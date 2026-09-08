@@ -1,0 +1,386 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: asentra_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: asentra_test
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_SSL: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      
+      - name: Apply database migrations
+        run: |
+          set -euo pipefail
+          npm run db:migrate
+
+      - name: Identity / RBAC / Isolation regression tests
+        run: |
+          set -euo pipefail
+          npx tsx --test --test-concurrency=1 \
+          tests/credentials.test.ts \
+          tests/sessions.test.ts \
+          tests/mobile-auth-contract.test.ts \
+          tests/rbac.test.ts \
+          tests/roles.test.ts \
+          tests/permissions.test.ts \
+          tests/operational-permission-contract.test.ts \
+          tests/data-isolation.test.ts \
+          tests/workforce-reporting-isolation.test.ts
+        env:
+          LOG_LEVEL: error
+
+      - name: Core operational regression tests
+        run: |
+          set -euo pipefail
+          npx tsx --test --test-concurrency=1 \
+          tests/work-orders.test.ts \
+          tests/work-order-lifecycle.test.ts \
+          tests/work-order-completion.test.ts \
+          tests/work-order-verification.test.ts \
+          tests/maintenance-bindings.test.ts \
+          tests/checklist-administration.test.ts \
+          tests/findings.test.ts \
+          tests/finding-closure.test.ts \
+          tests/finding-review-verification.test.ts \
+          tests/cr-be-stab-01-verification-closure-chain.test.ts \
+          tests/vendors.test.ts \
+          tests/vendor-work.test.ts \
+          tests/workforce-reporting.test.ts
+        env:
+          LOG_LEVEL: error
+
+      - name: Remaining DB-backed regression tests
+        run: |
+          set -euo pipefail
+          npx tsx --test --test-concurrency=1 \
+          tests/areas.test.ts \
+          tests/asset-certifications.test.ts \
+          tests/asset-classification.test.ts \
+          tests/asset-failures.test.ts \
+          tests/asset-history.test.ts \
+          tests/asset-identifiers.test.ts \
+          tests/asset-lifecycle.test.ts \
+          tests/asset-location.test.ts \
+          tests/asset-warranties.test.ts \
+          tests/assets.test.ts \
+          tests/attendance.test.ts \
+          tests/audit.test.ts \
+          tests/basic-expenses.test.ts \
+          tests/basic-financial-reporting.test.ts \
+          tests/bast-foundation-part01.test.ts \
+          tests/bast-legacy-compatibility-part03.test.ts \
+          tests/bast-lifecycle-part02.test.ts \
+          tests/branding.test.ts \
+          tests/breakdown-bindings.test.ts \
+          tests/building-assignments.test.ts \
+          tests/building-configurations.test.ts \
+          tests/building-utility-operational-summary-part16.test.ts \
+          tests/building-utility-reconciliation-part12.test.ts \
+          tests/buildings.test.ts \
+          tests/campuses.test.ts \
+          tests/cleaning-areas.test.ts \
+          tests/cleaning-assignments.test.ts \
+          tests/cleaning-schedule-bindings.test.ts \
+          tests/client-configurations.test.ts \
+          tests/clients.test.ts \
+          tests/cms-content.test.ts \
+          tests/configuration-audit.test.ts \
+          tests/configuration-lifecycle.test.ts \
+          tests/configuration-preview.test.ts \
+          tests/configuration-versioning.test.ts \
+          tests/consumable-readiness.test.ts \
+          tests/context.test.ts \
+          tests/contractor-contexts.test.ts \
+          tests/contractor-visitors.test.ts \
+          tests/corrective-action-due-dates.test.ts \
+          tests/corrective-action-responsibilities.test.ts \
+          tests/corrective-action-verifications.test.ts \
+          tests/corrective-actions.test.ts \
+          tests/cr-be-stab-01-due-job-dispatcher.test.ts \
+          tests/cr-be-stab-01-review-target-regression.test.ts \
+          tests/daily-cleaning.test.ts \
+          tests/dashboard-configurations.test.ts \
+          tests/database.test.ts \
+          tests/delivery-couriers.test.ts \
+          tests/document-archive.test.ts \
+          tests/document-control.test.ts \
+          tests/effective-context.test.ts \
+          tests/email-adapter.test.ts \
+          tests/engineering-checklist-bindings.test.ts \
+          tests/engineering-daily-operations.test.ts \
+          tests/engineering-findings.test.ts \
+          tests/engineering-overview.test.ts \
+          tests/engineering-reports.test.ts \
+          tests/equipment-profiles.test.ts \
+          tests/evidence-file-api.test.ts \
+          tests/expected-visitors.test.ts \
+          tests/feature-entitlement-configurations.test.ts \
+          tests/finding-assignment.test.ts \
+          tests/finding-authority-permissions.test.ts \
+          tests/finding-available-actions.test.ts \
+          tests/finding-classification-severity.test.ts \
+          tests/finding-escalations.test.ts \
+          tests/finding-history.test.ts \
+          tests/finding-rework-flow.test.ts \
+          tests/finding-source-binding.test.ts \
+          tests/finding-state-transition.test.ts \
+          tests/floors.test.ts \
+          tests/form-administration.test.ts \
+          tests/form-templates.test.ts \
+          tests/front-desk-log.test.ts \
+          tests/functional-locations.test.ts \
+          tests/health.test.ts \
+          tests/host-confirmations.test.ts \
+          tests/housekeeping-complaints.test.ts \
+          tests/housekeeping-evidence.test.ts \
+          tests/housekeeping-findings.test.ts \
+          tests/housekeeping-reports.test.ts \
+          tests/immediate-actions.test.ts \
+          tests/incident-closure.test.ts \
+          tests/incidents.test.ts \
+          tests/inspection-bindings.test.ts \
+          tests/inventory-ledger-completeness.test.ts \
+          tests/investigation-readiness.test.ts \
+          tests/invitations.test.ts \
+          tests/invoice-payment-status.test.ts \
+          tests/log-sheet-bindings.test.ts \
+          tests/management-asset-registry-compliance.test.ts \
+          tests/management-asset-reliability-work.test.ts \
+          tests/management-building-operational-finance.test.ts \
+          tests/management-building-performance.test.ts \
+          tests/management-contract-export.test.ts \
+          tests/management-critical-findings.test.ts \
+          tests/management-daily-operations.test.ts \
+          tests/management-financial-summary.test.ts \
+          tests/management-operational-finance.test.ts \
+          tests/management-operational-kpi.test.ts \
+          tests/management-operations-command-center.test.ts \
+          tests/management-pending-approval.test.ts \
+          tests/management-portfolio-overview.test.ts \
+          tests/management-read-scope.test.ts \
+          tests/management-tenant-service-summary.test.ts \
+          tests/management-utility-summary.test.ts \
+          tests/management-vendor-summary.test.ts \
+          tests/management-work-order-summary.test.ts \
+          tests/management-workforce-summary.test.ts \
+          tests/material-request-approved-quantity.test.ts \
+          tests/material-requests.test.ts \
+          tests/material-uom-snapshot.test.ts \
+          tests/meter-reading-bindings.test.ts \
+          tests/migrate.test.ts \
+          tests/mobile-app-version.test.ts \
+          tests/mobile-assignment-contract.test.ts \
+          tests/mobile-checklist-contract.test.ts \
+          tests/mobile-checklist-measurement-evidence-contract.test.ts \
+          tests/mobile-context-contract.test.ts \
+          tests/mobile-contract.test.ts \
+          tests/mobile-cross-contract.test.ts \
+          tests/mobile-current-shift.test.ts \
+          tests/mobile-effective-context.test.ts \
+          tests/mobile-error-contract.test.ts \
+          tests/mobile-evidence-contract.test.ts \
+          tests/mobile-finding-contract.test.ts \
+          tests/mobile-location-context-contract.test.ts \
+          tests/mobile-my-team.test.ts \
+          tests/mobile-observability.test.ts \
+          tests/mobile-push-token.test.ts \
+          tests/mobile-qr-resolution.test.ts \
+          tests/mobile-sync-conflict.test.ts \
+          tests/mobile-sync-contract.test.ts \
+          tests/mobile-sync-idempotency.test.ts \
+          tests/mobile-team-work-orders.test.ts \
+          tests/mobile-upcoming-shifts.test.ts \
+          tests/mobile-verification-contract.test.ts \
+          tests/mobile-work-order-contract.test.ts \
+          tests/mobile-work-order-verification-target.test.ts \
+          tests/module-configurations.test.ts \
+          tests/modules-entitlements.test.ts \
+          tests/navigation-registry.test.ts \
+          tests/notification-delivery.test.ts \
+          tests/notification-escalations.test.ts \
+          tests/notification-history.test.ts \
+          tests/notification-reminders.test.ts \
+          tests/notification-secure-links.test.ts \
+          tests/notification-subscriptions.test.ts \
+          tests/notification-templates.test.ts \
+          tests/notification.test.ts \
+          tests/operational-budget-aggregation.test.ts \
+          tests/operational-budget-foundation.test.ts \
+          tests/operational-budget-source-binding.test.ts \
+          tests/operational-data-scope.test.ts \
+          tests/operational-incidents.test.ts \
+          tests/operational-settings.test.ts \
+          tests/organization-presentation.test.ts \
+          tests/patrol-checklist-bindings.test.ts \
+          tests/patrol-executions.test.ts \
+          tests/patrol-routes.test.ts \
+          tests/patrol-schedule-bindings.test.ts \
+          tests/payment-receipts.test.ts \
+          tests/permit-applications.test.ts \
+          tests/permit-approvals.test.ts \
+          tests/permit-equipment.test.ts \
+          tests/permit-evidence.test.ts \
+          tests/permit-safety-requirements.test.ts \
+          tests/permit-validities.test.ts \
+          tests/permit-work-contexts.test.ts \
+          tests/permit-work-lifecycle.test.ts \
+          tests/permit-workers.test.ts \
+          tests/permits.test.ts \
+          tests/procurement-approvals.test.ts \
+          tests/properties.test.ts \
+          tests/public-area-inspections.test.ts \
+          tests/purchase-order-issuance.test.ts \
+          tests/purchase-order-lines.test.ts \
+          tests/purchase-order-readiness.test.ts \
+          tests/purchase-orders.test.ts \
+          tests/purchase-requests.test.ts \
+          tests/quality-audits.test.ts \
+          tests/rate-limit.test.ts \
+          tests/receiving-material-request-binding.test.ts \
+          tests/receivings.test.ts \
+          tests/recipient-resolution.test.ts \
+          tests/reporting-export.test.ts \
+          tests/room-types.test.ts \
+          tests/rooms.test.ts \
+          tests/security-daily-activity.test.ts \
+          tests/security-finding-incident-kpi.test.ts \
+          tests/security-findings.test.ts \
+          tests/security-incident-readiness.test.ts \
+          tests/security-keys.test.ts \
+          tests/security-logbook.test.ts \
+          tests/security-lost-found.test.ts \
+          tests/security-patrol-kpi.test.ts \
+          tests/security-posts.test.ts \
+          tests/security-reports.test.ts \
+          tests/security-shift-handovers.test.ts \
+          tests/security-visitor-bindings.test.ts \
+          tests/seeds.test.ts \
+          tests/service-charge-readiness.test.ts \
+          tests/service-requests.test.ts \
+          tests/shift-handovers.test.ts \
+          tests/source-forms.test.ts \
+          tests/spaces.test.ts \
+          tests/structure-context.test.ts \
+          tests/subscriptions-licenses.test.ts \
+          tests/supervisor-inspections.test.ts \
+          tests/tenant-approvals.test.ts \
+          tests/tenant-building-contexts.test.ts \
+          tests/tenant-charges.test.ts \
+          tests/tenant-communications.test.ts \
+          tests/tenant-companies.test.ts \
+          tests/tenant-complaints.test.ts \
+          tests/tenant-contractors.test.ts \
+          tests/tenant-documents.test.ts \
+          tests/tenant-invoices.test.ts \
+          tests/tenant-pics.test.ts \
+          tests/tenant-service-requests.test.ts \
+          tests/tenant-spaces.test.ts \
+          tests/tenant-utility-requests.test.ts \
+          tests/toilet-inspections.test.ts \
+          tests/users.test.ts \
+          tests/utility-abnormal-consumptions.test.ts \
+          tests/utility-aggregations.test.ts \
+          tests/utility-billing-handoff-part11.test.ts \
+          tests/utility-bills.test.ts \
+          tests/utility-calculations.test.ts \
+          tests/utility-kpi.test.ts \
+          tests/utility-meter-consumptions.test.ts \
+          tests/utility-meter-hierarchies.test.ts \
+          tests/utility-meter-reading-evidence.test.ts \
+          tests/utility-meter-readings.test.ts \
+          tests/utility-meter-tenants.test.ts \
+          tests/utility-meters.test.ts \
+          tests/utility-operational-exceptions-part15.test.ts \
+          tests/utility-reading-due-ocr-part14.test.ts \
+          tests/utility-tariffs-part10.test.ts \
+          tests/utility-tenant-approvals.test.ts \
+          tests/utility-type-configurations.test.ts \
+          tests/utility-usage-history.test.ts \
+          tests/utility-verifications.test.ts \
+          tests/vendor-assignments.test.ts \
+          tests/vendor-bast-bindings.test.ts \
+          tests/vendor-buildings.test.ts \
+          tests/vendor-capabilities.test.ts \
+          tests/vendor-categories.test.ts \
+          tests/vendor-checklist-bindings.test.ts \
+          tests/vendor-completion-reports.test.ts \
+          tests/vendor-compliance-documents.test.ts \
+          tests/vendor-invoice-consistency.test.ts \
+          tests/vendor-invoice-payment.test.ts \
+          tests/vendor-invoice-procurement-linkage.test.ts \
+          tests/vendor-invoice-settlement-readiness.test.ts \
+          tests/vendor-invoice-verification.test.ts \
+          tests/vendor-invoices.test.ts \
+          tests/vendor-licenses.test.ts \
+          tests/vendor-pics.test.ts \
+          tests/vendor-rework.test.ts \
+          tests/vendor-selection-readiness.test.ts \
+          tests/vendor-service-costs.test.ts \
+          tests/vendor-service-reports.test.ts \
+          tests/vendor-tenant-kpi.test.ts \
+          tests/vendor-verification.test.ts \
+          tests/vendor-work-evidence.test.ts \
+          tests/vendor-work-history.test.ts \
+          tests/vendor-workforce.test.ts \
+          tests/visit-check-ins.test.ts \
+          tests/visit-check-outs.test.ts \
+          tests/visitor-invitations.test.ts \
+          tests/visitor-passes.test.ts \
+          tests/visitor-photos.test.ts \
+          tests/visitors.test.ts \
+          tests/walk-in-visits.test.ts \
+          tests/whatsapp-adapter.test.ts \
+          tests/wo-procurement-spk-binding.test.ts \
+          tests/work-contracts.test.ts \
+          tests/work-order-action.test.ts \
+          tests/work-order-assignment.test.ts \
+          tests/work-order-bast-closure-part04.test.ts \
+          tests/work-order-context.test.ts \
+          tests/work-order-evidence.test.ts \
+          tests/work-order-history.test.ts \
+          tests/work-order-material-cost.test.ts \
+          tests/work-order-material-issue-control.test.ts \
+          tests/work-order-procurement-bindings.test.ts \
+          tests/work-permit-readiness.test.ts \
+          tests/work-requests.test.ts \
+          tests/workforce-kpi.test.ts \
+          tests/workforce-reporting-api.test.ts \
+          tests/workspace-registry.test.ts
+        env:
+          LOG_LEVEL: error

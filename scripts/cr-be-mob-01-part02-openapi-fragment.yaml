@@ -1,0 +1,1560 @@
+  # --------------------------------------------------------------------
+  # CR-BE-MOB-01 PART 02 — Security operational contract.
+  #
+  # Existing BE-12 (Security) and BE-21A/B (Incident) routes published for
+  # mobile. Nothing new is introduced: patrol execution start/complete
+  # delegate to the BE-07 task engine, patrol checklist execution stays on
+  # BE-07 checklist endpoints, and finding workflow stays on BE-09.
+  # --------------------------------------------------------------------
+
+  /buildings/{buildingId}/security-posts:
+    post:
+      operationId: createSecurityPost
+      summary: Create a Security Post in a Building
+      description: >-
+        BE-12A. A Security Post is Security operational context anchored to
+        the BE-04 building structure (Floor / Area / Room / Space /
+        Functional Location references only — never a second hierarchy).
+        Requires `security_post.manage` and BE-02G Building access.
+        `clientId` is derived through Building → Property → Client and is
+        never accepted from the caller.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_post.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSecurityPostRequest" }
+      responses:
+        "201":
+          description: Security Post created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SecurityPost" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listBuildingSecurityPosts
+      summary: List Security Posts in a Building
+      description: >-
+        BE-12A read. Requires `security_post.read` and BE-02G Building
+        access. Mobile relevance: duty-post picker and patrol start-post
+        context.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_post.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/SecurityPostStatus" }
+        - name: postType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/SecurityPostType" }
+        - name: floorId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: areaId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: roomId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: functionalLocationId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Security Post list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/SecurityPost" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /security/posts/{id}:
+    get:
+      operationId: getSecurityPost
+      summary: Get a Security Post by id
+      description: >-
+        BE-12A read. Requires `security_post.read`; the service walks
+        Security Post → Building and asserts BE-02G access, so an
+        inaccessible post is rejected with 403 `BUILDING_ACCESS_DENIED`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_post.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/SecurityPostIdPath"
+      responses:
+        "200":
+          description: Security Post.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SecurityPost" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateSecurityPost
+      summary: Update a Security Post
+      description: >-
+        BE-12A. Requires `security_post.manage` and Building access.
+        `code`, `clientId` and `buildingId` are immutable.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_post.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/SecurityPostIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSecurityPostRequest" }
+      responses:
+        "200":
+          description: Updated Security Post.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SecurityPost" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/security/patrol-routes:
+    post:
+      operationId: createPatrolRoute
+      summary: Create a Patrol Route in a Building
+      description: >-
+        BE-12B. A Patrol Route is the ordered patrol definition for one
+        Building, optionally starting at a BE-12A Security Post in the same
+        Building. It carries no schedule, task, or execution semantics.
+        Requires `patrol_route.manage` and BE-02G Building access.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_route.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePatrolRouteRequest" }
+      responses:
+        "201":
+          description: Patrol Route created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolRoute" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listBuildingPatrolRoutes
+      summary: List Patrol Routes in a Building
+      description: >-
+        BE-12B read. Requires `patrol_route.read` and BE-02G Building
+        access. Mobile relevance: route picker and checkpoint context.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_route.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: Patrol Route list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PatrolRoute" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /security/patrol-routes/{id}:
+    get:
+      operationId: getPatrolRoute
+      summary: Get a Patrol Route by id
+      description: >-
+        BE-12B read. Requires `patrol_route.read`; Building access is
+        asserted through Patrol Route → Building.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_route.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolRouteIdPath"
+      responses:
+        "200":
+          description: Patrol Route.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolRoute" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updatePatrolRoute
+      summary: Update a Patrol Route
+      description: >-
+        BE-12B. Requires `patrol_route.manage`. `code`, `clientId` and
+        `buildingId` are immutable; a start post must belong to the same
+        Building (`PATROL_ROUTE_START_POST_MISMATCH`).
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_route.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolRouteIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdatePatrolRouteRequest" }
+      responses:
+        "200":
+          description: Updated Patrol Route.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolRoute" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/patrol-routes/{id}/points:
+    post:
+      operationId: addPatrolRoutePoint
+      summary: Add a checkpoint (patrol route point) to a Patrol Route
+      description: >-
+        BE-12B. A patrol route point IS the Security checkpoint: an ordered
+        (`sequence`) reference to an existing BE-04 location (Floor / Area /
+        Room / Space / Functional Location). There is no separate checkpoint
+        master and no checkpoint identifier/QR authority — scan-to-confirm
+        remains unavailable (see the QR boundary in CR-BE-MOB-01 PART 05).
+        Requires `patrol_route.manage`; duplicate sequences are rejected with
+        `PATROL_ROUTE_POINT_DUPLICATE_SEQUENCE`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_route.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolRouteIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePatrolRoutePointRequest"
+      responses:
+        "201":
+          description: Checkpoint added.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolRoutePoint" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listPatrolRoutePoints
+      summary: List the checkpoints of a Patrol Route
+      description: >-
+        BE-12B read, ordered by `sequence`. Requires `patrol_route.read`.
+        Mobile relevance: the checkpoint list a guard must confirm during a
+        patrol execution.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_route.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolRouteIdPath"
+      responses:
+        "200":
+          description: Checkpoint list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PatrolRoutePoint"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/patrol-route-points/{id}:
+    patch:
+      operationId: updatePatrolRoutePoint
+      summary: Update a checkpoint (patrol route point)
+      description: >-
+        BE-12B. Requires `patrol_route.manage`. The point stays inside its
+        route's Building (`PATROL_ROUTE_POINT_LOCATION_MISMATCH`).
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_route.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolRoutePointIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePatrolRoutePointRequest"
+      responses:
+        "200":
+          description: Updated checkpoint.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolRoutePoint" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /security/patrol-routes/{id}/schedule-bindings:
+    post:
+      operationId: createPatrolScheduleBinding
+      summary: Bind a Patrol Route to a BE-07 Schedule Definition
+      description: >-
+        BE-12C. The binding is the patrol *assignment of work over time*:
+        it links a Patrol Route to a shared BE-07 Schedule Definition, which
+        generates the tasks that become Patrol Executions. Recurrence,
+        occurrence preview and task generation stay in BE-07 — this module
+        never re-implements them. Assignment of a generated patrol to a
+        workforce profile or team is the published BE-07 task assignment
+        surface (`POST /tasks/{taskId}/assignments`), where `taskId` is the
+        Patrol Execution id. Requires `patrol_schedule.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_schedule.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolRouteIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePatrolScheduleBindingRequest"
+      responses:
+        "201":
+          description: Patrol Schedule Binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolScheduleBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listPatrolRouteScheduleBindings
+      summary: List the Schedule Bindings of a Patrol Route
+      description: >-
+        BE-12C read. Requires `patrol_schedule.read`. Each row resolves the
+        BE-07 schedule and recurrence context without copying it.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_schedule.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolRouteIdPath"
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/PatrolScheduleBindingStatus"
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: patrolRouteId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: scheduleDefinitionId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Patrol Schedule Binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PatrolScheduleBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/patrol-schedule-bindings/{id}:
+    get:
+      operationId: getPatrolScheduleBinding
+      summary: Get a Patrol Schedule Binding by id
+      description: >-
+        BE-12C read. Requires `patrol_schedule.read`; Building access is
+        asserted through the binding's Building.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_schedule.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolScheduleBindingIdPath"
+      responses:
+        "200":
+          description: Patrol Schedule Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolScheduleBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updatePatrolScheduleBinding
+      summary: Update a Patrol Schedule Binding
+      description: >-
+        BE-12C. Requires `patrol_schedule.manage`. Only the Security-side
+        binding fields are mutable; the BE-07 Schedule Definition is edited
+        through BE-07.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_schedule.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolScheduleBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePatrolScheduleBindingRequest"
+      responses:
+        "200":
+          description: Updated Patrol Schedule Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolScheduleBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/security/patrol-executions:
+    get:
+      operationId: listBuildingPatrolExecutions
+      summary: List Patrol Executions for a Building
+      description: >-
+        BE-12D read. A Patrol Execution is the Security view of an
+        authoritative BE-07 generated task bound to a Patrol Route through a
+        BE-12C Schedule Binding; `id` equals the BE-07 `taskId` and `status`
+        is the shared task status (no second lifecycle). Requires
+        `patrol_execution.read` and BE-02G Building access. Mobile
+        relevance: the guard's patrol work list.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_execution.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: Operational date YYYY-MM-DD.
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/PatrolExecutionStatus" }
+        - name: patrolRouteId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Patrol Execution list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PatrolExecution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /security/patrol-executions/{id}:
+    get:
+      operationId: getPatrolExecution
+      summary: Get a Patrol Execution by id
+      description: >-
+        BE-12D read. `id` is the BE-07 task id. `pointProgress` is derived
+        from `patrol_point_visits` versus the route's ACTIVE checkpoints and
+        is backend-authoritative. Requires `patrol_execution.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_execution.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolExecutionIdPath"
+      responses:
+        "200":
+          description: Patrol Execution.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolExecution" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/patrol-executions/{id}/start:
+    post:
+      operationId: startPatrolExecution
+      summary: Start a Patrol Execution
+      description: >-
+        BE-12D. Delegates to the shared BE-07 task-execution engine, which
+        owns the transition (`OPEN|ASSIGNED → IN_PROGRESS`) and rejects an
+        illegal one. Prefer this over the generic `startTask` on a patrol so
+        the Security route/binding checks run. Requires
+        `patrol_execution.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_execution.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolExecutionIdPath"
+      responses:
+        "200":
+          description: Started Patrol Execution.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolExecution" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /security/patrol-executions/{id}/points/{pointId}/visit:
+    post:
+      operationId: recordPatrolPointVisit
+      summary: Confirm a checkpoint during a Patrol Execution
+      description: >-
+        BE-12D. Records a `patrol_point_visits` row (`VISITED`) for the
+        checkpoint `pointId` of the execution's route. This is the
+        checkpoint-confirmation authority; confirmation is by canonical
+        `pointId`, NOT by QR scan (no checkpoint identifier authority
+        exists). Requires `patrol_execution.manage`; the execution must be
+        IN_PROGRESS and the point must belong to the execution's route.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_execution.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolExecutionIdPath"
+        - $ref: "#/components/parameters/PatrolPointIdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordPatrolPointVisitRequest"
+      responses:
+        "201":
+          description: Checkpoint visit recorded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolPointVisit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /security/patrol-executions/{id}/points:
+    get:
+      operationId: listPatrolPointVisits
+      summary: List checkpoint visits of a Patrol Execution
+      description: >-
+        BE-12D read of `patrol_point_visits` for the execution, ordered by
+        checkpoint `sequence`. Requires `patrol_execution.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_execution.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolExecutionIdPath"
+      responses:
+        "200":
+          description: Checkpoint visit list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PatrolPointVisit"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/patrol-executions/{id}/complete:
+    post:
+      operationId: completePatrolExecution
+      summary: Complete a Patrol Execution
+      description: >-
+        BE-12D. Applies the Security checkpoint-progress rules and then
+        delegates the status transition to the shared BE-07 task-execution
+        engine. Mobile must call this rather than the generic `completeTask`
+        on a patrol, otherwise the patrol-specific checks are bypassed.
+        Requires `patrol_execution.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_execution.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolExecutionIdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletePatrolExecutionRequest"
+      responses:
+        "200":
+          description: Completed Patrol Execution.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolExecution" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /security/patrol-point-visits/{id}:
+    patch:
+      operationId: updatePatrolPointVisit
+      summary: Update the notes of a checkpoint visit
+      description: >-
+        BE-12D. Only `notes` are mutable — the visit time and actor are
+        history. Requires `patrol_execution.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_execution.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolPointVisitIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePatrolPointVisitRequest"
+      responses:
+        "200":
+          description: Updated checkpoint visit.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PatrolPointVisit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/patrol-checklist-bindings:
+    post:
+      operationId: createPatrolChecklistBinding
+      summary: Bind a BE-07 Checklist Template to a Patrol Route
+      description: >-
+        BE-12E. The checklist linkage for Security: a join row associating a
+        Checklist Template with a Patrol Route (+ optional start post) in one
+        Building. Checklist execution itself stays BE-07 — responses,
+        completion, evidence and verification use the published checklist
+        and evidence operations. Requires
+        `patrol_checklist_binding.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_checklist_binding.manage
+      x-building-scoped: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePatrolChecklistBindingRequest"
+      responses:
+        "201":
+          description: Patrol Checklist Binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listPatrolChecklistBindings
+      summary: List Patrol Checklist Bindings
+      description: >-
+        BE-12E read, constrained to the caller's accessible Buildings.
+        Requires `patrol_checklist_binding.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_checklist_binding.read
+      x-building-scoped: true
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: patrolRouteId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: checklistTemplateId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/PatrolChecklistBindingStatus"
+      responses:
+        "200":
+          description: Patrol Checklist Binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PatrolChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /security/patrol-checklist-bindings/{id}:
+    get:
+      operationId: getPatrolChecklistBinding
+      summary: Get a Patrol Checklist Binding by id
+      description: >-
+        BE-12E read. Requires `patrol_checklist_binding.read` and Building
+        access on the binding's Building.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_checklist_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolChecklistBindingIdPath"
+      responses:
+        "200":
+          description: Patrol Checklist Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updatePatrolChecklistBinding
+      summary: Update a Patrol Checklist Binding
+      description: >-
+        BE-12E. Only the Security binding fields are mutable; the Checklist
+        Template is edited through BE-07. Requires
+        `patrol_checklist_binding.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_checklist_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolChecklistBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePatrolChecklistBindingRequest"
+      responses:
+        "200":
+          description: Updated Patrol Checklist Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/patrol-checklist-bindings/{id}/start:
+    post:
+      operationId: startPatrolChecklistExecution
+      summary: Start the BE-07 checklist execution for a patrol binding
+      description: >-
+        BE-12E. Creates the shared BE-07 checklist execution row for the
+        binding and returns it. No request body. Everything after this —
+        saving responses, completing or cancelling, attaching evidence,
+        supervisor verification — uses the published BE-07 checklist,
+        evidence and verification operations on the returned execution
+        `id`. Requires `patrol_checklist_binding.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_checklist_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolChecklistBindingIdPath"
+      responses:
+        "201":
+          description: Shared BE-07 checklist execution started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolChecklistExecution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /security/patrol-checklist-executions/{id}:
+    get:
+      operationId: getPatrolChecklistExecutionContext
+      summary: Resolve the Security context of a patrol checklist execution
+      description: >-
+        BE-12E read. Projects the authoritative Building / Template / Patrol
+        Route / start post for a BE-07 checklist execution that was started
+        from a patrol binding. The execution state itself stays with BE-07.
+        Requires `patrol_checklist_binding.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: patrol_checklist_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/PatrolChecklistExecutionIdPath"
+      responses:
+        "200":
+          description: Patrol checklist execution context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/PatrolChecklistExecutionContext"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/security/daily-activity:
+    get:
+      operationId: getSecurityDailyActivity
+      summary: Security daily activity read model for a Building
+      description: >-
+        BE-12F. A per-Building, per-operational-date composition of existing
+        authoritative records (BE-12A/B/C/D/E + BE-07 + BE-09). It creates no
+        state: it is the Security field-reporting *read* surface. Each open
+        finding carries BE-09's backend-authoritative `availableActions`.
+        Requires `security_daily_activity.read` and BE-02G Building access.
+        `date` defaults to the current operational date when omitted.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_daily_activity.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: Operational date YYYY-MM-DD.
+        - name: shiftId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: securityPostId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Security daily activity.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SecurityDailyActivity"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /security/findings:
+    post:
+      operationId: createSecurityFinding
+      summary: Report a Security finding (creates the linked BE-09 Finding)
+      description: >-
+        BE-12H. The Security field-reporting write for an issue observed on
+        a Security source (`PATROL_EXECUTION`, `PATROL_CHECKLIST`,
+        `SECURITY_DAILY_ACTIVITY`, `SHIFT_HANDOVER`, `SECURITY_POST`). It
+        creates the authoritative BE-09 Finding and records the Security
+        context link — it does not fork Finding workflow. Classification,
+        severity, assignment, state transitions, review, rework, closure and
+        `availableActions` all remain on the published BE-09 finding
+        operations, keyed by `findingId` (NOT by this link's `id`).
+        Requires `security_finding.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_finding.manage
+      x-building-scoped: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSecurityFindingRequest"
+      responses:
+        "201":
+          description: Security finding link + authoritative BE-09 Finding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SecurityFinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listSecurityFindings
+      summary: List Security findings
+      description: >-
+        BE-12H read, constrained to the caller's accessible Buildings. Each
+        row embeds the authoritative BE-09 Finding and its per-caller
+        `availableActions`. Requires `security_finding.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_finding.read
+      x-building-scoped: true
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: startSecurityPostId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: patrolRouteId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: sourceType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SecurityFindingSourceType"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/FindingStatus" }
+      responses:
+        "200":
+          description: Security finding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/SecurityFinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /security/findings/{id}:
+    get:
+      operationId: getSecurityFinding
+      summary: Get a Security finding link by id
+      description: >-
+        BE-12H read. `{id}` is the Security link id; use the embedded
+        `findingId` for every BE-09 workflow operation. Requires
+        `security_finding.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: security_finding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/SecurityFindingIdPath"
+      responses:
+        "200":
+          description: Security finding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SecurityFinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /incidents:
+    post:
+      operationId: createIncident
+      summary: Report an Incident (shared BE-21A foundation)
+      description: >-
+        BE-21A. ONE Incident foundation serves Operational Incident,
+        Asset Failure and Finding Escalation, distinguished only by
+        `incidentType`. For a standalone Security event, prefer
+        `createOperationalIncident` with `operationalCategory: SECURITY`,
+        which pins `incidentType` to OPERATIONAL and adds the operational
+        handling status. `clientId` is derived from the Building and
+        `reportedByUserId` is the authenticated actor — neither is accepted
+        from the caller. Requires `incident.manage` and Building access.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: incident.manage
+      x-building-scoped: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateIncidentRequest" }
+      responses:
+        "201":
+          description: Incident reported.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Incident" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listIncidents
+      summary: List Incidents
+      description: >-
+        BE-21A read, constrained to the caller's accessible Buildings.
+        Requires `incident.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: incident.read
+      x-building-scoped: true
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: incidentType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentType" }
+        - name: severity
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentSeverity" }
+        - name: priority
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentPriority" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentStatus" }
+      responses:
+        "200":
+          description: Incident list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Incident" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /incidents/{id}:
+    get:
+      operationId: getIncident
+      summary: Get an Incident by id
+      description: BE-21A read. Requires `incident.read` and Building access.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: incident.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/IncidentIdPath"
+      responses:
+        "200":
+          description: Incident.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Incident" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateIncident
+      summary: Update descriptive Incident metadata
+      description: >-
+        BE-21A. Only `title`, `description`, `severity` and `priority` are
+        mutable; type, context, number and reporter are the identity of the
+        record. Requires `incident.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: incident.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/IncidentIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateIncidentRequest" }
+      responses:
+        "200":
+          description: Updated Incident.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Incident" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /incidents/{id}/cancel:
+    post:
+      operationId: cancelIncident
+      summary: Cancel (withdraw) an Incident
+      description: >-
+        BE-21A. `CANCELLED` is terminal and mutually exclusive with the
+        BE-21K `CLOSED` end state: a withdrawn incident was never resolved.
+        Requires `incident.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: incident.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/IncidentIdPath"
+      responses:
+        "200":
+          description: Cancelled Incident.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Incident" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /operational-incidents:
+    post:
+      operationId: createOperationalIncident
+      summary: Report an Operational Incident (Security field report)
+      description: >-
+        BE-21B. The authoritative field-report write for a standalone
+        operational event; use `operationalCategory: SECURITY` (or `SAFETY`
+        / `ACCESS`) for Security. It is a specialization of the BE-21A
+        foundation with `incidentType` pinned to OPERATIONAL — identity,
+        Building/Client context, location, severity, priority and reporter
+        stay in BE-21A and are never stored twice. There is no separate
+        "occurrence" domain: a patrol/checklist issue becomes a Security
+        finding (`createSecurityFinding`), a standalone event becomes an
+        Operational Incident. Requires `operational_incident.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: operational_incident.manage
+      x-building-scoped: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOperationalIncidentRequest"
+      responses:
+        "201":
+          description: Operational Incident reported.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/OperationalIncident"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listOperationalIncidents
+      summary: List Operational Incidents
+      description: >-
+        BE-21B read, constrained to the caller's accessible Buildings.
+        Requires `operational_incident.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: operational_incident.read
+      x-building-scoped: true
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: locationType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentLocationType" }
+        - name: locationId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: operationalCategory
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/OperationalIncidentCategory"
+        - name: severity
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentSeverity" }
+        - name: priority
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentPriority" }
+        - name: operationalStatus
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/OperationalIncidentStatus"
+        - name: incidentStatus
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/IncidentStatus" }
+        - name: occurredFrom
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: occurredTo
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Operational Incident list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/OperationalIncident"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /operational-incidents/{id}:
+    get:
+      operationId: getOperationalIncident
+      summary: Get an Operational Incident by id
+      description: >-
+        BE-21B read. `id` is the shared BE-21A Incident id;
+        `operationalIncidentId` is the internal specialization id.
+        `availableActions` is backend-resolved per request from state ×
+        permission × foundation lifecycle and must never be recomputed by
+        the client. Requires `operational_incident.read`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: operational_incident.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/OperationalIncidentIdPath"
+      responses:
+        "200":
+          description: Operational Incident.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/OperationalIncident"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateOperationalIncident
+      summary: Update an Operational Incident (incl. handling status)
+      description: >-
+        BE-21B. Foundation metadata and operational fields are accepted on
+        one request and applied atomically. `operationalStatus` follows the
+        closed transition table (OPEN → IN_PROGRESS|RESOLVED, IN_PROGRESS →
+        RESOLVED|OPEN, RESOLVED → IN_PROGRESS); an illegal transition is
+        rejected. `RESOLVED` means operational handling finished — NOT
+        verified or closed. Requires `operational_incident.manage`.
+      tags: [Security]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: operational_incident.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/OperationalIncidentIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOperationalIncidentRequest"
+      responses:
+        "200":
+          description: Updated Operational Incident.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/OperationalIncident"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

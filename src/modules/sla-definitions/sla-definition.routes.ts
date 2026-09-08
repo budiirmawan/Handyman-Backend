@@ -1,0 +1,3 @@
+import{Router}from'express';import{authenticationMiddleware}from'../auth/authentication.middleware';import{requirePermission}from'../auth/rbac.middleware';import{create,get,list,update}from'./sla-definition.controller';
+/** SLA definitions are client-owned configuration; building is an optional narrowing scope. */
+export function createSlaDefinitionRouter(){const r=Router(),a=authenticationMiddleware,rd=requirePermission('client_configuration.read'),m=requirePermission('client_configuration.manage');r.post('/clients/:clientId/sla-definitions',a,m,create);r.get('/clients/:clientId/sla-definitions',a,rd,list);r.get('/sla-definitions/:id',a,rd,get);r.patch('/sla-definitions/:id',a,m,update);return r}

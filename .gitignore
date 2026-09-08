@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+*.log
+coverage/
+.DS_Store
+*.tsbuildinfo
+.data/
+
+# CR-BE-PUSH-01 PART 02 — never commit push provider credentials.
+# FCM settings are injected as PUSH_FCM_* environment variables; the raw
+# Google service-account JSON must never enter the repository.
+*service-account*.json
+*serviceAccount*.json
+*firebase-adminsdk*.json

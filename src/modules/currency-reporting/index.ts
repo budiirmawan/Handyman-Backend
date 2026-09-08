@@ -1,0 +1,8 @@
+import { getPool } from '../../database';
+import { contextAccessService } from '../context-access';
+import { clientMonetaryContextService } from '../client-monetary-contexts';
+export type CurrencyTotal={currencyCode:string;amount:number;count:number}; export type UnknownCurrencyGap={count:number;amount:number};
+/** Exact-currency read seam. It intentionally returns no cross-currency grand total. */
+export async function getOperationalCurrencySummary(buildingId:string,actorUserId:string){await contextAccessService.assertBuildingAccess(actorUserId,buildingId);const q=async(table:string,column:string,date:string)=>getPool().query<{currencyCode:string|null;amount:string;count:number}>(`SELECT currency_code AS "currencyCode",COALESCE(SUM(${column}),0)::text amount,COUNT(*)::int count FROM ${table} WHERE building_id=$1 AND status='FINALIZED' GROUP BY currency_code`,[buildingId]);const [costs,expenses]=await Promise.all([q('vendor_service_costs','cost_amount','cost_date'),q('basic_expenses','amount','expense_date')]);const split=(r:{currencyCode:string|null;amount:string;count:number}[])=>({totals:r.filter(x=>x.currencyCode!==null).map(x=>({currencyCode:x.currencyCode!,amount:Number(x.amount),count:x.count})),unknown:r.filter(x=>x.currencyCode===null).reduce((a,x)=>({count:a.count+x.count,amount:a.amount+Number(x.amount)}),{count:0,amount:0})});return{buildingId,vendorServiceCosts:split(costs.rows),basicExpenses:split(expenses.rows)};}
+/** Client-scoped configuration read seam; no mutation/defaulting behavior. */
+export async function getClientMonetaryContextReadModel(clientId:string,actorUserId:string){return clientMonetaryContextService.getClientMonetaryContext(clientId,actorUserId);}
