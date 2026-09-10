@@ -189,6 +189,11 @@ import { createExternalWorkforceRouter } from '../modules/external-workforce/ext
 import { createFloorRouter } from '../modules/floors/floor.routes';
 // CR-BE-FX-01 PART 02 — governed FX Rate lifecycle and Client FX Policy.
 import { createFxRateRouter } from '../modules/fx-rates/fx-rate.routes';
+// HC-00 PART 01 — Handyman bounded-context namespace gateway.
+import {
+  HANDYMAN_API_NAMESPACE,
+  createHandymanRouter,
+} from '../modules/handyman-foundation';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -652,5 +657,8 @@ export function createApiRouter(): Router {
   router.use(createIncidentClosureRouter());
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
+  // HC-00 PART 01 — Handyman bounded-context namespace reservation.
+  // Intentionally empty: HC-01+ wave routers mount under /handyman.
+  router.use(HANDYMAN_API_NAMESPACE, createHandymanRouter());
   return router;
 }

@@ -3,8 +3,43 @@ import type { FinancialReportFilters } from './basic-financial-reporting.types';
 
 type Scope = { buildingId: string; filters: FinancialReportFilters };
 
-const params = (s: Scope) =>
-  [s.buildingId, s.filters.periodFrom ?? null, s.filters.periodTo ?? null, s.filters.tenantCompanyId ?? null] as const;
+type TenantChargeBillGroupedRow = {
+  currencyCode: string | null;
+  count: number;
+  amount: string;
+  cancelled: number;
+};
+
+type InvoiceGroupedRow = {
+  currencyCode: string | null;
+  finalized_count: number;
+  finalized_amount: string;
+  draft_count: number;
+  cancelled_count: number;
+};
+
+type PaymentGroupedRow = {
+  currencyCode: string | null;
+  paid_amount: string;
+  unpaid_amount: string;
+  overdue_amount: string;
+  outstanding_amount: string;
+  unpaid_count: number;
+  partial_count: number;
+  paid_count: number;
+  overdue_count: number;
+};
+
+type ReceiptGroupedRow = {
+  currencyCode: string | null;
+  issued_count: number;
+  issued_amount: string;
+  void_count: number;
+  void_amount: string;
+};
+
+const params = (s: Scope): (string | null)[] =>
+  [s.buildingId, s.filters.periodFrom ?? null, s.filters.periodTo ?? null, s.filters.tenantCompanyId ?? null];
 
 const n = (v: unknown) => Number(v ?? 0);
 
@@ -42,7 +77,7 @@ async function tenantChargesGrouped(s: Scope) {
   const v = params(s);
   // Group by exact currency_code, including NULL as unknown
   const rows = (
-    await getPool().query(
+    await getPool().query<TenantChargeBillGroupedRow>(
       `SELECT
          currency_code AS "currencyCode",
          COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS count,
@@ -56,7 +91,7 @@ async function tenantChargesGrouped(s: Scope) {
        GROUP BY currency_code`,
       v,
     )
-  ).rows as Array<{ currencyCode: string | null; count: number; amount: string; cancelled: number }>;
+  ).rows;
 
   const byCurrency: Record<string, { count: number; amount: number }> = {};
   let unknownCount = 0;
@@ -92,7 +127,7 @@ async function tenantChargesGrouped(s: Scope) {
 async function utilityBillsGrouped(s: Scope) {
   const v = params(s);
   const rows = (
-    await getPool().query(
+    await getPool().query<TenantChargeBillGroupedRow>(
       `SELECT
          currency AS "currencyCode",
          COUNT(*) FILTER (WHERE status <> 'CANCELLED')::int AS count,
@@ -106,7 +141,7 @@ async function utilityBillsGrouped(s: Scope) {
        GROUP BY currency`,
       v,
     )
-  ).rows as Array<{ currencyCode: string | null; count: number; amount: string; cancelled: number }>;
+  ).rows;
 
   const byCurrency: Record<string, { count: number; amount: number }> = {};
   let unknownCount = 0;
@@ -274,7 +309,7 @@ async function byTenantGrouped(s: Scope) {
 async function invoicesGrouped(s: Scope) {
   const v = params(s);
   const rows = (
-    await getPool().query(
+    await getPool().query<InvoiceGroupedRow>(
       `SELECT
          currency_code AS "currencyCode",
          COUNT(*) FILTER (WHERE status = 'FINALIZED')::int AS finalized_count,
@@ -289,7 +324,7 @@ async function invoicesGrouped(s: Scope) {
        GROUP BY currency_code`,
       v,
     )
-  ).rows as Array<{ currencyCode: string | null; finalized_count: number; finalized_amount: string; draft_count: number; cancelled_count: number }>;
+  ).rows;
 
   const byCurrency: Record<string, { count: number; amount: number }> = {};
   let unknownCount = 0;
@@ -327,7 +362,7 @@ async function invoicesGrouped(s: Scope) {
 async function paymentsGrouped(s: Scope) {
   const v = params(s);
   const rows = (
-    await getPool().query(
+    await getPool().query<PaymentGroupedRow>(
       `WITH scoped AS (
          SELECT i.currency_code AS "currencyCode", i.total_amount::text AS total_amount, i.due_date, i.status, COALESCE(ps.paid_amount,0)::text AS paid
          FROM tenant_invoices i
@@ -355,17 +390,7 @@ async function paymentsGrouped(s: Scope) {
        GROUP BY "currencyCode"`,
       v,
     )
-  ).rows as Array<{
-    currencyCode: string | null;
-    paid_amount: string;
-    unpaid_amount: string;
-    overdue_amount: string;
-    outstanding_amount: string;
-    unpaid_count: number;
-    partial_count: number;
-    paid_count: number;
-    overdue_count: number;
-  }>;
+  ).rows;
 
   const byCurrency: Record<string, { paidAmount: number; unpaidAmount: number; overdueAmount: number; outstandingAmount: number; unpaidCount: number; partiallyPaidCount: number; paidCount: number; overdueCount: number }> = {};
   const unknown = { paidAmount: 0, unpaidAmount: 0, overdueAmount: 0, outstandingAmount: 0, unpaidCount: 0, partiallyPaidCount: 0, paidCount: 0, overdueCount: 0 };
@@ -419,7 +444,7 @@ async function paymentsGrouped(s: Scope) {
 async function receiptsGrouped(s: Scope) {
   const v = params(s);
   const rows = (
-    await getPool().query(
+    await getPool().query<ReceiptGroupedRow>(
       `SELECT
          i.currency_code AS "currencyCode",
          COUNT(*) FILTER (WHERE pr.status = 'ISSUED')::int AS issued_count,
@@ -435,7 +460,7 @@ async function receiptsGrouped(s: Scope) {
        GROUP BY i.currency_code`,
       v,
     )
-  ).rows as Array<{ currencyCode: string | null; issued_count: number; issued_amount: string; void_count: number; void_amount: string }>;
+  ).rows;
 
   const issuedByCurrency: Record<string, { count: number; amount: number }> = {};
   const voidByCurrency: Record<string, { count: number; amount: number }> = {};
@@ -708,7 +733,7 @@ export const basicFinancialReportingRepository = {
       payments: {
         paidAmount: (() => {
           const knownCodes = Object.keys(pay.byCurrency);
-          if (pay.unknown.paidAmount !== 0 || pay.unknown.count !== 0) return null;
+          if (pay.unknown.paidAmount !== 0) return null;
           if (knownCodes.length === 1) return pay.byCurrency[knownCodes[0]].paidAmount;
           if (knownCodes.length === 0) return 0;
           return null;

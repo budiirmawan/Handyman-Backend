@@ -128,6 +128,10 @@ function addSummary(
     'unpaidAmount',
     'overdueAmount',
     'outstandingAmount',
+  ] as const) {
+    target.payments[key] = addNullable(target.payments[key], source.payments[key]);
+  }
+  for (const key of [
     'unpaidCount',
     'partiallyPaidCount',
     'paidCount',
@@ -148,7 +152,10 @@ function addSummary(
   target.basicExpenses.draftCount += source.basicExpenses.draftCount;
   target.basicExpenses.cancelledCount += source.basicExpenses.cancelledCount;
   target.outstandingBalance.invoiceCount += source.outstandingBalance.invoiceCount;
-  target.outstandingBalance.amount += source.outstandingBalance.amount;
+  target.outstandingBalance.amount = addNullable(
+    target.outstandingBalance.amount,
+    source.outstandingBalance.amount,
+  );
 
   for (const key of [
     'billedIncome',
@@ -157,16 +164,28 @@ function addSummary(
     'netBilled',
     'netReceived',
   ] as const) {
-    target.incomeVsOperationalCost[key] += source.incomeVsOperationalCost[key];
+    target.incomeVsOperationalCost[key] = addNullable(
+      target.incomeVsOperationalCost[key],
+      source.incomeVsOperationalCost[key],
+    );
   }
 }
 
 function addCountAmount(
-  target: { count: number; amount: number },
-  source: { count: number; amount: number },
+  target: { count: number; amount: number | null },
+  source: { count: number; amount: number | null },
 ): void {
   target.count += source.count;
-  target.amount += source.amount;
+  target.amount = addNullable(target.amount, source.amount);
+}
+
+/**
+ * Null means "not representable as a single amount" (BE-19I single-currency
+ * rule). An unavailable operand poisons the roll-up: the Client total cannot
+ * be stated, so it stays null rather than silently dropping data as zero.
+ */
+function addNullable(a: number | null, b: number | null): number | null {
+  return a === null || b === null ? null : a + b;
 }
 
 function cloneSummary(

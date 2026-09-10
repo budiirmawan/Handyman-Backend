@@ -267,6 +267,10 @@ export const fxReportingService = {
     }
 
     // ---- 3. Convert each fact independently at its OWN business date -----
+    // Past the fail-closed policy guard, the reporting currency is governed
+    // and non-null (ClientFxPolicy.reportingCurrencyCode is `string`); bind
+    // it once so the conversion authority and the COMPLETE total share it.
+    const targetCurrencyCode: string = policy.reportingCurrencyCode;
     const convertedComponents: FxConvertedComponent[] = [];
     const unconvertible: FxUnconvertibleDetail[] = [];
     let convertedTotalDecimal: Decimal | null = null;
@@ -305,7 +309,7 @@ export const fxReportingService = {
           {
             clientId,
             sourceCurrencyCode: currencyCode,
-            targetCurrencyCode: reportingCurrencyCode,
+            targetCurrencyCode,
             amount: fact.amount,
             referenceDate,
             purpose: `${fact.sourceType}:${fact.sourceId}`,
@@ -336,7 +340,7 @@ export const fxReportingService = {
       unconvertible.length === 0 && convertedTotalDecimal !== null
         ? {
             amount: toDecimalString(convertedTotalDecimal),
-            currencyCode: reportingCurrencyCode,
+            currencyCode: targetCurrencyCode,
             completeness: 'COMPLETE',
           }
         : null;
