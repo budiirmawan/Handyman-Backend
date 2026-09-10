@@ -7,7 +7,13 @@ export type ManagementFinancialSummaryQuery = {
   scope: ManagementReadScopeFilters;
 };
 
-export type ManagementCountAmount = { count: number; amount: number };
+/**
+ * Amount is null when BE-19I cannot represent the aggregate as a single
+ * amount under its single-currency convenience rule (multi-currency or
+ * unknown-currency source data). Null is propagated, never zero-filled:
+ * an unavailable total must not be reported as 0.
+ */
+export type ManagementCountAmount = { count: number; amount: number | null };
 
 export type ManagementFinancialSummaryBlock = {
   tenantCharges: ManagementCountAmount & { cancelledCount: number };
@@ -17,10 +23,10 @@ export type ManagementFinancialSummaryBlock = {
     cancelledCount: number;
   };
   payments: {
-    paidAmount: number;
-    unpaidAmount: number;
-    overdueAmount: number;
-    outstandingAmount: number;
+    paidAmount: number | null;
+    unpaidAmount: number | null;
+    overdueAmount: number | null;
+    outstandingAmount: number | null;
     unpaidCount: number;
     partiallyPaidCount: number;
     paidCount: number;
@@ -40,13 +46,13 @@ export type ManagementFinancialSummaryBlock = {
     draftCount: number;
     cancelledCount: number;
   };
-  outstandingBalance: { invoiceCount: number; amount: number };
+  outstandingBalance: { invoiceCount: number; amount: number | null };
   incomeVsOperationalCost: {
-    billedIncome: number;
-    receivedIncome: number;
-    operationalCost: number;
-    netBilled: number;
-    netReceived: number;
+    billedIncome: number | null;
+    receivedIncome: number | null;
+    operationalCost: number | null;
+    netBilled: number | null;
+    netReceived: number | null;
   };
 };
 
