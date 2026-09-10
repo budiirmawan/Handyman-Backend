@@ -46,12 +46,9 @@ describe('handyman-foundation (HC-00 PART 01)', () => {
     assert.equal(mounted, true);
   });
 
-  // BLOCKED by pre-existing baseline breakage (absent in HEAD 4b4d744
-  // itself, unrelated to PART 01): src/routes/index.ts cannot load because
-  // vendor-category.errors, workforce-reporting.types, and
-  // utility-operational-exception.routes files are missing from the repo.
-  // Enable once the baseline is repaired; bodies are kept intact.
-  it.skip('mounts the /handyman namespace on the central API router', async () => {
+  // CR-BASELINE-01 FINAL VALIDATION — baseline repaired; the full-app
+  // registration tests are active.
+  it('mounts the /handyman namespace on the central API router', async () => {
     const { createApiRouter } = await import('../src/routes');
     const stack = (createApiRouter() as unknown as { stack: RouterLayer[] })
       .stack;
@@ -64,7 +61,7 @@ describe('handyman-foundation (HC-00 PART 01)', () => {
     assert.equal(mounted, true);
   });
 
-  it.skip('reserves the namespace on the full app: unmapped /handyman paths fall through to the standard 404 envelope', async () => {
+  it('reserves the namespace on the full app: unmapped /handyman paths fall through to the standard 404 envelope', async () => {
     const { getAppConfig } = await import('../src/config');
     const { api } = await import('./helpers/http');
     const response = await api().get(
