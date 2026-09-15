@@ -346,6 +346,7 @@ import { migration0345AddChecklistResponseLastRespondedByUserId } from './0345_a
 import { migration0346AddFormInstanceAttributionSnapshot } from './0346_add_form_instance_attribution_snapshot';
 import { migration0347AddFormResponseLastRespondedByUserId } from './0347_add_form_response_last_responded_by_user_id';
 import { migration0348CreateHandymanRequests } from './0348_create_handyman_requests';
+import { migration0349CreateHandymanProviders } from './0349_create_handyman_providers';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -699,4 +700,5 @@ export const migrations: readonly Migration[] = [
   migration0346AddFormInstanceAttributionSnapshot,
   migration0347AddFormResponseLastRespondedByUserId,
   migration0348CreateHandymanRequests,
+  migration0349CreateHandymanProviders,
 ];

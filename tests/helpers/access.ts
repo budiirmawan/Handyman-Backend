@@ -493,6 +493,9 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   { code: 'handyman_request.create', name: 'Create Handyman Request' },
   { code: 'handyman_request.read', name: 'Read Handyman Requests' },
   { code: 'handyman_request.manage', name: 'Manage Handyman Requests' },
+  // CR-HM-BE-02 RUN 1 — Handyman provider designation permissions
+  { code: 'handyman_provider.read', name: 'Read Handyman Providers' },
+  { code: 'handyman_provider.manage', name: 'Manage Handyman Providers' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {

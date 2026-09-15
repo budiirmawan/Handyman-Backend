@@ -183,8 +183,15 @@ describe('CR-HM-BE-01 RUN 1 — Migration & Permissions', () => {
   it('verifies downgrade and re-migration cycle', async (t) => {
     if (!ok(t)) return;
 
-    // Down 0348
-    const downResult = await migrateDown(pool!);
+    // Roll back any later migrations stacked above 0348 (CR-HM-BE-02 added
+    // 0349 on top), then down 0348 itself
+    let downResult = await migrateDown(pool!);
+    while (
+      downResult !== null &&
+      downResult !== '0348_create_handyman_requests'
+    ) {
+      downResult = await migrateDown(pool!);
+    }
     assert.equal(downResult, '0348_create_handyman_requests');
 
     // Table should not exist
