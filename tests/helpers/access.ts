@@ -489,6 +489,10 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   { code: 'fx_rate.approve', name: 'Approve, Reject, Supersede or Deactivate FX Rates' },
   { code: 'client_fx_policy.read', name: 'Read Client FX Policy' },
   { code: 'client_fx_policy.manage', name: 'Manage Client FX Policy' },
+  // CR-HM-BE-01 RUN 1 — Handyman request permissions
+  { code: 'handyman_request.create', name: 'Create Handyman Request' },
+  { code: 'handyman_request.read', name: 'Read Handyman Requests' },
+  { code: 'handyman_request.manage', name: 'Manage Handyman Requests' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {
