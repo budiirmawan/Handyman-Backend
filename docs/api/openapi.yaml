@@ -71,6 +71,17 @@ tags:
       the caller. No quotation, inspection, approval, provider/crew,
       scheduling, permit, WorkSession, QC, BAST, invoice, payment, pricing,
       ledger or warranty surface exists here.
+  - name: Handyman Providers
+    description: >
+      CR-HM-BE-02 RUN 3 — Handyman Provider HTTP contract: thin exposure of
+      the completed Run 1–2 Handyman Provider authority (Client-scoped
+      designation lifecycle plus Building-scoped authorized-provider and
+      service-eligibility reads) through the existing Asentra route
+      composition. Six endpoints only. The client/building scope comes from
+      the route, the actor only from the authenticated session, and
+      createdByUserId / status / id / timestamps are server-managed and never
+      accepted from the caller. No entitlement/configuration internals, no
+      pricing or rate card, and no request-assignment surface exists here.
   - name: Front Desk
     description: >
       CR-BE-FE-JOURNEY-CONTRACT-01 PART 01A - J09 Visitor & Front-Desk core
@@ -44709,6 +44720,246 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  # CR-HM-BE-02 RUN 3 — Handyman Provider designation + Building-scoped
+  # eligibility reads (thin exposure of the Run 1/Run 2 service authority;
+  # no separate Handyman server/runtime).
+  /clients/{clientId}/handyman-providers:
+    post:
+      operationId: designateHandymanProvider
+      x-required-permission: handyman_provider.manage
+      x-client-scoped: true
+      summary: Designate a Handyman Provider for a Client
+      description: >
+        CR-HM-BE-02 — designates an existing Vendor of the same Client as a
+        Handyman Provider. The path `clientId` is the authoritative client
+        scope and the actor comes only from the authenticated session. Body
+        allowlist is exactly `vendorId`; protected fields (`clientId`,
+        `createdByUserId`, `status`, `id`, timestamps) and any unknown field
+        are rejected with 400 `VALIDATION_ERROR`. The Run 1 service enforces
+        client access (403 `BUILDING_ACCESS_DENIED` — the shared
+        context-access authority, no existence leak), Client existence (404
+        `CLIENT_NOT_FOUND`), effective HANDYMAN entitlement through the
+        existing BE-02C chain (403 `HANDYMAN_PROVIDER_MODULE_NOT_ENTITLED`;
+        entitlements are never created here), Vendor existence and ACTIVE
+        status (404 `VENDOR_NOT_FOUND` / 400 `VENDOR_INACTIVE`), vendor/client
+        match (400 `HANDYMAN_PROVIDER_VENDOR_CLIENT_MISMATCH`), and at-most-
+        one-ACTIVE-designation-per-pair (409
+        `HANDYMAN_PROVIDER_ALREADY_DESIGNATED`). New designations are created
+        `ACTIVE`; `status` is server-managed.
+      tags: [Handyman Providers]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanProvider"
+      responses:
+        "201":
+          description: Designation created (ACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanProvider" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listClientHandymanProviders
+      x-required-permission: handyman_provider.read
+      x-client-scoped: true
+      summary: List a Client's Handyman Provider Designations
+      description: >
+        CR-HM-BE-02 — full designation history for the Client, including
+        deactivated rows (the preserved history is a first-class read
+        surface). No query parameters are accepted: the Run 1 service default
+        is the complete history and the path `clientId` is the authoritative
+        scope. Client access is service-authoritative (403
+        `BUILDING_ACCESS_DENIED` for actors without access); unknown clients
+        return 404 `CLIENT_NOT_FOUND`.
+      tags: [Handyman Providers]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      responses:
+        "200":
+          description: Designation history (ACTIVE and INACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanProvider" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-providers/{providerId}:
+    parameters:
+      - name: providerId
+        in: path
+        description: Authoritative `handyman_providers.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanProvider
+      x-required-permission: handyman_provider.read
+      summary: Get one Handyman Provider Designation
+      description: >
+        CR-HM-BE-02 — single designation detail, including deactivated rows.
+        Unknown designations return 404 `HANDYMAN_PROVIDER_NOT_FOUND`; access
+        to the owning Client is service-authoritative (403
+        `BUILDING_ACCESS_DENIED`, no existence leak).
+      tags: [Handyman Providers]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Designation detail.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanProvider" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateHandymanProviderStatus
+      x-required-permission: handyman_provider.manage
+      summary: Activate or Deactivate a Handyman Provider Designation
+      description: >
+        CR-HM-BE-02 — ACTIVE ↔ INACTIVE lifecycle on the designation row.
+        Body allowlist is exactly `status` (ACTIVE or INACTIVE); protected
+        fields (`clientId`, `vendorId`, `createdByUserId`, `id`, timestamps)
+        and any unknown field are rejected with 400 `VALIDATION_ERROR`.
+        Deactivation always succeeds from ACTIVE (fail-safe direction).
+        Reactivation re-asserts the full designation invariants (ACTIVE
+        Client, effective HANDYMAN entitlement, ACTIVE Vendor of the same
+        Client, no other ACTIVE designation for the pair) and returns the
+        governed designation errors on violation. A no-op transition
+        (already in the target status) is 400
+        `HANDYMAN_PROVIDER_STATUS_INVALID`; the transition itself is guarded
+        so concurrent lifecycle commands cannot both succeed. Deactivated
+        rows are preserved as history, never deleted.
+      tags: [Handyman Providers]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateHandymanProviderStatus"
+      responses:
+        "200":
+          description: Designation after the transition.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanProvider" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /buildings/{buildingId}/handyman-providers:
+    parameters:
+      - $ref: "#/components/parameters/BuildingIdPath"
+    get:
+      operationId: listBuildingHandymanProviders
+      x-required-permission: handyman_provider.read
+      x-building-scoped: true
+      summary: List Providers Authorized for a Building
+      description: >
+        CR-HM-BE-02 Run 2 read model — every designated Provider authorized
+        to serve this Building right now: Handyman enablement (effective
+        commercial entitlement AND effective activated module configuration,
+        fail closed by construction), ACTIVE designation, ACTIVE Vendor of
+        the same Client, and an ACTIVE effective-now
+        `vendor_building_relationships` row. A disabled or unconfigured
+        Building yields an empty list (200 `data: []` — the fail-closed
+        outcome; DRAFT-only configuration versions are not effective until
+        activated through the existing publish-gated lifecycle). Building
+        access remains service-authoritative (403 `BUILDING_ACCESS_DENIED`,
+        no existence leak). No internal entitlement/configuration records
+        are exposed.
+      tags: [Handyman Providers]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Authorized providers (empty when the Building is not Handyman-enabled).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AuthorizedHandymanProvider" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /buildings/{buildingId}/handyman-providers/{providerId}/service-eligibilities:
+    parameters:
+      - $ref: "#/components/parameters/BuildingIdPath"
+      - name: providerId
+        in: path
+        description: Authoritative `handyman_providers.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listBuildingHandymanProviderServiceEligibilities
+      x-required-permission: handyman_provider.read
+      x-building-scoped: true
+      summary: List a Provider's Eligible Handyman Services at a Building
+      description: >
+        CR-HM-BE-02 Run 2 read model — the Service Catalog services this
+        authorized Provider may deliver at this Building right now: ACTIVE
+        vendor capability, ACTIVE service-catalog link, ACTIVE same-client
+        catalog entry in the HANDYMAN category, and capability scope covering
+        the Building (`VENDOR_WIDE`, or `BUILDING_SCOPED` with this Building
+        inside the scope). The provider must be authorized for the Building —
+        otherwise 404 `HANDYMAN_PROVIDER_NOT_FOUND` (no capability leak).
+        Building access remains service-authoritative (403
+        `BUILDING_ACCESS_DENIED`). Contains no pricing or rate-card data
+        (service commerce belongs to CR-HM-BE-03).
+      tags: [Handyman Providers]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Eligible services (possibly empty).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanProviderServiceEligibility" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     bearerAuth:
@@ -73111,3 +73362,76 @@ components:
         title: { type: string, maxLength: 200 }
         description: { type: string, nullable: true, maxLength: 2000 }
         priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL], default: MEDIUM }
+    HandymanProvider:
+      type: object
+      description: >
+        CR-HM-BE-02 — Client-scoped Handyman Provider designation (public
+        read model). `clientId` comes from the route, `createdByUserId` from
+        the authenticated actor, and `status` is server-managed (ACTIVE on
+        creation). Deactivated rows are preserved as history.
+      required: [id, clientId, vendorId, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateHandymanProvider:
+      type: object
+      description: >
+        CR-HM-BE-02 RUN 3 — allowed designation body ONLY. `clientId` comes
+        from the route and the actor from the session; `clientId`,
+        `createdByUserId`, `status`, `id` and timestamps are never accepted
+        from the caller — supplying any of them, or any other field, is
+        rejected with 400 `VALIDATION_ERROR`.
+      required: [vendorId]
+      properties:
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+    UpdateHandymanProviderStatus:
+      type: object
+      description: >
+        CR-HM-BE-02 RUN 3 — allowed status-transition body ONLY. The
+        designation pair (`clientId`, `vendorId`), `createdByUserId`, `id`
+        and timestamps are immutable or server-generated and never accepted
+        from the caller — supplying any of them, or any other field, is
+        rejected with 400 `VALIDATION_ERROR`.
+      required: [status]
+      properties:
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+    AuthorizedHandymanProvider:
+      type: object
+      description: >
+        CR-HM-BE-02 Run 2 read model — one designated Provider authorized to
+        serve one Building right now (Handyman enablement ∧ ACTIVE
+        designation ∧ ACTIVE same-client Vendor ∧ ACTIVE effective-now
+        vendor-building relationship). Exposes no internal
+        subscription/license/entitlement/configuration records.
+      required: [providerId, buildingId, clientId, vendorId, vendorCode, vendorName, relationshipId]
+      properties:
+        providerId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+        vendorCode: { type: string }
+        vendorName: { type: string }
+        relationshipId: { $ref: "#/components/schemas/Uuid" }
+    HandymanProviderServiceEligibility:
+      type: object
+      description: >
+        CR-HM-BE-02 Run 2 read model — one eligible Service Catalog service
+        for one authorized Provider at one Building (ACTIVE capability ∧
+        ACTIVE catalog link ∧ ACTIVE same-client HANDYMAN catalog entry ∧
+        capability scope covering the Building). Contains no pricing or
+        rate-card data — service commerce belongs to CR-HM-BE-03.
+      required: [providerId, buildingId, vendorId, capabilityId, capabilityScope, serviceCatalogId, serviceCode, serviceName]
+      properties:
+        providerId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+        capabilityId: { $ref: "#/components/schemas/Uuid" }
+        capabilityScope: { type: string, enum: [VENDOR_WIDE, BUILDING_SCOPED] }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        serviceCode: { type: string }
+        serviceName: { type: string }

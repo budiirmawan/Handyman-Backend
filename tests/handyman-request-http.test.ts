@@ -672,8 +672,12 @@ describe('CR-HM-BE-01 RUN 3: Handyman Request HTTP contract', () => {
       'utf8',
     );
 
+    // CR-HM-BE-02 Run 3: narrowed from 'handyman' to 'handyman-requests' so
+    // this exact-set assertion keeps covering the four CR-HM-BE-01 endpoints
+    // only; the Handyman Provider paths added by CR-HM-BE-02 are asserted by
+    // tests/handyman-provider-http.test.ts.
     const handymanPaths = Object.keys(spec.paths).filter((p) =>
-      p.includes('handyman'),
+      p.includes('handyman-requests'),
     );
     assert.deepEqual(handymanPaths.sort(), [
       '/buildings/{buildingId}/handyman-requests',

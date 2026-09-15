@@ -192,6 +192,10 @@ import { createFxRateRouter } from '../modules/fx-rates/fx-rate.routes';
 // CR-HM-BE-01 RUN 3 — Handyman Request HTTP contract (thin exposure of the
 // Run 1–2 service authority; no separate Handyman server/runtime).
 import { createHandymanRequestRouter } from '../modules/handyman-requests/handyman-request.routes';
+// CR-HM-BE-02 RUN 3 — Handyman Provider designation + eligibility HTTP
+// contract (thin exposure of the Run 1–2 service authority; no separate
+// Handyman server/runtime).
+import { createHandymanProviderRouter } from '../modules/handyman-providers/handyman-provider.routes';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -659,5 +663,7 @@ export function createApiRouter(): Router {
   router.use(createFxRateRouter());
   // CR-HM-BE-01 RUN 3 — Handyman Request HTTP contract.
   router.use(createHandymanRequestRouter());
+  // CR-HM-BE-02 RUN 3 — Handyman Provider designation + eligibility contract.
+  router.use(createHandymanProviderRouter());
   return router;
 }
