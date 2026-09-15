@@ -69,3 +69,55 @@ export type NewHandymanProvider = {
 export type HandymanProviderFilters = {
   status?: HandymanProviderStatus;
 };
+
+/**
+ * CR-HM-BE-02 RUN 2 — domain read models.
+ *
+ * Shapes sufficient for the Run 3 HTTP exposure. `entitled` /
+ * `configuredEnabled` mirror the existing BE-27C effective-projection
+ * convention (public through the existing module-configuration effective
+ * endpoints); everything else is Handyman-domain vocabulary. No internal
+ * subscription/license/entitlement/configuration records are exposed.
+ */
+
+/** Effective Handyman state of one Building (fail closed by construction). */
+export type BuildingHandymanEnablement = {
+  buildingId: string;
+  clientId: string;
+  /** Authoritative flag: commercial entitlement AND effective configuration. */
+  enabled: boolean;
+  /** Diagnostic: effective commercial HANDYMAN right (BE-02C chain). */
+  entitled: boolean;
+  /** Diagnostic: effective configuration intent (BE-27C projection). */
+  configuredEnabled: boolean;
+};
+
+/** One designated Provider authorized to serve one Building right now. */
+export type AuthorizedHandymanProvider = {
+  /** `handyman_providers` designation id. */
+  providerId: string;
+  buildingId: string;
+  clientId: string;
+  vendorId: string;
+  vendorCode: string;
+  vendorName: string;
+  /** The authorizing BE-06D `vendor_building_relationships` row. */
+  relationshipId: string;
+};
+
+/** How a capability scopes to Buildings (BE-06E semantics). */
+export const HANDYMAN_CAPABILITY_SCOPES = ['VENDOR_WIDE', 'BUILDING_SCOPED'] as const;
+
+export type HandymanCapabilityScope = (typeof HANDYMAN_CAPABILITY_SCOPES)[number];
+
+/** One eligible Service Catalog service for one authorized Provider at one Building. */
+export type HandymanProviderServiceEligibility = {
+  providerId: string;
+  buildingId: string;
+  vendorId: string;
+  capabilityId: string;
+  capabilityScope: HandymanCapabilityScope;
+  serviceCatalogId: string;
+  serviceCode: string;
+  serviceName: string;
+};
