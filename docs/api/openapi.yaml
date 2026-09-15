@@ -59,6 +59,18 @@ servers:
     description: Versioned API base path (API_PREFIX; default /api/v1)
 
 tags:
+  - name: Handyman Requests
+    description: >
+      CR-HM-BE-01 RUN 3 — Handyman Request HTTP contract: thin exposure of the
+      completed Run 1–2 Handyman Request authority (service authority,
+      validation, idempotency and audit) through the existing Asentra route
+      composition. Four endpoints only — building-scoped create/list plus
+      detail and cancel. The building scope comes from the route, the actor
+      only from the authenticated session, and clientId / requestNumber /
+      status / operationalSurface are server-managed and never accepted from
+      the caller. No quotation, inspection, approval, provider/crew,
+      scheduling, permit, WorkSession, QC, BAST, invoice, payment, pricing,
+      ledger or warranty surface exists here.
   - name: Front Desk
     description: >
       CR-BE-FE-JOURNEY-CONTRACT-01 PART 01A - J09 Visitor & Front-Desk core
@@ -44498,6 +44510,205 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /buildings/{buildingId}/handyman-requests:
+    parameters:
+      - name: buildingId
+        in: path
+        required: true
+        description: Authoritative Building scope of the request.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: createHandymanRequest
+      x-required-permission: handyman_request.create
+      x-building-scoped: true
+      summary: Submit a Handyman Request for a Building
+      description: >
+        CR-HM-BE-01 RUN 3 — thin HTTP exposure of the Run 2 Handyman Request
+        authority. The Building scope comes from the path, the actor only from
+        the authenticated session (`createdByUserId`), the Client identity is
+        derived from the Building, and `requestNumber`, `status` and
+        `operationalSurface` are server-managed: none of them is accepted in
+        the body (400 with a field detail). The body accepts ONLY the allowed
+        intake fields of `CreateHandymanRequest` — any other field is
+        rejected. An optional `Idempotency-Key` header is forwarded to the
+        existing service: the same key with the same payload returns the
+        original request; the same key with a different payload is 409
+        `HANDYMAN_REQUEST_IDEMPOTENCY_CONFLICT`. Creation records a
+        `HANDYMAN_REQUEST_CREATED` operational event with no customer PII.
+        There is no lifecycle effect beyond `SUBMITTED` — no quotation,
+        inspection, approval, provider/crew, scheduling, permit, WorkSession,
+        QC, BAST, invoice, payment, pricing, ledger or warranty surface.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >
+            Optional client request key (at most 255 characters). A replayed
+            key with an identical payload returns the original handyman
+            request; a replayed key with a different payload fails 409. It is
+            never accepted in the JSON body.
+          schema:
+            type: string
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateHandymanRequest" }
+      responses:
+        "201":
+          description: >
+            Handyman request submitted (or the original request returned for
+            an `Idempotency-Key` replay). The internal idempotency
+            fingerprint is never exposed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanRequest" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listBuildingHandymanRequests
+      x-required-permission: handyman_request.read
+      x-building-scoped: true
+      summary: List Handyman Requests in a Building
+      description: >
+        Building-scoped list. The path `buildingId` is the authoritative
+        scope: a `buildingId` query parameter can never widen it, and the
+        caller must hold an ACTIVE Building assignment (403
+        `BUILDING_ACCESS_DENIED` otherwise). Supports the existing
+        limit/offset pagination convention and the already-supported filters.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: spaceId
+          in: query
+          required: false
+          description: Filter by Space.
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          description: Filter by status.
+          schema: { type: string, enum: [SUBMITTED, CANCELLED] }
+        - name: inboundChannel
+          in: query
+          required: false
+          description: Filter by inbound channel.
+          schema: { type: string, enum: [WHATSAPP, PHONE, WALK_IN, OTHER] }
+        - name: createdByUserId
+          in: query
+          required: false
+          description: Filter by submitting user.
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: tenantCompanyId
+          in: query
+          required: false
+          description: Filter by Tenant Company.
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: search
+          in: query
+          required: false
+          description: Free-text search over request number, title and customer name.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          description: Page size (1..100).
+          schema: { type: integer, minimum: 1, maximum: 100 }
+        - name: offset
+          in: query
+          required: false
+          description: Page offset (non-negative integer).
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Handyman requests of the Building.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: "#/components/schemas/HandymanRequest" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /handyman-requests/{handymanRequestId}:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        description: Authoritative `handyman_requests.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanRequest
+      x-required-permission: handyman_request.read
+      x-building-scoped: true
+      summary: Get a Handyman Request
+      description: >
+        Returns one Handyman Request. Building access enforcement is preserved:
+        the record is resolved first, then the caller's assignment to the
+        record's Building is asserted — an inaccessible Building is 403
+        `BUILDING_ACCESS_DENIED`, an unknown id is 404
+        `HANDYMAN_REQUEST_NOT_FOUND`.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Handyman request.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanRequest" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman-requests/{handymanRequestId}/cancel:
+    post:
+      operationId: cancelHandymanRequest
+      x-required-permission: handyman_request.manage
+      x-building-scoped: true
+      summary: Cancel a submitted Handyman Request
+      description: >
+        Calls the existing cancellation service only. A `SUBMITTED` request is
+        cancelled (a `HANDYMAN_REQUEST_CANCELLED` operational event is
+        recorded); cancelling an already-cancelled request is 409
+        `HANDYMAN_REQUEST_ALREADY_CANCELLED`. There is deliberately no generic
+        status-update surface on this path.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Cancelled handyman request.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanRequest" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -72847,3 +73058,56 @@ components:
             never re-linked, never duplicated and never made dependent on this
             binding. An explicit null is treated as missing rather than as "no
             parent", and no parent-less binding can be created.
+
+    HandymanRequest:
+      type: object
+      description: >
+        CR-HM-BE-01 — Building-scoped Handyman Request intake record. `clientId`
+        is derived from the Building, `createdByUserId` from the authenticated
+        actor, `requestNumber` is server-generated, and `status` /
+        `operationalSurface` are server-managed. The internal idempotency
+        fingerprint is never returned.
+      required: [id, clientId, buildingId, spaceId, customerName, createdByUserId, operationalSurface, inboundChannel, requestNumber, title, priority, status, requestedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        spaceId: { $ref: "#/components/schemas/Uuid" }
+        tenantCompanyId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        customerName: { type: string, maxLength: 200 }
+        customerPhone: { type: string, nullable: true, maxLength: 50 }
+        customerEmail: { type: string, nullable: true, maxLength: 254 }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        operationalSurface: { type: string, enum: [BM_SUPER_APP] }
+        inboundChannel: { type: string, enum: [WHATSAPP, PHONE, WALK_IN, OTHER] }
+        requestNumber: { type: string }
+        title: { type: string, maxLength: 200 }
+        description: { type: string, nullable: true, maxLength: 2000 }
+        priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        status: { type: string, enum: [SUBMITTED, CANCELLED] }
+        idempotencyKey: { type: string, nullable: true, maxLength: 255 }
+        requestedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateHandymanRequest:
+      type: object
+      description: >
+        CR-HM-BE-01 RUN 3 — allowed intake fields ONLY. `buildingId` comes from
+        the route, the actor from the session, and `clientId`,
+        `createdByUserId`, `requestNumber`, `status`, `operationalSurface`,
+        `idempotencyKey` (header-only), `idempotencyFingerprint` and
+        `requestedAt` are never accepted from the caller — supplying any of
+        them, or any other field, is rejected with 400 `VALIDATION_ERROR`.
+      required: [spaceId, customerName, inboundChannel, title]
+      properties:
+        spaceId: { $ref: "#/components/schemas/Uuid" }
+        tenantCompanyId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        customerName: { type: string, maxLength: 200 }
+        customerPhone: { type: string, nullable: true, maxLength: 50 }
+        customerEmail: { type: string, nullable: true, maxLength: 254 }
+        inboundChannel: { type: string, enum: [WHATSAPP, PHONE, WALK_IN, OTHER] }
+        title: { type: string, maxLength: 200 }
+        description: { type: string, nullable: true, maxLength: 2000 }
+        priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL], default: MEDIUM }

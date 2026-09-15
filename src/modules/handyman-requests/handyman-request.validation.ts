@@ -403,4 +403,103 @@ export function parseHandymanRequestFilters(query: unknown): HandymanRequestFilt
   };
 }
 
+// ---------------------------------------------------------------------------
+// CR-HM-BE-01 RUN 3 — HTTP surface parsers.
+//
+// The Run 2 service parsers above remain the single validation authority for
+// field VALUES (types, lengths, formats, enums). These parsers only enforce
+// the HTTP transport contract: the strict create-body allow-list (caller
+// authority is never accepted for clientId, createdByUserId, requestNumber,
+// status, or operationalSurface), and route parameter parsing.
+// ---------------------------------------------------------------------------
+
+const CREATE_HANDYMAN_REQUEST_HTTP_BODY_FIELDS = [
+  'spaceId',
+  'customerName',
+  'customerPhone',
+  'customerEmail',
+  'tenantCompanyId',
+  'tenantPicId',
+  'inboundChannel',
+  'title',
+  'description',
+  'priority',
+] as const;
+
+const CREATE_HANDYMAN_REQUEST_PROTECTED_FIELDS: Record<string, string> = {
+  clientId:
+    'clientId is derived from the route building and cannot be provided.',
+  createdByUserId:
+    'createdByUserId is derived from the authenticated actor and cannot be provided.',
+  requestNumber:
+    'requestNumber is server-generated and cannot be provided.',
+  status: 'status is server-managed and cannot be provided.',
+  operationalSurface:
+    'operationalSurface is server-managed and cannot be provided.',
+  idempotencyKey:
+    'idempotencyKey is accepted only through the Idempotency-Key header.',
+  idempotencyFingerprint:
+    'idempotencyFingerprint is server-computed and never accepted.',
+  requestedAt: 'requestedAt is server-assigned and cannot be provided.',
+};
+
+export function parseHandymanRequestBuildingIdParam(raw: string): string {
+  if (typeof raw !== 'string') {
+    fail([{ field: 'buildingId', message: 'Building id must be a string.' }]);
+  }
+  const value = raw.trim().toLowerCase();
+  if (!isValidUuid(value)) {
+    fail([{ field: 'buildingId', message: 'Building id must be a valid UUID.' }]);
+  }
+  return value;
+}
+
+export const validateHandymanRequestBuildingIdParam =
+  parseHandymanRequestBuildingIdParam;
+
+/**
+ * Strict HTTP create-body contract (CR-HM-BE-01 RUN 3): only the allowed
+ * intake fields pass through, and only their raw values — the Run 2 service
+ * parser performs all value validation. Protected authority fields and any
+ * other field are rejected with 400 details.
+ */
+export function parseCreateHandymanRequestHttpBody(
+  body: unknown,
+): Record<string, unknown> {
+  if (!isRecord(body)) {
+    fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
+  }
+
+  const details: Detail[] = [];
+  const allowed: Record<string, unknown> = {};
+
+  for (const field of Object.keys(body)) {
+    const protectedMessage = CREATE_HANDYMAN_REQUEST_PROTECTED_FIELDS[field];
+    if (protectedMessage) {
+      details.push({ field, message: protectedMessage });
+      continue;
+    }
+    if (
+      !(CREATE_HANDYMAN_REQUEST_HTTP_BODY_FIELDS as readonly string[]).includes(
+        field,
+      )
+    ) {
+      details.push({ field, message: `${field} is not allowed.` });
+      continue;
+    }
+    if (body[field] !== undefined) {
+      allowed[field] = body[field];
+    }
+  }
+
+  if (details.length > 0) {
+    fail(details);
+  }
+
+  return allowed;
+}
+
+export const validateCreateHandymanRequestHttpBody =
+  parseCreateHandymanRequestHttpBody;
+
 export const validateHandymanRequestFilters = parseHandymanRequestFilters;

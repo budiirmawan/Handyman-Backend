@@ -189,6 +189,9 @@ import { createExternalWorkforceRouter } from '../modules/external-workforce/ext
 import { createFloorRouter } from '../modules/floors/floor.routes';
 // CR-BE-FX-01 PART 02 — governed FX Rate lifecycle and Client FX Policy.
 import { createFxRateRouter } from '../modules/fx-rates/fx-rate.routes';
+// CR-HM-BE-01 RUN 3 — Handyman Request HTTP contract (thin exposure of the
+// Run 1–2 service authority; no separate Handyman server/runtime).
+import { createHandymanRequestRouter } from '../modules/handyman-requests/handyman-request.routes';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -654,5 +657,7 @@ export function createApiRouter(): Router {
   router.use(createIncidentClosureRouter());
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
+  // CR-HM-BE-01 RUN 3 — Handyman Request HTTP contract.
+  router.use(createHandymanRequestRouter());
   return router;
 }
