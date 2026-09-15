@@ -442,6 +442,45 @@ describe('CR-HM-BE-01 RUN 3: Handyman Request HTTP contract', () => {
     );
   });
 
+  it('enforces the 200-character Idempotency-Key limit with a governed validation error', async (t) => {
+    if (!ready(t)) return;
+    const h = await createHierarchy();
+    const url = `/api/v1/buildings/${h.building.id}/handyman-requests`;
+
+    // Exactly 200 characters is accepted (DB authority: 1..200 after trim).
+    const exact = 'K'.repeat(200);
+    const accepted = await api()
+      .post(url)
+      .set(authHeaders())
+      .set('Idempotency-Key', exact)
+      .send(createBody(h.space.id));
+    assert.equal(accepted.status, 201, JSON.stringify(accepted.body));
+    assert.equal(accepted.body.data.idempotencyKey, exact);
+
+    // 201 characters is a governed 400 VALIDATION_ERROR, never a DB-driven 500.
+    const tooLong = 'K'.repeat(201);
+    const rejected = await api()
+      .post(url)
+      .set(authHeaders())
+      .set('Idempotency-Key', tooLong)
+      .send(createBody(h.space.id));
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, 'VALIDATION_ERROR');
+    const details = rejected.body.error.details as { field: string }[];
+    assert.ok(
+      details.some((d) => d.field === 'idempotencyKey'),
+      'idempotencyKey must be named in the validation details',
+    );
+
+    const replayRejected = await api()
+      .post(url)
+      .set(authHeaders())
+      .set('Idempotency-Key', tooLong)
+      .send(createBody(h.space.id));
+    assert.equal(replayRejected.status, 400);
+    assert.equal(replayRejected.body.error.code, 'VALIDATION_ERROR');
+  });
+
   it('lists building-scoped handyman requests only', async (t) => {
     if (!ready(t)) return;
     const hA = await createHierarchy();
@@ -581,6 +620,44 @@ describe('CR-HM-BE-01 RUN 3: Handyman Request HTTP contract', () => {
       .set(authHeaders(outsider.token));
     assert.equal(outsiderCancel.status, 403);
     assert.equal(outsiderCancel.body.error.code, 'BUILDING_ACCESS_DENIED');
+  });
+
+  it('lets exactly one of two concurrent cancel commands succeed with a single audit event', async (t) => {
+    if (!ready(t)) return;
+    const h = await createHierarchy();
+
+    const created = await api()
+      .post(`/api/v1/buildings/${h.building.id}/handyman-requests`)
+      .set(authHeaders())
+      .send(createBody(h.space.id));
+    assert.equal(created.status, 201);
+    const id = created.body.data.id as string;
+
+    // Two cancellation commands racing through the HTTP surface.
+    const [first, second] = await Promise.all([
+      api().post(`/api/v1/handyman-requests/${id}/cancel`).set(authHeaders()),
+      api().post(`/api/v1/handyman-requests/${id}/cancel`).set(authHeaders()),
+    ]);
+
+    assert.deepEqual(
+      [first.status, second.status].sort(),
+      [200, 409],
+      'exactly one command must win the transition',
+    );
+    const loser = first.status === 409 ? first : second;
+    assert.equal(
+      loser.body.error.code,
+      'HANDYMAN_REQUEST_ALREADY_CANCELLED',
+    );
+
+    // Only the winning command emitted the audit event.
+    const events = await pool!.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+       FROM operational_events
+       WHERE entity_type = 'HANDYMAN_REQUEST' AND entity_id = $1 AND event_type = 'HANDYMAN_REQUEST_CANCELLED'`,
+      [id],
+    );
+    assert.equal(events.rows[0].count, 1);
   });
 
   it('keeps runtime ↔ OpenAPI parity for exactly the four endpoints', async () => {

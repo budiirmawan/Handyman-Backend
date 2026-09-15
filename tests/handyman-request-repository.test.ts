@@ -560,4 +560,102 @@ describe('CR-HM-BE-01 RUN 1 — Handyman Request Repository', () => {
     assert.equal(updated.status, 'CANCELLED');
     assert.ok(updated.updatedAt.getTime() >= record.updatedAt.getTime());
   });
+
+  it('updateStatusFrom only transitions a row still in the expected status', async (t) => {
+    if (!ok(t)) return;
+
+    const h = await createHierarchy();
+    const { record } = await handymanRequestRepository.create({
+      clientId: h.client.id,
+      buildingId: h.building.id,
+      spaceId: h.space.id,
+      customerName: 'Guarded Cancel',
+      createdByUserId: adminUserId,
+      inboundChannel: 'PHONE',
+      requestNumber: `HMR_${suffix()}`,
+      title: 'Guarded transition request',
+    });
+
+    const first = await handymanRequestRepository.updateStatusFrom(
+      record.id,
+      'SUBMITTED',
+      'CANCELLED',
+    );
+    assert.ok(first);
+    assert.equal(first.status, 'CANCELLED');
+
+    // The guard fails on the existing-but-already-CANCELLED row.
+    const second = await handymanRequestRepository.updateStatusFrom(
+      record.id,
+      'SUBMITTED',
+      'CANCELLED',
+    );
+    assert.equal(second, null);
+
+    // The guard also fails for an unknown id.
+    const missing = await handymanRequestRepository.updateStatusFrom(
+      randomUUID(),
+      'SUBMITTED',
+      'CANCELLED',
+    );
+    assert.equal(missing, null);
+  });
+
+  it('updateStatusFrom lets exactly one of two interleaved cancellations win', async (t) => {
+    if (!ok(t)) return;
+
+    const h = await createHierarchy();
+    const { record } = await handymanRequestRepository.create({
+      clientId: h.client.id,
+      buildingId: h.building.id,
+      spaceId: h.space.id,
+      customerName: 'Race Cancel',
+      createdByUserId: adminUserId,
+      inboundChannel: 'WALK_IN',
+      requestNumber: `HMR_${suffix()}`,
+      title: 'Concurrent cancel race request',
+    });
+
+    const tx1 = await pool!.connect();
+    const tx2 = await pool!.connect();
+    try {
+      await tx1.query('BEGIN');
+      await tx2.query('BEGIN');
+
+      // Both transactions read the row while it is still SUBMITTED — the
+      // exact interleaving that previously allowed a double cancellation.
+      const read1 = await handymanRequestRepository.findById(record.id, tx1);
+      const read2 = await handymanRequestRepository.findById(record.id, tx2);
+      assert.equal(read1?.status, 'SUBMITTED');
+      assert.equal(read2?.status, 'SUBMITTED');
+
+      // First command wins the guarded transition.
+      const winner = await handymanRequestRepository.updateStatusFrom(
+        record.id,
+        'SUBMITTED',
+        'CANCELLED',
+        tx1,
+      );
+      assert.ok(winner);
+      assert.equal(winner.status, 'CANCELLED');
+      await tx1.query('COMMIT');
+
+      // Second command's guarded UPDATE matches no SUBMITTED row -> null,
+      // so it can neither transition again nor emit a second event.
+      const loser = await handymanRequestRepository.updateStatusFrom(
+        record.id,
+        'SUBMITTED',
+        'CANCELLED',
+        tx2,
+      );
+      assert.equal(loser, null);
+      await tx2.query('COMMIT');
+    } finally {
+      tx1.release();
+      tx2.release();
+    }
+
+    const after = await handymanRequestRepository.findById(record.id);
+    assert.equal(after?.status, 'CANCELLED');
+  });
 });

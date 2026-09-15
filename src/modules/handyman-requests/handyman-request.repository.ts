@@ -256,6 +256,29 @@ async function updateStatus(
   return result.rows[0] ?? null;
 }
 
+/**
+ * CR-HM-BE-01 closure hardening — guarded transition: the UPDATE only applies
+ * when the row is still in `expectedStatus`, so two concurrent cancellation
+ * commands cannot both succeed and emit duplicate
+ * HANDYMAN_REQUEST_CANCELLED events. Returns null when the guard fails
+ * (row missing, or no longer in `expectedStatus`).
+ */
+async function updateStatusFrom(
+  id: string,
+  expectedStatus: HandymanRequestStatus,
+  status: HandymanRequestStatus,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<HandymanRequestRecord | null> {
+  const result = await executor.query<HandymanRequestRecord>(
+    `UPDATE handyman_requests
+     SET status = $3, updated_at = NOW()
+     WHERE id = $1 AND status = $2
+     RETURNING ${HANDYMAN_REQUEST_SELECT}`,
+    [id, expectedStatus, status],
+  );
+  return result.rows[0] ?? null;
+}
+
 export const handymanRequestRepository = {
   create,
   findById,
@@ -263,4 +286,5 @@ export const handymanRequestRepository = {
   findByRequestNumber,
   list,
   updateStatus,
+  updateStatusFrom,
 };

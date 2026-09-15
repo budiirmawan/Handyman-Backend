@@ -371,13 +371,28 @@ export async function cancelHandymanRequest(
       );
     }
 
-    const updated = await handymanRequestRepository.updateStatus(
+    // CR-HM-BE-01 closure hardening — guarded atomic SUBMITTED -> CANCELLED
+    // transition. When two cancellation commands race, exactly one UPDATE
+    // still matches a SUBMITTED row; the losing command gets null and is
+    // classified below, so only the command that actually performs the
+    // transition emits the HANDYMAN_REQUEST_CANCELLED event.
+    const updated = await handymanRequestRepository.updateStatusFrom(
       parsedId,
+      'SUBMITTED',
       'CANCELLED',
       tx,
     );
     if (!updated) {
-      throw handymanRequestNotFoundError();
+      const current = await handymanRequestRepository.findById(parsedId, tx);
+      if (!current) {
+        throw handymanRequestNotFoundError();
+      }
+      if (current.status === 'CANCELLED') {
+        throw handymanRequestAlreadyCancelledError();
+      }
+      throw handymanRequestStatusInvalidError(
+        'Only submitted handyman requests can be cancelled.',
+      );
     }
 
     await recordOperationalEvent(

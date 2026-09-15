@@ -25,7 +25,10 @@ const MAX_STRING_LENGTH = 200;
 const MAX_DESCRIPTION_LENGTH = 2000;
 const MAX_EMAIL_LENGTH = 254;
 const MAX_PHONE_LENGTH = 50;
-const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+// CR-HM-BE-01 closure hardening — aligned with the persistence authority:
+// migration 0348 enforces length(btrim(idempotency_key)) BETWEEN 1 AND 200,
+// so the governed validation limit must be 200 (never DB-driven 500s).
+const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

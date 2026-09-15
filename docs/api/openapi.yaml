@@ -44546,13 +44546,13 @@ paths:
           in: header
           required: false
           description: >
-            Optional client request key (at most 255 characters). A replayed
-            key with an identical payload returns the original handyman
-            request; a replayed key with a different payload fails 409. It is
-            never accepted in the JSON body.
+            Optional client request key (at most 200 characters, matching the
+            persistence authority). A replayed key with an identical payload
+            returns the original handyman request; a replayed key with a
+            different payload fails 409. It is never accepted in the JSON body.
           schema:
             type: string
-            maxLength: 255
+            maxLength: 200
       requestBody:
         required: true
         content:
@@ -73086,7 +73086,7 @@ components:
         description: { type: string, nullable: true, maxLength: 2000 }
         priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
         status: { type: string, enum: [SUBMITTED, CANCELLED] }
-        idempotencyKey: { type: string, nullable: true, maxLength: 255 }
+        idempotencyKey: { type: string, nullable: true, maxLength: 200 }
         requestedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

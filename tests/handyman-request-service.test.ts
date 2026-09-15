@@ -666,4 +666,68 @@ describe('CR-HM-BE-01 RUN 2: Handyman Request Service Authority & Lifecycle', ()
     );
     assert.equal(finalEvents.rows[0].count, 1);
   });
+
+  it('concurrent cancellation commands produce exactly one transition and one audit event', async (t) => {
+    if (!ready(t)) return;
+
+    const h = await createHierarchy({ assignUserId: adminUserId });
+
+    const created = await createHandymanRequest(
+      {
+        buildingId: h.building.id,
+        spaceId: h.space.id,
+        customerName: 'Concurrent Cancel Resident',
+        inboundChannel: 'PHONE',
+        title: 'Race two concurrent cancels',
+      },
+      adminUserId,
+    );
+
+    // Two cancellation commands racing on the same SUBMITTED request.
+    const outcomes = await Promise.allSettled([
+      cancelHandymanRequest(created.id, adminUserId),
+      cancelHandymanRequest(created.id, adminUserId),
+    ]);
+
+    const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
+    const rejected = outcomes.filter((o) => o.status === 'rejected');
+    assert.equal(fulfilled.length, 1, 'exactly one command must win');
+    assert.equal(rejected.length, 1, 'exactly one command must lose');
+
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ status: string }>)
+      .value;
+    assert.equal(winner.status, 'CANCELLED');
+
+    const loserError = (rejected[0] as PromiseRejectedResult).reason as {
+      code?: string;
+      statusCode?: number;
+    };
+    assert.equal(loserError.code, 'HANDYMAN_REQUEST_ALREADY_CANCELLED');
+    assert.equal(loserError.statusCode, 409);
+
+    // Only the command that actually performed SUBMITTED -> CANCELLED may
+    // emit the HANDYMAN_REQUEST_CANCELLED audit event.
+    const events = await pool!.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+       FROM operational_events
+       WHERE entity_type = 'HANDYMAN_REQUEST' AND entity_id = $1 AND event_type = 'HANDYMAN_REQUEST_CANCELLED'`,
+      [created.id],
+    );
+    assert.equal(events.rows[0].count, 1);
+
+    // A later sequential command is still a governed 409 with no new event.
+    await assert.rejects(
+      async () => cancelHandymanRequest(created.id, adminUserId),
+      (err: { code?: string; statusCode?: number }) =>
+        err.code === 'HANDYMAN_REQUEST_ALREADY_CANCELLED' &&
+        err.statusCode === 409,
+    );
+    const finalEvents = await pool!.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+       FROM operational_events
+       WHERE entity_type = 'HANDYMAN_REQUEST' AND entity_id = $1 AND event_type = 'HANDYMAN_REQUEST_CANCELLED'`,
+      [created.id],
+    );
+    assert.equal(finalEvents.rows[0].count, 1);
+  });
 });
