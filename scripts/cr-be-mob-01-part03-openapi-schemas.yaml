@@ -1,0 +1,861 @@
+    # ------------------------------------------------------------------
+    # CR-BE-MOB-01 PART 03 — Engineering field / reading schemas
+    # (BE-10A/B/C/D/E/F/G/H/J/K). Shapes mirror the implemented public
+    # DTOs; no new field, status, or workflow is introduced. Every
+    # execution id is the authoritative BE-07 checklist-execution or
+    # form-instance id; every work id is the BE-08 Work Order id; every
+    # finding id is the BE-09 Finding id.
+    # ------------------------------------------------------------------
+    EngineeringBindingStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+      description: Shared ACTIVE/INACTIVE status of a BE-10 binding row.
+    EngineeringAssetRef:
+      type: object
+      required: [id, assetCode, assetName, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        assetCode: { type: string }
+        assetName: { type: string }
+        status: { type: string }
+    EngineeringBuildingRef:
+      type: object
+      required: [id, code, name]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+    EngineeringFunctionalLocationRef:
+      type: object
+      nullable: true
+      required: [id, code, name, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        status: { type: string }
+
+    InspectionBinding:
+      type: object
+      description: >-
+        BE-10B equipment-inspection binding: BE-05 Asset × BE-07 Checklist
+        Template (+ optional BE-04 Functional Location). Not an inspection
+        engine.
+      required:
+        [id, clientId, buildingId, assetId, checklistTemplateId,
+         functionalLocationId, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateInspectionBindingRequest:
+      type: object
+      required: [checklistTemplateId]
+      properties:
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    UpdateInspectionBindingRequest:
+      type: object
+      properties:
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    InspectionExecution:
+      type: object
+      description: >-
+        The shared BE-07 checklist execution started from an inspection
+        binding. `id` is the authoritative checklist-execution id used by the
+        published BE-07 checklist / evidence / verification operations.
+      required:
+        [id, checklistTemplateId, inspectionBindingId, status, startedAt,
+         completedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        inspectionBindingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    InspectionExecutionContext:
+      type: object
+      required: [execution, asset, building, functionalLocation]
+      properties:
+        execution: { $ref: "#/components/schemas/InspectionExecution" }
+        asset: { $ref: "#/components/schemas/EngineeringAssetRef" }
+        building: { $ref: "#/components/schemas/EngineeringBuildingRef" }
+        functionalLocation:
+          $ref: "#/components/schemas/EngineeringFunctionalLocationRef"
+
+    MeterReadingBinding:
+      type: object
+      description: >-
+        BE-10C technical meter-reading definition: BE-05 Asset × numeric BE-07
+        Form Field × BE-07 UOM (+ optional Functional Location), with an
+        optional binding-level tightening of the field's measurement range.
+      required:
+        [id, clientId, buildingId, assetId, formFieldId, uomId,
+         functionalLocationId, minimumValue, maximumValue, status,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { $ref: "#/components/schemas/Uuid" }
+        formFieldId: { $ref: "#/components/schemas/Uuid" }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        minimumValue: { type: number, nullable: true }
+        maximumValue: { type: number, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateMeterReadingBindingRequest:
+      type: object
+      required: [formFieldId]
+      properties:
+        formFieldId: { $ref: "#/components/schemas/Uuid" }
+        uomId: { type: string, format: uuid }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        minimumValue: { type: number }
+        maximumValue: { type: number }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    UpdateMeterReadingBindingRequest:
+      type: object
+      properties:
+        uomId: { type: string, format: uuid }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        minimumValue: { type: number }
+        maximumValue: { type: number }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    MeterReadingExecution:
+      type: object
+      description: >-
+        The shared BE-07 form instance started from a meter-reading binding.
+        `id` is the authoritative form-instance id.
+      required:
+        [id, formTemplateVersionId, meterReadingBindingId, status, startedAt,
+         completedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        formTemplateVersionId: { $ref: "#/components/schemas/Uuid" }
+        meterReadingBindingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SubmitMeterReadingRequest:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: number
+          description: >-
+            Validated against the effective range (binding range tightened
+            over the BE-07 field range).
+        notes: { type: string, nullable: true }
+    MeterReading:
+      type: object
+      description: >-
+        A submitted technical reading, stored in BE-07's own `form_responses`
+        row — not in a second measurement table.
+      required:
+        [executionId, formInstanceId, versionFieldId, value, uom,
+         minimumValue, maximumValue, notes, submittedAt]
+      properties:
+        executionId: { $ref: "#/components/schemas/Uuid" }
+        formInstanceId: { $ref: "#/components/schemas/Uuid" }
+        versionFieldId: { $ref: "#/components/schemas/Uuid" }
+        value: { type: number }
+        uom:
+          type: object
+          required: [id, code, symbol]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            symbol: { type: string }
+        minimumValue: { type: number, nullable: true }
+        maximumValue: { type: number, nullable: true }
+        notes: { type: string, nullable: true }
+        submittedAt: { type: string, format: date-time }
+    MeterReadingContext:
+      type: object
+      required:
+        [execution, asset, building, functionalLocation, uom, minimumValue,
+         maximumValue, currentValue]
+      properties:
+        execution: { $ref: "#/components/schemas/MeterReadingExecution" }
+        asset: { $ref: "#/components/schemas/EngineeringAssetRef" }
+        building: { $ref: "#/components/schemas/EngineeringBuildingRef" }
+        functionalLocation:
+          $ref: "#/components/schemas/EngineeringFunctionalLocationRef"
+        uom:
+          type: object
+          required: [id, code, name, symbol]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            symbol: { type: string }
+        minimumValue: { type: number, nullable: true }
+        maximumValue: { type: number, nullable: true }
+        currentValue: { type: number, nullable: true }
+
+    LogSheetBinding:
+      type: object
+      description: >-
+        BE-10D equipment log-sheet definition: BE-05 Asset × BE-07 Form
+        Template (+ optional pinned Template Version, optional Functional
+        Location).
+      required:
+        [id, clientId, buildingId, assetId, formTemplateId,
+         formTemplateVersionId, functionalLocationId, status, createdByUserId,
+         createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { $ref: "#/components/schemas/Uuid" }
+        formTemplateId: { $ref: "#/components/schemas/Uuid" }
+        formTemplateVersionId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateLogSheetBindingRequest:
+      type: object
+      required: [formTemplateId]
+      properties:
+        formTemplateId: { $ref: "#/components/schemas/Uuid" }
+        formTemplateVersionId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    UpdateLogSheetBindingRequest:
+      type: object
+      properties:
+        formTemplateVersionId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    LogSheetExecution:
+      type: object
+      description: >-
+        One log-sheet row = one shared BE-07 form instance. `id` is the
+        authoritative form-instance id.
+      required:
+        [id, formTemplateVersionId, logSheetBindingId, status, startedAt,
+         completedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        formTemplateVersionId: { $ref: "#/components/schemas/Uuid" }
+        logSheetBindingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    LogSheetExecutionContext:
+      type: object
+      required:
+        [execution, asset, building, functionalLocation, template, version]
+      properties:
+        execution: { $ref: "#/components/schemas/LogSheetExecution" }
+        asset: { $ref: "#/components/schemas/EngineeringAssetRef" }
+        building: { $ref: "#/components/schemas/EngineeringBuildingRef" }
+        functionalLocation:
+          $ref: "#/components/schemas/EngineeringFunctionalLocationRef"
+        template:
+          type: object
+          required: [id, code, name]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+        version:
+          type: object
+          required: [id, versionNumber, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            versionNumber: { type: integer }
+            status: { type: string }
+
+    EngineeringChecklistBinding:
+      type: object
+      description: >-
+        BE-10E binding: BE-07 Checklist Template × Building (+ optional Asset
+        and/or Functional Location target inside that Building).
+      required:
+        [id, clientId, buildingId, checklistTemplateId, assetId,
+         functionalLocationId, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateEngineeringChecklistBindingRequest:
+      type: object
+      required: [buildingId, checklistTemplateId]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    UpdateEngineeringChecklistBindingRequest:
+      type: object
+      properties:
+        assetId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    EngineeringChecklistExecution:
+      type: object
+      description: >-
+        The shared BE-07 checklist execution started from an Engineering
+        checklist binding.
+      required:
+        [id, checklistTemplateId, engineeringChecklistBindingId, status,
+         startedAt, completedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        engineeringChecklistBindingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    EngineeringChecklistExecutionContext:
+      type: object
+      required: [execution, building, template, asset, functionalLocation]
+      properties:
+        execution:
+          $ref: "#/components/schemas/EngineeringChecklistExecution"
+        building: { $ref: "#/components/schemas/EngineeringBuildingRef" }
+        template:
+          type: object
+          required: [id, code, name, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+        asset:
+          allOf: [{ $ref: "#/components/schemas/EngineeringAssetRef" }]
+          nullable: true
+        functionalLocation:
+          $ref: "#/components/schemas/EngineeringFunctionalLocationRef"
+
+    BreakdownStatus:
+      type: string
+      enum: [OPEN, CLOSED]
+      description: >-
+        The BE-10F breakdown record lifecycle. It is deliberately minimal —
+        corrective progress lives on the linked BE-08 Work Order.
+    BreakdownBinding:
+      type: object
+      description: >-
+        BE-10F breakdown / corrective event on a BE-05 Asset. `corrective`
+        projects the current BE-08 status of the linked Work Order and is
+        never stored.
+      required:
+        [id, clientId, buildingId, assetId, functionalLocationId, category,
+         description, reportedByUserId, reportedAt, status, createdAt,
+         updatedAt, corrective]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { $ref: "#/components/schemas/Uuid" }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        category: { type: string }
+        description: { type: string }
+        reportedByUserId: { $ref: "#/components/schemas/Uuid" }
+        reportedAt: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/BreakdownStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        corrective:
+          type: object
+          nullable: true
+          description: Live projection of the linked BE-08 Work Order.
+          required: [workOrderId, workOrderNumber, title, status]
+          properties:
+            workOrderId: { $ref: "#/components/schemas/Uuid" }
+            workOrderNumber: { type: string }
+            title: { type: string }
+            status: { type: string }
+    CreateBreakdownRequest:
+      type: object
+      required: [category, description]
+      properties:
+        category: { type: string }
+        description: { type: string }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        reportedAt: { type: string, format: date-time }
+    CloseBreakdownRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [CLOSED]
+          description: CLOSED is the only accepted breakdown transition.
+    LinkCorrectiveWorkOrderRequest:
+      type: object
+      description: >-
+        Supply `workOrderId` to link an existing BE-08 Work Order, or `title`
+        to have the shared BE-08 service create the corrective Work Order.
+      properties:
+        workOrderId: { type: string, format: uuid }
+        title: { type: string }
+
+    MaintenanceType:
+      type: string
+      enum: [PREVENTIVE, PREDICTIVE, CONDITION_BASED, CALIBRATION]
+      description: >-
+        BE-10G planned-maintenance classification. Corrective work is NOT a
+        member: it is a BE-10F breakdown plus a BE-08 corrective Work Order.
+    MaintenanceBinding:
+      type: object
+      description: >-
+        BE-10G planned-maintenance context for a BE-05 Asset. `schedule`,
+        `workOrder` and `tasks` are live projections of the authoritative
+        BE-07 / BE-08 records, never stored copies.
+      required:
+        [id, clientId, buildingId, assetId, functionalLocationId, name,
+         maintenanceType, description, status, createdByUserId, createdAt,
+         updatedAt, schedule, workOrder, tasks]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { $ref: "#/components/schemas/Uuid" }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        name: { type: string }
+        maintenanceType: { $ref: "#/components/schemas/MaintenanceType" }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        schedule:
+          type: object
+          nullable: true
+          description: Linked BE-07 Schedule Definition.
+          required: [id, code, name, targetType, targetId, timezone, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            targetType: { type: string }
+            targetId: { $ref: "#/components/schemas/Uuid" }
+            timezone: { type: string }
+            status: { type: string }
+        workOrder:
+          type: object
+          nullable: true
+          description: Linked BE-08 Work Order (authoritative status).
+          required: [id, workOrderNumber, title, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            workOrderNumber: { type: string }
+            title: { type: string }
+            status: { type: string }
+        tasks:
+          type: array
+          description: Linked BE-07 generated tasks, newest first.
+          items:
+            type: object
+            required: [id, occurrenceAt, status]
+            properties:
+              id: { $ref: "#/components/schemas/Uuid" }
+              occurrenceAt: { type: string, format: date-time }
+              status: { type: string }
+    CreateMaintenanceBindingRequest:
+      type: object
+      required: [name, maintenanceType]
+      properties:
+        name: { type: string }
+        maintenanceType: { $ref: "#/components/schemas/MaintenanceType" }
+        description: { type: string }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    UpdateMaintenanceBindingRequest:
+      type: object
+      properties:
+        name: { type: string }
+        maintenanceType: { $ref: "#/components/schemas/MaintenanceType" }
+        description: { type: string, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        status: { $ref: "#/components/schemas/EngineeringBindingStatus" }
+    LinkMaintenanceScheduleRequest:
+      type: object
+      description: >-
+        Supply `scheduleDefinitionId` to link an existing BE-07 schedule, or
+        the creation fields so the shared BE-07 scheduler creates one.
+      properties:
+        scheduleDefinitionId: { type: string, format: uuid }
+        targetType: { type: string }
+        targetId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        startAt: { type: string, format: date-time }
+        timezone: { type: string }
+    LinkMaintenanceTaskRequest:
+      type: object
+      required: [taskId]
+      properties:
+        taskId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            The authoritative BE-07 generated task id. Execution stays on the
+            published task operations.
+    LinkMaintenanceWorkOrderRequest:
+      type: object
+      description: >-
+        Supply `workOrderId` to link an existing BE-08 Work Order, or `title`
+        to have the shared BE-08 service create one.
+      properties:
+        workOrderId: { type: string, format: uuid }
+        title: { type: string }
+
+    EngineeringFindingOperationType:
+      type: string
+      enum:
+        [EQUIPMENT_INSPECTION, METER_READING, EQUIPMENT_LOG_SHEET,
+         ENGINEERING_CHECKLIST, BREAKDOWN, MAINTENANCE]
+      description: >-
+        Which Engineering operation produced the finding. Distinct from BE-09's
+        own `FindingSourceType`, which records the underlying execution kind.
+    EngineeringFinding:
+      type: object
+      description: >-
+        BE-10H Engineering context link for an authoritative BE-09 Finding.
+        `id` is the link id; every workflow operation uses `findingId`.
+      required:
+        [id, clientId, buildingId, findingId, assetId, functionalLocationId,
+         operationType, sourceType, sourceId, createdAt, finding,
+         availableActions]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        findingId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        operationType:
+          $ref: "#/components/schemas/EngineeringFindingOperationType"
+        sourceType:
+          allOf: [{ $ref: "#/components/schemas/FindingSourceType" }]
+          nullable: true
+        sourceId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        finding: { $ref: "#/components/schemas/Finding" }
+        availableActions:
+          type: array
+          items: { type: string }
+          description: >-
+            BE-09 backend-authoritative actions for the linked finding —
+            never re-derived by Engineering or by the client.
+    CreateEngineeringFindingRequest:
+      type: object
+      description: >-
+        Supply `findingId` to link an existing BE-09 Finding, or the create
+        fields (`title` …) to have the shared BE-09 service create one.
+        `clientId` and the reporter are derived by the backend.
+      required: [buildingId, operationType]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        operationType:
+          $ref: "#/components/schemas/EngineeringFindingOperationType"
+        findingId: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        assetId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        sourceType: { $ref: "#/components/schemas/FindingSourceType" }
+        sourceId: { type: string, format: uuid }
+        classificationId: { type: string, format: uuid }
+        severityId: { type: string, format: uuid }
+        assigneeType:
+          type: string
+          enum: [WORKFORCE, TEAM, VENDOR, VENDOR_WORKFORCE]
+        workforceProfileId: { type: string, format: uuid }
+        teamId: { type: string, format: uuid }
+        vendorId: { type: string, format: uuid }
+
+    EngineeringShiftContext:
+      type: object
+      nullable: true
+      description: BE-03 Shift context with the workforce bound to that Shift.
+      required:
+        [id, code, name, startTime, endTime, status, workforceCount, workforce]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        startTime: { type: string }
+        endTime: { type: string }
+        status: { type: string }
+        workforceCount: { type: integer }
+        workforce:
+          type: array
+          items:
+            type: object
+            required: [workforceProfileId, employeeCode, fullName]
+            properties:
+              workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+              employeeCode: { type: string }
+              fullName: { type: string }
+    EngineeringDailyOperationKind:
+      type: string
+      enum: [TASK, WORK_ORDER, FINDING]
+    EngineeringDailyOperationsSummary:
+      type: object
+      required:
+        [scheduled, inProgress, completed, openWorkOrders, openFindings]
+      properties:
+        scheduled: { type: integer }
+        inProgress: { type: integer }
+        completed: { type: integer }
+        openWorkOrders: { type: integer }
+        openFindings: { type: integer }
+    EngineeringDailyOperation:
+      type: object
+      description: >-
+        One consolidated daily operation referencing its authoritative source
+        record. `id` is the BE-07 task id, BE-08 Work Order id or BE-09 Finding
+        id depending on `kind`; `status` is the source domain's own status,
+        untranslated.
+      required:
+        [kind, id, referenceNumber, title, status, occurredAt, completedAt,
+         assignee]
+      properties:
+        kind: { $ref: "#/components/schemas/EngineeringDailyOperationKind" }
+        id: { $ref: "#/components/schemas/Uuid" }
+        referenceNumber: { type: string, nullable: true }
+        title: { type: string }
+        status: { type: string }
+        occurredAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        assignee:
+          type: object
+          nullable: true
+          required: [type, workforceProfileId, teamId, vendorId]
+          properties:
+            type: { type: string }
+            workforceProfileId: { type: string, format: uuid, nullable: true }
+            teamId: { type: string, format: uuid, nullable: true }
+            vendorId: { type: string, format: uuid, nullable: true }
+        availableActions:
+          type: array
+          items: { type: string }
+          description: >-
+            BE-09 backend-authoritative actions. Present for FINDING rows
+            only — Tasks and Work Orders expose no authoritative
+            available-actions service in their foundations.
+    EngineeringDailyOperations:
+      type: object
+      description: >-
+        BE-10A read model for one Building + operational date (+ optional
+        Shift). Composition only — it stores nothing.
+      required: [buildingId, operationalDate, shift, summary, operations]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        operationalDate: { type: string, format: date }
+        shift: { $ref: "#/components/schemas/EngineeringShiftContext" }
+        summary:
+          $ref: "#/components/schemas/EngineeringDailyOperationsSummary"
+        operations:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringDailyOperation" }
+
+    EngineeringOverview:
+      type: object
+      description: >-
+        BE-10K supervisor read model derived from BE-10A operations, BE-09
+        finding counts, BE-08 Work Orders and the BE-10J handover dataset.
+      required:
+        [buildingId, date, shift, summary, operations, findings, workOrders,
+         handover]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        date: { type: string, format: date }
+        shift: { $ref: "#/components/schemas/EngineeringShiftContext" }
+        summary:
+          type: object
+          required:
+            [scheduledOperations, inProgressOperations, completedOperations,
+             activeWorkOrders, openFindings, pendingHandoverItems]
+          properties:
+            scheduledOperations: { type: integer }
+            inProgressOperations: { type: integer }
+            completedOperations: { type: integer }
+            activeWorkOrders: { type: integer }
+            openFindings: { type: integer }
+            pendingHandoverItems: { type: integer }
+        operations:
+          $ref: "#/components/schemas/EngineeringDailyOperationsSummary"
+        findings:
+          type: object
+          required: [open, rework, verified, closed]
+          properties:
+            open: { type: integer }
+            rework: { type: integer }
+            verified: { type: integer }
+            closed: { type: integer }
+        workOrders:
+          type: object
+          required: [active, completedInWindow]
+          properties:
+            active:
+              type: array
+              items:
+                type: object
+                required: [id, workOrderNumber, title, status]
+                properties:
+                  id: { $ref: "#/components/schemas/Uuid" }
+                  workOrderNumber: { type: string }
+                  title: { type: string }
+                  status: { type: string }
+            completedInWindow: { type: integer }
+        handover:
+          type: object
+          required: [drafts, ready, acknowledged, pendingItems]
+          properties:
+            drafts: { type: integer }
+            ready: { type: integer }
+            acknowledged: { type: integer }
+            pendingItems:
+              type: array
+              items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+
+    EngineeringShiftHandoverStatus:
+      type: string
+      enum: [DRAFT, READY, ACKNOWLEDGED]
+    EngineeringHandoverItem:
+      type: object
+      description: >-
+        One unresolved operational item, referenced from its authoritative
+        record. `status` is the source record's own status, never translated.
+      required: [kind, id, referenceNumber, title, status, assetCode]
+      properties:
+        kind:
+          type: string
+          enum:
+            [WORK_ORDER, BREAKDOWN, FINDING, INSPECTION, CHECKLIST,
+             METER_READING, EQUIPMENT_LOG, MAINTENANCE, TASK]
+        id: { $ref: "#/components/schemas/Uuid" }
+        referenceNumber: { type: string, nullable: true }
+        title: { type: string }
+        status: { type: string }
+        assetCode: { type: string, nullable: true }
+    EngineeringHandoverDataset:
+      type: object
+      description: >-
+        The live Engineering operational dataset for the handover's Building,
+        resolved at read time from the authoritative records.
+      required:
+        [activeWorkOrders, openBreakdowns, openFindings, incompleteInspections,
+         incompleteChecklists, incompleteMeterReadings, incompleteLogSheets,
+         pendingMaintenance, scheduledTasks]
+      properties:
+        activeWorkOrders:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        openBreakdowns:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        openFindings:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        incompleteInspections:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        incompleteChecklists:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        incompleteMeterReadings:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        incompleteLogSheets:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        pendingMaintenance:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+        scheduledTasks:
+          type: array
+          items: { $ref: "#/components/schemas/EngineeringHandoverItem" }
+    EngineeringShiftHandover:
+      type: object
+      description: >-
+        BE-10J shift handover. Only the summary and lifecycle fields are
+        stored; `dataset` is resolved live from the authoritative Engineering
+        records at read time.
+      required:
+        [id, clientId, buildingId, outgoingShift, incomingShift, handoverDate,
+         preparedByUserId, acknowledgedByUserId, summary, status, preparedAt,
+         acknowledgedAt, createdAt, updatedAt, dataset]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        outgoingShift:
+          type: object
+          required: [id, code, name, startTime, endTime]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            startTime: { type: string }
+            endTime: { type: string }
+        incomingShift:
+          type: object
+          required: [id, code, name, startTime, endTime]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            startTime: { type: string }
+            endTime: { type: string }
+        handoverDate: { type: string, format: date }
+        preparedByUserId: { $ref: "#/components/schemas/Uuid" }
+        acknowledgedByUserId: { type: string, format: uuid, nullable: true }
+        summary: { type: string, nullable: true }
+        status:
+          $ref: "#/components/schemas/EngineeringShiftHandoverStatus"
+        preparedAt: { type: string, format: date-time }
+        acknowledgedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        dataset:
+          $ref: "#/components/schemas/EngineeringHandoverDataset"
+    CreateEngineeringShiftHandoverRequest:
+      type: object
+      required: [outgoingShiftId, incomingShiftId, handoverDate]
+      properties:
+        outgoingShiftId: { $ref: "#/components/schemas/Uuid" }
+        incomingShiftId: { $ref: "#/components/schemas/Uuid" }
+        handoverDate: { type: string, format: date }
+        summary: { type: string }
+    UpdateEngineeringShiftHandoverRequest:
+      type: object
+      properties:
+        summary: { type: string }

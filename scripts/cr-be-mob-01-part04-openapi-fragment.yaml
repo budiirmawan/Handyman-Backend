@@ -1,0 +1,354 @@
+  # --------------------------------------------------------------------
+  # CR-BE-MOB-01 PART 04 — Work Order material context reference data.
+  #
+  # Existing BE-16A / BE-16B / BE-16H **read** routes published for mobile.
+  # The Work Order material *write* chain is already published elsewhere and
+  # is NOT repeated here: `recordWorkOrderMaterialUsage`,
+  # `listWorkOrderMaterialUsages`, `getWorkOrderMaterialCostSummary`
+  # (Work Order Material Usage), the stock ledger (Inventory Stock), the
+  # approved-quantity chain (Material Requests, Work Order Procurement
+  # Binding) and Work Order verification (Work Orders). This block only adds
+  # the item / warehouse / spare-part reference reads a field picker needs.
+  # --------------------------------------------------------------------
+
+  /clients/{clientId}/inventory-items:
+    get:
+      operationId: listClientInventoryItems
+      summary: List the Inventory Item master of a Client
+      description: >-
+        BE-16A read. The authoritative material / spare-part catalogue owned by
+        one Client; `itemType` is data (SPARE_PART / MATERIAL / CONSUMABLE) and
+        drives no behaviour. `uomId` reuses the BE-07 UOM foundation and is the
+        UOM snapshotted onto a Work Order material usage. Mobile relevance: the
+        item picker behind `recordWorkOrderMaterialUsage`. Requires
+        `inventory_item.read`; results are constrained to the caller's
+        accessible Clients. This route carries no stock — availability is the
+        published stock-balance surface.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inventory_item.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/InventoryItemStatus" }
+        - name: itemType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/InventoryItemType" }
+        - name: category
+          in: query
+          required: false
+          schema: { type: string }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+          description: Free-text match over item code and name.
+        - name: uomId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Inventory item list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/InventoryItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /inventory-items/{itemId}:
+    get:
+      operationId: getInventoryItem
+      summary: Get an Inventory Item by id
+      description: >-
+        BE-16A read, including the resolved BE-07 UOM context when present.
+        `itemId` is the authoritative id embedded in material usages, material
+        requests, stock balances and stock movements. Requires
+        `inventory_item.read`.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inventory_item.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/InventoryItemIdPath"
+      responses:
+        "200":
+          description: Inventory item.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/InventoryItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/warehouses:
+    get:
+      operationId: listBuildingWarehouses
+      summary: List the Warehouses / stores of a Building
+      description: >-
+        BE-16B read. A Warehouse is operated within exactly one Building
+        (Client → Property → Building → Warehouse) and may bind to a BE-04
+        Functional Location. Mobile relevance: the issuing-warehouse picker
+        behind `recordWorkOrderMaterialUsage` and the scope of the published
+        stock-balance reads. Requires `inventory_warehouse.read` and BE-02G
+        Building access.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inventory_warehouse.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/InventoryWarehouseStatus" }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+          description: Free-text match over warehouse code and name.
+        - name: functionalLocationId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Warehouse list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/InventoryWarehouse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /clients/{clientId}/warehouses:
+    get:
+      operationId: listClientWarehouses
+      summary: List the Warehouses / stores of a Client
+      description: >-
+        BE-16B read across the Client's Buildings, constrained to the caller's
+        accessible scope. Requires `inventory_warehouse.read`.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inventory_warehouse.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/InventoryWarehouseStatus" }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Warehouse list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/InventoryWarehouse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /warehouses/{warehouseId}:
+    get:
+      operationId: getWarehouse
+      summary: Get a Warehouse / store by id
+      description: >-
+        BE-16B read, including the resolved Functional Location when bound.
+        `warehouseId` is the authoritative id embedded in material usages and
+        stock records. Requires `inventory_warehouse.read` and Building access
+        on the warehouse's Building.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inventory_warehouse.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/WarehouseIdPath"
+      responses:
+        "200":
+          description: Warehouse.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InventoryWarehouse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /assets/{assetId}/spare-parts:
+    get:
+      operationId: listAssetSpareParts
+      summary: List the spare-part Items bound to an Asset
+      description: >-
+        BE-16H read. The many-to-many binding between a BE-05 Asset and
+        SPARE_PART Inventory Items, with the `requiredQuantity` planned per
+        asset. Mobile relevance: the expected parts for corrective / planned
+        work on this equipment, before issuing them through
+        `recordWorkOrderMaterialUsage`. `requiredQuantity` is a planning
+        reference only — it is neither an approved nor an issued quantity.
+        Requires `asset.read` and Building access on the Asset's Building.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+        - name: itemId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/AssetSparePartStatus" }
+        - name: clientId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Asset spare-part binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AssetSparePart" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /inventory-items/{itemId}/asset-bindings:
+    get:
+      operationId: listInventoryItemAssetBindings
+      summary: List the Assets an Inventory Item is a spare part for
+      description: >-
+        BE-16H reverse read of the same binding. Requires
+        `inventory_item.read`.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inventory_item.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/InventoryItemIdPath"
+        - name: assetId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/AssetSparePartStatus" }
+        - name: clientId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Asset spare-part binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AssetSparePart" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /asset-spare-parts/{id}:
+    get:
+      operationId: getAssetSparePart
+      summary: Get an Asset ↔ spare-part Item binding by id
+      description: >-
+        BE-16H read, including the resolved Asset and Item context. Requires
+        `asset.read`.
+      tags: [Inventory Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetSparePartIdPath"
+      responses:
+        "200":
+          description: Asset spare-part binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AssetSparePart" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

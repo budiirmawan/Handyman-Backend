@@ -1,0 +1,11 @@
+import { clientInactiveError, clientNotFoundError, clientRepository } from '../clients';
+import { sourceFormCodeAlreadyExistsError, sourceFormNotFoundError } from './source-form.errors';
+import { sourceFormRepository } from './source-form.repository';
+import type { CreateSourceFormInput, NewSourceForm, PublicSourceForm, SourceFormRecord, UpdateSourceFormInput } from './source-form.types';
+export const toPublicSourceForm=(r:SourceFormRecord):PublicSourceForm=>({id:r.id,clientId:r.clientId,code:r.code,name:r.name,sourceType:r.sourceType,sourceReference:r.sourceReference,description:r.description,status:r.status});
+export async function createSourceForm(input:CreateSourceFormInput):Promise<PublicSourceForm>{const client=await clientRepository.findById(input.clientId);if(!client)throw clientNotFoundError();if(client.status!=='ACTIVE')throw clientInactiveError();if(await sourceFormRepository.findByCodeForClient(input.clientId,input.code))throw sourceFormCodeAlreadyExistsError();const record:NewSourceForm={...input,sourceReference:input.sourceReference?.trim()||null,description:input.description?.trim()||null,status:input.status??'ACTIVE'};try{return toPublicSourceForm(await sourceFormRepository.create(record))}catch(error){if(isDuplicate(error))throw sourceFormCodeAlreadyExistsError();throw error}}
+export async function getSourceFormById(id:string){const r=await sourceFormRepository.findById(id);if(!r)throw sourceFormNotFoundError();return toPublicSourceForm(r)}
+export async function listSourceFormsByClient(clientId:string){if(!await clientRepository.findById(clientId))throw clientNotFoundError();return (await sourceFormRepository.listByClient(clientId)).map(toPublicSourceForm)}
+export async function updateSourceForm(id:string,input:UpdateSourceFormInput){if(!await sourceFormRepository.findById(id))throw sourceFormNotFoundError();return toPublicSourceForm((await sourceFormRepository.update(id,input)) as SourceFormRecord)}
+function isDuplicate(e:unknown){return typeof e==='object'&&e!==null&&(e as {code?:string;constraint?:string}).code==='23505'&&(e as {constraint?:string}).constraint==='source_forms_client_code_unique'}
+export const sourceFormService={createSourceForm,getSourceFormById,listSourceFormsByClient,updateSourceForm,toPublicSourceForm};

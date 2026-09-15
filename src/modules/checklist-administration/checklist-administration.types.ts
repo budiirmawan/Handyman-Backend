@@ -1,0 +1,15 @@
+import type{ModuleConfigurationScope}from'../module-configurations';
+export const ADMIN_CHECKLIST_ITEM_TYPES=['CHECK','BOOLEAN','TEXT','NUMBER','SELECT']as const;
+export type AdminChecklistItemType=typeof ADMIN_CHECKLIST_ITEM_TYPES[number];
+export type ChecklistBinding={id:string;scopeType:ModuleConfigurationScope;clientId:string;buildingId:string|null;checklistTemplateId:string;createdAt:string};
+export type AdminChecklistItemOption={id:string;checklistItemId:string;code:string;label:string;displayOrder:number;status:'ACTIVE'|'INACTIVE';createdAt:string;updatedAt:string};
+export type AdminChecklistItemOptionRow={id:string;checklist_item_id:string;checklist_template_id:string;code:string;label:string;display_order:number;status:'ACTIVE'|'INACTIVE';created_at:Date;updated_at:Date};
+export type AdminChecklistItem={id:string;checklistTemplateId:string;code:string;label:string;itemType:AdminChecklistItemType;required:boolean;displayOrder:number;status:'ACTIVE'|'INACTIVE';uomId:string|null;minimumValue:string|null;maximumValue:string|null;decimalPrecision:number|null;isNaAllowed:boolean;naRequiresNote:boolean;options:AdminChecklistItemOption[];createdAt:string;updatedAt:string};
+export type AdminChecklistTemplate={id:string;clientId:string;code:string;name:string;description:string|null;status:'DRAFT'|'ACTIVE'|'INACTIVE';createdAt:string;updatedAt:string};
+export type AdminChecklistDefinition={template:AdminChecklistTemplate;bindings:ChecklistBinding[];items:AdminChecklistItem[]};
+export type CreateChecklistTemplateInput={code:string;name:string;description:string|null;status:'DRAFT'|'ACTIVE'|'INACTIVE'};
+export type UpdateChecklistTemplateInput={name?:string;description?:string|null;status?:'DRAFT'|'ACTIVE'|'INACTIVE'};
+export type CreateChecklistItemOptionInput={code:string;label:string;displayOrder:number};
+export type CreateChecklistItemInput={code:string;label:string;itemType:AdminChecklistItemType;required:boolean;displayOrder:number;status:'ACTIVE'|'INACTIVE';isNaAllowed:boolean;naRequiresNote:boolean;options:CreateChecklistItemOptionInput[]};
+export type UpdateChecklistItemInput={label?:string;itemType?:AdminChecklistItemType;required?:boolean;displayOrder?:number;status?:'ACTIVE'|'INACTIVE';isNaAllowed?:boolean;naRequiresNote?:boolean};
+export type UpdateChecklistItemOptionInput={label?:string;displayOrder?:number;status?:'ACTIVE'|'INACTIVE'};

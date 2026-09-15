@@ -1,0 +1,1 @@
+export{createFormAdministrationRouter}from'./form-administration.routes';export{formAdministrationService}from'./form-administration.service';export type{AdminFormDefinition,AdminFormField,AdminFormSection,FormBinding}from'./form-administration.types';
