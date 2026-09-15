@@ -122,3 +122,44 @@ export type HandymanRequestFilters = {
   limit?: number;
   offset?: number;
 };
+
+export type CreateHandymanRequestInput = {
+  buildingId: string;
+  spaceId: string;
+  tenantCompanyId?: string | null;
+  tenantPicId?: string | null;
+  customerName: string;
+  customerPhone?: string | null;
+  customerEmail?: string | null;
+  operationalSurface?: HandymanOperationalSurface;
+  inboundChannel: HandymanInboundChannel;
+  title: string;
+  description?: string | null;
+  priority?: HandymanRequestPriority;
+  idempotencyKey?: string | null;
+  requestedAt?: Date | string | null;
+};
+
+export type PublicHandymanRequest = {
+  id: string;
+  clientId: string;
+  buildingId: string;
+  spaceId: string;
+  tenantCompanyId: string | null;
+  tenantPicId: string | null;
+  customerName: string;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  createdByUserId: string;
+  operationalSurface: HandymanOperationalSurface;
+  inboundChannel: HandymanInboundChannel;
+  requestNumber: string;
+  title: string;
+  description: string | null;
+  priority: HandymanRequestPriority;
+  status: HandymanRequestStatus;
+  idempotencyKey: string | null;
+  requestedAt: string;
+  createdAt: string;
+  updatedAt: string;
+};

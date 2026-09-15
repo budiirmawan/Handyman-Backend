@@ -31,3 +31,35 @@ export function handymanRequestAlreadyCancelledError(): AppError {
     statusCode: 409,
   });
 }
+
+export function handymanRequestSpaceMismatchError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_REQUEST_SPACE_MISMATCH,
+    message: 'The space does not belong to the specified building.',
+    statusCode: 400,
+  });
+}
+
+export function handymanRequestTenantCompanyMismatchError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_REQUEST_TENANT_COMPANY_MISMATCH,
+    message: 'The tenant company is not actively associated with the specified building.',
+    statusCode: 400,
+  });
+}
+
+export function handymanRequestTenantPicMismatchError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_REQUEST_TENANT_PIC_MISMATCH,
+    message: 'The tenant PIC does not belong to the specified tenant company or is not active.',
+    statusCode: 400,
+  });
+}
+
+export function handymanRequestStatusInvalidError(message?: string): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_REQUEST_STATUS_INVALID,
+    message: message ?? 'Only submitted handyman requests can be cancelled.',
+    statusCode: 400,
+  });
+}
