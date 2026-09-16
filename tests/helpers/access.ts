@@ -509,6 +509,11 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   // CR-HM-BE-04 RUN 2 — Handyman work crew permissions
   { code: 'handyman_work_crew.read', name: 'Read Handyman Work Crews' },
   { code: 'handyman_work_crew.manage', name: 'Manage Handyman Work Crews' },
+  // CR-HM-BE-05 RUN 1 — Handyman job + provider/crew assignment permissions
+  { code: 'handyman_job.read', name: 'Read Handyman Jobs' },
+  { code: 'handyman_job.manage', name: 'Manage Handyman Jobs' },
+  { code: 'handyman_job_assignment.read', name: 'Read Handyman Job Assignments' },
+  { code: 'handyman_job_assignment.manage', name: 'Manage Handyman Job Assignments' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {
