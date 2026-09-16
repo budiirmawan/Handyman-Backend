@@ -584,6 +584,12 @@ export const FOUNDATION_PERMISSIONS: readonly {
     code: 'handyman_job_assignment.manage',
     name: 'Manage Handyman Job Assignments',
   },
+  // CR-HM-BE-05 RUN 2 — Handyman service visit scheduling permissions
+  { code: 'handyman_service_visit.read', name: 'Read Handyman Service Visits' },
+  {
+    code: 'handyman_service_visit.manage',
+    name: 'Manage Handyman Service Visits',
+  },
 ];
 
 /**

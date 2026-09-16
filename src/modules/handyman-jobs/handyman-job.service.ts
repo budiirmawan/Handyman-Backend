@@ -158,6 +158,12 @@ const PRE_EXECUTION_WORK_ORDER_STATUSES: ReadonlySet<string> = new Set([
   'ASSIGNED',
 ]);
 
+/** True while the work order is inside the pre-execution window (OPEN or
+ * ASSIGNED). Exported for the CR-HM-BE-05 Run-2 scheduling/readiness gates. */
+export function isPreExecutionWorkOrderStatus(status: string): boolean {
+  return PRE_EXECUTION_WORK_ORDER_STATUSES.has(status);
+}
+
 export function toPublicHandymanJob(
   record: HandymanJobRecord,
 ): PublicHandymanJob {
@@ -400,14 +406,14 @@ export async function createHandymanJob(
 /* Assignment composition — shared helpers                             */
 /* ------------------------------------------------------------------ */
 
-type JobContext = {
+export type JobContext = {
   job: HandymanJobRecord;
   request: { id: string; clientId: string; buildingId: string };
   workOrder: PublicWorkOrder;
 };
 
 /** Loads the job with its client-scope gate and structural context checks. */
-async function loadJobContext(
+export async function loadJobContext(
   jobId: string,
   actorUserId: string,
 ): Promise<JobContext> {
@@ -440,7 +446,7 @@ async function loadJobContext(
   return { job, request, workOrder: toPublicWorkOrder(workOrderRecord) };
 }
 
-function assertPreExecutionWorkOrder(status: string): void {
+export function assertPreExecutionWorkOrder(status: string): void {
   if (!PRE_EXECUTION_WORK_ORDER_STATUSES.has(status)) {
     throw handymanJobNotAssignableError(
       `Work order status ${status} is past the pre-execution assignment window.`,
@@ -457,7 +463,7 @@ function assertPreExecutionWorkOrder(status: string): void {
  * building (BE-06E via CR-HM-BE-02). Failures reuse the owning modules'
  * errors; only the Handyman-specific rules get BE-05 codes.
  */
-async function requireEligibleProviderForJob(
+export async function requireEligibleProviderForJob(
   context: JobContext,
   handymanProviderId: string,
   actorUserId: string,
@@ -561,15 +567,22 @@ async function requireValidJobCrewWorker(
  * provider, has a valid ACTIVE lead (CR-HM-BE-04 aggregate invariant), and
  * EVERY ACTIVE member (lead included) passes the worker chain. `lock` runs
  * the crew row FOR UPDATE inside the composition transaction.
+ *
+ * Members are validated in ASCENDING vendor workforce binding id order: the
+ * per-worker `lockWorkerCandidate` locks exactly the binding row
+ * (`FOR UPDATE OF b`), so a sorted acquisition order is the deterministic
+ * lock ordering that keeps concurrent commands sharing workers deadlock-free
+ * (CR-HM-BE-05 Run 2 §7). Returns the sorted ACTIVE binding ids for the
+ * temporal worker-conflict scan.
  */
-async function requireOperationalCrewChain(
+export async function requireOperationalCrewChain(
   handymanWorkCrewId: string,
   providerId: string,
   providerVendorId: string,
   clientId: string,
   executor: Executor,
   lock: boolean,
-): Promise<void> {
+): Promise<string[]> {
   const crew = lock
     ? await handymanWorkCrewRepository.lockById(handymanWorkCrewId, executor)
     : await handymanWorkCrewRepository.findById(handymanWorkCrewId, executor);
@@ -596,7 +609,10 @@ async function requireOperationalCrewChain(
     { status: 'ACTIVE' },
     executor,
   );
-  for (const member of members) {
+  const sortedMembers = [...members].sort((a, b) =>
+    a.vendorWorkforceBindingId.localeCompare(b.vendorWorkforceBindingId),
+  );
+  for (const member of sortedMembers) {
     await requireValidJobCrewWorker(
       member.vendorWorkforceBindingId,
       clientId,
@@ -604,6 +620,7 @@ async function requireOperationalCrewChain(
       executor,
     );
   }
+  return sortedMembers.map((member) => member.vendorWorkforceBindingId);
 }
 
 /**

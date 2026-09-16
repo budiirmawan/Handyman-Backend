@@ -514,6 +514,9 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   { code: 'handyman_job.manage', name: 'Manage Handyman Jobs' },
   { code: 'handyman_job_assignment.read', name: 'Read Handyman Job Assignments' },
   { code: 'handyman_job_assignment.manage', name: 'Manage Handyman Job Assignments' },
+  // CR-HM-BE-05 RUN 2 — Handyman service visit scheduling permissions
+  { code: 'handyman_service_visit.read', name: 'Read Handyman Service Visits' },
+  { code: 'handyman_service_visit.manage', name: 'Manage Handyman Service Visits' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {
