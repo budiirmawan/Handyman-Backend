@@ -50,6 +50,15 @@ export function isHandymanRequestPriority(
 export const HANDYMAN_REQUEST_STATUSES = [
   'SUBMITTED',
   'CANCELLED',
+  // CR-HM-BE-03 RUN 1 — additive governed lifecycle statuses (migration
+  // 0350). CR-HM-BE-01 semantics are unchanged: intake creates SUBMITTED
+  // and cancellation remains SUBMITTED → CANCELLED only.
+  'TRIAGED',
+  'INSPECTION_REQUIRED',
+  'INSPECTION_COMPLETED',
+  'QUOTATION_PENDING',
+  'APPROVED',
+  'QUOTATION_REJECTED',
 ] as const;
 export type HandymanRequestStatus =
   (typeof HANDYMAN_REQUEST_STATUSES)[number];

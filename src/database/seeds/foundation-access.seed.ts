@@ -559,6 +559,10 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // CR-HM-BE-02 RUN 1 — Handyman provider designation permissions
   { code: 'handyman_provider.read', name: 'Read Handyman Providers' },
   { code: 'handyman_provider.manage', name: 'Manage Handyman Providers' },
+  // CR-HM-BE-03 RUN 1 — Handyman request governance permissions
+  { code: 'handyman_triage.manage', name: 'Triage Handyman Requests' },
+  { code: 'handyman_request_service.manage', name: 'Manage Handyman Request Services' },
+  { code: 'handyman_inspection.manage', name: 'Manage Handyman Inspections' },
 ];
 
 /**
