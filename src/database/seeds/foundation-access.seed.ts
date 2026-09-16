@@ -563,6 +563,10 @@ export const FOUNDATION_PERMISSIONS: readonly {
   { code: 'handyman_triage.manage', name: 'Triage Handyman Requests' },
   { code: 'handyman_request_service.manage', name: 'Manage Handyman Request Services' },
   { code: 'handyman_inspection.manage', name: 'Manage Handyman Inspections' },
+  // CR-HM-BE-03 RUN 3 — Handyman customer approval permissions
+  { code: 'handyman_quotation.manage', name: 'Manage Handyman Quotations' },
+  { code: 'handyman_quotation_approval.record', name: 'Record Handyman Quotation Approval Decisions' },
+  { code: 'handyman_quotation_approval_link.manage', name: 'Manage Handyman Quotation Approval Links' },
 ];
 
 /**

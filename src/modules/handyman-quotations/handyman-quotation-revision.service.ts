@@ -2,9 +2,16 @@ import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
+import {
+  handymanRequestNotFoundError,
+  handymanRequestRepository,
+  handymanRequestStatusInvalidError,
+} from '../handyman-requests';
+import { handymanRequestTriageRepository } from '../handyman-request-governance';
 import { recordOperationalEvent } from '../operational-events';
 import {
   handymanQuotationLinesRequiredError,
+  handymanQuotationNotAllowedError,
   handymanQuotationRevisionDraftExistsError,
   handymanQuotationRevisionNotFoundError,
   handymanQuotationRevisionStateInvalidError,
@@ -87,9 +94,13 @@ function normalizeValidUntil(value: unknown): string | null {
 /**
  * Envelope states in which a new DRAFT revision may be opened: the
  * WITHDRAWN re-quote loop (governance correction #3 — same quotation
- * identity) and the not-yet-sent DRAFT envelope (correcting a SUBMITTED
- * revision before it was ever sent). A SENT quotation must be withdrawn
- * first — sent commercial facts are never edited around.
+ * identity), the not-yet-sent DRAFT envelope (correcting a SUBMITTED
+ * revision before it was ever sent), and — CR-HM-BE-03 RUN 3 — the
+ * REJECTED envelope: a customer rejection returns to the commercial loop
+ * under the SAME quotation identity (opening the revision performs the
+ * governed reopen transition of the request). A SENT quotation must be
+ * withdrawn first and an APPROVED quotation is final — sent/approved
+ * commercial facts are never edited around.
  */
 function assertRevisionCreatable(quotation: HandymanQuotationRecord): void {
   if (!(HANDYMAN_QUOTATION_SENDABLE_STATUSES as readonly string[]).includes(quotation.status)) {
@@ -99,6 +110,42 @@ function assertRevisionCreatable(quotation: HandymanQuotationRecord): void {
         : 'A new revision cannot be opened in this quotation state.',
     );
   }
+}
+
+/**
+ * CR-HM-BE-03 RUN 3 — minimum governed reopen transition: when the envelope
+ * is REJECTED, opening the next DRAFT revision returns the request from
+ * QUOTATION_REJECTED to its quotation-authoring phase (TRIAGED on the
+ * QUOTATION path, INSPECTION_COMPLETED on the INSPECTION path) through the
+ * guarded CR-HM-BE-01 transition, in the SAME transaction as the revision.
+ * The rejected approval row is untouched immutable history.
+ */
+async function reopenRejectedQuotation(
+  quotation: HandymanQuotationRecord,
+  tx: Pick<PoolClient, 'query'>,
+): Promise<string | null> {
+  if (quotation.status !== 'REJECTED') return null;
+  const request = await handymanRequestRepository.findById(quotation.requestId, tx);
+  if (!request) throw handymanRequestNotFoundError();
+  const activeTriage = await handymanRequestTriageRepository.findActiveByRequest(
+    request.id,
+    tx,
+  );
+  if (!activeTriage) {
+    throw handymanQuotationNotAllowedError(
+      'Reopening a rejected quotation requires an ACTIVE triage decision on the handyman request.',
+    );
+  }
+  const targetStatus =
+    activeTriage.path === 'INSPECTION' ? 'INSPECTION_COMPLETED' : 'TRIAGED';
+  const moved = await handymanRequestRepository.updateStatusFrom(
+    request.id,
+    'QUOTATION_REJECTED',
+    targetStatus,
+    tx,
+  );
+  if (!moved) throw handymanRequestStatusInvalidError();
+  return targetStatus;
 }
 
 async function loadRevisionOrThrow(
@@ -132,6 +179,10 @@ export async function createHandymanQuotationRevision(
       { forUpdate: true },
     );
     assertRevisionCreatable(quotation);
+
+    // RUN 3: opening a revision on a REJECTED envelope performs the governed
+    // reopen transition of the request in the same transaction.
+    const reopenedRequestStatus = await reopenRejectedQuotation(quotation, tx);
 
     // One-DRAFT rule: pre-check under the envelope lock; the partial unique
     // index is the structural backstop for any residual race.
@@ -182,6 +233,8 @@ export async function createHandymanQuotationRevision(
           quotationId: quotation.id,
           quotationNumber: quotation.quotationNumber,
           revisionNumber: revision.revisionNumber,
+          reopenedFromRejected: reopenedRequestStatus !== null,
+          requestStatus: reopenedRequestStatus,
         },
       },
       tx,

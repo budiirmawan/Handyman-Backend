@@ -21,7 +21,15 @@ export const HANDYMAN_QUOTATION_STATUSES = [
 export type HandymanQuotationStatus = (typeof HANDYMAN_QUOTATION_STATUSES)[number];
 
 /** Envelope states from which a send is governed in Run 2. */
-export const HANDYMAN_QUOTATION_SENDABLE_STATUSES = ['DRAFT', 'WITHDRAWN'] as const;
+export const HANDYMAN_QUOTATION_SENDABLE_STATUSES = [
+  'DRAFT',
+  'WITHDRAWN',
+  // CR-HM-BE-03 RUN 3: a REJECTED quotation re-quotes under the SAME
+  // identity — the governed reopen transition (next DRAFT revision) returns
+  // the request to its authoring phase and the envelope re-sends from
+  // REJECTED. APPROVED remains final.
+  'REJECTED',
+] as const;
 
 export const HANDYMAN_QUOTATION_REVISION_STATUSES = [
   'DRAFT',

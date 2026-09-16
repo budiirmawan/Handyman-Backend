@@ -194,6 +194,27 @@ async function markWithdrawnFromSent(
   return result.rows[0] ?? null;
 }
 
+/**
+ * Guarded SENT → APPROVED/REJECTED (CR-HM-BE-03 RUN 3 customer decision).
+ * The sent binding facts are retained — the migration-0352 decided-state
+ * CHECK requires them as history.
+ */
+async function markDecidedFromSent(
+  id: string,
+  status: 'APPROVED' | 'REJECTED',
+  executor: Pick<PoolClient, 'query'>,
+): Promise<HandymanQuotationRecord | null> {
+  const result = await executor.query<HandymanQuotationRecord>(
+    `UPDATE handyman_quotations
+     SET status = $2,
+         updated_at = NOW()
+     WHERE id = $1 AND status = 'SENT'
+     RETURNING ${QUOTATION_SELECT}`,
+    [id, status],
+  );
+  return result.rows[0] ?? null;
+}
+
 export const handymanQuotationRepository = {
   create,
   findById,
@@ -203,4 +224,5 @@ export const handymanQuotationRepository = {
   findLastQuotationNumber,
   markSentFrom,
   markWithdrawnFromSent,
+  markDecidedFromSent,
 };

@@ -39,6 +39,10 @@ import {
   handymanQuotationSendRevisionInvalidError,
   handymanQuotationStateInvalidError,
 } from './handyman-quotation.errors';
+import { handymanQuotationApprovalAlreadyExistsError } from './handyman-quotation-approval.errors';
+import { handymanQuotationApprovalRepository } from './handyman-quotation-approval.repository';
+import { toPublicHandymanQuotationApproval } from './handyman-quotation-approval.service';
+import type { PublicHandymanQuotationApproval } from './handyman-quotation-approval.types';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationRevisionRepository } from './handyman-quotation-revision.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
@@ -562,6 +566,7 @@ export async function sendHandymanQuotation(
 ): Promise<{
   quotation: PublicHandymanQuotation;
   revision: PublicHandymanQuotationRevision;
+  approval: PublicHandymanQuotationApproval;
 }> {
   if (!isValidUuid(input.revisionId)) {
     throw handymanQuotationSendRevisionInvalidError();
@@ -671,6 +676,41 @@ export async function sendHandymanQuotation(
       await handymanQuotationLineRepository.totalsByRevision(revision.id, tx),
     );
 
+    // CR-HM-BE-03 RUN 3 — approval composition: a successful send creates
+    // exactly one PENDING approval for the exact sent revision in the SAME
+    // transaction (send concurrency/idempotency guarantees are preserved —
+    // only the guarded-send winner reaches this point). Any stale PENDING
+    // approval from an earlier send cycle is expired first so at most one
+    // PENDING approval exists per quotation.
+    const expiredApprovalIds =
+      await handymanQuotationApprovalRepository.expirePendingByQuotation(
+        quotation.id,
+        tx,
+      );
+    let approval;
+    try {
+      approval = await handymanQuotationApprovalRepository.createPending(
+        {
+          quotationId: quotation.id,
+          quotationRevisionId: revision.id,
+          clientId: quotation.clientId,
+          buildingId: quotation.buildingId,
+          createdByUserId: actorUserId,
+        },
+        tx,
+      );
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error as { code?: string }).code === '23505' &&
+        (error as { constraint?: string }).constraint ===
+          'handyman_quotation_approvals_one_pending_per_revision'
+      ) {
+        throw handymanQuotationApprovalAlreadyExistsError();
+      }
+      throw error;
+    }
+
     await recordOperationalEvent(
       {
         clientId: quotation.clientId,
@@ -692,9 +732,33 @@ export async function sendHandymanQuotation(
       tx,
     );
 
+    await recordOperationalEvent(
+      {
+        clientId: quotation.clientId,
+        buildingId: quotation.buildingId,
+        eventType: 'HANDYMAN_QUOTATION_APPROVAL_CREATED',
+        entityType: 'HANDYMAN_QUOTATION_APPROVAL',
+        entityId: approval.id,
+        actorUserId,
+        summary: `Pending customer approval created for quotation ${quotation.quotationNumber} revision ${revision.revisionNumber}.`,
+        metadata: {
+          approvalId: approval.id,
+          quotationId: quotation.id,
+          quotationNumber: quotation.quotationNumber,
+          revisionId: revision.id,
+          revisionNumber: revision.revisionNumber,
+          requestId: request.id,
+          requestNumber: request.requestNumber,
+          expiredApprovalIds,
+        },
+      },
+      tx,
+    );
+
     return {
       quotation: toPublicHandymanQuotation(sent),
       revision: toPublicHandymanQuotationRevision(revision, totals),
+      approval: toPublicHandymanQuotationApproval(approval),
     };
   });
 }
@@ -716,6 +780,15 @@ export async function withdrawHandymanQuotation(
         'Only a SENT quotation can be withdrawn.',
       );
     }
+
+    // CR-HM-BE-03 RUN 3: withdrawing a SENT quotation expires its PENDING
+    // approval (expiration is never a decision) so exactly one PENDING
+    // approval can exist per quotation and only for a live sent revision.
+    const expiredApprovalIds =
+      await handymanQuotationApprovalRepository.expirePendingByQuotation(
+        quotation.id,
+        tx,
+      );
 
     // Return the request to its triaged lifecycle state so the SAME
     // quotation identity can carry a fresh revision (re-quote loop).
@@ -757,6 +830,7 @@ export async function withdrawHandymanQuotation(
           requestId: request.id,
           requestNumber: request.requestNumber,
           requestStatus: targetStatus,
+          expiredApprovalIds,
         },
       },
       tx,

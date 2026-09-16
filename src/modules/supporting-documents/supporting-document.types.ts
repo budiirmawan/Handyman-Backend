@@ -16,6 +16,8 @@ export const SUPPORTING_PARENT_TYPES = [
   'DOCUMENT',
   'RFQ',
   'QUOTATION_REVISION',
+  // CR-HM-BE-03 RUN 3 — customer quotation approval evidence (migration 0352)
+  'HANDYMAN_QUOTATION_APPROVAL',
 ] as const;
 export type SupportingParentType = (typeof SUPPORTING_PARENT_TYPES)[number];
 export function isSupportingParentType(v: unknown): v is SupportingParentType {

@@ -159,6 +159,18 @@ async function resolveParentContext(
       const row = result.rows[0];
       return row ? { clientId: row.clientId, buildingId: row.buildingId, contextType: 'VENDOR' } : null;
     }
+    case 'HANDYMAN_QUOTATION_APPROVAL': {
+      // CR-HM-BE-03 RUN 3 — approval evidence binds through the existing
+      // supporting-documents authority (migration 0352 parent-type extension).
+      const result = await getPool().query<{ clientId: string; buildingId: string }>(
+        `SELECT a.client_id AS "clientId", a.building_id AS "buildingId"
+           FROM handyman_quotation_approvals a
+          WHERE a.id = $1`,
+        [parentId],
+      );
+      const row = result.rows[0];
+      return row ? { clientId: row.clientId, buildingId: row.buildingId, contextType: 'TENANT' } : null;
+    }
     default:
       return null;
   }
