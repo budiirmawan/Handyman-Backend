@@ -82,6 +82,56 @@ tags:
       createdByUserId / status / id / timestamps are server-managed and never
       accepted from the caller. No entitlement/configuration internals, no
       pricing or rate card, and no request-assignment surface exists here.
+  - name: Handyman Request Governance
+    description: >
+      CR-HM-BE-03 RUN 4 — Handyman Request governance HTTP contract: thin
+      exposure of the completed Run 1 governance authority (append-only
+      triage / re-triage history, governed request-service selection with
+      ACTIVE/SUPERSEDED history, and inspection open/complete/cancel with the
+      existing checklist-execution binding) through the existing Asentra
+      route composition. Twelve endpoints only. The request scope comes from
+      the route, the actor only from the authenticated session, and row
+      status / actor-stamp / supersede lifecycle fields are server-managed
+      and never accepted from the caller. There is deliberately no
+      free-text-to-service classification endpoint: a selection always binds
+      an existing ACTIVE same-client HANDYMAN service-catalog entry. No new
+      checklist or evidence endpoint exists here.
+  - name: Handyman Quotations
+    description: >
+      CR-HM-BE-03 RUN 4 — Handyman Quotation commerce HTTP contract: thin
+      exposure of the completed Run 2 customer quotation authority
+      (quotation envelope, immutable revision history under ONE quotation
+      identity, DRAFT line authoring with governed pricing lookup, guarded
+      submit / send / withdraw transitions) through the existing Asentra
+      route composition. Thirteen endpoints only. Derived totals, client /
+      building authority, customer snapshot authority, revision_number,
+      quotation_number and sent_revision_id are never accepted from a
+      caller; the governed send command carries exactly the explicit
+      revision identifier. Pricing remains service-authoritative through
+      the UNCHANGED governed price-catalog lookup (snapshot + provenance on
+      every line; deviation notes mandatory when authored prices deviate or
+      no reference price exists). No FX conversion, discount, BM fee or
+      settlement surface exists here.
+  - name: Handyman Quotation Approvals
+    description: >
+      CR-HM-BE-03 RUN 4 — Handyman customer approval HTTP contract: thin
+      exposure of the completed Run 3 approval authority (IN_APP tenant-PIC
+      decision, ASSISTED staff-recorded out-of-band decision, approval
+      history reads, and the staff secure-link readiness surfaces
+      issue/read/revoke) through the existing Asentra route composition.
+      Eight endpoints only. APPROVED FOR (the authorizing party:
+      TENANT_COMPANY | TENANT_PIC | CUSTOMER with an identity snapshot) and
+      RECORDED BY (the authenticated staff actor recording an assisted
+      decision, null for genuinely direct in-app PIC decisions) are
+      preserved separately on every decision. The IN_APP route requires
+      authentication only — no staff permission code — because the Run 3
+      service resolves and verifies the actor exclusively through governed
+      tenant-PIC identity/context links. SECURE_LINK public resolve/decide
+      is NOT available in CR-HM-BE-03 and remains deferred pending
+      public-endpoint abuse protection (only login-scoped rate limiting
+      exists platform-wide); the raw link token is returned exactly once in
+      the successful issue response, only its SHA-256 hash is stored, and
+      token_hash is never exposed by any read surface.
   - name: Front Desk
     description: >
       CR-BE-FE-JOURNEY-CONTRACT-01 PART 01A - J09 Visitor & Front-Desk core
@@ -44960,6 +45010,1349 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-requests/{handymanRequestId}/triages:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        description: Authoritative `handyman_requests.id` scope of the triage.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: triageHandymanRequest
+      x-required-permission: handyman_triage.manage
+      summary: Triage or Re-triage a Handyman Request
+      description: >
+        CR-HM-BE-03 RUN 4 — thin HTTP exposure of the Run 1 append-only
+        triage authority. The request scope comes from the path and the
+        actor only from the authenticated session (`triagedByUserId`). Body
+        allowlist is exactly `path` (QUOTATION | INSPECTION) and optional
+        `notes` (≤2000 chars); `requestId`, `clientId`, `buildingId`,
+        `status`, actor stamps, supersede fields and any unknown field are
+        rejected with 400 `VALIDATION_ERROR`. Each triage appends a new
+        history row and supersedes the previous ACTIVE triage — at most one
+        ACTIVE triage per request, superseded rows stay auditable. The
+        governed request lifecycle transition (QUOTATION path → `TRIAGED`,
+        INSPECTION path → `INSPECTION_REQUIRED`) is performed atomically in
+        the same transaction; disallowed request states fail with 409
+        `HANDYMAN_REQUEST_STATUS_INVALID` or 400
+        `HANDYMAN_REQUEST_TRIAGE_NOT_ALLOWED`. Unknown or inaccessible
+        requests return 404 `HANDYMAN_REQUEST_NOT_FOUND` (building access is
+        service-authoritative, no existence leak).
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriageHandymanRequest"
+      responses:
+        "201":
+          description: Triage recorded (ACTIVE); previous ACTIVE triage superseded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanRequestTriage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanRequestTriages
+      x-required-permission: handyman_request.read
+      summary: List a Request's Triage History
+      description: >
+        CR-HM-BE-03 RUN 4 — full append-only triage history for the request
+        (ACTIVE and SUPERSEDED rows; the preserved history is a first-class
+        read surface). No query parameters are accepted. Request scope
+        comes from the path; building access is service-authoritative (403
+        `BUILDING_ACCESS_DENIED`); unknown requests return 404
+        `HANDYMAN_REQUEST_NOT_FOUND`.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Triage history (ACTIVE first-class, SUPERSEDED preserved).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanRequestTriage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-request-triages/{triageId}:
+    parameters:
+      - name: triageId
+        in: path
+        required: true
+        description: Authoritative `handyman_request_triages.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanRequestTriage
+      x-required-permission: handyman_request.read
+      summary: Read One Triage Row (Current or History)
+      description: >
+        CR-HM-BE-03 RUN 4 — single triage row by id (ACTIVE or SUPERSEDED —
+        the append-only history is readable row-by-row). Building access is
+        service-authoritative; unknown rows return 404
+        `HANDYMAN_TRIAGE_NOT_FOUND`.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Triage row.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanRequestTriage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-requests/{handymanRequestId}/services:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        description: Authoritative `handyman_requests.id` scope of the selection.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: selectHandymanRequestService
+      x-required-permission: handyman_request_service.manage
+      summary: Select a Governed Service for a Handyman Request
+      description: >
+        CR-HM-BE-03 RUN 4 — thin HTTP exposure of the Run 1 governed
+        request-service binding (`handyman_request_services` — the dedicated
+        first binding, NOT quotation lines). Body allowlist is exactly
+        `serviceCatalogId` + `source` (TRIAGE | INSPECTION); `requestId`
+        comes from the path, actor stamps and row status are server-managed,
+        and free-text classification fields (`description`, `serviceName`,
+        …) are rejected with 400 `VALIDATION_ERROR` — selection always
+        binds an existing service-catalog entry. The service enforces
+        same-client ACTIVE HANDYMAN-category catalog governance (400
+        `HANDYMAN_REQUEST_SERVICE_NOT_HANDYMAN` /
+        `HANDYMAN_REQUEST_SERVICE_CLIENT_MISMATCH`), source-vs-request-phase
+        consistency (400 `HANDYMAN_REQUEST_SERVICE_SOURCE_INVALID`), and
+        lifecycle state (409 `HANDYMAN_REQUEST_STATUS_INVALID`). Multiple
+        ACTIVE selections of DISTINCT services per request are preserved;
+        re-selecting an already-ACTIVE identical service fails 409
+        `HANDYMAN_REQUEST_SERVICE_ALREADY_ACTIVE`.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SelectHandymanRequestService"
+      responses:
+        "201":
+          description: Selection recorded (ACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanRequestService" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanRequestServices
+      x-required-permission: handyman_request.read
+      summary: List a Request's Service Selections (History or Current)
+      description: >
+        CR-HM-BE-03 RUN 4 — selection history for the request. Optional
+        `status` query filter (ACTIVE | SUPERSEDED); without it the full
+        governed history is returned (multiple ACTIVE distinct services are
+        first-class). Any other query parameter is rejected with 400
+        `VALIDATION_ERROR`. Building access is service-authoritative.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Optional history filter.
+          schema: { type: string, enum: [ACTIVE, SUPERSEDED] }
+      responses:
+        "200":
+          description: Service selection rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanRequestService" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-request-services/{selectionId}:
+    parameters:
+      - name: selectionId
+        in: path
+        required: true
+        description: Authoritative `handyman_request_services.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanRequestService
+      x-required-permission: handyman_request.read
+      summary: Read One Request-Service Selection
+      description: >
+        CR-HM-BE-03 RUN 4 — single selection row by id (ACTIVE or
+        SUPERSEDED). Building access is service-authoritative; unknown rows
+        return 404 `HANDYMAN_REQUEST_SERVICE_NOT_FOUND`.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Selection row.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanRequestService" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-request-services/{selectionId}/supersede:
+    parameters:
+      - name: selectionId
+        in: path
+        required: true
+        description: Authoritative `handyman_request_services.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: supersedeHandymanRequestServiceSelection
+      x-required-permission: handyman_request_service.manage
+      summary: Supersede an ACTIVE Request-Service Selection
+      description: >
+        CR-HM-BE-03 RUN 4 — governed removal of one ACTIVE selection: the
+        row transitions to SUPERSEDED and stays auditable (append-only
+        history — never deleted). No body is accepted; ANY body field is
+        rejected with 400 `VALIDATION_ERROR`. Only ACTIVE rows of a request
+        in a governed lifecycle state can be superseded (409
+        `HANDYMAN_REQUEST_SERVICE_STATE_INVALID` /
+        `HANDYMAN_REQUEST_STATUS_INVALID`). Downstream LABOR quotation lines
+        referencing the selection are re-validated by the Run 2 pricing
+        governance on any subsequent line authoring.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Selection superseded (history preserved).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanRequestService" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-requests/{handymanRequestId}/inspections:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        description: Authoritative `handyman_requests.id` scope of the inspection.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: openHandymanInspection
+      x-required-permission: handyman_inspection.manage
+      summary: Open an Inspection for a Handyman Request
+      description: >
+        CR-HM-BE-03 RUN 4 — thin HTTP exposure of the Run 1 inspection
+        authority. Body allowlist is exactly the optional
+        `checklistExecutionId` (the EXISTING checklist-execution binding —
+        validated against the existing authority, 400
+        `HANDYMAN_INSPECTION_CHECKLIST_INVALID`; no new checklist or
+        evidence endpoint is introduced). `requestId`, `spaceId`,
+        `diagnosis`, `scopeNotes`, actor stamps and status are never
+        accepted (400 `VALIDATION_ERROR`). The request must be in the
+        governed inspection phase (400
+        `HANDYMAN_INSPECTION_NOT_ALLOWED`); at most one OPEN inspection per
+        request (409 `HANDYMAN_INSPECTION_ALREADY_OPEN`).
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenHandymanInspection"
+      responses:
+        "201":
+          description: Inspection opened (OPEN).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanInspections
+      x-required-permission: handyman_request.read
+      summary: List a Request's Inspections
+      description: >
+        CR-HM-BE-03 RUN 4 — inspection rows for the request (OPEN,
+        COMPLETED and CANCELLED history). No query parameters are accepted.
+        Building access is service-authoritative.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Inspection rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-inspections/{inspectionId}:
+    parameters:
+      - name: inspectionId
+        in: path
+        required: true
+        description: Authoritative `handyman_inspections.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanInspection
+      x-required-permission: handyman_request.read
+      summary: Read One Inspection
+      description: >
+        CR-HM-BE-03 RUN 4 — single inspection row by id. Building access is
+        service-authoritative; unknown rows return 404
+        `HANDYMAN_INSPECTION_NOT_FOUND`.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Inspection row.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-inspections/{inspectionId}/complete:
+    parameters:
+      - name: inspectionId
+        in: path
+        required: true
+        description: Authoritative `handyman_inspections.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: completeHandymanInspection
+      x-required-permission: handyman_inspection.manage
+      summary: Complete an Open Inspection
+      description: >
+        CR-HM-BE-03 RUN 4 — records the governed inspection outcome: body
+        allowlist is exactly `diagnosis` (1..4000 chars, required) and
+        `scopeNotes` (1..2000 chars, required). The checklist-execution
+        binding, request scope, actor stamps and status are immutable and
+        never accepted (400 `VALIDATION_ERROR`). Only an OPEN inspection
+        completes (OPEN → COMPLETED guarded, otherwise 409
+        `HANDYMAN_INSPECTION_STATE_INVALID`); the request advances to
+        `INSPECTION_COMPLETED` atomically in the same transaction when its
+        lifecycle allows (otherwise 409
+        `HANDYMAN_REQUEST_STATUS_INVALID`).
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteHandymanInspection"
+      responses:
+        "200":
+          description: Inspection completed; request advanced to INSPECTION_COMPLETED.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-inspections/{inspectionId}/cancel:
+    parameters:
+      - name: inspectionId
+        in: path
+        required: true
+        description: Authoritative `handyman_inspections.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: cancelHandymanInspection
+      x-required-permission: handyman_inspection.manage
+      summary: Cancel an Open Inspection
+      description: >
+        CR-HM-BE-03 RUN 4 — OPEN → CANCELLED guarded transition; the row
+        stays as history. No body is accepted; ANY body field is rejected
+        with 400 `VALIDATION_ERROR`. Non-OPEN inspections fail 409
+        `HANDYMAN_INSPECTION_STATE_INVALID`.
+      tags: [Handyman Request Governance]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Inspection cancelled.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-requests/{handymanRequestId}/quotations:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        description: Authoritative `handyman_requests.id` scope of the quotation.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: createHandymanQuotation
+      x-required-permission: handyman_quotation.manage
+      summary: Create a Quotation Envelope with Its First DRAFT Revision
+      description: >
+        CR-HM-BE-03 RUN 4 — thin HTTP exposure of the Run 2 quotation
+        authority. Body allowlist is exactly `currency` (the governed
+        price-catalog currency set; no FX conversion exists in CR03).
+        `requestId` comes from the path; `quotationNumber`, `status`,
+        client/building/tenant identity, the customer snapshot,
+        `sentRevisionId` and timestamps are server-managed and never
+        accepted (400 `VALIDATION_ERROR`); `idempotencyKey` is accepted
+        ONLY through the optional `Idempotency-Key` header (same key + same
+        payload replays the original result with `replayed: true`; same key
+        + different payload is 409 `HANDYMAN_QUOTATION_IDEMPOTENCY_CONFLICT`
+        — the internal fingerprint is never exposed). One transaction
+        creates the envelope (DRAFT) plus its first DRAFT revision
+        (`revisionNumber` 1, server-assigned). The request must be TRIAGED
+        or INSPECTION_COMPLETED (otherwise 400
+        `HANDYMAN_QUOTATION_NOT_ALLOWED`); building access is
+        service-authoritative (403 `BUILDING_ACCESS_DENIED`).
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >
+            Optional client request key (at most 200 characters) forwarded
+            to the existing Run 2 idempotent create authority.
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanQuotation"
+      responses:
+        "201":
+          description: Quotation envelope + first DRAFT revision (or replayed original).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CreateHandymanQuotationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listRequestHandymanQuotations
+      x-required-permission: handyman_quotation.read
+      summary: List a Request's Quotations
+      description: >
+        CR-HM-BE-03 RUN 4 — quotation envelopes for the request (full
+        governed history across lifecycle states). No query parameters are
+        accepted. Building access is service-authoritative; unknown
+        requests return 404 `HANDYMAN_REQUEST_NOT_FOUND`.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Quotation envelopes.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanQuotation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotations/{quotationId}:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanQuotation
+      x-required-permission: handyman_quotation.read
+      summary: Read a Quotation with Its Full Revision History
+      description: >
+        CR-HM-BE-03 RUN 4 — quotation envelope plus the complete revision
+        history (each with server-derived totals). Revisions are immutable
+        history: SUBMITTED/SUPERSEDED revisions are never mutated by any
+        endpoint. Building access is service-authoritative; unknown
+        quotations return 404 `HANDYMAN_QUOTATION_NOT_FOUND`.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Quotation envelope + revision history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotations/{quotationId}/send:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: sendHandymanQuotation
+      x-required-permission: handyman_quotation.send
+      summary: Send an Exact Submitted Revision to the Customer
+      description: >
+        CR-HM-BE-03 RUN 4 — the governed send command. Body allowlist is
+        exactly `revisionId`: the explicit revision identifier is the ONLY
+        caller-supplied send authority — `sentRevisionId`, `sentAt`,
+        `status`, the customer snapshot and the resulting PENDING approval
+        are server-managed and never accepted (400 `VALIDATION_ERROR`). The
+        revision must belong to this quotation and be SUBMITTED (400
+        `HANDYMAN_QUOTATION_SEND_REVISION_INVALID`); the envelope must be
+        DRAFT, WITHDRAWN or REJECTED (guarded transition to SENT, otherwise
+        409 `HANDYMAN_QUOTATION_STATE_INVALID`); the request transitions
+        TRIAGED|INSPECTION_COMPLETED → QUOTATION_PENDING in the SAME
+        transaction (409 `HANDYMAN_REQUEST_STATUS_INVALID`). The same
+        transaction expires any stale PENDING approval and creates exactly
+        one new PENDING approval bound to the exact sent revision
+        (structural one-PENDING-per-revision guarantee). Concurrent sends
+        resolve to one winner via guarded atomics; APPROVED quotations are
+        final and cannot be re-sent.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendHandymanQuotation"
+      responses:
+        "200":
+          description: Envelope SENT with the exact revision; one PENDING approval created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SendHandymanQuotationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-quotations/{quotationId}/withdraw:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: withdrawHandymanQuotation
+      x-required-permission: handyman_quotation.manage
+      summary: Withdraw a SENT Quotation
+      description: >
+        CR-HM-BE-03 RUN 4 — guarded SENT → WITHDRAWN transition (the
+        minimum governed withdrawal supporting the revision loop). No body
+        is accepted; ANY body field is rejected with 400 `VALIDATION_ERROR`.
+        The same transaction expires the PENDING approval of the withdrawn
+        revision (EXPIRED is never a decision) and returns the request to
+        its authoring phase. Non-SENT envelopes fail 409
+        `HANDYMAN_QUOTATION_STATE_INVALID`; a withdrawn quotation can later
+        re-send a (new) submitted revision under the SAME identity.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Envelope WITHDRAWN; PENDING approval expired.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-quotations/{quotationId}/revisions:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: createHandymanQuotationRevision
+      x-required-permission: handyman_quotation.manage
+      summary: Open the Next DRAFT Revision under the SAME Quotation
+      description: >
+        CR-HM-BE-03 RUN 4 — the governed re-quote loop: a new commercial
+        revision NEVER creates a new quotation identity. Body allowlist is
+        exactly optional `notes` (≤2000) and optional `validUntil`
+        (YYYY-MM-DD, calendar-validated by the service); `revisionNumber`
+        (sequential), `status` (DRAFT), totals, actor stamps and supersede
+        fields are server-managed and never accepted (400
+        `VALIDATION_ERROR`). At most one DRAFT revision per quotation (409
+        `HANDYMAN_QUOTATION_REVISION_DRAFT_EXISTS`). Allowed from governed
+        envelope states — including REJECTED, where the SAME transaction
+        performs the governed reopen transition returning the request from
+        QUOTATION_REJECTED to its authoring phase (TRIAGED on a QUOTATION
+        triage path, INSPECTION_COMPLETED on an INSPECTION path; otherwise
+        400 `HANDYMAN_QUOTATION_NOT_ALLOWED`). Prior SUBMITTED/SUPERSEDED
+        revisions remain immutable.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanQuotationRevision"
+      responses:
+        "201":
+          description: Next sequential DRAFT revision under the same quotation.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationRevision" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanQuotationRevisions
+      x-required-permission: handyman_quotation.read
+      summary: List a Quotation's Revision History
+      description: >
+        CR-HM-BE-03 RUN 4 — the full revision history (DRAFT, SUBMITTED and
+        SUPERSEDED rows with server-derived totals). Revisions are
+        immutable once submitted or superseded. No query parameters are
+        accepted. Building access is service-authoritative.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Revision history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanQuotationRevision" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotation-revisions/{revisionId}:
+    parameters:
+      - name: revisionId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_revisions.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanQuotationRevision
+      x-required-permission: handyman_quotation.read
+      summary: Read One Revision (with Server-Derived Totals)
+      description: >
+        CR-HM-BE-03 RUN 4 — single revision row with derived totals
+        (laborTotal / materialTotal / otherTotal / grandTotal — always
+        computed from stored lines, never caller input). Building access is
+        service-authoritative; unknown revisions return 404
+        `HANDYMAN_QUOTATION_REVISION_NOT_FOUND`.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Revision row.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationRevision" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotation-revisions/{revisionId}/submit:
+    parameters:
+      - name: revisionId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_revisions.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: submitHandymanQuotationRevision
+      x-required-permission: handyman_quotation.manage
+      summary: Submit a DRAFT Revision
+      description: >
+        CR-HM-BE-03 RUN 4 — guarded DRAFT → SUBMITTED transition; any
+        previously SUBMITTED revision of the same quotation becomes
+        SUPERSEDED in the same transaction (immutable history — submitted
+        revisions are never mutated afterwards). No body is accepted; ANY
+        body field is rejected with 400 `VALIDATION_ERROR`. The revision
+        must carry at least one line (409
+        `HANDYMAN_QUOTATION_LINES_REQUIRED`) and the envelope must be in a
+        governed authoring state (409 `HANDYMAN_QUOTATION_STATE_INVALID` /
+        `HANDYMAN_QUOTATION_REVISION_STATE_INVALID`). Submitting never
+        sends: the governed send is a separate explicit command.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Revision SUBMITTED; prior SUBMITTED revision superseded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SubmitHandymanQuotationRevisionResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-quotation-revisions/{revisionId}/lines:
+    parameters:
+      - name: revisionId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_revisions.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: addHandymanQuotationLine
+      x-required-permission: handyman_quotation.manage
+      summary: Add a Line to a DRAFT Revision
+      description: >
+        CR-HM-BE-03 RUN 4 — DRAFT-only line authoring. Body allowlist is
+        exactly `lineType` (LABOR | MATERIAL | OTHER), `unitPrice`
+        (required, positive, ≤2 decimals — service-authoritative), and the
+        optional governed subject/quantity/text fields (`serviceCatalogId`,
+        `inventoryItemId`, `uomId`, `quantity` positive ≤3 decimals for
+        MATERIAL, `description`, `deviationNote`). Derived and provenance
+        authority is NEVER accepted: `lineTotal` (GENERATED column),
+        `lineNumber` (server-assigned), subject/UOM resolution
+        (`subjectCode`, `subjectName`, `uomCode`), pricing provenance
+        (`referenceResolution`, `referencePriceEntryId`,
+        `referenceScopeTier`, `referenceUnitPrice`, `referenceAsOf`),
+        currency and any override/discount field are rejected with 400
+        `VALIDATION_ERROR`. LABOR lines must be consistent with the
+        request's ACTIVE governed service selections (400
+        `HANDYMAN_QUOTATION_LINE_SERVICE_NOT_SELECTED`); reference pricing
+        resolves through the UNCHANGED governed price-catalog lookup —
+        MATCHED (deviation from the reference requires `deviationNote`, 400
+        `HANDYMAN_QUOTATION_PRICE_DEVIATION_NOTE_REQUIRED`),
+        NO_REFERENCE_PRICE (manual price + note mandatory) or fail-closed
+        (409 `HANDYMAN_QUOTATION_PRICE_UNRESOLVED`). Non-DRAFT revisions
+        are immutable (409 `HANDYMAN_QUOTATION_REVISION_STATE_INVALID`).
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddHandymanQuotationLine"
+      responses:
+        "201":
+          description: Line stored with resolved pricing snapshot/provenance.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationLine" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanQuotationLines
+      x-required-permission: handyman_quotation.read
+      summary: List a Revision's Lines
+      description: >
+        CR-HM-BE-03 RUN 4 — stored lines of one revision with derived
+        totals and full pricing provenance (snapshot fields are
+        server-resolved and immutable on SUBMITTED/SUPERSEDED revisions).
+        No query parameters are accepted. Building access is
+        service-authoritative.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Revision lines.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanQuotationLine" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotation-lines/{lineId}:
+    parameters:
+      - name: lineId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_lines.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    patch:
+      operationId: updateHandymanQuotationLine
+      x-required-permission: handyman_quotation.manage
+      summary: Update Mutable Commercial Facts of a DRAFT Line
+      description: >
+        CR-HM-BE-03 RUN 4 — body allowlist is exactly the mutable
+        commercial facts: `unitPrice`, `quantity`, `description`,
+        `deviationNote` (at least one required). Subject identity
+        (`lineType`, `serviceCatalogId`, `inventoryItemId`, `uomId`),
+        derived/provenance fields and the revision binding are immutable —
+        supplying any of them is rejected with 400 `VALIDATION_ERROR`
+        (remove and re-add under governance instead). The same Run 2
+        pricing governance re-resolves provenance on every update
+        (deviation-note rules, fail-closed unresolved pricing). Only lines
+        of a DRAFT revision are mutable (409
+        `HANDYMAN_QUOTATION_REVISION_STATE_INVALID`).
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateHandymanQuotationLine"
+      responses:
+        "200":
+          description: Updated line with re-resolved pricing snapshot/provenance.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationLine" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: removeHandymanQuotationLine
+      x-required-permission: handyman_quotation.manage
+      summary: Remove a DRAFT Line
+      description: >
+        CR-HM-BE-03 RUN 4 — governed removal of one line from a DRAFT
+        revision (totals re-derive from the remaining stored lines). No
+        body is accepted; ANY body field is rejected with 400
+        `VALIDATION_ERROR`. Lines of SUBMITTED/SUPERSEDED revisions are
+        immutable (409 `HANDYMAN_QUOTATION_REVISION_STATE_INVALID`);
+        unknown lines return 404 `HANDYMAN_QUOTATION_LINE_NOT_FOUND`.
+      tags: [Handyman Quotations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Line removed from the DRAFT revision.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [removed, lineId]
+                        properties:
+                          removed: { type: boolean, enum: [true] }
+                          lineId: { $ref: "#/components/schemas/Uuid" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-quotations/{quotationId}/approvals:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanQuotationApprovals
+      x-required-permission: handyman_quotation.read
+      summary: List a Quotation's Approval History
+      description: >
+        CR-HM-BE-03 RUN 4 — the approval rows of one quotation: at most one
+        PENDING (bound to the exact sent revision) plus immutable decided /
+        expired history (APPROVED, REJECTED, EXPIRED rows are never
+        overwritten or deleted). Each row preserves APPROVED FOR
+        (`approvedForType` + identity snapshot) separately from RECORDED BY
+        (`recordedByUserId` — the staff recorder of an ASSISTED decision,
+        null for a genuinely direct IN_APP decision). No query parameters
+        are accepted. Building access is service-authoritative (403
+        `BUILDING_ACCESS_DENIED`); unknown quotations return 404
+        `HANDYMAN_QUOTATION_NOT_FOUND`.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Approval history (authoritative decision evidence).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanQuotationApproval" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotation-approvals/{approvalId}:
+    parameters:
+      - name: approvalId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_approvals.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanQuotationApproval
+      x-required-permission: handyman_quotation.read
+      summary: Read One Approval Row
+      description: >
+        CR-HM-BE-03 RUN 4 — single approval row (the authoritative decision
+        evidence with the approved-for/recorded-by separation). Building
+        access is service-authoritative; unknown rows return 404
+        `HANDYMAN_QUOTATION_APPROVAL_NOT_FOUND`.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Approval row.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationApproval" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotations/{quotationId}/approvals/in-app-decision:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: decideHandymanQuotationApprovalInApp
+      summary: Record the Linked Tenant PIC's In-App Decision
+      description: >
+        CR-HM-BE-03 RUN 4 — the IN_APP customer decision channel.
+        AUTHENTICATION ONLY: this route deliberately requires NO staff
+        permission code (no `x-required-permission`) — the approving party
+        is the tenant PIC, not staff, and no fabricated Tenant Relation
+        role exists. The Run 3 service resolves the actor EXCLUSIVELY from
+        the authenticated session through governed identity/context links
+        (tenant_pics.user == actor, the PIC linked to this request, ACTIVE
+        PIC of the request's tenant company, ACTIVE company of the same
+        client, ACTIVE effective tenant building context); any other actor
+        — including staff, unlinked users and a different PIC of the same
+        company — receives 403
+        `HANDYMAN_QUOTATION_APPROVAL_NOT_AUTHORIZED`. Body allowlist is
+        strictly `decision` (APPROVED | REJECTED) + optional `notes`
+        (≤2000); `approvedFor`/`recordedBy` (and every alias) cannot be
+        smuggled — supplying any of them is rejected with 400
+        `VALIDATION_ERROR`. The decision binds to the PENDING approval of
+        the exact sent revision: APPROVED moves approval + quotation to
+        APPROVED and the request to APPROVED; REJECTED moves approval +
+        quotation to REJECTED and the request to QUOTATION_REJECTED — all
+        guarded atomics in one transaction (`approvedFor` = TENANT_PIC
+        snapshot of the linked PIC; `recordedByUserId` stays null).
+        Decisions are once-only (409
+        `HANDYMAN_QUOTATION_APPROVAL_NOT_PENDING` /
+        `HANDYMAN_QUOTATION_APPROVAL_STATE_INVALID`); no SECURE_LINK
+        decision runtime exists in CR03.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideHandymanQuotationApprovalInApp"
+      responses:
+        "200":
+          description: Decision recorded with atomic downstream transitions.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationApprovalDecisionResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-quotations/{quotationId}/approvals/assisted-decision:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: recordHandymanQuotationApprovalAssistedDecision
+      x-required-permission: handyman_quotation_approval.record
+      summary: Record an Out-of-Band (Assisted) Customer Decision
+      description: >
+        CR-HM-BE-03 RUN 4 — the ASSISTED channel: an authenticated staff
+        actor records a customer decision that happened out-of-band. Body
+        allowlist is exactly `decision` (APPROVED | REJECTED), the explicit
+        `approvedFor` party and mandatory `notes` (1..2000 — the
+        out-of-band evidence trail; missing/empty notes are rejected with
+        400 `VALIDATION_ERROR` at the edge and 400
+        `HANDYMAN_QUOTATION_APPROVAL_NOTES_REQUIRED` by the service).
+        `approvedFor` must explicitly identify the approving party —
+        TENANT_COMPANY (`tenantCompanyId`), TENANT_PIC (`tenantPicId`) or
+        CUSTOMER (snapshot taken from the request, never from the caller);
+        it is validated against the governed request context (400
+        `HANDYMAN_QUOTATION_APPROVAL_FOR_INVALID`). RECORDED BY is derived
+        ONLY from the authenticated session (`recordedByUserId` = actor)
+        and can never be supplied — a staff recorder NEVER becomes the
+        customer. Same guarded atomic downstream transitions as IN_APP;
+        decisions are once-only (409). Out-of-band evidence documents
+        attach through the EXISTING supporting-document foundation
+        (`parentType: HANDYMAN_QUOTATION_APPROVAL`) — no duplicate upload
+        API exists here.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordHandymanQuotationApprovalAssisted"
+      responses:
+        "200":
+          description: Assisted decision recorded (approved-for and recorded-by preserved separately).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationApprovalDecisionResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-quotation-approvals/{approvalId}/links:
+    parameters:
+      - name: approvalId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_approvals.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: issueHandymanQuotationApprovalLink
+      x-required-permission: handyman_quotation_approval_link.manage
+      summary: Issue a Single-Use Secure Approval Link (Staff Readiness)
+      description: >
+        CR-HM-BE-03 RUN 4 — STAFF READINESS ONLY. Issues the secure link of
+        a PENDING approval: the token is 256-bit crypto-random, contains no
+        resource identifiers, is bound to the approval, and only its
+        SHA-256 hash is stored. The RAW token appears EXACTLY ONCE — in
+        this successful response (`rawToken`) — and is never stored, never
+        re-readable, and never logged or emitted in events; `tokenHash` is
+        never exposed by ANY surface. Body allowlist is exactly
+        `recipientName`, optional `recipientPhone`/`recipientEmail`
+        (recipient/contact snapshot) and required future `expiresAt`;
+        token/hash/lifecycle internals (`maxUses` fixed at 1, `usesCount`,
+        `status`, actor stamps) are never accepted (400
+        `VALIDATION_ERROR`). One ACTIVE link per approval (409
+        `HANDYMAN_QUOTATION_APPROVAL_LINK_ALREADY_ACTIVE`); non-PENDING
+        approvals cannot carry links (409
+        `HANDYMAN_QUOTATION_APPROVAL_STATE_INVALID`). NO public resolve,
+        public decide, anonymous token or token-consumption endpoint
+        exists: SECURE_LINK public exposure is NOT available in CR-HM-BE-03
+        and remains deferred pending platform public-endpoint abuse
+        protection.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueHandymanQuotationApprovalLink"
+      responses:
+        "201":
+          description: >
+            Link issued (ACTIVE). `rawToken` is returned exactly once here
+            and can never be retrieved again.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/IssueHandymanQuotationApprovalLinkResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-quotations/{quotationId}/approval-links:
+    parameters:
+      - name: quotationId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotations.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanQuotationApprovalLinks
+      x-required-permission: handyman_quotation_approval_link.manage
+      summary: List a Quotation's Secure-Link Metadata
+      description: >
+        CR-HM-BE-03 RUN 4 — staff metadata read of all links across the
+        quotation's approvals (ACTIVE/USED/REVOKED/EXPIRED). The response
+        NEVER contains the raw token or `tokenHash` — only lifecycle,
+        recipient snapshot and usage metadata. No query parameters are
+        accepted. Building access is service-authoritative; unknown
+        quotations return 404 `HANDYMAN_QUOTATION_NOT_FOUND`.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Link metadata (hash-free, token-free).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanQuotationApprovalLink" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotation-approval-links/{linkId}:
+    parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_approval_links.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanQuotationApprovalLink
+      x-required-permission: handyman_quotation_approval_link.manage
+      summary: Read One Secure-Link's Metadata
+      description: >
+        CR-HM-BE-03 RUN 4 — single link metadata row (never the raw token,
+        never `tokenHash`). Building access is service-authoritative;
+        unknown rows return 404
+        `HANDYMAN_QUOTATION_APPROVAL_LINK_NOT_FOUND`.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Link metadata (hash-free, token-free).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationApprovalLink" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-quotation-approval-links/{linkId}/revoke:
+    parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: Authoritative `handyman_quotation_approval_links.id`.
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: revokeHandymanQuotationApprovalLink
+      x-required-permission: handyman_quotation_approval_link.manage
+      summary: Revoke an ACTIVE Secure Link
+      description: >
+        CR-HM-BE-03 RUN 4 — guarded ACTIVE → REVOKED transition (single
+        statement; revoke/consume races resolve to exactly one outcome).
+        No body is accepted; ANY body field is rejected with 400
+        `VALIDATION_ERROR`. Non-ACTIVE links fail 409
+        `HANDYMAN_QUOTATION_APPROVAL_LINK_STATE_INVALID` (double revoke is
+        impossible). Revoking never decides the approval; a fresh link can
+        be issued afterwards.
+      tags: [Handyman Quotation Approvals]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Link revoked.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanQuotationApprovalLink" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 components:
   securitySchemes:
     bearerAuth:
@@ -73435,3 +74828,528 @@ components:
         serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
         serviceCode: { type: string }
         serviceName: { type: string }
+    HandymanRequestTriage:
+      type: object
+      description: >
+        CR-HM-BE-03 — one append-only triage row of a Handyman Request
+        (public read model). At most one ACTIVE row per request; re-triage
+        supersedes the previous ACTIVE row and the superseded history stays
+        auditable. `triagedByUserId` comes from the authenticated actor;
+        `status` and supersede fields are server-managed.
+      required: [id, requestId, clientId, buildingId, path, status, triagedByUserId, triagedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        requestId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        path: { type: string, enum: [QUOTATION, INSPECTION] }
+        notes: { type: string, nullable: true, maxLength: 2000 }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        triagedByUserId: { $ref: "#/components/schemas/Uuid" }
+        triagedAt: { type: string, format: date-time }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TriageHandymanRequest:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed triage body ONLY. `requestId` comes from
+        the route and the actor from the session; `status`, actor stamps,
+        supersede fields, `id` and timestamps are never accepted from the
+        caller — supplying any of them, or any other field, is rejected with
+        400 `VALIDATION_ERROR`.
+      required: [path]
+      properties:
+        path: { type: string, enum: [QUOTATION, INSPECTION] }
+        notes: { type: string, nullable: true, maxLength: 2000 }
+    HandymanRequestService:
+      type: object
+      description: >
+        CR-HM-BE-03 — one governed request-service binding
+        (`handyman_request_services`, public read model). Multiple ACTIVE
+        rows of DISTINCT services per request are first-class; superseded
+        rows remain auditable history. The binding references the existing
+        service catalog — no free-text classification exists.
+      required: [id, requestId, clientId, buildingId, serviceCatalogId, source, status, selectedByUserId, selectedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        requestId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        source: { type: string, enum: [TRIAGE, INSPECTION] }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        selectedByUserId: { $ref: "#/components/schemas/Uuid" }
+        selectedAt: { type: string, format: date-time }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SelectHandymanRequestService:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed selection body ONLY: the explicit
+        service-catalog binding plus the governed source phase. Free-text
+        classification fields (`description`, `serviceName`, …), request /
+        client / building scope, actor stamps, row status, `id` and
+        timestamps are never accepted — supplying any of them, or any other
+        field, is rejected with 400 `VALIDATION_ERROR`.
+      required: [serviceCatalogId, source]
+      properties:
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        source: { type: string, enum: [TRIAGE, INSPECTION] }
+    HandymanInspection:
+      type: object
+      description: >
+        CR-HM-BE-03 — one inspection row (public read model).
+        `checklistExecutionId` is the EXISTING checklist-execution binding
+        (immutable after open); `diagnosis`/`scopeNotes` are recorded on
+        completion; actor stamps and status are server-managed.
+      required: [id, requestId, clientId, buildingId, spaceId, status, openedByUserId, openedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        requestId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        spaceId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [OPEN, COMPLETED, CANCELLED] }
+        diagnosis: { type: string, nullable: true, maxLength: 4000 }
+        scopeNotes: { type: string, nullable: true, maxLength: 2000 }
+        checklistExecutionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        openedByUserId: { $ref: "#/components/schemas/Uuid" }
+        openedAt: { type: string, format: date-time }
+        inspectedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        inspectedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    OpenHandymanInspection:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed open-inspection body ONLY: the optional
+        existing checklist-execution binding. Request / space scope,
+        `diagnosis`, `scopeNotes`, actor stamps, status, `id` and timestamps
+        are never accepted — supplying any of them, or any other field, is
+        rejected with 400 `VALIDATION_ERROR`.
+      properties:
+        checklistExecutionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+    CompleteHandymanInspection:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed completion body ONLY: the governed
+        outcome facts. The checklist binding, request scope, actor stamps,
+        status, `id` and timestamps are immutable or server-generated and
+        never accepted — supplying any of them, or any other field, is
+        rejected with 400 `VALIDATION_ERROR`.
+      required: [diagnosis, scopeNotes]
+      properties:
+        diagnosis: { type: string, minLength: 1, maxLength: 4000 }
+        scopeNotes: { type: string, minLength: 1, maxLength: 2000 }
+    HandymanQuotation:
+      type: object
+      description: >
+        CR-HM-BE-03 — one quotation envelope (public read model). The
+        identity is permanent: a REJECTED / WITHDRAWN / EXPIRED commercial
+        round re-quotes under the SAME envelope through a new revision —
+        never a new quotation. `quotationNumber` is server-assigned;
+        client / building / tenant identity and the customer snapshot are
+        derived from the governed request; `sentRevisionId` / `sentAt` are
+        written only by the guarded send transition and are immutable
+        afterwards for decided envelopes (APPROVED / REJECTED keep the
+        exact sent revision as audit evidence).
+      required: [id, requestId, clientId, buildingId, quotationNumber, currency, status, customerName, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        requestId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        quotationNumber: { type: string }
+        currency: { type: string, enum: [IDR, USD, SGD, MYR, AUD, EUR, GBP, JPY, CNY] }
+        status: { type: string, enum: [DRAFT, SENT, APPROVED, REJECTED, EXPIRED, WITHDRAWN, CANCELLED] }
+        tenantCompanyId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        customerName: { type: string, maxLength: 200 }
+        customerPhone: { type: string, nullable: true, maxLength: 50 }
+        customerEmail: { type: string, nullable: true, maxLength: 254 }
+        sentRevisionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        sentAt: { type: string, format: date-time, nullable: true }
+        withdrawnAt: { type: string, format: date-time, nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationTotals:
+      type: object
+      description: >
+        CR-HM-BE-03 — server-derived revision totals (GENERATED line totals
+        + SQL SUM). Never caller input; no discount, tax, BM fee or FX
+        component exists in CR03.
+      required: [laborTotal, materialTotal, otherTotal, grandTotal]
+      properties:
+        laborTotal: { type: number }
+        materialTotal: { type: number }
+        otherTotal: { type: number }
+        grandTotal: { type: number }
+    HandymanQuotationRevision:
+      type: object
+      description: >
+        CR-HM-BE-03 — one commercial revision under a quotation (public
+        read model). `revisionNumber` is server-assigned (sequential per
+        quotation). Immutable-revision semantics: a SUBMITTED revision is
+        never mutated — a later commercial round opens a new DRAFT revision
+        and submitting it supersedes the previous SUBMITTED row (preserved
+        history). Totals are always server-derived.
+      required: [id, quotationId, clientId, buildingId, revisionNumber, status, createdByUserId, createdAt, updatedAt, totals]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        quotationId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        revisionNumber: { type: integer, minimum: 1 }
+        status: { type: string, enum: [DRAFT, SUBMITTED, SUPERSEDED] }
+        notes: { type: string, nullable: true, maxLength: 2000 }
+        validUntil:
+          type: string
+          nullable: true
+          description: Optional YYYY-MM-DD commercial validity date.
+        submittedAt: { type: string, format: date-time, nullable: true }
+        submittedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        totals: { $ref: "#/components/schemas/HandymanQuotationTotals" }
+    HandymanQuotationLine:
+      type: object
+      description: >
+        CR-HM-BE-03 — one quotation line (public read model) with the full
+        pricing snapshot/provenance resolved by the UNCHANGED governed
+        price-catalog lookup at authoring time: `referenceResolution`
+        (MATCHED | NO_REFERENCE_PRICE), the matched catalog entry, its
+        scope tier, the snapshot unit price and the as-of timestamp.
+        Provenance and `lineTotal` (GENERATED) are server-resolved and
+        immutable; subject identity is fixed at add time. LABOR lines
+        reference the request's ACTIVE governed service selections;
+        MATERIAL lines reference same-client ACTIVE inventory items with an
+        exact UOM (no conversion); a deviation from a MATCHED reference
+        price always carries `deviationNote`.
+      required: [id, quotationRevisionId, quotationId, lineNumber, lineType, unitPrice, lineTotal, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        quotationRevisionId: { $ref: "#/components/schemas/Uuid" }
+        quotationId: { $ref: "#/components/schemas/Uuid" }
+        lineNumber: { type: integer, minimum: 1 }
+        lineType: { type: string, enum: [LABOR, MATERIAL, OTHER] }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        quantity: { type: number, nullable: true, exclusiveMinimum: 0 }
+        subjectCode: { type: string, nullable: true }
+        subjectName: { type: string, nullable: true }
+        uomCode: { type: string, nullable: true }
+        description: { type: string, nullable: true, maxLength: 1000 }
+        unitPrice: { type: number, exclusiveMinimum: 0 }
+        lineTotal: { type: number }
+        referenceResolution: { type: string, nullable: true, enum: [MATCHED, NO_REFERENCE_PRICE] }
+        referencePriceEntryId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        referenceScopeTier: { type: string, nullable: true }
+        referenceUnitPrice: { type: number, nullable: true }
+        referenceAsOf: { type: string, format: date-time, nullable: true }
+        deviationNote: { type: string, nullable: true, maxLength: 1000 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateHandymanQuotation:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed quotation-create body ONLY: the
+        governed currency. `requestId` comes from the route, the actor and
+        idempotency key from the session / `Idempotency-Key` header, and
+        `quotationNumber`, `status`, client / building / tenant identity,
+        customer snapshot, `sentRevisionId`, timestamps and the internal
+        idempotency fingerprint are never accepted — supplying any of them,
+        or any other field, is rejected with 400 `VALIDATION_ERROR`.
+      required: [currency]
+      properties:
+        currency: { type: string, enum: [IDR, USD, SGD, MYR, AUD, EUR, GBP, JPY, CNY] }
+    CreateHandymanQuotationResult:
+      type: object
+      description: >
+        CR-HM-BE-03 — create result: the DRAFT envelope plus its first
+        DRAFT revision, and whether an idempotent replay returned the
+        original result (the internal fingerprint itself is never exposed).
+      required: [quotation, revision, replayed]
+      properties:
+        quotation: { $ref: "#/components/schemas/HandymanQuotation" }
+        revision: { $ref: "#/components/schemas/HandymanQuotationRevision" }
+        replayed: { type: boolean }
+    HandymanQuotationDetail:
+      type: object
+      description: >
+        CR-HM-BE-03 — quotation envelope with its full immutable revision
+        history (each revision carries server-derived totals).
+      required: [quotation, revisions]
+      properties:
+        quotation: { $ref: "#/components/schemas/HandymanQuotation" }
+        revisions:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanQuotationRevision" }
+    CreateHandymanQuotationRevision:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed revision-create body ONLY (both fields
+        optional; the body may be empty). `quotationId` comes from the
+        route; `revisionNumber`, `status`, totals, actor stamps, supersede
+        fields, `id` and timestamps are never accepted — supplying any of
+        them, `lines`, or any other field, is rejected with 400
+        `VALIDATION_ERROR`.
+      properties:
+        notes: { type: string, nullable: true, maxLength: 2000 }
+        validUntil:
+          type: string
+          nullable: true
+          description: Optional YYYY-MM-DD commercial validity date (calendar-validated).
+    AddHandymanQuotationLine:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed DRAFT line-authoring body ONLY. Derived
+        and provenance authority is never accepted: `lineTotal`,
+        `lineNumber`, subject/UOM resolution, all `reference*` snapshot
+        fields, `currency`, override/discount fields, revision binding,
+        `id` and timestamps are rejected with 400 `VALIDATION_ERROR`.
+        `unitPrice` is a positive number with at most 2 decimals;
+        `quantity` (MATERIAL) is positive with at most 3 decimals — both
+        service-authoritative.
+      required: [lineType, unitPrice]
+      properties:
+        lineType: { type: string, enum: [LABOR, MATERIAL, OTHER] }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        quantity: { type: number, nullable: true, exclusiveMinimum: 0 }
+        description: { type: string, nullable: true, maxLength: 1000 }
+        unitPrice: { type: number, exclusiveMinimum: 0, multipleOf: 0.01 }
+        deviationNote: { type: string, nullable: true, maxLength: 1000 }
+    UpdateHandymanQuotationLine:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed line-update body ONLY: the mutable
+        commercial facts, at least one required. Line type, subject
+        identity (service / item / UOM), revision binding, derived and
+        provenance fields are immutable — supplying any of them is rejected
+        with 400 `VALIDATION_ERROR` (remove and re-add under governance
+        instead).
+      minProperties: 1
+      properties:
+        unitPrice: { type: number, exclusiveMinimum: 0, multipleOf: 0.01 }
+        quantity: { type: number, nullable: true, exclusiveMinimum: 0 }
+        description: { type: string, nullable: true, maxLength: 1000 }
+        deviationNote: { type: string, nullable: true, maxLength: 1000 }
+    SendHandymanQuotation:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — the governed send command body: EXACTLY the
+        explicit revision identifier. `quotationId` comes from the route;
+        `sentRevisionId`, `sentAt`, `status`, the customer snapshot and the
+        resulting PENDING approval are server-managed and never accepted —
+        supplying any of them, or any other field, is rejected with 400
+        `VALIDATION_ERROR`.
+      required: [revisionId]
+      properties:
+        revisionId: { $ref: "#/components/schemas/Uuid" }
+    SendHandymanQuotationResult:
+      type: object
+      description: >
+        CR-HM-BE-03 — send result: the SENT envelope bound to the exact
+        revision, the sent revision with derived totals, and the exactly
+        one new PENDING approval created in the same transaction.
+      required: [quotation, revision, approval]
+      properties:
+        quotation: { $ref: "#/components/schemas/HandymanQuotation" }
+        revision: { $ref: "#/components/schemas/HandymanQuotationRevision" }
+        approval: { $ref: "#/components/schemas/HandymanQuotationApproval" }
+    SubmitHandymanQuotationRevisionResult:
+      type: object
+      description: >
+        CR-HM-BE-03 — submit result: the SUBMITTED revision plus the ids of
+        previously SUBMITTED revisions superseded in the same transaction
+        (immutable history is preserved, never mutated).
+      required: [revision, supersededRevisionIds]
+      properties:
+        revision: { $ref: "#/components/schemas/HandymanQuotationRevision" }
+        supersededRevisionIds:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid" }
+    HandymanQuotationApproval:
+      type: object
+      description: >
+        CR-HM-BE-03 — one approval row bound to a quotation and its exact
+        sent revision (public read model; the authoritative decision
+        evidence). APPROVED FOR and RECORDED BY are preserved separately:
+        `approvedForType` (TENANT_COMPANY | TENANT_PIC | CUSTOMER) with the
+        approved-for identity snapshot (company/PIC ids and name, or the
+        request's customer snapshot for CUSTOMER) versus
+        `recordedByUserId` — the authenticated STAFF actor who recorded an
+        ASSISTED out-of-band decision, always null for a genuinely direct
+        IN_APP decision by the linked tenant PIC (staff are never modeled
+        as the customer just because they recorded). Lifecycle: PENDING →
+        APPROVED | REJECTED | EXPIRED; decisions are once-only; EXPIRED is
+        never a decision (withdraw / superseded send hygiene); at most one
+        PENDING row per exact revision; decided rows are immutable history.
+        `method` is IN_APP or ASSISTED at runtime — SECURE_LINK exists in
+        the stored vocabulary ONLY and is unreachable through the CR03
+        decision runtime (schema CHECK rejects it).
+      required: [id, quotationId, quotationRevisionId, clientId, buildingId, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        quotationId: { $ref: "#/components/schemas/Uuid" }
+        quotationRevisionId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [PENDING, APPROVED, REJECTED, EXPIRED] }
+        method: { type: string, nullable: true, enum: [IN_APP, ASSISTED] }
+        approvedForType: { type: string, nullable: true, enum: [TENANT_COMPANY, TENANT_PIC, CUSTOMER] }
+        approvedForTenantCompanyId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        approvedForTenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        approvedForName: { type: string, nullable: true, maxLength: 200 }
+        approvedForCustomerName: { type: string, nullable: true, maxLength: 200 }
+        approvedForCustomerPhone: { type: string, nullable: true, maxLength: 50 }
+        approvedForCustomerEmail: { type: string, nullable: true, maxLength: 254 }
+        decisionNotes: { type: string, nullable: true, maxLength: 2000 }
+        recordedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    DecideHandymanQuotationApprovalInApp:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — the strict IN_APP decision body allowlist:
+        `decision` + optional `notes` ONLY. `approvedFor` / `recordedBy`
+        authority (and every alias, plus `method`, `status`, approval /
+        quotation / revision identifiers and timestamps) can never be
+        submitted — supplying any of them, or any other field, is rejected
+        with 400 `VALIDATION_ERROR`. The approved party is the
+        authenticated linked tenant PIC resolved by the service; a direct
+        in-app decision has no staff recorder.
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [APPROVED, REJECTED] }
+        notes: { type: string, nullable: true, maxLength: 2000 }
+    HandymanQuotationApprovedFor:
+      type: object
+      description: >
+        CR-HM-BE-03 — the explicit approved-for party of an ASSISTED
+        decision (strict discriminated union; unknown keys inside
+        `approvedFor` are rejected). TENANT_COMPANY carries
+        `tenantCompanyId`, TENANT_PIC carries `tenantPicId`, CUSTOMER
+        carries only `type` (the customer snapshot is taken from the
+        governed request, never from the caller). The identity is validated
+        against the request context by the Run 3 service.
+      required: [type]
+      properties:
+        type: { type: string, enum: [TENANT_COMPANY, TENANT_PIC, CUSTOMER] }
+        tenantCompanyId: { $ref: "#/components/schemas/Uuid" }
+        tenantPicId: { $ref: "#/components/schemas/Uuid" }
+      oneOf:
+        - required: [type, tenantCompanyId]
+          properties:
+            type: { const: TENANT_COMPANY }
+        - required: [type, tenantPicId]
+          properties:
+            type: { const: TENANT_PIC }
+        - properties:
+            type: { const: CUSTOMER }
+          not:
+            anyOf:
+              - required: [tenantCompanyId]
+              - required: [tenantPicId]
+    RecordHandymanQuotationApprovalAssisted:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — the strict ASSISTED decision body allowlist:
+        `decision`, the explicit `approvedFor` party and MANDATORY `notes`
+        (1..2000 — the out-of-band evidence trail). RECORDED BY is derived
+        only from the authenticated session; `recordedBy` /
+        `recordedByUserId`, resolved approved-for snapshot fields,
+        `method`, `status`, identifiers and timestamps can never be
+        supplied — any of them, or any other field, is rejected with 400
+        `VALIDATION_ERROR`.
+      required: [decision, approvedFor, notes]
+      properties:
+        decision: { type: string, enum: [APPROVED, REJECTED] }
+        approvedFor: { $ref: "#/components/schemas/HandymanQuotationApprovedFor" }
+        notes: { type: string, minLength: 1, maxLength: 2000 }
+    HandymanQuotationApprovalDecisionResult:
+      type: object
+      description: >
+        CR-HM-BE-03 — decision result: the decided approval row
+        (approved-for / recorded-by preserved separately), the quotation
+        envelope after its guarded atomic transition (APPROVED | REJECTED)
+        and the request status after its governed transition (APPROVED |
+        QUOTATION_REJECTED).
+      required: [approval, quotation, requestStatus]
+      properties:
+        approval: { $ref: "#/components/schemas/HandymanQuotationApproval" }
+        quotation: { $ref: "#/components/schemas/HandymanQuotation" }
+        requestStatus: { type: string, enum: [APPROVED, QUOTATION_REJECTED] }
+    HandymanQuotationApprovalLink:
+      type: object
+      description: >
+        CR-HM-BE-03 — secure-link metadata (public read model; STAFF
+        READINESS ONLY). Deliberately contains NO token and NO `tokenHash`
+        field on ANY read surface — only the SHA-256 hash is stored, and
+        the raw token exists exactly once (the successful issue response).
+        Lifecycle ACTIVE → USED | REVOKED | EXPIRED; `maxUses` is fixed at
+        1; one ACTIVE link per approval; the recipient snapshot is captured
+        at issuance. No public resolve/decide/consume endpoint exists in
+        CR03 — SECURE_LINK public exposure remains deferred pending
+        platform public-endpoint abuse protection.
+      required: [id, approvalId, quotationId, status, recipientName, maxUses, usesCount, expiresAt, issuedByUserId, issuedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        approvalId: { $ref: "#/components/schemas/Uuid" }
+        quotationId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, USED, REVOKED, EXPIRED] }
+        recipientName: { type: string, maxLength: 200 }
+        recipientPhone: { type: string, nullable: true, maxLength: 50 }
+        recipientEmail: { type: string, nullable: true, maxLength: 254 }
+        maxUses: { type: integer, enum: [1] }
+        usesCount: { type: integer, minimum: 0, maximum: 1 }
+        expiresAt: { type: string, format: date-time }
+        issuedByUserId: { $ref: "#/components/schemas/Uuid" }
+        issuedAt: { type: string, format: date-time }
+        usedAt: { type: string, format: date-time, nullable: true }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        revokedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    IssueHandymanQuotationApprovalLink:
+      type: object
+      description: >
+        CR-HM-BE-03 RUN 4 — allowed link-issuance body ONLY: the recipient
+        / contact snapshot and the required future `expiresAt`. Token /
+        hash generation, `maxUses` (fixed at 1), usage accounting, status
+        and actor stamps are server-managed and never accepted — supplying
+        any of them, or any other field, is rejected with 400
+        `VALIDATION_ERROR`.
+      required: [recipientName, expiresAt]
+      properties:
+        recipientName: { type: string, minLength: 1, maxLength: 200 }
+        recipientPhone: { type: string, nullable: true, maxLength: 50 }
+        recipientEmail: { type: string, nullable: true, maxLength: 254 }
+        expiresAt: { type: string, format: date-time }
+    IssueHandymanQuotationApprovalLinkResult:
+      type: object
+      description: >
+        CR-HM-BE-03 — issuance result: `rawToken` (256-bit crypto-random,
+        base64url, no resource identifiers) returned EXACTLY ONCE here and
+        never again by any surface, plus the hash-free link metadata.
+      required: [rawToken, link]
+      properties:
+        rawToken:
+          type: string
+          description: >
+            The one-time raw secure-link token (43-character base64url
+            encoding of 32 crypto-random bytes). Shown only in this
+            successful issue response; only its SHA-256 hash is stored.
+        link: { $ref: "#/components/schemas/HandymanQuotationApprovalLink" }

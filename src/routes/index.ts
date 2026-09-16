@@ -196,6 +196,12 @@ import { createHandymanRequestRouter } from '../modules/handyman-requests/handym
 // contract (thin exposure of the Run 1–2 service authority; no separate
 // Handyman server/runtime).
 import { createHandymanProviderRouter } from '../modules/handyman-providers/handyman-provider.routes';
+// CR-HM-BE-03 RUN 4 — Handyman commerce + approval HTTP contract (thin
+// exposure of the Run 1–3 governance/quotation/approval authority; no
+// separate Handyman server/runtime, no public secure-link surface).
+import { createHandymanRequestGovernanceRouter } from '../modules/handyman-request-governance/handyman-request-governance.routes';
+import { createHandymanQuotationRouter } from '../modules/handyman-quotations/handyman-quotation.routes';
+import { createHandymanQuotationApprovalRouter } from '../modules/handyman-quotations/handyman-quotation-approval.routes';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -665,5 +671,10 @@ export function createApiRouter(): Router {
   router.use(createHandymanRequestRouter());
   // CR-HM-BE-02 RUN 3 — Handyman Provider designation + eligibility contract.
   router.use(createHandymanProviderRouter());
+  // CR-HM-BE-03 RUN 4 — Request governance, quotation commerce and customer
+  // approval contracts (IN_APP + ASSISTED; staff secure-link readiness only).
+  router.use(createHandymanRequestGovernanceRouter());
+  router.use(createHandymanQuotationRouter());
+  router.use(createHandymanQuotationApprovalRouter());
   return router;
 }

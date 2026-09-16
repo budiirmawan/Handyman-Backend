@@ -567,6 +567,12 @@ export const FOUNDATION_PERMISSIONS: readonly {
   { code: 'handyman_quotation.manage', name: 'Manage Handyman Quotations' },
   { code: 'handyman_quotation_approval.record', name: 'Record Handyman Quotation Approval Decisions' },
   { code: 'handyman_quotation_approval_link.manage', name: 'Manage Handyman Quotation Approval Links' },
+  // CR-HM-BE-03 RUN 4 — Handyman quotation commerce HTTP wiring. Reads and
+  // the governed send of an exact revision carry their own minimum-correct
+  // codes; the IN_APP tenant-PIC decision deliberately requires NO staff
+  // permission (identity/context authority lives in the Run 3 service).
+  { code: 'handyman_quotation.read', name: 'Read Handyman Quotations' },
+  { code: 'handyman_quotation.send', name: 'Send Handyman Quotations' },
 ];
 
 /**

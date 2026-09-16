@@ -500,6 +500,12 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   { code: 'handyman_triage.manage', name: 'Triage Handyman Requests' },
   { code: 'handyman_request_service.manage', name: 'Manage Handyman Request Services' },
   { code: 'handyman_inspection.manage', name: 'Manage Handyman Inspections' },
+  // CR-HM-BE-03 RUN 2–4 — Handyman quotation commerce + customer approval
+  { code: 'handyman_quotation.read', name: 'Read Handyman Quotations' },
+  { code: 'handyman_quotation.manage', name: 'Manage Handyman Quotations' },
+  { code: 'handyman_quotation.send', name: 'Send Handyman Quotations' },
+  { code: 'handyman_quotation_approval.record', name: 'Record Handyman Quotation Approval Decisions' },
+  { code: 'handyman_quotation_approval_link.manage', name: 'Manage Handyman Quotation Approval Links' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {

@@ -23,3 +23,12 @@ export {
   listHandymanQuotationApprovalLinks,
   toPublicHandymanQuotationApprovalLink,
 } from './handyman-quotation-approval-link.service';
+// CR-HM-BE-03 RUN 4 — thin HTTP contract over the Run 2 quotation commerce
+// authority and the Run 3 customer approval authority (staff secure-link
+// readiness only; consumeApprovalLinkTokenInternal stays unexported).
+export * from './handyman-quotation.validation';
+export * from './handyman-quotation.controller';
+export * from './handyman-quotation.routes';
+export * from './handyman-quotation-approval.validation';
+export * from './handyman-quotation-approval.controller';
+export * from './handyman-quotation-approval.routes';

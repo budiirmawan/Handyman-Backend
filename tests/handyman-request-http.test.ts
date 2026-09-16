@@ -676,9 +676,17 @@ describe('CR-HM-BE-01 RUN 3: Handyman Request HTTP contract', () => {
     // this exact-set assertion keeps covering the four CR-HM-BE-01 endpoints
     // only; the Handyman Provider paths added by CR-HM-BE-02 are asserted by
     // tests/handyman-provider-http.test.ts.
-    const handymanPaths = Object.keys(spec.paths).filter((p) =>
-      p.includes('handyman-requests'),
-    );
+    // CR-HM-BE-03 Run 4: narrowed to the EXACT CR-HM-BE-01 path set — the
+    // governance/commerce contracts add sub-paths under
+    // /handyman-requests/{handymanRequestId} (triages, services,
+    // inspections, quotations), which are asserted (bidirectionally, against
+    // the runtime route registrations) by tests/handyman-commerce-http.test.ts.
+    const be01Paths = new Set([
+      '/buildings/{buildingId}/handyman-requests',
+      '/handyman-requests/{handymanRequestId}',
+      '/handyman-requests/{handymanRequestId}/cancel',
+    ]);
+    const handymanPaths = Object.keys(spec.paths).filter((p) => be01Paths.has(p));
     assert.deepEqual(handymanPaths.sort(), [
       '/buildings/{buildingId}/handyman-requests',
       '/handyman-requests/{handymanRequestId}',

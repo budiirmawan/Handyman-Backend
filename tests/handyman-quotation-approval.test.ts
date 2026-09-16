@@ -1372,8 +1372,11 @@ describe('CR-HM-BE-03 RUN 3 — secure-link readiness only', () => {
     if (!ready(t)) return;
     const ctx = await makeSentContext();
 
-    // Module surface: no consumption primitive, no token decision function,
-    // no router/anonymous surface exported from CR03.
+    // Module surface: no consumption primitive, no token decision function.
+    // CR-HM-BE-03 RUN 4: the module now legitimately exports the two staff /
+    // in-app router factories wired through the Asentra route composition;
+    // every other router surface (e.g. a public/anonymous secure-link
+    // router) remains forbidden.
     const exported = Object.keys(handymanQuotationModule);
     assert.ok(!exported.includes('consumeApprovalLinkTokenInternal'));
     for (const name of exported) {
@@ -1381,7 +1384,15 @@ describe('CR-HM-BE-03 RUN 3 — secure-link readiness only', () => {
         !/decide.*(token|link)|secureLink.*decide|resolveApprovalToken/i.test(name),
         `unexpected token-decision export ${name}`,
       );
-      assert.ok(!/Router$/.test(name), `unexpected router export ${name}`);
+      if (/Router$/.test(name)) {
+        assert.ok(
+          [
+            'createHandymanQuotationRouter',
+            'createHandymanQuotationApprovalRouter',
+          ].includes(name),
+          `unexpected router export ${name}`,
+        );
+      }
     }
     assert.deepEqual(Object.keys(handymanQuotationApprovalService).sort(), [
       'decideHandymanQuotationApprovalInApp',
