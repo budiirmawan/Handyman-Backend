@@ -90,7 +90,7 @@ before(async () => {
   pool = await initDatabase(db);
   await migrateUp(pool);
   await runSeeds(pool);
-  await pool.query('TRUNCATE handyman_providers');
+  await pool.query('TRUNCATE handyman_work_crew_members, handyman_work_crews, handyman_providers');
   const admin = await createAdminUser();
   adminUserId = admin.userId;
   adminToken = admin.token;

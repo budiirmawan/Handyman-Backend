@@ -573,6 +573,9 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // permission (identity/context authority lives in the Run 3 service).
   { code: 'handyman_quotation.read', name: 'Read Handyman Quotations' },
   { code: 'handyman_quotation.send', name: 'Send Handyman Quotations' },
+  // CR-HM-BE-04 RUN 1 — Handyman work crew permissions
+  { code: 'handyman_work_crew.read', name: 'Read Handyman Work Crews' },
+  { code: 'handyman_work_crew.manage', name: 'Manage Handyman Work Crews' },
 ];
 
 /**
