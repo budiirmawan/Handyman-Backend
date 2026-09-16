@@ -400,6 +400,44 @@ export async function createHandymanWorkCrew(
   }
 }
 
+/**
+ * CR-HM-BE-04 RUN 2 — transport composition for `POST /handyman-work-crews`.
+ * The HTTP body deliberately cannot carry `clientId` (server-authoritative
+ * field), so the crew's Client is DERIVED from the addressed provider
+ * designation and the call delegates to the UNCHANGED Run-1 atomic
+ * founding-lead creation, which re-asserts every invariant (designation
+ * existence/ACTIVE status, client access for the actor against the derived
+ * client, ACTIVE vendor, valid EXTERNAL lead binding, code uniqueness).
+ * This adds no domain behavior — it resolves one identifier and delegates.
+ */
+export async function createHandymanWorkCrewForProvider(
+  handymanProviderId: string,
+  input: {
+    crewCode: string;
+    crewName: string;
+    leadWorkerBindingId: string;
+  },
+  actorUserId: string,
+): Promise<{
+  crew: PublicHandymanWorkCrew;
+  leadMember: PublicHandymanWorkCrewMember;
+}> {
+  const provider = await handymanProviderRepository.findById(handymanProviderId);
+  if (!provider) {
+    throw handymanProviderNotFoundError();
+  }
+  return createHandymanWorkCrew(
+    {
+      clientId: provider.clientId,
+      handymanProviderId,
+      crewCode: input.crewCode,
+      crewName: input.crewName,
+      leadWorkerBindingId: input.leadWorkerBindingId,
+    },
+    actorUserId,
+  );
+}
+
 export async function getHandymanWorkCrewById(
   id: string,
   actorUserId: string,
@@ -931,6 +969,7 @@ export const handymanWorkCrewService = {
   addHandymanWorkCrewMember,
   changeHandymanWorkCrewLeadWorker,
   createHandymanWorkCrew,
+  createHandymanWorkCrewForProvider,
   getHandymanWorkCrewById,
   listHandymanWorkCrewMembers,
   listHandymanWorkCrews,

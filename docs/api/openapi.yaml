@@ -132,6 +132,23 @@ tags:
       exists platform-wide); the raw link token is returned exactly once in
       the successful issue response, only its SHA-256 hash is stored, and
       token_hash is never exposed by any read surface.
+  - name: Handyman Work Crews
+    description: >
+      CR-HM-BE-04 RUN 2 — Handyman Work Crew HTTP contract: thin exposure of
+      the Run-1 crew governance authority (provider-scoped crews, founding
+      Lead Worker required at creation, Helper seats that never require a
+      login, immutable membership history, atomic lead replacement, guarded
+      crew lifecycle) through the existing Asentra route composition. Ten
+      endpoints only. Crews are composed EXCLUSIVELY of existing platform
+      masters: the CR-HM-BE-02 handyman provider designation (provider
+      organization authority), BE-06F vendor workforce bindings and BE-03C
+      EXTERNAL workforce profiles (worker/person authority). No person
+      master, provider master, building eligibility, request/work-order
+      assignment, dispatch, permit, WorkSession, attendance or mobile
+      surface is created or exposed here; client/provider/vendor/worker
+      validation, the lead invariant and all concurrency guarantees remain
+      service-authoritative. There is deliberately no DELETE route —
+      membership and crew history is closed, never deleted.
   - name: Front Desk
     description: >
       CR-BE-FE-JOURNEY-CONTRACT-01 PART 01A - J09 Visitor & Front-Desk core
@@ -46353,6 +46370,437 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-work-crews:
+    post:
+      operationId: createHandymanWorkCrew
+      x-required-permission: handyman_work_crew.manage
+      summary: Create a Handyman Work Crew with its founding Lead Worker
+      description: >
+        CR-HM-BE-04 — creates an ACTIVE work crew under an existing ACTIVE
+        CR-HM-BE-02 Handyman Provider designation and seats the FOUNDING
+        LEAD_WORKER atomically in the same transaction (Run-1 founding-lead
+        authority: an operational ACTIVE crew never exists with zero active
+        leads, and no preparation state exists). Body allowlist is exactly
+        `handymanProviderId`, `crewCode`, `crewName`,
+        `leadWorkerBindingId`. `clientId` is derived SERVER-SIDE from the
+        designation and is never accepted; protected fields (`clientId`,
+        `status`, `createdByUserId`, `id`, timestamps, `buildingId`,
+        `requestId`, `workOrderId`, `vendorId`, `members`) and any unknown
+        field are rejected with 400 `VALIDATION_ERROR`. The UNCHANGED Run-1
+        service enforces: actor client access (403
+        `BUILDING_ACCESS_DENIED`, no existence leak), designation existence
+        / same-client / ACTIVE status (404 `HANDYMAN_PROVIDER_NOT_FOUND`,
+        400 `HANDYMAN_WORK_CREW_PROVIDER_CLIENT_MISMATCH`, 400
+        `HANDYMAN_PROVIDER_STATUS_INVALID`), ACTIVE vendor behind the
+        designation (400 `VENDOR_INACTIVE`), crew-code uniqueness among
+        ACTIVE crews per provider (409
+        `HANDYMAN_WORK_CREW_CODE_ALREADY_EXISTS`), and the founding lead
+        through the EXISTING personnel authority only — ACTIVE vendor
+        workforce binding (404 `VENDOR_WORKFORCE_BINDING_NOT_FOUND`, 409
+        `HANDYMAN_WORK_CREW_WORKER_BINDING_INACTIVE`), binding of the
+        crew's provider vendor (400
+        `HANDYMAN_WORK_CREW_WORKER_PROVIDER_MISMATCH`), ACTIVE EXTERNAL
+        workforce profile (400 `WORKFORCE_PROFILE_INACTIVE`, 400
+        `WORKFORCE_NOT_EXTERNAL`) of the same client (400
+        `VENDOR_WORKFORCE_CLIENT_MISMATCH`). A Lead Worker does NOT require
+        a user account (the nullable BE-03C user link already supports a
+        future authenticated mobile lead); no user, credential, role or
+        building access is ever created. Provider↔Building and
+        Provider↔Service eligibility remain on the existing BE-06D/BE-06E
+        and CR-HM-BE-02 authorities — crews carry no building, request,
+        work-order, schedule or dispatch data. An invalid founding lead
+        creates NO crew (single transaction).
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanWorkCrew"
+      responses:
+        "201":
+          description: Crew created ACTIVE with its founding LEAD_WORKER membership.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CreateHandymanWorkCrewResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanWorkCrews
+      x-required-permission: handyman_work_crew.read
+      summary: List a Client's Handyman Work Crews (history included)
+      description: >
+        CR-HM-BE-04 — crews of one Client including INACTIVE history rows
+        (the preserved crew history is a first-class read surface). Query
+        allowlist: `clientId` (required transport scope), optional
+        `handymanProviderId` and `status` filters; unknown parameters are
+        rejected with 400 `VALIDATION_ERROR`. Whether the actor may see the
+        Client is decided ONLY by the Run-1 service through the existing
+        context-access authority (403 `BUILDING_ACCESS_DENIED`, no
+        existence leak); unknown clients return 404 `CLIENT_NOT_FOUND`.
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          description: Authoritative Client scope (`clients.id`).
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: handymanProviderId
+          in: query
+          description: Optional designation filter (`handyman_providers.id`).
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          description: Optional lifecycle filter.
+          required: false
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        "200":
+          description: Crew history (ACTIVE and INACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanWorkCrew" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-work-crews/{crewId}:
+    parameters:
+      - name: crewId
+        in: path
+        description: Authoritative `handyman_work_crews.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanWorkCrew
+      x-required-permission: handyman_work_crew.read
+      summary: Get one Handyman Work Crew
+      description: >
+        CR-HM-BE-04 — single crew detail, including INACTIVE rows. Unknown
+        crews return 404 `HANDYMAN_WORK_CREW_NOT_FOUND`; access to the
+        owning Client is service-authoritative (403
+        `BUILDING_ACCESS_DENIED`, no existence leak).
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Crew detail.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanWorkCrew" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateHandymanWorkCrew
+      x-required-permission: handyman_work_crew.manage
+      summary: Rename a Handyman Work Crew (metadata only)
+      description: >
+        CR-HM-BE-04 — updates the ONLY mutable crew metadata (`crewName`).
+        Body allowlist is exactly `crewName`; `crewCode`,
+        `handymanProviderId` and `clientId` are immutable identity, and
+        `status`, member/lead identity and audit stamps are never accepted
+        through PATCH — supplying any of them, or any unknown field, is
+        rejected with 400 `VALIDATION_ERROR`. Lifecycle changes use the
+        governed activate/deactivate commands; lead changes use the governed
+        atomic lead-change command. Renaming is metadata-only and is allowed
+        in either crew status.
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateHandymanWorkCrew"
+      responses:
+        "200":
+          description: Crew after the rename.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanWorkCrew" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-work-crews/{crewId}/deactivate:
+    post:
+      operationId: deactivateHandymanWorkCrew
+      x-required-permission: handyman_work_crew.manage
+      summary: Deactivate a Handyman Work Crew
+      description: >
+        CR-HM-BE-04 — governed ACTIVE → INACTIVE transition. The route IS
+        the command: no body field is accepted (any key is rejected with 400
+        `VALIDATION_ERROR`); the target status is never caller-authoritative.
+        Deactivation always succeeds from ACTIVE (fail-safe direction) and
+        FREEZES the crew: an INACTIVE crew gains no operational membership
+        and its memberships cannot change. Membership history rows are
+        untouched. A no-op transition is 400
+        `HANDYMAN_WORK_CREW_STATUS_INVALID`; the transition is guarded so
+        concurrent lifecycle commands cannot both succeed. Rows are never
+        deleted.
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Crew after deactivation (INACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanWorkCrew" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-work-crews/{crewId}/activate:
+    post:
+      operationId: activateHandymanWorkCrew
+      x-required-permission: handyman_work_crew.manage
+      summary: Reactivate a Handyman Work Crew
+      description: >
+        CR-HM-BE-04 — governed INACTIVE → ACTIVE transition. No body field
+        is accepted (any key is rejected with 400 `VALIDATION_ERROR`).
+        Reactivation re-asserts the full crew invariants (the BE-02
+        reactivation idiom): ACTIVE Client, ACTIVE provider designation with
+        ACTIVE Vendor, and a valid ACTIVE LEAD_WORKER whose binding chain
+        still passes worker validation — an ACTIVE operational crew is never
+        left with zero active leads (400
+        `HANDYMAN_WORK_CREW_LEAD_REQUIRED`, 409
+        `HANDYMAN_WORK_CREW_WORKER_BINDING_INACTIVE` and the worker-chain
+        errors of the create operation apply). A crew whose lead left the
+        provider retires permanently and a new crew is created; history is
+        never rewritten. Guarded transition: a stale concurrent command is
+        400 `HANDYMAN_WORK_CREW_STATUS_INVALID`.
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Crew after reactivation (ACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanWorkCrew" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-work-crews/{crewId}/members:
+    post:
+      operationId: addHandymanWorkCrewMember
+      x-required-permission: handyman_work_crew.manage
+      summary: Seat a worker on a Handyman Work Crew
+      description: >
+        CR-HM-BE-04 — adds one membership referencing an EXISTING BE-06F
+        vendor workforce binding (the person master stays BE-03C; no Handyman
+        worker master exists). Body allowlist is exactly
+        `vendorWorkforceBindingId` and `crewRole` (LEAD_WORKER | HELPER);
+        protected fields (`clientId`, `crewId`, `status`, attribution,
+        effective window, timestamps, `userId`) and unknown fields are
+        rejected with 400 `VALIDATION_ERROR`. A HELPER does NOT require a
+        user account, login, smartphone or app registration — the binding
+        may point at a workforce profile with no user link, and none is
+        ever created here. The crew must be ACTIVE (an INACTIVE crew is
+        frozen — 400 `HANDYMAN_WORK_CREW_STATUS_INVALID`). The Run-1 service
+        validates the worker chain through the existing personnel authority
+        (binding ACTIVE, binding of the crew's provider vendor, profile
+        ACTIVE and EXTERNAL, same client — the error set of the create
+        operation) and blocks duplicates: an existing ACTIVE membership for
+        the (crew, binding) pair is 409
+        `HANDYMAN_WORK_CREW_MEMBER_ALREADY_ACTIVE`, and adding a
+        LEAD_WORKER while the crew's single ACTIVE lead exists is 409
+        `HANDYMAN_WORK_CREW_LEAD_ALREADY_ACTIVE` — the lead only changes
+        through the atomic lead-change command. Partial unique indexes are
+        the structural concurrency authority; one duplicate racer wins.
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddHandymanWorkCrewMember"
+      responses:
+        "201":
+          description: Membership created ACTIVE.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanWorkCrewMember" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanWorkCrewMembers
+      x-required-permission: handyman_work_crew.read
+      summary: List a crew's memberships (history included)
+      description: >
+        CR-HM-BE-04 — memberships of one crew INCLUDING deactivated history
+        rows (immutable, fully attributed evidence; a first-class read
+        surface). Optional `status` query filter (ACTIVE | INACTIVE);
+        unknown parameters are rejected with 400 `VALIDATION_ERROR`. The
+        read model exposes operational membership facts only — worker
+        contact data, credentials and internal event metadata are never
+        exposed and no contact enrichment exists; person identity facts
+        live in the existing BE-03C/BE-06F authorities.
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          description: Optional membership status filter.
+          required: false
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        "200":
+          description: Membership history (ACTIVE and INACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanWorkCrewMember" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-work-crews/{crewId}/members/{memberId}/remove:
+    parameters:
+      - name: memberId
+        in: path
+        description: Authoritative `handyman_work_crew_members.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: removeHandymanWorkCrewMember
+      x-required-permission: handyman_work_crew.manage
+      summary: Remove (close) a crew membership — never a DELETE
+      description: >
+        CR-HM-BE-04 — governed membership closure: the ACTIVE row
+        transitions to INACTIVE with full removal attribution
+        (`removedAt`, `removedByUserId`, `effectiveTo`). No DELETE verb
+        exists anywhere in this contract — history is immutable evidence and
+        is never deleted or rewritten. The route IS the command: no body
+        field is accepted (any key is rejected with 400
+        `VALIDATION_ERROR`). The crew must be ACTIVE (frozen INACTIVE crews
+        refuse membership changes — 400
+        `HANDYMAN_WORK_CREW_STATUS_INVALID`). Direct removal of the crew's
+        ACTIVE LEAD_WORKER is forbidden (409
+        `HANDYMAN_WORK_CREW_LEAD_REMOVAL_FORBIDDEN`) — the lead only ends
+        through the atomic lead-change command, so an ACTIVE crew can never
+        be left without a lead. Unknown or foreign-crew members return 404
+        `HANDYMAN_WORK_CREW_MEMBER_NOT_FOUND`; closing an already-INACTIVE
+        membership is 400 `HANDYMAN_WORK_CREW_MEMBER_STATUS_INVALID`
+        (guarded — concurrent closures cannot both succeed).
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Membership after closure (INACTIVE, attributed).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanWorkCrewMember" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-work-crews/{crewId}/lead-worker/change:
+    post:
+      operationId: changeHandymanWorkCrewLeadWorker
+      x-required-permission: handyman_work_crew.manage
+      summary: Atomically replace the crew's Lead Worker
+      description: >
+        CR-HM-BE-04 — the ONLY path that ends an ACTIVE lead membership: a
+        single crew-locked transaction closes the current ACTIVE
+        LEAD_WORKER membership and inserts the new one, so an ACTIVE
+        operational crew never passes through a zero-lead or two-lead state.
+        Body allowlist is exactly `newLeadWorkerBindingId`; the outgoing
+        lead is derived SERVER-SIDE — supplying `oldLeadMemberId`,
+        `previousMemberId`, `currentLeadMemberId`, `crewRole`, `status`,
+        client/provider identity or audit fields is rejected with 400
+        `VALIDATION_ERROR`. The crew must be ACTIVE (frozen crews refuse —
+        400 `HANDYMAN_WORK_CREW_STATUS_INVALID`). The new lead passes the
+        full existing-personnel-authority worker validation (the error set
+        of the member-add operation) and must not already hold an ACTIVE
+        membership on the crew (409
+        `HANDYMAN_WORK_CREW_MEMBER_ALREADY_ACTIVE`); the explicit promotion
+        path is remove-helper then change-lead, which never opens a
+        zero-lead window. The previous member's historical row keeps its
+        role and binding identity untouched — closed, never mutated.
+      tags: [Handyman Work Crews]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeHandymanWorkCrewLead"
+      responses:
+        "200":
+          description: >
+            Atomic replacement result: the closed previous membership and
+            the new ACTIVE LEAD_WORKER membership.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ChangeHandymanWorkCrewLeadResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 components:
   securitySchemes:
     bearerAuth:
@@ -75353,3 +75801,127 @@ components:
             encoding of 32 crypto-random bytes). Shown only in this
             successful issue response; only its SHA-256 hash is stored.
         link: { $ref: "#/components/schemas/HandymanQuotationApprovalLink" }
+    HandymanWorkCrew:
+      type: object
+      description: >
+        CR-HM-BE-04 — provider-scoped Handyman Work Crew (public read
+        model). `clientId` is derived server-side from the provider
+        designation, `createdByUserId`/`updatedByUserId` come from the
+        authenticated actor, and `status` is server-managed (ACTIVE on
+        creation; lifecycle only through the governed activate/deactivate
+        commands). Deactivated crews are preserved as history. Carries no
+        building, request, work-order, schedule or dispatch data.
+      required: [id, clientId, handymanProviderId, crewCode, crewName, status, createdByUserId, updatedByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanProviderId: { $ref: "#/components/schemas/Uuid" }
+        crewCode: { type: string }
+        crewName: { type: string }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        updatedByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanWorkCrewMember:
+      type: object
+      description: >
+        CR-HM-BE-04 — one crew membership (public read model; history rows
+        included). References the EXISTING BE-06F vendor workforce binding —
+        no Handyman worker master exists and a HELPER (or LEAD_WORKER) never
+        requires a user account. Exposes operational membership facts only:
+        no worker contact data, no credential/auth information, no internal
+        event metadata. INACTIVE rows are immutable evidence carrying full
+        removal attribution.
+      required: [id, clientId, crewId, vendorWorkforceBindingId, crewRole, status, effectiveFrom, effectiveTo, addedAt, addedByUserId, removedAt, removedByUserId]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        crewId: { $ref: "#/components/schemas/Uuid" }
+        vendorWorkforceBindingId: { $ref: "#/components/schemas/Uuid" }
+        crewRole: { type: string, enum: [LEAD_WORKER, HELPER] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveTo: { type: string, format: date-time, nullable: true }
+        addedAt: { type: string, format: date-time }
+        addedByUserId: { $ref: "#/components/schemas/Uuid" }
+        removedAt: { type: string, format: date-time, nullable: true }
+        removedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+    CreateHandymanWorkCrew:
+      type: object
+      description: >
+        CR-HM-BE-04 RUN 2 — allowed crew-creation body ONLY. `clientId` is
+        derived server-side from the designation; `status`,
+        `createdByUserId`, `id`, timestamps, `buildingId`, `requestId`,
+        `workOrderId`, `vendorId` and member collections are never accepted
+        — supplying any of them, or any other field, is rejected with 400
+        `VALIDATION_ERROR`. `leadWorkerBindingId` is the FOUNDING
+        LEAD_WORKER's existing vendor workforce binding: the crew and this
+        membership are created atomically, so an ACTIVE crew never exists
+        without a lead.
+      required: [handymanProviderId, crewCode, crewName, leadWorkerBindingId]
+      properties:
+        handymanProviderId: { $ref: "#/components/schemas/Uuid" }
+        crewCode: { type: string }
+        crewName: { type: string }
+        leadWorkerBindingId: { $ref: "#/components/schemas/Uuid" }
+    CreateHandymanWorkCrewResult:
+      type: object
+      description: >
+        CR-HM-BE-04 — creation result: the new ACTIVE crew and its founding
+        ACTIVE LEAD_WORKER membership, committed in one transaction.
+      required: [crew, leadMember]
+      properties:
+        crew: { $ref: "#/components/schemas/HandymanWorkCrew" }
+        leadMember: { $ref: "#/components/schemas/HandymanWorkCrewMember" }
+    UpdateHandymanWorkCrew:
+      type: object
+      description: >
+        CR-HM-BE-04 RUN 2 — allowed crew-update body ONLY (mutable metadata:
+        `crewName`). `crewCode`, `handymanProviderId`, `clientId` are
+        immutable identity; `status` changes use the governed
+        activate/deactivate commands and lead/member identity changes use
+        the governed member/lead commands — supplying any of them, or any
+        other field, is rejected with 400 `VALIDATION_ERROR`.
+      required: [crewName]
+      properties:
+        crewName: { type: string }
+    AddHandymanWorkCrewMember:
+      type: object
+      description: >
+        CR-HM-BE-04 RUN 2 — allowed member-add body ONLY. The worker is
+        addressed by their EXISTING vendor workforce binding; a HELPER needs
+        no user account. `clientId`, `crewId`, `status`, attribution, the
+        effective window, timestamps and `userId` are server-managed or
+        route-derived and never accepted — supplying any of them, or any
+        other field, is rejected with 400 `VALIDATION_ERROR`. `crewRole` is
+        wire vocabulary only; the lead invariant (at most one ACTIVE lead,
+        seatable only through the atomic lead change) stays in the Run-1
+        service.
+      required: [vendorWorkforceBindingId, crewRole]
+      properties:
+        vendorWorkforceBindingId: { $ref: "#/components/schemas/Uuid" }
+        crewRole: { type: string, enum: [LEAD_WORKER, HELPER] }
+    ChangeHandymanWorkCrewLead:
+      type: object
+      description: >
+        CR-HM-BE-04 RUN 2 — allowed lead-change body ONLY. The outgoing lead
+        is derived SERVER-SIDE from the crew's ACTIVE lead membership;
+        `oldLeadMemberId`, `previousMemberId`, `currentLeadMemberId`,
+        `crewRole`, `status`, client/provider identity and audit fields are
+        never accepted — supplying any of them, or any other field, is
+        rejected with 400 `VALIDATION_ERROR`.
+      required: [newLeadWorkerBindingId]
+      properties:
+        newLeadWorkerBindingId: { $ref: "#/components/schemas/Uuid" }
+    ChangeHandymanWorkCrewLeadResult:
+      type: object
+      description: >
+        CR-HM-BE-04 — atomic replacement result: `previousMember` is the
+        closed (INACTIVE, fully attributed, otherwise untouched) former lead
+        membership and `newMember` is the new ACTIVE LEAD_WORKER membership,
+        committed in one crew-locked transaction.
+      required: [previousMember, newMember]
+      properties:
+        previousMember: { $ref: "#/components/schemas/HandymanWorkCrewMember" }
+        newMember: { $ref: "#/components/schemas/HandymanWorkCrewMember" }

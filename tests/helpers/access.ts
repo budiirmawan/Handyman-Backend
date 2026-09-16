@@ -506,6 +506,9 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   { code: 'handyman_quotation.send', name: 'Send Handyman Quotations' },
   { code: 'handyman_quotation_approval.record', name: 'Record Handyman Quotation Approval Decisions' },
   { code: 'handyman_quotation_approval_link.manage', name: 'Manage Handyman Quotation Approval Links' },
+  // CR-HM-BE-04 RUN 2 — Handyman work crew permissions
+  { code: 'handyman_work_crew.read', name: 'Read Handyman Work Crews' },
+  { code: 'handyman_work_crew.manage', name: 'Manage Handyman Work Crews' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {

@@ -202,6 +202,7 @@ import { createHandymanProviderRouter } from '../modules/handyman-providers/hand
 import { createHandymanRequestGovernanceRouter } from '../modules/handyman-request-governance/handyman-request-governance.routes';
 import { createHandymanQuotationRouter } from '../modules/handyman-quotations/handyman-quotation.routes';
 import { createHandymanQuotationApprovalRouter } from '../modules/handyman-quotations/handyman-quotation-approval.routes';
+import { createHandymanWorkCrewRouter } from '../modules/handyman-work-crews/handyman-work-crew.routes';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -676,5 +677,9 @@ export function createApiRouter(): Router {
   router.use(createHandymanRequestGovernanceRouter());
   router.use(createHandymanQuotationRouter());
   router.use(createHandymanQuotationApprovalRouter());
+  // CR-HM-BE-04 RUN 2 — Handyman Work Crew contract (crew + membership
+  // governance over the existing provider/personnel foundations; no
+  // assignment or dispatch surface).
+  router.use(createHandymanWorkCrewRouter());
   return router;
 }
