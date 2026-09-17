@@ -353,6 +353,7 @@ import { migration0352CreateHandymanQuotationApprovals } from './0352_create_han
 import { migration0353CreateHandymanWorkCrews } from './0353_create_handyman_work_crews';
 import { migration0354CreateHandymanJobs } from './0354_create_handyman_jobs';
 import { migration0355CreateHandymanServiceVisits } from './0355_create_handyman_service_visits';
+import { migration0356CreateHandymanVisitArrivalsAndPresence } from './0356_create_handyman_visit_arrivals_and_presence';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -713,4 +714,5 @@ export const migrations: readonly Migration[] = [
   migration0353CreateHandymanWorkCrews,
   migration0354CreateHandymanJobs,
   migration0355CreateHandymanServiceVisits,
+  migration0356CreateHandymanVisitArrivalsAndPresence,
 ];
