@@ -149,6 +149,56 @@ tags:
       validation, the lead invariant and all concurrency guarantees remain
       service-authoritative. There is deliberately no DELETE route —
       membership and crew history is closed, never deleted.
+  - name: Handyman Jobs
+    description: >
+      CR-HM-BE-05 RUN 3 — Handyman Job HTTP contract: thin exposure of the
+      Run-1 job + provider/crew composition authority (approved-request job
+      creation bound to a NEW backend-composed Work Order, idempotent per
+      request, client-scoped reads, the atomic first assignment and the
+      guarded pre-execution reassignment, append-only composition history)
+      through the existing Asentra route composition. Six endpoints only. A
+      Handyman job is a THIN BINDING to its Work Order — the Work Order owns
+      the execution lifecycle (status, SLA, cancellation, completion) and the
+      job deliberately has NO independent lifecycle status and NO generic
+      PATCH surface; no Work Order lifecycle mutation is exposed through
+      Handyman routes. Provider + crew composition is backend-governed: the
+      caller supplies ONLY the designation and crew identifiers, every
+      time-of-use eligibility check (client/vendor/building relationship,
+      per-service capability, ACTIVE crew with exactly one valid lead and an
+      operational worker chain) is revalidated at command time, EXACTLY ONE
+      ACTIVE composition exists per job, and reassignment is legal ONLY while
+      the Work Order is pre-execution. The composed BE-15A vendor assignment
+      and BE-15B vendor work (NOT_STARTED) rows are server-derived and are
+      never accepted from a caller. No arrival, dispatch, permit, execution,
+      invoice or mobile surface exists here; there is deliberately no DELETE
+      route — compositions are superseded, never deleted.
+  - name: Handyman Service Visits
+    description: >
+      CR-HM-BE-05 RUN 3 — Handyman Service Visit scheduling HTTP contract:
+      thin exposure of the Run-2 visit identity + versioned schedule-window
+      authority (occurrence creation with a server-generated per-job visit
+      sequence, multiple visits per job supported, reschedule that SUPERSEDES
+      the old window and inserts a new ACTIVE one without ever mutating
+      history, guarded idempotent cancellation, append-only schedule history
+      reads, and the PURE execution-readiness assessment) through the
+      existing Asentra route composition. Seven endpoints only. Exactly ONE
+      ACTIVE schedule window exists per visit; reschedule and cancellation
+      PRESERVE full history (windows are closed, never deleted or edited);
+      temporal conflicts use half-open `[start, end)` semantics and are
+      backend-governed — overlapping ACTIVE windows of DIFFERENT jobs sharing
+      the same crew, or sharing a worker across crews, are rejected with 409
+      while back-to-back windows are allowed. Every schedule command
+      revalidates the full authority chain at time of use (work order
+      pre-execution, ACTIVE composition, provider/vendor/building/service
+      eligibility, operational crew) and requires an ACTIVE composition.
+      Execution readiness is a READ: it returns the factorized assessment
+      (ACTIVE window, work-order pre-execution, valid composition chain, no
+      temporal conflict, BE-15D permit readiness READY/NOT_REQUIRED — zero
+      permit-readiness rows follow the EXISTING BE-15D semantics) and never
+      starts the Work Order or vendor work. No schedule-row CRUD, no arrival,
+      GPS, QR, check-in/out, WorkSession, attendance, labor, material, QC,
+      BAST, invoice or execution surface exists here; there is deliberately
+      no DELETE route.
   - name: Front Desk
     description: >
       CR-BE-FE-JOURNEY-CONTRACT-01 PART 01A - J09 Visitor & Front-Desk core
@@ -46801,6 +46851,525 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs:
+    post:
+      operationId: createHandymanJob
+      x-required-permission: handyman_job.manage
+      summary: Create a Handyman Job from an APPROVED Request
+      description: >
+        CR-HM-BE-05 — creates the thin job binding for a Handyman request
+        that is APPROVED with exactly one approved quotation revision. The
+        Run-1 service resolves EVERYTHING server-side (client authority, the
+        exact approved revision, the canonical building/space context) and
+        composes a NEW backend-owned Work Order (`HMWO-<requestNumber>`,
+        status OPEN) in the same transaction; the Work Order then owns the
+        execution lifecycle — the job has NO independent lifecycle status.
+        Creation is idempotent per request: a replay returns the existing job
+        with `created: false` (201 is the constant success status). Body
+        allowlist: `handymanRequestId` ONLY; server-authoritative fields
+        (`clientId`, `workOrderId`, `workOrderNumber`, `status`,
+        `buildingId`, `spaceId`, provider/vendor/crew ids, actor ids,
+        timestamps, scheduling or permit fields) and any unknown key are
+        rejected with 400 `VALIDATION_ERROR`. A non-APPROVED request is
+        rejected at time of use with 409
+        `HANDYMAN_JOB_REQUEST_NOT_APPROVED`; an unknown request with 404
+        `HANDYMAN_REQUEST_NOT_FOUND`; an actor without the request's client
+        data scope with 403 `BUILDING_ACCESS_DENIED` (no existence leak).
+      tags: [Handyman Jobs]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanJob"
+      responses:
+        "201":
+          description: >
+            Job created (or idempotent replay, `created: false`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanJobCreationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanJobs
+      x-required-permission: handyman_job.read
+      summary: List a Client's Handyman Jobs
+      description: >
+        CR-HM-BE-05 — jobs of one Client (the domain list read is
+        client-scoped). Query allowlist: `clientId` (required transport
+        scope) plus the exact domain filters `handymanRequestId` and
+        `workOrderId`; unknown parameters are rejected with 400
+        `VALIDATION_ERROR`. Whether the actor may see the Client is decided
+        ONLY by the Run-1 service through the existing context-access
+        authority (403 `BUILDING_ACCESS_DENIED`, no existence leak); unknown
+        clients return 404 `CLIENT_NOT_FOUND`.
+      tags: [Handyman Jobs]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          description: Authoritative Client scope (`clients.id`).
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: handymanRequestId
+          in: query
+          description: Optional request filter (`handyman_requests.id`).
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: workOrderId
+          in: query
+          description: Optional work-order filter (`work_orders.id`).
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: The client's Handyman jobs.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanJob" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-jobs/{jobId}:
+    parameters:
+      - name: jobId
+        in: path
+        description: Authoritative `handyman_jobs.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanJobById
+      x-required-permission: handyman_job.read
+      summary: Get one Handyman Job
+      description: >
+        CR-HM-BE-05 — the thin job binding by id: request identity, the exact
+        approved quotation/revision identity and the bound `workOrderId`
+        (the Work Order owns the execution lifecycle; no job status exists).
+        Client data scope is enforced by the Run-1 service (403
+        `BUILDING_ACCESS_DENIED`, no existence leak); unknown jobs return 404
+        `HANDYMAN_JOB_NOT_FOUND`.
+      tags: [Handyman Jobs]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The Handyman job.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties: { data: { $ref: "#/components/schemas/HandymanJob" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-jobs/{jobId}/assignment:
+    post:
+      operationId: assignHandymanJobProviderAndCrew
+      x-required-permission: handyman_job_assignment.manage
+      summary: Assign the Provider + Crew Composition (first assignment)
+      description: >
+        CR-HM-BE-05 — composes the job's provider + crew authority in ONE
+        transaction: the backend-governed BE-15A vendor assignment and the
+        BE-15B vendor work (NOT_STARTED) are server-derived, then the
+        post-commit OPEN→ASSIGNED work-order seam converges. Body allowlist:
+        `handymanProviderId` + `handymanWorkCrewId` ONLY; vendor/composition
+        ids (`vendorId`, `vendorAssignmentId`, `vendorWorkId`), client/work
+        order identity, status, actor attribution and effective timestamps
+        are never accepted (400 `VALIDATION_ERROR`). Every time-of-use
+        eligibility fact is revalidated by the Run-1 service: ACTIVE
+        designation of the job's client (400
+        `HANDYMAN_JOB_PROVIDER_CLIENT_MISMATCH`), ACTIVE vendor, ACTIVE
+        vendor↔building relationship, per-request-service capability
+        eligibility (409 `HANDYMAN_JOB_PROVIDER_SERVICE_NOT_ELIGIBLE`),
+        ACTIVE crew of the same provider (400
+        `HANDYMAN_JOB_CREW_PROVIDER_MISMATCH`) with exactly one valid ACTIVE
+        lead and an operational worker chain. EXACTLY ONE ACTIVE composition
+        exists per job: an existing ACTIVE composition rejects a DIFFERENT
+        target with 409 `HANDYMAN_JOB_ALREADY_ASSIGNED`, while an identical
+        target replays idempotently. Only assignable while the Work Order is
+        pre-execution (409 `HANDYMAN_JOB_NOT_ASSIGNABLE`); unassigned-job
+        reads of this seam are 404s owned by the domain.
+      tags: [Handyman Jobs]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignHandymanJob"
+      responses:
+        "201":
+          description: >
+            Composition committed (or idempotent replay of the identical
+            target): the job, its ACTIVE assignment and the server-derived
+            BE-15A/BE-15B row ids.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanJobAssignmentResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs/{jobId}/assignment/reassign:
+    post:
+      operationId: reassignHandymanJobProviderAndCrew
+      x-required-permission: handyman_job_assignment.manage
+      summary: Reassign the Provider + Crew Composition (pre-execution only)
+      description: >
+        CR-HM-BE-05 — guarded replacement of the ACTIVE composition while the
+        bound Work Order is still pre-execution (OPEN/ASSIGNED): the old
+        assignment is SUPERSEDED with full attribution and the new
+        composition (BE-15A/BE-15B server-derived) becomes ACTIVE in one
+        transaction; history is never deleted. Body allowlist is identical to
+        the first assignment (`handymanProviderId` + `handymanWorkCrewId`
+        ONLY) and all time-of-use eligibility revalidation applies again. A
+        job with no ACTIVE composition is rejected with 409
+        `HANDYMAN_JOB_NOT_ASSIGNED`; execution already started is rejected
+        with 409 `HANDYMAN_JOB_NOT_ASSIGNABLE`; an identical target replays
+        idempotently.
+      tags: [Handyman Jobs]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignHandymanJob"
+      responses:
+        "200":
+          description: >
+            Reassignment committed (or idempotent replay): the job, the new
+            ACTIVE assignment and the server-derived BE-15A/BE-15B row ids.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanJobAssignmentResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs/{jobId}/assignments:
+    get:
+      operationId: listHandymanJobAssignments
+      x-required-permission: handyman_job_assignment.read
+      summary: List a Job's Composition History (append-only)
+      description: >
+        CR-HM-BE-05 — the full append-only composition history of one job
+        (newest first): ACTIVE and SUPERSEDED assignments with their
+        lifecycle/attribution timestamps. The designated provider, the crew,
+        and the composed `vendorAssignmentId` are exposed exactly as the
+        authoritative operational read model carries them — no worker,
+        customer or vendor-personnel enrichment. Client data scope is
+        service-enforced; unknown jobs return 404 `HANDYMAN_JOB_NOT_FOUND`.
+      tags: [Handyman Jobs]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Composition history (newest first).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanJobAssignment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-jobs/{jobId}/visits:
+    post:
+      operationId: createHandymanServiceVisit
+      x-required-permission: handyman_service_visit.manage
+      summary: Schedule a Service Visit (occurrence + first ACTIVE window)
+      description: >
+        CR-HM-BE-05 — creates the NEXT visit occurrence of one job
+        (server-generated `visitSequence` under a job-row lock; multiple
+        visits per job are fully supported) together with its first ACTIVE
+        schedule window, in one transaction. Body allowlist:
+        `plannedStartAt` + `plannedEndAt` (ISO-8601 date-time) ONLY; the job
+        comes from the route, identity/sequence/status/attribution are
+        server-managed, and every out-of-scope execution field (arrival, GPS,
+        QR, check-in, session, labor) is rejected with 400 `VALIDATION_ERROR`
+        — the transport validates timestamp SHAPE only, while `end > start`
+        (400 `HANDYMAN_SERVICE_VISIT_WINDOW_INVALID`) and all lifecycle rules
+        stay in the domain. Requires an ACTIVE composition (409
+        `HANDYMAN_JOB_NOT_ASSIGNED`) and a pre-execution Work Order (409
+        `HANDYMAN_JOB_NOT_ASSIGNABLE`), plus full time-of-use revalidation
+        (provider/vendor/relationship/capability and crew/lead/worker-chain
+        eligibility with their owning Run-1 codes). Temporal conflicts are
+        backend-governed
+        with half-open `[start, end)` semantics: overlap with another ACTIVE
+        window of a DIFFERENT non-cancelled job assignment sharing the same
+        crew → 409 `HANDYMAN_SERVICE_VISIT_CREW_CONFLICT`; sharing a worker
+        across crews → 409 `HANDYMAN_SERVICE_VISIT_WORKER_CONFLICT`;
+        back-to-back windows are allowed.
+      tags: [Handyman Service Visits]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanServiceVisit"
+      responses:
+        "201":
+          description: Visit occurrence created with its ACTIVE schedule window.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanServiceVisitCreationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanServiceVisitsByJob
+      x-required-permission: handyman_service_visit.read
+      summary: List a Job's Service Visits (sequence order)
+      description: >
+        CR-HM-BE-05 — all visit occurrences of one job in sequence order,
+        each with its current ACTIVE schedule window (`activeSchedule` is
+        null once the window was cancelled). Full window history is read
+        through `GET /handyman-service-visits/{visitId}/schedules`. Client
+        data scope is service-enforced; unknown jobs return 404
+        `HANDYMAN_JOB_NOT_FOUND`. No query parameters are accepted.
+      tags: [Handyman Service Visits]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The job's visits with their ACTIVE windows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanServiceVisitView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-service-visits/{visitId}:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanServiceVisitById
+      x-required-permission: handyman_service_visit.read
+      summary: Get one Service Visit (identity + ACTIVE window)
+      description: >
+        CR-HM-BE-05 — the visit occurrence identity (`visitSequence`, job
+        binding, timestamps) plus its current ACTIVE schedule window
+        (`activeSchedule` is null once cancelled). Schedule rows are never
+        directly mutable: history is preserved and readable, windows change
+        only through the governed reschedule/cancel commands. Unknown visits
+        return 404 `HANDYMAN_SERVICE_VISIT_NOT_FOUND`; client data scope is
+        service-enforced (403 `BUILDING_ACCESS_DENIED`).
+      tags: [Handyman Service Visits]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The visit with its ACTIVE window.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanServiceVisitView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-service-visits/{visitId}/schedules:
+    get:
+      operationId: listHandymanServiceVisitSchedules
+      x-required-permission: handyman_service_visit.read
+      summary: List a Visit's Schedule History (append-only)
+      description: >
+        CR-HM-BE-05 — the full append-only schedule-window history of one
+        visit (oldest first): ACTIVE, SUPERSEDED and CANCELLED rows with
+        their planned windows and closure attribution. History is retained
+        forever; no schedule-row create/update/delete surface exists (this
+        GET is read-only history inspection through the visit). Unknown
+        visits return 404 `HANDYMAN_SERVICE_VISIT_NOT_FOUND`.
+      tags: [Handyman Service Visits]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Schedule-window history (oldest first).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanServiceVisitSchedule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-service-visits/{visitId}/reschedule:
+    post:
+      operationId: rescheduleHandymanServiceVisit
+      x-required-permission: handyman_service_visit.manage
+      summary: Reschedule a Visit (supersede window, insert new ACTIVE one)
+      description: >
+        CR-HM-BE-05 — replaces the visit's ACTIVE window WITHOUT ever
+        mutating it: the old schedule becomes SUPERSEDED (with attribution)
+        and a NEW ACTIVE schedule row is inserted, guarded in one
+        transaction under deterministic row locks (concurrent reschedules
+        yield exactly one winner; the loser sees 409
+        `HANDYMAN_SERVICE_VISIT_SCHEDULE_STATE_INVALID`). Body allowlist:
+        `plannedStartAt` + `plannedEndAt` ONLY (400 `VALIDATION_ERROR`
+        otherwise); `end > start` stays domain-owned (400
+        `HANDYMAN_SERVICE_VISIT_WINDOW_INVALID`). Full time-of-use
+        revalidation applies again, and the temporal crew/worker conflict
+        scans EXCLUDE the visit's own current window (a self-reschedule never
+        conflicts with itself). A visit whose window was cancelled is not
+        schedulable (409 `HANDYMAN_SERVICE_VISIT_NOT_SCHEDULABLE`).
+      tags: [Handyman Service Visits]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RescheduleHandymanServiceVisit"
+      responses:
+        "200":
+          description: >
+            Window replaced: the visit, the new ACTIVE schedule and the
+            superseded schedule id (history preserved).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanServiceVisitRescheduleResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-service-visits/{visitId}/cancel:
+    post:
+      operationId: cancelHandymanServiceVisitSchedule
+      x-required-permission: handyman_service_visit.manage
+      summary: Cancel a Visit's ACTIVE Schedule Window
+      description: >
+        CR-HM-BE-05 — closes the visit's ACTIVE window as CANCELLED with
+        attribution; history is retained and the freed temporal slot becomes
+        reusable (conflict scans ignore CANCELLED windows). This is NOT a
+        Work Order cancellation: the request, quotation, Work Order and
+        vendor work are untouched. The command carries NO business body —
+        any key is rejected with 400 `VALIDATION_ERROR`. Idempotent per the
+        repository convention: a replay onto an already-CANCELLED window
+        returns 200 with `alreadyCancelled: true` and emits no duplicate
+        event. A visit with no ACTIVE window otherwise is 409
+        `HANDYMAN_SERVICE_VISIT_SCHEDULE_STATE_INVALID` (domain-owned).
+      tags: [Handyman Service Visits]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Window cancelled (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanServiceVisitCancellationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-service-visits/{visitId}/execution-readiness:
+    get:
+      operationId: assessHandymanServiceVisitExecutionReadiness
+      x-required-permission: handyman_service_visit.read
+      summary: Assess Execution Readiness (pure read)
+      description: >
+        CR-HM-BE-05 — the PURE execution-ready assessment of one visit:
+        `ready` is true only when every factorized check passes — an ACTIVE
+        schedule window exists, the Work Order is pre-execution, an ACTIVE
+        job composition exists, the provider chain is valid (designation,
+        vendor, building relationship, per-service capability), the crew
+        chain is valid (ACTIVE crew, provider match, one valid lead,
+        operational worker bindings), no temporal crew/worker conflict
+        exists, and the BE-15D permit readiness of the composed vendor work
+        is READY or NOT_REQUIRED (zero permit-readiness rows follow the
+        EXISTING BE-15D semantics — `NOT_REQUIRED`, never an invented
+        requirement). This is a READ behind `handyman_service_visit.read`:
+        it performs NO mutation, emits NO event, and NEVER starts the Work
+        Order or the vendor work; permit issuance and permit lifecycle stay
+        on the BE-15D/BE-20 authorities. Unknown visits return 404
+        `HANDYMAN_SERVICE_VISIT_NOT_FOUND`.
+      tags: [Handyman Service Visits]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The factorized readiness assessment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanServiceVisitExecutionReadiness" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     bearerAuth:
@@ -75925,3 +76494,255 @@ components:
       properties:
         previousMember: { $ref: "#/components/schemas/HandymanWorkCrewMember" }
         newMember: { $ref: "#/components/schemas/HandymanWorkCrewMember" }
+    HandymanJob:
+      type: object
+      description: >
+        CR-HM-BE-05 — the thin Handyman job binding (public read model). A
+        job is NOT a lifecycle aggregate: it carries identity only — the
+        request, the exact approved quotation revision and the bound
+        `workOrderId`. The Work Order owns the execution lifecycle (status,
+        SLA, cancellation); the job deliberately has no status field.
+        `clientId` and `createdByUserId` are server-derived; timestamps are
+        server-generated. No customer or worker PII is exposed.
+      required: [id, clientId, handymanRequestId, handymanQuotationId, handymanQuotationRevisionId, workOrderId, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        handymanQuotationId: { $ref: "#/components/schemas/Uuid" }
+        handymanQuotationRevisionId: { $ref: "#/components/schemas/Uuid" }
+        workOrderId: { $ref: "#/components/schemas/Uuid" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanJobAssignment:
+      type: object
+      description: >
+        CR-HM-BE-05 — one provider + crew composition row (public read model;
+        append-only history included). `vendorAssignmentId` is the composed
+        BE-15A assignment; the composed BE-15B vendor work id is returned on
+        the assignment RESULT. `status` is server-managed (exactly one ACTIVE
+        composition per job; superseded rows carry full attribution). No
+        worker, customer or vendor-personnel enrichment.
+      required: [id, clientId, handymanJobId, vendorAssignmentId, handymanWorkCrewId, status, assignedAt, assignedByUserId, supersededAt, supersededByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        vendorAssignmentId: { $ref: "#/components/schemas/Uuid" }
+        handymanWorkCrewId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        assignedAt: { type: string, format: date-time }
+        assignedByUserId: { $ref: "#/components/schemas/Uuid" }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateHandymanJob:
+      type: object
+      description: >
+        CR-HM-BE-05 RUN 3 — allowed job-creation body ONLY: the APPROVED
+        request to bind. `clientId`, `workOrderId`, `workOrderNumber`,
+        `status`, `buildingId`, `spaceId`, provider/vendor/crew ids, actor
+        ids, timestamps and any scheduling or permit field are
+        server-derived or out of scope and never accepted — supplying any of
+        them, or any other field, is rejected with 400 `VALIDATION_ERROR`.
+      required: [handymanRequestId]
+      properties:
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+    HandymanJobCreationResult:
+      type: object
+      description: >
+        CR-HM-BE-05 — creation result: the thin job binding and `created`
+        (false when the call was an idempotent replay converging onto the
+        already-existing job of the same request).
+      required: [job, created]
+      properties:
+        job: { $ref: "#/components/schemas/HandymanJob" }
+        created: { type: boolean }
+    AssignHandymanJob:
+      type: object
+      description: >
+        CR-HM-BE-05 RUN 3 — allowed composition body ONLY (first assignment
+        and reassignment share this exact allowlist): the designated provider
+        and the crew. `vendorId`, `vendorAssignmentId`, `vendorWorkId`,
+        `clientId`, `workOrderId`, `status`, actor attribution
+        (`assignedBy`/`supersededBy`) and effective timestamps are
+        server-derived or server-managed and never accepted — supplying any
+        of them, or any other field, is rejected with 400 `VALIDATION_ERROR`.
+        All time-of-use eligibility revalidation and the atomic BE-15A/
+        BE-15B composition stay in the Run-1 service.
+      required: [handymanProviderId, handymanWorkCrewId]
+      properties:
+        handymanProviderId: { $ref: "#/components/schemas/Uuid" }
+        handymanWorkCrewId: { $ref: "#/components/schemas/Uuid" }
+    HandymanJobAssignmentResult:
+      type: object
+      description: >
+        CR-HM-BE-05 — composition result: the job, its ACTIVE assignment row,
+        the server-derived BE-15A `vendorAssignmentId`, the server-derived
+        BE-15B `vendorWorkId` (NOT_STARTED) and the Work Order status after
+        the post-commit OPEN→ASSIGNED seam.
+      required: [job, assignment, vendorAssignmentId, vendorWorkId, workOrderStatus]
+      properties:
+        job: { $ref: "#/components/schemas/HandymanJob" }
+        assignment: { $ref: "#/components/schemas/HandymanJobAssignment" }
+        vendorAssignmentId: { $ref: "#/components/schemas/Uuid" }
+        vendorWorkId: { $ref: "#/components/schemas/Uuid" }
+        workOrderStatus: { type: string }
+    HandymanServiceVisit:
+      type: object
+      description: >
+        CR-HM-BE-05 — one service-visit occurrence (public read model):
+        immutable identity carrying the server-generated per-job
+        `visitSequence` and the job binding. The visit holds NO provider/crew
+        copy (resolved from the ACTIVE composition), NO mutable timestamps
+        and NO arrival/GPS/QR/labor fields — windows live exclusively in the
+        schedule history. `clientId` and `createdByUserId` are
+        server-derived.
+      required: [id, clientId, handymanJobId, visitSequence, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        visitSequence: { type: integer, minimum: 1 }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanServiceVisitSchedule:
+      type: object
+      description: >
+        CR-HM-BE-05 — one schedule window (public read model; append-only
+        history included). Windows use half-open `[plannedStartAt,
+        plannedEndAt)` temporal semantics; exactly one ACTIVE window exists
+        per visit. SUPERSEDED (reschedule) and CANCELLED rows are immutable
+        evidence carrying full closure attribution; rows are never deleted
+        and their planned timestamps are never mutated.
+      required: [id, clientId, handymanServiceVisitId, plannedStartAt, plannedEndAt, status, createdByUserId, supersededAt, supersededByUserId, cancelledAt, cancelledByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid" }
+        plannedStartAt: { type: string, format: date-time }
+        plannedEndAt: { type: string, format: date-time }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED, CANCELLED] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancelledByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanServiceVisitView:
+      type: object
+      description: >
+        CR-HM-BE-05 — visit read model: the occurrence identity plus its
+        current ACTIVE schedule window (`activeSchedule` is null once the
+        window was cancelled). Full history lives on the schedules read.
+      required: [visit, activeSchedule]
+      properties:
+        visit: { $ref: "#/components/schemas/HandymanServiceVisit" }
+        activeSchedule:
+          allOf:
+            - $ref: "#/components/schemas/HandymanServiceVisitSchedule"
+          nullable: true
+    CreateHandymanServiceVisit:
+      type: object
+      description: >
+        CR-HM-BE-05 RUN 3 — allowed visit-creation body ONLY: the planned
+        window as ISO-8601 date-times. The job comes from the route;
+        `clientId`, `visitSequence`, schedule identity, `status`, actor
+        attribution, timestamps, permit fields and every execution field
+        (arrival, GPS, QR, check-in, session, labor) are server-managed or
+        out of scope and never accepted — supplying any of them, or any other
+        field, is rejected with 400 `VALIDATION_ERROR`. The transport
+        validates timestamp SHAPE only; `end > start` (400
+        `HANDYMAN_SERVICE_VISIT_WINDOW_INVALID`) and all conflict/lifecycle
+        rules stay in the Run-2 service.
+      required: [plannedStartAt, plannedEndAt]
+      properties:
+        plannedStartAt: { type: string, format: date-time }
+        plannedEndAt: { type: string, format: date-time }
+    RescheduleHandymanServiceVisit:
+      type: object
+      description: >
+        CR-HM-BE-05 RUN 3 — allowed reschedule body ONLY (same window
+        allowlist as creation). `visitId`, `supersededScheduleId`, closure
+        attribution and status are route-derived or server-managed and never
+        accepted — supplying any of them, or any other field, is rejected
+        with 400 `VALIDATION_ERROR`. The old window is superseded, never
+        mutated.
+      required: [plannedStartAt, plannedEndAt]
+      properties:
+        plannedStartAt: { type: string, format: date-time }
+        plannedEndAt: { type: string, format: date-time }
+    HandymanServiceVisitCreationResult:
+      type: object
+      description: >
+        CR-HM-BE-05 — creation result: the new visit occurrence and its first
+        ACTIVE schedule window, committed in one transaction.
+      required: [visit, schedule]
+      properties:
+        visit: { $ref: "#/components/schemas/HandymanServiceVisit" }
+        schedule: { $ref: "#/components/schemas/HandymanServiceVisitSchedule" }
+    HandymanServiceVisitRescheduleResult:
+      type: object
+      description: >
+        CR-HM-BE-05 — reschedule result: the visit, the NEW ACTIVE window and
+        the id of the SUPERSEDED window (whose planned timestamps remain
+        byte-intact history).
+      required: [visit, schedule, supersededScheduleId]
+      properties:
+        visit: { $ref: "#/components/schemas/HandymanServiceVisit" }
+        schedule: { $ref: "#/components/schemas/HandymanServiceVisitSchedule" }
+        supersededScheduleId: { $ref: "#/components/schemas/Uuid" }
+    HandymanServiceVisitCancellationResult:
+      type: object
+      description: >
+        CR-HM-BE-05 — cancellation result: the visit, the id of the CANCELLED
+        window and `alreadyCancelled` (true when the call was an idempotent
+        replay onto an already-CANCELLED window; no duplicate event is
+        emitted).
+      required: [visit, cancelledScheduleId, alreadyCancelled]
+      properties:
+        visit: { $ref: "#/components/schemas/HandymanServiceVisit" }
+        cancelledScheduleId: { $ref: "#/components/schemas/Uuid" }
+        alreadyCancelled: { type: boolean }
+    HandymanServiceVisitExecutionReadinessChecks:
+      type: object
+      description: >
+        CR-HM-BE-05 — the factorized execution-ready checks: ACTIVE window,
+        Work Order pre-execution, ACTIVE composition, valid provider chain,
+        valid crew chain, no temporal crew/worker conflict, BE-15D permits
+        READY or NOT_REQUIRED.
+      required: [hasActiveSchedule, workOrderPreExecution, hasActiveJobAssignment, providerChainValid, crewChainValid, noScheduleConflict, permitsReady]
+      properties:
+        hasActiveSchedule: { type: boolean }
+        workOrderPreExecution: { type: boolean }
+        hasActiveJobAssignment: { type: boolean }
+        providerChainValid: { type: boolean }
+        crewChainValid: { type: boolean }
+        noScheduleConflict: { type: boolean }
+        permitsReady: { type: boolean }
+    HandymanServiceVisitExecutionReadiness:
+      type: object
+      description: >
+        CR-HM-BE-05 — the PURE execution-readiness assessment (read-only; no
+        mutation, no event, no Work Order or vendor-work transition).
+        `permitReadiness` is the EXISTING BE-15D `VendorWorkPermitReadiness`
+        passthrough for the composed vendor work — zero permit-readiness rows
+        aggregate to `NOT_REQUIRED` per the established BE-15D semantics, and
+        permit issuance/lifecycle remain on the BE-15D/BE-20 authorities.
+      required: [handymanServiceVisitId, handymanJobId, workOrderId, vendorWorkId, ready, checks, activeSchedule, permitReadiness]
+      properties:
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        workOrderId: { $ref: "#/components/schemas/Uuid" }
+        vendorWorkId: { $ref: "#/components/schemas/Uuid" }
+        ready: { type: boolean }
+        checks: { $ref: "#/components/schemas/HandymanServiceVisitExecutionReadinessChecks" }
+        activeSchedule:
+          allOf:
+            - $ref: "#/components/schemas/HandymanServiceVisitSchedule"
+          nullable: true
+        permitReadiness: { $ref: "#/components/schemas/VendorWorkPermitReadiness" }

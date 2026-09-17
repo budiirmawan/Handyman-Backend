@@ -203,6 +203,12 @@ import { createHandymanRequestGovernanceRouter } from '../modules/handyman-reque
 import { createHandymanQuotationRouter } from '../modules/handyman-quotations/handyman-quotation.routes';
 import { createHandymanQuotationApprovalRouter } from '../modules/handyman-quotations/handyman-quotation-approval.routes';
 import { createHandymanWorkCrewRouter } from '../modules/handyman-work-crews/handyman-work-crew.routes';
+// CR-HM-BE-05 RUN 3 — Handyman Job/assignment + service-visit scheduling
+// HTTP contract (thin exposure of the Run 1–2 domain authority; no separate
+// Handyman server/runtime, no Work Order lifecycle mutation, no arrival or
+// execution surface).
+import { createHandymanJobRouter } from '../modules/handyman-jobs/handyman-job.routes';
+import { createHandymanServiceVisitRouter } from '../modules/handyman-jobs/handyman-service-visit.routes';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -681,5 +687,11 @@ export function createApiRouter(): Router {
   // governance over the existing provider/personnel foundations; no
   // assignment or dispatch surface).
   router.use(createHandymanWorkCrewRouter());
+  // CR-HM-BE-05 RUN 3 — Handyman Job/assignment + service-visit scheduling
+  // contract (thin exposure of the Run 1–2 domain authority; Work Order
+  // lifecycle mutation, permit issuance and execution surfaces stay on their
+  // existing owners).
+  router.use(createHandymanJobRouter());
+  router.use(createHandymanServiceVisitRouter());
   return router;
 }
