@@ -54,6 +54,21 @@ export async function resolveBuildingConfigurationContext(
   userId: string,
 ): Promise<BuildingConfigurationContext> {
   await contextAccessService.assertBuildingAccess(userId, buildingId);
+  return resolveBuildingIdentityContext(buildingId);
+}
+
+/**
+ * Access-neutral Building → Property → Client identity resolution (the
+ * exact identity half of {@link resolveBuildingConfigurationContext},
+ * factored out unchanged for CR-HM-BE-06 Run 2 §11). This performs NO
+ * access decision and no business rule beyond existence identity: callers
+ * MUST be independently preauthorized for the Building (e.g. the governed
+ * Handyman Work Session field-lead chain, which proves visit-scoped
+ * authority stronger than a building assignment).
+ */
+export async function resolveBuildingIdentityContext(
+  buildingId: string,
+): Promise<BuildingConfigurationContext> {
   const building = await buildingRepository.findById(buildingId);
   if (!building) throw buildingNotFoundError();
   const property = await propertyRepository.findById(building.propertyId);

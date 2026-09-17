@@ -15,6 +15,7 @@ import {
   handymanProviderRepository,
   handymanProviderStatusInvalidError,
   listHandymanProviderServiceEligibilities,
+  listHandymanProviderServiceEligibilitiesPreauthorized,
 } from '../handyman-providers';
 import { handymanServiceSelectionRepository } from '../handyman-request-governance';
 import {
@@ -468,6 +469,44 @@ export async function requireEligibleProviderForJob(
   handymanProviderId: string,
   actorUserId: string,
 ): Promise<{ providerId: string; vendorId: string }> {
+  return requireEligibleProviderForJobWith(context, handymanProviderId, (buildingId, providerId) =>
+    listHandymanProviderServiceEligibilities(buildingId, providerId, actorUserId),
+  );
+}
+
+/**
+ * Access-neutral variant for governed preauthorized command chains
+ * (CR-HM-BE-06 Run 2 §11): the IDENTICAL provider-chain rule body as
+ * {@link requireEligibleProviderForJob} — same designation/vendor/
+ * relationship revalidation and same capability-coverage requirement —
+ * consuming the BE-02 preauthorized eligibility read instead of the
+ * actor-gated one. Callers MUST have independently authorized the actor
+ * for this exact job/visit (the Handyman Work Session start command proves
+ * field authority through the BE-06 lead chain).
+ */
+export async function requireEligibleProviderForJobPreauthorized(
+  context: JobContext,
+  handymanProviderId: string,
+): Promise<{ providerId: string; vendorId: string }> {
+  return requireEligibleProviderForJobWith(
+    context,
+    handymanProviderId,
+    (buildingId, providerId) =>
+      listHandymanProviderServiceEligibilitiesPreauthorized(
+        buildingId,
+        providerId,
+      ),
+  );
+}
+
+async function requireEligibleProviderForJobWith(
+  context: JobContext,
+  handymanProviderId: string,
+  listEligibilities: (
+    buildingId: string,
+    providerId: string,
+  ) => Promise<{ serviceCatalogId: string }[]>,
+): Promise<{ providerId: string; vendorId: string }> {
   const provider = await handymanProviderRepository.findById(
     handymanProviderId,
   );
@@ -504,10 +543,9 @@ export async function requireEligibleProviderForJob(
     context.request.id,
     { status: 'ACTIVE' },
   );
-  const eligibilities = await listHandymanProviderServiceEligibilities(
+  const eligibilities = await listEligibilities(
     context.workOrder.buildingId,
     provider.id,
-    actorUserId,
   );
   const eligibleServiceIds = new Set(
     eligibilities.map((eligibility) => eligibility.serviceCatalogId),

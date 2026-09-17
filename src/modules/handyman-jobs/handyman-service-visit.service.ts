@@ -1,7 +1,10 @@
 import { getPool, withTransaction } from '../../database';
 import { AppError } from '../../shared/errors';
 import { recordOperationalEvent } from '../operational-events';
-import { resolveVendorWorkPermitReadiness } from '../work-permit-readiness';
+import {
+  resolveVendorWorkPermitReadiness,
+  type VendorWorkPermitReadiness,
+} from '../work-permit-readiness';
 import { workOrderNotFoundError } from '../work-orders';
 import { handymanProviderRepository } from '../handyman-providers';
 import { handymanWorkCrewRepository } from '../handyman-work-crews';
@@ -874,7 +877,49 @@ export async function assessHandymanServiceVisitExecutionReadiness(
     throw handymanServiceVisitNotFoundError();
   }
   const jobContext = await loadJobContext(visit.handymanJobId, actorUserId);
+  return assessHandymanServiceVisitExecutionReadinessCore(
+    visit,
+    jobContext,
+    actorUserId,
+  );
+}
 
+/**
+ * Injectable subreads for the readiness core (CR-HM-BE-06 Run 2 §11).
+ *
+ * The defaults ARE the existing BE-05 behavior (actor-gated BE-02/BE-15D
+ * reads + the pre-execution work-order predicate). A governed PREAUTHORIZED
+ * command chain — the Handyman Work Session start command, whose actor is a
+ * field lead authorized by the BE-06 lead chain instead of a building
+ * assignment — injects the access-neutral variants of the SAME rule
+ * authorities and the execution-start work-order predicate. No checklist,
+ * aggregation, or conflict/crew semantics are ever duplicated: this core
+ * function stays the ONE semantic authority for execution readiness.
+ */
+export type ExecutionReadinessSubreads = {
+  requireProviderEligibility: (
+    jobContext: JobContext,
+    handymanProviderId: string,
+  ) => Promise<{ providerId: string; vendorId: string }>;
+  resolvePermitReadiness: (
+    vendorWorkId: string,
+  ) => Promise<VendorWorkPermitReadiness>;
+  isWorkOrderStartable: (workOrderStatus: string) => boolean;
+};
+
+export async function assessHandymanServiceVisitExecutionReadinessCore(
+  visit: HandymanServiceVisitRecord,
+  jobContext: JobContext,
+  actorUserId: string,
+  subreads: ExecutionReadinessSubreads = {
+    requireProviderEligibility: (context, handymanProviderId) =>
+      requireEligibleProviderForJob(context, handymanProviderId, actorUserId),
+    resolvePermitReadiness: (vendorWorkId) =>
+      resolveVendorWorkPermitReadiness(vendorWorkId, actorUserId),
+    isWorkOrderStartable: (workOrderStatus) =>
+      isPreExecutionWorkOrderStatus(workOrderStatus),
+  },
+): Promise<HandymanServiceVisitExecutionReadiness> {
   const activeSchedule =
     await handymanServiceVisitRepository.findActiveScheduleByVisitId(visit.id);
 
@@ -896,7 +941,7 @@ export async function assessHandymanServiceVisitExecutionReadiness(
     throw handymanJobNotAssignedError();
   }
 
-  const workOrderPreExecution = isPreExecutionWorkOrderStatus(
+  const workOrderPreExecution = subreads.isWorkOrderStartable(
     jobContext.workOrder.status,
   );
 
@@ -909,10 +954,9 @@ export async function assessHandymanServiceVisitExecutionReadiness(
   if (hasActiveJobAssignment) {
     try {
       schedulingContext = await requireSchedulingContext(jobContext);
-      await requireEligibleProviderForJob(
+      await subreads.requireProviderEligibility(
         jobContext,
         schedulingContext.handymanProviderId,
-        actorUserId,
       );
       providerChainValid = true;
     } catch (error) {
@@ -970,10 +1014,7 @@ export async function assessHandymanServiceVisitExecutionReadiness(
 
   // BE-15D passthrough — readiness semantics (including zero rows =
   // NOT_REQUIRED) stay owned by BE-15D. No event: pure reads are not audited.
-  const permitReadiness = await resolveVendorWorkPermitReadiness(
-    vendorWorkId,
-    actorUserId,
-  );
+  const permitReadiness = await subreads.resolvePermitReadiness(vendorWorkId);
 
   const hasActiveSchedule = activeSchedule !== null;
   const ready =

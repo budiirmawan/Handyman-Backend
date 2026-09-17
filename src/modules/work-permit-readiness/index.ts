@@ -8,6 +8,7 @@ export {
 export { workPermitReadinessRepository } from './work-permit-readiness.repository';
 
 export {
+  aggregateVendorWorkPermitReadiness,
   createWorkPermitReadiness,
   deriveReadinessStatus,
   getWorkPermitReadiness,

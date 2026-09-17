@@ -6,6 +6,7 @@ export {
   getEffectiveBuildingConfiguration,
   listBuildingConfigurations,
   resolveBuildingConfigurationContext,
+  resolveBuildingIdentityContext,
   toPublicBuildingConfiguration,
   updateBuildingConfiguration,
 } from './building-configuration.service';

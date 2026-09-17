@@ -324,6 +324,26 @@ export async function resolveVendorWorkPermitReadiness(
     throw vendorWorkNotFoundError();
   }
   await contextAccessService.assertBuildingAccess(userId, work.buildingId);
+  return aggregateVendorWorkPermitReadiness(vendorWorkId);
+}
+
+/**
+ * Access-neutral permit-readiness aggregation (CR-HM-BE-06 Run 2 §11): the
+ * IDENTICAL rule authority as {@link resolveVendorWorkPermitReadiness} —
+ * same zero-rows NOT_REQUIRED semantics, same per-permit status derivation,
+ * same aggregation and `ready` fold — minus the BE-02G building-access
+ * assertion, which stays in the gated public read above. Callers MUST be
+ * independently preauthorized for the Vendor Work's Building (the governed
+ * Handyman Work Session start command proves visit-scoped field authority
+ * through the BE-06 lead chain).
+ */
+export async function aggregateVendorWorkPermitReadiness(
+  vendorWorkId: string,
+): Promise<VendorWorkPermitReadiness> {
+  const work = await vendorWorkRepository.findById(vendorWorkId);
+  if (!work) {
+    throw vendorWorkNotFoundError();
+  }
 
   const now = new Date();
   const records =

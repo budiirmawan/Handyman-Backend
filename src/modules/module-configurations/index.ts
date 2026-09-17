@@ -3,6 +3,7 @@ export {
   createBuildingModuleConfiguration,
   createClientModuleConfiguration,
   getEffectiveBuildingModuleConfiguration,
+  getEffectiveBuildingModuleConfigurationPreauthorized,
   getEffectiveClientModuleConfiguration,
   getModuleConfigurationById,
   listBuildingModuleConfigurations,

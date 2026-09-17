@@ -6,6 +6,7 @@ import { vendorRepository } from '../vendors';
 import { handymanProviderNotFoundError } from './handyman-provider.errors';
 import { handymanProviderRepository } from './handyman-provider.repository';
 import { HANDYMAN_MODULE_CODE } from './handyman-provider.service';
+import type { EffectiveModuleConfiguration } from '../module-configurations';
 import type {
   AuthorizedHandymanProvider,
   BuildingHandymanEnablement,
@@ -89,6 +90,32 @@ export async function getBuildingHandymanEnablement(
       buildingId,
       actorUserId,
     );
+  return projectHandymanEnablement(buildingId, effective);
+}
+
+/**
+ * Access-neutral enablement projection (CR-HM-BE-06 Run 2 §11): the
+ * IDENTICAL BE-27C projection rule as {@link getBuildingHandymanEnablement}
+ * — same `enabled = configuredEnabled ∧ entitled` fold, same fail-closed
+ * missing-entry semantics — resolved through the preauthorized BE-27C
+ * effective-configuration read. Callers MUST be independently preauthorized
+ * for the Building (the governed Handyman Work Session start command proves
+ * visit-scoped field authority through the BE-06 lead chain).
+ */
+export async function getBuildingHandymanEnablementPreauthorized(
+  buildingId: string,
+): Promise<BuildingHandymanEnablement> {
+  const effective =
+    await moduleConfigurationService.getEffectiveBuildingModuleConfigurationPreauthorized(
+      buildingId,
+    );
+  return projectHandymanEnablement(buildingId, effective);
+}
+
+function projectHandymanEnablement(
+  buildingId: string,
+  effective: EffectiveModuleConfiguration,
+): BuildingHandymanEnablement {
   const entry = effective.modules.find(
     (module) => module.moduleKey === HANDYMAN_MODULE_CODE,
   );
@@ -121,6 +148,28 @@ export async function listAuthorizedHandymanProvidersForBuilding(
   actorUserId: string,
 ): Promise<AuthorizedHandymanProvider[]> {
   const enablement = await getBuildingHandymanEnablement(buildingId, actorUserId);
+  return listAuthorizedProvidersForEnablement(buildingId, enablement);
+}
+
+/**
+ * Access-neutral provider ↔ building authorization (CR-HM-BE-06 Run 2 §11):
+ * the IDENTICAL B rules as {@link listAuthorizedHandymanProvidersForBuilding}
+ * (enablement fail-closed, ACTIVE designation, ACTIVE same-client vendor,
+ * ACTIVE-and-effective relationship) with the preauthorized enablement read.
+ * Callers MUST be independently preauthorized for the Building.
+ */
+export async function listAuthorizedHandymanProvidersForBuildingPreauthorized(
+  buildingId: string,
+): Promise<AuthorizedHandymanProvider[]> {
+  const enablement =
+    await getBuildingHandymanEnablementPreauthorized(buildingId);
+  return listAuthorizedProvidersForEnablement(buildingId, enablement);
+}
+
+async function listAuthorizedProvidersForEnablement(
+  buildingId: string,
+  enablement: BuildingHandymanEnablement,
+): Promise<AuthorizedHandymanProvider[]> {
   if (!enablement.enabled) {
     return [];
   }
@@ -193,6 +242,39 @@ export async function listHandymanProviderServiceEligibilities(
     buildingId,
     actorUserId,
   );
+  return listEligibilitiesForAuthorizedProviders(
+    buildingId,
+    providerId,
+    authorizedProviders,
+  );
+}
+
+/**
+ * Access-neutral provider ↔ service eligibility (CR-HM-BE-06 Run 2 §11):
+ * the IDENTICAL C rules as {@link listHandymanProviderServiceEligibilities}
+ * (B-gate fail-closed to the 404 no-existence-leak doctrine, capability
+ * coverage, governed catalog identity, category convention, capability
+ * scope windows) with the preauthorized B read. Callers MUST be
+ * independently preauthorized for the Building.
+ */
+export async function listHandymanProviderServiceEligibilitiesPreauthorized(
+  buildingId: string,
+  providerId: string,
+): Promise<HandymanProviderServiceEligibility[]> {
+  const authorizedProviders =
+    await listAuthorizedHandymanProvidersForBuildingPreauthorized(buildingId);
+  return listEligibilitiesForAuthorizedProviders(
+    buildingId,
+    providerId,
+    authorizedProviders,
+  );
+}
+
+async function listEligibilitiesForAuthorizedProviders(
+  buildingId: string,
+  providerId: string,
+  authorizedProviders: AuthorizedHandymanProvider[],
+): Promise<HandymanProviderServiceEligibility[]> {
   const provider = authorizedProviders.find(
     (candidate) => candidate.providerId === providerId,
   );
@@ -248,7 +330,10 @@ export async function listHandymanProviderServiceEligibilities(
 
 export const handymanProviderEligibilityService = {
   getBuildingHandymanEnablement,
+  getBuildingHandymanEnablementPreauthorized,
   isHandymanServiceCategory,
   listAuthorizedHandymanProvidersForBuilding,
+  listAuthorizedHandymanProvidersForBuildingPreauthorized,
   listHandymanProviderServiceEligibilities,
+  listHandymanProviderServiceEligibilitiesPreauthorized,
 };

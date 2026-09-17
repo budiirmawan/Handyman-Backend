@@ -22,3 +22,7 @@ export * from './handyman-visit-presence.types';
 export * from './handyman-visit-presence.errors';
 export * from './handyman-visit-presence.repository';
 export * from './handyman-visit-presence.service';
+export * from './handyman-work-session.types';
+export * from './handyman-work-session.errors';
+export * from './handyman-work-session.repository';
+export * from './handyman-work-session.service';

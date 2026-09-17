@@ -242,7 +242,17 @@ export function computeArrivalFingerprint(facts: {
  * assignments (external lead workers hold no staff context by design).
  * All structural integrity checks are reproduced verbatim.
  */
-async function loadFieldJobContext(jobId: string): Promise<JobContext> {
+/**
+ * Structural job-context load for FIELD-authorized command chains
+ * (exported for CR-HM-BE-06 Run 2 composition): the same integrity
+ * assertions as the BE-05 staff loadJobContext — job/client/request/work
+ * order existence, ACTIVE client, one-client coherence — WITHOUT the
+ * BE-02G building-assignment access gate that external workforce leads can
+ * never satisfy. Authorization for callers of this load is the BE-06 lead
+ * chain (user → BE-03C profile → ACTIVE vendor binding → ACTIVE membership
+ * → LEAD of the visit's composition), asserted separately.
+ */
+export async function loadFieldJobContext(jobId: string): Promise<JobContext> {
   const job = await handymanJobRepository.findById(jobId);
   if (!job) {
     throw handymanJobNotFoundError();
@@ -274,7 +284,8 @@ async function loadFieldJobContext(jobId: string): Promise<JobContext> {
   return { job, request, workOrder: toPublicWorkOrder(workOrderRecord) };
 }
 
-type ArrivalChainContext = {
+/** Visit-scoped execution chain resolved from business facts (Run 2 reuse). */
+export type ArrivalChainContext = {
   jobContext: JobContext;
   compositionId: string;
   vendorAssignmentId: string;
@@ -289,7 +300,7 @@ type ArrivalChainContext = {
  * exported owning repositories — BE-05 stays frozen): ACTIVE composition →
  * its BE-15A vendor assignment → crew ↔ provider ↔ vendor coherence.
  */
-async function requireArrivalChain(
+export async function requireArrivalChain(
   jobContext: JobContext,
 ): Promise<ArrivalChainContext> {
   const composition = await handymanJobRepository.findActiveByJobId(
@@ -375,9 +386,11 @@ async function requireActiveScheduleForArrival(visitId: string): Promise<void> {
 /* In-transaction re-assertion (Run-2 visit-path lock order VERBATIM)  */
 /* ------------------------------------------------------------------ */
 
-type LockedArrivalContext = {
+export type LockedArrivalContext = {
   lockedScheduleId: string;
   compositionId: string;
+  vendorAssignmentId: string;
+  workOrderStatus: string;
   handymanWorkCrewId: string;
   members: HandymanWorkCrewMemberRecord[];
   buildingId: string;
@@ -393,7 +406,7 @@ type LockedArrivalContext = {
  * inside the single established lock-order family. Returns the ACTIVE crew
  * members for the presence snapshot.
  */
-async function reassertArrivalContextInTx(
+export async function reassertArrivalContextInTx(
   visitId: string,
   chain: ArrivalChainContext,
   tx: Parameters<Parameters<typeof withTransaction>[0]>[0],
@@ -501,6 +514,8 @@ async function reassertArrivalContextInTx(
   return {
     lockedScheduleId: lockedSchedule.id,
     compositionId: compositionInTx.id,
+    vendorAssignmentId: compositionInTx.vendorAssignmentId,
+    workOrderStatus: lockedWorkOrder.status,
     handymanWorkCrewId: lockedCrew.id,
     members,
     buildingId: lockedWorkOrder.buildingId,

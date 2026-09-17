@@ -4,6 +4,7 @@ import {
 } from '../client-configurations';
 import {
   resolveBuildingConfigurationContext,
+  resolveBuildingIdentityContext,
 } from '../building-configurations';
 import { contextAccessService } from '../context-access';
 import {
@@ -278,6 +279,32 @@ export async function getEffectiveBuildingModuleConfiguration(
   userId: string,
 ): Promise<EffectiveModuleConfiguration> {
   const context = await resolveBuildingConfigurationContext(buildingId, userId);
+  return projectEffectiveBuildingConfiguration(context);
+}
+
+/**
+ * Access-neutral effective Building module projection (CR-HM-BE-06 Run 2
+ * §11): the IDENTICAL rule authority as
+ * {@link getEffectiveBuildingModuleConfiguration} — same client-active gate,
+ * same CLIENT/BUILDING scope fold (Building row overriding Client row),
+ * same entitlement-aware projection — minus the BE-02G building-access
+ * assertion, which lives in the gated entry above. Callers MUST be
+ * independently preauthorized for the Building (the governed Handyman Work
+ * Session start command proves visit-scoped field authority through the
+ * BE-06 lead chain).
+ */
+export async function getEffectiveBuildingModuleConfigurationPreauthorized(
+  buildingId: string,
+): Promise<EffectiveModuleConfiguration> {
+  const context = await resolveBuildingIdentityContext(buildingId);
+  return projectEffectiveBuildingConfiguration(context);
+}
+
+async function projectEffectiveBuildingConfiguration(context: {
+  buildingId: string;
+  clientId: string;
+  clientStatus: string;
+}): Promise<EffectiveModuleConfiguration> {
   if (context.clientStatus !== 'ACTIVE') throw clientInactiveError();
 
   const [clientRecords, buildingRecords] = await Promise.all([
@@ -298,6 +325,7 @@ export const moduleConfigurationService = {
   createBuildingModuleConfiguration,
   createClientModuleConfiguration,
   getEffectiveBuildingModuleConfiguration,
+  getEffectiveBuildingModuleConfigurationPreauthorized,
   getEffectiveClientModuleConfiguration,
   getModuleConfigurationById,
   listBuildingModuleConfigurations,
