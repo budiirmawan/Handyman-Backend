@@ -150,3 +150,20 @@ export type HandymanVisitPresenceEvaluation = {
     presenceStatus: HandymanVisitPresenceStatus;
   }[];
 };
+
+/**
+ * CR-HM-BE-06 RUN 3 — the gated presence READ view for the HTTP surface:
+ * the pure evaluation scalars (Run-1/Run-2 gate facts) plus the attributed
+ * public snapshot rows. Operational facts only — binding identity, the
+ * FROZEN crew role, status, recording path/attribution and timestamps. No
+ * worker PII exists on the rows, and the assisted free-text reason stays
+ * off this read model (it lives on the arrival/presence evidence, exposed
+ * only through the arrival public projection).
+ */
+export type HandymanVisitPresenceReadView = {
+  handymanServiceVisitId: string;
+  snapshotExists: boolean;
+  leadPresent: boolean;
+  leadVendorWorkforceBindingId: string | null;
+  presence: PublicHandymanVisitPresence[];
+};

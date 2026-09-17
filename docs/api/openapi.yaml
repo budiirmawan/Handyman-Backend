@@ -199,6 +199,37 @@ tags:
       GPS, QR, check-in/out, WorkSession, attendance, labor, material, QC,
       BAST, invoice or execution surface exists here; there is deliberately
       no DELETE route.
+  - name: Handyman Field Execution
+    description: >
+      CR-HM-BE-06 RUN 3 — Handyman field-execution HTTP contract: thin
+      exposure of the Run 1 visit-arrival/crew-presence and Run 2
+      work-session domain authorities through the existing Asentra route
+      composition (no separate backend). Ten operations only. ARRIVAL is a
+      VISIT-LEVEL fact with server-owned GPS verification against the
+      backend-authoritative building configuration — client coordinates are
+      evidence only, `VERIFIED` is never taken from a client, radius and
+      policy stay backend configuration (never hardcoded in a frontend),
+      the STAFF-ASSISTED override is attributed with a mandatory reason,
+      and arrival is NOT execution start. PRESENCE is the crew snapshot
+      frozen atomically with the one VERIFIED arrival: helpers never
+      authenticate (the Lead Worker or staff record on their behalf), the
+      lead records normal marks, assisted marks stay distinguishable, and
+      presence is an operational fact — NOT HR attendance and never an
+      invoice or payroll input. WORK SESSIONS are execution-time facts
+      (non-financial): at most one OPEN session per visit, sequential
+      sessions allowed, server timestamps authoritative (an `occurredAt`
+      claim is offline-replay evidence only) and duration is never a
+      billable amount. EXECUTION START is the guarded seam: verified
+      arrival + snapshot Lead PRESENT + the BE-05 execution-readiness
+      assessment, composition and vendor work resolved backend-side,
+      vendor_work converged BEFORE the Work Order (lifecycle owners
+      unchanged), inconsistent execution state rejected explicitly with 409
+      `HANDYMAN_WORK_SESSION_EXECUTION_STATE_INCONSISTENT`, and replays
+      converge. No QR, material, QC, BAST, invoice, payment,
+      building-management, warranty, notification, payroll or settlement
+      surface exists here; there is deliberately no DELETE and no
+      PATCH/PUT route — facts are append-only or converged, never removed
+      or directly edited.
   - name: Front Desk
     description: >
       CR-BE-FE-JOURNEY-CONTRACT-01 PART 01A - J09 Visitor & Front-Desk core
@@ -47370,6 +47401,555 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-service-visits/{visitId}/arrival:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: recordGpsHandymanVisitArrival
+      x-required-permission: handyman_work_execution.manage
+      summary: Record GPS Visit Arrival (server-verified, append-only)
+      description: >
+        CR-HM-BE-06 — one VISIT-LEVEL arrival attempt carrying
+        client-claimed GPS evidence. The server is the SOLE verification
+        authority: it resolves the backend-authoritative building
+        configuration (policy point + radius — never accepted from the
+        wire, never hardcoded by a frontend), computes the distance itself
+        and decides `VERIFIED` or `FAILED` with an exhaustive server-owned
+        failure reason. Failed claims are preserved as evidence (an
+        out-of-range coordinate is a recorded FAILED attempt, not a
+        transport error). Attempts are append-only: no DELETE, no mutable
+        verified flag. One visit establishes AT MOST one VERIFIED arrival —
+        the first VERIFIED result atomically snapshots the crew presence
+        rows (returned in `presence`), and later attempts or same-key
+        replays CONVERGE onto the authoritative fact (`converged: true`,
+        200) without duplicating it; idempotency never suppresses FAILED
+        history. Raw coordinates, accuracy, computed distance and the
+        idempotency key stay on the server-owned evidence rows and appear
+        in NO response or read model. Arrival is NOT execution start: work
+        orders, vendor work and sessions are untouched. The actor must
+        resolve through the governed field chain (user → workforce profile
+        → ACTIVE vendor workforce binding) onto the current composition's
+        Lead Worker (403 `HANDYMAN_VISIT_ARRIVAL_ACTOR_NOT_LEAD`
+        otherwise); helpers never authenticate. Body allowlist:
+        `latitude`, `longitude`, `accuracyMeters`, `occurredAt`,
+        `idempotencyKey` ONLY — any other key (results, radius,
+        configuration points, client/building/job identities, recorder
+        attribution, worker identity) is rejected with 400
+        `VALIDATION_ERROR`. Domain semantics stay on the wire: 409
+        `HANDYMAN_VISIT_ARRIVAL_IDEMPOTENCY_CONFLICT` (same key, different
+        facts), 409 `HANDYMAN_VISIT_ARRIVAL_STATE_INVALID`, 404
+        `HANDYMAN_SERVICE_VISIT_NOT_FOUND`.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordGpsHandymanVisitArrival"
+      responses:
+        "201":
+          description: >
+            A new arrival attempt was recorded (VERIFIED or FAILED — the
+            server decided).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanVisitArrivalCommandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "200":
+          description: >
+            Idempotent replay / convergence onto the visit's authoritative
+            arrival fact (`converged: true`; no new attempt row).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanVisitArrivalCommandResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-service-visits/{visitId}/arrival/assisted:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: recordAssistedHandymanVisitArrival
+      x-required-permission: handyman_service_visit.manage
+      summary: Record Staff-Assisted Visit Arrival (attributed override)
+      description: >
+        CR-HM-BE-06 — the STAFF-ASSISTED arrival override for the field
+        reality that a crew may arrive without a usable GPS fix. It is a
+        provenance-bearing fact, structurally distinguishable from GPS:
+        `verificationMethod` is `ASSISTED`, the mandatory non-empty
+        `assistedReason` is attributed on the public projection, and the
+        REAL recording staff user is attributed — never a silent
+        impersonation of the Lead Worker. NO coordinate, accuracy,
+        distance, radius or verification result is accepted on this route
+        (400 `VALIDATION_ERROR`): assisted arrivals carry no GPS evidence.
+        Gated by the established assisted-staff authority
+        `handyman_service_visit.manage` — a field
+        `handyman_work_execution.manage` credential alone can NEVER reach
+        this override. Staff client data scope is service-enforced (403
+        `BUILDING_ACCESS_DENIED`). All Run-1 invariants apply unchanged:
+        append-only attempts, one VERIFIED arrival per visit, atomic
+        presence snapshot on the first VERIFIED fact, convergence with
+        `converged: true` (200) on replay, 409
+        `HANDYMAN_VISIT_ARRIVAL_IDEMPOTENCY_CONFLICT` on key reuse with
+        different facts, 404 `HANDYMAN_SERVICE_VISIT_NOT_FOUND`. Body
+        allowlist: `assistedReason`, `occurredAt`, `idempotencyKey` ONLY.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordAssistedHandymanVisitArrival"
+      responses:
+        "201":
+          description: A new ASSISTED arrival fact was recorded (VERIFIED).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanVisitArrivalCommandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "200":
+          description: >
+            Idempotent replay / convergence onto the visit's authoritative
+            arrival fact (`converged: true`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanVisitArrivalCommandResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-service-visits/{visitId}/arrivals:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanVisitArrivalsByVisit
+      x-required-permission: handyman_work_execution.read
+      summary: Arrival Attempt History (privacy-safe projection)
+      description: >
+        CR-HM-BE-06 — the visit's append-only arrival attempt history,
+        oldest first, behind the shared field-execution read scope: staff
+        client access (BE-02G building assignments), an involved recorder
+        of the visit's arrival facts, or the current composition's Lead
+        Worker; anyone else gets 403 `BUILDING_ACCESS_DENIED`. The read
+        model is the PUBLIC projection ONLY — verification method, server
+        verification result, failure reason, server `receivedAt`, the
+        optional claimed `occurredAt`, configuration/version ids, the
+        assisted reason and attribution ids. Raw claimed coordinates,
+        accuracy, computed distance, idempotency keys, device identifiers
+        and evidence references are NEVER exposed. An empty list is a
+        factual answer before any attempt exists (no error). Unknown
+        visits return 404 `HANDYMAN_SERVICE_VISIT_NOT_FOUND`.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Arrival attempts, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanVisitArrival" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-service-visits/{visitId}/presence:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanVisitExecutionPresence
+      x-required-permission: handyman_work_execution.read
+      summary: Crew Presence Snapshot View (operational facts only)
+      description: >
+        CR-HM-BE-06 — the visit's presence snapshot plus the pure
+        execution-start evaluation scalars (`snapshotExists`,
+        `leadPresent`, `leadVendorWorkforceBindingId`). The snapshot is
+        FROZEN at the one VERIFIED arrival: it lists the composed crew
+        members with their frozen crew role and current operational status
+        (PENDING until marked, then PRESENT/ABSENT), each mark attributed
+        with its recording path (LEAD vs STAFF_ASSISTED), the real
+        recorder and server timestamps. Operational facts ONLY — no worker
+        PII exists on the rows, the assisted free-text reason stays off
+        this view, and presence is NOT HR attendance (no shift, payroll or
+        invoice meaning). Before the VERIFIED arrival the snapshot does
+        not exist yet: `snapshotExists: false` with an empty `presence`
+        list (a factual read, never an error). Read scope: staff client
+        access, an involved recorder, or the current composition's Lead
+        Worker (403 `BUILDING_ACCESS_DENIED` otherwise); unknown visits
+        404 `HANDYMAN_SERVICE_VISIT_NOT_FOUND`.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The evaluation scalars plus the attributed snapshot rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanVisitPresenceReadView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: recordHandymanVisitPresenceByLead
+      x-required-permission: handyman_work_execution.manage
+      summary: Mark Crew Presence (Lead Worker field path)
+      description: >
+        CR-HM-BE-06 — the Lead Worker marks one FROZEN snapshot member
+        (themselves or any helper) PRESENT or ABSENT. Helpers never
+        authenticate and never need a smartphone or login: the lead
+        records on their behalf, which is exactly why the target is a
+        snapshot row identity and never an arbitrary worker: binding ids
+        outside the visit's frozen snapshot (other providers, other crews,
+        later memberships) are rejected with 404
+        `HANDYMAN_VISIT_PRESENCE_MEMBER_NOT_FOUND` — presence rows are
+        never inserted outside the arrival transaction and later crew
+        changes never rewrite the snapshot. The actor must resolve through
+        the governed field chain onto the snapshot's LEAD_WORKER row (403
+        `HANDYMAN_VISIT_PRESENCE_ACTOR_NOT_LEAD`); before the VERIFIED
+        arrival there is nothing to mark (409
+        `HANDYMAN_VISIT_PRESENCE_NOT_CAPTURED`). Re-marking is allowed
+        (last-writer-wins under the visit-row lock) and every mark carries
+        the real recorder, path and server timestamp. NOT attendance: no
+        attendance_records row, no payroll or invoice meaning. Body
+        allowlist: `vendorWorkforceBindingId`, `presenceStatus` ONLY —
+        crew role, arrival binding, attribution, client scope and the
+        assisted reason are rejected with 400 `VALIDATION_ERROR`
+        (`presenceStatus` transport enum: PRESENT | ABSENT; PENDING is the
+        server-owned initial state).
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordHandymanVisitPresence"
+      responses:
+        "200":
+          description: The updated snapshot row with full attribution.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanVisitPresenceRow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-service-visits/{visitId}/presence/assisted:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: recordAssistedHandymanVisitPresence
+      x-required-permission: handyman_service_visit.manage
+      summary: Mark Crew Presence (staff-assisted override)
+      description: >
+        CR-HM-BE-06 — the staff-assisted presence override through the
+        established assisted-staff authority
+        `handyman_service_visit.manage` (a field
+        `handyman_work_execution.manage` credential alone can never reach
+        it). Identical snapshot-binding governance as the lead path: the
+        target must be a member of the visit's FROZEN presence snapshot
+        (404 `HANDYMAN_VISIT_PRESENCE_MEMBER_NOT_FOUND` for arbitrary
+        workers), the mark is PRESENT | ABSENT, and the result is
+        attributed as `recordedVia: STAFF_ASSISTED` with the mandatory
+        non-empty `assistedReason` and the REAL recording staff user —
+        never a silent impersonation of the Lead Worker. Staff client data
+        scope is service-enforced (403 `BUILDING_ACCESS_DENIED`); before
+        the VERIFIED arrival there is nothing to mark (409
+        `HANDYMAN_VISIT_PRESENCE_NOT_CAPTURED`). NOT attendance: no HR,
+        payroll or invoice semantics. Body allowlist:
+        `vendorWorkforceBindingId`, `presenceStatus`, `assistedReason`
+        ONLY.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordAssistedHandymanVisitPresence"
+      responses:
+        "200":
+          description: The updated snapshot row with assisted attribution.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanVisitPresenceRow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-service-visits/{visitId}/work-sessions/start:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: startHandymanWorkSession
+      x-required-permission: handyman_work_execution.manage
+      summary: Start Work Session (guarded execution start)
+      description: >
+        CR-HM-BE-06 — the ONE guarded execution-start seam. Preconditions
+        are re-asserted server-side under deterministic row locks: the
+        visit's VERIFIED arrival exists (409
+        `HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED`), the frozen snapshot's
+        Lead Worker is PRESENT (409
+        `HANDYMAN_WORK_SESSION_LEAD_NOT_PRESENT` — helper presence never
+        gates and no minimum-helper staffing exists), the EXACT BE-05
+        execution-readiness assessment passes (409
+        `HANDYMAN_WORK_SESSION_EXECUTION_NOT_READY`), and the actor
+        resolves onto the current composition's Lead Worker (403
+        `HANDYMAN_WORK_SESSION_ACTOR_NOT_LEAD`). Everything authoritative
+        — client, job, work order, vendor work, composition, actor,
+        `startedAt`, status — is resolved backend-side from the visit; the
+        body carries replay/business facts ONLY (`idempotencyKey` required,
+        `occurredAt` optional offline-replay evidence; server timestamps
+        stay authoritative). The convergence is backend-owned and
+        split-brain-free: the composed vendor_work transitions to
+        IN_PROGRESS BEFORE the Work Order does, through the EXISTING
+        BE-15B/BE-08C transition owners (unchanged; no duplicated
+        lifecycle rules here), and the converged statuses are echoed in
+        `execution`. At most ONE OPEN session exists per visit: same-key
+        replays AND fresh legal starts by the same lead while the session
+        is OPEN converge onto the recorded fact (`converged: true`, 200) —
+        a second window is never opened, while a DIFFERENT lead over an
+        open window gets 409 `HANDYMAN_WORK_SESSION_ALREADY_OPEN`;
+        sequential CLOSED→new-OPEN sessions are legal when the
+        preconditions still hold. Key reuse with different facts is 409
+        `HANDYMAN_WORK_SESSION_IDEMPOTENCY_CONFLICT`. An inconsistent
+        execution state (e.g. Work Order already advanced while vendor
+        work has not) FAILS EXPLICITLY with 409
+        `HANDYMAN_WORK_SESSION_EXECUTION_STATE_INCONSISTENT` — never
+        flattened, auto-repaired or converted into another error. Sessions
+        are execution-time facts only: non-financial, never billing,
+        payroll or invoice inputs. Any other body key is 400
+        `VALIDATION_ERROR`.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartHandymanWorkSession"
+      responses:
+        "201":
+          description: >
+            A new OPEN session was established and the execution lifecycle
+            converged (vendor_work before Work Order).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanWorkSessionStartResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "200":
+          description: >
+            Idempotent replay / convergence onto the session established by
+            the same key (`converged: true`; no new fact).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanWorkSessionStartResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-service-visits/{visitId}/work-sessions:
+    parameters:
+      - name: visitId
+        in: path
+        description: Authoritative `handyman_service_visits.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanWorkSessionsByVisit
+      x-required-permission: handyman_work_execution.read
+      summary: Work Session History of one Visit
+      description: >
+        CR-HM-BE-06 — the visit's full work-session history, oldest first,
+        behind the shared field-execution read scope (staff client access,
+        the field actor that started any session of the visit, or the
+        current composition's Lead Worker; 403 `BUILDING_ACCESS_DENIED`
+        otherwise). The read model is the Run-2 public projection ONLY:
+        ids, status (OPEN/CLOSED), server timestamps, the optional claimed
+        `occurredAt` and actor attribution — no worker PII, no GPS, no
+        device data, and no billing/duration-as-money field exists on the
+        model. Unknown visits 404 `HANDYMAN_SERVICE_VISIT_NOT_FOUND`; an
+        empty list is factual before the first start.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Session history, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanWorkSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-work-sessions/{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        description: Authoritative `handyman_work_sessions.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanWorkSessionById
+      x-required-permission: handyman_work_execution.read
+      summary: Get one Work Session
+      description: >
+        CR-HM-BE-06 — one work session by id, behind the shared
+        field-execution read scope (staff client access, the field actor
+        that started it, or the current composition's Lead Worker of the
+        session's visit; 403 `BUILDING_ACCESS_DENIED` otherwise). Same
+        privacy-safe Run-2 public projection as the history read:
+        execution-time facts only — never financial. Unknown sessions 404
+        `HANDYMAN_WORK_SESSION_NOT_FOUND`.
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The session.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanWorkSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-work-sessions/{sessionId}/end:
+    parameters:
+      - name: sessionId
+        in: path
+        description: Authoritative `handyman_work_sessions.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: endHandymanWorkSession
+      x-required-permission: handyman_work_execution.manage
+      summary: End Work Session (replay-safe closure)
+      description: >
+        CR-HM-BE-06 — closes an OPEN session (OPEN → CLOSED) with the
+        server-stamped `endedAt` and the REAL closing actor attributed.
+        End authority is the smallest auditable rule: the actor resolves
+        onto the CURRENT ACTIVE lead membership of EITHER the session's
+        immutable start-context crew (the crew that opened the window can
+        close it even after reassignment) OR the visit's current ACTIVE
+        composition crew (operational continuity); anyone else gets 403
+        `HANDYMAN_WORK_SESSION_ACTOR_NOT_LEAD`. Replay-safe: ending an
+        already-CLOSED session converges (200, `converged: true`) with the
+        recorded closure attribution intact and emits no duplicate event.
+        The command carries NO business body — any key (closure reason,
+        timestamps, attribution, completion/QC/BAST or billing facts) is
+        rejected with 400 `VALIDATION_ERROR`. End NEVER completes
+        financials, the vendor work or the Work Order: execution
+        completion stays owned by BE-15B/BE-08C and the quality/acceptance
+        foundations; a later NEW session may start again while the Run-2
+        preconditions remain legal. Unknown sessions 404
+        `HANDYMAN_WORK_SESSION_NOT_FOUND`; a structurally impossible
+        concurrent-close race fails explicitly with 409
+        `HANDYMAN_WORK_SESSION_STATE_INVALID` (never guessed).
+      tags: [Handyman Field Execution]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The CLOSED session (or idempotent replay convergence).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanWorkSessionEndResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 components:
   securitySchemes:
     bearerAuth:
@@ -76746,3 +77326,251 @@ components:
             - $ref: "#/components/schemas/HandymanServiceVisitSchedule"
           nullable: true
         permitReadiness: { $ref: "#/components/schemas/VendorWorkPermitReadiness" }
+    RecordGpsHandymanVisitArrival:
+      type: object
+      description: >
+        CR-HM-BE-06 RUN 3 — allowed GPS-arrival body ONLY: the
+        client-claimed evidence coordinates (finite numbers; ranges stay
+        domain-owned — an out-of-range claim is preserved as a FAILED
+        attempt), the optional claimed accuracy, the optional offline-replay
+        `occurredAt` claim and the required client idempotency key. The
+        verification result, method, distance, radius, configuration point,
+        client/building/job identities, recorder attribution and every
+        worker/device identity are server-owned and never accepted —
+        supplying any of them, or any other field, is rejected with 400
+        `VALIDATION_ERROR`.
+      required: [latitude, longitude, idempotencyKey]
+      properties:
+        latitude: { type: number, format: double }
+        longitude: { type: number, format: double }
+        accuracyMeters: { type: number, format: double, nullable: true }
+        occurredAt: { type: string, format: date-time, nullable: true }
+        idempotencyKey: { type: string, minLength: 1 }
+    RecordAssistedHandymanVisitArrival:
+      type: object
+      description: >
+        CR-HM-BE-06 RUN 3 — allowed staff-assisted arrival body ONLY: the
+        mandatory non-empty `assistedReason` (the exact Run-1 service wire
+        field), the optional `occurredAt` claim and the required idempotency
+        key. NO coordinate, accuracy, distance, radius, result or
+        verification flag is accepted — ASSISTED arrivals carry no GPS
+        evidence and stay structurally distinguishable from GPS; any other
+        field is rejected with 400 `VALIDATION_ERROR`.
+      required: [assistedReason, idempotencyKey]
+      properties:
+        assistedReason: { type: string, minLength: 1 }
+        occurredAt: { type: string, format: date-time, nullable: true }
+        idempotencyKey: { type: string, minLength: 1 }
+    RecordHandymanVisitPresence:
+      type: object
+      description: >
+        CR-HM-BE-06 RUN 3 — allowed lead presence-mark body ONLY: one
+        FROZEN snapshot row target (`vendorWorkforceBindingId`, UUID
+        transport shape — snapshot membership itself is domain-owned) and
+        the mark (`presenceStatus` transport enum PRESENT | ABSENT; PENDING
+        is the server-owned initial state). Crew role, arrival binding,
+        recording path, attribution, client scope and the assisted reason
+        are never accepted (400 `VALIDATION_ERROR`).
+      required: [vendorWorkforceBindingId, presenceStatus]
+      properties:
+        vendorWorkforceBindingId: { $ref: "#/components/schemas/Uuid" }
+        presenceStatus: { type: string, enum: [PRESENT, ABSENT] }
+    RecordAssistedHandymanVisitPresence:
+      type: object
+      description: >
+        CR-HM-BE-06 RUN 3 — allowed staff-assisted presence-mark body ONLY:
+        the frozen snapshot row target, the PRESENT | ABSENT mark and the
+        mandatory non-empty `assistedReason`. The recorder attribution
+        (`recordedVia: STAFF_ASSISTED` + the real staff user) is derived
+        from the authenticated session and never accepted from the body.
+      required: [vendorWorkforceBindingId, presenceStatus, assistedReason]
+      properties:
+        vendorWorkforceBindingId: { $ref: "#/components/schemas/Uuid" }
+        presenceStatus: { type: string, enum: [PRESENT, ABSENT] }
+        assistedReason: { type: string, minLength: 1 }
+    StartHandymanWorkSession:
+      type: object
+      description: >
+        CR-HM-BE-06 RUN 3 — allowed session-start body ONLY: the required
+        client idempotency key and the optional offline-replay `occurredAt`
+        claim. Client, job, work-order, vendor-work, assignment, crew and
+        session identities, lifecycle statuses, actor attribution,
+        server timestamps and every billing/labor field are server-resolved
+        or out of scope and never accepted (400 `VALIDATION_ERROR`).
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1 }
+        occurredAt: { type: string, format: date-time, nullable: true }
+    HandymanVisitArrival:
+      type: object
+      description: >
+        CR-HM-BE-06 — the privacy-safe public arrival projection (Run-1).
+        Evidence-only facts: the raw claimed coordinates, accuracy, the
+        server-computed distance, the idempotency key and device/evidence
+        data live on server-owned rows and NEVER appear here.
+        `verificationResult` is the SERVER's decision; `failureReason` is
+        the exhaustive server-owned reason on FAILED attempts;
+        `assistedReason` is attributed on ASSISTED facts.
+      required: [id, clientId, handymanServiceVisitId, verificationMethod, verificationResult, receivedAt, occurredAt, buildingConfigurationId, configurationVersionId, assistedReason, failureReason, recordedByUserId, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid" }
+        verificationMethod: { type: string, enum: [GPS, ASSISTED] }
+        verificationResult: { type: string, enum: [VERIFIED, FAILED] }
+        receivedAt: { type: string, format: date-time }
+        occurredAt: { type: string, format: date-time, nullable: true }
+        buildingConfigurationId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        configurationVersionId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        assistedReason: { type: string, nullable: true }
+        failureReason:
+          type: string
+          nullable: true
+          enum:
+            - INVALID_COORDINATES
+            - INVALID_ACCURACY
+            - ARRIVAL_POLICY_UNAVAILABLE
+            - ARRIVAL_POLICY_INVALID
+            - GPS_NOT_ENABLED
+            - GPS_METHOD_NOT_ALLOWED
+            - DISTANCE_EXCEEDED
+            - null
+        recordedByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+    HandymanVisitArrivalCommandResult:
+      type: object
+      description: >
+        CR-HM-BE-06 — arrival command result: the authoritative arrival
+        fact, the crew presence snapshot rows created atomically with the
+        one VERIFIED arrival (empty for FAILED or pre-snapshot facts) and
+        the convergence flag (`converged: true` when NO new attempt row was
+        created because the command replayed onto its own idempotency key
+        or onto the visit's established VERIFIED arrival).
+      required: [arrival, presence, converged]
+      properties:
+        arrival: { $ref: "#/components/schemas/HandymanVisitArrival" }
+        presence:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanVisitPresenceRow" }
+        converged: { type: boolean }
+    HandymanVisitPresenceRow:
+      type: object
+      description: >
+        CR-HM-BE-06 — one FROZEN presence-snapshot row (public projection):
+        binding identity, the frozen crew role, the operational status and
+        full mark attribution (path, real recorder, server timestamps). No
+        worker PII exists on the row and the assisted free-text reason
+        stays off this projection. Presence is an operational fact — NOT HR
+        attendance and never a billing input.
+      required: [id, clientId, handymanServiceVisitId, handymanVisitArrivalId, handymanJobAssignmentId, handymanWorkCrewId, vendorWorkforceBindingId, crewRole, presenceStatus, recordedVia, recordedByUserId, recordedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid" }
+        handymanVisitArrivalId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobAssignmentId: { $ref: "#/components/schemas/Uuid" }
+        handymanWorkCrewId: { $ref: "#/components/schemas/Uuid" }
+        vendorWorkforceBindingId: { $ref: "#/components/schemas/Uuid" }
+        crewRole: { type: string, enum: [LEAD_WORKER, HELPER] }
+        presenceStatus: { type: string, enum: [PENDING, PRESENT, ABSENT] }
+        recordedVia:
+          type: string
+          nullable: true
+          enum: [LEAD, STAFF_ASSISTED, null]
+        recordedByUserId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        recordedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanVisitPresenceReadView:
+      type: object
+      description: >
+        CR-HM-BE-06 — the gated presence read view: the pure
+        execution-start evaluation scalars (snapshot existence, Lead
+        PRESENT gate fact, the snapshot's lead binding id) plus the
+        attributed public snapshot rows. Read-only; decides nothing — the
+        guarded session start remains the sole consumer of presence
+        authority.
+      required: [handymanServiceVisitId, snapshotExists, leadPresent, leadVendorWorkforceBindingId, presence]
+      properties:
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid" }
+        snapshotExists: { type: boolean }
+        leadPresent: { type: boolean }
+        leadVendorWorkforceBindingId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        presence:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanVisitPresenceRow" }
+    HandymanWorkSession:
+      type: object
+      description: >
+        CR-HM-BE-06 — the Run-2 public work-session projection: an
+        execution-time fact with server-authoritative timestamps
+        (`startedAt`/`endedAt`; the optional `occurredAt` is an
+        offline-replay claim only), lifecycle status OPEN/CLOSED and actor
+        attribution. NON-FINANCIAL by construction: no billing rate, labor
+        amount, duration-as-money, GPS or device field exists on the model,
+        and duration never becomes a billable or payroll fact.
+      required: [id, clientId, visitId, vendorWorkId, handymanJobAssignmentId, status, startedAt, startedByUserId, endedAt, endedByUserId, occurredAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        visitId: { $ref: "#/components/schemas/Uuid" }
+        vendorWorkId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobAssignmentId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [OPEN, CLOSED] }
+        startedAt: { type: string, format: date-time }
+        startedByUserId: { $ref: "#/components/schemas/Uuid" }
+        endedAt: { type: string, format: date-time, nullable: true }
+        endedByUserId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        occurredAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanExecutionStartState:
+      type: object
+      description: >
+        CR-HM-BE-06 — the execution-lifecycle statuses as converged by the
+        guarded start seam (vendor_work converged BEFORE the Work Order,
+        through the existing BE-15B/BE-08C transition owners). Read-only
+        echo of authoritative statuses — never an input.
+      required: [vendorWorkStatus, workOrderStatus]
+      properties:
+        vendorWorkStatus: { type: string }
+        workOrderStatus: { type: string }
+    HandymanWorkSessionStartResult:
+      type: object
+      description: >
+        CR-HM-BE-06 — session-start result: the session fact, the
+        convergence flag (`converged: true` on same-key replay — no new
+        fact, no duplicate transition) and the converged execution
+        lifecycle statuses.
+      required: [session, converged, execution]
+      properties:
+        session: { $ref: "#/components/schemas/HandymanWorkSession" }
+        converged: { type: boolean }
+        execution: { $ref: "#/components/schemas/HandymanExecutionStartState" }
+    HandymanWorkSessionEndResult:
+      type: object
+      description: >
+        CR-HM-BE-06 — session-end result: the CLOSED session with the real
+        closing actor attributed, and the convergence flag (`converged:
+        true` when the session was already CLOSED — replay-safe, no
+        duplicate event). End never completes financials, vendor work or
+        the Work Order.
+      required: [session, converged]
+      properties:
+        session: { $ref: "#/components/schemas/HandymanWorkSession" }
+        converged: { type: boolean }

@@ -62,7 +62,10 @@ import type {
   RecordAssistedArrivalInput,
   RecordGpsArrivalInput,
 } from './handyman-visit-arrival.types';
-import { resolveFieldActorActiveBindingIds } from './handyman-visit-lead-chain';
+import {
+  assertHandymanVisitExecutionReadAccess,
+  resolveFieldActorActiveBindingIds,
+} from './handyman-visit-lead-chain';
 import { handymanVisitPresenceRepository } from './handyman-visit-presence.repository';
 import { toPublicHandymanVisitPresence } from './handyman-visit-presence.service';
 
@@ -940,4 +943,31 @@ export async function recordAssistedHandymanVisitArrival(
       failureReason: null,
     },
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Run-3 HTTP surface — gated arrival-history read                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * CR-HM-BE-06 RUN 3 — arrival attempt history of one visit, oldest first.
+ * A THIN READ over the existing repository + public projection: no new
+ * domain rule, no mutation, no event. Access is the shared field-execution
+ * read scope (staff client access, an involved recorder, or the current
+ * composition's Lead Worker). Privacy stays on the Run-1 projection: raw
+ * claimed coordinates, accuracy, computed distance and idempotency keys
+ * live on the evidence rows and are NEVER part of this read model.
+ */
+export async function listHandymanVisitArrivalsByVisit(
+  visitId: string,
+  actorUserId: string,
+): Promise<PublicHandymanVisitArrival[]> {
+  const visit = await requireVisitForArrival(visitId);
+  const rows = await handymanVisitArrivalRepository.listByVisitId(visitId);
+  await assertHandymanVisitExecutionReadAccess(
+    visit,
+    actorUserId,
+    rows.map((row) => row.recordedByUserId),
+  );
+  return rows.map(toPublicHandymanVisitArrival);
 }

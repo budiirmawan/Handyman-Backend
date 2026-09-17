@@ -517,6 +517,10 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   // CR-HM-BE-05 RUN 2 — Handyman service visit scheduling permissions
   { code: 'handyman_service_visit.read', name: 'Read Handyman Service Visits' },
   { code: 'handyman_service_visit.manage', name: 'Manage Handyman Service Visits' },
+  // CR-HM-BE-06 RUN 1 — Handyman field-execution permissions (seeded by
+  // migration 0356; listed here so RBAC test roles can carry them)
+  { code: 'handyman_work_execution.read', name: 'Read Handyman Work Execution' },
+  { code: 'handyman_work_execution.manage', name: 'Manage Handyman Work Execution' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {

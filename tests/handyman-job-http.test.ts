@@ -2254,9 +2254,11 @@ describe('CR-HM-BE-05 RUN 3 — runtime/OpenAPI parity', () => {
       ['get'],
     );
 
-    // No arrival / check-in / session / execution-start style routes exist.
-    for (const path of Object.keys(spec.paths)) {
-      if (!path.includes('handyman')) continue;
+    // No arrival / check-in / session / execution-start style routes exist
+    // ON THE BE-05 SURFACE. (CR-HM-BE-06 RUN 3 legitimately owns those
+    // surfaces under its own tag and its own parity contract; the BE-05
+    // boundary assertion is scoped to the BE-05-documented paths.)
+    for (const path of Object.keys(documented)) {
       for (const forbidden of [
         'arrival',
         'check-in',

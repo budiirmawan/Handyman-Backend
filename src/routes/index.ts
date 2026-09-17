@@ -209,6 +209,7 @@ import { createHandymanWorkCrewRouter } from '../modules/handyman-work-crews/han
 // execution surface).
 import { createHandymanJobRouter } from '../modules/handyman-jobs/handyman-job.routes';
 import { createHandymanServiceVisitRouter } from '../modules/handyman-jobs/handyman-service-visit.routes';
+import { createHandymanFieldExecutionRouter } from '../modules/handyman-jobs/handyman-field-execution.routes';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -693,5 +694,10 @@ export function createApiRouter(): Router {
   // existing owners).
   router.use(createHandymanJobRouter());
   router.use(createHandymanServiceVisitRouter());
+  // CR-HM-BE-06 RUN 3 — Handyman field-execution contract (visit arrival,
+  // crew presence, work session): thin exposure of the Run 1–2 domain
+  // authority; GPS verification, presence snapshots, readiness and every
+  // lifecycle transition stay service-owned. No DELETE/PATCH surface.
+  router.use(createHandymanFieldExecutionRouter());
   return router;
 }

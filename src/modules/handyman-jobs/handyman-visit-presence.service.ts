@@ -3,7 +3,10 @@ import { recordOperationalEvent } from '../operational-events';
 import { loadJobContext } from './handyman-job.service';
 import { handymanServiceVisitNotFoundError } from './handyman-service-visit.errors';
 import { handymanServiceVisitRepository } from './handyman-service-visit.repository';
-import { resolveFieldActorActiveBindingIds } from './handyman-visit-lead-chain';
+import {
+  assertHandymanVisitExecutionReadAccess,
+  resolveFieldActorActiveBindingIds,
+} from './handyman-visit-lead-chain';
 import {
   handymanVisitPresenceActorNotLeadError,
   handymanVisitPresenceAssistedReasonRequiredError,
@@ -15,6 +18,7 @@ import { handymanVisitPresenceRepository } from './handyman-visit-presence.repos
 import {
   isHandymanVisitPresenceMark,
   type HandymanVisitPresenceEvaluation,
+  type HandymanVisitPresenceReadView,
   type HandymanVisitPresenceRecord,
   type PublicHandymanVisitPresence,
   type RecordAssistedPresenceInput,
@@ -288,5 +292,46 @@ export async function evaluateHandymanVisitExecutionPresence(
       crewRole: row.crewRole,
       presenceStatus: row.presenceStatus,
     })),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Run-3 HTTP surface — gated presence read                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * CR-HM-BE-06 RUN 3 — presence snapshot + evaluation of one visit behind
+ * the shared field-execution read scope (staff client access, an involved
+ * recorder, or the current composition's Lead Worker). A THIN READ: it
+ * composes the EXISTING pure evaluation with the EXISTING public projection
+ * — no new domain rule, no mutation, no event, and no gate decision (the
+ * Run-2 execution start remains the sole consumer of presence authority).
+ * Before the one VERIFIED arrival the snapshot does not exist yet: the view
+ * reports `snapshotExists: false` with an empty presence list (a factual
+ * read, never an error).
+ */
+export async function getHandymanVisitExecutionPresence(
+  visitId: string,
+  actorUserId: string,
+): Promise<HandymanVisitPresenceReadView> {
+  const visit = await handymanServiceVisitRepository.findVisitById(visitId);
+  if (!visit) {
+    throw handymanServiceVisitNotFoundError();
+  }
+  const rows = await handymanVisitPresenceRepository.listByVisitId(visitId);
+  await assertHandymanVisitExecutionReadAccess(
+    visit,
+    actorUserId,
+    rows
+      .map((row) => row.recordedByUserId)
+      .filter((userId): userId is string => userId !== null),
+  );
+  const evaluation = await evaluateHandymanVisitExecutionPresence(visitId);
+  return {
+    handymanServiceVisitId: evaluation.handymanServiceVisitId,
+    snapshotExists: evaluation.snapshotExists,
+    leadPresent: evaluation.leadPresent,
+    leadVendorWorkforceBindingId: evaluation.leadVendorWorkforceBindingId,
+    presence: rows.map(toPublicHandymanVisitPresence),
   };
 }

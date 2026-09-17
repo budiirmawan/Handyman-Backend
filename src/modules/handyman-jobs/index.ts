@@ -26,3 +26,6 @@ export * from './handyman-work-session.types';
 export * from './handyman-work-session.errors';
 export * from './handyman-work-session.repository';
 export * from './handyman-work-session.service';
+export * from './handyman-field-execution.validation';
+export * from './handyman-field-execution.controller';
+export * from './handyman-field-execution.routes';
