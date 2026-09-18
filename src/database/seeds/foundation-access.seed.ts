@@ -590,6 +590,10 @@ export const FOUNDATION_PERMISSIONS: readonly {
     code: 'handyman_service_visit.manage',
     name: 'Manage Handyman Service Visits',
   },
+  // CR-HM-BE-07 RUN 3 — material operations HTTP contract.
+  { code: 'handyman_material.read', name: 'Read Handyman Material Operations' },
+  { code: 'handyman_material.manage', name: 'Manage Handyman Material Operations' },
+  { code: 'handyman_material.approve', name: 'Record Handyman Material Approval Decisions' },
 ];
 
 /**

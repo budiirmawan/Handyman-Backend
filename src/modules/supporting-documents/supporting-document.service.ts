@@ -171,6 +171,40 @@ async function resolveParentContext(
       const row = result.rows[0];
       return row ? { clientId: row.clientId, buildingId: row.buildingId, contextType: 'TENANT' } : null;
     }
+    case 'HANDYMAN_MATERIAL_DEMAND':
+    case 'HANDYMAN_MATERIAL_ADDENDUM':
+    case 'HANDYMAN_MATERIAL_APPROVAL':
+    case 'HANDYMAN_MATERIAL_ISSUE':
+    case 'HANDYMAN_MATERIAL_USAGE':
+    case 'HANDYMAN_MATERIAL_RETURN': {
+      // CR-HM-BE-07 RUN 3 — material operations evidence binds through the
+      // existing supporting-documents authority (migration 0360 parent-type
+      // extension). Parent existence + same-client/building scoping is
+      // proven here; actor access is asserted by the caller flow; the
+      // existing client/building/context guards below apply unchanged.
+      // Evidence is INTERNAL operational support and never mutates CR07
+      // lifecycle, commercial, or inventory state.
+      const table =
+        parentType === 'HANDYMAN_MATERIAL_DEMAND'
+          ? 'handyman_material_demands'
+          : parentType === 'HANDYMAN_MATERIAL_ADDENDUM'
+            ? 'handyman_material_commercial_addenda'
+            : parentType === 'HANDYMAN_MATERIAL_APPROVAL'
+              ? 'handyman_material_approvals'
+              : parentType === 'HANDYMAN_MATERIAL_ISSUE'
+                ? 'handyman_material_controlled_issues'
+                : parentType === 'HANDYMAN_MATERIAL_USAGE'
+                  ? 'handyman_material_actual_usages'
+                  : 'handyman_material_returns';
+      const result = await getPool().query<{ clientId: string; buildingId: string }>(
+        `SELECT t.client_id AS "clientId", t.building_id AS "buildingId"
+           FROM ${table} t
+          WHERE t.id = $1`,
+        [parentId],
+      );
+      const row = result.rows[0];
+      return row ? { clientId: row.clientId, buildingId: row.buildingId, contextType: 'INTERNAL' } : null;
+    }
     default:
       return null;
   }

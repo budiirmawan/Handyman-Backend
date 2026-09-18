@@ -521,6 +521,10 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   // migration 0356; listed here so RBAC test roles can carry them)
   { code: 'handyman_work_execution.read', name: 'Read Handyman Work Execution' },
   { code: 'handyman_work_execution.manage', name: 'Manage Handyman Work Execution' },
+  // CR-HM-BE-07 RUN 3 — material operations HTTP contract.
+  { code: 'handyman_material.read', name: 'Read Handyman Material Operations' },
+  { code: 'handyman_material.manage', name: 'Manage Handyman Material Operations' },
+  { code: 'handyman_material.approve', name: 'Record Handyman Material Approval Decisions' },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {

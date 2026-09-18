@@ -2257,11 +2257,14 @@ tags:
       expires anything. There is no bucket, object key, size, mime type, checksum,
       page count or document body anywhere in this contract.
 
-      TARGETS ARE A CLOSED SET: `parentType` accepts exactly the nine values the
+      TARGETS ARE A CLOSED SET: `parentType` accepts exactly the sixteen values the
       runtime enumerates and nothing else - `WORK_COMPLETION`, `BAST`, `HANDOVER`,
-      `SIGN_OFF`, `TENANT_COMPANY`, `VENDOR`, `DOCUMENT`, `RFQ` and
-      `QUOTATION_REVISION` - each resolved by `parentId` against that target's own
-      row. There is therefore no polymorphic "attach to any entity" model, no
+      `SIGN_OFF`, `TENANT_COMPANY`, `VENDOR`, `DOCUMENT`, `RFQ`,
+      `QUOTATION_REVISION`, `HANDYMAN_QUOTATION_APPROVAL`,
+      `HANDYMAN_MATERIAL_DEMAND`, `HANDYMAN_MATERIAL_ADDENDUM`,
+      `HANDYMAN_MATERIAL_APPROVAL`, `HANDYMAN_MATERIAL_ISSUE`,
+      `HANDYMAN_MATERIAL_USAGE` and `HANDYMAN_MATERIAL_RETURN` - each resolved by
+      `parentId` against that target's own row. There is therefore no polymorphic "attach to any entity" model, no
       free-form target type, no `targetType` string, no array or multi-parent form,
       and no reverse read path: a target's own routes never list its supporting
       documents, and no response here returns the parent object itself.
@@ -47950,6 +47953,1291 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs/{jobId}/material-demands:
+    parameters:
+      - name: jobId
+        in: path
+        description: Authoritative `handyman_jobs.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanMaterialDemands
+      x-required-permission: handyman_material.read
+      summary: List job material demands
+      description: >
+        CR-HM-BE-07 — privacy-safe job-scoped material-demand history: every
+        demand of the job whatever its source lane (quotation-included,
+        customer-approved addendum, internal operation, field-discovered).
+        Read access stays service-owned (staff building scope, the direct
+        customer relation, or the narrow field-lead operational allowance).
+        No idempotency keys, fingerprints, customer/worker PII or pricing
+        provenance leaves the server.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The job material demands, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanMaterialDemand" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-material-demands/{demandId}:
+    parameters:
+      - name: demandId
+        in: path
+        description: Authoritative `handyman_material_demands.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanMaterialDemand
+      x-required-permission: handyman_material.read
+      summary: Get one material demand
+      description: >
+        CR-HM-BE-07 — privacy-safe single material-demand read. Unknown ids
+        404 `HANDYMAN_MATERIAL_DEMAND_NOT_FOUND`; actors outside the job
+        scope get 403. No idempotency keys, fingerprints or PII is exposed.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The material demand.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemand" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-material-demands/{demandId}/fulfillment:
+    parameters:
+      - name: demandId
+        in: path
+        description: Authoritative `handyman_material_demands.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanMaterialDemandFulfillment
+      x-required-permission: handyman_material.read
+      summary: Get derived demand fulfillment
+      description: >
+        CR-HM-BE-07 — service-backed DERIVED fulfillment projection for one
+        demand: demand quantity, ACTIVE reservation remainder, gross
+        controlled-issue quantity, cumulative actual use, cumulative unused
+        return, remaining demand and the derived label
+        (`WAITING_FOR_MATERIAL` / `PARTIALLY_FULFILLED` / `FULFILLED`).
+        Computed at read time from authoritative facts; nothing is
+        persisted, no second mutable lifecycle exists, and the authoritative
+        caps stay Run-2 owned. Unknown ids 404; out-of-scope actors 403.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The derived fulfillment projection.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandFulfillment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-jobs/{jobId}/material-demands/quotation-included:
+    parameters:
+      - name: jobId
+        in: path
+        description: Authoritative `handyman_jobs.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: createQuotationIncludedMaterialDemand
+      x-required-permission: handyman_material.manage
+      summary: Create quotation-included demand
+      description: >
+        CR-HM-BE-07 — creates a QUOTATION_INCLUDED material demand from one
+        approved quotation MATERIAL line. The service re-proves the
+        quotation/addendum commercial basis, derives client, building,
+        request, item, UOM, description and quantity server-side, and needs
+        NO second material approval. Same key + same facts replays onto the
+        recorded demand (200, `replayed: true`); same key + changed facts
+        is 409 `HANDYMAN_MATERIAL_DEMAND_IDEMPOTENCY_CONFLICT`. Any other
+        body key — identity, pricing, balances, timestamps — is 400
+        `VALIDATION_ERROR`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuotationIncludedMaterialDemand"
+      responses:
+        "201":
+          description: "The recorded demand (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "200":
+          description: "Idempotent replay onto the demand recorded by the same key (`replayed: true`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs/{jobId}/material-demands/operational:
+    parameters:
+      - name: jobId
+        in: path
+        description: Authoritative `handyman_jobs.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: createOperationalMaterialDemand
+      x-required-permission: handyman_material.manage
+      summary: Create operational demand
+      description: >
+        CR-HM-BE-07 — creates a NON_CHARGEABLE_OPERATIONAL demand
+        (INTERNAL_OPERATION, or FIELD_DISCOVERED with a visit and the
+        service-verified current Lead Worker — no crew identity is
+        accepted). Quantity is a positive decimal with at most 4 fraction
+        digits. Same key + same facts replays (200, `replayed: true`);
+        same key + changed facts is 409
+        `HANDYMAN_MATERIAL_DEMAND_IDEMPOTENCY_CONFLICT`. Any other body key
+        is 400 `VALIDATION_ERROR`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOperationalMaterialDemand"
+      responses:
+        "201":
+          description: "The recorded demand (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "200":
+          description: "Idempotent replay onto the demand recorded by the same key (`replayed: true`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs/{jobId}/material-demands/customer-supplied:
+    parameters:
+      - name: jobId
+        in: path
+        description: Authoritative `handyman_jobs.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: createCustomerSuppliedMaterialDemand
+      x-required-permission: handyman_material.manage
+      summary: Create customer-supplied demand
+      description: >
+        CR-HM-BE-07 — creates a CUSTOMER_SUPPLIED demand; the supply source
+        is pinned server-side (no `supplySource` is accepted) and the item
+        master link is optional. Customer-supplied scope never touches
+        provider reservations, stock movements or warehouses. Replay and
+        conflict semantics match the operational lane. Any other body key
+        is 400 `VALIDATION_ERROR`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerSuppliedMaterialDemand"
+      responses:
+        "201":
+          description: "The recorded demand (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "200":
+          description: "Idempotent replay onto the demand recorded by the same key (`replayed: true`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-demands/{demandId}/cancel:
+    parameters:
+      - name: demandId
+        in: path
+        description: Authoritative `handyman_material_demands.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: cancelHandymanMaterialDemand
+      x-required-permission: handyman_material.manage
+      summary: Cancel material demand
+      description: >
+        CR-HM-BE-07 — cancels an ACTIVE demand with a closed reason code.
+        A demand with ACTIVE inventory reservations cannot be cancelled
+        (409 `HANDYMAN_MATERIAL_DEMAND_STATE_INVALID`): release or cancel
+        the allocation through inventory first. Same key + same facts
+        replays (200, `replayed: true`); same key + changed facts is 409
+        idempotency conflict. Cancellation is a transition of the existing
+        fact and always answers 200.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelHandymanMaterial"
+      responses:
+        "200":
+          description: The cancelled demand (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandCancellationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-demands/{demandId}/supersede:
+    parameters:
+      - name: demandId
+        in: path
+        description: The ACTIVE non-chargeable predecessor demand id.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: supersedeHandymanMaterialDemand
+      x-required-permission: handyman_material.manage
+      summary: Supersede demand with new scope
+      description: >
+        CR-HM-BE-07 — thin transport over the existing operational-demand
+        authority: the predecessor comes from the route, its job is
+        resolved server-side, and the body carries ONLY the successor
+        scope facts (a body `supersedesDemandId` is rejected). Only an
+        ACTIVE non-chargeable demand of the job may be superseded, and
+        never while it holds ACTIVE inventory reservations (409
+        `HANDYMAN_MATERIAL_DEMAND_STATE_INVALID`). Answers 201 for the new
+        successor, 200 with `replayed: true` on same-key replay.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOperationalMaterialDemand"
+      responses:
+        "201":
+          description: "The recorded successor demand (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "200":
+          description: "Idempotent replay onto the successor recorded by the same key (`replayed: true`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialDemandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs/{jobId}/material-addenda:
+    parameters:
+      - name: jobId
+        in: path
+        description: Authoritative `handyman_jobs.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanMaterialAddenda
+      x-required-permission: handyman_material.read
+      summary: List job material addenda
+      description: >
+        CR-HM-BE-07 — privacy-safe job-scoped additional-chargeable-scope
+        history (staff/customer-only read; field leads are excluded from
+        commercial amounts by the service). An addendum is governed scope,
+        never a final invoice.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The job material addenda, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanMaterialCommercialAddendum" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createHandymanMaterialAddendum
+      x-required-permission: handyman_material.manage
+      summary: Create material addendum
+      description: >
+        CR-HM-BE-07 — creates an ADDITIONAL_CUSTOMER_CHARGEABLE scope with
+        its PENDING customer approval. No caller price, currency, client,
+        request, customer or quotation fact is accepted: provider-stock
+        pricing resolves only through the existing price-catalog lookup,
+        customer-supplied scope carries no provider charge, and an
+        optional `supersedesAddendumId` follows the governed supersession
+        path. Same key + same facts replays (200, `replayed: true`); same
+        key + changed facts is 409 idempotency conflict. Any other body
+        key is 400 `VALIDATION_ERROR`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanMaterialAddendum"
+      responses:
+        "201":
+          description: "The recorded addendum with its PENDING approval (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialAddendumResult" }
+        "200":
+          description: "Idempotent replay onto the addendum recorded by the same key (`replayed: true`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialAddendumResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-addenda/{addendumId}:
+    parameters:
+      - name: addendumId
+        in: path
+        description: Authoritative `handyman_material_commercial_addenda.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanMaterialAddendum
+      x-required-permission: handyman_material.read
+      summary: Get one material addendum
+      description: >
+        CR-HM-BE-07 — privacy-safe single addendum read (staff/customer
+        only). Unknown ids 404
+        `HANDYMAN_MATERIAL_ADDENDUM_NOT_FOUND`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The material addendum.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialCommercialAddendum" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-material-addenda/{addendumId}/cancel:
+    parameters:
+      - name: addendumId
+        in: path
+        description: Authoritative `handyman_material_commercial_addenda.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: cancelHandymanMaterialAddendum
+      x-required-permission: handyman_material.manage
+      summary: Cancel material addendum
+      description: >
+        CR-HM-BE-07 — cancels a PENDING addendum (and its PENDING approval)
+        with a closed reason code. Cancellation is a transition of the
+        existing facts and always answers 200; same key + same facts
+        replays, same key + changed facts is 409 idempotency conflict.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelHandymanMaterial"
+      responses:
+        "200":
+          description: The cancelled addendum with its cancelled approval (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialAddendumCancellationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-jobs/{jobId}/material-approvals:
+    parameters:
+      - name: jobId
+        in: path
+        description: Authoritative `handyman_jobs.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanMaterialApprovals
+      x-required-permission: handyman_material.read
+      summary: List job material approvals
+      description: >
+        CR-HM-BE-07 — privacy-safe job-scoped approval history
+        (staff/customer-only read; approved-for names and assisted notes
+        never leave the server).
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The job material approvals, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanMaterialApproval" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-material-approvals/{approvalId}:
+    parameters:
+      - name: approvalId
+        in: path
+        description: Authoritative `handyman_material_approvals.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanMaterialApproval
+      x-required-permission: handyman_material.read
+      summary: Get one material approval
+      description: >
+        CR-HM-BE-07 — privacy-safe single approval read. Unknown ids 404
+        `HANDYMAN_MATERIAL_APPROVAL_NOT_FOUND`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The material approval.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialApproval" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-material-approvals/{approvalId}/decision/in-app:
+    parameters:
+      - name: approvalId
+        in: path
+        description: Authoritative `handyman_material_approvals.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: decideHandymanMaterialApprovalInApp
+      summary: Record direct customer decision
+      description: >
+        CR-HM-BE-07 — DIRECT customer decision with authentication ONLY
+        (deliberately no manage/approve permission code — the deciding
+        party is the authorized tenant PIC/customer, resolved and verified
+        exclusively by the Run-1 service through governed identity/context
+        links; a non-customer actor fails closed). Approved-for is the
+        derived customer party; recorded-by stays null. Body allowlist is
+        `decision` + optional `notes` only — no approver identity,
+        customer id, or shortcut is accepted. An APPROVED additional-charge
+        scope converges its demand; decisions are transitions and always
+        answer 200. No anonymous/public secure-link surface exists.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideHandymanMaterialApprovalInApp"
+      responses:
+        "200":
+          description: The decided approval with its converged addendum/demand (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialApprovalDecisionResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-approvals/{approvalId}/decision/assisted:
+    parameters:
+      - name: approvalId
+        in: path
+        description: Authoritative `handyman_material_approvals.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: decideHandymanMaterialApprovalAssisted
+      x-required-permission: handyman_material.approve
+      summary: Record assisted customer decision
+      description: >
+        CR-HM-BE-07 — ASSISTED decision recorded by authorized staff: the
+        wire selects ONLY the customer class (`approvedFor.type`), every
+        customer/tenant identity is derived server-side from the approval's
+        job/request context, `notes` is mandatory provenance, and the
+        recorder is attributed as recorded-by — staff never becomes the
+        customer approver and no identity shortcut is accepted. Decisions
+        are transitions and always answer 200.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideHandymanMaterialApprovalAssisted"
+      responses:
+        "200":
+          description: The decided approval with its converged addendum/demand (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialApprovalDecisionResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-demands/{demandId}/reservations:
+    parameters:
+      - name: demandId
+        in: path
+        description: Authoritative `handyman_material_demands.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanMaterialReservations
+      x-required-permission: handyman_material.read
+      summary: List demand reservations
+      description: >
+        CR-HM-BE-07 — demand-scoped reservation history over the existing
+        inventory reservation authority (typed Handyman source only; no
+        procurement rows). Oldest first.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The demand reservations, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanMaterialReservation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: reserveHandymanMaterial
+      x-required-permission: handyman_material.manage + inventory_stock.manage
+      summary: Reserve provider stock
+      description: >
+        CR-HM-BE-07 — reserves an ACTIVE approved PROVIDER_STOCK demand
+        through the existing balance authority (item/UOM derived from the
+        demand; warehouse link asserted and scope-checked; demand cap and
+        available stock enforced by Run-2). CUSTOMER_SUPPLIED demands are
+        rejected (409
+        `HANDYMAN_MATERIAL_INVENTORY_DEMAND_NOT_EXECUTABLE`).
+        Over-capacity is 409
+        `HANDYMAN_MATERIAL_INVENTORY_DEMAND_EXCEEDED`. Same key + same
+        facts replays (200, `replayed: true`); same key + changed facts
+        is 409 idempotency conflict. No generic inventory reservation API
+        is exposed; any other body key is 400 `VALIDATION_ERROR`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReserveHandymanMaterial"
+      responses:
+        "201":
+          description: "The recorded reservation (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialReservationResult" }
+        "200":
+          description: "Idempotent replay onto the reservation recorded by the same key (`replayed: true`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialReservationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-reservations/{reservationId}/release:
+    parameters:
+      - name: reservationId
+        in: path
+        description: Authoritative `inventory_material_reservations.id` (Handyman source).
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: releaseHandymanMaterialReservation
+      x-required-permission: handyman_material.manage + inventory_stock.manage
+      summary: Release reservation remainder
+      description: >
+        CR-HM-BE-07 — releases the unconsumed remainder of an ACTIVE
+        Handyman reservation back to available stock (terminal RELEASED;
+        replay-safe through the header key). Only ACTIVE reservations
+        transition (409
+        `HANDYMAN_MATERIAL_INVENTORY_RESERVATION_NOT_ACTIVE`
+        otherwise). The command carries NO business body — any key is 400
+        `VALIDATION_ERROR` — and always answers 200.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        "200":
+          description: The RELEASED reservation (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialReservationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-reservations/{reservationId}/cancel:
+    parameters:
+      - name: reservationId
+        in: path
+        description: Authoritative `inventory_material_reservations.id` (Handyman source).
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    post:
+      operationId: cancelHandymanMaterialReservation
+      x-required-permission: handyman_material.manage + inventory_stock.manage
+      summary: Cancel reservation remainder
+      description: >
+        CR-HM-BE-07 — cancels the unconsumed remainder of an ACTIVE
+        Handyman reservation (terminal CANCELLED; replay-safe through the
+        header key). Only ACTIVE reservations transition. The command
+        carries NO business body — any key is 400 `VALIDATION_ERROR` —
+        and always answers 200.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      responses:
+        "200":
+          description: The CANCELLED reservation (or idempotent replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialReservationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-demands/{demandId}/issues:
+    parameters:
+      - name: demandId
+        in: path
+        description: Authoritative `handyman_material_demands.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanMaterialIssues
+      x-required-permission: handyman_material.read
+      summary: List demand controlled issues
+      description: >
+        CR-HM-BE-07 — demand-scoped controlled-issue history (each bound to
+        exactly one inventory STOCK_OUT). Oldest first.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The demand controlled issues, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanMaterialControlledIssue" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: issueHandymanMaterial
+      x-required-permission: handyman_material.manage + inventory_stock.manage
+      summary: Record controlled issue
+      description: >
+        CR-HM-BE-07 — records one controlled provider-stock hand-off: the
+        issue binds demand + job + Work Order + warehouse/item/UOM and
+        exactly one inventory STOCK_OUT (reservation-backed when
+        `inventoryMaterialReservationId` is supplied, consuming that
+        allocation; unreserved otherwise within unallocated capacity). A
+        visit/session may be asserted for execution context but is
+        OPTIONAL — pre-staged issue without a session is legitimate and
+        nothing is fabricated; supplied context must cohere with the job
+        (409 `HANDYMAN_MATERIAL_INVENTORY_EXECUTION_CONTEXT_INVALID`).
+        Over-capacity is 409
+        `HANDYMAN_MATERIAL_INVENTORY_ISSUE_EXCEEDED`; allocation
+        over-consumption is 409
+        `HANDYMAN_MATERIAL_INVENTORY_RESERVATION_ALLOCATION_EXCEEDED`;
+        incompatible item UOM is 400
+        `HANDYMAN_MATERIAL_INVENTORY_UOM_INCOMPATIBLE` (the transport
+        normalizes the fail-closed movement-proof signature to this
+        governed error; raw database errors never surface). Same key +
+        same facts replays (200, `replayed: true`) without a second
+        STOCK_OUT; same key + changed facts is 409 idempotency conflict.
+        Any other body key — balances, movement ids, server timestamps —
+        is 400 `VALIDATION_ERROR`. Nothing here transitions visits,
+        sessions, arrivals, presence, vendor work or Work Orders.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueHandymanMaterial"
+      responses:
+        "201":
+          description: "The recorded controlled issue (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialIssueResult" }
+        "200":
+          description: "Idempotent replay onto the issue recorded by the same key (`replayed: true`; no second STOCK_OUT)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialIssueResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-issues/{issueId}:
+    parameters:
+      - name: issueId
+        in: path
+        description: Authoritative `handyman_material_controlled_issues.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: getHandymanMaterialIssue
+      x-required-permission: handyman_material.read
+      summary: Get one controlled issue
+      description: >
+        CR-HM-BE-07 — single controlled-issue read. Unknown ids 404
+        `HANDYMAN_MATERIAL_INVENTORY_ISSUE_NOT_FOUND`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The controlled issue.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialControlledIssue" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman-material-demands/{demandId}/usages:
+    parameters:
+      - name: demandId
+        in: path
+        description: Authoritative `handyman_material_demands.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanMaterialUsages
+      x-required-permission: handyman_material.read
+      summary: List demand actual usages
+      description: >
+        CR-HM-BE-07 — demand-scoped append-only actual-use/install history
+        (provider use cites its originating issue; customer-supplied use
+        cites none). Oldest first.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The demand actual usages, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanMaterialActualUsage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: recordHandymanMaterialUsage
+      x-required-permission: handyman_material.manage
+      summary: Record actual usage
+      description: >
+        CR-HM-BE-07 — records one append-only USED/INSTALLED field fact.
+        Provider-stock use MUST cite its originating controlled issue and
+        is capped together with returns against that issue (409
+        `HANDYMAN_MATERIAL_INVENTORY_ACTUAL_USE_EXCEEDED`); customer-
+        supplied use MUST NOT cite an issue, posts no stock movement,
+        needs no warehouse, and is capped against its demand. Actual use
+        never posts stock and never transitions execution state; the actor
+        is attributed server-side. Same key + same facts replays (200,
+        `replayed: true`); same key + changed facts is 409 idempotency
+        conflict. Any other body key is 400 `VALIDATION_ERROR`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordHandymanMaterialUsage"
+      responses:
+        "201":
+          description: "The recorded actual usage (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialUsageResult" }
+        "200":
+          description: "Idempotent replay onto the usage recorded by the same key (`replayed: true`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialUsageResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman-material-issues/{issueId}/returns:
+    parameters:
+      - name: issueId
+        in: path
+        description: Authoritative `handyman_material_controlled_issues.id`.
+        required: true
+        schema: { $ref: "#/components/schemas/Uuid" }
+    get:
+      operationId: listHandymanMaterialReturns
+      x-required-permission: handyman_material.read
+      summary: List issue returns
+      description: >
+        CR-HM-BE-07 — issue-scoped unused-return history (each bound to
+        exactly one inventory STOCK_IN). Oldest first.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The issue returns, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanMaterialReturn" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: returnHandymanMaterial
+      x-required-permission: handyman_material.manage + inventory_stock.manage
+      summary: Return unused stock
+      description: >
+        CR-HM-BE-07 — returns unused provider stock to the originating
+        issue's warehouse through exactly one inventory STOCK_IN (routine
+        return only — no stock-adjustment path). Capped together with
+        actual use against the originating issue, so already-used
+        quantity is unreturnable (409
+        `HANDYMAN_MATERIAL_INVENTORY_RETURN_EXCEEDED`);
+        customer-supplied scope can never enter provider inventory here.
+        Same key + same facts replays (200, `replayed: true`) without a
+        second STOCK_IN; same key + changed facts is 409 idempotency
+        conflict. Any other body key — movement ids, warehouse overrides,
+        server timestamps — is 400 `VALIDATION_ERROR`.
+      tags: [Handyman Material Operations]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >
+            Mandatory client request key (1-200 chars). Forwarded to the
+            authoritative service; same key plus the same canonical facts
+            replays, same key plus different facts conflicts.
+          schema:
+            type: string
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReturnHandymanMaterial"
+      responses:
+        "201":
+          description: "The recorded return (`replayed: false`)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialReturnResult" }
+        "200":
+          description: "Idempotent replay onto the return recorded by the same key (`replayed: true`; no second STOCK_IN)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialReturnResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 components:
   securitySchemes:
     bearerAuth:
@@ -75981,14 +77269,23 @@ components:
         - DOCUMENT
         - RFQ
         - QUOTATION_REVISION
+        - HANDYMAN_QUOTATION_APPROVAL
+        - HANDYMAN_MATERIAL_DEMAND
+        - HANDYMAN_MATERIAL_ADDENDUM
+        - HANDYMAN_MATERIAL_APPROVAL
+        - HANDYMAN_MATERIAL_ISSUE
+        - HANDYMAN_MATERIAL_USAGE
+        - HANDYMAN_MATERIAL_RETURN
       description: >
         The closed set of targets a Supporting Document may be bound to
         (`SUPPORTING_PARENT_TYPES`), exactly as the runtime enumerates it - input is
         trimmed and upper-cased before the check, and anything else is 400
-        `VALIDATION_ERROR` with a detail naming these nine. Each value selects which
+        `VALIDATION_ERROR` with a detail naming these sixteen. Each value selects which
         store `parentId` is resolved against: the Work Completion, BAST, Handover and
         Acceptance Sign-Off records, a Tenant Company, a Vendor, a generic
-        `documents` row, an RFQ row and a vendor quotation revision row
+        `documents` row, an RFQ row, a vendor quotation revision row, a Handyman
+        quotation approval row, and the six CR-HM-BE-07 material operations rows
+        (demand, addendum, approval, controlled issue, actual usage, return)
         respectively. It is a REFERENCE KIND, nothing more: it is not a document
         type code, not a workflow, stage or owner, not a permission and not a
         capability - naming a target never reads, writes, approves, verifies or
@@ -77574,3 +78871,437 @@ components:
       properties:
         session: { $ref: "#/components/schemas/HandymanWorkSession" }
         converged: { type: boolean }
+    HandymanMaterialSupplySource:
+      type: string
+      enum: [PROVIDER_STOCK, CUSTOMER_SUPPLIED]
+      description: CR-HM-BE-07 — where the physical material comes from.
+    HandymanMaterialCommercialBasis:
+      type: string
+      enum: [QUOTATION_INCLUDED, ADDITIONAL_CUSTOMER_CHARGEABLE, NON_CHARGEABLE_OPERATIONAL]
+      description: CR-HM-BE-07 — the commercial authority behind the demand.
+    HandymanMaterialDemandSource:
+      type: string
+      enum: [QUOTATION_INCLUDED, CUSTOMER_APPROVED_ADDENDUM, INTERNAL_OPERATION, FIELD_DISCOVERED]
+      description: CR-HM-BE-07 — demand source context (read fact).
+    HandymanMaterialOperationalSourceContext:
+      type: string
+      enum: [INTERNAL_OPERATION, FIELD_DISCOVERED]
+      description: CR-HM-BE-07 — the only source contexts accepted on the operational lanes.
+    HandymanMaterialDemandStatus:
+      type: string
+      enum: [ACTIVE, SUPERSEDED, CANCELLED]
+      description: CR-HM-BE-07 — server-managed demand lifecycle (never accepted).
+    HandymanMaterialAddendumStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, SUPERSEDED, CANCELLED]
+      description: CR-HM-BE-07 — server-managed addendum lifecycle (never accepted).
+    HandymanMaterialApprovalStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+      description: CR-HM-BE-07 — server-managed approval lifecycle (never accepted).
+    HandymanMaterialApprovalMethod:
+      type: string
+      enum: [IN_APP, ASSISTED]
+      description: CR-HM-BE-07 — decision channel (pinned by the route).
+    HandymanMaterialApprovalDecision:
+      type: string
+      enum: [APPROVED, REJECTED]
+      description: CR-HM-BE-07 — customer decision value.
+    HandymanMaterialApprovedForType:
+      type: string
+      enum: [TENANT_COMPANY, TENANT_PIC, CUSTOMER]
+      description: CR-HM-BE-07 — approved-for customer class (assisted wire selector; identities derived server-side).
+    HandymanMaterialCancellationReason:
+      type: string
+      enum: [CUSTOMER_WITHDREW, SCOPE_NO_LONGER_REQUIRED, OTHER_OPERATIONAL]
+      description: CR-HM-BE-07 — closed cancellation reason codes.
+    HandymanMaterialUsageKind:
+      type: string
+      enum: [USED, INSTALLED]
+      description: CR-HM-BE-07 — actual-use fact kind (defaults to USED).
+    HandymanMaterialFulfillmentStatus:
+      type: string
+      enum: [WAITING_FOR_MATERIAL, PARTIALLY_FULFILLED, FULFILLED]
+      description: CR-HM-BE-07 — derived fulfillment label (computed at read time, never persisted).
+    HandymanMaterialDemand:
+      type: object
+      description: CR-HM-BE-07 — privacy-safe material demand (no keys, fingerprints, names or PII).
+      required: [id, clientId, handymanJobId, handymanRequestId, buildingId, supplySource, commercialBasis, sourceContext, uomId, description, quantity, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        supplySource: { $ref: "#/components/schemas/HandymanMaterialSupplySource" }
+        commercialBasis: { $ref: "#/components/schemas/HandymanMaterialCommercialBasis" }
+        sourceContext: { $ref: "#/components/schemas/HandymanMaterialDemandSource" }
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        description: { type: string }
+        quantity: { type: number, description: Approved demand quantity (positive decimal, 4dp). }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        quotationRevisionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanQuotationLineId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        commercialAddendumId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanMaterialApprovalId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        status: { $ref: "#/components/schemas/HandymanMaterialDemandStatus" }
+        supersedesDemandId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancelledByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        cancellationReason: { $ref: "#/components/schemas/HandymanMaterialCancellationReason", nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanMaterialCommercialAddendum:
+      type: object
+      description: CR-HM-BE-07 — governed additional-chargeable scope; price is provenance-backed or null, never a final invoice.
+      required: [id, clientId, handymanJobId, handymanRequestId, buildingId, supplySource, commercialBasis, uomId, description, quantity, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        supplySource: { $ref: "#/components/schemas/HandymanMaterialSupplySource" }
+        commercialBasis: { type: string, enum: [ADDITIONAL_CUSTOMER_CHARGEABLE] }
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        description: { type: string }
+        quantity: { type: number }
+        currency: { type: string, nullable: true }
+        unitCommercialAmount: { type: number, nullable: true }
+        totalCommercialAmount: { type: number, nullable: true }
+        referencePriceCatalogEntryId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        referenceScopeTier: { type: string, nullable: true }
+        referenceAsOf: { type: string, format: date-time, nullable: true }
+        status: { $ref: "#/components/schemas/HandymanMaterialAddendumStatus" }
+        supersedesAddendumId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancelledByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        cancellationReason: { $ref: "#/components/schemas/HandymanMaterialCancellationReason", nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanMaterialApproval:
+      type: object
+      description: CR-HM-BE-07 — approval read; approved-for names and assisted notes are deliberately omitted.
+      required: [id, clientId, handymanJobId, handymanRequestId, buildingId, commercialAddendumId, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        commercialAddendumId: { $ref: "#/components/schemas/Uuid" }
+        status: { $ref: "#/components/schemas/HandymanMaterialApprovalStatus" }
+        method: { $ref: "#/components/schemas/HandymanMaterialApprovalMethod", nullable: true }
+        approvedForType: { $ref: "#/components/schemas/HandymanMaterialApprovedForType", nullable: true }
+        approvedForTenantCompanyId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        approvedForTenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        recordedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancelledByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanMaterialReservation:
+      type: object
+      description: CR-HM-BE-07 — typed Handyman reservation over the existing inventory authority (no keys or fingerprints).
+      required: [id, clientId, buildingId, sourceType, handymanMaterialDemandId, warehouseId, itemId, uomId, reservedQuantity, consumedQuantity, remainingQuantity, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        sourceType: { type: string, enum: [HANDYMAN_MATERIAL_DEMAND] }
+        handymanMaterialDemandId: { $ref: "#/components/schemas/Uuid" }
+        warehouseId: { $ref: "#/components/schemas/Uuid" }
+        itemId: { $ref: "#/components/schemas/Uuid" }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        reservedQuantity: { type: number }
+        consumedQuantity: { type: number }
+        remainingQuantity: { type: number }
+        status: { type: string, enum: [ACTIVE, CONSUMED, RELEASED, CANCELLED] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        releasedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        cancelledByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        consumedByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        releasedAt: { type: string, format: date-time, nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        consumedAt: { type: string, format: date-time, nullable: true }
+        updatedAt: { type: string, format: date-time }
+    HandymanMaterialControlledIssue:
+      type: object
+      description: CR-HM-BE-07 — one provider-stock hand-off bound to exactly one inventory STOCK_OUT.
+      required: [id, clientId, buildingId, handymanMaterialDemandId, handymanJobId, workOrderId, warehouseId, itemId, uomId, inventoryStockMovementId, quantity, issuedByUserId, issuedAt, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        handymanMaterialDemandId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        workOrderId: { $ref: "#/components/schemas/Uuid" }
+        inventoryMaterialReservationId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        warehouseId: { $ref: "#/components/schemas/Uuid" }
+        itemId: { $ref: "#/components/schemas/Uuid" }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanWorkSessionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        inventoryStockMovementId: { $ref: "#/components/schemas/Uuid" }
+        quantity: { type: number }
+        issuedByUserId: { $ref: "#/components/schemas/Uuid" }
+        issuedAt: { type: string, format: date-time }
+        reference: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanMaterialActualUsage:
+      type: object
+      description: CR-HM-BE-07 — append-only USED/INSTALLED field fact; never a stock movement.
+      required: [id, clientId, buildingId, handymanMaterialDemandId, handymanJobId, workOrderId, uomId, usageKind, quantity, usedByUserId, usedAt, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        handymanMaterialDemandId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        workOrderId: { $ref: "#/components/schemas/Uuid" }
+        handymanMaterialControlledIssueId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanWorkSessionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        usageKind: { $ref: "#/components/schemas/HandymanMaterialUsageKind" }
+        quantity: { type: number }
+        usedByUserId: { $ref: "#/components/schemas/Uuid" }
+        usedAt: { type: string, format: date-time }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanMaterialReturn:
+      type: object
+      description: CR-HM-BE-07 — one unused return bound to exactly one inventory STOCK_IN.
+      required: [id, clientId, buildingId, handymanMaterialControlledIssueId, handymanMaterialDemandId, handymanJobId, workOrderId, warehouseId, itemId, uomId, inventoryStockMovementId, quantity, returnedByUserId, returnedAt, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        handymanMaterialControlledIssueId: { $ref: "#/components/schemas/Uuid" }
+        handymanMaterialDemandId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        workOrderId: { $ref: "#/components/schemas/Uuid" }
+        warehouseId: { $ref: "#/components/schemas/Uuid" }
+        itemId: { $ref: "#/components/schemas/Uuid" }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        inventoryStockMovementId: { $ref: "#/components/schemas/Uuid" }
+        quantity: { type: number }
+        returnedByUserId: { $ref: "#/components/schemas/Uuid" }
+        returnedAt: { type: string, format: date-time }
+        reference: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanMaterialDemandFulfillment:
+      type: object
+      description: CR-HM-BE-07 — derived per-demand fulfillment (read-time aggregation; nothing persisted).
+      required: [handymanMaterialDemandId, handymanJobId, supplySource, commercialBasis, demandStatus, demandQuantity, activeReservedQuantity, issuedQuantity, usedQuantity, returnedQuantity, remainingDemandQuantity, fulfillmentStatus]
+      properties:
+        handymanMaterialDemandId: { $ref: "#/components/schemas/Uuid" }
+        handymanJobId: { $ref: "#/components/schemas/Uuid" }
+        supplySource: { $ref: "#/components/schemas/HandymanMaterialSupplySource" }
+        commercialBasis: { $ref: "#/components/schemas/HandymanMaterialCommercialBasis" }
+        demandStatus: { $ref: "#/components/schemas/HandymanMaterialDemandStatus" }
+        demandQuantity: { type: number }
+        activeReservedQuantity: { type: number }
+        issuedQuantity: { type: number }
+        usedQuantity: { type: number }
+        returnedQuantity: { type: number }
+        remainingDemandQuantity: { type: number }
+        fulfillmentStatus: { $ref: "#/components/schemas/HandymanMaterialFulfillmentStatus" }
+    CreateQuotationIncludedMaterialDemand:
+      type: object
+      description: CR-HM-BE-07 — quotation-included demand facts (job from route; everything else server-derived).
+      required: [handymanQuotationLineId]
+      properties:
+        handymanQuotationLineId: { $ref: "#/components/schemas/Uuid" }
+    CreateOperationalMaterialDemand:
+      type: object
+      description: CR-HM-BE-07 — operational demand facts (also the supersede successor shape; predecessor from route on supersede).
+      required: [supplySource, uomId, quantity]
+      properties:
+        supplySource: { $ref: "#/components/schemas/HandymanMaterialSupplySource" }
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        description: { type: string, maxLength: 1000, nullable: true }
+        quantity: { type: number, description: Positive decimal, at most 4 fraction digits (canonical decimal strings accepted). }
+        sourceContext: { $ref: "#/components/schemas/HandymanMaterialOperationalSourceContext", nullable: true }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid", nullable: true }
+    CreateCustomerSuppliedMaterialDemand:
+      type: object
+      description: CR-HM-BE-07 — customer-supplied demand facts (supply source pinned server-side).
+      required: [uomId, quantity]
+      properties:
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        description: { type: string, maxLength: 1000, nullable: true }
+        quantity: { type: number, description: Positive decimal, at most 4 fraction digits (canonical decimal strings accepted). }
+        sourceContext: { $ref: "#/components/schemas/HandymanMaterialOperationalSourceContext", nullable: true }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid", nullable: true }
+    CancelHandymanMaterial:
+      type: object
+      description: CR-HM-BE-07 — demand/addendum cancellation facts (target from route).
+      required: [reason]
+      properties:
+        reason: { $ref: "#/components/schemas/HandymanMaterialCancellationReason" }
+    CreateHandymanMaterialAddendum:
+      type: object
+      description: CR-HM-BE-07 — addendum scope facts (no caller price/currency/identity accepted).
+      required: [supplySource, uomId, quantity]
+      properties:
+        supplySource: { $ref: "#/components/schemas/HandymanMaterialSupplySource" }
+        inventoryItemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        description: { type: string, maxLength: 1000, nullable: true }
+        quantity: { type: number, description: Positive decimal, at most 4 fraction digits (canonical decimal strings accepted). }
+        supersedesAddendumId: { $ref: "#/components/schemas/Uuid", nullable: true, description: Optional governed supersession link. }
+    DecideHandymanMaterialApprovalInApp:
+      type: object
+      description: CR-HM-BE-07 — direct customer decision facts (approver verified server-side; no identity accepted).
+      required: [decision]
+      properties:
+        decision: { $ref: "#/components/schemas/HandymanMaterialApprovalDecision" }
+        notes: { type: string, maxLength: 2000, nullable: true }
+    HandymanMaterialApprovedForClass:
+      type: object
+      description: CR-HM-BE-07 — assisted customer-class selector (identities derived server-side).
+      required: [type]
+      properties:
+        type: { $ref: "#/components/schemas/HandymanMaterialApprovedForType" }
+    DecideHandymanMaterialApprovalAssisted:
+      type: object
+      description: CR-HM-BE-07 — assisted decision facts (class selector + mandatory provenance notes).
+      required: [decision, approvedFor, notes]
+      properties:
+        decision: { $ref: "#/components/schemas/HandymanMaterialApprovalDecision" }
+        approvedFor: { $ref: "#/components/schemas/HandymanMaterialApprovedForClass" }
+        notes: { type: string, maxLength: 2000 }
+    ReserveHandymanMaterial:
+      type: object
+      description: CR-HM-BE-07 — reservation facts (demand from route; item/UOM asserted, derived from demand).
+      required: [warehouseId, quantity]
+      properties:
+        warehouseId: { $ref: "#/components/schemas/Uuid" }
+        itemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        quantity: { type: number, description: Positive decimal, at most 4 fraction digits (canonical decimal strings accepted). }
+        notes: { type: string, maxLength: 1000, nullable: true }
+    IssueHandymanMaterial:
+      type: object
+      description: CR-HM-BE-07 — controlled-issue facts (demand from route; execution context optional for pre-staged issue).
+      required: [warehouseId, quantity]
+      properties:
+        warehouseId: { $ref: "#/components/schemas/Uuid" }
+        itemId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        uomId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        inventoryMaterialReservationId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanWorkSessionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        quantity: { type: number, description: Positive decimal, at most 4 fraction digits (canonical decimal strings accepted). }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        reference: { type: string, maxLength: 200, nullable: true }
+        notes: { type: string, maxLength: 1000, nullable: true }
+    RecordHandymanMaterialUsage:
+      type: object
+      description: CR-HM-BE-07 — actual-use facts (demand from route; provider use must cite its issue).
+      required: [quantity]
+      properties:
+        handymanMaterialControlledIssueId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanServiceVisitId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        handymanWorkSessionId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        usageKind: { $ref: "#/components/schemas/HandymanMaterialUsageKind" }
+        quantity: { type: number, description: Positive decimal, at most 4 fraction digits (canonical decimal strings accepted). }
+        usedAt: { type: string, format: date-time, nullable: true }
+        notes: { type: string, maxLength: 1000, nullable: true }
+    ReturnHandymanMaterial:
+      type: object
+      description: CR-HM-BE-07 — unused-return facts (originating issue from route).
+      required: [quantity]
+      properties:
+        quantity: { type: number, description: Positive decimal, at most 4 fraction digits (canonical decimal strings accepted). }
+        returnedAt: { type: string, format: date-time, nullable: true }
+        reference: { type: string, maxLength: 200, nullable: true }
+        notes: { type: string, maxLength: 1000, nullable: true }
+    HandymanMaterialDemandResult:
+      type: object
+      description: "CR-HM-BE-07 — demand command result (`replayed: true` on same-key convergence)."
+      required: [demand, replayed]
+      properties:
+        demand: { $ref: "#/components/schemas/HandymanMaterialDemand" }
+        replayed: { type: boolean }
+    HandymanMaterialAddendumResult:
+      type: object
+      description: CR-HM-BE-07 — addendum command result with its approval.
+      required: [addendum, approval, replayed]
+      properties:
+        addendum: { $ref: "#/components/schemas/HandymanMaterialCommercialAddendum" }
+        approval: { $ref: "#/components/schemas/HandymanMaterialApproval" }
+        replayed: { type: boolean }
+    HandymanMaterialApprovalDecisionResult:
+      type: object
+      description: CR-HM-BE-07 — decision result with converged addendum and optional demand.
+      required: [approval, addendum, replayed]
+      properties:
+        approval: { $ref: "#/components/schemas/HandymanMaterialApproval" }
+        addendum: { $ref: "#/components/schemas/HandymanMaterialCommercialAddendum" }
+        demand:
+          allOf: [{ $ref: "#/components/schemas/HandymanMaterialDemand" }]
+          nullable: true
+        replayed: { type: boolean }
+    HandymanMaterialDemandCancellationResult:
+      type: object
+      description: CR-HM-BE-07 — demand cancellation result.
+      required: [demand, replayed]
+      properties:
+        demand: { $ref: "#/components/schemas/HandymanMaterialDemand" }
+        replayed: { type: boolean }
+    HandymanMaterialAddendumCancellationResult:
+      type: object
+      description: CR-HM-BE-07 — addendum cancellation result with its approval.
+      required: [addendum, approval, replayed]
+      properties:
+        addendum: { $ref: "#/components/schemas/HandymanMaterialCommercialAddendum" }
+        approval: { $ref: "#/components/schemas/HandymanMaterialApproval" }
+        replayed: { type: boolean }
+    HandymanMaterialReservationResult:
+      type: object
+      description: "CR-HM-BE-07 — reservation command result (`replayed: true` on same-key convergence)."
+      required: [reservation, replayed]
+      properties:
+        reservation: { $ref: "#/components/schemas/HandymanMaterialReservation" }
+        replayed: { type: boolean }
+    HandymanMaterialIssueResult:
+      type: object
+      description: CR-HM-BE-07 — controlled-issue command result (replay posts no second STOCK_OUT).
+      required: [issue, replayed]
+      properties:
+        issue: { $ref: "#/components/schemas/HandymanMaterialControlledIssue" }
+        replayed: { type: boolean }
+    HandymanMaterialUsageResult:
+      type: object
+      description: CR-HM-BE-07 — actual-use command result (actual use never posts stock).
+      required: [usage, replayed, supplySource]
+      properties:
+        usage: { $ref: "#/components/schemas/HandymanMaterialActualUsage" }
+        replayed: { type: boolean }
+        supplySource: { $ref: "#/components/schemas/HandymanMaterialSupplySource" }
+    HandymanMaterialReturnResult:
+      type: object
+      description: CR-HM-BE-07 — unused-return command result (replay posts no second STOCK_IN).
+      required: [return, replayed]
+      properties:
+        return: { $ref: "#/components/schemas/HandymanMaterialReturn" }
+        replayed: { type: boolean }

@@ -210,6 +210,11 @@ import { createHandymanWorkCrewRouter } from '../modules/handyman-work-crews/han
 import { createHandymanJobRouter } from '../modules/handyman-jobs/handyman-job.routes';
 import { createHandymanServiceVisitRouter } from '../modules/handyman-jobs/handyman-service-visit.routes';
 import { createHandymanFieldExecutionRouter } from '../modules/handyman-jobs/handyman-field-execution.routes';
+// CR-HM-BE-07 RUN 3 — Material operations HTTP contract (thin exposure of
+// the Run-1 demand/commercial/approval authority and the Run-2 inventory
+// integration; no separate Handyman server/runtime, no lifecycle, pricing,
+// inventory, approval, or financial authority at the transport layer).
+import { createHandymanMaterialOperationsRouter } from '../modules/handyman-material-operations/handyman-material-operations.routes';
 import { createFindingAssignmentRouter } from '../modules/finding-assignments/finding-assignment.routes';
 import { createFindingClosureRouter } from '../modules/finding-closure/finding-closure.routes';
 import { createFindingClassificationRouter } from '../modules/finding-classifications/finding-classification.routes';
@@ -699,5 +704,11 @@ export function createApiRouter(): Router {
   // authority; GPS verification, presence snapshots, readiness and every
   // lifecycle transition stay service-owned. No DELETE/PATCH surface.
   router.use(createHandymanFieldExecutionRouter());
+  // CR-HM-BE-07 RUN 3 — Handyman material-operations contract (demands,
+  // addenda, approvals, reservations, issues, usages, returns, derived
+  // fulfillment): thin exposure of the Run 1–2 domain authority; commercial
+  // basis, customer approval, demand caps, allocation, stock posting and
+  // idempotent replay stay service-owned. No DELETE/PATCH surface.
+  router.use(createHandymanMaterialOperationsRouter());
   return router;
 }

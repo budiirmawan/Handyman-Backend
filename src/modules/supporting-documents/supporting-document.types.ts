@@ -18,6 +18,15 @@ export const SUPPORTING_PARENT_TYPES = [
   'QUOTATION_REVISION',
   // CR-HM-BE-03 RUN 3 — customer quotation approval evidence (migration 0352)
   'HANDYMAN_QUOTATION_APPROVAL',
+  // CR-HM-BE-07 RUN 3 — material operations evidence (migration 0360).
+  // Supporting evidence only: attaching never approves, reserves, issues,
+  // uses, returns, or mutates commercial state.
+  'HANDYMAN_MATERIAL_DEMAND',
+  'HANDYMAN_MATERIAL_ADDENDUM',
+  'HANDYMAN_MATERIAL_APPROVAL',
+  'HANDYMAN_MATERIAL_ISSUE',
+  'HANDYMAN_MATERIAL_USAGE',
+  'HANDYMAN_MATERIAL_RETURN',
 ] as const;
 export type SupportingParentType = (typeof SUPPORTING_PARENT_TYPES)[number];
 export function isSupportingParentType(v: unknown): v is SupportingParentType {
