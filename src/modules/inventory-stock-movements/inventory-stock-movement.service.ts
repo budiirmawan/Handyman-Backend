@@ -13,6 +13,7 @@ import {
   stockMovementInvalidQuantityError,
   stockMovementNotFoundError,
   stockMovementWorkOrderBypassError,
+  stockMovementHandymanMaterialBypassError,
 } from './inventory-stock-movement.errors';
 import { inventoryStockMovementRepository } from './inventory-stock-movement.repository';
 import type {
@@ -94,6 +95,13 @@ function isWorkOrderMaterialSource(source: string | undefined): boolean {
   );
 }
 
+/** Run-2 Handyman issue/return rows prove these internal movement sources. */
+function isHandymanMaterialSource(source: string | undefined): boolean {
+  return /^HANDYMAN_MATERIAL_(?:ISSUE|RETURN):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    source?.trim() ?? '',
+  );
+}
+
 /**
  * Transaction-safe Stock In / Out.
  * Flow:
@@ -116,6 +124,9 @@ export async function postStockMovement(
     isWorkOrderMaterialSource(input.source)
   ) {
     throw stockMovementWorkOrderBypassError();
+  }
+  if (isHandymanMaterialSource(input.source)) {
+    throw stockMovementHandymanMaterialBypassError();
   }
 
   const pool = getPool();

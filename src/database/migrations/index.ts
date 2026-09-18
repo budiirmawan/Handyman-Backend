@@ -356,6 +356,7 @@ import { migration0355CreateHandymanServiceVisits } from './0355_create_handyman
 import { migration0356CreateHandymanVisitArrivalsAndPresence } from './0356_create_handyman_visit_arrivals_and_presence';
 import { migration0357CreateHandymanWorkSessions } from './0357_create_handyman_work_sessions';
 import { migration0358CreateHandymanMaterialDemands } from './0358_create_handyman_material_demands';
+import { migration0359IntegrateHandymanMaterialInventory } from './0359_integrate_handyman_material_inventory';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -719,4 +720,5 @@ export const migrations: readonly Migration[] = [
   migration0356CreateHandymanVisitArrivalsAndPresence,
   migration0357CreateHandymanWorkSessions,
   migration0358CreateHandymanMaterialDemands,
+  migration0359IntegrateHandymanMaterialInventory,
 ];

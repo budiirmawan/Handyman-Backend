@@ -134,3 +134,75 @@ export type MaterialReservationFilters = {
   materialRequestId: string;
   status?: MaterialReservationStatus;
 };
+
+/**
+ * CR-HM-BE-07 RUN 2 — the existing inventory reservation table can now point
+ * at one of two demand authorities. The legacy Material Request surface stays
+ * typed separately above so its public contract and procurement behaviour do
+ * not become nullable or ambiguous.
+ */
+export const MATERIAL_RESERVATION_SOURCE_TYPES = [
+  'MATERIAL_REQUEST',
+  'HANDYMAN_MATERIAL_DEMAND',
+] as const;
+export type MaterialReservationSourceType =
+  (typeof MATERIAL_RESERVATION_SOURCE_TYPES)[number];
+
+/** Inventory-owned view of a reservation sourced by a Handyman demand. */
+export type HandymanMaterialReservationRecord = {
+  id: string;
+  clientId: string;
+  buildingId: string;
+  sourceType: 'HANDYMAN_MATERIAL_DEMAND';
+  materialRequestId: null;
+  handymanMaterialDemandId: string;
+  warehouseId: string;
+  itemId: string;
+  uomId: string;
+  reservedQuantity: number;
+  consumedQuantity: number;
+  remainingQuantity: number;
+  status: MaterialReservationStatus;
+  createdByUserId: string;
+  releasedByUserId: string | null;
+  cancelledByUserId: string | null;
+  consumedByUserId: string | null;
+  idempotencyKey: string;
+  idempotencyFingerprint: string;
+  terminalIdempotencyKey: string | null;
+  terminalIdempotencyFingerprint: string | null;
+  notes: string | null;
+  createdAt: Date;
+  releasedAt: Date | null;
+  cancelledAt: Date | null;
+  consumedAt: Date | null;
+  updatedAt: Date;
+};
+
+export type NewHandymanMaterialReservation = {
+  clientId: string;
+  buildingId: string;
+  handymanMaterialDemandId: string;
+  warehouseId: string;
+  itemId: string;
+  uomId: string;
+  reservedQuantity: number;
+  createdByUserId: string;
+  idempotencyKey: string;
+  idempotencyFingerprint: string;
+  notes: string | null;
+};
+
+/** Server-side, NUMERIC-derived capacity of one locked Handyman demand. */
+export type HandymanMaterialReservationDemand = {
+  authorizedDemand: number;
+  cumulativeIssued: number;
+  activeReserved: number;
+  remainingDemand: number;
+  reservableDemand: number;
+  reservationAllowed: boolean;
+  /** Demand cap for an issue consuming a supplied reservation allocation. */
+  reservedIssueAllowed: boolean;
+  /** Demand cap for an issue with no reservation allocation. */
+  unreservedIssueAllowed: boolean;
+};

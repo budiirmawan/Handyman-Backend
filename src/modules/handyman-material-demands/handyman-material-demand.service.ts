@@ -19,6 +19,7 @@ import { handymanJobRepository } from '../handyman-jobs/handyman-job.repository'
 import { handymanServiceVisitRepository } from '../handyman-jobs/handyman-service-visit.repository';
 import { resolveFieldActorActiveBindingIds } from '../handyman-jobs/handyman-visit-lead-chain';
 import { handymanWorkCrewRepository } from '../handyman-work-crews';
+import { inventoryMaterialReservationRepository } from '../inventory-material-reservations/inventory-material-reservation.repository';
 import {
   handymanRequestNotFoundError,
   handymanRequestRepository,
@@ -1203,6 +1204,19 @@ export async function createNonChargeableMaterialDemand(
           'Only an active non-chargeable demand of this job may be superseded.',
         );
       }
+      // An ACTIVE inventory allocation belongs to the predecessor demand and
+      // must be explicitly released/cancelled through inventory first. Never
+      // silently strand or release physical stock while changing scope.
+      const activeReservations =
+        await inventoryMaterialReservationRepository.countActiveByHandymanMaterialDemand(
+          tx,
+          predecessor.id,
+        );
+      if (activeReservations > 0) {
+        throw handymanMaterialDemandStateInvalidError(
+          'A material demand with active inventory reservations cannot be superseded.',
+        );
+      }
       const superseded = await handymanMaterialDemandRepository.supersedeActiveDemand(
         predecessor.id,
         actorUserId,
@@ -1997,6 +2011,19 @@ export async function cancelHandymanMaterialDemand(
       return { demand: toPublicHandymanMaterialDemand(keyed), replayed: true };
     }
     if (demand.status !== 'ACTIVE') throw handymanMaterialDemandStateInvalidError();
+    // Keep the source row locked while checking allocation. Reservation
+    // creation holds this same demand lock, so cancellation cannot race a new
+    // ACTIVE inventory allocation or silently release it.
+    const activeReservations =
+      await inventoryMaterialReservationRepository.countActiveByHandymanMaterialDemand(
+        tx,
+        demand.id,
+      );
+    if (activeReservations > 0) {
+      throw handymanMaterialDemandStateInvalidError(
+        'A material demand with active inventory reservations cannot be cancelled.',
+      );
+    }
     const cancelled = await handymanMaterialDemandRepository.cancelActiveDemand(
       demand.id,
       {

@@ -47,3 +47,12 @@ export function stockMovementWorkOrderBypassError(): AppError {
     statusCode: 409,
   });
 }
+
+/** Controlled Handyman issue/return sources are internal transaction-only. */
+export function stockMovementHandymanMaterialBypassError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.INVENTORY_STOCK_MOVEMENT_HANDYMAN_MATERIAL_BYPASS,
+    message: 'Handyman material issue and return must use the controlled Handyman material authority.',
+    statusCode: 409,
+  });
+}
