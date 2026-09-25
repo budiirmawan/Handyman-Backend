@@ -10,6 +10,10 @@ import type {
 const SELECT = `id, client_id AS "clientId",
   tenant_company_id AS "tenantCompanyId", tenant_pic_id AS "tenantPicId",
   building_id AS "buildingId", space_id AS "spaceId",
+  intake_channel AS "intakeChannel",
+  created_by_user_id AS "createdByUserId",
+  reporter_name AS "reporterName", reporter_phone AS "reporterPhone",
+  reporter_email AS "reporterEmail",
   request_number AS "requestNumber", request_type AS "requestType",
   title, description, priority, status, requested_at AS "requestedAt",
   work_request_id AS "workRequestId", work_order_id AS "workOrderId",
@@ -19,11 +23,18 @@ async function create(input: NewTenantServiceRequest): Promise<TenantServiceRequ
   const result = await getPool().query<TenantServiceRequestRecord>(
     `INSERT INTO tenant_service_requests
        (id, client_id, tenant_company_id, tenant_pic_id, building_id, space_id,
-        request_number, request_type, title, description, priority)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING ${SELECT}`,
+        intake_channel, created_by_user_id, reporter_name, reporter_phone,
+        reporter_email, request_number, request_type, title, description,
+        priority)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     RETURNING ${SELECT}`,
     [randomUUID(), input.clientId, input.tenantCompanyId, input.tenantPicId,
-      input.buildingId, input.spaceId, input.requestNumber, input.requestType,
-      input.title, input.description, input.priority],
+      input.buildingId, input.spaceId,
+      input.intakeChannel ?? null, input.createdByUserId ?? null,
+      input.reporterName ?? null, input.reporterPhone ?? null,
+      input.reporterEmail ?? null,
+      input.requestNumber, input.requestType, input.title, input.description,
+      input.priority],
   );
   return result.rows[0];
 }

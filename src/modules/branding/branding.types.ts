@@ -45,6 +45,15 @@ export type BrandingThemeTokens = {
 export type BrandingProfile = {
   brandName: string;
   logoReference: string | null;
+  /**
+   * PART 12A extension — frozen §5 row "Branding": additive keys
+   * `supportName` + `supportContact` (no schema change). Optional
+   * for back-compat with pre-PART-12 profiles. PART 10 health
+   * `configuration_completeness.sourceAvailable` will rely on the
+   * presence of these keys as one of the required sources.
+   */
+  supportName?: string | null;
+  supportContact?: string | null;
   login: LoginBranding;
   portal: PortalBranding;
   report: ReportBranding;
@@ -68,6 +77,8 @@ export type CreateBrandingInput = BrandingProfile & {
 export type UpdateBrandingInput = {
   brandName?: string;
   logoReference?: string | null;
+  supportName?: string | null;
+  supportContact?: string | null;
   login?: Partial<LoginBranding>;
   portal?: Partial<PortalBranding>;
   report?: Partial<ReportBranding>;

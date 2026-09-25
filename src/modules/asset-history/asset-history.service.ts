@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { logger } from '../../shared/logger';
 import { sanitizeHistoryMetadata } from './asset-history.metadata';
 import { assetHistoryRepository } from './asset-history.repository';
@@ -57,6 +58,38 @@ export async function recordAssetHistory(
 }
 
 /**
+ * CR-BE-RN10-SAFE-EQUIPMENT-01 PART 03 — records one Asset history event
+ * INSIDE the caller's transaction, and FAILS LOUDLY.
+ *
+ * This is the deliberate opposite of `recordAssetHistory` above, and it is used
+ * for exactly one thing: the governed RETURN_TO_SERVICE command, where the
+ * audit row and the state change it authorizes must either both exist or
+ * neither exist. A best-effort history row would leave an Asset restored to
+ * service with no record of who authorized it — the one outcome an RN-10
+ * control must never produce. Throwing here makes `withTransaction` roll the
+ * operational-state change back.
+ *
+ * Metadata is sanitized by the SAME central policy as the best-effort path, so
+ * governance of what may be persisted is unchanged; only the failure semantics
+ * differ. There is no parallel audit table and no second metadata policy.
+ */
+export async function recordAssetHistoryInTransaction(
+  input: RecordAssetHistoryInput,
+  executor: PoolClient,
+): Promise<AssetHistoryEventRecord> {
+  return assetHistoryRepository.insertEvent(
+    {
+      assetId: input.assetId,
+      eventType: input.eventType,
+      actorUserId: input.actorUserId ?? null,
+      summary: input.summary,
+      metadata: sanitizeHistoryMetadata(input.metadata),
+    },
+    executor,
+  );
+}
+
+/**
  * Reads one Asset's history, newest first.
  *
  * The query is scoped to `asset_id`, so another Asset's timeline is never
@@ -85,5 +118,6 @@ export async function listAssetHistory(
 export const assetHistoryService = {
   listAssetHistory,
   recordAssetHistory,
+  recordAssetHistoryInTransaction,
   toPublicAssetHistoryEvent,
 };

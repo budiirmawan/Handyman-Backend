@@ -8,6 +8,7 @@ import {
 import {
   cleaningScheduleBindingAlreadyExistsError,
   cleaningScheduleBindingNotFoundError,
+  cleaningScheduleBindingScheduleConflictError,
   cleaningScheduleBuildingMismatchError,
   cleaningScheduleClientMismatchError,
   cleaningScheduleInactiveError,
@@ -232,6 +233,19 @@ export async function createCleaningScheduleBinding(
     throw cleaningScheduleBindingAlreadyExistsError();
   }
 
+  // CR-BE-RN13-CLEANING-FIELD-01 PART 00 — one ACTIVE binding per schedule
+  // definition, so one generated cleaning task resolves to exactly one
+  // Cleaning Area. Only enforced when the binding being created is ACTIVE:
+  // creating an INACTIVE row is history and must stay unconstrained.
+  const willBeActive = (input.status ?? 'ACTIVE') === 'ACTIVE';
+  if (willBeActive) {
+    const activeForSchedule =
+      await cleaningScheduleBindingRepository.findActiveBySchedule(scheduleId);
+    if (activeForSchedule) {
+      throw cleaningScheduleBindingScheduleConflictError();
+    }
+  }
+
   try {
     const record = await cleaningScheduleBindingRepository.create({
       clientId: area.client_id,
@@ -244,8 +258,9 @@ export async function createCleaningScheduleBinding(
     });
     return resolveBindingContext(record);
   } catch (error) {
-    if (isCleaningScheduleBindingUniqueViolation(error)) {
-      throw cleaningScheduleBindingAlreadyExistsError();
+    const violation = cleaningScheduleBindingUniqueViolationError(error);
+    if (violation) {
+      throw violation;
     }
     throw error;
   }
@@ -315,22 +330,66 @@ export async function updateCleaningScheduleBinding(
     if (activeExisting && activeExisting.id !== id) {
       throw cleaningScheduleBindingAlreadyExistsError();
     }
+
+    // CR-BE-RN13-CLEANING-FIELD-01 PART 00 — reactivating must not put the
+    // schedule definition back into a multi-area ACTIVE state.
+    const activeForSchedule =
+      await cleaningScheduleBindingRepository.findActiveBySchedule(
+        existing.scheduleDefinitionId,
+      );
+    if (activeForSchedule && activeForSchedule.id !== id) {
+      throw cleaningScheduleBindingScheduleConflictError();
+    }
   }
 
-  const record = await cleaningScheduleBindingRepository.update(id, input);
+  const record = await cleaningScheduleBindingRepository
+    .update(id, input)
+    .catch((error: unknown) => {
+      // CR-BE-RN13-CLEANING-FIELD-01 PART 00 — a concurrent reactivation can
+      // pass the pre-check above and still lose the index race; surface the
+      // bounded 409 instead of a raw Postgres unique violation.
+      const violation = cleaningScheduleBindingUniqueViolationError(error);
+      if (violation) {
+        throw violation;
+      }
+      throw error;
+    });
   return resolveBindingContext(record as CleaningScheduleBindingRecord);
 }
 
-function isCleaningScheduleBindingUniqueViolation(error: unknown): boolean {
+/**
+ * Maps a Postgres unique-violation on either cleaning-binding index to its
+ * bounded domain error. The race backstop for the pre-checks above: two
+ * concurrent creates can both pass the SELECT and only one can win the index.
+ *
+ *   cleaning_schedule_bindings_active_unique          → same (area, schedule)
+ *   cleaning_schedule_bindings_schedule_active_unique → same schedule, any area
+ *                                                      (CR-BE-RN13 PART 00)
+ */
+function cleaningScheduleBindingUniqueViolationError(
+  error: unknown,
+): AppError | null {
   if (typeof error !== 'object' || error === null) {
-    return false;
+    return null;
   }
 
   const candidate = error as { code?: string; constraint?: string };
-  return (
-    candidate.code === '23505' &&
-    candidate.constraint === 'cleaning_schedule_bindings_active_unique'
-  );
+  if (candidate.code !== '23505') {
+    return null;
+  }
+
+  if (candidate.constraint === 'cleaning_schedule_bindings_active_unique') {
+    return cleaningScheduleBindingAlreadyExistsError();
+  }
+
+  if (
+    candidate.constraint ===
+    'cleaning_schedule_bindings_schedule_active_unique'
+  ) {
+    return cleaningScheduleBindingScheduleConflictError();
+  }
+
+  return null;
 }
 
 export const cleaningScheduleBindingService = {

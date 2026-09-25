@@ -390,15 +390,43 @@ describe('PART 04 invents no verification target, engine or id (reconciled by CR
     );
   });
 
-  it('adds no mobile-specific material or inventory facade', () => {
-    const invented = Object.keys(spec.paths).filter((p: string) =>
-      /\/mobile\/(material|inventory|work-order)/.test(p),
-    );
-    assert.deepEqual(invented, []);
-    const inventedSchemas = Object.keys(spec.components.schemas).filter(
-      (n: string) => /^(MobileMaterial|MobileInventory|MaterialIssue)/.test(n),
-    );
-    assert.deepEqual(inventedSchemas, []);
+  it('adds no mobile-specific inventory facade (material surface reconciled by CR-BE-RN11-MATERIAL-FIELD-01 PART 01)', () => {
+    // PART 04 (MOB-01) pinned that no mobile material/inventory facade
+    // existed. CR-BE-RN11-MATERIAL-FIELD-01 PART 01 deliberately introduced a
+    // Work-Order-bound FIELD MATERIAL REQUEST surface (demand only — request
+    // create/list/get/cancel). The pin therefore narrows to what remains
+    // true: no mobile inventory / stock / issue facade, and the material
+    // surface is exactly the RN-11 PART 01 + PART 02 + PART 03 (field usage =
+    // canonical STOCK_OUT issue) set — no reservation/stock/return facade.
+    const mobileMaterial = Object.keys(spec.paths)
+      .filter((p: string) => /\/mobile\/(material|inventory|work-order)/.test(p))
+      .sort();
+    assert.deepEqual(mobileMaterial, [
+      '/mobile/material-requests/{materialRequestId}',
+      '/mobile/material-requests/{materialRequestId}/cancel',
+      '/mobile/work-orders/{workOrderId}/material-items',
+      '/mobile/work-orders/{workOrderId}/material-requests',
+      '/mobile/work-orders/{workOrderId}/material-usages',
+    ]);
+    const inventedSchemas = Object.keys(spec.components.schemas)
+      .filter((n: string) => /^(MobileMaterial|MobileWorkOrderMaterial|MobileInventory|MaterialIssue)/.test(n))
+      .sort();
+    assert.deepEqual(inventedSchemas, [
+      'MobileMaterialIssue',
+      'MobileMaterialItem',
+      'MobileMaterialRequest',
+      'MobileMaterialRequestAvailableAction',
+      'MobileMaterialRequestCreate',
+      'MobileMaterialRequestDetail',
+      'MobileMaterialRequestFulfillment',
+      'MobileMaterialRequestUom',
+      'MobileMaterialReservation',
+      'MobileMaterialUsageCreate',
+      'MobileMaterialUsageResult',
+      'MobileMaterialWarehouseRef',
+      'MobileWorkOrderMaterialAvailableAction',
+      'MobileWorkOrderMaterialContext',
+    ]);
   });
 
   it('preserves the authoritative master enums', () => {

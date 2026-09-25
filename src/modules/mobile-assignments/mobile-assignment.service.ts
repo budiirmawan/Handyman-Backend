@@ -6,6 +6,7 @@ import type { MobileCurrentShift } from '../mobile-current-shift/mobile-current-
 import { permissionService } from '../permissions';
 import { resolveTaskAvailableActions } from '../task-execution';
 import { resolveWorkOrderAvailableActions } from '../work-order-actions';
+import { safetyInspectionBindingAmbiguousError } from '../safety-inspection-bindings';
 import { canCloseWorkOrder } from '../work-order-verification';
 import type { WorkOrderStatus } from '../work-orders';
 import { workforceRepository } from '../workforce/workforce.repository';
@@ -54,6 +55,18 @@ type TaskAssignmentRow = {
   generated_at: Date;
   building_code: string | null;
   building_name: string | null;
+  /** Canonical BE-18 reading-due id when this task's generated task is the one
+   * linked by `utility_reading_dues.generated_task_id`; null otherwise. */
+  utility_reading_due_id: string | null;
+  cleaning_area_id: string | null;
+  /** Canonical ACTIVE patrol schedule binding id of the task's schedule
+   * definition; null when the schedule is not a patrol. Non-null means the
+   * generated task is a Patrol Execution. */
+  active_patrol_binding_id: string | null;
+  /** Canonical ACTIVE Safety Inspection binding id resolved by cardinality. */
+  active_safety_inspection_binding_id: string | null;
+  /** Count is returned by the aggregate so corruption is never winner-selected. */
+  active_safety_inspection_binding_count: number;
 };
 
 type WorkOrderAssignmentRow = {
@@ -115,10 +128,43 @@ const TASK_ASSIGNMENT_SELECT = `
     t.completion_notes,
     t.generated_at,
     b.code          AS building_code,
-    b.name          AS building_name
+    b.name          AS building_name,
+    urd.id          AS utility_reading_due_id,
+    csb.cleaning_area_id AS cleaning_area_id,
+    psb.id          AS active_patrol_binding_id,
+    sib.active_safety_inspection_binding_id,
+    sib.active_safety_inspection_binding_count
   FROM task_assignments a
   JOIN generated_tasks t ON t.id = a.task_id
   LEFT JOIN buildings b ON b.id = t.building_id
+  LEFT JOIN utility_reading_dues urd ON urd.generated_task_id = t.id
+  -- CR-BE-RN16-PATROL-FIELD-01 PART 01 — the canonical patrol marker. Reached
+  -- only through the task's schedule definition and its ACTIVE patrol binding.
+  -- Migration 0354 caps that binding at one per schedule definition, so this
+  -- LEFT JOIN can never multiply the assignment rows (and the marker can never
+  -- be ambiguous).
+  LEFT JOIN patrol_schedule_bindings psb
+    ON psb.schedule_definition_id = t.schedule_definition_id
+   AND psb.status = 'ACTIVE'
+  -- CR-BE-RN13-CLEANING-FIELD-01 PART 00 — canonical Cleaning Area, reached
+  -- only through the task's schedule definition and its ACTIVE cleaning
+  -- binding. Migration 0352 makes that binding at most one per schedule
+  -- definition, so this LEFT JOIN can never multiply the assignment rows.
+  LEFT JOIN cleaning_schedule_bindings csb
+    ON csb.schedule_definition_id = t.schedule_definition_id
+   AND csb.status = 'ACTIVE'
+  -- CR-BE-RN19-SAFETY-INSPECTION-01 — aggregate before projecting the marker.
+  -- The count is the cardinality guard; the id is exposed only when exactly
+  -- one ACTIVE binding exists. No LIMIT, rows[0], or winner ordering is used.
+  LEFT JOIN LATERAL (
+    SELECT
+      COUNT(*)::INTEGER AS active_safety_inspection_binding_count,
+      CASE WHEN COUNT(*) = 1 THEN MIN(sib_row.id) ELSE NULL END
+        AS active_safety_inspection_binding_id
+      FROM safety_inspection_bindings sib_row
+     WHERE sib_row.schedule_definition_id = t.schedule_definition_id
+       AND sib_row.status = 'ACTIVE'
+  ) sib ON TRUE
 `;
 
 const TASK_ASSIGNMENT_SCOPE = `
@@ -185,6 +231,10 @@ function toTaskItem(
   row: TaskAssignmentRow,
   canManageTasks: boolean,
 ): MobileAssignmentFeedItem {
+  if (row.active_safety_inspection_binding_count > 1) {
+    throw safetyInspectionBindingAmbiguousError();
+  }
+
   const reference: MobileAssignmentReference = {
     // TASK side
     taskId: row.task_id,
@@ -192,6 +242,24 @@ function toTaskItem(
     targetType: row.target_type,
     targetId: row.target_id,
     generatedAt: iso(row.generated_at),
+    // RN-12 PART B — canonical BE-18 reading-due id, derived from the
+    // generated-task → utility_reading_due relation only (never targetType/targetId).
+    utilityReadingDueId: row.utility_reading_due_id ?? null,
+    // CR-BE-RN13-CLEANING-FIELD-01 PART 00 — canonical Cleaning Area, derived
+    // from the generated-task → ACTIVE cleaning_schedule_bindings relation
+    // only (never targetType/targetId).
+    cleaningAreaId: row.cleaning_area_id ?? null,
+    // CR-BE-RN16-PATROL-FIELD-01 PART 01 — canonical Patrol Execution marker.
+    // A Patrol Execution IS the generated task, so the id is the task id —
+    // emitted only when the task's schedule definition carries exactly one
+    // ACTIVE patrol schedule binding (migration 0354). Never inferred from
+    // targetType / targetId / title / workType / securityPost.
+    patrolExecutionId: row.active_patrol_binding_id ? row.task_id : null,
+    // CR-BE-RN19-SAFETY-INSPECTION-01 — canonical Safety Inspection binding
+    // marker, derived only from the generated task's schedule definition to
+    // exactly one ACTIVE binding. The binding id is context only; taskId stays
+    // the generated_tasks.id execution reference.
+    safetyInspectionBindingId: row.active_safety_inspection_binding_id ?? null,
     // WORK_ORDER side (explicit nulls for a stable contract)
     workOrderId: null,
     workOrderNumber: null,
@@ -266,6 +334,14 @@ function toWorkOrderItem(
     targetType: null,
     targetId: null,
     generatedAt: null,
+    // WORK_ORDER items never originate from a utility reading due.
+    utilityReadingDueId: null,
+    // WORK_ORDER items are never cleaning executions.
+    cleaningAreaId: null,
+    // WORK_ORDER items are never patrol executions.
+    patrolExecutionId: null,
+    // WORK_ORDER items are never Safety Inspection tasks.
+    safetyInspectionBindingId: null,
     // WORK_ORDER side
     workOrderId: row.work_order_id,
     workOrderNumber: row.work_order_number,
@@ -463,4 +539,99 @@ export async function listMobileAssignments(
   return { items: feed, total };
 }
 
-export const mobileAssignmentService = { listMobileAssignments };
+/**
+ * CR-BE-RN21-NOTIFICATION-NAV-01 — every mobile WORK_ORDER assignment the
+ * authenticated user can see for ONE canonical Work Order.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * `GET /notifications/{id}/navigation-target` must hand the client the SAME
+ * `MobileAssignment` object the FieldWork feed publishes — never a second
+ * assignment DTO, and never a client-side scan of `/mobile/assignments`
+ * looking for a match. This function is the Work Order half of the feed
+ * applied to a single Work Order:
+ *
+ *   · the SAME projection  (`WORK_ORDER_ASSIGNMENT_SELECT` + `toWorkOrderItem`)
+ *   · the SAME visibility (`WORK_ORDER_ASSIGNMENT_SCOPE`: ACTIVE assignment,
+ *     the caller's own Workforce Profile or Team, Building access, plus the
+ *     `work_order.manage` gate the feed applies to `availableActions` and the
+ *     `work-order-verification` CLOSE check)
+ *   · the SAME evidence requirements (`GET /mobile/assignments` requires
+ *     `task.read` + `work_order.read`; the notification route requires
+ *     `work_order.read`)
+ *
+ * CARDINALITY IS RETURNED, NOT RESOLVED
+ * -------------------------------------
+ * A Work Order can legitimately carry more than one ACTIVE assignment visible
+ * to the same user (a WORKFORCE assignment AND a TEAM assignment, or several
+ * assignment rows). This function returns the WHOLE array so the caller — the
+ * navigation resolver — decides: exactly one is navigable, none means no
+ * target, and more than one is a bounded conflict. No `LIMIT 1`, no `rows[0]`
+ * and no ordering-based winner selection exists here on purpose.
+ */
+export async function findMobileWorkOrderAssignmentsByWorkOrderId(
+  userId: string,
+  workOrderId: string,
+  options: MobileAssignmentQueryOptions = {},
+): Promise<MobileAssignmentFeedItem[]> {
+  const now = options.now ?? new Date();
+  const [buildingIds, profile, permissions] = await Promise.all([
+    contextAccessService.getAccessibleBuildingIds(userId),
+    workforceRepository.findByUserId(userId),
+    permissionService.resolvePermissionsForUser(userId),
+  ]);
+
+  if (!profile) {
+    // No linked Workforce Profile (BE-25B identity) means no assignment can be
+    // assigned to this user at all — the same reason the feed yields no
+    // WORK_ORDER items for them.
+    return [];
+  }
+
+  const canManageWorkOrders = permissions.includes('work_order.manage');
+  const profileIds = [profile.id];
+  const teamIds = profile.teamId ? [profile.teamId] : [];
+
+  const workOrders = await getPool().query<WorkOrderAssignmentRow>(
+    `SELECT wo_items.* FROM (
+       ${WORK_ORDER_ASSIGNMENT_SELECT}
+       WHERE ${WORK_ORDER_ASSIGNMENT_SCOPE}
+         AND w.id = $4
+       ORDER BY w.created_at, a.id
+     ) wo_items`,
+    [profileIds, teamIds, buildingIds, workOrderId],
+  );
+
+  const items = await Promise.all(
+    workOrders.rows.map(async (row) => {
+      const canClose =
+        canManageWorkOrders && row.wo_status === 'COMPLETED'
+          ? await canCloseWorkOrder(row.work_order_id)
+          : false;
+      return toWorkOrderItem(row, canManageWorkOrders, canClose);
+    }),
+  );
+
+  // The feed annotates every item with the authoritative current-shift context.
+  // Reproduced here so the returned assignment is byte-identical in shape to
+  // the feed's — never a reduced projection.
+  const current = await resolveCurrentShifts(userId, now);
+  const shiftForBuilding = new Map<string, MobileCurrentShift>();
+  for (const shift of current.shifts) {
+    if (shift.buildingId && !shiftForBuilding.has(shift.buildingId)) {
+      shiftForBuilding.set(shift.buildingId, shift);
+    }
+  }
+  for (const item of items) {
+    const buildingId = item.context.buildingId;
+    const shift = buildingId ? shiftForBuilding.get(buildingId) : undefined;
+    item.shift = shift ? toShiftContext(shift) : null;
+  }
+
+  return items;
+}
+
+export const mobileAssignmentService = {
+  findMobileWorkOrderAssignmentsByWorkOrderId,
+  listMobileAssignments,
+};

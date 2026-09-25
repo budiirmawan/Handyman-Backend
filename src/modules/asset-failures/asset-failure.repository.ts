@@ -104,8 +104,9 @@ async function create(
 /** Addressed by the SHARED BE-21A Incident id, not the specialization id. */
 async function findByIncidentId(
   incidentId: string,
+  executor: Executor = getPool(),
 ): Promise<AssetFailureCompositeRecord | null> {
-  const result = await getPool().query<AssetFailureCompositeRecord>(
+  const result = await executor.query<AssetFailureCompositeRecord>(
     `SELECT ${SELECT} ${FROM} WHERE af.incident_id = $1`,
     [incidentId],
   );
@@ -228,6 +229,59 @@ async function update(
 }
 
 /**
+ * CR-BE-RN10-SAFE-EQUIPMENT-01 PART 03 — the RN-10 safety-risk clearance gate.
+ *
+ * Counts the Asset Failure records that BLOCK returning an Asset to service.
+ * This lives in BE-21C's repository because BE-21C owns the failure-handling
+ * vocabulary: RN-10 reads that canonical state, it does not reinterpret it.
+ *
+ * A record blocks when ALL of the following hold:
+ *
+ *   `operational_impact = 'SAFETY_RISK'`
+ *       The recorded impact the RN-10 gate is about. Any other impact
+ *       (`NONE`, `DEGRADED`, `PARTIAL_OUTAGE`, `FULL_OUTAGE`) describes a
+ *       service consequence, not a hazard, and must not block a return: an
+ *       Asset can legitimately be isolated for a non-safety reason.
+ *
+ *   `failure_status <> 'RESOLVED'`
+ *       BE-21C's canonical failure-handling progression is
+ *       OPEN → IN_PROGRESS → RESOLVED (see `ASSET_FAILURE_STATUSES`), where
+ *       `RESOLVED` means failure handling has finished. A reopened failure
+ *       returns to `IN_PROGRESS` through the same table, so it blocks again
+ *       automatically — no extra flag, and no severity inference from the
+ *       incident title.
+ *
+ *   `i.status = 'REPORTED'`
+ *       The BE-21A record lifecycle: only a standing record can be blocked on.
+ *       A `CANCELLED` incident is a WITHDRAWN record — BE-21C itself grants it
+ *       no actions, refuses every update, and it can never reach `RESOLVED`
+ *       (withdrawal happens through `POST /incidents/:id/cancel`). Without this
+ *       predicate a withdrawn SAFETY_RISK record would block the Asset
+ *       permanently with no path out, which is a deadlock rather than a
+ *       control. `CLOSED` is likewise not `REPORTED`.
+ *
+ * Because it takes an executor it can run inside the caller's transaction, on
+ * the same connection and the same snapshot as the state change it guards.
+ */
+async function countUnresolvedSafetyRisk(
+  assetId: string,
+  executor: Executor = getPool(),
+): Promise<number> {
+  const result = await executor.query<{ count: number }>(
+    `SELECT COUNT(*)::int AS count
+       FROM asset_failure_incidents af
+       JOIN incidents i ON i.id = af.incident_id
+      WHERE af.asset_id = $1
+        AND af.operational_impact = 'SAFETY_RISK'
+        AND af.failure_status <> 'RESOLVED'
+        AND i.status = 'REPORTED'`,
+    [assetId],
+  );
+
+  return result.rows[0]?.count ?? 0;
+}
+
+/**
  * Guarded transition: the WHERE clause pins the expected current status, so a
  * concurrent transition cannot be silently overwritten.
  */
@@ -249,6 +303,7 @@ async function transitionStatus(
 }
 
 export const assetFailureRepository = {
+  countUnresolvedSafetyRisk,
   create,
   findByIncidentId,
   list,

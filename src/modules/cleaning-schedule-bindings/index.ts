@@ -2,6 +2,7 @@ export {
   cleaningScheduleBindingAlreadyExistsError,
   cleaningScheduleBindingInactiveError,
   cleaningScheduleBindingNotFoundError,
+  cleaningScheduleBindingScheduleConflictError,
   cleaningScheduleBuildingMismatchError,
   cleaningScheduleClientMismatchError,
   cleaningScheduleInactiveError,

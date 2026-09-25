@@ -33,7 +33,23 @@ export const WORK_ORDER_EXECUTION_ACTIONS = [
 ] as const;
 
 export type WorkOrderExecutionAction = (typeof WORK_ORDER_EXECUTION_ACTIONS)[number];
-export type WorkOrderAvailableAction = WorkOrderExecutionAction | 'CLOSE';
+
+/**
+ * CR-BE-MOBILE-WO-COMPLETE-01 — canonical available-action vocabulary.
+ *
+ * `COMPLETE` and `CLOSE` are COMMAND tokens, not recorded execution actions:
+ *   - `COMPLETE` surfaces the existing BE-08H completion command
+ *     (`POST /work-orders/:id/complete`, IN_PROGRESS → COMPLETED),
+ *   - `CLOSE` surfaces the existing BE-08I closure command
+ *     (`POST /work-orders/:id/close`, COMPLETED → CLOSED).
+ *
+ * Neither has an entry in `WORK_ORDER_ACTION_TYPES`: that set exists to record
+ * `work_order_actions` history rows, and completion/closure never write one.
+ */
+export type WorkOrderAvailableAction =
+  | WorkOrderExecutionAction
+  | 'COMPLETE'
+  | 'CLOSE';
 
 export function isWorkOrderActionType(
   value: unknown,

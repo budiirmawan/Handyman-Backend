@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { assertActiveAllowedCurrencyCommand } from '../client-monetary-contexts';
@@ -8,6 +9,7 @@ import { inventoryItemRepository } from '../inventory-items';
 import { inventoryWarehouseRepository } from '../inventory-warehouses';
 import { workOrderRepository } from '../work-orders';
 import { materialRequestRepository } from '../material-requests';
+import { purchaseRequestRepository } from '../purchase-requests/purchase-request.repository';
 import { materialRequestNotFoundError } from '../material-requests/material-request.errors';
 import { workOrderProcurementBindingRepository } from '../work-order-procurement-bindings/work-order-procurement-binding.repository';
 import { inventoryStockMovementService } from '../inventory-stock-movements';
@@ -130,17 +132,64 @@ async function assertClientAccess(actorUserId: string | undefined, clientId: str
 }
 
 /**
+ * CR-BE-RN11-MATERIAL-FIELD-01 PART 03 — Work Order → Material Request
+ * ownership resolver for the usage/issue engine.
+ *
+ * Two canonical relations admit a Material Request to a Work Order:
+ *   A. FIELD  — material_requests.purchase_request_id → purchase_requests.id
+ *               → purchase_requests.work_order_id == workOrderId (PART 00).
+ *   B. LEGACY — work_order_procurement_bindings.material_request_id (one row
+ *               per Work Order; management flows).
+ *
+ * `materialRequestId` supplied  → valid if A or B holds, else
+ *   INVENTORY_WO_MATERIAL_USAGE_MATERIAL_REQUEST_INVALID.
+ * `materialRequestId` omitted   → LEGACY behaviour preserved verbatim: the
+ *   binding's material request is used; without a binding →
+ *   INVENTORY_WO_MATERIAL_USAGE_MATERIAL_REQUEST_REQUIRED. A Work Order with
+ *   several field requests is NEVER auto-selected among (callers must name one).
+ */
+export async function resolveWorkOrderMaterialRequestId(
+  workOrderId: string,
+  requestedMaterialRequestId: string | undefined,
+): Promise<string> {
+  const binding = await workOrderProcurementBindingRepository.findByWorkOrderId(workOrderId);
+  if (requestedMaterialRequestId === undefined) {
+    if (!binding?.materialRequestId) {
+      throw woMaterialUsageMaterialRequestRequiredError();
+    }
+    return binding.materialRequestId;
+  }
+  if (binding?.materialRequestId === requestedMaterialRequestId) {
+    return requestedMaterialRequestId;
+  }
+  const materialRequest = await materialRequestRepository.findById(requestedMaterialRequestId);
+  if (materialRequest) {
+    const parent = await purchaseRequestRepository.findById(materialRequest.purchaseRequestId);
+    if (parent?.workOrderId === workOrderId) {
+      return materialRequest.id;
+    }
+  }
+  throw woMaterialUsageMaterialRequestInvalidError();
+}
+
+/**
  * Record a demand-linked Work Order material issue.
  *
  * The existing Work Order usage and stock movement authorities remain in place:
- * the operation now resolves its Material Request through the existing Work
- * Order procurement binding, locks that approved demand before calculating the
- * cap, and then delegates stock mutation to the transaction-aware stock
- * movement core. Lock order is Material Request → Reservation (when supplied)
- * → Stock Balance → Movement/Usage persistence.
+ * the operation resolves its Material Request through
+ * `resolveWorkOrderMaterialRequestId` (field parent relation OR legacy
+ * binding), locks that approved demand before calculating the cap, and then
+ * delegates stock mutation to the transaction-aware stock movement core. Lock
+ * order is Material Request → Reservation (when supplied) → Stock Balance →
+ * Movement/Usage persistence.
+ *
+ * `executor` (PART 03): when supplied, the whole issue runs inside the
+ * caller's already-open transaction (idempotent field command) instead of
+ * opening its own — the lock order and every guard are identical.
  */
 export async function recordMaterialUsage(
   input: CreateWorkOrderMaterialUsageInput,
+  executor?: PoolClient,
 ): Promise<PublicWorkOrderMaterialUsage> {
   if (!input.quantity || input.quantity <= 0) {
     throw woMaterialUsageInvalidQuantityError();
@@ -181,19 +230,10 @@ export async function recordMaterialUsage(
     throw woMaterialUsageWorkOrderStateInvalidError();
   }
 
-  const binding = await workOrderProcurementBindingRepository.findByWorkOrderId(
+  const materialRequestId = await resolveWorkOrderMaterialRequestId(
     workOrder.id,
+    input.materialRequestId,
   );
-  if (!binding?.materialRequestId) {
-    throw woMaterialUsageMaterialRequestRequiredError();
-  }
-  if (
-    input.materialRequestId !== undefined &&
-    input.materialRequestId !== binding.materialRequestId
-  ) {
-    throw woMaterialUsageMaterialRequestInvalidError();
-  }
-  const materialRequestId = binding.materialRequestId;
 
   const warehouse = await inventoryWarehouseRepository.findById(input.warehouseId);
   if (!warehouse) {
@@ -228,7 +268,7 @@ export async function recordMaterialUsage(
     await assertBuildingAccess(input.usedByUserId, workOrder.buildingId);
   }
 
-  const transactionResult = await withTransaction(async (client) => {
+  const issueWork = async (client: PoolClient) => {
     // Demand is the first row lock. Every new controlled issue for the same
     // Material Request therefore serializes its cumulative issued calculation.
     const materialRequest = await materialRequestRepository.findByIdForUpdate(
@@ -477,11 +517,16 @@ export async function recordMaterialUsage(
     );
 
     return { createdUsage, movement };
-  });
+  };
+
+  const transactionResult = executor
+    ? await issueWork(executor)
+    : await withTransaction(issueWork);
 
   const detailed =
     await inventoryWorkOrderMaterialUsageRepository.findByIdWithDetails(
       transactionResult.createdUsage.id,
+      executor,
     );
   return toPublic(detailed ?? transactionResult.createdUsage);
 }
@@ -630,6 +675,7 @@ export async function getWorkOrderMaterialCostSummary(
 }
 
 export const inventoryWorkOrderMaterialUsageService = {
+  resolveWorkOrderMaterialRequestId,
   getWorkOrderMaterialCostSummary,
   recordMaterialUsage,
   getUsageById,

@@ -157,6 +157,16 @@ async function executeClaimed(
       sourceEntityId: action.workOrderId,
       sourceEventType: SOURCE_EVENT_TYPE,
       templateKey: action.templateKey,
+      // CR-BE-RN21-NOTIFICATION-NAV-01 — the EXPLICIT backend-owned navigation
+      // target. This is the only producer that declares one today: the action
+      // row already carries the canonical `work_orders.id` it was raised
+      // against (`action.workOrderId`, used verbatim above for the source
+      // entity), so the target is READ from the frozen action row — never
+      // inferred from `sourceEntityType`, and never taken from `metadata`.
+      navigationTarget: {
+        type: 'WORK_ORDER_FIELD_WORK',
+        id: action.workOrderId,
+      },
       metadata: {
         escalationActionId: action.id,
         slaClockId: action.slaClockId,

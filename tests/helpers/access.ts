@@ -275,6 +275,11 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   // BE-17B — Material Request
   { code: 'material_request.read', name: 'Read Material Requests' },
   { code: 'material_request.manage', name: 'Manage Material Requests' },
+  { code: 'material_request.field.read', name: 'Read Field Material Requests' },
+  { code: 'material_request.field.request', name: 'Request Field Materials' },
+  // CR-BE-RN11-MATERIAL-FIELD-01 PART 03 — record canonical Work Order material
+  // usage (STOCK_OUT issue) from the field. Not inventory_stock.manage.
+  { code: 'material_usage.field.record', name: 'Record Field Material Usage' },
   // BE-17C — Service Request
   { code: 'service_request.read', name: 'Read Service Requests' },
   { code: 'service_request.manage', name: 'Manage Service Requests' },
@@ -320,6 +325,9 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   // BE-18A — Utility Meter Master
   { code: 'utility_meter.read', name: 'Read Utility Meters' },
   { code: 'utility_meter.manage', name: 'Manage Utility Meters' },
+  // CR-BE-RN12-METER-FIELD-01 PART 00 — mobile field meter context (read only)
+  { code: 'utility_meter.field.read', name: 'Read Field Utility Meter Context' },
+  { code: 'utility_meter.field.record', name: 'Record Field Utility Meter Reading' },
   // BE-19A — Tenant Charges
   { code: 'tenant_charge.read', name: 'Read Tenant Charges' },
   { code: 'tenant_charge.manage', name: 'Manage Tenant Charges' },
@@ -489,6 +497,26 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   { code: 'fx_rate.approve', name: 'Approve, Reject, Supersede or Deactivate FX Rates' },
   { code: 'client_fx_policy.read', name: 'Read Client FX Policy' },
   { code: 'client_fx_policy.manage', name: 'Manage Client FX Policy' },
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 02 — Asset operational state (RN-10).
+  // The test administrator is granted it so the RN-10 command is exercisable
+  // through HTTP; the scoped sessions created inside
+  // `tests/asset-operational-state.test.ts` remain what prove RBAC denial, and
+  // `createPlainSession` remains what proves a caller with no role cannot
+  // mutate equipment safety state.
+  {
+    code: 'asset_operational_state.manage',
+    name: 'Manage Asset Operational State',
+  },
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 03 — governed RETURN_TO_SERVICE.
+  // The test administrator holds it so the command is exercisable over HTTP;
+  // the scoped sessions created inside
+  // `tests/asset-return-to-service.test.ts` remain what prove that neither
+  // `asset_operational_state.manage` nor any `asset_failure.*` code can stand
+  // in for it.
+  {
+    code: 'asset_operational_state.return_to_service',
+    name: 'Return Asset to Service',
+  },
 ];
 
 async function ensurePermissionId(code: string, name: string): Promise<string> {

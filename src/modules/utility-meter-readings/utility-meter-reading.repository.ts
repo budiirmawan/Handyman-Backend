@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewUtilityMeterReading,
@@ -13,7 +14,21 @@ import type {
  * All queries are scoped at the database level (`meter_id`, `building_id`,
  * `client_id`, or `tenant_company_id` in the WHERE clause) rather than
  * filtered in memory after a global fetch, per docs/data-isolation.md.
+ *
+ * CR-BE-RN12-METER-FIELD-01 PART 01 — optional executor seam
+ * ----------------------------------------------------------
+ * The mutating/lookup functions a caller may need to compose atomically take
+ * an OPTIONAL `executor`, defaulting to the pool. This is the same convention
+ * `recordOperationalEvent` already uses, so every existing management caller
+ * is untouched: omitting the argument behaves exactly as before.
+ *
+ * It exists because a field submission must commit the reading, its
+ * `UTILITY_METER_READING_RECORDED` event, and the Reading Due linkage in ONE
+ * transaction. A caller inside `withTransaction` must pass its `PoolClient`,
+ * otherwise these statements would run on a different connection and could
+ * neither see nor be rolled back with the surrounding work.
  */
+export type UtilityMeterReadingExecutor = Pick<PoolClient, 'query'>;
 
 const READING_SELECT = `
   id,
@@ -40,8 +55,9 @@ const DEFAULT_LIMIT = 100;
 
 async function create(
   input: NewUtilityMeterReading,
+  executor: UtilityMeterReadingExecutor = getPool(),
 ): Promise<UtilityMeterReadingRecord> {
-  const result = await getPool().query<UtilityMeterReadingRecord>(
+  const result = await executor.query<UtilityMeterReadingRecord>(
     `INSERT INTO utility_meter_readings
        (id, client_id, building_id, meter_id, uom_id, reading_value,
         reading_at, source, reading_type, notes, recorded_by_user_id,
@@ -72,8 +88,9 @@ async function create(
 
 async function findById(
   id: string,
+  executor: UtilityMeterReadingExecutor = getPool(),
 ): Promise<UtilityMeterReadingRecord | null> {
-  const result = await getPool().query<UtilityMeterReadingRecord>(
+  const result = await executor.query<UtilityMeterReadingRecord>(
     `SELECT ${READING_SELECT} FROM utility_meter_readings WHERE id = $1`,
     [id],
   );
@@ -118,8 +135,9 @@ async function findPreviousByMeter(
 async function findByMeterAndInstant(
   meterId: string,
   readingAt: Date,
+  executor: UtilityMeterReadingExecutor = getPool(),
 ): Promise<UtilityMeterReadingRecord | null> {
-  const result = await getPool().query<UtilityMeterReadingRecord>(
+  const result = await executor.query<UtilityMeterReadingRecord>(
     `SELECT ${READING_SELECT} FROM utility_meter_readings
      WHERE meter_id = $1 AND reading_at = $2`,
     [meterId, readingAt],

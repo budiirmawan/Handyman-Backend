@@ -5,6 +5,7 @@ import { requireBuildingAccess } from '../context-access';
 import {
   completePatrolExecutionHandler,
   getPatrolExecutionHandler,
+  getPatrolFieldContextHandler,
   listBuildingPatrolExecutionsHandler,
   listPatrolPointVisitsHandler,
   startPatrolExecutionHandler,
@@ -17,6 +18,7 @@ import {
  *
  *   GET   /buildings/:buildingId/security/patrol-executions
  *   GET   /security/patrol-executions/:id
+ *   GET   /security/patrol-executions/:id/field-context
  *   POST  /security/patrol-executions/:id/start
  *   POST  /security/patrol-executions/:id/points/:pointId/visit
  *   GET   /security/patrol-executions/:id/points
@@ -49,6 +51,16 @@ export function createPatrolExecutionRouter(): Router {
     auth,
     read,
     getPatrolExecutionHandler,
+  );
+  // CR-BE-RN16-PATROL-FIELD-01 PART 01 — mobile field entry: the execution,
+  // its canonical route points with visits, and the backend-derived field
+  // actions. Read-only; the existing start/visit/complete commands below stay
+  // the only mutation path.
+  router.get(
+    '/security/patrol-executions/:id/field-context',
+    auth,
+    read,
+    getPatrolFieldContextHandler,
   );
   router.post(
     '/security/patrol-executions/:id/start',

@@ -119,3 +119,33 @@ export type QualityAuditFilter = {
   result?: QualityAuditResult;
   status?: QualityAuditStatus;
 };
+
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — the commands a caller may issue next
+ * against the quality audit of one Daily Cleaning task.
+ *
+ * Both tokens map onto EXISTING BE-11K commands; no new command is introduced:
+ *   CREATE_AUDIT   → POST /housekeeping/quality-audits
+ *   COMPLETE_AUDIT → POST /housekeeping/quality-audits/{auditId}/complete
+ */
+export const QUALITY_AUDIT_MOBILE_ACTIONS = [
+  'CREATE_AUDIT',
+  'COMPLETE_AUDIT',
+] as const;
+export type QualityAuditMobileAction =
+  (typeof QUALITY_AUDIT_MOBILE_ACTIONS)[number];
+
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — target-scoped discovery of the
+ * DAILY_CLEANING quality audit.
+ *
+ * `audit` is the single current DRAFT audit of the Daily Cleaning task (or
+ * `null` when none is open) — never a list, and never completed history.
+ * `availableActions` is the authoritative command list the caller may issue
+ * next; it is resolved by the backend on every read and never derived on the
+ * client.
+ */
+export type DailyCleaningQualityAuditContext = {
+  audit: PublicQualityAudit | null;
+  availableActions: QualityAuditMobileAction[];
+};

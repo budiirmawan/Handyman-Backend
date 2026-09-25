@@ -25,8 +25,15 @@ import {
   EVIDENCE_HASH_ALGORITHM,
 } from './evidence-integrity';
 import { loadEvidenceExecution } from './evidence.service';
+// CR-BE-RN12-METER-FIELD-01 PART 02 — the field-safe BE-18F write for a Reading
+// parent (field-actor seam + storage + integrity hash + the authoritative
+// reading-evidence metadata write). Imported from the module file rather than
+// its index so this door cannot pull a router back into the evidence module.
+import { submitMobileReadingEvidenceFile } from '../mobile-utility-meter-reading-verification/mobile-utility-meter-reading-verification.service';
 import { resolveBoundFormInstanceBuilding } from '../form-instances';
 import { applyRetentionToEvidence } from '../evidence-retention-policies/evidence-retention-application.service';
+import { dailyCleaningRepository } from '../daily-cleaning';
+import { housekeepingEvidenceService, type EvidenceType } from '../housekeeping-evidence';
 import {
   MOBILE_EVIDENCE_EXECUTION_TYPES,
   type MobileEvidenceBuilding,
@@ -116,6 +123,24 @@ const UPLOAD_PERMISSION: Record<MobileEvidenceExecutionType, string> = {
   FINDING: 'evidence.manage',
   FINDING_REWORK: 'evidence.manage',
   FINDING_VERIFICATION: 'finding.review',
+  /**
+   * CR-BE-RN12-METER-FIELD-01 PART 02 — dedicated-route parity with the PART 02
+   * field reading-evidence routes, which require `utility_meter.field.evidence`.
+   *
+   * Note the deliberate asymmetry with the SHARED map in `evidence.service.ts`,
+   * where the same parent kind maps to `utility_meter.manage`. Each generic door
+   * mirrors the dedicated door of its own audience: this one is the mobile field
+   * app's door, so it takes the field code — and, unlike every other kind, it
+   * also runs `assertUtilityMeterReadingFieldActor` before writing (see the
+   * handler), because a flat permission grant says nothing about who is standing
+   * in front of which meter. The Web/offline door keeps the management code
+   * precisely so it cannot be used as a field-authority bypass.
+   *
+   * Not `evidence.manage`: that is the generic BE-07 engine authority, which is
+   * Client-scoped and has no notion of a field execution.
+   */
+  UTILITY_METER_READING: 'utility_meter.field.evidence',
+  DAILY_CLEANING: 'housekeeping_evidence.manage',
 };
 
 function permissionDeniedError(): AppError {
@@ -131,7 +156,11 @@ async function assertUploadPermission(
   executionType: MobileEvidenceExecutionType,
 ): Promise<void> {
   const permissions = await permissionService.resolvePermissionsForUser(userId);
-  if (!permissions.includes(UPLOAD_PERMISSION[executionType])) {
+  const required = UPLOAD_PERMISSION[executionType];
+  const hasPermission =
+    permissions.includes(required) ||
+    (executionType === 'DAILY_CLEANING' && permissions.includes('evidence.manage'));
+  if (!hasPermission) {
     throw permissionDeniedError();
   }
 }
@@ -267,6 +296,156 @@ async function resolveFindingParentContext(
         executionType === 'FINDING_VERIFICATION'
           ? { id: executionId, status: parent.verification_status ?? '' }
           : null,
+      // PART 02 — additive nullable parent reference; never set for a Finding kind.
+      meterReading: null,
+    },
+    building,
+  };
+}
+
+/**
+ * CR-BE-RN12-METER-FIELD-01 PART 02 — authoritative BE-18F Reading-parent
+ * context, resolved ONLY from the stored evidence's execution_type +
+ * execution_id (never from client input): `utility_meter_readings` is the
+ * parent row, and its own `building_id` is the Building context.
+ *
+ * Fail-closed semantics are the Finding-parent ones: a missing reading yields
+ * 404 (no partial context with null projections), and the reading's Building
+ * must be inside the caller's accessible Building set (BE-02G) before any
+ * enriched parent metadata is returned — 403 otherwise. This is the SAME gate
+ * the shared write-side resolver applies, so the read model can never be more
+ * permissive than the write side.
+ *
+ * No meter identity beyond `meterId` is projected: PART 00's meter-context route
+ * owns that, and a second meter projection here would drift.
+ */
+async function resolveMeterReadingParentContext(
+  executionId: string,
+  userId: string,
+): Promise<{ target: MobileEvidenceTarget; building: MobileEvidenceBuilding | null }> {
+  const readingResult = await getPool().query<{
+    id: string;
+    meter_id: string;
+    building_id: string;
+    reading_value: string;
+    reading_at: Date;
+    source: string;
+    reading_type: string;
+  }>(
+    `SELECT id, meter_id, building_id, reading_value::text AS reading_value,
+            reading_at, source, reading_type
+       FROM utility_meter_readings WHERE id = $1`,
+    [executionId],
+  );
+  const reading = readingResult.rows[0];
+  if (!reading) {
+    throw new AppError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: 'Evidence parent not found.',
+      statusCode: 404,
+      resource: { type: 'UTILITY_METER_READING', id: executionId },
+    });
+  }
+
+  const accessibleBuildingIds =
+    await contextAccessService.getAccessibleBuildingIds(userId);
+  if (!accessibleBuildingIds.includes(reading.building_id)) {
+    throw buildingAccessDeniedError();
+  }
+
+  const buildingRow = await getPool().query<MobileEvidenceBuilding>(
+    'SELECT id, code, name FROM buildings WHERE id = $1',
+    [reading.building_id],
+  );
+  const building = buildingRow.rows[0];
+  if (!building) {
+    throw new AppError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: 'Evidence parent not found.',
+      statusCode: 404,
+      resource: { type: 'UTILITY_METER_READING', id: executionId },
+    });
+  }
+
+  return {
+    target: {
+      executionType: 'UTILITY_METER_READING',
+      executionId,
+      checklist: null,
+      form: null,
+      task: null,
+      finding: null,
+      rework: null,
+      verification: null,
+      meterReading: {
+        id: reading.id,
+        meterId: reading.meter_id,
+        readingValue: Number(reading.reading_value),
+        readingAt: iso(reading.reading_at) ?? '',
+        source: reading.source,
+        readingType: reading.reading_type,
+      },
+    },
+    building,
+  };
+}
+
+/**
+ * CR-BE-RN13-CLEANING-EVIDENCE-MOBILE-01 — authoritative Daily Cleaning task
+ * parent context, resolved from `dailyCleaningRepository.findById(executionId)`.
+ * Proves that the task exists and binds to an ACTIVE cleaning schedule binding
+ * and ACTIVE cleaning area.
+ */
+async function resolveDailyCleaningParentContext(
+  executionId: string,
+  userId: string,
+): Promise<{ target: MobileEvidenceTarget; building: MobileEvidenceBuilding | null }> {
+  const task = await dailyCleaningRepository.findById(executionId);
+  if (!task) {
+    throw new AppError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: 'Evidence parent not found.',
+      statusCode: 404,
+      resource: { type: 'DAILY_CLEANING', id: executionId },
+    });
+  }
+
+  const accessibleBuildingIds =
+    await contextAccessService.getAccessibleBuildingIds(userId);
+  if (!accessibleBuildingIds.includes(task.building_id)) {
+    throw buildingAccessDeniedError();
+  }
+
+  const buildingRow = await getPool().query<MobileEvidenceBuilding>(
+    'SELECT id, code, name FROM buildings WHERE id = $1',
+    [task.building_id],
+  );
+  const building = buildingRow.rows[0];
+  if (!building) {
+    throw new AppError({
+      code: ERROR_CODES.NOT_FOUND,
+      message: 'Evidence parent not found.',
+      statusCode: 404,
+      resource: { type: 'DAILY_CLEANING', id: executionId },
+    });
+  }
+
+  return {
+    target: {
+      executionType: 'DAILY_CLEANING',
+      executionId,
+      checklist: null,
+      form: null,
+      task: {
+        taskId: task.task_id,
+        occurrenceAt: iso(task.occurrence_at) ?? '',
+        taskStatus: task.status,
+        buildingId: task.building_id,
+      },
+      finding: null,
+      rework: null,
+      verification: null,
+      meterReading: null,
     },
     building,
   };
@@ -291,6 +470,15 @@ async function resolveFindingParentContext(
  *     partial context with null projections), and the parent Finding's
  *     Building must be accessible to the caller (403 otherwise) before any
  *     enriched parent metadata is returned.
+ *   - UTILITY_METER_READING (CR-BE-RN12-METER-FIELD-01 PART 02) → the BE-18F
+ *     Reading parent, resolved from the STORED evidence's execution_type +
+ *     execution_id against `utility_meter_readings` (never from client input).
+ *     Identical fail-closed semantics: a missing reading is 404, and the
+ *     reading's own Building must be accessible (403 otherwise) before any
+ *     enriched parent metadata is returned. The projection carries the BE-18E
+ *     reading facts plus `meterId` only — meter identity stays with PART 00's
+ *     meter-context route, and no consumption, delta, abnormality or OCR
+ *     verdict is derived here.
  */
 async function resolveTargetContext(
   executionType: MobileEvidenceExecutionType,
@@ -305,6 +493,20 @@ async function resolveTargetContext(
     return resolveFindingParentContext(executionType, executionId, userId);
   }
 
+  // CR-BE-RN12-METER-FIELD-01 PART 02 — handled BEFORE the CHECKLIST/FORM
+  // branches: the trailing FORM_INSTANCE fallback queries `form_instances`, so
+  // without this case a reading parent would silently project a null form and a
+  // null Building instead of failing closed or resolving properly.
+  if (executionType === 'UTILITY_METER_READING') {
+    return resolveMeterReadingParentContext(executionId, userId);
+  }
+
+  // CR-BE-RN13-CLEANING-EVIDENCE-MOBILE-01 — handled BEFORE the generic
+  // CHECKLIST/FORM branches.
+  if (executionType === 'DAILY_CLEANING') {
+    return resolveDailyCleaningParentContext(executionId, userId);
+  }
+
   if (executionType === 'CHECKLIST_EXECUTION') {
     const execution = await getPool().query<{
       checklist_template_id: string;
@@ -314,6 +516,10 @@ async function resolveTargetContext(
     );
     const templateId = execution.rows[0]?.checklist_template_id;
     if (!templateId) {
+      const cleaningTask = await dailyCleaningRepository.findById(executionId);
+      if (cleaningTask) {
+        return resolveDailyCleaningParentContext(executionId, userId);
+      }
       return {
         target: {
           executionType,
@@ -324,6 +530,7 @@ async function resolveTargetContext(
           finding: null,
           rework: null,
           verification: null,
+          meterReading: null,
         },
         building: null,
       };
@@ -378,6 +585,7 @@ async function resolveTargetContext(
         finding: null,
         rework: null,
         verification: null,
+        meterReading: null,
       },
       building,
     };
@@ -452,6 +660,7 @@ async function resolveTargetContext(
       finding: null,
       rework: null,
       verification: null,
+      meterReading: null,
     },
     building,
   };
@@ -481,8 +690,10 @@ async function loadEvidenceRow(evidenceId: string, userId: string): Promise<Reco
 async function buildContract(
   row: Record<string, unknown>,
   userId: string,
+  executionTypeOverride?: MobileEvidenceExecutionType,
 ): Promise<MobileEvidenceContract> {
-  const executionType = row.execution_type as MobileEvidenceExecutionType;
+  const executionType =
+    executionTypeOverride ?? (row.execution_type as MobileEvidenceExecutionType);
   const executionId = row.execution_id as string;
   const { target, building } = await resolveTargetContext(
     executionType,
@@ -595,8 +806,7 @@ export function createMobileEvidenceRouter(): Router {
         ) {
           details.push({
             field: 'executionType',
-            message:
-              'executionType must be FORM_INSTANCE, CHECKLIST_EXECUTION, FINDING, FINDING_REWORK or FINDING_VERIFICATION.',
+            message: `executionType must be one of: ${MOBILE_EVIDENCE_EXECUTION_TYPES.join(', ')}.`,
           });
         }
         if (!executionId || !isValidUuid(executionId)) {
@@ -625,6 +835,72 @@ export function createMobileEvidenceRouter(): Router {
         // CHECKLIST_EXECUTION / FINDING / FINDING_REWORK; finding.review for
         // FINDING_VERIFICATION (generic-route parity).
         await assertUploadPermission(req.auth.userId, executionTypeValue);
+
+        /**
+         * CR-BE-RN13-CLEANING-EVIDENCE-MOBILE-01 — Daily Cleaning multipart evidence.
+         *
+         * Reuses the existing RN-06 multipart pipeline and storage abstraction,
+         * validates field-actor authority via `assertDailyCleaningEvidenceFieldActor`,
+         * and delegates persistence to BE-11I `housekeepingEvidenceService.submitEvidence`.
+         */
+        if (executionTypeValue === 'DAILY_CLEANING') {
+          const source =
+            await housekeepingEvidenceService.resolveHousekeepingEvidenceSource(
+              'daily-cleaning',
+              executionId as string,
+            );
+
+          await contextAccessService.assertBuildingAccess(
+            req.auth.userId,
+            source.buildingId,
+          );
+
+          await housekeepingEvidenceService.assertDailyCleaningEvidenceFieldActor(
+            'daily-cleaning',
+            source,
+            req.auth.userId,
+          );
+
+          const allowedMime =
+            MIME_BY_EVIDENCE_TYPE[evidenceType as string] ?? [];
+          if (!allowedMime.includes(file.mimetype)) {
+            throw AppError.badRequest(
+              `Evidence type ${evidenceType} does not accept MIME type ${file.mimetype}.`,
+            );
+          }
+
+          const evidenceId = randomUUID();
+          const key = evidenceStorageKey(evidenceId);
+          await storage.put(key, {
+            buffer: file.buffer,
+            mimeType: file.mimetype,
+          });
+
+          const created = await housekeepingEvidenceService.submitEvidence({
+            sourceType: 'daily-cleaning',
+            sourceId: executionId as string,
+            evidenceType: evidenceType as EvidenceType,
+            evidenceRequirementId: evidenceRequirementId ?? null,
+            fileReference: key,
+            originalFileName:
+              p(body.originalFileName) ?? file.originalname ?? 'evidence',
+            mimeType: file.mimetype,
+            fileSize: file.size,
+            capturedAt: capturedAt ? capturedAt.toISOString() : undefined,
+            submittedByUserId: req.auth.userId,
+          });
+
+          const createdRow = await getPool().query<Record<string, unknown>>(
+            'SELECT * FROM evidence_submissions WHERE id = $1',
+            [created.id],
+          );
+          sendSuccess(
+            res,
+            await buildContract(createdRow.rows[0], req.auth.userId, 'DAILY_CLEANING'),
+            201,
+          );
+          return;
+        }
 
         // MOB-C06 PART 01 — the parent is resolved ONLY from
         // executionType + executionId through the shared BE-07 evidence
@@ -661,6 +937,78 @@ export function createMobileEvidenceRouter(): Router {
         }
         if (execution.status === 'COMPLETED' || execution.status === 'CANCELLED') {
           throw AppError.badRequest('Terminal execution cannot receive evidence.');
+        }
+
+        /**
+         * CR-BE-RN12-METER-FIELD-01 PART 02 — a Reading parent is written
+         * through BE-18F, never through this handler's own INSERT.
+         *
+         * WHY THIS DOOR DELEGATES INSTEAD OF INSERTING
+         * --------------------------------------------
+         * Every other kind above is written by the generic INSERT below, because
+         * for those kinds the generic engine IS the authority. For
+         * `UTILITY_METER_READING` it is not: BE-18F `submitReadingEvidence` owns
+         * reading evidence, and it enforces three things the generic path does
+         * not — that an `evidenceRequirementId` is a requirement targeted at THIS
+         * reading (the generic path only checks type and Client, so it would
+         * happily file a photo under another reading's obligation), that the
+         * reading and its meter still agree on the Building, and that the
+         * canonical `UTILITY_METER_READING_EVIDENCE_ADDED` audit event is
+         * recorded. Letting this door insert directly would have made it a
+         * second, weaker write path into the same table for the same parent kind.
+         *
+         * So the mobile door and the dedicated field route
+         * (`POST /mobile/utility-reading-dues/:readingDueId/readings/:readingId/evidence`)
+         * are two ADDRESSES for one authoritative write, exactly as BE-07's
+         * `POST /evidence` and `POST /findings/:id/evidence` are two addresses
+         * for `submitEvidenceMetadata`. One table, one rule set, one event.
+         *
+         * FIELD-SAFE, NOT JUST PERMISSION-SAFE
+         * ------------------------------------
+         * `submitMobileReadingEvidenceFile` runs
+         * `assertUtilityMeterReadingFieldActor` before any byte is stored:
+         * `utility_meter.field.evidence` says a role may do field evidence work,
+         * and the seam says THIS actor is the assigned executor of the reading's
+         * generated task and has BE-02G access to its Building. A reading with no
+         * field due behind it is not field-accessible through this door (404), so
+         * admitting the parent kind here does not widen the field surface to
+         * management-, engineering- or import-posted readings. The generic
+         * Client + Building scope already applied above is kept, not replaced.
+         *
+         * The response stays the BE-25E mobile contract: the authoritative row
+         * BE-18F created is re-read and projected by the same `buildContract`
+         * every other kind uses, so a client sees one evidence shape regardless
+         * of parent kind — now including the additive `target.meterReading`
+         * reference.
+         */
+        if (executionTypeValue === 'UTILITY_METER_READING') {
+          const originalFileName = p(body.originalFileName);
+          const created = await submitMobileReadingEvidenceFile({
+            readingId: executionId as string,
+            actorUserId: req.auth.userId,
+            file: {
+              buffer: file.buffer,
+              mimeType: file.mimetype,
+              size: file.size,
+              originalName: file.originalname,
+            },
+            fields: {
+              evidenceType: evidenceType as 'PHOTO' | 'DOCUMENT' | 'SIGNATURE',
+              ...(evidenceRequirementId ? { evidenceRequirementId } : {}),
+              ...(capturedAt ? { capturedAt: capturedAt.toISOString() } : {}),
+              ...(originalFileName ? { originalFileName } : {}),
+            },
+          });
+          const createdRow = await getPool().query<Record<string, unknown>>(
+            'SELECT * FROM evidence_submissions WHERE id = $1',
+            [created.id],
+          );
+          sendSuccess(
+            res,
+            await buildContract(createdRow.rows[0], req.auth.userId),
+            201,
+          );
+          return;
         }
 
         // Evidence requirement validation (when provided).

@@ -123,3 +123,21 @@ export function woMaterialUsageCurrencyRequiredError(): AppError {
     statusCode: 400,
   });
 }
+
+/** PART 03 — field issue needs an ACTIVE reservation and the request has none. */
+export function woMaterialUsageActiveReservationRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.INVENTORY_WO_MATERIAL_USAGE_ACTIVE_RESERVATION_REQUIRED,
+    message: 'Material usage requires an ACTIVE reservation on the material request.',
+    statusCode: 409,
+  });
+}
+
+/** PART 03 — several ACTIVE reservations exist; the caller must name one. */
+export function woMaterialUsageReservationRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.INVENTORY_WO_MATERIAL_USAGE_RESERVATION_REQUIRED,
+    message: 'reservationId is required: the material request has multiple ACTIVE reservations.',
+    statusCode: 409,
+  });
+}

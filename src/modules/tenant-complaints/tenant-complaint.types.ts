@@ -1,4 +1,5 @@
 import type { FindingAction } from '../findings';
+import type { IntakeChannel } from '../tenant-intake';
 import type { WorkOrderPriority } from '../work-orders';
 
 export const TENANT_COMPLAINT_STATUSES = [
@@ -31,6 +32,11 @@ export type TenantComplaintRecord = {
   tenantPicId: string;
   buildingId: string;
   spaceId: string | null;
+  intakeChannel: IntakeChannel | null;
+  createdByUserId: string | null;
+  reporterName: string | null;
+  reporterPhone: string | null;
+  reporterEmail: string | null;
   complaintNumber: string;
   complaintType: string;
   title: string;
@@ -58,6 +64,10 @@ export type CreateTenantComplaintInput = {
   tenantPicId: string;
   buildingId: string;
   spaceId?: string;
+  intakeChannel?: IntakeChannel;
+  reporterName?: string;
+  reporterPhone?: string;
+  reporterEmail?: string;
   complaintNumber: string;
   complaintType: string;
   title: string;
@@ -71,6 +81,11 @@ export type NewTenantComplaint = {
   tenantPicId: string;
   buildingId: string;
   spaceId: string | null;
+  intakeChannel?: IntakeChannel | null;
+  createdByUserId?: string | null;
+  reporterName?: string | null;
+  reporterPhone?: string | null;
+  reporterEmail?: string | null;
   complaintNumber: string;
   complaintType: string;
   title: string;

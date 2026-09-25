@@ -5,6 +5,7 @@ import { contextAccessService } from '../context-access';
 import { supervisorInspectionService } from './supervisor-inspection.service';
 import {
   parseCreateSupervisorInspectionBody,
+  parseDailyCleaningTaskIdParam,
   parseSubmitSupervisorDecisionBody,
   parseSupervisorInspectionFilter,
   parseSupervisorInspectionIdParam,
@@ -95,6 +96,37 @@ export async function getSupervisorInspectionHandler(
     );
 
     sendSuccess(res, inspection);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-BE-RN14-CLEANING-SUPERVISOR-MOBILE-01 — target-scoped supervisor
+ * inspection context for a Daily Cleaning task. Read-only: it resolves the
+ * current PENDING inspection and the authoritative command list, and never
+ * creates or mutates an inspection.
+ */
+export async function getDailyCleaningSupervisorInspectionContextHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const taskId = parseDailyCleaningTaskIdParam(
+      paramString(req.params.taskId),
+    );
+    if (!req.auth) {
+      throw authenticationRequiredError();
+    }
+
+    const context =
+      await supervisorInspectionService.getDailyCleaningSupervisorInspectionContext(
+        taskId,
+        req.auth.userId,
+      );
+
+    sendSuccess(res, context);
   } catch (error) {
     next(error);
   }

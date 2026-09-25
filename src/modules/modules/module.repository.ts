@@ -59,8 +59,11 @@ async function findById(id: string): Promise<ModuleRecord | null> {
   return row ? mapModuleRow(row) : null;
 }
 
-async function findByCode(code: string): Promise<ModuleRecord | null> {
-  const result = await getPool().query<ModuleRow>(
+async function findByCode(
+  code: string,
+  q?: Pick<import('pg').PoolClient, 'query'>,
+): Promise<ModuleRecord | null> {
+  const result = await (q ?? getPool()).query<ModuleRow>(
     `SELECT ${MODULE_SELECT} FROM modules WHERE code = $1`,
     [code],
   );

@@ -1,10 +1,16 @@
 import { buildingNotFoundError, buildingRepository } from '../buildings';
 import { cleaningAreaRepository } from '../cleaning-areas';
-import { dailyCleaningRepository } from '../daily-cleaning';
+import { contextAccessService } from '../context-access';
+import {
+  dailyCleaningNotFoundError,
+  dailyCleaningRepository,
+} from '../daily-cleaning';
+import { permissionService } from '../permissions';
 import { publicAreaInspectionRepository } from '../public-area-inspections';
 import { supervisorInspectionRepository } from '../supervisor-inspections';
 import { toiletInspectionRepository } from '../toilet-inspections';
 import {
+  qualityAuditDraftAlreadyExistsError,
   qualityAuditImmutableError,
   qualityAuditNotFoundError,
   qualityAuditSourceNotFoundError,
@@ -16,7 +22,9 @@ import {
 import type {
   CompleteQualityAuditInput,
   CreateQualityAuditInput,
+  DailyCleaningQualityAuditContext,
   PublicQualityAudit,
+  QualityAuditMobileAction,
   QualityAuditFilter,
   QualityAuditRecord,
   QualityAuditSourceType,
@@ -152,25 +160,132 @@ export function toPublicQualityAudit(
   };
 }
 
+/**
+ * Creates a DRAFT quality audit for an audited Housekeeping source.
+ *
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 tightens the ORDER of the two checks
+ * that guard the insert, without changing either outcome:
+ *
+ *   1. BE-02G Building access is asserted BEFORE the row is written. The
+ *      Building is derived from the resolved source, so it is known as soon as
+ *      the source is resolved; previously the controller asserted it AFTER the
+ *      create had already committed, which left an audit row belonging to an
+ *      unauthorized caller behind every 403. The caller still sees the same
+ *      403 BUILDING_ACCESS_DENIED — now with nothing persisted.
+ *   2. At most ONE DRAFT audit may exist per `(sourceType, sourceId)`. The
+ *      pre-check gives a clean 409; the unique-violation translation below
+ *      covers the concurrent race the pre-check cannot. COMPLETED audits are
+ *      not consulted at all, so quality history stays unlimited.
+ */
 export async function createQualityAudit(
   input: CreateQualityAuditInput,
 ): Promise<PublicQualityAudit> {
   const source = await resolveAuditSource(input.sourceType, input.sourceId);
 
-  const record = await qualityAuditRepository.create({
-    clientId: source.clientId,
-    buildingId: source.buildingId,
-    cleaningAreaId: source.cleaningAreaId,
-    sourceType: input.sourceType,
-    sourceId: input.sourceId,
-    auditorUserId: input.auditorUserId,
-    score: input.score ?? null,
-    result: input.result ?? null,
-    notes: input.notes ?? null,
-  });
+  await contextAccessService.assertBuildingAccess(
+    input.auditorUserId,
+    source.buildingId,
+  );
+
+  const existingDraft = await qualityAuditRepository.findDraftBySource(
+    input.sourceType,
+    input.sourceId,
+  );
+  if (existingDraft) {
+    throw qualityAuditDraftAlreadyExistsError();
+  }
+
+  let record;
+  try {
+    record = await qualityAuditRepository.create({
+      clientId: source.clientId,
+      buildingId: source.buildingId,
+      cleaningAreaId: source.cleaningAreaId,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      auditorUserId: input.auditorUserId,
+      score: input.score ?? null,
+      result: input.result ?? null,
+      notes: input.notes ?? null,
+    });
+  } catch (error) {
+    if (qualityAuditRepository.isDraftQualityAuditUniqueViolation(error)) {
+      throw qualityAuditDraftAlreadyExistsError();
+    }
+    throw error;
+  }
 
   const full = await qualityAuditRepository.findById(record.id);
   return toPublicQualityAudit(full!);
+}
+
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — backend-only command authority.
+ *
+ *   CREATE_AUDIT   — no DRAFT audit exists for the source, and the caller may
+ *                    manage quality audits;
+ *   COMPLETE_AUDIT — a DRAFT audit exists, and the caller may manage quality
+ *                    audits.
+ *
+ * The two are mutually exclusive by construction: the DRAFT either exists or
+ * it does not. Building access is asserted by the caller before this resolver
+ * runs, so reaching it already proves the Building condition. Mobile never
+ * derives these tokens.
+ */
+export function resolveDailyCleaningQualityAuditActions(input: {
+  hasDraftAudit: boolean;
+  canManage: boolean;
+}): QualityAuditMobileAction[] {
+  if (!input.canManage) {
+    return [];
+  }
+  return input.hasDraftAudit ? ['COMPLETE_AUDIT'] : ['CREATE_AUDIT'];
+}
+
+/**
+ * Target-scoped discovery of the DAILY_CLEANING quality audit for one Daily
+ * Cleaning task, so mobile never scans the global quality-audit list.
+ *
+ * `taskId` is resolved canonically through Daily Cleaning (the same
+ * authoritative reading BE-11C publishes as `id` / `taskId`, i.e.
+ * `generated_tasks.id`) — no second task lookup is introduced. The Building
+ * authority check runs against the task-derived Building before any audit fact
+ * is disclosed, so an unrelated-Building caller is denied rather than shown
+ * `audit: null`.
+ *
+ * Read-only. It never creates, updates or completes an audit, and it exposes
+ * no completed history: `audit` is the single open DRAFT or `null`.
+ */
+export async function getDailyCleaningQualityAuditContext(
+  taskId: string,
+  actorUserId: string,
+): Promise<DailyCleaningQualityAuditContext> {
+  const task = await dailyCleaningRepository.findById(taskId);
+  if (!task) {
+    throw dailyCleaningNotFoundError();
+  }
+
+  await contextAccessService.assertBuildingAccess(
+    actorUserId,
+    task.building_id,
+  );
+
+  const draft = await qualityAuditRepository.findDraftBySource(
+    'DAILY_CLEANING',
+    taskId,
+  );
+
+  const permissions = new Set(
+    await permissionService.resolvePermissionsForUser(actorUserId),
+  );
+
+  return {
+    audit: draft ? toPublicQualityAudit(draft) : null,
+    availableActions: resolveDailyCleaningQualityAuditActions({
+      hasDraftAudit: draft !== null,
+      canManage: permissions.has('quality_audit.manage'),
+    }),
+  };
 }
 
 export async function getQualityAuditById(
@@ -232,8 +347,10 @@ export async function completeQualityAudit(
 export const qualityAuditService = {
   completeQualityAudit,
   createQualityAudit,
+  getDailyCleaningQualityAuditContext,
   getQualityAuditById,
   listQualityAudits,
+  resolveDailyCleaningQualityAuditActions,
   toPublicQualityAudit,
   updateQualityAudit,
 };

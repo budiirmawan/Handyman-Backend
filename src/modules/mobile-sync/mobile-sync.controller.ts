@@ -165,6 +165,39 @@ function validateOperation(
         });
       }
     }
+    if (resourceType === 'UTILITY_METER_READING') {
+      // CR-BE-RN12-METER-FIELD-01 PART 03 — BE-18 field reading. The two
+      // measurement facts are required up front so a malformed offline record
+      // fails here rather than after the batch has been accepted. Everything
+      // else stays backend-owned and is deliberately NOT accepted from the
+      // client: the meter comes from the Reading Due, the unit and its decimal
+      // precision from BE-18B, provenance and actor from the session, and the
+      // due completion from the canonical service. PART 01's own body parser
+      // remains the single authoritative rule for the payload itself.
+      const data = entry.data as Record<string, unknown> | undefined;
+      if (
+        !data ||
+        typeof data.readingValue !== 'number' ||
+        !Number.isFinite(data.readingValue)
+      ) {
+        details.push({
+          field: field('data.readingValue'),
+          message:
+            'data.readingValue must be a finite number for UTILITY_METER_READING.',
+        });
+      }
+      if (
+        !data ||
+        typeof data.readingAt !== 'string' ||
+        Number.isNaN(Date.parse(data.readingAt))
+      ) {
+        details.push({
+          field: field('data.readingAt'),
+          message:
+            'data.readingAt must be an ISO-8601 timestamp for UTILITY_METER_READING.',
+        });
+      }
+    }
     if (resourceType === 'CHECKLIST_RESPONSES') {
       const data = entry.data as Record<string, unknown> | undefined;
       if (!data || (data.responses !== undefined && !Array.isArray(data.responses) && !isRecord(data.responses))) {

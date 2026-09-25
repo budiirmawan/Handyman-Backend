@@ -11,6 +11,7 @@ export {
   assetHistoryService,
   listAssetHistory,
   recordAssetHistory,
+  recordAssetHistoryInTransaction,
   toPublicAssetHistoryEvent,
 } from './asset-history.service';
 

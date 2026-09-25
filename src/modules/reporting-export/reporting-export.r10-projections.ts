@@ -987,14 +987,15 @@ export function projectPermitToWorkApproval(source: PublicPermitToWorkApproval):
  * GRAIN AND IDENTITY — exactly one export row per authoritative `PublicPatrolDatasetRow`
  * returned by the owning BE-12M security-report patrol read. The row identity is the pair
  * (taskId, patrolScheduleBindingId), and BOTH fields are projected. The patrol query joins
- * `generated_tasks` to `patrol_schedule_bindings` on `schedule_definition_id` alone while
- * `patrol_schedule_bindings_active_unique` is unique on (patrol_route_id,
- * schedule_definition_id) WHERE status = 'ACTIVE', so several ACTIVE bindings for one schedule
- * definition across different patrol routes are valid and one taskId legitimately appears on
- * more than one row. That multiplicity is authoritative and is preserved exactly: the
- * projection never filters, sorts, groups, de-duplicates, ranks, elects or collapses, so the
- * row count is always `source.length`. No DISTINCT, GROUP BY, ROW_NUMBER or LATERAL selector
- * exists anywhere in this path and no primary, current, first or latest binding is chosen.
+ * `generated_tasks` to `patrol_schedule_bindings` on `schedule_definition_id` alone, and
+ * since CR-BE-RN16-PATROL-FIELD-01 PART 00 (migration 0354, which made
+ * `patrol_schedule_bindings_schedule_active_unique` unique on `schedule_definition_id WHERE
+ * status = 'ACTIVE'`) a schedule definition holds at most one ACTIVE binding, so one taskId
+ * resolves to exactly one patrol route and cannot appear on more than one row. The
+ * projection is unchanged by that: it still never filters, sorts, groups, de-duplicates,
+ * ranks, elects or collapses, so the row count is always `source.length`. No DISTINCT,
+ * GROUP BY, ROW_NUMBER or LATERAL selector exists anywhere in this path and no primary,
+ * current, first or latest binding is chosen.
  *
  * NO DERIVED IDENTITY — `patrolScheduleBindingId` is the PART 14B additive field copied
  * VERBATIM. It is never derived from patrolRouteId, scheduleDefinitionId or taskId and never

@@ -1858,9 +1858,10 @@ export const REPORTING_EXPORT_DATASET_REGISTRY: Readonly<
           asOf,
         },
         // ONE table `securityOperationalPatrol` at ONE row per governed patrol dataset row. The
-        // row identity is (taskId, patrolScheduleBindingId) and a repeated taskId across several
-        // ACTIVE bindings is preserved as several rows — never collapsed, deduplicated or
-        // elected. No KPI is calculated and this list is not a missed/overdue contributor list.
+        // row identity is (taskId, patrolScheduleBindingId) and rows are never collapsed,
+        // deduplicated or elected. Since CR-BE-RN16-PATROL-FIELD-01 PART 00 (migration 0354) a
+        // schedule definition holds at most one ACTIVE binding, so a repeated taskId cannot
+        // arise. No KPI is calculated and this list is not a missed/overdue contributor list.
         projected: projectSecurityOperationalPatrol(rows),
         // Echo the required `source` plus only the filters the owning parser actually accepted.
         // For PATROL the owning read applies buildingId, securityPostId, patrolRouteId, status,

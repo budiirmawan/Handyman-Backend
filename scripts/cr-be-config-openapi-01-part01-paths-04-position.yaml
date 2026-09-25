@@ -1,0 +1,180 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 04 — BE-03B POSITION
+  # (`src/modules/positions`).
+  # ---------------------------------------------------------------------------
+
+  /organizations/{organizationId}/positions:
+    post:
+      operationId: createPosition
+      summary: Create a Position under an Organization
+      description: >-
+        BE-03B. Creates one Position inside the Organization taken from the
+        route. Requires `position.manage`. The Organization is always the path
+        segment and is never read from the body; it must exist (404
+        `ORGANIZATION_NOT_FOUND`). `departmentId` is optional — omitted or
+        `null` creates an Organization-level Position — and when supplied the
+        Department must exist (404 `DEPARTMENT_NOT_FOUND`) and belong to that
+        same Organization, otherwise 400 `POSITION_HIERARCHY_MISMATCH`. `code`
+        is trimmed and upper-cased, must be 2–64 characters of `[A-Z][A-Z0-9_]*`
+        and is unique per Organization — a duplicate is 409
+        `POSITION_CODE_ALREADY_EXISTS`. `status` defaults to `ACTIVE`; an
+        INACTIVE Department cannot host a new ACTIVE Position (400
+        `DEPARTMENT_INACTIVE`). Creating a Position never alters BE-01 Role or
+        Permission state. Responds 201 with the created Position.
+      tags: [Position]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: position.manage
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePositionRequest" }
+      responses:
+        "201":
+          description: The created Position.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Position" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listOrganizationPositions
+      summary: List the Positions of an Organization
+      description: >-
+        BE-03B. Returns every Position of the Organization taken from the
+        route, ordered by `code` ascending, as a plain array — no page or limit
+        parameter exists on this route and `meta` is always `{}`. Requires
+        `position.read`. The list includes both Organization-level Positions
+        and Positions belonging to any of that Organization's Departments, so
+        `departmentId` on a row may be `null`.
+      tags: [Position]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: position.read
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdPathParam"
+      responses:
+        "200":
+          description: The Positions of the requested Organization.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Position" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /departments/{departmentId}/positions:
+    get:
+      operationId: listDepartmentPositions
+      summary: List the Positions of a Department
+      description: >-
+        BE-03B. Returns the Positions whose owning Department is the route's
+        `departmentId`, ordered by `code` ascending, as a plain array. Requires
+        `position.read`. This is the narrow counterpart of
+        `listOrganizationPositions`: Organization-level Positions (whose
+        `departmentId` is `null`) are excluded by definition. An unknown
+        Department yields an empty array rather than a 404.
+      tags: [Position]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: position.read
+      parameters:
+        - $ref: "#/components/parameters/DepartmentIdPathParam"
+      responses:
+        "200":
+          description: The Positions of the requested Department.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Position" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /positions/{id}:
+    get:
+      operationId: getPosition
+      summary: Get one Position
+      description: >-
+        BE-03B. Returns the single Position addressed by its own id. Requires
+        `position.read`. An unknown id is 404 `POSITION_NOT_FOUND`.
+      tags: [Position]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: position.read
+      parameters:
+        - $ref: "#/components/parameters/PositionIdPath"
+      responses:
+        "200":
+          description: The requested Position.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Position" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updatePosition
+      summary: Update a Position
+      description: >-
+        BE-03B partial update. Requires `position.manage`. Only `name`,
+        `description` and `status` are updatable. `organizationId`, `code` and
+        `departmentId` are not accepted here, so a Position can never be
+        re-coded or moved between Organizations or Departments through this
+        route. There is no minimum-property rule — an empty object returns the
+        unchanged Position. An explicit `null` for `description` is treated as
+        "absent". An unknown id is 404 `POSITION_NOT_FOUND`. This route grants
+        nothing: it never touches BE-01 Role or Permission state.
+      tags: [Position]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: position.manage
+      parameters:
+        - $ref: "#/components/parameters/PositionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdatePositionRequest" }
+      responses:
+        "200":
+          description: The updated Position.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Position" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

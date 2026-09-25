@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type { NewWorkOrderMaterialUsage, WorkOrderMaterialUsageRecord } from './inventory-wo-material-usage.types';
 
@@ -123,8 +124,11 @@ async function findById(id: string): Promise<WorkOrderMaterialUsageRecord | null
   return res.rows[0] ? map(res.rows[0]) : null;
 }
 
-async function findByIdWithDetails(id: string): Promise<any> {
-  const res = await getPool().query(
+async function findByIdWithDetails(
+  id: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<any> {
+  const res = await executor.query(
     `SELECT
        u.id,
        u.client_id AS "clientId",

@@ -27,6 +27,7 @@ export {
 export {
   completePatrolExecution,
   getPatrolExecutionById,
+  getPatrolFieldContext,
   listPatrolExecutionsByBuilding,
   listPatrolPointVisits,
   operationalDateWindow,
@@ -39,11 +40,17 @@ export {
 
 export {
   PATROL_EXECUTION_STATUSES,
+  PATROL_FIELD_ACTIONS,
+  PATROL_POINT_FIELD_ACTIONS,
   TERMINAL_PATROL_EXECUTION_STATUSES,
   isPatrolExecutionStatus,
   type PatrolExecutionFilter,
   type PatrolExecutionRow,
   type PatrolExecutionStatus,
+  type PatrolFieldAction,
+  type PatrolFieldContext,
+  type PatrolFieldPoint,
+  type PatrolPointFieldAction,
   type PatrolPointVisitInput,
   type PublicPatrolExecution,
   type PublicPatrolPointVisit,

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewPurchaseRequest,
@@ -23,6 +24,7 @@ type PurchaseRequestRow = {
   status: PurchaseRequestStatus;
   requestedByUserId: string;
   requestedAt: Date;
+  workOrderId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -41,6 +43,7 @@ const PURCHASE_REQUEST_SELECT = `
   status,
   requested_by_user_id AS "requestedByUserId",
   requested_at AS "requestedAt",
+  work_order_id AS "workOrderId",
   created_at AS "createdAt",
   updated_at AS "updatedAt"
 `;
@@ -60,6 +63,7 @@ function mapRow(row: PurchaseRequestRow): PurchaseRequestRecord {
     status: row.status,
     requestedByUserId: row.requestedByUserId,
     requestedAt: row.requestedAt,
+    workOrderId: row.workOrderId ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -67,13 +71,14 @@ function mapRow(row: PurchaseRequestRow): PurchaseRequestRecord {
 
 async function create(
   input: NewPurchaseRequest,
+  executor: PoolClient | null = null,
 ): Promise<PurchaseRequestRecord> {
-  const result = await getPool().query<PurchaseRequestRow>(
+  const result = await (executor ?? getPool()).query<PurchaseRequestRow>(
     `INSERT INTO purchase_requests
        (id, client_id, building_id, request_number, requester_reference,
         request_type, title, description, required_date, priority, status,
-        requested_by_user_id, requested_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN', $11, NOW())
+        requested_by_user_id, requested_at, work_order_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN', $11, NOW(), $12)
      RETURNING ${PURCHASE_REQUEST_SELECT}`,
     [
       randomUUID(),
@@ -87,14 +92,36 @@ async function create(
       input.requiredDate,
       input.priority,
       input.requestedByUserId,
+      input.workOrderId ?? null,
     ],
   );
 
   return mapRow(result.rows[0]);
 }
 
-async function findById(id: string): Promise<PurchaseRequestRecord | null> {
-  const result = await getPool().query<PurchaseRequestRow>(
+/**
+ * PART 00 — the Work-Order field procurement parent (at most one per Work
+ * Order, enforced by `purchase_requests_work_order_unique`).
+ */
+async function findByWorkOrderId(
+  workOrderId: string,
+  executor: PoolClient | null = null,
+): Promise<PurchaseRequestRecord | null> {
+  const result = await (executor ?? getPool()).query<PurchaseRequestRow>(
+    `SELECT ${PURCHASE_REQUEST_SELECT} FROM purchase_requests
+     WHERE work_order_id = $1`,
+    [workOrderId],
+  );
+
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
+async function findById(
+  id: string,
+  executor: PoolClient | null = null,
+): Promise<PurchaseRequestRecord | null> {
+  const result = await (executor ?? getPool()).query<PurchaseRequestRow>(
     `SELECT ${PURCHASE_REQUEST_SELECT} FROM purchase_requests WHERE id = $1`,
     [id],
   );
@@ -220,6 +247,7 @@ export const purchaseRequestRepository = {
   create,
   findById,
   findByRequestNumberForClient,
+  findByWorkOrderId,
   listByBuilding,
   update,
   updateStatus,

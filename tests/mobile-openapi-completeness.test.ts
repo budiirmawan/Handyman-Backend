@@ -209,6 +209,19 @@ const MOBILE_CONTRACT_MATRIX: string[] = [
   // 11. QR Resolution
   'GET /assets/resolve/{identifier}',
   'GET /mobile/qr/resolve/{identifier}',
+  // 11b. Unsafe condition field reporting
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 01 — the authoritative mobile field
+  // command for an Asset unsafe condition (a BE-21C Asset Failure with
+  // operationalImpact = SAFETY_RISK). Pinned here so the published command
+  // cannot silently rot out of the mobile contract.
+  'POST /mobile/assets/{assetId}/unsafe-condition',
+  // 11c. Mobile RN-10 operational-state read
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 04 — the authoritative mobile
+  // operational-state READ (canonical PART 02 view + caller-specific
+  // availableActions). Pinned here, next to the PART 01 field report, so
+  // the published mobile read cannot silently rot out of the contract.
+  // READ ONLY: the RN-10 mutations remain canonical on /assets.
+  'GET /mobile/assets/{assetId}/operational-state',
   // 12. Location / Functional Location
   'GET /buildings/{buildingId}/hierarchy',
   'GET /functional-locations/{functionalLocationId}/context',

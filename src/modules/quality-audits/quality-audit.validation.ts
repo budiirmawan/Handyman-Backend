@@ -347,3 +347,21 @@ function readOptionalString(
   }
   return trimmed;
 }
+
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — path parameter of the target-scoped
+ * Daily Cleaning quality-audit read. Validated as a UUID because it is the
+ * Daily Cleaning identity (`generated_tasks.id`), not a quality audit id.
+ */
+export function parseDailyCleaningTaskIdParam(raw: string): string {
+  const value = raw.trim();
+  if (!isValidUuid(value)) {
+    throw AppError.validation('Request validation failed.', [
+      {
+        field: 'taskId',
+        message: 'Daily cleaning task id must be a valid UUID.',
+      },
+    ]);
+  }
+  return value.toLowerCase();
+}

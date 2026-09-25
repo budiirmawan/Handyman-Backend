@@ -6,6 +6,7 @@ import { loadEvidenceExecution } from '../evidence/evidence.service';
 import { loadTaskAssignmentTask } from '../task-assignments/task-assignment.service';
 import { patrolExecutionService } from '../patrol-executions/patrol-execution.service';
 import { meterReadingBindingService } from '../meter-reading-bindings/meter-reading-binding.service';
+import { getMobileUtilityMeterContext } from '../mobile-utility-meter-context/mobile-utility-meter-context.service';
 import type { MobileSyncRequestItem } from './mobile-sync.types';
 import type {
   MobileSyncConflict,
@@ -41,6 +42,8 @@ const RELOAD_ENDPOINTS: Record<MobileSyncRequestItem['resourceType'], string> = 
   PATROL_EXECUTION: '/security/patrol-executions/{executionId}',
   PATROL_POINT_VISIT: '/security/patrol-executions/{executionId}/points',
   METER_READING: '/engineering/meter-reading-executions/{executionId}',
+  // CR-BE-RN12-METER-FIELD-01 PART 03 — the BE-18 field execution read.
+  UTILITY_METER_READING: '/mobile/utility-reading-dues/{readingDueId}/meter-context',
 };
 
 /**
@@ -137,6 +140,30 @@ export async function loadCurrentResourceState(
       );
       return { current: context, updatedAt: row.updated_at.toISOString() };
     }
+    case 'UTILITY_METER_READING': {
+      // CR-BE-RN12-METER-FIELD-01 PART 03 — the synced resource is the BE-18
+      // Reading Due, i.e. the field execution the reading is recorded against,
+      // so the authoritative version is that due's `updated_at`: it moves when
+      // the due is completed by another device, re-pointed, or cancelled. The
+      // current state is loaded through PART 00's published scoped read, which
+      // asserts the SAME field authority the write does, so a stale baseVersion
+      // is not a cross-Building read primitive. An unknown due → null (the write
+      // path produces the canonical 404); a caller without field authority →
+      // the seam's own refusal, mapped to a per-item FAILED result.
+      const result = await getPool().query<UpdatedAtRow>(
+        'SELECT updated_at FROM utility_reading_dues WHERE id = $1',
+        [operation.resourceId],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      const current = await getMobileUtilityMeterContext(
+        operation.resourceId,
+        userId,
+      );
+      return { current, updatedAt: row.updated_at.toISOString() };
+    }
     case 'TASK_ASSIGNMENT': {
       const task = await loadTaskAssignmentTask(operation.resourceId, userId);
       const assignment = await getPool().query<UpdatedAtRow>(
@@ -164,7 +191,12 @@ function buildGuidance(
   const reloadEndpoint = RELOAD_ENDPOINTS[operation.resourceType].replace(
     '{taskId}',
     operation.resourceId,
-  ).replace('{executionId}', operation.resourceId);
+  ).replace('{executionId}', operation.resourceId).replace(
+    // CR-BE-RN12-METER-FIELD-01 PART 03 — the BE-18 kind is addressed by its
+    // own authoritative resource name rather than borrowing a placeholder.
+    '{readingDueId}',
+    operation.resourceId,
+  );
   return {
     action: 'reload',
     reloadEndpoint,

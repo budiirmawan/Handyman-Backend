@@ -259,9 +259,16 @@ export async function createPatrolScheduleBinding(
     }
   }
 
+  // CR-BE-RN16-PATROL-FIELD-01 PART 00 — the schedule definition, NOT the
+  // (route, schedule) pair, is the binding cardinality authority. A generated
+  // task is unique per (schedule_definition_id, occurrence_at), so a second
+  // ACTIVE binding for the same schedule — from ANY patrol route — would make
+  // that task resolve to more than one route. The previous pair-scoped check
+  // could not see a binding arriving through a different route, which is
+  // exactly how the defect was reachable. INACTIVE history is preserved and
+  // unconstrained; only the ACTIVE set is bound by this rule.
   const activeExisting =
-    await patrolScheduleBindingRepository.findActiveByRouteAndSchedule(
-      input.patrolRouteId,
+    await patrolScheduleBindingRepository.findActiveByScheduleDefinitionId(
       scheduleId,
     );
   if (activeExisting) {
@@ -370,9 +377,13 @@ export async function updatePatrolScheduleBinding(
       throw patrolRouteHasNoPointsError();
     }
 
+    // CR-BE-RN16-PATROL-FIELD-01 PART 00 — reactivating a binding makes it
+    // the schedule's ACTIVE binding, so the same schedule-scoped rule applies
+    // as on create: no OTHER ACTIVE binding may already hold that schedule.
+    // `id` is excluded because the row being reactivated is INACTIVE by the
+    // branch condition above and therefore cannot be the ACTIVE row returned.
     const activeExisting =
-      await patrolScheduleBindingRepository.findActiveByRouteAndSchedule(
-        existing.patrolRouteId,
+      await patrolScheduleBindingRepository.findActiveByScheduleDefinitionId(
         existing.scheduleDefinitionId,
       );
     if (activeExisting && activeExisting.id !== id) {
@@ -392,7 +403,15 @@ function isPatrolScheduleBindingUniqueViolation(error: unknown): boolean {
   const candidate = error as { code?: string; constraint?: string };
   return (
     candidate.code === '23505' &&
-    candidate.constraint === 'patrol_schedule_bindings_active_unique'
+    // `patrol_schedule_bindings_active_unique` is the (route, schedule) pair
+    // index from migration 0123; `patrol_schedule_bindings_schedule_active_unique`
+    // is the schedule-scoped index added by CR-BE-RN16-PATROL-FIELD-01 PART 00
+    // (migration 0354). Both express the same bounded conflict — an ACTIVE
+    // binding already claims this schedule — so both map to the one conflict
+    // error, and the pre-check above cannot race the second one.
+    (candidate.constraint === 'patrol_schedule_bindings_active_unique' ||
+      candidate.constraint ===
+        'patrol_schedule_bindings_schedule_active_unique')
   );
 }
 

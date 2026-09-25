@@ -112,17 +112,18 @@ export type PublicPatrolDatasetRow = {
    * R10 PART 14B — the ACTIVE `patrol_schedule_bindings` row this task was joined through.
    *
    * The patrol dataset joins `generated_tasks` to its bindings on `schedule_definition_id`
-   * ALONE, while `patrol_schedule_bindings_active_unique` is unique on
+   * ALONE. `patrol_schedule_bindings_active_unique` is unique on
    * `(patrol_route_id, schedule_definition_id) WHERE status = 'ACTIVE'` — NOT on
-   * `schedule_definition_id` by itself. Several ACTIVE bindings for one schedule definition
-   * across different patrol routes are therefore valid, and one `taskId` legitimately
-   * appears on more than one row. That multiplicity is real and is deliberately preserved:
-   * this query has no DISTINCT, GROUP BY, ROW_NUMBER or LATERAL selector and elects no
-   * primary, current or latest binding.
+   * `schedule_definition_id` by itself — but CR-BE-RN16-PATROL-FIELD-01 PART 00 (migration
+   * 0354) added `patrol_schedule_bindings_schedule_active_unique` on
+   * `(schedule_definition_id) WHERE status = 'ACTIVE'`, so a schedule definition now holds
+   * at most ONE ACTIVE binding and one `taskId` resolves to exactly one patrol route. This
+   * query still has no DISTINCT, GROUP BY, ROW_NUMBER or LATERAL selector and still elects
+   * no primary, current or latest binding: it never had to choose, and it never chooses now.
    *
-   * The truthful row identity is consequently `(taskId, patrolScheduleBindingId)`, and this
-   * field exists to make that identity expressible. It names the actual joined binding for
-   * THIS row only; it is not a selection among bindings and implies no precedence.
+   * The truthful row identity is `(taskId, patrolScheduleBindingId)`, and this field exists
+   * to make that identity expressible. It names the actual joined binding for THIS row only;
+   * it is not a selection among bindings and implies no precedence.
    *
    * Non-nullable: the binding is reached through an INNER JOIN filtered on
    * `psb.status = 'ACTIVE'`, and `patrol_schedule_bindings.id` is a UUID PRIMARY KEY, so

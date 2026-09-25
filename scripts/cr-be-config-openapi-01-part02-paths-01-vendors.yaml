@@ -1,0 +1,162 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 01 — BE-06A VENDOR
+  # (`src/modules/vendors`).
+  #
+  # Vendor is Client-scoped master data for an external organisation. The
+  # vendor work / BAST / invoice surfaces that also live under `/vendors/...`
+  # are separate runtime authorities and are NOT re-documented here.
+  # ---------------------------------------------------------------------------
+
+  /clients/{clientId}/vendors:
+    post:
+      operationId: createVendor
+      summary: Create a Vendor for a Client
+      description: >-
+        BE-06A. Creates one Vendor owned by the Client taken from the route.
+        Requires `vendor.manage`. Resolution order: unknown Client 404
+        `CLIENT_NOT_FOUND`, INACTIVE Client 400 `CLIENT_INACTIVE`, duplicate
+        code 409 `VENDOR_CODE_ALREADY_EXISTS` (the unique index is the
+        race-condition backstop behind the explicit pre-check). `vendorCode` is
+        trimmed and upper-cased and must be 2–64 characters of
+        `[A-Z][A-Z0-9_-]*`, unique per Client; `vendorName` is required and at
+        most 160 characters. Optional `legalName` (≤255), `registrationNumber`
+        (≤64), `taxNumber` (≤64), `email` (≤255, must look like an address),
+        `phone` (≤32) and `address` (≤512) are stored as supplied. `status`
+        defaults to `ACTIVE`. A Vendor is master data only: no classification
+        `vendorCategoryId` is accepted here (that is BE-06B on PATCH), and no
+        procurement, billing or operational workflow is created. Responds 201
+        with the created Vendor.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVendorRequest" }
+      responses:
+        "201":
+          description: The created Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Vendor" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listClientVendors
+      summary: List the Vendors of a Client
+      description: >-
+        BE-06A read of the Client's Vendor master, ordered by `vendorCode`
+        ascending, as a plain array. Requires `vendor.read`; the Client id is
+        resolved first, so an unknown Client is 404 `CLIENT_NOT_FOUND` rather
+        than an empty list. The response is unpaginated and carries no filter
+        parameters.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      responses:
+        "200":
+          description: The Vendors recorded for the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Vendor" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendors/{id}:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPathParam"
+
+    get:
+      operationId: getVendor
+      summary: Get a Vendor
+      description: >-
+        BE-06A single-Vendor read addressed by the Vendor id. Requires
+        `vendor.read`. The id is trimmed, must be a UUID (400
+        `VALIDATION_ERROR` otherwise, with the detail naming `vendorId`) and is
+        looked up directly and globally — the read is not scoped by Client, so
+        ownership is visible from the record itself. An unknown id is 404
+        `VENDOR_NOT_FOUND`.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The requested Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Vendor" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateVendor
+      summary: Update a Vendor
+      description: >-
+        BE-06A partial update. Requires `vendor.manage`. `clientId` and
+        `vendorCode` are immutable — naming either is 400 `VALIDATION_ERROR`
+        with the detail "This field is immutable and cannot be updated.", so a
+        Vendor never migrates between Clients and its code stays the stable
+        identifier later BE-06 parts point at. Mutable: `vendorName`,
+        `legalName`, `registrationNumber`, `taxNumber`, `email`, `phone`,
+        `address` (an explicit `null` clears an optional field),
+        `vendorCategoryId` (BE-06B classification; explicit `null` clears it —
+        a set value must resolve to an ACTIVE Category of the same Client, else
+        404 `VENDOR_CATEGORY_NOT_FOUND`, 400
+        `VENDOR_CATEGORY_CLIENT_MISMATCH` or 400 `VENDOR_CATEGORY_INACTIVE`),
+        and `status`. Deactivation is `{"status": "INACTIVE"}` on this same
+        endpoint; records are never deleted. An unknown Vendor is 404
+        `VENDOR_NOT_FOUND`. The post-update shape is re-validated against the
+        merged record. Responds 200 with the updated Vendor.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateVendorRequest" }
+      responses:
+        "200":
+          description: The updated Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Vendor" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

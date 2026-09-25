@@ -124,6 +124,15 @@ export async function submitHousekeepingEvidenceHandler(
       source.buildingId,
     );
 
+    // CR-BE-RN13-CLEANING-FIELD-01 PART 02 — for a canonical cleaning execution,
+    // submission additionally requires the caller to be the assigned field
+    // actor. Same engine, same route, same table; no separate field uploader.
+    await housekeepingEvidenceService.assertDailyCleaningEvidenceFieldActor(
+      sourceType,
+      source,
+      req.auth.userId,
+    );
+
     const input = parseSubmitHousekeepingEvidenceBody(req.body);
     const result = await housekeepingEvidenceService.submitEvidence({
       ...input,

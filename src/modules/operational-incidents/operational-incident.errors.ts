@@ -51,3 +51,31 @@ export const operationalIncidentOccurrenceInvalidError = (): AppError =>
     'The occurrence date/time cannot be in the future.',
     400,
   );
+
+export const securityIncidentActiveShiftRequiredError = (): AppError =>
+  error(
+    ERROR_CODES.SECURITY_INCIDENT_ACTIVE_SHIFT_REQUIRED,
+    'Security incident reporting requires an active current shift in the requested building.',
+    409,
+  );
+
+export const securityIncidentShiftAmbiguousError = (): AppError =>
+  error(
+    ERROR_CODES.SECURITY_INCIDENT_SHIFT_AMBIGUOUS,
+    'Multiple active current shift assignments match the reporting context; cannot determine reporting shift.',
+    409,
+  );
+
+export const securityIncidentBuildingMismatchError = (): AppError =>
+  error(
+    ERROR_CODES.SECURITY_INCIDENT_BUILDING_MISMATCH,
+    'The requested building does not match the reporting field context building.',
+    409,
+  );
+
+export const securityIncidentReporterMismatchError = (): AppError =>
+  error(
+    ERROR_CODES.SECURITY_INCIDENT_REPORTER_MISMATCH,
+    'Security incident reports cannot be filed using another reporter’s field context.',
+    400,
+  );

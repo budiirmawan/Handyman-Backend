@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   AssetHistoryEventRecord,
@@ -6,6 +7,18 @@ import type {
   AssetHistoryMetadata,
   NewAssetHistoryEvent,
 } from './asset-history.types';
+
+/**
+ * CR-BE-RN10-SAFE-EQUIPMENT-01 PART 03 — minimal transaction seam.
+ *
+ * The default executor stays the pool, so every existing caller is unchanged.
+ * The parameter exists so a governed command that must write its audit row
+ * INSIDE the same transaction as the state change it describes (RN-10
+ * RETURN_TO_SERVICE) can hand in its `PoolClient`. This is the BE-21C
+ * convention (`Executor = Pick<PoolClient, 'query'>`) applied to BE-05I — not a
+ * second audit engine, and not a second history table.
+ */
+type Executor = Pick<PoolClient, 'query'>;
 
 type AssetHistoryEventRow = {
   id: string;
@@ -42,8 +55,9 @@ function mapRow(row: AssetHistoryEventRow): AssetHistoryEventRecord {
 /** Append only: there is deliberately no update or delete operation here. */
 async function insertEvent(
   input: NewAssetHistoryEvent,
+  executor: Executor = getPool(),
 ): Promise<AssetHistoryEventRecord> {
-  const result = await getPool().query<AssetHistoryEventRow>(
+  const result = await executor.query<AssetHistoryEventRow>(
     `INSERT INTO asset_history_events
        (id, asset_id, event_type, actor_user_id, summary, metadata)
      VALUES ($1, $2, $3, $4, $5, $6::jsonb)

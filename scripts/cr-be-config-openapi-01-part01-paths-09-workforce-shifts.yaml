@@ -1,0 +1,150 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 09 — BE-03E WORKFORCE SHIFT
+  # ASSIGNMENT (`src/modules/workforce-shifts`).
+  #
+  # Reuses the BE-03E Shift codes rather than introducing new ones: reads
+  # require `shift.read`, writes require `shift.manage`. Deactivation is
+  # `{"status": "INACTIVE"}` on PATCH, not a DELETE, so rostering history
+  # survives. `securityPostId` exists on the stored row but is accepted by no
+  # HTTP route, so it is deliberately absent from these request bodies.
+  # ---------------------------------------------------------------------------
+
+  /workforce/{workforceId}/shifts:
+    post:
+      operationId: assignWorkforceShift
+      summary: Assign a Shift to a Workforce Profile
+      description: >-
+        BE-03E. Connects an existing Workforce Profile to an existing Shift.
+        Requires `shift.manage`. The profile always comes from the route and is
+        never read from the body; the profile is resolved through its
+        Organization to obtain the Client (unknown profile → 404
+        `WORKFORCE_PROFILE_NOT_FOUND`), the Shift must exist (404
+        `SHIFT_NOT_FOUND`) and be ACTIVE for an ACTIVE assignment (400
+        `SHIFT_INACTIVE`), and both sides must resolve to the same Client (400
+        `WORKFORCE_SHIFT_CLIENT_MISMATCH`). A profile may hold at most one
+        ACTIVE assignment per Shift: a repeat is 409
+        `WORKFORCE_SHIFT_ALREADY_ASSIGNED`. `status` defaults to `ACTIVE`, and
+        `effectiveFrom` / `effectiveUntil` are both optional — an assignment
+        with no window is undated and stands until deactivated. An explicit
+        `null` clears a bound; when both are supplied, `effectiveUntil` must be
+        the same as or after `effectiveFrom`. The assignment is a rostering
+        record only: it implies no Role, Permission, Position, Team, Skill or
+        Building Assignment, and carries no attendance, payroll, overtime,
+        leave, timesheet or automatic scheduling behaviour. Responds 201 with
+        the created assignment.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignWorkforceShiftRequest"
+      responses:
+        "201":
+          description: The created Workforce Shift assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceShiftAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listWorkforceShifts
+      summary: List a Workforce Profile's Shift assignments
+      description: >-
+        BE-03E. Returns every Shift assignment held by the profile taken from
+        the route, ordered by creation time ascending, as a plain array — no
+        page or limit parameter exists on this route and `meta` is always `{}`.
+        Requires `shift.read`. The profile is resolved through its
+        Organization, so an unknown id is 404 `WORKFORCE_PROFILE_NOT_FOUND`
+        rather than a misleading empty list. `shiftId` is an identifier only
+        and is not expanded into the Shift definition.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      responses:
+        "200":
+          description: The Shift assignments held by the requested profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceShiftAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/shifts/{shiftId}:
+    patch:
+      operationId: updateWorkforceShiftAssignment
+      summary: Update a Workforce Shift assignment
+      description: >-
+        BE-03E partial update, addressed by the (workforce, shift) pair.
+        Requires `shift.manage`. Mutable: `effectiveFrom`, `effectiveUntil`,
+        `status`. At least one of them must be provided — an empty object is 400
+        `VALIDATION_ERROR` with the detail naming all three. Deactivation is
+        `{"status": "INACTIVE"}` on this same endpoint; the row is retained so
+        the rostering history stays auditable, and a deactivated assignment can
+        be reactivated by a later PATCH. An explicit `null` clears a bound, and
+        a partial update is re-checked against the stored record so
+        `effectiveUntil` can never end up before `effectiveFrom`. The profile
+        is resolved through its Organization (unknown profile → 404
+        `WORKFORCE_PROFILE_NOT_FOUND`), the Shift must exist (404
+        `SHIFT_NOT_FOUND`), both sides must share a Client (400
+        `WORKFORCE_SHIFT_CLIENT_MISMATCH`), and the pair must already be
+        assigned (404 `WORKFORCE_SHIFT_ASSIGNMENT_NOT_FOUND`). Reactivating
+        against an INACTIVE Shift is 400 `SHIFT_INACTIVE`, and colliding with
+        another ACTIVE assignment for the same Shift is 409
+        `WORKFORCE_SHIFT_ALREADY_ASSIGNED`. The Security Post on the row is not
+        addressable here: no HTTP route accepts `securityPostId`.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - $ref: "#/components/parameters/WorkforceShiftIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkforceShiftAssignmentRequest"
+      responses:
+        "200":
+          description: The updated Workforce Shift assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceShiftAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

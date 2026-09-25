@@ -48,6 +48,23 @@ export function qualityAuditClientMismatchError(): AppError {
   });
 }
 
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — application-level guard matching the
+ * `quality_audits_source_draft_unique` partial index (migration 0353).
+ *
+ * COMPLETED audits stay unlimited; only a SECOND open DRAFT for the same
+ * `(sourceType, sourceId)` is refused, because a target-scoped read must be
+ * able to name exactly one current draft.
+ */
+export function qualityAuditDraftAlreadyExistsError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.QUALITY_AUDIT_DRAFT_ALREADY_EXISTS,
+    message:
+      'A draft quality audit already exists for this source. Complete it before starting another.',
+    statusCode: 409,
+  });
+}
+
 export function qualityAuditBuildingMismatchError(): AppError {
   return new AppError({
     code: ERROR_CODES.QUALITY_AUDIT_BUILDING_MISMATCH,

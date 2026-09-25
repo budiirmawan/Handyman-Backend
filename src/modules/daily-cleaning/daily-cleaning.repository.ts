@@ -1,4 +1,5 @@
 import { getPool } from '../../database';
+import { dailyCleaningAreaAmbiguousError } from './daily-cleaning.errors';
 import type {
   DailyCleaningFilter,
   DailyCleaningStatus,
@@ -76,11 +77,32 @@ const BASE_QUERY = `
     ON sd.id = gt.schedule_definition_id
 `;
 
+/**
+ * CR-BE-RN13-CLEANING-FIELD-01 PART 00 — deterministic task → Cleaning Area
+ * resolution.
+ *
+ * `BASE_QUERY` joins `generated_tasks → cleaning_schedule_bindings →
+ * cleaning_areas`, so its row count equals the number of ACTIVE cleaning
+ * schedule bindings on the task's schedule definition. Migration 0352 caps
+ * that at one, which makes this a genuine single-row lookup.
+ *
+ * Previously this returned `rows[0]`, silently picking an arbitrary Cleaning
+ * Area whenever a schedule was ACTIVE against several areas. Under the new
+ * invariant more than one row means corrupted data, so it fails explicitly
+ * instead of guessing. This is the single chokepoint every Housekeeping
+ * consumer (evidence, findings, complaints, quality audits, supervisor
+ * inspections, cleaning assignments) resolves a daily cleaning through.
+ */
 export async function findById(id: string): Promise<DailyCleaningRow | null> {
   const result = await getPool().query<DailyCleaningRow>(
     `${BASE_QUERY} WHERE gt.id = $1`,
     [id],
   );
+
+  if (result.rows.length > 1) {
+    throw dailyCleaningAreaAmbiguousError(id);
+  }
+
   return result.rows[0] ?? null;
 }
 

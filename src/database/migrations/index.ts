@@ -345,6 +345,32 @@ import { migration0344AddChecklistExecutionAssignmentSnapshot } from './0344_add
 import { migration0345AddChecklistResponseLastRespondedByUserId } from './0345_add_checklist_response_last_responded_by_user_id';
 import { migration0346AddFormInstanceAttributionSnapshot } from './0346_add_form_instance_attribution_snapshot';
 import { migration0347AddFormResponseLastRespondedByUserId } from './0347_add_form_response_last_responded_by_user_id';
+import { migration0348AddAssetOperationalState } from './0348_add_asset_operational_state';
+import { migration0349CreateRequestIdempotencyRecords } from './0349_create_request_idempotency_records';
+import { migration0350AddPurchaseRequestWorkOrder } from './0350_add_purchase_request_work_order';
+import { migration0351AddUtilityExceptionReadingRecheck } from './0351_add_utility_exception_reading_recheck';
+import { migration0352UniqueActiveCleaningBindingPerSchedule } from './0352_unique_active_cleaning_binding_per_schedule';
+import { migration0353UniqueDraftQualityAuditPerSource } from './0353_unique_draft_quality_audit_per_source';
+import { migration0354UniqueActivePatrolBindingPerSchedule } from './0354_unique_active_patrol_binding_per_schedule';
+import { migration0355AddSecurityIncidentReportingContext } from './0355_add_security_incident_reporting_context';
+import { migration0356AddOperationalIncidentsSafetyReportType } from './0356_add_operational_incidents_safety_report_type';
+import { migration0357CreateSafetyInspectionBindings } from './0357_create_safety_inspection_bindings';
+import { migration0358AddNotificationNavigationTarget } from './0358_add_notification_navigation_target';
+import { migration0359AddTenantIntakeProvenance } from './0359_add_tenant_intake_provenance';
+import { migration0360ExtendClientsSaasCustomer } from './0360_extend_clients_saas_customer';
+import { migration0361AllowPlatformScopeOperationalEvents } from './0361_allow_platform_scope_operational_events';
+import { migration0362CreateSaasProductCatalog } from './0362_create_saas_product_catalog';
+import { migration0363CreateSaasPricebook } from './0363_create_saas_pricebook';
+import { migration0364ExtendSubscriptionsSaas } from './0364_extend_subscriptions_saas';
+import { migration0365ExtendModuleEntitlementsSaas } from './0365_extend_module_entitlements_saas';
+import { migration0366CreateSaasBillingAccounts } from './0366_create_saas_billing_accounts';
+import { migration0367CreateSaasInvoices } from './0367_create_saas_invoices';
+import { migration0368CreateSaasProvisioningRuns } from './0368_create_saas_provisioning_runs';
+import { migration0369CreateSaasPayments } from './0369_create_saas_payments';
+import { migration0370CreatePlatformConfigurations } from './0370_create_platform_configurations';
+import { migration0371CreateSaasUsage } from './0371_create_saas_usage';
+import { migration0372CreatePlatformSupportSessions } from './0372_create_platform_support_sessions';
+import { migration0373CreateProductAddOns } from './0373_create_product_add_ons';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -697,4 +723,30 @@ export const migrations: readonly Migration[] = [
   migration0345AddChecklistResponseLastRespondedByUserId,
   migration0346AddFormInstanceAttributionSnapshot,
   migration0347AddFormResponseLastRespondedByUserId,
+  migration0348AddAssetOperationalState,
+  migration0349CreateRequestIdempotencyRecords,
+  migration0350AddPurchaseRequestWorkOrder,
+  migration0351AddUtilityExceptionReadingRecheck,
+  migration0352UniqueActiveCleaningBindingPerSchedule,
+  migration0353UniqueDraftQualityAuditPerSource,
+  migration0354UniqueActivePatrolBindingPerSchedule,
+  migration0355AddSecurityIncidentReportingContext,
+  migration0356AddOperationalIncidentsSafetyReportType,
+  migration0357CreateSafetyInspectionBindings,
+  migration0358AddNotificationNavigationTarget,
+  migration0359AddTenantIntakeProvenance,
+  migration0360ExtendClientsSaasCustomer,
+  migration0361AllowPlatformScopeOperationalEvents,
+  migration0362CreateSaasProductCatalog,
+  migration0363CreateSaasPricebook,
+  migration0364ExtendSubscriptionsSaas,
+  migration0365ExtendModuleEntitlementsSaas,
+  migration0366CreateSaasBillingAccounts,
+  migration0367CreateSaasInvoices,
+  migration0368CreateSaasProvisioningRuns,
+  migration0369CreateSaasPayments,
+  migration0370CreatePlatformConfigurations,
+  migration0371CreateSaasUsage,
+  migration0372CreatePlatformSupportSessions,
+  migration0373CreateProductAddOns,
 ];

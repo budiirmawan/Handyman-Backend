@@ -102,6 +102,35 @@ export async function findById(
   return result.rows[0] ?? null;
 }
 
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — the single current DRAFT audit of one
+ * audited source.
+ *
+ * Migration 0353 caps `(source_type, source_id) WHERE status = 'DRAFT'` at one
+ * row, so this is a genuine single-row lookup and never picks a winner.
+ * COMPLETED history is excluded by the `status` predicate, not ordered and
+ * truncated, so a completed audit never masquerades as the open one.
+ */
+export async function findDraftBySource(
+  sourceType: QualityAuditSourceType,
+  sourceId: string,
+): Promise<QualityAuditWithContextRow | null> {
+  const result = await getPool().query<QualityAuditWithContextRow>(
+    `SELECT
+       qa.*,
+       ca.code AS area_code,
+       ca.name AS area_name,
+       ca.status AS area_status
+     FROM quality_audits qa
+     LEFT JOIN cleaning_areas ca ON ca.id = qa.cleaning_area_id
+     WHERE qa.source_type = $1
+       AND qa.source_id = $2
+       AND qa.status = 'DRAFT'`,
+    [sourceType, sourceId],
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function list(
   filter: QualityAuditFilter = {},
 ): Promise<QualityAuditWithContextRow[]> {
@@ -213,10 +242,29 @@ export async function complete(
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }
 
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — true when the error is the database
+ * refusing a SECOND DRAFT for one source (migration 0353). Used to translate a
+ * race that slipped past the service pre-check into the same 409 the pre-check
+ * raises, so the invariant holds under concurrency too.
+ */
+export function isDraftQualityAuditUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const candidate = error as { code?: string; constraint?: string };
+  return (
+    candidate.code === '23505' &&
+    candidate.constraint === 'quality_audits_source_draft_unique'
+  );
+}
+
 export const qualityAuditRepository = {
   complete,
   create,
   findById,
+  findDraftBySource,
+  isDraftQualityAuditUniqueViolation,
   list,
   update,
 };

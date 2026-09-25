@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getPool } from '../../database';
+import { patrolExecutionBindingAmbiguousError } from './patrol-execution.errors';
 import type {
   PatrolExecutionFilter,
   PatrolExecutionRow,
@@ -98,11 +99,31 @@ function rowToRecord(row: PatrolExecutionRow): PatrolExecutionRow {
   };
 }
 
+/**
+ * CR-BE-RN16-PATROL-FIELD-01 PART 00 — deterministic task → binding resolution.
+ *
+ * `BASE_QUERY` joins `generated_tasks → patrol_schedule_bindings → patrol_routes`,
+ * so its row count equals the number of ACTIVE patrol schedule bindings on the
+ * task's schedule definition. Migration 0354 caps that at one, which makes this
+ * a genuine single-row lookup.
+ *
+ * Previously this returned `rows[0]`, silently picking an arbitrary Patrol
+ * Route / binding whenever a schedule was ACTIVE against several routes.
+ * Under the new invariant more than one row means corrupted data, so it fails
+ * explicitly instead of guessing. This is the resolver every Patrol Execution
+ * consumer (get / start / visit / complete / the mobile conflict probe)
+ * resolves an execution through, so no caller can act on an arbitrary route.
+ */
 export async function findById(taskId: string): Promise<PatrolExecutionRow | null> {
   const result = await getPool().query<PatrolExecutionRow>(
     `${BASE_QUERY} WHERE gt.id = $1`,
     [taskId],
   );
+
+  if (result.rows.length > 1) {
+    throw patrolExecutionBindingAmbiguousError(taskId);
+  }
+
   return result.rows[0] ? rowToRecord(result.rows[0]) : null;
 }
 
@@ -137,6 +158,24 @@ export async function listByBuilding(
      ORDER BY gt.occurrence_at ASC, pr.code ASC`,
     values,
   );
+
+  // CR-BE-RN16-PATROL-FIELD-01 PART 00 — one generated task is one Patrol
+  // Execution. Under migration 0354's invariant the join cannot fan a task out
+  // across routes, but a row set produced BEFORE 0354 (or written while the
+  // index was bypassed) would silently list the SAME task as several
+  // executions on several routes, which the operator would read as several
+  // separate patrols. Anything other than one row per task is corrupted data
+  // and fails explicitly rather than being duplicated into the list. The rows
+  // are never collapsed, deduplicated or elected — a task that repeats is
+  // reported as ambiguity, not resolved to a winner.
+  const seenTaskIds = new Set<string>();
+  for (const row of result.rows) {
+    if (seenTaskIds.has(row.task_id)) {
+      throw patrolExecutionBindingAmbiguousError(row.task_id);
+    }
+    seenTaskIds.add(row.task_id);
+  }
+
   return result.rows.map(rowToRecord);
 }
 

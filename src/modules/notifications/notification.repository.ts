@@ -28,6 +28,8 @@ const SELECT_COLUMNS = `id,
   source_event_type AS "sourceEventType",
   template_key AS "templateKey",
   metadata,
+  navigation_target_type AS "navigationTargetType",
+  navigation_target_id AS "navigationTargetId",
   created_at AS "createdAt",
   delivered_at AS "deliveredAt",
   read_at AS "readAt",
@@ -53,9 +55,9 @@ async function create(input: NewNotification): Promise<NotificationRecord> {
     `INSERT INTO notifications (
        id, client_id, recipient_user_id, type, channel, status, title, body,
        source_entity_type, source_entity_id, source_event_type, template_key,
-       metadata
+       metadata, navigation_target_type, navigation_target_id
      )
-     VALUES ($1, $2, $3, $4, $5, 'UNREAD', $6, $7, $8, $9, $10, $11, $12)
+     VALUES ($1, $2, $3, $4, $5, 'UNREAD', $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING ${SELECT_COLUMNS}`,
     [
       randomUUID(),
@@ -70,6 +72,10 @@ async function create(input: NewNotification): Promise<NotificationRecord> {
       input.sourceEventType ?? null,
       input.templateKey ?? null,
       input.metadata ?? {},
+      // CR-BE-RN21-NOTIFICATION-NAV-01 — written ONLY from the producer's
+      // explicit target, never inferred from the source entity fields.
+      input.navigationTarget?.type ?? null,
+      input.navigationTarget?.id ?? null,
     ],
   );
   return result.rows[0];

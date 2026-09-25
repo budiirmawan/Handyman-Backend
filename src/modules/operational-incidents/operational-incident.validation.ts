@@ -73,6 +73,10 @@ export function parseCreateOperationalIncidentBody(
     'cancelledByUserId',
     'createdAt',
     'updatedAt',
+    'reportedShiftAssignmentId',
+    'reportedSecurityPostId',
+    'reported_shift_assignment_id',
+    'reported_security_post_id',
   ].find((field) => body[field] !== undefined);
   if (controlled) {
     fail([
@@ -181,6 +185,10 @@ export function parseUpdateOperationalIncidentBody(
     'cancelledByUserId',
     'createdAt',
     'updatedAt',
+    'reportedShiftAssignmentId',
+    'reportedSecurityPostId',
+    'reported_shift_assignment_id',
+    'reported_security_post_id',
   ].find((field) => body[field] !== undefined);
   if (immutable) {
     fail([

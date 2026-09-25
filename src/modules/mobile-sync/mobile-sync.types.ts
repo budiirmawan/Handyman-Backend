@@ -32,6 +32,19 @@ import type { MobileSyncConflictGuidance } from './mobile-sync-conflict.types';
  * PART 06: PATROL_EXECUTION (BE-12D `startPatrolExecution` /
  * `completePatrolExecution`), PATROL_POINT_VISIT (BE-12D
  * `recordPatrolPointVisit`), METER_READING (BE-10C `submitMeterReading`).
+ * CR-BE-RN12-METER-FIELD-01 PART 03: UTILITY_METER_READING (BE-18
+ * `recordMobileUtilityMeterReading`).
+ *
+ * METER_READING AND UTILITY_METER_READING ARE DIFFERENT DOMAINS, BOTH KEPT
+ * ------------------------------------------------------------------------
+ * `METER_READING` is BE-10C: an engineering meter-reading BINDING executed
+ * through a BE-07 Form Instance, gated by `meter_reading_binding.manage`, and it
+ * is unchanged here. `UTILITY_METER_READING` is BE-18: a utility Meter Reading
+ * recorded against a Reading Due by the field executor of that due's generated
+ * task, gated by `utility_meter.field.record`, writing a canonical BE-18E
+ * reading and completing the due. They share no resource id, no permission, no
+ * service and no write target, so neither is repurposed for the other and a
+ * client can never reach BE-18 through the BE-10C kind or vice versa.
  */
 export const MOBILE_SYNC_RESOURCE_TYPES = [
   'TASK_EXECUTION',
@@ -41,6 +54,7 @@ export const MOBILE_SYNC_RESOURCE_TYPES = [
   'PATROL_EXECUTION',
   'PATROL_POINT_VISIT',
   'METER_READING',
+  'UTILITY_METER_READING',
 ] as const;
 
 export type MobileSyncResourceType = (typeof MOBILE_SYNC_RESOURCE_TYPES)[number];
@@ -66,7 +80,8 @@ export type MobileSyncRequestItem = {
    * never a client-fabricated one: taskId (TASK_EXECUTION, TASK_ASSIGNMENT),
    * checklist executionId (CHECKLIST_RESPONSES, EVIDENCE_SUBMISSION),
    * patrol execution id = BE-07 taskId (PATROL_EXECUTION,
-   * PATROL_POINT_VISIT), BE-07 form instance id (METER_READING).
+   * PATROL_POINT_VISIT), BE-07 form instance id (METER_READING), BE-18 Reading
+   * Due id (UTILITY_METER_READING) — the field execution, never a bare meter id.
    */
   resourceId: string;
   operation: MobileSyncOperation;

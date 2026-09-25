@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { purchaseRequestRepository } from '../purchase-requests';
 import { purchaseRequestNotFoundError } from '../purchase-requests/purchase-request.errors';
@@ -94,13 +95,17 @@ function resolveUomId(
  */
 export async function createMaterialRequest(
   input: CreateMaterialRequestInput,
+  executor?: PoolClient,
 ): Promise<PublicMaterialRequest> {
   if (!input.quantity || input.quantity <= 0) {
     throw materialRequestInvalidQuantityError();
   }
 
+  // The Purchase Request may have been created in the caller's still-open
+  // transaction (PART 00 Work-Order field parent), so read it on the executor.
   const purchaseRequest = await purchaseRequestRepository.findById(
     input.purchaseRequestId,
+    executor ?? null,
   );
   if (!purchaseRequest) {
     throw purchaseRequestNotFoundError();
@@ -147,7 +152,7 @@ export async function createMaterialRequest(
     requestedByUserId: input.requestedByUserId,
   };
 
-  const record = await materialRequestRepository.create(newMaterialRequest);
+  const record = await materialRequestRepository.create(newMaterialRequest, executor);
   return toPublicMaterialRequest(record);
 }
 

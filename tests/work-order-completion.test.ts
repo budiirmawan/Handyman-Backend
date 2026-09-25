@@ -269,6 +269,41 @@ describe('required evidence', () => {
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, 'WORK_ORDER_COMPLETION_EVIDENCE_INCOMPLETE');
   });
+
+  it('keeps the COMPLETE token while required evidence is still missing', async (t) => {
+    if (!requireDatabase(t)) {
+      return;
+    }
+
+    const { wo, worker, client } = await setupAssignedWorkOrder(t);
+    await startWorkOrder(wo.id, worker.token);
+    await createRequirement(wo.id, client.id, 'PHOTO', 1);
+
+    // CR-BE-MOBILE-WO-COMPLETE-01 — evidence readiness is deliberately NOT part
+    // of the available-action authority, so the token stays visible and the
+    // completion command remains the single evidence authority.
+    const feed = await api()
+      .get('/api/v1/mobile/assignments')
+      .set(authHeaders(worker.token));
+    assert.equal(feed.status, 200, JSON.stringify(feed.body));
+    const item = (feed.body.data as any[]).find(
+      (entry: { reference: { workOrderId?: string } }) =>
+        entry.reference.workOrderId === wo.id,
+    );
+    assert.ok(item, 'the work order must be in the mobile feed');
+    assert.equal(item.status, 'IN_PROGRESS');
+    assert.ok(
+      item.availableActions.includes('COMPLETE'),
+      'missing required evidence must not remove the COMPLETE token',
+    );
+
+    const rejected = await completeWorkOrder(wo.id, worker.token);
+    assert.equal(rejected.status, 400);
+    assert.equal(
+      rejected.body.error.code,
+      'WORK_ORDER_COMPLETION_EVIDENCE_INCOMPLETE',
+    );
+  });
 });
 
 describe('invalid lifecycle state', () => {

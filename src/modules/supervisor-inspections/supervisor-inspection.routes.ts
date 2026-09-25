@@ -3,6 +3,7 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   createSupervisorInspectionHandler,
+  getDailyCleaningSupervisorInspectionContextHandler,
   getSupervisorInspectionHandler,
   listSupervisorInspectionsHandler,
   submitSupervisorDecisionHandler,
@@ -15,6 +16,10 @@ import {
  *   GET  /housekeeping/supervisor-inspections
  *   GET  /housekeeping/supervisor-inspections/:id
  *   POST /housekeeping/supervisor-inspections/:id/decision
+ *
+ * CR-BE-RN14-CLEANING-SUPERVISOR-MOBILE-01 — target-scoped discovery:
+ *
+ *   GET  /housekeeping/daily-cleaning/:taskId/supervisor-inspection
  */
 export function createSupervisorInspectionRouter(): Router {
   const router = Router();
@@ -45,6 +50,16 @@ export function createSupervisorInspectionRouter(): Router {
     auth,
     manage,
     submitSupervisorDecisionHandler,
+  );
+  // CR-BE-RN14-CLEANING-SUPERVISOR-MOBILE-01 — target-scoped read that keeps
+  // mobile off the global inspection list. Read permission only: the
+  // `availableActions` it returns are themselves gated on the manage
+  // permission by the service.
+  router.get(
+    '/housekeeping/daily-cleaning/:taskId/supervisor-inspection',
+    auth,
+    read,
+    getDailyCleaningSupervisorInspectionContextHandler,
   );
 
   return router;

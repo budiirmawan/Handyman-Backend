@@ -66,6 +66,16 @@ const PRE_EXISTING_KINDS = [
 /** Kinds added by PART 06 over already-published authoritative writes. */
 const PART_06_KINDS = ['PATROL_EXECUTION', 'PATROL_POINT_VISIT', 'METER_READING'];
 
+/**
+ * CR-BE-RN12-METER-FIELD-01 PART 03 — ONE further kind, for the BE-18 utility
+ * field reading. It is a DISTINCT domain from the BE-25H `METER_READING` kind,
+ * which stays BE-10C (meter-reading bindings, `meter_reading_binding.manage`,
+ * `submitMeterReading`): different resource id, different permission, different
+ * published service, no shared write target. The kind list order below is the
+ * implemented order, so the documented enum and the constant must stay in lockstep.
+ */
+const PART_03_KINDS = ['UTILITY_METER_READING'];
+
 describe('CR-BE-MOB-01 PART 06 — supported sync resource kinds', () => {
   it('preserves the BE-25G kinds and their operations exactly', () => {
     for (const kind of PRE_EXISTING_KINDS) {
@@ -84,14 +94,40 @@ describe('CR-BE-MOB-01 PART 06 — supported sync resource kinds', () => {
     assert.deepEqual(OPERATIONS_BY_TYPE.TASK_ASSIGNMENT, ['UPDATE']);
   });
 
-  it('adds exactly the PART 06 kinds', () => {
+  it('adds exactly the PART 06 and PART 03 kinds', () => {
     assert.deepEqual(
       [...MOBILE_SYNC_RESOURCE_TYPES],
-      [...PRE_EXISTING_KINDS, ...PART_06_KINDS],
+      [...PRE_EXISTING_KINDS, ...PART_06_KINDS, ...PART_03_KINDS],
     );
     assert.deepEqual(OPERATIONS_BY_TYPE.PATROL_EXECUTION, ['START', 'COMPLETE']);
     assert.deepEqual(OPERATIONS_BY_TYPE.PATROL_POINT_VISIT, ['SUBMIT']);
     assert.deepEqual(OPERATIONS_BY_TYPE.METER_READING, ['SUBMIT']);
+    assert.deepEqual(OPERATIONS_BY_TYPE.UTILITY_METER_READING, ['SUBMIT']);
+  });
+
+  it('keeps BE-10C METER_READING untouched by the PART 03 kind', () => {
+    // The two kinds are different domains: PART 03 added a kind, it did not
+    // repurpose, extend or re-point the BE-25H one.
+    assert.deepEqual(OPERATIONS_BY_TYPE.METER_READING, ['SUBMIT']);
+    assert.deepEqual(PUBLISHED_OPERATION_BY_TYPE.METER_READING, {
+      SUBMIT: 'submitMeterReading',
+    });
+    assert.deepEqual(PUBLISHED_OPERATION_BY_TYPE.UTILITY_METER_READING, {
+      SUBMIT: 'recordMobileUtilityMeterReading',
+    });
+    const service = readSource('src/modules/mobile-sync/mobile-sync.service.ts');
+    const block = /REQUIRED_PERMISSION[^=]*=\s*\{([\s\S]*?)\n\};/.exec(service);
+    assert.ok(block, 'REQUIRED_PERMISSION map not found');
+    assert.match(
+      block[1],
+      /METER_READING:\s*'meter_reading_binding\.manage'/,
+      'the BE-10C kind must keep its own permission',
+    );
+    assert.match(
+      block[1],
+      /UTILITY_METER_READING:\s*'utility_meter\.field\.record'/,
+      'the BE-18 kind must require the field record permission',
+    );
   });
 
   it('introduces no new operation verb', () => {
@@ -242,6 +278,8 @@ describe('CR-BE-MOB-01 PART 06 — supported sync resource kinds', () => {
       'patrolExecutionService.completePatrolExecution',
       'patrolExecutionService.recordPatrolPointVisit',
       'meterReadingBindingService.submitMeterReading',
+      // PART 03 — the SAME published BE-18 field service the online route calls.
+      'recordMobileUtilityMeterReading(',
     ]) {
       assert.ok(
         service.includes(call),

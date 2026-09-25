@@ -5,6 +5,7 @@ import {
   hasPaginationParams,
   parsePagination,
 } from '../../shared/pagination';
+import { notificationNavigationService } from './notification-navigation.service';
 import { notificationService } from './notification.service';
 import {
   parseNotificationFilters,
@@ -85,6 +86,36 @@ export async function markNotificationReadHandler(
     sendSuccess(
       res,
       await notificationService.markNotificationRead(req.auth.userId, id),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-BE-RN21-NOTIFICATION-NAV-01 — navigation target handler.
+ *
+ *   GET /notifications/:id/navigation-target   →  { target: {...} | null }
+ *
+ * The recipient is always the authenticated user (never client-supplied), the
+ * notification is resolved through the same recipient-scoped detail read, and
+ * the returned assignment is resolved through the existing mobile-assignment
+ * authority. Resolving reads state only: the notification is NOT marked read
+ * here — that remains the explicit `PATCH /notifications/:id/read` call.
+ */
+export async function getNotificationNavigationTargetHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const id = parseNotificationIdParam(param(req.params.id));
+    sendSuccess(
+      res,
+      await notificationNavigationService.resolveNotificationNavigationTarget(
+        req.auth.userId,
+        id,
+      ),
     );
   } catch (error) {
     next(error);

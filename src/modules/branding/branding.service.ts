@@ -38,6 +38,10 @@ function validateProfile(value: unknown): BrandingProfile {
   return {
     brandName: parsed.brandName,
     logoReference: parsed.logoReference,
+    // PART 12A: additive extension frozen §5 row "Branding".
+    // Optional keys — already validated when present.
+    supportName: parsed.supportName ?? null,
+    supportContact: parsed.supportContact ?? null,
     login: parsed.login,
     portal: parsed.portal,
     report: parsed.report,
@@ -191,6 +195,14 @@ function mergeProfile(
       update.logoReference === undefined
         ? current.logoReference
         : update.logoReference,
+    supportName:
+      update.supportName === undefined
+        ? current.supportName ?? null
+        : update.supportName,
+    supportContact:
+      update.supportContact === undefined
+        ? current.supportContact ?? null
+        : update.supportContact,
     login: { ...current.login, ...update.login },
     portal: { ...current.portal, ...update.portal },
     report: { ...current.report, ...update.report },

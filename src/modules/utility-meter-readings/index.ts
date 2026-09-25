@@ -8,6 +8,7 @@ export {
 } from './utility-meter-reading.errors';
 
 export { utilityMeterReadingRepository } from './utility-meter-reading.repository';
+export type { UtilityMeterReadingExecutor } from './utility-meter-reading.repository';
 
 export {
   getLatestReadingForMeter,

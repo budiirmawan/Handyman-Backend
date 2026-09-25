@@ -12,7 +12,7 @@ export function patrolScheduleBindingAlreadyExistsError(): AppError {
   return new AppError({
     code: ERROR_CODES.PATROL_SCHEDULE_BINDING_ALREADY_EXISTS,
     message:
-      'An active schedule binding already exists for this patrol route and schedule.',
+      'An active patrol schedule binding already exists for this schedule definition.',
     statusCode: 409,
   });
 }

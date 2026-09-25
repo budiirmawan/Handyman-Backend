@@ -116,6 +116,42 @@ export async function findById(
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }
 
+/**
+ * CR-BE-RN16-PATROL-FIELD-01 PART 00 — the ACTIVE binding of a schedule
+ * definition, whatever Patrol Route it points at.
+ *
+ * This is the cardinality authority for patrol scheduling: migration 0354
+ * makes `patrol_schedule_bindings` unique on `(schedule_definition_id) WHERE
+ * status = 'ACTIVE'`, so this lookup returns at most one row. It is the
+ * schedule-side counterpart of `findActiveByRouteAndSchedule` below and is
+ * what the create/reactivate guard uses, because the defect it closes is a
+ * SECOND ACTIVE binding arriving through a DIFFERENT patrol route — a
+ * route-scoped check cannot see that row.
+ */
+export async function findActiveByScheduleDefinitionId(
+  scheduleDefinitionId: string,
+): Promise<PatrolScheduleBindingRecord | null> {
+  const result = await getPool().query<PatrolScheduleBindingRow>(
+    `SELECT id, client_id, building_id, patrol_route_id,
+            schedule_definition_id, start_security_post_id, description,
+            status, created_by_user_id, created_at, updated_at
+     FROM patrol_schedule_bindings
+     WHERE schedule_definition_id = $1
+       AND status = 'ACTIVE'`,
+    [scheduleDefinitionId],
+  );
+  return result.rows[0] ? mapRow(result.rows[0]) : null;
+}
+
+/**
+ * The ACTIVE binding of one (Patrol Route, schedule definition) PAIR.
+ *
+ * Still a valid reverse lookup and still used for the pair-scoped read
+ * surface, but it is deliberately NOT the write guard any more (PART 00):
+ * being pair-scoped, it cannot detect a second ACTIVE binding that arrives
+ * through another route, so `findActiveByScheduleDefinitionId` above is the
+ * authority that decides whether a schedule may acquire an ACTIVE binding.
+ */
 export async function findActiveByRouteAndSchedule(
   patrolRouteId: string,
   scheduleDefinitionId: string,
@@ -321,6 +357,7 @@ export const patrolScheduleBindingRepository = {
   countActivePatrolRoutePoints,
   create,
   findActiveByRouteAndSchedule,
+  findActiveByScheduleDefinitionId,
   findById,
   findPatrolRoute,
   findSchedule,

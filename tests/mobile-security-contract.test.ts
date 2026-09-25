@@ -72,6 +72,8 @@ const DOCUMENTED_SECURITY_PATHS: Record<string, string[]> = {
   // BE-12D Patrol Execution + checkpoint confirmation
   '/buildings/{buildingId}/security/patrol-executions': ['get'],
   '/security/patrol-executions/{id}': ['get'],
+  // CR-BE-RN16-PATROL-FIELD-01 PART 01 — field entry receipt.
+  '/security/patrol-executions/{id}/field-context': ['get'],
   '/security/patrol-executions/{id}/start': ['post'],
   '/security/patrol-executions/{id}/points': ['get'],
   '/security/patrol-executions/{id}/points/{pointId}/visit': ['post'],
@@ -114,6 +116,7 @@ const EXPECTED_OPERATION_IDS = [
   'updatePatrolScheduleBinding',
   'listBuildingPatrolExecutions',
   'getPatrolExecution',
+  'getPatrolFieldContext',
   'startPatrolExecution',
   'listPatrolPointVisits',
   'recordPatrolPointVisit',
@@ -159,6 +162,7 @@ const EXPECTED_PERMISSIONS: Record<string, string> = {
   updatePatrolScheduleBinding: 'patrol_schedule.manage',
   listBuildingPatrolExecutions: 'patrol_execution.read',
   getPatrolExecution: 'patrol_execution.read',
+  getPatrolFieldContext: 'patrol_execution.read',
   startPatrolExecution: 'patrol_execution.manage',
   listPatrolPointVisits: 'patrol_execution.read',
   recordPatrolPointVisit: 'patrol_execution.manage',

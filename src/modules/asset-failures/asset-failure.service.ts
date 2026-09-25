@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { assetNotFoundError, assetRepository } from '../assets';
 import type { AssetRecord } from '../assets';
@@ -274,9 +275,12 @@ async function present(
   );
 }
 
+type Executor = Pick<PoolClient, 'query'>;
+
 export async function createAssetFailure(
   input: CreateAssetFailureInput,
   actorUserId: string,
+  executor?: Executor,
 ): Promise<PublicAssetFailure> {
   // Reuses BE-21A's Client derivation + Building access assertion verbatim.
   const { clientId } = await resolveBuildingContext(
@@ -300,42 +304,83 @@ export async function createAssetFailure(
   const existing = await incidentRepository.findByClientAndNumber(
     clientId,
     input.incidentNumber,
+    executor as any,
   );
   if (existing) throw incidentNumberAlreadyExistsError();
 
+  const createCore = async (client: Executor): Promise<string> => {
+    const incident = await incidentRepository.create(
+      {
+        clientId,
+        buildingId: input.buildingId,
+        incidentNumber: input.incidentNumber,
+        // BE-21C always pins the discriminator; callers cannot set it.
+        incidentType: 'ASSET_FAILURE',
+        title: input.title,
+        description: input.description ?? null,
+        severity: input.severity ?? 'MEDIUM',
+        priority: input.priority ?? 'MEDIUM',
+        ...location,
+        reportedByUserId,
+        reportedAt: new Date(),
+      },
+      client,
+    );
+    await assetFailureRepository.create(
+      {
+        incidentId: incident.id,
+        assetId: asset.id,
+        failureCategory: input.failureCategory,
+        occurredAt: input.occurredAt,
+        operationalImpact: input.operationalImpact ?? null,
+        notes: input.notes ?? null,
+        createdByUserId: actorUserId,
+      },
+      client,
+    );
+    return incident.id;
+  };
+
   try {
-    // Foundation + specialization are atomic: no orphan Incident on failure.
+    if (executor) {
+      // Caller owns the transaction — do NOT open an inner one. All writes,
+      // read-back, and operational event must use the same executor so the
+      // idempotency claim + business rows + event commit atomically.
+      const incidentId = await createCore(executor);
+      const created = await assetFailureRepository.findByIncidentId(
+        incidentId,
+        executor,
+      );
+      if (!created) throw assetFailureNotFoundError();
+
+      await recordOperationalEvent(
+        {
+          clientId: created.clientId,
+          buildingId: created.buildingId,
+          entityType: 'INCIDENT',
+          entityId: created.incidentId,
+          eventType: 'ASSET_FAILURE_REPORTED',
+          actorUserId,
+          summary: `Asset Failure ${created.incidentNumber} reported for asset ${created.assetCode}`,
+          metadata: {
+            incidentNumber: created.incidentNumber,
+            assetId: created.assetId,
+            assetCode: created.assetCode,
+            failureCategory: created.failureCategory,
+            operationalImpact: created.operationalImpact,
+            severity: created.severity,
+            priority: created.priority,
+            occurredAt: created.occurredAt.toISOString(),
+          },
+        },
+        executor,
+      );
+      return present(created, actorUserId);
+    }
+
+    // Legacy path: preserve exact prior behaviour when no executor is supplied.
     const incidentId = await withTransaction(async (client) => {
-      const incident = await incidentRepository.create(
-        {
-          clientId,
-          buildingId: input.buildingId,
-          incidentNumber: input.incidentNumber,
-          // BE-21C always pins the discriminator; callers cannot set it.
-          incidentType: 'ASSET_FAILURE',
-          title: input.title,
-          description: input.description ?? null,
-          severity: input.severity ?? 'MEDIUM',
-          priority: input.priority ?? 'MEDIUM',
-          ...location,
-          reportedByUserId,
-          reportedAt: new Date(),
-        },
-        client,
-      );
-      await assetFailureRepository.create(
-        {
-          incidentId: incident.id,
-          assetId: asset.id,
-          failureCategory: input.failureCategory,
-          occurredAt: input.occurredAt,
-          operationalImpact: input.operationalImpact ?? null,
-          notes: input.notes ?? null,
-          createdByUserId: actorUserId,
-        },
-        client,
-      );
-      return incident.id;
+      return createCore(client);
     });
 
     const created = await assetFailureRepository.findByIncidentId(incidentId);

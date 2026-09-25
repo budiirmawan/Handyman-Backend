@@ -1,5 +1,10 @@
 import { buildingNotFoundError, buildingRepository } from '../buildings';
 import { contextAccessService } from '../context-access';
+import { permissionService } from '../permissions';
+import {
+  patrolRoutePointRepository,
+  toPublicPatrolRoutePoint,
+} from '../patrol-routes';
 import { AppError } from '../../shared/errors';
 import {
   patrolExecutionBindingInactiveError,
@@ -23,6 +28,9 @@ import type {
   PatrolExecutionFilter,
   PatrolExecutionRow,
   PatrolExecutionStatus,
+  PatrolFieldAction,
+  PatrolFieldContext,
+  PatrolFieldPoint,
   PatrolPointVisitInput,
   PublicPatrolExecution,
   PublicPatrolPointVisit,
@@ -125,6 +133,40 @@ async function resolvePointProgress(
   };
 }
 
+/**
+ * CR-BE-RN16-PATROL-FIELD-01 PART 01 — the ACTIVE task-assignment authority
+ * shared by the patrol field commands and the field context.
+ *
+ * This is the same BE-07 assignment gate START and COMPLETE enforce: the
+ * execution must have at least one ACTIVE `task_assignments` row, and when
+ * that assignment targets a WORKFORCE profile the acting user must be the
+ * linked user. It is assignment-based, never role-name based, and the mobile
+ * assignment feed marker is never consulted as authority.
+ *
+ * Building access is asserted separately (it is BE-02G scope, not BE-07
+ * assignment authority).
+ */
+async function assertActiveTaskAssignmentAuthority(
+  taskId: string,
+  actorUserId: string,
+): Promise<void> {
+  const assignments = await patrolExecutionRepository.findActiveAssignmentForTask(
+    taskId,
+  );
+  if (assignments.length === 0) {
+    throw patrolExecutionNoAssignmentError();
+  }
+  const workforceAssignments = assignments.filter(
+    (a) => a.assignee_type === 'WORKFORCE' && a.workforce_user_id,
+  );
+  if (
+    workforceAssignments.length > 0 &&
+    !workforceAssignments.some((a) => a.workforce_user_id === actorUserId)
+  ) {
+    throw patrolExecutionUnauthorizedError();
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Read                                                                */
 /* ------------------------------------------------------------------ */
@@ -171,6 +213,100 @@ export async function listPatrolExecutionsByBuilding(
   );
 }
 
+/**
+ * CR-BE-RN16-PATROL-FIELD-01 PART 01 — the mobile field entry payload.
+ *
+ * Read-only: it never mutates the execution and never becomes an authority of
+ * its own. It resolves the canonical execution (single ACTIVE binding per
+ * schedule definition), the route's own points in `sequence` order, the
+ * `patrol_point_visits` rows of THIS execution, and then publishes the field
+ * action tokens the backend would currently accept:
+ *
+ *   START_PATROL    — status OPEN or ASSIGNED, caller has
+ *                     `patrol_execution.manage`, caller is the authorized
+ *                     field actor (building access + ACTIVE assignment).
+ *   VISIT_POINT     — status IN_PROGRESS, point ACTIVE, point belongs to the
+ *                     execution's canonical route, no VISITED visit yet,
+ *                     caller has `patrol_execution.manage`.
+ *   COMPLETE_PATROL — status IN_PROGRESS, every ACTIVE route point VISITED,
+ *                     caller has `patrol_execution.manage`.
+ *
+ * There is no CANCEL token: the generic BE-07 task CANCEL is not patrol
+ * authority and is not surfaced here.
+ */
+export async function getPatrolFieldContext(
+  executionId: string,
+  actorUserId: string,
+): Promise<PatrolFieldContext> {
+  const row = await patrolExecutionRepository.findById(executionId);
+  if (!row) {
+    throw patrolExecutionNotFoundError();
+  }
+
+  // Field authority: BE-02G building access + the ACTIVE task assignment
+  // authority the patrol commands enforce. The mobile assignment marker is
+  // never trusted as authorization.
+  await contextAccessService.assertBuildingAccess(actorUserId, row.building_id);
+  await assertActiveTaskAssignmentAuthority(row.task_id, actorUserId);
+
+  const [progress, pointRecords, visits, permissions] = await Promise.all([
+    resolvePointProgress(row.task_id, row.patrol_route_id),
+    patrolRoutePointRepository.listByRoute(row.patrol_route_id),
+    patrolExecutionRepository.listVisitsForTask(row.task_id),
+    permissionService.resolvePermissionsForUser(actorUserId),
+  ]);
+
+  const canManage = permissions.includes('patrol_execution.manage');
+  const inProgress = row.status === 'IN_PROGRESS';
+
+  const visitedPointIds = new Set(
+    visits
+      .filter((visit) => visit.status === 'VISITED')
+      .map((visit) => visit.patrolRoutePointId),
+  );
+
+  // One visit per point for display: a VISITED visit always wins over an
+  // INACTIVE remnant for the same point.
+  const visitByPointId = new Map<string, PublicPatrolPointVisit>();
+  for (const visit of visits) {
+    const existing = visitByPointId.get(visit.patrolRoutePointId);
+    if (
+      !existing ||
+      (existing.status !== 'VISITED' && visit.status === 'VISITED')
+    ) {
+      visitByPointId.set(visit.patrolRoutePointId, visit);
+    }
+  }
+
+  const execution = toPublicPatrolExecution(row, progress);
+
+  const availableActions: PatrolFieldAction[] = [];
+  if (canManage && (row.status === 'OPEN' || row.status === 'ASSIGNED')) {
+    availableActions.push('START_PATROL');
+  }
+  const activePoints = pointRecords.filter((point) => point.status === 'ACTIVE');
+  const allActivePointsVisited = activePoints.every((point) =>
+    visitedPointIds.has(point.id),
+  );
+  if (canManage && inProgress && allActivePointsVisited) {
+    availableActions.push('COMPLETE_PATROL');
+  }
+
+  const points: PatrolFieldPoint[] = pointRecords.map((point) => ({
+    point: toPublicPatrolRoutePoint(point),
+    visit: visitByPointId.get(point.id) ?? null,
+    availableActions:
+      canManage &&
+      inProgress &&
+      point.status === 'ACTIVE' &&
+      !visitedPointIds.has(point.id)
+        ? ['VISIT_POINT']
+        : [],
+  }));
+
+  return { execution, availableActions, points };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Start                                                               */
 /* ------------------------------------------------------------------ */
@@ -205,21 +341,7 @@ export async function startPatrolExecution(
     throw patrolExecutionClientMismatchError();
   }
 
-  const assignments = await patrolExecutionRepository.findActiveAssignmentForTask(
-    task.id,
-  );
-  if (assignments.length === 0) {
-    throw patrolExecutionNoAssignmentError();
-  }
-  const workforceAssignments = assignments.filter(
-    (a) => a.assignee_type === 'WORKFORCE' && a.workforce_user_id,
-  );
-  if (
-    workforceAssignments.length > 0 &&
-    !workforceAssignments.some((a) => a.workforce_user_id === actorUserId)
-  ) {
-    throw patrolExecutionUnauthorizedError();
-  }
+  await assertActiveTaskAssignmentAuthority(task.id, actorUserId);
 
   if (task.status !== 'IN_PROGRESS') {
     await patrolExecutionRepository.setTaskStatus(
@@ -262,21 +384,7 @@ export async function completePatrolExecution(
     throw patrolExecutionClientMismatchError();
   }
 
-  const assignments = await patrolExecutionRepository.findActiveAssignmentForTask(
-    task.id,
-  );
-  if (assignments.length === 0) {
-    throw patrolExecutionNoAssignmentError();
-  }
-  const workforceAssignments = assignments.filter(
-    (a) => a.assignee_type === 'WORKFORCE' && a.workforce_user_id,
-  );
-  if (
-    workforceAssignments.length > 0 &&
-    !workforceAssignments.some((a) => a.workforce_user_id === actorUserId)
-  ) {
-    throw patrolExecutionUnauthorizedError();
-  }
+  await assertActiveTaskAssignmentAuthority(task.id, actorUserId);
 
   // Completion gating: all active route points must be visited.
   const activePoints = await patrolExecutionRepository.listActivePointsForRoute(
@@ -405,6 +513,7 @@ function isPatrolPointVisitUniqueViolation(error: unknown): boolean {
 export const patrolExecutionService = {
   completePatrolExecution,
   getPatrolExecutionById,
+  getPatrolFieldContext,
   listPatrolExecutionsByBuilding,
   listPatrolPointVisits,
   operationalDateWindow,

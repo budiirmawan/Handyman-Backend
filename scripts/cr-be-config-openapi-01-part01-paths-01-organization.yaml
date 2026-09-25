@@ -1,0 +1,145 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — Organization & Workforce admin.
+  #
+  # Contract exposure of the ALREADY REGISTERED BE-03A/B/C/D1/E/F/G/H runtime
+  # routes only. Nothing below is invented: every method/path pair is a
+  # registered route in src/modules/**/*.routes.ts and every permission named
+  # is enforced by the router's own `requirePermission` call.
+  #
+  # SECTION 01 — BE-03A ORGANIZATION (`src/modules/organizations`).
+  # ---------------------------------------------------------------------------
+
+  /organizations:
+    post:
+      operationId: createOrganization
+      summary: Create an Organization
+      description: >-
+        BE-03A. Creates one Organization inside the Client named in the body.
+        Requires `organization.manage`. `code` is trimmed and upper-cased
+        before validation, must be 2–64 characters of `[A-Z][A-Z0-9_]*`, and is
+        unique per Client while any row holds it — a duplicate is 409
+        `ORGANIZATION_CODE_ALREADY_EXISTS`. The route does not re-resolve the
+        Client: an unknown but well-formed `clientId` is a database
+        foreign-key fault, not a 404. `status` defaults to `ACTIVE`.
+        Responds 201 with the created Organization.
+      tags: [Organization]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: organization.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOrganizationRequest" }
+      responses:
+        "201":
+          description: The created Organization.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listOrganizations
+      summary: List the Organizations of a Client
+      description: >-
+        BE-03A. Returns every Organization of the required `clientId` scope,
+        ordered by `code` ascending, as a plain array — no page or limit
+        parameter exists on this route and `meta` is always `{}`. Requires
+        `organization.read`. A Client with no Organizations returns an empty
+        array, never a 404.
+      tags: [Organization]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: organization.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdRequiredQuery"
+      responses:
+        "200":
+          description: The Organizations of the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /organizations/{id}:
+    get:
+      operationId: getOrganization
+      summary: Get one Organization
+      description: >-
+        BE-03A. Returns the single Organization addressed by its own id.
+        Requires `organization.read`. An unknown id is 404
+        `ORGANIZATION_NOT_FOUND`. The id is trimmed and lower-cased and must
+        be a UUID.
+      tags: [Organization]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: organization.read
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdPath"
+      responses:
+        "200":
+          description: The requested Organization.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateOrganization
+      summary: Update an Organization
+      description: >-
+        BE-03A partial update. Requires `organization.manage`. Only `name`,
+        `description` and `status` are updatable: `clientId` and `code` are
+        immutable identity and are not accepted here. There is no
+        minimum-property rule — an empty object is a valid request and returns
+        the unchanged Organization. An explicit `null` for `description` is
+        treated as "absent", so the field cannot be cleared through this route.
+        An unknown id is 404 `ORGANIZATION_NOT_FOUND`.
+      tags: [Organization]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: organization.manage
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateOrganizationRequest" }
+      responses:
+        "200":
+          description: The updated Organization.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

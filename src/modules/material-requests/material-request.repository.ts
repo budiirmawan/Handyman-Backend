@@ -75,8 +75,11 @@ function mapRow(row: MaterialRequestRow): MaterialRequestRecord {
   };
 }
 
-async function create(input: NewMaterialRequest): Promise<MaterialRequestRecord> {
-  const result = await getPool().query<MaterialRequestRow>(
+async function create(
+  input: NewMaterialRequest,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<MaterialRequestRecord> {
+  const result = await executor.query<MaterialRequestRow>(
     `INSERT INTO material_requests
        (id, client_id, building_id, purchase_request_id, item_id, warehouse_id,
         quantity, uom_id, required_date, notes, status, requested_by_user_id)

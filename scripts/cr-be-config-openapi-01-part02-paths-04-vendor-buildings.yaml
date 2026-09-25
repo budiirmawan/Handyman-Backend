@@ -1,0 +1,188 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 04 — BE-06D VENDOR BUILDING
+  # RELATIONSHIP (`src/modules/vendor-buildings`).
+  #
+  # Master data only: the relationship grants no data access. BE-02F
+  # `user_building_assignments` remains the only access table, and the single
+  # Building-nested read below carries the BE-02G Building gate.
+  # ---------------------------------------------------------------------------
+
+  /vendors/{vendorId}/buildings:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+
+    post:
+      operationId: assignVendorBuilding
+      summary: Relate a Vendor to a Building
+      description: >-
+        BE-06D. Records that the route's Vendor serves the Building named in the
+        body. Requires `vendor.manage`. Validation order: unknown Vendor 404
+        `VENDOR_NOT_FOUND`, unknown Building 404 `BUILDING_NOT_FOUND` (a
+        Building is resolved through its Property, so a dangling Property is 404
+        `PROPERTY_NOT_FOUND`), foreign-Client pair 400
+        `VENDOR_BUILDING_CLIENT_MISMATCH` (Client ownership is derived
+        Building → Property → Client; reported as 400 rather than 404 so the
+        other Client's estate is never observable), INACTIVE Building 400
+        `VENDOR_BUILDING_INACTIVE`, INACTIVE Vendor when the new relationship
+        would be ACTIVE 400 `VENDOR_INACTIVE`, already-ACTIVE pair 409
+        `VENDOR_BUILDING_ALREADY_RELATED` (only a duplicate *active* pair
+        conflicts — deactivated history never does, and the partial unique
+        index is the race-condition backstop). `buildingId` is required and
+        must be a UUID; `effectiveFrom` / `effectiveUntil` are optional and
+        `effectiveUntil` before `effectiveFrom` is 400 `VALIDATION_ERROR`;
+        `status` defaults to `ACTIVE`. Deactivation is `{"status": "INACTIVE"}`
+        on the PATCH sibling, so the relationship history stays auditable.
+        Responds 201 with the created relationship.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignVendorBuildingRequest"
+      responses:
+        "201":
+          description: The created Vendor ↔ Building relationship.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorBuildingRelationship"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listVendorBuildings
+      summary: List the Building relationships of a Vendor
+      description: >-
+        BE-06D read, ordered by creation time ascending and including
+        deactivated history, as a plain array. Requires `vendor.read`. An
+        unknown Vendor is 404 `VENDOR_NOT_FOUND` rather than an empty list.
+        This read carries no Building gate: it is scoped by the Vendor, not by
+        a Building context.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The Vendor ↔ Building relationships held by the requested Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/VendorBuildingRelationship"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/vendors:
+    parameters:
+      - $ref: "#/components/parameters/BuildingIdPath"
+
+    get:
+      operationId: listBuildingVendors
+      summary: List the Vendors serving a Building
+      description: >-
+        BE-06D read from the Building side, ordered by creation time ascending
+        and including deactivated history, as a plain array. Requires
+        `vendor.read` AND an ACTIVE BE-02F Building assignment for the route's
+        `buildingId` — holding the permission alone is not enough, and a caller
+        without the grant is 403 `BUILDING_ACCESS_DENIED` whether or not the
+        Building exists. The Building is then resolved (unknown id 404
+        `BUILDING_NOT_FOUND`, unknown Property 404 `PROPERTY_NOT_FOUND`) so an
+        unknown id never yields a misleading empty list.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      x-building-scoped: true
+      responses:
+        "200":
+          description: The Vendor ↔ Building relationships recorded for the requested Building.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/VendorBuildingRelationship"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendors/{vendorId}/buildings/{buildingId}:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+      - $ref: "#/components/parameters/BuildingIdPath"
+
+    patch:
+      operationId: updateVendorBuildingRelationship
+      summary: Update a Vendor ↔ Building relationship
+      description: >-
+        BE-06D partial update addressed by the (vendor, building) pair rather
+        than a relationship id. Requires `vendor.manage`. Resolution order:
+        unknown Vendor 404 `VENDOR_NOT_FOUND`, unknown Building 404
+        `BUILDING_NOT_FOUND` (through its Property, so a dangling Property is
+        404 `PROPERTY_NOT_FOUND`), foreign-Client pair 400
+        `VENDOR_BUILDING_CLIENT_MISMATCH`, then no row for the pair 404
+        `VENDOR_BUILDING_RELATIONSHIP_NOT_FOUND`. The pair is the address and
+        `vendorId` / `buildingId` cannot be changed through this endpoint —
+        supplying them has no effect. The pair resolves to the ACTIVE row where
+        one exists, so an update targets the live relationship rather than
+        deactivated history. Mutable: `effectiveFrom`,
+        `effectiveUntil` (explicit
+        `null` clears a bound; the merged result is re-checked so
+        `effectiveUntil` can never end up before `effectiveFrom` — 400
+        `VALIDATION_ERROR`) and `status`. Deactivation is
+        `{"status": "INACTIVE"}` on this same endpoint; the row is retained so
+        the relationship history stays auditable. Re-activating a pair that
+        already has another live relationship is 409
+        `VENDOR_BUILDING_ALREADY_RELATED`, and the foreign-Client and INACTIVE
+        Building/Vendor guards are re-applied to the merged result. Responds
+        200 with the updated relationship.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVendorBuildingRelationshipRequest"
+      responses:
+        "200":
+          description: The updated Vendor ↔ Building relationship.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorBuildingRelationship"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

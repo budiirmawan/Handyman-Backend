@@ -24,7 +24,15 @@ export type OperationalEventCorrelationOverride = Readonly<{
 }>;
 
 export type OperationalEventInput = {
-  clientId: string;
+  /**
+   * Customer scope of the event. Required for business-plane events.
+   *
+   * CR-BE-SAAS-01 PART 01 (frozen decision D1): optional for platform-scope
+   * SaaS Control Plane events (product catalog, pricebook, platform
+   * configuration, support sessions) which have no customer. Platform-scope
+   * events skip integration-outbox fan-out (the outbox is customer-scoped).
+   */
+  clientId?: string | null;
   eventType: string;
   entityType: string;
   entityId: string;
@@ -150,7 +158,7 @@ export async function recordOperationalEvent(
      RETURNING *`,
     [
       randomUUID(),
-      input.clientId,
+      input.clientId ?? null,
       input.eventType,
       input.entityType,
       input.entityId,
@@ -165,6 +173,11 @@ export async function recordOperationalEvent(
   );
 
   const record = result.rows[0];
-  await maybeEnqueueIntegrationOutboxEvent(record, executor);
+  // CR-BE-SAAS-01 PART 01 — the integration outbox is customer-scoped
+  // (NOT NULL customer FK). Platform-scope events (NULL client) are recorded
+  // in the canonical store only and never fan out.
+  if (record.client_id) {
+    await maybeEnqueueIntegrationOutboxEvent(record, executor);
+  }
   return record;
 }

@@ -1,0 +1,113 @@
+    # -----------------------------------------------------------------------
+    # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 11 — BE-03F WORKFORCE
+    # REPORTING LINE (`src/modules/workforce-reporting-lines`).
+    #
+    # The two GET operations of this path are documented above; these are the
+    # write side of the same mounted authority. Reuses the BE-03C workforce
+    # codes rather than introducing new ones, so writes require
+    # `workforce.manage`. Deactivation is `{"status": "INACTIVE"}` on PATCH, not
+    # a DELETE, so the reporting history survives. A reporting line grants
+    # nothing: it never implies or changes a Role, Permission, Position, Team,
+    # Shift, Skill or Building Assignment, and there is no approval workflow or
+    # task verification attached to it.
+    # -----------------------------------------------------------------------
+    post:
+      operationId: assignWorkforceSupervisor
+      summary: Assign a Supervisor to a Workforce Profile
+      description: >-
+        BE-03F. Records who the Workforce Profile taken from the route reports
+        to. Requires `workforce.manage`. The supervised profile always comes
+        from the route and is never read from the body; the Supervisor is
+        always another Workforce Profile. Resolution order: unknown profile 404
+        `WORKFORCE_PROFILE_NOT_FOUND`, supervisor equal to the profile itself
+        400 `WORKFORCE_REPORTING_LINE_SELF_SUPERVISION`, unknown supervisor 404
+        `WORKFORCE_SUPERVISOR_NOT_FOUND`, supervisor in another Client 400
+        `WORKFORCE_REPORTING_LINE_CLIENT_MISMATCH` (reported as 400 rather than
+        404 so the other Client's data is never observable), INACTIVE profile
+        or supervisor 400 `WORKFORCE_PROFILE_INACTIVE` /
+        `WORKFORCE_SUPERVISOR_INACTIVE`, the direct two-node cycle 400
+        `WORKFORCE_REPORTING_LINE_CIRCULAR` (the proposed Supervisor already
+        reports to this profile; no generic organization-graph engine is built),
+        and an already-ACTIVE line 409
+        `WORKFORCE_REPORTING_LINE_ALREADY_EXISTS` — changing who somebody
+        reports to goes through PATCH, so two live supervisors never coexist.
+        `status` defaults to `ACTIVE`; `effectiveFrom` / `effectiveUntil` are
+        optional and an explicit `null` clears a bound. Responds 201 with the
+        created reporting line.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignSupervisorRequest" }
+      responses:
+        "201":
+          description: The created Workforce Reporting Line.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceReportingLine"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    patch:
+      operationId: updateWorkforceReportingLine
+      summary: Update a Workforce Profile's reporting line
+      description: >-
+        BE-03F partial update of the profile's current reporting line, addressed
+        by the Workforce Profile id rather than a reporting-line id. Requires
+        `workforce.manage`. Mutable: `supervisorWorkforceProfileId`,
+        `effectiveFrom`, `effectiveUntil`, `status` — re-pointing the current
+        line is the normal way a reporting line changes over time, and a
+        superseded line is deactivated rather than deleted. At least one of them
+        must be provided: an empty object is 400 `VALIDATION_ERROR` with the
+        detail naming all four. Deactivation is `{"status": "INACTIVE"}` on this
+        same endpoint. An explicit `null` clears a bound; the update is merged
+        against the stored record and re-checked so `effectiveUntil` can never
+        end up before `effectiveFrom`. The same 404 / client-mismatch /
+        inactive / self-supervision / circular outcomes apply as on create, and
+        re-activating a superseded line that would collide with the line which
+        replaced it is 409 `WORKFORCE_REPORTING_LINE_ALREADY_EXISTS`. A profile
+        that exists but has no reporting line at all is 404
+        `WORKFORCE_REPORTING_LINE_NOT_FOUND`, while a profile id that does not
+        resolve is 404 `WORKFORCE_PROFILE_NOT_FOUND`.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkforceReportingLineRequest"
+      responses:
+        "200":
+          description: The updated Workforce Reporting Line.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceReportingLine"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

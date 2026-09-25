@@ -26,11 +26,12 @@ export async function createTenantServiceRequestHandler(
     const tenantCompanyId = parseTenantServiceRequestCompanyIdParam(
       param(req.params.tenantCompanyId),
     );
+    const authUserId = actor(req);
     const body = parseCreateTenantServiceRequestBody(req.body);
     sendSuccess(
       res,
       await tenantServiceRequestService.createTenantServiceRequest(
-        { ...body, tenantCompanyId }, actor(req),
+        { ...body, tenantCompanyId }, authUserId, authUserId,
       ),
       201,
     );

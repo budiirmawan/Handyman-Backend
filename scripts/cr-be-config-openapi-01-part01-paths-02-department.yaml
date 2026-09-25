@@ -1,0 +1,139 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 02 — BE-03A DEPARTMENT
+  # (`src/modules/departments`).
+  # ---------------------------------------------------------------------------
+
+  /departments:
+    post:
+      operationId: createDepartment
+      summary: Create a Department
+      description: >-
+        BE-03A. Creates one Department inside the Organization named in the
+        body. Requires `department.manage`. `code` is trimmed and upper-cased
+        before validation, must be 2–64 characters of `[A-Z][A-Z0-9_]*`, and is
+        unique per Organization — a duplicate is 409
+        `DEPARTMENT_CODE_ALREADY_EXISTS`. The route does not re-resolve the
+        Organization: an unknown but well-formed `organizationId` is a
+        database foreign-key fault, not a 404. `status` defaults to `ACTIVE`.
+        Responds 201 with the created Department.
+      tags: [Department]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: department.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDepartmentRequest" }
+      responses:
+        "201":
+          description: The created Department.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Department" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listDepartments
+      summary: List the Departments of an Organization
+      description: >-
+        BE-03A. Returns every Department of the required `organizationId`
+        scope, ordered by `code` ascending, as a plain array — no page or limit
+        parameter exists on this route and `meta` is always `{}`. Requires
+        `department.read`. There is no global Department collection: the
+        Organization scope is mandatory and a missing scope is 400
+        `VALIDATION_ERROR`, never an unscoped list.
+      tags: [Department]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: department.read
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdRequiredQuery"
+      responses:
+        "200":
+          description: The Departments of the requested Organization.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Department" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /departments/{id}:
+    get:
+      operationId: getDepartment
+      summary: Get one Department
+      description: >-
+        BE-03A. Returns the single Department addressed by its own id.
+        Requires `department.read`. An unknown id is 404
+        `DEPARTMENT_NOT_FOUND`.
+      tags: [Department]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: department.read
+      parameters:
+        - $ref: "#/components/parameters/DepartmentIdPath"
+      responses:
+        "200":
+          description: The requested Department.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Department" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateDepartment
+      summary: Update a Department
+      description: >-
+        BE-03A partial update. Requires `department.manage`. Only `name`,
+        `description` and `status` are updatable: `organizationId` and `code`
+        are immutable identity and are not accepted here, so a Department can
+        never be moved between Organizations. There is no minimum-property
+        rule — an empty object returns the unchanged Department. An explicit
+        `null` for `description` is treated as "absent". An unknown id is 404
+        `DEPARTMENT_NOT_FOUND`.
+      tags: [Department]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: department.manage
+      parameters:
+        - $ref: "#/components/parameters/DepartmentIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDepartmentRequest" }
+      responses:
+        "200":
+          description: The updated Department.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Department" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

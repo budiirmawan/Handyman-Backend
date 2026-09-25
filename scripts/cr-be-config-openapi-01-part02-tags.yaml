@@ -1,0 +1,85 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — Remaining configuration master contract.
+  #
+  # Contract exposure of the ALREADY REGISTERED BE-05B / BE-06A / BE-06B /
+  # BE-06C / BE-06D / BE-06E / BE-06F / BE-06G / BE-06H / BE-07 / BE-18B /
+  # form-template-version / finding-classification / finding-severity runtime
+  # routes only.
+  #
+  # Publish-only: no endpoint, route, service, database, permission semantics
+  # or approval workflow is added or changed here. Every permission named below
+  # is an existing catalogue code already enforced by `requirePermission`
+  # (`vendor.read` / `vendor.manage`, `asset_category.read` /
+  # `asset_category.manage`, `asset_type.read` / `asset_type.manage`,
+  # `utility_meter.read` / `utility_meter.manage`, `form_template.read` /
+  # `form_template.manage`, `finding.read` / `finding.manage`) or the
+  # pre-existing `workforce.read` on the Workforce-side vendor binding read.
+  # ---------------------------------------------------------------------------
+
+  - name: Vendor Master
+    description: >-
+      BE-06A Vendor and its BE-06B..BE-06F administration surfaces —
+      Client-scoped Vendor master data plus the Vendor Category classification,
+      PIC (contact person), Building relationship, capability / service-scope
+      and Vendor Workforce Binding records that hang off it. Reads require
+      `vendor.read` (and `workforce.read` on the Workforce-side binding read),
+      writes require `vendor.manage`. The single Building-nested read
+      additionally requires an ACTIVE BE-02F Building assignment. These are
+      master-data records only: creating one never creates or alters a User,
+      Credential, Role, Permission, Building access grant, Shift, Skill or
+      Supervisor, and no Vendor work execution, BAST lifecycle, invoice or
+      procurement behaviour is described here.
+  - name: Vendor Compliance
+    description: >-
+      BE-06G Vendor Compliance Document (structured metadata plus an opaque
+      file pointer) and BE-06H Vendor License / Certification record, carrying
+      the read-time resolved `expiryStatus`. Reads require `vendor.read`,
+      writes require `vendor.manage`. Only metadata is held: no binary, no
+      document-management platform, no OCR, no approval workflow, no renewal
+      automation, no scheduler and no notification.
+  - name: Asset Category
+    description: >-
+      BE-05B Asset Category — Client-scoped classification/reference data for
+      Assets (ELECTRICAL, HVAC, …), not an Asset and not a hierarchy level.
+      Reads require `asset_category.read`, writes require
+      `asset_category.manage`. Category codes are data, never behaviour: no
+      application logic branches on a specific code.
+  - name: Asset Type
+    description: >-
+      BE-05B Asset Type / Class — the finer classification level beneath one
+      Asset Category (HVAC → AHU / CHILLER / FCU). Reads require
+      `asset_type.read`, writes require `asset_type.manage`. A Type carries no
+      `clientId` of its own: Client ownership is derived
+      Type → Category → Client.
+  - name: Utility Type Configuration
+    description: >-
+      BE-18B Client configuration for the BE-18A utility types ELECTRICITY /
+      WATER / GAS: display metadata, optional reading precision, lifecycle
+      status and the set of BE-07 Units of Measure allowed for that utility
+      type. Reads require `utility_meter.read`, writes require
+      `utility_meter.manage`. There is no separate utility engine: BE-18A's
+      Meter Master validates against this data, and no meter-reading
+      lifecycle, billing, tariff calculation or OCR behaviour is described
+      here.
+  - name: Form Template Version
+    description: >-
+      Published Form Template Version rows plus the DRAFT → PUBLISHED →
+      RETIRED version lifecycle. Reads require `form_template.read`, writes
+      require `form_template.manage`. Publishing snapshots the template's
+      sections and fields into the version tables; there is no approval chain,
+      no draft-editing workflow and no transition beyond the two registered
+      actions.
+  - name: Finding Classification
+    description: >-
+      Finding classification master — Client-scoped reference data used to
+      classify a finding. Reads require `finding.read`, writes require
+      `finding.manage`. This is configuration data only; the finding instance
+      lifecycle (finding, rework, corrective action, verification) is not part
+      of this tag.
+  - name: Finding Severity
+    description: >-
+      Finding severity master — Client-scoped reference data with a numeric
+      `rank`. Reads require `finding.read`, writes require `finding.manage`.
+      This is configuration data only; the finding instance lifecycle
+      (finding, rework, corrective action, verification) is not part of this
+      tag.

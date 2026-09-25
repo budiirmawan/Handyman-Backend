@@ -36,8 +36,6 @@ import { ensureTestDatabase } from './helpers/postgres';
 
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
-let managerToken = '';
-let managerUserId = '';
 
 before(async () => {
   const db = await ensureTestDatabase();
@@ -54,9 +52,6 @@ before(async () => {
        users, roles, permissions, clients
      CASCADE`,
   );
-  const manager = await createAdminUser();
-  managerToken = manager.token;
-  managerUserId = manager.userId;
   database = db;
 });
 
@@ -82,6 +77,13 @@ const TZ = 'Asia/Jakarta';
 type Fixture = Awaited<ReturnType<typeof seed>>;
 
 async function seed() {
+  // One caller per seed() invocation. `workforce_profiles.user_id` carries a
+  // UNIQUE constraint (one profile per user), so a shared module-level user
+  // could only ever be linked by the first seed(); every later test would die
+  // on WORKFORCE_USER_ALREADY_LINKED before reaching the behaviour it means to
+  // prove. This mirrors the BE-25N sibling suite (tests/mobile-my-team.test.ts).
+  const manager = await createAdminUser();
+
   const client = await clientService.createClient({
     code: `C_${suffix()}`,
     name: 'Current shift client',
@@ -110,10 +112,10 @@ async function seed() {
     code: `B_${suffix()}`,
     name: 'Building NoTz',
   });
-  await buildingAssignmentService.createAssignment(managerUserId, {
+  await buildingAssignmentService.createAssignment(manager.userId, {
     buildingId: buildingA.id,
   });
-  await buildingAssignmentService.createAssignment(managerUserId, {
+  await buildingAssignmentService.createAssignment(manager.userId, {
     buildingId: buildingNoTz.id,
   });
 
@@ -136,7 +138,7 @@ async function seed() {
     organizationId: organization.id,
     departmentId: department.id,
     positionId: position.id,
-    userId: managerUserId,
+    userId: manager.userId,
     employeeCode: `WF_${suffix()}`,
     fullName: 'Mobile Worker',
   });
@@ -157,6 +159,11 @@ async function seed() {
     startTime: '22:00:00',
     endTime: '06:00:00',
   });
+  // Created ACTIVE on purpose: `assignShiftToWorkforce` correctly refuses an
+  // INACTIVE Shift (SHIFT_INACTIVE), so the inactive-shift boundary has to be
+  // reached by deactivating AFTER the roster row exists — the legitimate
+  // historical state BE-03E describes ("Deactivating is not a delete: existing
+  // assignments are retained, they simply stop being assignable targets").
   const shiftInactive = await shiftService.createShift({
     clientId: client.id,
     buildingId: buildingA.id,
@@ -164,7 +171,6 @@ async function seed() {
     name: 'Inactive shift',
     startTime: '07:00:00',
     endTime: '15:00:00',
-    status: 'INACTIVE',
   });
   const shiftNoTz = await shiftService.createShift({
     clientId: client.id,
@@ -191,7 +197,7 @@ async function seed() {
     workforceProfileId: profile.id,
     shiftId: shiftNight.id,
   });
-  await assignShiftToWorkforce({
+  const inactiveAssignment = await assignShiftToWorkforce({
     workforceProfileId: profile.id,
     shiftId: shiftInactive.id,
   });
@@ -204,13 +210,27 @@ async function seed() {
     shiftId: shiftOtherBuilding.id,
   });
 
+  // Deactivate through the BE-03E service path only AFTER the roster row
+  // exists. The assignment stays ACTIVE while the Shift becomes INACTIVE, which
+  // is exactly the state `GET /mobile/current-shift` must exclude on
+  // `s.status = 'ACTIVE'` — distinct from test "excludes an assignment
+  // deactivated to INACTIVE", which deactivates the roster row instead.
+  await shiftService.updateShiftStatus(shiftInactive.id, 'INACTIVE');
+
   return {
     client,
     profile,
+    manager,
     buildingA,
+    buildingB,
+    buildingNoTz,
     shiftMorning,
     shiftNight,
+    shiftInactive,
+    shiftNoTz,
+    shiftOtherBuilding,
     morningAssignment,
+    inactiveAssignment,
   };
 }
 
@@ -237,10 +257,26 @@ describe('BE-25M mobile current shift', () => {
     if (!ready(t)) return;
     const f = await seed();
 
-    // 2026-08-20T02:00:00Z == 09:00 Asia/Jakarta — inside 07:00–15:00.
+    // 2026-08-20T02:00:00Z == 09:00 Asia/Jakarta — inside 07:00–15:00. The
+    // seeded INACTIVE shift shares this exact window, Building and an ACTIVE
+    // roster row, so the count of 1 is what proves the ACTIVE-shift requirement
+    // (`s.status = 'ACTIVE'`); assert it by name as well so the boundary stays
+    // explicit rather than incidental to the fixture.
     const context = await resolveCurrentShifts(
-      managerUserId,
+      f.manager.userId,
       new Date('2026-08-20T02:00:00Z'),
+    );
+    // Fixture state the exclusion depends on, re-read rather than assumed: the
+    // roster row is still ACTIVE while the Shift it points at was deactivated
+    // afterwards through the BE-03E service path.
+    assert.equal(f.inactiveAssignment.status, 'ACTIVE');
+    assert.equal(
+      (await shiftService.getShiftById(f.shiftInactive.id)).status,
+      'INACTIVE',
+    );
+    assert.ok(
+      context.shifts.every((s) => s.shiftId !== f.shiftInactive.id),
+      'a shift deactivated to INACTIVE must be excluded even with an ACTIVE roster row',
     );
     assert.equal(context.shifts.length, 1);
     const shift = context.shifts[0];
@@ -263,7 +299,7 @@ describe('BE-25M mobile current shift', () => {
     // 2026-08-20T18:00:00Z == 01:00 Asia/Jakarta — inside the overnight
     // 22:00–06:00 window, outside 07:00–15:00.
     const context = await resolveCurrentShifts(
-      managerUserId,
+      f.manager.userId,
       new Date('2026-08-20T18:00:00Z'),
     );
     assert.equal(context.shifts.length, 1);
@@ -272,11 +308,11 @@ describe('BE-25M mobile current shift', () => {
 
   it('returns an empty context outside every assigned window', async (t) => {
     if (!ready(t)) return;
-    await seed();
+    const f = await seed();
 
     // 2026-08-20T09:00:00Z == 16:00 Asia/Jakarta — between 15:00 and 22:00.
     const context = await resolveCurrentShifts(
-      managerUserId,
+      f.manager.userId,
       new Date('2026-08-20T09:00:00Z'),
     );
     assert.deepEqual(context.shifts, []);
@@ -302,7 +338,7 @@ describe('BE-25M mobile current shift', () => {
 
     // 09:00 Jakarta on the 20th — futureShift's roster starts on the 21st.
     const context = await resolveCurrentShifts(
-      managerUserId,
+      f.manager.userId,
       new Date('2026-08-20T02:00:00Z'),
     );
     assert.ok(
@@ -334,7 +370,7 @@ describe('BE-25M mobile current shift', () => {
 
     // 2026-08-20T10:00:00Z == 17:00 Jakarta — inside 15:00–23:00.
     const context = await resolveCurrentShifts(
-      managerUserId,
+      f.manager.userId,
       new Date('2026-08-20T10:00:00Z'),
     );
     assert.deepEqual(context.shifts, []);
@@ -344,27 +380,54 @@ describe('BE-25M mobile current shift', () => {
     if (!ready(t)) return;
     const f = await seed();
 
-    // 2026-08-20T01:00:00Z == 08:00 Jakarta — inside buildingB's 08:00–16:00
-    // shift, but buildingB was never assigned to the manager.
+    // 2026-08-20T01:00:00Z == 08:00 Jakarta — inside BOTH buildingB's
+    // 08:00–16:00 shift and buildingA's 07:00–15:00 morning shift. Both shifts
+    // are ACTIVE with ACTIVE roster rows and both Buildings carry the same IANA
+    // timezone, so Building access is the ONLY differing variable: buildingB was
+    // never assigned to the caller and must not resolve, while the morning shift
+    // must. Asserting the positive control too is what makes this a real
+    // isolation proof rather than a blanket-empty result.
     const context = await resolveCurrentShifts(
-      managerUserId,
+      f.manager.userId,
       new Date('2026-08-20T01:00:00Z'),
     );
-    assert.equal(context.shifts.length, 0);
-    void f;
+    assert.ok(
+      context.shifts.every((shift) => shift.buildingId !== f.buildingB.id),
+      'no shift in a Building the caller cannot access may resolve',
+    );
+    assert.ok(
+      context.shifts.every((shift) => shift.shiftId !== f.shiftOtherBuilding.id),
+      'the inaccessible Building shift must be excluded',
+    );
+    assert.equal(context.shifts.length, 1);
+    assert.equal(context.shifts[0].shiftId, f.shiftMorning.id);
+    assert.equal(context.shifts[0].buildingId, f.buildingA.id);
   });
 
   it('excludes shifts whose Building has no timezone (cannot affirm "current")', async (t) => {
     if (!ready(t)) return;
     const f = await seed();
 
-    // 2026-08-20T03:00:00Z == 10:00 Jakarta — inside buildingNoTz's
-    // 08:00–16:00 shift, but that Building carries no IANA timezone.
+    // 2026-08-20T03:00:00Z == 10:00 Jakarta — inside BOTH buildingNoTz's
+    // 08:00–16:00 shift and buildingA's 07:00–15:00 morning shift. buildingNoTz
+    // IS assigned to the caller but carries no IANA timezone, so the local
+    // wall-clock cannot be determined and "current" cannot be affirmed: the row
+    // is excluded, never guessed. The morning shift still resolves, proving the
+    // exclusion is timezone-specific and not a blanket-empty result.
     const context = await resolveCurrentShifts(
-      managerUserId,
+      f.manager.userId,
       new Date('2026-08-20T03:00:00Z'),
     );
-    assert.deepEqual(context.shifts, []);
-    void f;
+    assert.ok(
+      context.shifts.every((shift) => shift.buildingId !== f.buildingNoTz.id),
+      'no shift in a Building without a timezone may resolve',
+    );
+    assert.ok(
+      context.shifts.every((shift) => shift.shiftId !== f.shiftNoTz.id),
+      'the no-timezone Building shift must be excluded, never guessed',
+    );
+    assert.equal(context.shifts.length, 1);
+    assert.equal(context.shifts[0].shiftId, f.shiftMorning.id);
+    assert.equal(context.shifts[0].buildingId, f.buildingA.id);
   });
 });

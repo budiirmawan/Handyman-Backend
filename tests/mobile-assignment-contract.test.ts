@@ -667,3 +667,151 @@ describe('BE-25C mobile assignment contract — pagination', () => {
     assert.ok(Array.isArray(response.body.error.details));
   });
 });
+
+// ---------------------------------------------------------------------------
+// CR-BE-RN12-METER-ENTRY-01 — canonical BE-18 reading-due id on the mobile
+// assignment reference.
+//
+// Focused, additive test only. It proves the new `reference.utilityReadingDueId`
+// is derived SOLELY from the generated-task → utility_reading_due relation
+// (`utility_reading_dues.generated_task_id = generated_tasks.id`), never from
+// `targetType` / `targetId`, and that every other assignment keeps it null.
+// No new command, no authority change, no migration.
+// ---------------------------------------------------------------------------
+describe('CR-BE-RN12-METER-ENTRY-01 — reading due reference on mobile assignment', () => {
+  let meterId = '';
+  let rdTaskId = ''; // TASK whose generated task is linked to a reading due
+  let rdDueId = '';
+  let otherTaskId = ''; // TASK with no linked reading due
+  let rdTask2Id = ''; // second TASK linked to a DIFFERENT reading due
+  let rdDue2Id = '';
+
+  async function createMeter(): Promise<string> {
+    const uomId = await insertRow('units_of_measure', {
+      client_id: clientA,
+      code: `UOM_${randomUUID().slice(0, 8).toUpperCase()}`,
+      name: 'Kilowatt Hour',
+      symbol: 'kWh',
+      category: 'ENERGY',
+    });
+    return insertRow('utility_meters', {
+      client_id: clientA,
+      building_id: buildingA,
+      code: `MTR_${randomUUID().slice(0, 8).toUpperCase()}`,
+      name: 'Main Meter',
+      utility_type: 'ELECTRICITY',
+      uom_id: uomId,
+    });
+  }
+
+  async function createReadingDue(
+    meter: string,
+    generatedTaskId: string,
+    periodDay: number,
+  ): Promise<string> {
+    const dueId = id();
+    await q(
+      `INSERT INTO utility_reading_dues
+         (id, client_id, building_id, meter_id, utility_type, period_start,
+          period_end, due_at, status, schedule_definition_id,
+          generated_task_id, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'DUE', NULL, $9, $10)`,
+      [
+        dueId,
+        clientA,
+        buildingA,
+        meter,
+        'ELECTRICITY',
+        `2026-09-0${periodDay}T00:00:00Z`,
+        `2026-09-1${periodDay}T00:00:00Z`,
+        '2026-09-20T00:00:00Z',
+        generatedTaskId,
+        adminUserId,
+      ],
+    );
+    return dueId;
+  }
+
+  before(async () => {
+    meterId = await createMeter();
+
+    rdTaskId = await createTask(clientA, buildingA, 'OPEN', 6);
+    await assignTask(rdTaskId, 'WORKFORCE', adminProfileId, null, adminUserId);
+    rdDueId = await createReadingDue(meterId, rdTaskId, 1);
+
+    otherTaskId = await createTask(clientA, buildingA, 'OPEN', 7);
+    await assignTask(otherTaskId, 'WORKFORCE', adminProfileId, null, adminUserId);
+
+    rdTask2Id = await createTask(clientA, buildingA, 'OPEN', 8);
+    await assignTask(rdTask2Id, 'WORKFORCE', adminProfileId, null, adminUserId);
+    rdDue2Id = await createReadingDue(meterId, rdTask2Id, 2);
+  });
+
+  it('A — returns the exact utilityReadingDueId for the linked reading-due task', async () => {
+    const response = await getFeed(adminToken);
+    assert.equal(response.status, 200);
+    const item = feedItem(response.body.data, 'TASK', rdTaskId);
+    assert.equal(typeof item.reference.utilityReadingDueId, 'string');
+    assert.equal(item.reference.utilityReadingDueId, rdDueId);
+  });
+
+  it('B — returns null/absent for a task with no linked reading due (and for work orders)', async () => {
+    const response = await getFeed(adminToken);
+    const unlinked = feedItem(response.body.data, 'TASK', otherTaskId);
+    assert.equal(unlinked.reference.utilityReadingDueId, null);
+
+    const preExisting = feedItem(response.body.data, 'TASK', task1Id);
+    assert.equal(preExisting.reference.utilityReadingDueId, null);
+
+    const wo = feedItem(response.body.data, 'WORK_ORDER', wo1Id);
+    assert.equal(wo.reference.utilityReadingDueId, null);
+  });
+
+  it('C — two dues/tasks never cross-link', async () => {
+    const response = await getFeed(adminToken);
+    const a = feedItem(response.body.data, 'TASK', rdTaskId);
+    const b = feedItem(response.body.data, 'TASK', rdTask2Id);
+    assert.equal(a.reference.utilityReadingDueId, rdDueId);
+    assert.equal(b.reference.utilityReadingDueId, rdDue2Id);
+    assert.notEqual(a.reference.utilityReadingDueId, rdDue2Id);
+    assert.notEqual(b.reference.utilityReadingDueId, rdDueId);
+  });
+
+  it('D — derived from the generated-task relation, not targetType/targetId', async () => {
+    // The linked task targets CHECKLIST_TEMPLATE (not a meter), proving the id is
+    // NOT inferred from targetType/targetId.
+    const response = await getFeed(adminToken);
+    const linked = feedItem(response.body.data, 'TASK', rdTaskId);
+    assert.equal(linked.reference.targetType, 'CHECKLIST_TEMPLATE');
+    assert.equal(linked.reference.utilityReadingDueId, rdDueId);
+
+    // A task whose generated task targets UTILITY_METER but has NO reading due
+    // must still return null — targetType alone must never produce an id.
+    const meterTaskId = await createTask(clientA, buildingA, 'OPEN', 9);
+    await q(
+      `UPDATE generated_tasks SET target_type = 'UTILITY_METER' WHERE id = $1`,
+      [meterTaskId],
+    );
+    await assignTask(meterTaskId, 'WORKFORCE', adminProfileId, null, adminUserId);
+    const response2 = await getFeed(adminToken);
+    const meterItem = feedItem(response2.body.data, 'TASK', meterTaskId);
+    assert.equal(meterItem.reference.targetType, 'UTILITY_METER');
+    assert.equal(meterItem.reference.utilityReadingDueId, null);
+  });
+
+  it('E — existing assignment fields remain unchanged for the linked task', async () => {
+    const response = await getFeed(adminToken);
+    const item = feedItem(response.body.data, 'TASK', rdTaskId);
+    assert.equal(item.type, 'TASK');
+    assert.equal(item.status, 'OPEN');
+    assert.equal(item.reference.taskId, rdTaskId);
+    assert.equal(item.reference.targetType, 'CHECKLIST_TEMPLATE');
+    assert.ok(item.reference.targetId);
+    assert.equal(item.reference.scheduleDefinitionId, item.reference.scheduleDefinitionId);
+    assert.ok(item.reference.generatedAt);
+    // WORK_ORDER side stays explicit null.
+    assert.equal(item.reference.workOrderId, null);
+    assert.equal(item.reference.workOrderNumber, null);
+    assert.equal(item.reference.title, null);
+  });
+});

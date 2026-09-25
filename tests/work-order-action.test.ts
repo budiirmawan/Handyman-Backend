@@ -14,6 +14,12 @@ import { positionService } from '../src/modules/positions';
 import { workforceService } from '../src/modules/workforce';
 import { workforceBuildingAssignmentService } from '../src/modules/workforce-building-assignments';
 import { workOrderService } from '../src/modules/work-orders';
+import {
+  WORK_ORDER_ACTION_TYPES,
+  WORK_ORDER_EXECUTION_ACTIONS,
+  isWorkOrderActionType,
+  resolveWorkOrderAvailableActions,
+} from '../src/modules/work-order-actions';
 import { createAdminUser, createPlainSession } from './helpers/access';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
@@ -323,5 +329,178 @@ describe('RBAC and isolation', () => {
     const response = await postAction(wo.id, 'acknowledge', outsider.token);
     assert.equal(response.status, 403);
     assert.equal(response.body.error.code, 'BUILDING_ACCESS_DENIED');
+  });
+});
+
+/**
+ * CR-BE-MOBILE-WO-COMPLETE-01 — Work Order COMPLETE availability authority.
+ *
+ * The resolver is the single authority the BE-25C mobile assignment feed and
+ * the execution endpoints share, so these assertions pin the exact token
+ * matrix without a database: COMPLETE surfaces the existing BE-08H completion
+ * command, and CLOSE remains the separate COMPLETED → CLOSED closure token.
+ */
+describe('CR-BE-MOBILE-WO-COMPLETE-01 — COMPLETE available-action authority', () => {
+  it('exposes COMPLETE for an authorized IN_PROGRESS work order', () => {
+    assert.deepEqual(
+      resolveWorkOrderAvailableActions('IN_PROGRESS', true, true),
+      ['HOLD', 'ADD_NOTE', 'CANCEL', 'COMPLETE'],
+    );
+  });
+
+  it('never exposes COMPLETE outside IN_PROGRESS', () => {
+    const statuses = [
+      'OPEN',
+      'ASSIGNED',
+      'ON_HOLD',
+      'COMPLETED',
+      'CANCELLED',
+      'CLOSED',
+    ] as const;
+
+    for (const status of statuses) {
+      assert.ok(
+        !resolveWorkOrderAvailableActions(status, true, true).includes('COMPLETE'),
+        `COMPLETE must not be offered for ${status}`,
+      );
+    }
+  });
+
+  it('does not grant COMPLETE without active-assignment authority', () => {
+    assert.deepEqual(
+      resolveWorkOrderAvailableActions('IN_PROGRESS', false, true),
+      ['CANCEL'],
+    );
+    assert.deepEqual(
+      resolveWorkOrderAvailableActions('IN_PROGRESS', true, false),
+      ['CANCEL'],
+    );
+    assert.ok(
+      !resolveWorkOrderAvailableActions('IN_PROGRESS', false, false).includes(
+        'COMPLETE',
+      ),
+    );
+  });
+
+  it('preserves the existing execution tokens for every other status', () => {
+    assert.deepEqual(resolveWorkOrderAvailableActions('OPEN', true, true), [
+      'ACKNOWLEDGE',
+      'ADD_NOTE',
+      'CANCEL',
+    ]);
+    assert.deepEqual(resolveWorkOrderAvailableActions('ASSIGNED', true, true), [
+      'ACKNOWLEDGE',
+      'START',
+      'ADD_NOTE',
+      'CANCEL',
+    ]);
+    assert.deepEqual(resolveWorkOrderAvailableActions('ON_HOLD', true, true), [
+      'RESUME',
+      'ADD_NOTE',
+      'CANCEL',
+    ]);
+    // The pre-existing IN_PROGRESS tokens are preserved, in order.
+    assert.deepEqual(
+      resolveWorkOrderAvailableActions('IN_PROGRESS', true, true).slice(0, 3),
+      ['HOLD', 'ADD_NOTE', 'CANCEL'],
+    );
+  });
+
+  it('keeps CLOSE a separate, COMPLETED-only token', () => {
+    assert.ok(
+      !resolveWorkOrderAvailableActions('IN_PROGRESS', true, true, true).includes(
+        'CLOSE',
+      ),
+      'CLOSE must never appear while IN_PROGRESS',
+    );
+    assert.deepEqual(resolveWorkOrderAvailableActions('COMPLETED', true, true, false), []);
+    assert.deepEqual(resolveWorkOrderAvailableActions('COMPLETED', true, true, true), ['CLOSE']);
+    assert.deepEqual(resolveWorkOrderAvailableActions('CANCELLED', true, true, true), []);
+    assert.deepEqual(resolveWorkOrderAvailableActions('CLOSED', true, true, true), []);
+  });
+
+  it('never records COMPLETE as a work_order_actions history type', () => {
+    assert.ok(
+      !(WORK_ORDER_ACTION_TYPES as readonly string[]).includes('COMPLETE'),
+      'COMPLETE must not be a recorded action type',
+    );
+    assert.ok(
+      !(WORK_ORDER_EXECUTION_ACTIONS as readonly string[]).includes('COMPLETE'),
+      'COMPLETE must not join the execution-action set',
+    );
+    assert.equal(isWorkOrderActionType('COMPLETE'), false);
+  });
+});
+
+/**
+ * CR-BE-MOBILE-WO-COMPLETE-01 — end-to-end COMPLETE authority.
+ *
+ * Proves the token the mobile feed advertises is the token the existing
+ * completion command answers to, and that CLOSE stays out of the way.
+ */
+describe('CR-BE-MOBILE-WO-COMPLETE-01 — COMPLETE end to end', () => {
+  async function feedWorkOrder(token: string, workOrderId: string): Promise<any> {
+    const response = await api()
+      .get('/api/v1/mobile/assignments')
+      .set(authHeaders(token));
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const item = (response.body.data as any[]).find(
+      (entry) => entry.reference.workOrderId === workOrderId,
+    );
+    assert.ok(item, `Work Order ${workOrderId} was not in the mobile feed`);
+    return item;
+  }
+
+  it('advertises COMPLETE while IN_PROGRESS and runs it at POST /work-orders/:id/complete', async (t) => {
+    if (!requireDatabase(t)) {
+      return;
+    }
+
+    const { wo, worker } = await setupAssignedWorkOrder(t);
+
+    assert.equal((await postAction(wo.id, 'acknowledge', worker.token, {})).status, 201);
+    assert.equal((await postAction(wo.id, 'start', worker.token, {})).status, 201);
+
+    const during = await feedWorkOrder(worker.token, wo.id);
+    assert.equal(during.status, 'IN_PROGRESS');
+    assert.ok(
+      during.availableActions.includes('COMPLETE'),
+      'an authorized IN_PROGRESS work order must expose COMPLETE',
+    );
+    assert.ok(
+      !during.availableActions.includes('CLOSE'),
+      'CLOSE must not appear while the work order is still IN_PROGRESS',
+    );
+
+    // The advertised token's command is the canonical completion endpoint.
+    const completed = await api()
+      .post(`/api/v1/work-orders/${wo.id}/complete`)
+      .set(authHeaders(worker.token))
+      .send({ completionSummary: 'Completed from the advertised token' });
+    assert.equal(completed.status, 200);
+    assert.equal(completed.body.data.status, 'COMPLETED');
+
+    const after = await feedWorkOrder(worker.token, wo.id);
+    assert.equal(after.status, 'COMPLETED');
+    assert.ok(
+      !after.availableActions.includes('COMPLETE'),
+      'COMPLETE must be gone once the work order is COMPLETED',
+    );
+    assert.ok(
+      !after.availableActions.includes('CLOSE'),
+      'CLOSE stays gated on the closure authority (no APPROVED review exists)',
+    );
+
+    // Completion does not write a work_order_actions history row.
+    const actions = await api()
+      .get(`/api/v1/work-orders/${wo.id}/actions`)
+      .set(authHeaders(worker.token));
+    assert.equal(actions.status, 200);
+    assert.ok(
+      !actions.body.data.some(
+        (entry: { actionType: string }) => entry.actionType === 'COMPLETE',
+      ),
+      'completion must not create a fake COMPLETE history row',
+    );
   });
 });

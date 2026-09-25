@@ -15,6 +15,7 @@ import type {
   NewSubscription,
   PublicSubscription,
   SubscriptionEffectiveState,
+  SubscriptionEffectiveness,
   SubscriptionRecord,
   SubscriptionStatus,
   UpdateSubscriptionStatusInput,
@@ -41,7 +42,7 @@ export function toPublicSubscription(record: SubscriptionRecord): PublicSubscrip
  * `now` is injectable for deterministic tests.
  */
 export function isSubscriptionEffective(
-  record: SubscriptionRecord,
+  record: SubscriptionEffectiveness,
   now: Date,
 ): boolean {
   if (record.status !== 'ACTIVE') {

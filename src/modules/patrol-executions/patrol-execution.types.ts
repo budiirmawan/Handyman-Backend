@@ -1,3 +1,5 @@
+import type { PublicPatrolRoutePoint } from '../patrol-routes/patrol-route.types';
+
 /**
  * BE-12D — Patrol Execution domain types.
  *
@@ -137,4 +139,54 @@ export type PatrolPointVisitInput = {
 
 export type UpdatePatrolPointVisitInput = {
   notes?: string | null;
+};
+
+/* ------------------------------------------------------------------ */
+/*  CR-BE-RN16-PATROL-FIELD-01 PART 01 — field context                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Backend-owned field action tokens for a Patrol Execution.
+ *
+ * Published so the mobile client renders exactly what the backend would
+ * accept. There is deliberately NO CANCEL token: patrol cancellation is not
+ * a field authority (the generic BE-07 task CANCEL stays a task-surface
+ * action and must never be surfaced as patrol authority).
+ */
+export const PATROL_FIELD_ACTIONS = ['START_PATROL', 'COMPLETE_PATROL'] as const;
+export type PatrolFieldAction = (typeof PATROL_FIELD_ACTIONS)[number];
+
+/** Backend-owned field action token for a single route point. */
+export const PATROL_POINT_FIELD_ACTIONS = ['VISIT_POINT'] as const;
+export type PatrolPointFieldAction =
+  (typeof PATROL_POINT_FIELD_ACTIONS)[number];
+
+/**
+ * One point of the execution's canonical patrol route, with its visit state
+ * and the actions the backend currently accepts for that point. Points are
+ * the route's own `patrol_route_points` (ordered by `sequence`); INACTIVE
+ * points are still listed (their `point.status` says so) but never carry
+ * VISIT_POINT.
+ */
+export type PatrolFieldPoint = {
+  point: PublicPatrolRoutePoint;
+  visit: PublicPatrolPointVisit | null;
+  availableActions: PatrolPointFieldAction[];
+};
+
+/**
+ * The mobile field entry payload for one Patrol Execution: the canonical
+ * execution, the route's points with their visits, and the actions the
+ * backend-derived rules currently authorize for the caller.
+ *
+ * The actions are advisory projections of the existing commands — the client
+ * must still call `POST /security/patrol-executions/{id}/start`,
+ * `POST /security/patrol-executions/{id}/points/{pointId}/visit` and
+ * `POST /security/patrol-executions/{id}/complete`, which re-derive
+ * authority server-side.
+ */
+export type PatrolFieldContext = {
+  execution: PublicPatrolExecution;
+  availableActions: PatrolFieldAction[];
+  points: PatrolFieldPoint[];
 };

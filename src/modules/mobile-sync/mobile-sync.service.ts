@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { AppError, ERROR_CODES } from '../../shared/errors';
+import { sha256Hex } from '../../shared/hash';
 import { logger } from '../../shared/logger';
 import { permissionService } from '../permissions';
+import { recordMobileUtilityMeterReading } from '../mobile-utility-meter-reading/mobile-utility-meter-reading.service';
+import { parseMobileUtilityMeterReadingBody } from '../mobile-utility-meter-reading/mobile-utility-meter-reading.validation';
 import { executeTaskAction } from '../task-execution/task-execution.service';
 import { saveChecklistResponses } from '../checklist-executions/checklist-execution.service';
 import { submitEvidenceMetadata, evidenceUploadPermissionFor } from '../evidence/evidence.service';
@@ -64,6 +67,10 @@ const REQUIRED_PERMISSION: Record<MobileSyncResourceType, string> = {
   PATROL_EXECUTION: 'patrol_execution.manage',
   PATROL_POINT_VISIT: 'patrol_execution.manage',
   METER_READING: 'meter_reading_binding.manage',
+  // CR-BE-RN12-METER-FIELD-01 PART 03 — identical to the permission the
+  // published BE-18 field route enforces (`utility_meter.field.record`, NOT the
+  // BE-10C `meter_reading_binding.manage` above and NOT `utility_meter.manage`).
+  UTILITY_METER_READING: 'utility_meter.field.record',
 };
 
 /**
@@ -90,6 +97,9 @@ export const PUBLISHED_OPERATION_BY_TYPE: Record<
   },
   PATROL_POINT_VISIT: { SUBMIT: 'recordPatrolPointVisit' },
   METER_READING: { SUBMIT: 'submitMeterReading' },
+  // CR-BE-RN12-METER-FIELD-01 PART 03 — the SAME published operation the online
+  // field route exposes; the dispatcher below calls the same service function.
+  UTILITY_METER_READING: { SUBMIT: 'recordMobileUtilityMeterReading' },
 };
 
 export const OPERATIONS_BY_TYPE: Record<
@@ -104,7 +114,34 @@ export const OPERATIONS_BY_TYPE: Record<
   PATROL_EXECUTION: ['START', 'COMPLETE'],
   PATROL_POINT_VISIT: ['SUBMIT'],
   METER_READING: ['SUBMIT'],
+  // PART 03 — no new operation verb was introduced.
+  UTILITY_METER_READING: ['SUBMIT'],
 };
+
+/**
+ * CR-BE-RN12-METER-FIELD-01 PART 03 — the canonical idempotency key of a synced
+ * operation, DERIVED from the sync operation identity and never supplied by the
+ * client.
+ *
+ * BE-25H already dedupes a batch by (user, operationId) before executing, so a
+ * sequential retry never reaches the write. This digest is the second half of
+ * that guarantee: two DUPLICATE batches racing past the store both reach the
+ * write, and because they derive the SAME key they land on the same canonical
+ * idempotency record — one executes, the other replays its stored response
+ * instead of failing. Replay safety therefore rests on the operation identity the
+ * client already committed to, not on a second identity it could vary.
+ *
+ * Digesting keeps the key inside the canonical 200-character bound for any
+ * operationId and out of the namespace an online `Idempotency-Key` header would
+ * naturally occupy, so the offline and online doors cannot collide by accident.
+ */
+function syncOperationIdempotencyKey(
+  resourceType: MobileSyncResourceType,
+  userId: string,
+  operationId: string,
+): string {
+  return sha256Hex(`mobile-sync:${resourceType}:${userId}:${operationId}`);
+}
 
 function permissionDeniedError(): AppError {
   return new AppError({
@@ -231,6 +268,40 @@ async function executeOperation(
             notes: (operation.data?.notes as string | null | undefined) ?? null,
           },
         );
+        break;
+      }
+      case 'UTILITY_METER_READING': {
+        // CR-BE-RN12-METER-FIELD-01 PART 03 — BE-18. `resourceId` is the Reading
+        // Due, the field execution identity, never a bare meter id.
+        //
+        // ONE CANONICAL WRITE, NO SYNC-SIDE READING LOGIC. This calls the exact
+        // application service the online field route calls, so offline and online
+        // are the same command: PART 00's field-actor seam (assignment to the
+        // due's generated task + BE-02G Building access) revalidated on every
+        // attempt, server-derived meter / UOM / source / readingType / actor, the
+        // atomic reading + due completion in one transaction, BE-18E's decimal
+        // precision and meter + instant uniqueness, the canonical operational
+        // events, and the one-reading-per-due concurrency invariant. There is
+        // therefore no second reading authority and no duplicated rule here.
+        //
+        // The body is parsed by PART 01's own parser — the identical allowlist,
+        // the identical refusals of authority keys — after removing BE-25I's own
+        // `baseVersion` envelope field, which belongs to the sync contract and
+        // not to the command.
+        const payload: Record<string, unknown> = { ...(operation.data ?? {}) };
+        delete payload.baseVersion;
+        const input = parseMobileUtilityMeterReadingBody(payload);
+        const written = await recordMobileUtilityMeterReading(
+          operation.resourceId,
+          userId,
+          input,
+          syncOperationIdempotencyKey(
+            operation.resourceType,
+            userId,
+            operation.operationId,
+          ),
+        );
+        result = written.data;
         break;
       }
     }

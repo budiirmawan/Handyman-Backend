@@ -29,6 +29,27 @@ export const MOBILE_EVIDENCE_EXECUTION_TYPES = [
   'FINDING',
   'FINDING_REWORK',
   'FINDING_VERIFICATION',
+  /**
+   * CR-BE-RN12-METER-FIELD-01 PART 02 — the BE-18F Reading Evidence parent
+   * (`evidence_submissions.execution_type = 'UTILITY_METER_READING'`,
+   * `execution_id = utility_meter_readings.id`).
+   *
+   * Admitted, not invented: BE-18F already writes those rows and migration 0281
+   * already allows the value at the database level. Until now the mobile
+   * contract did not know the kind, so a reading's photo read through
+   * `GET /mobile/evidence/:evidenceId` fell into the FORM_INSTANCE fallback and
+   * came back with a null parent — a broken projection of a row that was
+   * perfectly authoritative.
+   *
+   * Every existing kind is preserved verbatim; none is removed, reordered or
+   * reinterpreted, and no second mobile evidence engine or table is added.
+   */
+  'UTILITY_METER_READING',
+  /**
+   * CR-BE-RN13-CLEANING-EVIDENCE-MOBILE-01 — the canonical Daily Cleaning task
+   * parent (`execution_type = 'DAILY_CLEANING'`, `execution_id = generated_tasks.id / reference.taskId`).
+   */
+  'DAILY_CLEANING',
 ] as const;
 
 export type MobileEvidenceExecutionType =
@@ -71,6 +92,34 @@ export type MobileEvidenceTarget = {
   finding: { id: string; findingNumber: string; title: string; status: string } | null;
   rework: { id: string; status: string } | null;
   verification: { id: string; status: string } | null;
+  /**
+   * CR-BE-RN12-METER-FIELD-01 PART 02 — additive BE-18F Reading-parent
+   * reference, server-derived from the stored evidence's `execution_type` +
+   * `execution_id` and never from client input. Non-null only for
+   * `UTILITY_METER_READING`; always null for every pre-existing kind, so the
+   * projection of a Finding / checklist / form evidence row is byte-identical to
+   * before apart from this one nullable field.
+   *
+   * Exactly the BE-18E reading facts, with no status invented for a reading
+   * (BE-18E readings are append-only and have no status column) and no meter
+   * identity beyond `meterId`: PART 00's
+   * `GET /mobile/utility-reading-dues/:readingDueId/meter-context` is where a
+   * field client reads meter identity, and duplicating it here would create a
+   * second, divergent meter projection.
+   *
+   * No consumption value, no delta, no abnormality verdict and no OCR verdict is
+   * carried here — the evidence contract describes the FILE and its parent, and
+   * PART 02's verification surface is where suggestions and persisted signals
+   * are read.
+   */
+  meterReading: {
+    id: string;
+    meterId: string;
+    readingValue: number;
+    readingAt: string;
+    source: string;
+    readingType: string;
+  } | null;
 };
 
 /** File metadata + upload result of the submission. */

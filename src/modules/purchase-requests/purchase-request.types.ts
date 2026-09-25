@@ -60,6 +60,14 @@ export type PurchaseRequestRecord = {
   status: PurchaseRequestStatus;
   requestedByUserId: string;
   requestedAt: Date;
+  /**
+   * CR-BE-RN11-MATERIAL-FIELD-01 PART 00 — Work Order source of a field
+   * procurement parent. NULL for every management / historical Purchase
+   * Request; set only by the internal Work-Order field parent helper. At most
+   * one Purchase Request per Work Order (partial unique index). Internal in
+   * PART 00 — not exposed on PublicPurchaseRequest.
+   */
+  workOrderId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -109,6 +117,8 @@ export type NewPurchaseRequest = {
   requiredDate: Date | null;
   priority: PurchaseRequestPriority;
   requestedByUserId: string;
+  /** PART 00 — internal only; management create never sets it. */
+  workOrderId?: string | null;
 };
 
 /** Partial update input (PATCH /purchase-requests/:id). */

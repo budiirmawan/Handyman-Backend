@@ -108,6 +108,84 @@ export type MobileAssignmentReference = {
   targetType?: string | null;
   targetId?: string | null;
   generatedAt?: string | null;
+  /**
+   * CR-BE-RN12-METER-ENTRY-01 — canonical BE-18 utility reading due id.
+   *
+   * Exactly `utility_reading_dues.id` when this assignment's canonical
+   * generated task (`task_assignments.task_id` = `generated_tasks.id`) is the
+   * one linked by `utility_reading_dues.generated_task_id`. Derived purely from
+   * that generated-task relation — never from `targetType` / `targetId`. Null
+   * for every other assignment (including all WORK_ORDER items).
+   */
+  utilityReadingDueId?: string | null;
+  /**
+   * CR-BE-RN13-CLEANING-FIELD-01 PART 00 — canonical Cleaning Area of a
+   * cleaning execution.
+   *
+   * Exactly `cleaning_areas.id`, derived ONLY through the generated-task
+   * relation:
+   *
+   *   task_assignments.task_id
+   *     → generated_tasks.schedule_definition_id
+   *     → cleaning_schedule_bindings (status = 'ACTIVE')
+   *     → cleaning_areas.id
+   *
+   * Migration 0352 guarantees at most one ACTIVE cleaning schedule binding per
+   * schedule definition, so this resolves to exactly one Cleaning Area or to
+   * none. It is never derived from `targetType` / `targetId` (those identify
+   * the checklist or form template the schedule runs, not the area being
+   * cleaned), nor from title / work type / asset / functional location.
+   *
+   * Null for every non-cleaning assignment, including all WORK_ORDER items.
+   * Identity/context only — it carries no authority. `taskId` remains the
+   * field execution id; task assignment and the backend's task
+   * `availableActions` remain the only authority.
+   */
+  cleaningAreaId?: string | null;
+  /**
+   * CR-BE-RN16-PATROL-FIELD-01 PART 01 — canonical Patrol Execution of a
+   * patrol assignment.
+   *
+   * Exactly `generated_tasks.id` — i.e. the same value as `taskId`, because a
+   * Patrol Execution IS the BE-07 generated task (the Security view adds the
+   * route/binding context under that id). Derived ONLY through the generated
+   * task's schedule definition:
+   *
+   *   task_assignments.task_id
+   *     → generated_tasks.schedule_definition_id
+   *     → patrol_schedule_bindings (status = 'ACTIVE')
+   *
+   * Migration 0354 guarantees at most one ACTIVE patrol schedule binding per
+   * schedule definition, so a task either is a patrol execution (exactly one
+   * binding) or is not (none). Non-patrol assignments — including every
+   * WORK_ORDER item — are null.
+   *
+   * It is never derived from `targetType` / `targetId` (those identify the
+   * checklist or form template the schedule runs), nor from title, work type,
+   * asset, functional location or security post.
+   *
+   * Identity/context only — it carries no authority. The backend's
+   * `GET /security/patrol-executions/{id}/field-context` remains the only
+   * source of the field action tokens, and it re-derives the caller's
+   * authority from the building + ACTIVE task assignment itself.
+   */
+  patrolExecutionId?: string | null;
+  /**
+   * CR-BE-RN19-SAFETY-INSPECTION-01 — additive Safety Inspection marker.
+   *
+   * Exactly `safety_inspection_bindings.id` when the canonical generated task
+   * (`task_assignments.task_id` = `generated_tasks.id`) resolves through
+   * `generated_tasks.schedule_definition_id` to one ACTIVE Safety Inspection
+   * binding. The backend first checks cardinality; more than one ACTIVE row is
+   * a bounded ambiguity error and never selects a winner. It is never inferred
+   * from target type/id, names, codes, title, or work type.
+   *
+   * Null for non-Safety tasks and all WORK_ORDER items. Identity/context only:
+   * `taskId` remains `generated_tasks.id`, generic Checklist Execution owns
+   * lifecycle/actions, and no Safety-specific actions or result authority is
+   * carried here.
+   */
+  safetyInspectionBindingId?: string | null;
   // WORK_ORDER
   workOrderId?: string | null;
   workOrderNumber?: string | null;

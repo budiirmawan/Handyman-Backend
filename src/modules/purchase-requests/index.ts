@@ -8,6 +8,12 @@ export {
 export { purchaseRequestRepository } from './purchase-request.repository';
 
 export {
+  WORK_ORDER_FIELD_PURCHASE_REQUEST_TYPE,
+  WORK_ORDER_FIELD_REQUEST_NUMBER_PREFIX,
+  getOrCreateWorkOrderFieldPurchaseRequest,
+} from './purchase-request.work-order-parent';
+
+export {
   cancelPurchaseRequest,
   createPurchaseRequest,
   getPurchaseRequestById,

@@ -6,6 +6,7 @@ import { qualityAuditService } from './quality-audit.service';
 import {
   parseCompleteQualityAuditBody,
   parseCreateQualityAuditBody,
+  parseDailyCleaningTaskIdParam,
   parseQualityAuditFilter,
   parseQualityAuditIdParam,
   parseUpdateQualityAuditBody,
@@ -29,17 +30,45 @@ export async function createQualityAuditHandler(
     }
 
     const input = parseCreateQualityAuditBody(req.body);
+    // CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — Building access is asserted by
+    // the service BEFORE the insert, against the source-derived Building. It
+    // is deliberately NOT re-asserted here afterwards: doing so was what let an
+    // unauthorized row commit and only then be rejected.
     const audit = await qualityAuditService.createQualityAudit({
       ...input,
       auditorUserId: req.auth.userId,
     });
 
-    await contextAccessService.assertBuildingAccess(
-      req.auth.userId,
-      audit.buildingId,
-    );
-
     sendSuccess(res, audit, 201);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — target-scoped quality audit context
+ * for a Daily Cleaning task. Read-only: it resolves the single current DRAFT
+ * audit and the authoritative command list, and never creates or completes an
+ * audit.
+ */
+export async function getDailyCleaningQualityAuditContextHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const taskId = parseDailyCleaningTaskIdParam(paramString(req.params.taskId));
+    if (!req.auth) {
+      throw authenticationRequiredError();
+    }
+
+    const context =
+      await qualityAuditService.getDailyCleaningQualityAuditContext(
+        taskId,
+        req.auth.userId,
+      );
+
+    sendSuccess(res, context);
   } catch (error) {
     next(error);
   }

@@ -671,6 +671,14 @@ describe('BE-05C boundary', () => {
         'id',
         'manufacturer',
         'model',
+        // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 02 — the asset operational-state
+        // axis (RN-10): still no hierarchy duplication, and explicitly a
+        // different axis from the BE-05E lifecycle columns below.
+        'operational_state',
+        'operational_state_changed_at',
+        'operational_state_changed_by_user_id',
+        'operational_state_reason',
+        'operational_state_version',
         // BE-05E lifecycle traceability columns.
         'previous_status',
         'serial_number',

@@ -2,6 +2,7 @@ export {
   housekeepingEvidenceBuildingMismatchError,
   housekeepingEvidenceClientMismatchError,
   housekeepingEvidenceCountViolationError,
+  housekeepingEvidenceFieldUnauthorizedError,
   housekeepingEvidenceSourceNotFoundError,
   housekeepingEvidenceSourceTerminalError,
   housekeepingEvidenceTypeMismatchError,
@@ -16,6 +17,7 @@ export {
 } from './housekeeping-evidence.routes';
 
 export {
+  assertDailyCleaningEvidenceFieldActor,
   housekeepingEvidenceService,
   listEvidenceRequirements,
   listEvidenceSubmissions,

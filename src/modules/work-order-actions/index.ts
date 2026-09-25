@@ -7,6 +7,8 @@ export {
 export { workOrderActionRepository } from './work-order-action.repository';
 
 export {
+  assertWorkOrderFieldActor,
+  isActorAuthorizedForWorkOrderAssignment,
   listWorkOrderActions,
   recordWorkOrderAction,
   resolveWorkOrderAvailableActions,

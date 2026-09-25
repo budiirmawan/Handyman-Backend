@@ -1,0 +1,170 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 07 — BE-06G VENDOR COMPLIANCE
+  # DOCUMENT (`src/modules/vendor-compliance-documents`).
+  #
+  # Structured compliance metadata plus an opaque `fileReference` pointer. No
+  # binary, no document-management platform, no OCR, no approval workflow and
+  # no renewal scheduler exists in this authority.
+  # ---------------------------------------------------------------------------
+
+  /vendors/{vendorId}/compliance-documents:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+
+    post:
+      operationId: createVendorComplianceDocument
+      summary: Create a compliance document for a Vendor
+      description: >-
+        BE-06G. Records compliance metadata (business licence, tax letter,
+        insurance certificate, …) for the route's Vendor. Requires
+        `vendor.manage`. Validation order: unknown Vendor 404
+        `VENDOR_NOT_FOUND`, issue/expiry order 400 `VALIDATION_ERROR`,
+        status/date consistency 400
+        `VENDOR_COMPLIANCE_DOCUMENT_STATUS_DATE_MISMATCH`, then conflicting
+        ACTIVE document 409 `VENDOR_COMPLIANCE_DOCUMENT_ALREADY_ACTIVE`.
+        `documentType` is required, trimmed and upper-cased, 2–64 characters of
+        `[A-Z][A-Z0-9_-]*`; `documentNumber` (≤128) and `documentName` (≤255)
+        are required; `issueDate` / `expiryDate` are optional ISO-8601
+        timestamps (expiry before issue is rejected);
+        `fileReference` (≤512) is an opaque pointer, never a binary; `notes` is
+        at most 1024 characters. `status` defaults to `ACTIVE` and must be
+        date-consistent: ACTIVE cannot carry a past expiry (use `EXPIRED`), and
+        `EXPIRED` requires a past expiry. The ACTIVE conflict is scoped to the
+        same Vendor + document type + document number; history rows never
+        conflict, and the partial unique index is the race-condition backstop.
+        Responds 201 with the created document.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVendorComplianceDocumentRequest"
+      responses:
+        "201":
+          description: The created Vendor Compliance Document.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorComplianceDocument"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listVendorComplianceDocuments
+      summary: List the compliance documents of a Vendor
+      description: >-
+        BE-06G read, ordered by `documentType`, then `documentNumber`, then
+        creation time ascending, as a plain array. Requires `vendor.read`. An
+        unknown Vendor is 404 `VENDOR_NOT_FOUND` rather than an empty list, and
+        because every document hangs off exactly one Vendor this route can
+        never reach another Client's documents. Unpaginated, no filters.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The compliance documents recorded for the requested Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/VendorComplianceDocument"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendor-compliance-documents/{id}:
+    parameters:
+      - $ref: "#/components/parameters/VendorComplianceDocumentIdPath"
+
+    get:
+      operationId: getVendorComplianceDocument
+      summary: Get a Vendor compliance document
+      description: >-
+        BE-06G single-read addressed by the document id. Requires
+        `vendor.read`. The id must be a UUID (400 `VALIDATION_ERROR`); an
+        unknown id is 404 `VENDOR_COMPLIANCE_DOCUMENT_NOT_FOUND`.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The requested Vendor Compliance Document.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorComplianceDocument"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateVendorComplianceDocument
+      summary: Update a Vendor compliance document
+      description: >-
+        BE-06G partial update of metadata and/or status. Requires
+        `vendor.manage`. `vendorId` is immutable — naming it is 400
+        `VALIDATION_ERROR`. Mutable: `documentType`, `documentNumber`,
+        `documentName`, `issueDate`, `expiryDate` (explicit `null` clears a
+        bound), `fileReference` (explicit `null` clears the pointer), `notes`
+        and `status`; status changes travel through this same endpoint rather
+        than a separate lifecycle route. The post-update shape is fully
+        re-validated against the merged row — date order 400
+        `VALIDATION_ERROR`, status/date consistency 400
+        `VENDOR_COMPLIANCE_DOCUMENT_STATUS_DATE_MISMATCH`, and a collision with
+        a *different* ACTIVE document of the same Vendor + type + number 409
+        `VENDOR_COMPLIANCE_DOCUMENT_ALREADY_ACTIVE` (the row itself never
+        conflicts with itself). An unknown document is 404
+        `VENDOR_COMPLIANCE_DOCUMENT_NOT_FOUND`. Withdrawal is
+        `{"status": "INACTIVE"}`; rows are never deleted. Responds 200 with the
+        updated document.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVendorComplianceDocumentRequest"
+      responses:
+        "200":
+          description: The updated Vendor Compliance Document.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorComplianceDocument"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

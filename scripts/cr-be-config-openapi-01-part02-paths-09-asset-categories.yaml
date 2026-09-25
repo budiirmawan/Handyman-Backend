@@ -1,0 +1,149 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 09 — BE-05B ASSET CATEGORY
+  # (`src/modules/asset-categories`).
+  #
+  # Classification/reference data for Assets — not an Asset and not a hierarchy
+  # level. The registry chain stays Client → Property → Building → Asset.
+  # ---------------------------------------------------------------------------
+
+  /clients/{clientId}/asset-categories:
+    post:
+      operationId: createAssetCategory
+      summary: Create an Asset Category for a Client
+      description: >-
+        BE-05B. Creates one Asset Category owned by the Client taken from the
+        route. Requires `asset_category.manage`. Resolution order: unknown
+        Client 404 `CLIENT_NOT_FOUND`, INACTIVE Client 400 `CLIENT_INACTIVE`,
+        duplicate code 409 `ASSET_CATEGORY_CODE_ALREADY_EXISTS` (the unique
+        index is the race-condition backstop). `code` is trimmed and
+        upper-cased and must be 2–64 characters of `[A-Z][A-Z0-9_-]*`, unique
+        per Client; `name` is required (≤160); optional `description` is at
+        most 512 characters; `status` defaults to `ACTIVE`. Category codes are
+        data, never behaviour — no logic branches on a specific code, and no
+        Asset is created or re-classified here. Responds 201 with the created
+        Category.
+      tags: [Asset Category]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_category.manage
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAssetCategoryRequest" }
+      responses:
+        "201":
+          description: The created Asset Category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AssetCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listClientAssetCategories
+      summary: List the Asset Categories of a Client
+      description: >-
+        BE-05B read, ordered by `code` ascending, as a plain array. Requires
+        `asset_category.read`; the Client is resolved first, so an unknown
+        Client is 404 `CLIENT_NOT_FOUND` rather than an empty list.
+        Unpaginated, no filters.
+      tags: [Asset Category]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_category.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      responses:
+        "200":
+          description: The Asset Categories recorded for the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AssetCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /asset-categories/{id}:
+    parameters:
+      - $ref: "#/components/parameters/AssetCategoryIdParam"
+
+    get:
+      operationId: getAssetCategory
+      summary: Get an Asset Category
+      description: >-
+        BE-05B single-read addressed by the Category id. Requires
+        `asset_category.read`. The id must be a UUID (400 `VALIDATION_ERROR`);
+        an unknown id is 404 `ASSET_CATEGORY_NOT_FOUND`.
+      tags: [Asset Category]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_category.read
+      responses:
+        "200":
+          description: The requested Asset Category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AssetCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateAssetCategory
+      summary: Update an Asset Category
+      description: >-
+        BE-05B partial update. Requires `asset_category.manage`. Only `name`
+        (≤160), `description` (≤512, explicit `null` clears it) and `status`
+        are read: `clientId` and `code` cannot be changed through this
+        endpoint — a Category never migrates between Clients and its code stays
+        the stable identifier — and supplying them has no effect rather than
+        raising an error. Deactivation is `{"status": "INACTIVE"}` on this same
+        endpoint (the service-level status helper is not separately exposed),
+        and an INACTIVE Category can no longer be assigned to an Asset.
+        Categories are never deleted. An unknown Category is 404
+        `ASSET_CATEGORY_NOT_FOUND`. Responds 200 with the updated Category.
+      tags: [Asset Category]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_category.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateAssetCategoryRequest" }
+      responses:
+        "200":
+          description: The updated Asset Category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AssetCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

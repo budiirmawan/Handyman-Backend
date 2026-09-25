@@ -714,6 +714,13 @@ describe('BE-05E boundary', () => {
         'id',
         'manufacturer',
         'model',
+        // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 02 — the asset operational-state
+        // axis (RN-10), a separate axis from the BE-05E lifecycle below.
+        'operational_state',
+        'operational_state_changed_at',
+        'operational_state_changed_by_user_id',
+        'operational_state_reason',
+        'operational_state_version',
         'previous_status',
         'serial_number',
         'status',

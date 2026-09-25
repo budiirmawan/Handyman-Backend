@@ -138,6 +138,29 @@ export async function findActiveByAreaAndSchedule(
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }
 
+/**
+ * CR-BE-RN13-CLEANING-FIELD-01 PART 00 — the ACTIVE binding holding a schedule
+ * definition, regardless of which Cleaning Area holds it.
+ *
+ * Backs the one-ACTIVE-binding-per-schedule invariant: at most one row can
+ * exist under `cleaning_schedule_bindings_schedule_active_unique`
+ * (migration 0352), so this is a genuine single-row lookup.
+ */
+export async function findActiveBySchedule(
+  scheduleDefinitionId: string,
+): Promise<CleaningScheduleBindingRecord | null> {
+  const result = await getPool().query<CleaningScheduleBindingRow>(
+    `SELECT id, client_id, building_id, cleaning_area_id,
+            schedule_definition_id, description, status,
+            created_by_user_id, created_at, updated_at
+     FROM cleaning_schedule_bindings
+     WHERE schedule_definition_id = $1
+       AND status = 'ACTIVE'`,
+    [scheduleDefinitionId],
+  );
+  return result.rows[0] ? mapRow(result.rows[0]) : null;
+}
+
 export async function listByAreaId(
   cleaningAreaId: string,
   filter: CleaningScheduleBindingFilter = {},
@@ -308,6 +331,7 @@ export async function insertSchedule(input: {
 export const cleaningScheduleBindingRepository = {
   create,
   findActiveByAreaAndSchedule,
+  findActiveBySchedule,
   findCleaningArea,
   findById,
   findSchedule,

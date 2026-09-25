@@ -1,0 +1,94 @@
+    # ------------------------------------------------------------------
+    # CR-BE-CONFIG-OPENAPI-01 PART 01 — Organization & Workforce admin.
+    # ------------------------------------------------------------------
+    OrganizationIdPath:
+      name: id
+      in: path
+      description: Organization id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    OrganizationIdPathParam:
+      name: organizationId
+      in: path
+      description: Organization id that scopes the collection.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    DepartmentIdPath:
+      name: id
+      in: path
+      description: Department id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    DepartmentIdPathParam:
+      name: departmentId
+      in: path
+      description: Department id that scopes the collection.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    TeamIdPath:
+      name: id
+      in: path
+      description: Team id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    PositionIdPath:
+      name: id
+      in: path
+      description: Position id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    ShiftIdPath:
+      name: id
+      in: path
+      description: Shift id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    SkillIdPath:
+      name: id
+      in: path
+      description: Skill id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    WorkforceProfileIdPath:
+      name: id
+      in: path
+      description: Workforce Profile id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    WorkforceShiftIdPath:
+      name: shiftId
+      in: path
+      description: Shift id addressed inside the Workforce Profile's roster.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    WorkforceSkillIdPath:
+      name: skillId
+      in: path
+      description: >-
+        Skill id addressed inside the Workforce Profile's competency record.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    ExternalOrganizationIdPath:
+      name: externalOrganizationId
+      in: path
+      description: External Organization id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    ClientIdRequiredQuery:
+      name: clientId
+      in: query
+      description: >-
+        Required Client scope. The list is never returned unscoped: a missing,
+        blank or non-UUID value is 400 `VALIDATION_ERROR`, not an empty page.
+        Distinct from `ClientIdQuery`, which is an optional filter elsewhere.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    OrganizationIdRequiredQuery:
+      name: organizationId
+      in: query
+      description: >-
+        Required Organization scope. The list is never returned unscoped: a
+        missing, blank or non-UUID value is 400 `VALIDATION_ERROR`, not an
+        empty page.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }

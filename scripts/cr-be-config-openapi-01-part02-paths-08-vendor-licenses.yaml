@@ -1,0 +1,184 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 08 — BE-06H VENDOR LICENSE /
+  # CERTIFICATION (`src/modules/vendor-licenses`).
+  #
+  # One table carries both LICENSE and CERTIFICATION records (`recordType` is
+  # data, not a behavioural fork). The read-time `expiryStatus` is resolved by
+  # the service; there is no renewal automation and no notification scheduler.
+  # ---------------------------------------------------------------------------
+
+  /vendors/{vendorId}/licenses-certifications:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+
+    post:
+      operationId: createVendorLicense
+      summary: Create a license / certification for a Vendor
+      description: >-
+        BE-06H. Creates one LICENSE or CERTIFICATION record for the route's
+        Vendor. Requires `vendor.manage`. Validation order: unknown Vendor 404
+        `VENDOR_NOT_FOUND`, unknown referenced document 404
+        `VENDOR_COMPLIANCE_DOCUMENT_NOT_FOUND`, document of another Vendor 400
+        `VENDOR_LICENSE_CERTIFICATION_DOCUMENT_MISMATCH`, issue/expiry order 400
+        `VALIDATION_ERROR`, status/date consistency 400
+        `VENDOR_LICENSE_CERTIFICATION_STATUS_DATE_MISMATCH`, then conflicting
+        ACTIVE record 409 `VENDOR_LICENSE_CERTIFICATION_ALREADY_ACTIVE` (same
+        Vendor + record type + number; history never conflicts).
+        `recordType` is required and must be `LICENSE` or `CERTIFICATION`;
+        `name` (≤255) and `number` (≤128) are required; `issuingAuthority` is
+        optional (≤255); `issueDate` / `expiryDate` are optional ISO-8601
+        timestamps (expiry before issue is rejected); `documentReference` is an
+        optional pointer at an existing BE-06G document of the same Vendor —
+        document storage is reused, never duplicated; `notes` is at most 1024
+        characters. `status` defaults to `ACTIVE`, and an ACTIVE record cannot
+        carry a past expiry (use `EXPIRED`, which itself requires a past
+        expiry). Expired records remain historical rows — nothing is deleted
+        and nothing is renewed automatically. Responds 201 with the created
+        record, including the resolved `expiryStatus`.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVendorLicenseRequest" }
+      responses:
+        "201":
+          description: The created Vendor License / Certification record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorLicenseCertification"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listVendorLicenses
+      summary: List the licenses / certifications of a Vendor
+      description: >-
+        BE-06H read of the Vendor's full license/certification history, ordered
+        by `recordType`, then `number`, then creation time ascending, as a plain
+        array. Requires `vendor.read`. An unknown Vendor is 404
+        `VENDOR_NOT_FOUND` rather than an empty list. Each element carries the
+        read-time resolved `expiryStatus` alongside the stored `status`.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The license / certification records held by the requested Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/VendorLicenseCertification"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendors/{vendorId}/licenses-certifications/current:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+
+    get:
+      operationId: listCurrentVendorLicenses
+      summary: List the currently-standing licenses / certifications of a Vendor
+      description: >-
+        BE-06H derived read: the records whose stored status is ACTIVE and whose
+        expiry is still in the future at read time, ordered as the full list is
+        (`recordType`, `number`, creation time), as a plain array. Requires
+        `vendor.read`. An ACTIVE row whose expiry has passed drops out of this
+        view without any row being rewritten — there is no scheduler, and
+        effectiveness is resolved at read time. An unknown Vendor is 404
+        `VENDOR_NOT_FOUND`. The static `/current` segment is registered before
+        the parameterised PATCH sibling and never collides with it, because
+        record ids must be UUIDs.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The currently-standing license / certification records.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/VendorLicenseCertification"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendors/{vendorId}/licenses-certifications/{id}:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+      - $ref: "#/components/parameters/VendorLicenseIdPath"
+
+    patch:
+      operationId: updateVendorLicense
+      summary: Update a Vendor license / certification
+      description: >-
+        BE-06H partial update addressed by the record id, scoped to the route's
+        Vendor: a record that belongs to a different Vendor is 404
+        `VENDOR_LICENSE_CERTIFICATION_NOT_FOUND`, so the true owner is never
+        leaked through this route. Requires `vendor.manage`. `vendorId` and
+        `recordType` are immutable — naming either is 400 `VALIDATION_ERROR`; a
+        record never
+        migrates between Vendors and never mutates between LICENSE and
+        CERTIFICATION. Mutable: `name`, `number`, `issuingAuthority`, `issueDate`,
+        `expiryDate` (explicit `null` clears a bound), `documentReference`
+        (re-pointed at an existing BE-06G document of the same Vendor, or `null`
+        to clear; the same 404/400 outcomes as on create), `notes` and `status`.
+        The post-update shape is fully re-validated against the merged row
+        (date order, status/date consistency, ACTIVE conflict), so a partial
+        update can never leave an inconsistent record. An unknown record is 404
+        `VENDOR_LICENSE_CERTIFICATION_NOT_FOUND`. Deactivation is
+        `{"status": "INACTIVE"}`; expired records stay as history. Responds 200
+        with the updated record, including the resolved `expiryStatus`.
+      tags: [Vendor Compliance]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateVendorLicenseRequest" }
+      responses:
+        "200":
+          description: The updated Vendor License / Certification record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorLicenseCertification"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

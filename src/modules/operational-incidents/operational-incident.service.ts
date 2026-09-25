@@ -1,4 +1,4 @@
-import { withTransaction } from '../../database';
+import { withTransaction, getPool } from '../../database';
 import { contextAccessService, getAccessibleBuildingIds } from '../context-access';
 import {
   incidentRepository,
@@ -10,6 +10,7 @@ import {
 import { recordOperationalEvent } from '../operational-events';
 import { permissionService } from '../permissions';
 import { userRepository } from '../users';
+import { workforceRepository } from '../workforce/workforce.repository';
 import {
   operationalIncidentInvalidTransitionError,
   operationalIncidentNotFoundError,
@@ -17,6 +18,10 @@ import {
   operationalIncidentReporterInvalidError,
   operationalIncidentTypeMismatchError,
   operationalIncidentUpdateNotAllowedError,
+  securityIncidentActiveShiftRequiredError,
+  securityIncidentBuildingMismatchError,
+  securityIncidentReporterMismatchError,
+  securityIncidentShiftAmbiguousError,
 } from './operational-incident.errors';
 import { operationalIncidentRepository } from './operational-incident.repository';
 import {
@@ -49,6 +54,14 @@ import {
  * BE-09 remains authoritative for Finding workflow — nothing here reads or
  * writes Finding state, and this small closed transition table is deliberately
  * not a generic workflow engine.
+ *
+ * CR-BE-RN17-SECURITY-INCIDENT-FIELD-01 — For operationalCategory='SECURITY',
+ * reporting-time shift assignment + security post context is derived
+ * server-side from the authenticated actor + requested buildingId + request
+ * time using the same effective/current-shift semantics as
+ * GET /mobile/current-shift. Zero or ambiguous active shift is a bounded
+ * 409, building must match, reporter cannot be another user, and the two
+ * new fields are persisted but never accepted from the client.
  */
 
 /** Occurrence may be backdated but never post-dated. */
@@ -152,6 +165,8 @@ export function toPublicOperationalIncident(
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
     availableActions,
+    reportedShiftAssignmentId: record.reportedShiftAssignmentId ?? null,
+    reportedSecurityPostId: record.reportedSecurityPostId ?? null,
   };
 }
 
@@ -166,6 +181,128 @@ async function present(
     record,
     resolveAvailableActions(record, permissions),
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* CR-BE-RN17 — Security reporting context (current-shift semantics)  */
+/* ------------------------------------------------------------------ */
+
+type ReportingRow = {
+  assignment_id: string;
+  shift_id: string;
+  building_id: string;
+  building_timezone: string | null;
+  start_time: string;
+  end_time: string;
+  effective_from: Date | null;
+  effective_until: Date | null;
+  security_post_id: string | null;
+};
+
+const REPORTING_SHIFT_SELECT = `
+  SELECT
+    wsa.id           AS assignment_id,
+    wsa.shift_id     AS shift_id,
+    s.building_id    AS building_id,
+    b.timezone       AS building_timezone,
+    s.start_time,
+    s.end_time,
+    wsa.effective_from,
+    wsa.effective_until,
+    wsa.security_post_id
+  FROM workforce_shift_assignments wsa
+  JOIN shifts s        ON s.id = wsa.shift_id
+  JOIN buildings b     ON b.id = s.building_id
+  WHERE wsa.workforce_profile_id = $1
+    AND wsa.status = 'ACTIVE'
+    AND s.status = 'ACTIVE'
+    AND s.building_id = ANY($2::uuid[])
+    AND (wsa.effective_from IS NULL OR wsa.effective_from <= $3)
+    AND (wsa.effective_until IS NULL OR wsa.effective_until >= $3)
+`;
+
+function localTimeOfDay(now: Date, timeZone: string | null): string | null {
+  if (!timeZone) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(now);
+    const get = (type: Intl.DateTimeFormatPartTypes): string =>
+      parts.find((p) => p.type === type)?.value ?? '00';
+    return `${get('hour')}:${get('minute')}:${get('second')}`;
+  } catch {
+    return null;
+  }
+}
+
+function secondsOfDay(value: string): number {
+  const [h, m, s] = value.split(':').map((p) => Number(p) || 0);
+  return h * 3600 + m * 60 + s;
+}
+
+function isWithinWindow(local: string, start: string, end: string): boolean {
+  const now = secondsOfDay(local);
+  const from = secondsOfDay(start);
+  const to = secondsOfDay(end);
+  if (from === to) return false;
+  if (from < to) return now >= from && now < to;
+  return now >= from || now < to;
+}
+
+async function resolveSecurityReportingContext(
+  actorUserId: string,
+  requestedBuildingId: string,
+  now: Date,
+): Promise<{ assignmentId: string; securityPostId: string | null; buildingId: string }> {
+  const profile = await workforceRepository.findByUserId(actorUserId);
+  if (!profile || profile.status !== 'ACTIVE') {
+    throw securityIncidentActiveShiftRequiredError();
+  }
+
+  const buildingIds = await contextAccessService.getAccessibleBuildingIds(actorUserId);
+  if (buildingIds.length === 0) {
+    throw securityIncidentActiveShiftRequiredError();
+  }
+
+  // Pull all ACTIVE roster rows that are effective at `now` across accessible buildings
+  const result = await getPool().query<ReportingRow>(REPORTING_SHIFT_SELECT, [
+    profile.id,
+    buildingIds,
+    now,
+  ]);
+
+  // Apply building timezone + window semantics exactly as GET /mobile/current-shift
+  const currentRows: ReportingRow[] = [];
+  for (const row of result.rows) {
+    const local = localTimeOfDay(now, row.building_timezone);
+    if (local === null) continue;
+    if (!isWithinWindow(local, row.start_time, row.end_time)) continue;
+    currentRows.push(row);
+  }
+
+  const matchingInBuilding = currentRows.filter((r) => r.building_id === requestedBuildingId);
+
+  if (matchingInBuilding.length === 0) {
+    if (currentRows.length === 0) {
+      throw securityIncidentActiveShiftRequiredError();
+    }
+    throw securityIncidentBuildingMismatchError();
+  }
+
+  if (matchingInBuilding.length > 1) {
+    throw securityIncidentShiftAmbiguousError();
+  }
+
+  const canonical = matchingInBuilding[0];
+  return {
+    assignmentId: canonical.assignment_id,
+    securityPostId: canonical.security_post_id ?? null,
+    buildingId: canonical.building_id,
+  };
 }
 
 export async function createOperationalIncident(
@@ -183,11 +320,36 @@ export async function createOperationalIncident(
     input.buildingId,
   );
   assertOccurrence(input.occurredAt);
-  const reportedByUserId = await resolveReporter(
-    input.reportedByUserId,
-    actorUserId,
-    input.buildingId,
-  );
+
+  // CR-BE-RN17: SECURITY category reporting context
+  let reportedByUserId: string;
+  let reportedShiftAssignmentId: string | null = null;
+  let reportedSecurityPostId: string | null = null;
+
+  const isSecurity = input.operationalCategory === 'SECURITY';
+
+  if (isSecurity) {
+    if (input.reportedByUserId && input.reportedByUserId !== actorUserId) {
+      throw securityIncidentReporterMismatchError();
+    }
+    reportedByUserId = actorUserId;
+
+    const ctx = await resolveSecurityReportingContext(actorUserId, input.buildingId, new Date());
+    // Building hardening: resolveSecurityReportingContext already guarantees
+    // requested building == canonical building and throws appropriate 409s.
+    // Defensive double-check:
+    if (ctx.buildingId !== input.buildingId) {
+      throw securityIncidentBuildingMismatchError();
+    }
+    reportedShiftAssignmentId = ctx.assignmentId;
+    reportedSecurityPostId = ctx.securityPostId;
+  } else {
+    reportedByUserId = await resolveReporter(
+      input.reportedByUserId,
+      actorUserId,
+      input.buildingId,
+    );
+  }
 
   const existing = await incidentRepository.findByClientAndNumber(
     clientId,
@@ -222,6 +384,12 @@ export async function createOperationalIncident(
           occurredAt: input.occurredAt,
           notes: input.notes ?? null,
           createdByUserId: actorUserId,
+          ...(isSecurity
+            ? {
+                reportedShiftAssignmentId,
+                reportedSecurityPostId,
+              }
+            : {}),
         },
         client,
       );
@@ -247,6 +415,12 @@ export async function createOperationalIncident(
         severity: created.severity,
         priority: created.priority,
         occurredAt: created.occurredAt.toISOString(),
+        ...(isSecurity
+          ? {
+              reportedShiftAssignmentId,
+              reportedSecurityPostId,
+            }
+          : {}),
       },
     });
     return present(created, actorUserId);

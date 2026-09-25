@@ -4,6 +4,7 @@ import { requirePermission } from '../auth/rbac.middleware';
 import {
   completeQualityAuditHandler,
   createQualityAuditHandler,
+  getDailyCleaningQualityAuditContextHandler,
   getQualityAuditHandler,
   listQualityAuditsHandler,
   updateQualityAuditHandler,
@@ -17,6 +18,10 @@ import {
  *   GET   /housekeeping/quality-audits/:id
  *   PATCH /housekeeping/quality-audits/:id
  *   POST  /housekeeping/quality-audits/:id/complete
+ *
+ * CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — target-scoped discovery:
+ *
+ *   GET   /housekeeping/daily-cleaning/:taskId/quality-audit
  */
 export function createQualityAuditRouter(): Router {
   const router = Router();
@@ -53,6 +58,17 @@ export function createQualityAuditRouter(): Router {
     auth,
     manage,
     completeQualityAuditHandler,
+  );
+
+  // CR-BE-RN15-CLEANING-QUALITY-MOBILE-01 — target-scoped read that keeps
+  // mobile off the global quality-audit list. Read permission only: the
+  // `availableActions` it returns are themselves gated on the manage
+  // permission by the service.
+  router.get(
+    '/housekeeping/daily-cleaning/:taskId/quality-audit',
+    auth,
+    read,
+    getDailyCleaningQualityAuditContextHandler,
   );
 
   return router;

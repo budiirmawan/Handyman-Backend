@@ -268,6 +268,17 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // BE-17B — Material Request
   { code: 'material_request.read', name: 'Read Material Requests' },
   { code: 'material_request.manage', name: 'Manage Material Requests' },
+  // CR-BE-RN11-MATERIAL-FIELD-01 PART 01 — field (technician) material
+  // request authority on a Work Order. Deliberately separate from
+  // `material_request.manage` / `purchase_request.manage`: raising demand for
+  // the Work Order one is executing is FIELD authority, not procurement
+  // administration, and the two must be grantable / revocable independently.
+  // Granted to PLATFORM_ADMIN by default (ordinary operational capability).
+  { code: 'material_request.field.read', name: 'Read Field Material Requests' },
+  { code: 'material_request.field.request', name: 'Request Field Materials' },
+  // CR-BE-RN11-MATERIAL-FIELD-01 PART 03 — record canonical Work Order material
+  // usage (STOCK_OUT issue) from the field. Not inventory_stock.manage.
+  { code: 'material_usage.field.record', name: 'Record Field Material Usage' },
   // BE-17C — Service Request
   { code: 'service_request.read', name: 'Read Service Requests' },
   { code: 'service_request.manage', name: 'Manage Service Requests' },
@@ -333,6 +344,49 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // BE-18A — Utility Meter Master
   { code: 'utility_meter.read', name: 'Read Utility Meters' },
   { code: 'utility_meter.manage', name: 'Manage Utility Meters' },
+  // CR-BE-RN12-METER-FIELD-01 PART 00 — read the mobile field meter context of a
+  // Reading Due the caller is actually assigned to. Deliberately NOT
+  // `utility_meter.read` / `utility_meter.manage`: those are meter
+  // ADMINISTRATION, whereas identifying a meter at the point of capture is FIELD
+  // authority, and the two must be grantable / revocable independently — the same
+  // split CR-BE-RN11-MATERIAL-FIELD-01 drew between `material_request.field.read`
+  // and `material_request.manage`. This grants NO write: reading submission stays
+  // PART 01. Granted to PLATFORM_ADMIN by default (ordinary operational
+  // capability), not an exceptional authority.
+  { code: 'utility_meter.field.read', name: 'Read Field Utility Meter Context' },
+  // CR-BE-RN12-METER-FIELD-01 PART 01 — submit a field Meter Reading against a
+  // Reading Due the caller is assigned to. This is the WRITE half of the PART 00
+  // split, and it is a separate code for the same reason: an actor may be allowed
+  // to identify a meter at the point of capture without being allowed to post a
+  // measurement against it. Deliberately NOT `utility_meter.manage` (meter master
+  // administration), NOT `utility_meter.read` (dashboard visibility) and NOT
+  // `meter_reading_binding.manage` (BE-10C engineering binding administration) —
+  // none of those is standing in front of a meter recording a value, and the
+  // field permission is never substituted by any of them. Naming follows the
+  // `<domain>.field.<verb>` convention CR-BE-RN11-MATERIAL-FIELD-01 established
+  // with `material_usage.field.record`. No role name is implied or checked.
+  { code: 'utility_meter.field.record', name: 'Record Field Utility Meter Reading' },
+  // CR-BE-RN12-METER-FIELD-01 PART 02 — attach, read and remove the READING
+  // EVIDENCE of a field Meter Reading the caller is assigned to, read that
+  // reading's canonical evidence readiness, see its OCR suggestions, and record
+  // a human decision (confirm / reject) on one of those suggestions. This is a
+  // third, separate code for the same reason PART 00 and PART 01 are separate:
+  // identifying a meter (`field.read`), posting a measurement (`field.record`)
+  // and proving / verifying that measurement (`field.evidence`) are grantable
+  // and revocable independently — an organisation may let a technician post a
+  // value without letting them decide an OCR suggestion, or the reverse.
+  //
+  // Deliberately NOT any of: `utility_meter.manage` (meter administration, and
+  // the authority behind the BE-18F management evidence routes and the BE-18
+  // OCR accept/reject routes), `utility_meter.read` (dashboard visibility),
+  // `evidence.manage` / `evidence.read` (the generic BE-07 evidence engine,
+  // which is Client-scoped and knows nothing about who is standing in front of
+  // which meter), `meter_reading_binding.manage` (BE-10C engineering bindings).
+  // Holding this code alone grants NOTHING: every route that accepts it also
+  // runs `assertUtilityMeterReadingFieldActor`, so authority still comes from
+  // the actor's assignment to the reading's generated task plus BE-02G Building
+  // access. No role name is implied or checked.
+  { code: 'utility_meter.field.evidence', name: 'Manage Field Utility Meter Reading Evidence' },
   // BE-19A — Tenant Charges
   { code: 'tenant_charge.read', name: 'Read Tenant Charges' },
   { code: 'tenant_charge.manage', name: 'Manage Tenant Charges' },
@@ -370,15 +424,82 @@ export const FOUNDATION_PERMISSIONS: readonly {
   { code: 'permit.read', name: 'Read Permits' },
   { code: 'permit.manage', name: 'Manage Permits' },
   { code: 'permit.approve', name: 'Approve Permits' },
+  // CR-BE-RN20-PERMIT-FIELD-01 — Work Permit FIELD execution. A Permit Worker
+  // discovers and executes the BE-20K work lifecycle (START / CLOSE) of the
+  // permits they are an ACTIVE worker on. Deliberately NOT `permit.read` /
+  // `permit.manage` / `permit.approve`: those are permit ADMINISTRATION and
+  // approval authority, whereas standing on site executing an already issued
+  // permit is FIELD authority, and the two must be grantable / revocable
+  // independently — the same split CR-BE-RN11-MATERIAL-FIELD-01 and
+  // CR-BE-RN12-METER-FIELD-01 drew. Neither code opens any /permits, /permit-*
+  // or /safety-requirements route, and the field routes never accept
+  // `permit.manage` as a substitute: field identity (the worker chain) is
+  // asserted on every call. Granted to PLATFORM_ADMIN by default (ordinary
+  // operational capability), not an exceptional authority.
+  { code: 'permit_work_field.read', name: 'Read Field Permit Work' },
+  { code: 'permit_work_field.execute', name: 'Execute Field Permit Work' },
   // BE-21A — Incident Foundation
   { code: 'incident.read', name: 'Read Incidents' },
   { code: 'incident.manage', name: 'Manage Incidents' },
   // BE-21B — Operational Incident
   { code: 'operational_incident.read', name: 'Read Operational Incidents' },
   { code: 'operational_incident.manage', name: 'Manage Operational Incidents' },
+  // CR-BE-RN18-SAFETY-FIELD-REPORT-01 — Hazard / Near-Miss Field Reporting
+  { code: 'safety_field_report.create', name: 'Create Safety Field Reports' },
+  { code: 'safety_field_report.read', name: 'Read Safety Field Reports' },
+  // CR-BE-RN19-SAFETY-INSPECTION-01 — binding configuration only. Generic
+  // mobile Checklist Execution remains the lifecycle authority.
+  { code: 'safety_inspection.read', name: 'Read Safety Inspection Bindings' },
+  { code: 'safety_inspection.manage', name: 'Manage Safety Inspection Bindings' },
   // BE-21C — Asset Failure / Defect
   { code: 'asset_failure.read', name: 'Read Asset Failures' },
   { code: 'asset_failure.manage', name: 'Manage Asset Failures' },
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 01 — field reporting of an unsafe
+  // condition. Deliberately separate from `asset_failure.manage`: recording a
+  // hazard a technician can SEE is not authority to administer the record
+  // afterwards. Granted to PLATFORM_ADMIN by default — field reporting is an
+  // ordinary operational capability, not the exceptional authority class that
+  // UNASSIGNED_BY_DEFAULT_PERMISSION_CODES exists for.
+  { code: 'asset_failure.report', name: 'Report Unsafe Asset Conditions' },
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 02 — Asset operational state (RN-10).
+  // Deliberately separate from `asset.manage`: declaring equipment
+  // OUT_OF_SERVICE / ISOLATED / SHUT_DOWN is a SAFETY decision, not Asset
+  // master-data administration, and the two must be grantable and revocable
+  // independently. Reading the state needs no new code (`asset.read`).
+  // Granted to PLATFORM_ADMIN by default.
+  {
+    code: 'asset_operational_state.manage',
+    name: 'Manage Asset Operational State',
+  },
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 03 — governed RETURN_TO_SERVICE.
+  // A THIRD, separate code. Taking equipment out of service and putting it back
+  // are not the same authority: returning an Asset to service asserts that the
+  // hazard is cleared, so it is granted and revoked independently of
+  // `asset_operational_state.manage` (and, like it, of `asset.manage` and the
+  // whole `asset_failure.*` family). Granted to PLATFORM_ADMIN by default —
+  // an ordinary operational authority, not the exceptional class that
+  // UNASSIGNED_BY_DEFAULT_PERMISSION_CODES exists for. There is no technician
+  // or mobile grant: caller-specific mobile authority is a later PART.
+  {
+    code: 'asset_operational_state.return_to_service',
+    name: 'Return Asset to Service',
+  },
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 04 — mobile RN-10 operational-state
+  // READ. Gates `GET /mobile/assets/{assetId}/operational-state`, which
+  // returns the canonical PART 02 operational-state view plus the
+  // caller-specific `availableActions` snapshot. A dedicated code rather
+  // than `asset.read`: that surface discloses the caller's own safety
+  // authorities as executable affordances, which is a distinct capability
+  // grant. No role name is involved — application roles (technician, BM,
+  // supervisor, …) are provisioned to this code by policy/configuration,
+  // exactly like every other code in this catalogue. Granted to
+  // PLATFORM_ADMIN by default, following the existing convention for the
+  // other RN-10 operational codes (it is not the exceptional authority class
+  // that UNASSIGNED_BY_DEFAULT_PERMISSION_CODES exists for).
+  {
+    code: 'asset_operational_state.read',
+    name: 'Read Mobile Asset Operational State',
+  },
   // BE-21D — Finding Escalation
   { code: 'finding_escalation.read', name: 'Read Finding Escalations' },
   { code: 'finding_escalation.manage', name: 'Manage Finding Escalations' },
@@ -509,6 +630,51 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // the rest of the BE-03A/B/E catalogue codes remain out of scope for this
   // publish-first PART.
   { code: 'workforce.read', name: 'Read Workforce Profiles' },
+  // CR-BE-CONFIG-PERM-01 — organizational-structure (BE-03A/B/D1/E) catalogue
+  // codes plus the BE-03C Workforce management side. This closes the deferral
+  // recorded immediately above.
+  //
+  // The BE-03A Organization and Department routers, the BE-03B Team and
+  // Position routers, the BE-03D1 Skill catalog router (also reused by
+  // BE-03I workforce skills) and the BE-03E Shift router (also reused by
+  // workforce shifts) have always required exactly these codes, as has the
+  // `workforce.manage` write side reused by BE-03F reporting lines, BE-03G
+  // building assignments and BE-03H external affiliations. None was ever
+  // seeded, so under default-deny RBAC no role could be granted them and every
+  // one of those routes was unreachable — the same defect class as
+  // `workforce.read` and the `vendor_invoice.*` codes above.
+  //
+  // Registration only. Each spelling below is the exact string already passed
+  // to requirePermission(...) by the mounted router: no route, endpoint,
+  // workflow or authorization semantic changes, no alias is introduced, and no
+  // capability is implied beyond what those routers already implement.
+  // `workforce.read` already exists above and is deliberately NOT repeated.
+  //
+  // These are ordinary organizational master-data administration codes, not
+  // exceptional financial/commercial authorities, so they follow the default
+  // catalogue rule (granted to PLATFORM_ADMIN by the seed loop below) and are
+  // NOT added to UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.
+  // BE-03A — Organization
+  { code: 'organization.read', name: 'Read Organizations' },
+  { code: 'organization.manage', name: 'Manage Organizations' },
+  // BE-03A — Department
+  { code: 'department.read', name: 'Read Departments' },
+  { code: 'department.manage', name: 'Manage Departments' },
+  // BE-03B — Team
+  { code: 'team.read', name: 'Read Teams' },
+  { code: 'team.manage', name: 'Manage Teams' },
+  // BE-03B — Position (organizational label only; never alters BE-01 RBAC)
+  { code: 'position.read', name: 'Read Positions' },
+  { code: 'position.manage', name: 'Manage Positions' },
+  // BE-03C — Workforce Profile, management side (read side registered above)
+  { code: 'workforce.manage', name: 'Manage Workforce Profiles' },
+  // BE-03D1 — Skill Catalog (Client-scoped master/reference only)
+  { code: 'skill.read', name: 'Read Skills' },
+  { code: 'skill.manage', name: 'Manage Skills' },
+  // BE-03E — Shift (Building-scoped definition; also gated by BE-02G
+  // requireBuildingAccess on the Building-nested routes)
+  { code: 'shift.read', name: 'Read Shifts' },
+  { code: 'shift.manage', name: 'Manage Shifts' },
   // CR-BE-MOB-05 PART 02 — Workforce attendance self-service. `attendance.manage`
   // gates the worker's own clock-in / clock-out; `attendance.read` gates the
   // worker's own current attendance status. Both are self-service codes —
@@ -552,6 +718,34 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // Client's FX behaviour, permitted rate sources and inverse-rate rights.
   { code: 'client_fx_policy.read', name: 'Read Client FX Policy' },
   { code: 'client_fx_policy.manage', name: 'Manage Client FX Policy' },
+  // CR-BE-SAAS-01 PART 01 — SaaS Control Plane (Gatepro) platform authority.
+  //
+  // The `platform.*` namespace is the SOLE authority for `/api/v1/platform/*`
+  // (frozen contract §3/§8). It is deliberately a separate namespace from
+  // every tenant/business permission: no tenant role or business code implies
+  // a platform code, and a platform code never appears on a business-plane
+  // route. All codes are withheld by default (see
+  // UNASSIGNED_BY_DEFAULT_PERMISSION_CODES / D2) — even PLATFORM_ADMIN must
+  // receive an explicit, deliberate grant.
+  { code: 'platform.customer.read', name: 'Read SaaS Customers' },
+  { code: 'platform.customer.manage', name: 'Manage SaaS Customers' },
+  { code: 'platform.product.read', name: 'Read SaaS Products & Packages' },
+  { code: 'platform.product.manage', name: 'Manage SaaS Products & Packages' },
+  { code: 'platform.pricebook.read', name: 'Read SaaS Pricebooks' },
+  { code: 'platform.pricebook.manage', name: 'Manage SaaS Pricebooks' },
+  { code: 'platform.subscription.read', name: 'Read SaaS Subscriptions' },
+  { code: 'platform.subscription.manage', name: 'Manage SaaS Subscriptions' },
+  { code: 'platform.provisioning.execute', name: 'Execute Tenant Provisioning' },
+  { code: 'platform.billing.read', name: 'Read SaaS Billing' },
+  { code: 'platform.billing.manage', name: 'Manage SaaS Billing' },
+  { code: 'platform.payment.read', name: 'Read SaaS Payments' },
+  { code: 'platform.payment.reconcile', name: 'Reconcile SaaS Payments' },
+  { code: 'platform.usage.read', name: 'Read SaaS Usage' },
+  { code: 'platform.health.read', name: 'Read Tenant Health' },
+  { code: 'platform.reporting.read', name: 'Read Commercial Reporting' },
+  { code: 'platform.support.access', name: 'Open Support Sessions' },
+  { code: 'platform.configuration.manage', name: 'Manage Platform Configuration' },
+  { code: 'platform.audit.read', name: 'Read SaaS Control-Plane Audit' },
 ];
 
 /**
@@ -573,6 +767,29 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   // blast radius. It must be assigned as a deliberate administrative act, never
   // inherited by being a platform administrator (governance §15).
   'fx_rate.approve',
+  // CR-BE-SAAS-01 PART 01 — the ENTIRE platform.* namespace (frozen D2):
+  // Gatepro Control-Plane authority must be granted as a deliberate
+  // administrative act. No role — including PLATFORM_ADMIN — inherits any of
+  // these by default.
+  'platform.customer.read',
+  'platform.customer.manage',
+  'platform.product.read',
+  'platform.product.manage',
+  'platform.pricebook.read',
+  'platform.pricebook.manage',
+  'platform.subscription.read',
+  'platform.subscription.manage',
+  'platform.provisioning.execute',
+  'platform.billing.read',
+  'platform.billing.manage',
+  'platform.payment.read',
+  'platform.payment.reconcile',
+  'platform.usage.read',
+  'platform.health.read',
+  'platform.reporting.read',
+  'platform.support.access',
+  'platform.configuration.manage',
+  'platform.audit.read',
 ]);
 
 const PLATFORM_ADMIN_ROLE = {

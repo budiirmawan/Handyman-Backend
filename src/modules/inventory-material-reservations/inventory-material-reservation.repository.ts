@@ -34,13 +34,14 @@ type ReservationRow = {
 };
 
 type DemandRow = {
+  materialRequestId: string;
   authorizedDemand: string;
   cumulativeIssued: string;
   activeReserved: string;
   remainingDemand: string;
   reservableDemand: string;
-  reservationAllowed: boolean;
-  issueAllowed: boolean;
+  reservationAllowed?: boolean;
+  issueAllowed?: boolean;
 };
 
 export type MaterialReservationBalanceRow = {
@@ -231,6 +232,58 @@ async function listByMaterialRequest(
 }
 
 /**
+ * Canonical demand arithmetic — ONE definition (CR-BE-INV-CONTROL-01 PART 02
+ * issue control), shared by the locked mutation snapshot and the read-only
+ * awareness summary (CR-BE-RN11-MATERIAL-FIELD-01 PART 02). All arithmetic is
+ * PostgreSQL NUMERIC:
+ *
+ *   authorizedDemand  = COALESCE(approved_quantity, quantity)
+ *   cumulativeIssued  = SUM(inventory_work_order_material_usages.quantity)  per material_request_id
+ *   activeReserved    = SUM(remaining_quantity) of ACTIVE reservations        per material_request_id
+ *   remainingDemand   = authorizedDemand - cumulativeIssued          (issue cap; reservations NOT subtracted)
+ *   reservableDemand  = authorizedDemand - cumulativeIssued - activeReserved
+ */
+const DEMAND_SELECT = `
+  mr.id AS "materialRequestId",
+  COALESCE(mr.approved_quantity, mr.quantity)::numeric AS "authorizedDemand",
+  COALESCE(issued.quantity, 0)::numeric AS "cumulativeIssued",
+  COALESCE(active_reservations.quantity, 0)::numeric AS "activeReserved",
+  (
+    COALESCE(mr.approved_quantity, mr.quantity)
+    - COALESCE(issued.quantity, 0)
+  )::numeric AS "remainingDemand",
+  (
+    COALESCE(mr.approved_quantity, mr.quantity)
+    - COALESCE(issued.quantity, 0)
+    - COALESCE(active_reservations.quantity, 0)
+  )::numeric AS "reservableDemand"
+`;
+
+const DEMAND_FROM = `
+  FROM material_requests mr
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(u.quantity), 0)::numeric AS quantity
+    FROM inventory_work_order_material_usages u
+    WHERE u.material_request_id = mr.id
+  ) issued ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(r.remaining_quantity), 0)::numeric AS quantity
+    FROM inventory_material_reservations r
+    WHERE r.material_request_id = mr.id AND r.status = 'ACTIVE'
+  ) active_reservations ON TRUE
+`;
+
+function mapDemand(row: DemandRow): MaterialReservationDemand {
+  return {
+    authorizedDemand: Number(row.authorizedDemand),
+    cumulativeIssued: Number(row.cumulativeIssued),
+    activeReserved: Number(row.activeReserved),
+    remainingDemand: Number(row.remainingDemand),
+    reservableDemand: Number(row.reservableDemand),
+  };
+}
+
+/**
  * Reads the demand calculation after the caller has locked the Material Request
  * row. All arithmetic and the admission decision happen in PostgreSQL NUMERIC.
  */
@@ -243,45 +296,21 @@ async function getDemandSnapshot(
   issueAllowed: boolean;
 }> {
   const result = await client.query<DemandRow>(
-    `WITH issued AS (
-       SELECT COALESCE(SUM(quantity), 0)::numeric AS quantity
-       FROM inventory_work_order_material_usages
-       WHERE material_request_id = $1
-     ), active_reservations AS (
-       SELECT COALESCE(SUM(remaining_quantity), 0)::numeric AS quantity
-       FROM inventory_material_reservations
-       WHERE material_request_id = $1
-         AND status = 'ACTIVE'
-     )
-     SELECT
-       COALESCE(mr.approved_quantity, mr.quantity)::numeric AS "authorizedDemand",
-       issued.quantity AS "cumulativeIssued",
-       active_reservations.quantity AS "activeReserved",
-       (
-         COALESCE(mr.approved_quantity, mr.quantity)
-         - issued.quantity
-       )::numeric AS "remainingDemand",
-       (
-         COALESCE(mr.approved_quantity, mr.quantity)
-         - issued.quantity
-         - active_reservations.quantity
-       )::numeric AS "reservableDemand",
+    `SELECT ${DEMAND_SELECT},
        (
          $2::numeric <= (
            COALESCE(mr.approved_quantity, mr.quantity)
-           - issued.quantity
-           - active_reservations.quantity
+           - COALESCE(issued.quantity, 0)
+           - COALESCE(active_reservations.quantity, 0)
          )
        ) AS "reservationAllowed",
        (
          $2::numeric <= (
            COALESCE(mr.approved_quantity, mr.quantity)
-           - issued.quantity
+           - COALESCE(issued.quantity, 0)
          )
        ) AS "issueAllowed"
-     FROM material_requests mr
-     CROSS JOIN issued
-     CROSS JOIN active_reservations
+     ${DEMAND_FROM}
      WHERE mr.id = $1`,
     [materialRequestId, requestedQuantity],
   );
@@ -292,14 +321,32 @@ async function getDemandSnapshot(
   }
 
   return {
-    authorizedDemand: Number(row.authorizedDemand),
-    cumulativeIssued: Number(row.cumulativeIssued),
-    activeReserved: Number(row.activeReserved),
-    remainingDemand: Number(row.remainingDemand),
-    reservableDemand: Number(row.reservableDemand),
-    reservationAllowed: row.reservationAllowed,
-    issueAllowed: row.issueAllowed,
+    ...mapDemand(row),
+    reservationAllowed: row.reservationAllowed === true,
+    issueAllowed: row.issueAllowed === true,
   };
+}
+
+/**
+ * CR-BE-RN11-MATERIAL-FIELD-01 PART 02 — READ-ONLY demand summaries for many
+ * Material Requests in one bounded query (no lock, no admission decision).
+ * Same DEMAND_SELECT as the mutation snapshot, so awareness can never drift
+ * from issue control. Keyed by materialRequestId; unknown ids are absent.
+ */
+async function getDemandSummaries(
+  materialRequestIds: readonly string[],
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<Map<string, MaterialReservationDemand>> {
+  const out = new Map<string, MaterialReservationDemand>();
+  if (materialRequestIds.length === 0) return out;
+  const result = await executor.query<DemandRow>(
+    `SELECT ${DEMAND_SELECT} ${DEMAND_FROM} WHERE mr.id = ANY($1::uuid[])`,
+    [materialRequestIds],
+  );
+  for (const row of result.rows) {
+    out.set(row.materialRequestId, mapDemand(row));
+  }
+  return out;
 }
 
 /** Locks one existing Item + Warehouse balance for the reservation command. */
@@ -454,6 +501,7 @@ export const inventoryMaterialReservationRepository = {
   findByIdForUpdate,
   findByIdWithDetails,
   getDemandSnapshot,
+  getDemandSummaries,
   increaseReservedQuantity,
   listByMaterialRequest,
   transitionWithClient,

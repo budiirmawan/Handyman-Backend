@@ -56,6 +56,40 @@ export function isSupervisorInspectionDecision(
   );
 }
 
+/**
+ * Operational states of an inspected target that may be reviewed.
+ *
+ * Single source of truth for the reviewability rule: `resolveTarget` refuses
+ * to open an inspection outside these states, and the target-scoped mobile
+ * context only offers `CREATE_INSPECTION` while the state still allows it.
+ */
+export const SUPERVISOR_INSPECTION_REVIEWABLE_TARGET_STATUSES = [
+  'IN_PROGRESS',
+  'COMPLETED',
+] as const;
+
+export function isSupervisorInspectionReviewableTargetStatus(
+  value: string,
+): boolean {
+  return (
+    SUPERVISOR_INSPECTION_REVIEWABLE_TARGET_STATUSES as readonly string[]
+  ).includes(value);
+}
+
+/**
+ * CR-BE-RN14-CLEANING-SUPERVISOR-MOBILE-01 — backend-resolved command
+ * authority for the supervisor inspection surface.
+ *
+ * These tokens are computed from live state × permission × Building access on
+ * every read. Mobile renders them; it never derives them locally.
+ */
+export const SUPERVISOR_INSPECTION_MOBILE_ACTIONS = [
+  'CREATE_INSPECTION',
+  'SUBMIT_DECISION',
+] as const;
+export type SupervisorInspectionMobileAction =
+  (typeof SUPERVISOR_INSPECTION_MOBILE_ACTIONS)[number];
+
 export type SupervisorInspectionRecord = {
   id: string;
   clientId: string;
@@ -118,4 +152,17 @@ export type SupervisorInspectionFilter = {
   cleaningAreaId?: string;
   targetType?: SupervisorInspectionTargetType;
   status?: SupervisorInspectionStatus;
+};
+
+/**
+ * CR-BE-RN14-CLEANING-SUPERVISOR-MOBILE-01 — target-scoped discovery of the
+ * DAILY_CLEANING supervisor inspection.
+ *
+ * `inspection` is the current PENDING inspection of the Daily Cleaning task
+ * (or `null` when none is open). `availableActions` is the authoritative
+ * command list the caller may issue next; it is never derived on the client.
+ */
+export type DailyCleaningSupervisorInspectionContext = {
+  inspection: PublicSupervisorInspection | null;
+  availableActions: SupervisorInspectionMobileAction[];
 };

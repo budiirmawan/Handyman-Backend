@@ -22,9 +22,10 @@ function actor(req: Request): string {
 export async function createTenantComplaintHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const tenantCompanyId = parseTenantComplaintCompanyIdParam(param(req.params.tenantCompanyId));
+    const authUserId = actor(req);
     const body = parseCreateTenantComplaintBody(req.body);
     sendSuccess(res, await tenantComplaintService.createTenantComplaint(
-      { ...body, tenantCompanyId }, actor(req),
+      { ...body, tenantCompanyId }, authUserId, authUserId,
     ), 201);
   } catch (error) { next(error); }
 }

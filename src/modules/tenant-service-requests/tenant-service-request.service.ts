@@ -68,6 +68,7 @@ async function loadAccessible(
 export async function createTenantServiceRequest(
   input: CreateTenantServiceRequestInput,
   actorUserId: string,
+  createdByUserId?: string,
 ): Promise<PublicTenantServiceRequest> {
   const company = await tenantCompanyRepository.findById(input.tenantCompanyId);
   if (!company) throw tenantCompanyNotFoundError();
@@ -118,6 +119,11 @@ export async function createTenantServiceRequest(
     tenantPicId: input.tenantPicId,
     buildingId: input.buildingId,
     spaceId: input.spaceId ?? null,
+    intakeChannel: input.intakeChannel ?? null,
+    createdByUserId: createdByUserId ?? actorUserId,
+    reporterName: input.reporterName ?? null,
+    reporterPhone: input.reporterPhone ?? null,
+    reporterEmail: input.reporterEmail ?? null,
     requestNumber: input.requestNumber,
     requestType: input.requestType,
     title: input.title,

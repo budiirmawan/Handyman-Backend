@@ -1,0 +1,143 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 02 — BE-06B VENDOR CATEGORY
+  # (`src/modules/vendor-categories`).
+  # ---------------------------------------------------------------------------
+
+  /clients/{clientId}/vendor-categories:
+    post:
+      operationId: createVendorCategory
+      summary: Create a Vendor Category for a Client
+      description: >-
+        BE-06B. Creates one Vendor Category owned by the Client taken from the
+        route. Requires `vendor.manage`. Resolution order: unknown Client 404
+        `CLIENT_NOT_FOUND`, INACTIVE Client 400 `CLIENT_INACTIVE`, duplicate
+        code 409 `VENDOR_CATEGORY_CODE_ALREADY_EXISTS`. `code` is trimmed and
+        upper-cased and must be 2–64 characters of `[A-Z][A-Z0-9_-]*`, unique
+        per Client; `name` is required and at most 160 characters; optional
+        `description` is at most 512 characters; `status` defaults to `ACTIVE`.
+        A Category is classification data only — it carries no workflow, no
+        vendor binding of its own and grants no access. Responds 201 with the
+        created Category.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVendorCategoryRequest" }
+      responses:
+        "201":
+          description: The created Vendor Category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listClientVendorCategories
+      summary: List the Vendor Categories of a Client
+      description: >-
+        BE-06B read, ordered by `code` ascending, as a plain array. Requires
+        `vendor.read`; the Client is resolved first, so an unknown Client is 404
+        `CLIENT_NOT_FOUND` rather than an empty list. Unpaginated, no filters.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      responses:
+        "200":
+          description: The Vendor Categories recorded for the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/VendorCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendor-categories/{id}:
+    parameters:
+      - $ref: "#/components/parameters/VendorCategoryIdPath"
+
+    get:
+      operationId: getVendorCategory
+      summary: Get a Vendor Category
+      description: >-
+        BE-06B single-read addressed by the Category id. Requires
+        `vendor.read`. The id must be a UUID (400 `VALIDATION_ERROR`); an
+        unknown id is 404 `VENDOR_CATEGORY_NOT_FOUND`.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The requested Vendor Category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateVendorCategory
+      summary: Update a Vendor Category
+      description: >-
+        BE-06B partial update. Requires `vendor.manage`. `clientId` and `code`
+        are immutable — naming either is 400 `VALIDATION_ERROR` with the
+        immutable-field detail, because reference data never migrates between
+        Clients and its code is the stable identifier Vendors point at.
+        Mutable: `name` (required shape when present, ≤160), `description`
+        (≤512, explicit `null` clears it) and `status`. Deactivation is
+        `{"status": "INACTIVE"}`, which prevents new assignment without
+        touching existing Vendors. An unknown Category is 404
+        `VENDOR_CATEGORY_NOT_FOUND`. Responds 200 with the updated Category.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateVendorCategoryRequest" }
+      responses:
+        "200":
+          description: The updated Vendor Category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

@@ -22,6 +22,18 @@ export function isSubscriptionStatus(value: unknown): value is SubscriptionStatu
   );
 }
 
+/**
+ * Minimal structural input for commercial-validity checks (frozen BE-02B
+ * rule). Structural on purpose: both the business `SubscriptionRecord` and
+ * the extended SaaS aggregate (CR-BE-SAAS-01 0364) satisfy it, so callers
+ * never need to downcast.
+ */
+export type SubscriptionEffectiveness = {
+  status: string;
+  startsAt: Date;
+  endsAt: Date | null;
+};
+
 export type SubscriptionRecord = {
   id: string;
   clientId: string;
@@ -30,6 +42,8 @@ export type SubscriptionRecord = {
   status: SubscriptionStatus;
   startsAt: Date;
   endsAt: Date | null;
+  /** CR-BE-SAAS-01 (0364): bound SaaS package — nullable for legacy rows. */
+  packageId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };

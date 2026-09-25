@@ -90,8 +90,9 @@ async function findById(id: string): Promise<IncidentRecord | null> {
 async function findByClientAndNumber(
   clientId: string,
   incidentNumber: string,
+  executor: Executor = getPool(),
 ): Promise<IncidentRecord | null> {
-  const result = await getPool().query<IncidentRecord>(
+  const result = await executor.query<IncidentRecord>(
     `SELECT ${SELECT} FROM incidents
      WHERE client_id = $1 AND incident_number = $2`,
     [clientId, incidentNumber],

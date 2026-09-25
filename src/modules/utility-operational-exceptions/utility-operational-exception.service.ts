@@ -1,3 +1,4 @@
+import { getPool } from '../../database';
 import { contextAccessService } from '../context-access';
 import { buildingAccessDeniedError } from '../context-access/context-access.errors';
 import { recordOperationalEvent } from '../operational-events';
@@ -19,8 +20,12 @@ import type {
   CreateUtilityOperationalExceptionInput,
   PublicUtilityOperationalException,
   ResolvedUtilityExceptionContext,
+  UtilityExceptionExecutor,
   UtilityExceptionFilters,
+  UtilityExceptionReadingReread,
   UtilityOperationalExceptionRecord,
+  ResolveUtilityExceptionOptions,
+  StartUtilityExceptionReviewOptions,
 } from './utility-operational-exception.types';
 
 type Context = { clientId: string; buildingId: string; utilityType: UtilityType; meterId?: string | null };
@@ -32,6 +37,11 @@ const toPublic = (record: UtilityOperationalExceptionRecord): PublicUtilityOpera
   cancelledAt: record.cancelledAt?.toISOString() ?? null,
   createdAt: record.createdAt.toISOString(),
   updatedAt: record.updatedAt.toISOString(),
+  // CR-BE-RN12-METER-FIELD-01 PART 03 — the recheck payload, converted once
+  // here (NUMERIC arrives as text) and null for every non-recheck exception.
+  proposedReadingValue:
+    record.proposedReadingValue === null ? null : Number(record.proposedReadingValue),
+  proposedReadingAt: record.proposedReadingAt?.toISOString() ?? null,
 });
 function same(left: Context, right: Context) {
   return left.clientId === right.clientId && left.buildingId === right.buildingId &&
@@ -131,18 +141,100 @@ export async function listUtilityOperationalExceptions(filters: UtilityException
   const buildingIds = await contextAccessService.getAccessibleBuildingIds(actorUserId);
   return (await repository.list(filters, buildingIds)).map(toPublic);
 }
-export async function startUtilityExceptionReview(id: string, notes: string | null, actorUserId: string) {
+/**
+ * OPEN → UNDER_REVIEW.
+ *
+ * CR-BE-RN12-METER-FIELD-01 PART 03 adds one OPTIONAL `options.executor`, so a
+ * caller that owns a transaction can perform this transition and a following
+ * resolve atomically. The guard, the stamps and the canonical
+ * `UTILITY_EXCEPTION_REVIEW_STARTED` event are unchanged, and every existing
+ * caller — which omits the argument — behaves exactly as before.
+ */
+export async function startUtilityExceptionReview(
+  id: string,
+  notes: string | null,
+  actorUserId: string,
+  options?: StartUtilityExceptionReviewOptions,
+) {
   await accessible(id, actorUserId);
-  const record = await repository.startReview(id, actorUserId, notes);
+  const record = await repository.startReview(
+    id,
+    actorUserId,
+    notes,
+    options?.executor ?? getPool(),
+  );
   if (!record) throw utilityExceptionTransitionError();
-  await audit(record, actorUserId, 'UTILITY_EXCEPTION_REVIEW_STARTED', 'Utility exception review started');
+  await audit(
+    record,
+    actorUserId,
+    'UTILITY_EXCEPTION_REVIEW_STARTED',
+    'Utility exception review started',
+    options?.executor,
+  );
   return toPublic(record);
 }
-export async function resolveUtilityException(id: string, notes: string, actorUserId: string) {
-  await accessible(id, actorUserId);
-  const record = await repository.resolve(id, actorUserId, notes);
+/**
+ * CR-BE-RN12-METER-FIELD-01 PART 03 — stage a field reread against an OPEN (or
+ * already reviewing) `READING_RECHECK`.
+ *
+ * This is the register's OWN OPEN → UNDER_REVIEW transition with the recheck
+ * payload written by the same guarded statement, so no second lifecycle path and
+ * no new state exists. It is a separate function — not an extra argument on
+ * `startUtilityExceptionReview` — so that generic transition keeps its exact SQL
+ * and meaning for every other exception type.
+ *
+ * A re-stage while the review is open is permitted deliberately: it is the field
+ * analogue of retrying an online submit whose value the canonical BE-18E rules
+ * would refuse (decimal precision, meter + instant duplicate). Without it a
+ * technician could strand their own recheck and need a management cancellation
+ * to correct a typo. Reviewer stamps are kept from the first transition.
+ */
+export async function stageUtilityExceptionReadingReread(
+  id: string,
+  reread: UtilityExceptionReadingReread,
+  actorUserId: string,
+) {
+  const existing = await accessible(id, actorUserId);
+  const record = await repository.stageReadingReread(id, actorUserId, reread);
   if (!record) throw utilityExceptionTransitionError();
-  await audit(record, actorUserId, 'UTILITY_EXCEPTION_RESOLVED', 'Utility exception resolved');
+  await audit(
+    record,
+    actorUserId,
+    'UTILITY_EXCEPTION_REVIEW_STARTED',
+    existing.status === 'OPEN'
+      ? 'Utility exception review started'
+      : 'Utility exception reread re-staged during review',
+  );
+  return toPublic(record);
+}
+/**
+ * UNDER_REVIEW → RESOLVED.
+ *
+ * CR-BE-RN12-METER-FIELD-01 PART 03 adds one OPTIONAL argument: the replacement
+ * reading an accepted reread became, plus the executor of the transaction that
+ * created it. The transition guard, the resolution stamps and the canonical
+ * event are unchanged; `replacementMeterReadingId` is written by the same
+ * guarded UPDATE, so a replacement can only ever be linked by a resolve that
+ * succeeded, and — because the caller's transaction owns both writes — a
+ * replacement reading can never commit without the row that makes it auditable.
+ * Every existing caller omits it and resolves on the pool exactly as before.
+ */
+export async function resolveUtilityException(
+  id: string,
+  notes: string,
+  actorUserId: string,
+  options?: ResolveUtilityExceptionOptions,
+) {
+  await accessible(id, actorUserId);
+  const record = await repository.resolve(
+    id,
+    actorUserId,
+    notes,
+    options?.replacementMeterReadingId ?? null,
+    options?.executor ?? getPool(),
+  );
+  if (!record) throw utilityExceptionTransitionError();
+  await audit(record, actorUserId, 'UTILITY_EXCEPTION_RESOLVED', 'Utility exception resolved', options?.executor);
   return toPublic(record);
 }
 export async function cancelUtilityException(id: string, reason: string, actorUserId: string) {
@@ -152,15 +244,27 @@ export async function cancelUtilityException(id: string, reason: string, actorUs
   await audit(record, actorUserId, 'UTILITY_EXCEPTION_CANCELLED', 'Utility exception cancelled');
   return toPublic(record);
 }
-async function audit(record: UtilityOperationalExceptionRecord, actorUserId: string, eventType: string, summary: string) {
+async function audit(
+  record: UtilityOperationalExceptionRecord,
+  actorUserId: string,
+  eventType: string,
+  summary: string,
+  executor?: UtilityExceptionExecutor,
+) {
   await recordOperationalEvent({ clientId: record.clientId, buildingId: record.buildingId,
     eventType, entityType: 'UTILITY_OPERATIONAL_EXCEPTION', entityId: record.id,
     actorUserId, summary, metadata: { exceptionType: record.exceptionType,
       severity: record.severity, status: record.status, meterId: record.meterId,
-      reconciliationId: record.reconciliationId } });
+      reconciliationId: record.reconciliationId,
+      // PART 03 — the original and its accepted replacement, so the correction
+      // is auditable from the event stream too (null for every other exception).
+      meterReadingId: record.meterReadingId,
+      replacementMeterReadingId: record.replacementMeterReadingId } },
+    executor);
 }
 export const utilityOperationalExceptionService = {
   cancelUtilityException, createUtilityOperationalException,
   getUtilityOperationalException, listUtilityOperationalExceptions,
-  resolveUtilityException, startUtilityExceptionReview,
+  resolveUtilityException, stageUtilityExceptionReadingReread,
+  startUtilityExceptionReview,
 };

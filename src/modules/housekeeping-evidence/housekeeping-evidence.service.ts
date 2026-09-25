@@ -7,6 +7,7 @@ import { toiletInspectionRepository } from '../toilet-inspections';
 import {
   housekeepingEvidenceClientMismatchError,
   housekeepingEvidenceCountViolationError,
+  housekeepingEvidenceFieldUnauthorizedError,
   housekeepingEvidenceSourceNotFoundError,
   housekeepingEvidenceSourceTerminalError,
   housekeepingEvidenceTypeMismatchError,
@@ -19,6 +20,7 @@ import type {
   SubmitHousekeepingEvidenceInput,
 } from './housekeeping-evidence.types';
 import { applyRetentionToEvidence } from '../evidence-retention-policies/evidence-retention-application.service';
+import { isBoundTaskExecutableByUser } from '../mobile-task-authority';
 
 export type ResolvedEvidenceSource = {
   clientId: string;
@@ -129,6 +131,70 @@ export async function resolveHousekeepingEvidenceSource(
   throw housekeepingEvidenceSourceNotFoundError();
 }
 
+/**
+ * CR-BE-RN13-CLEANING-FIELD-01 PART 02 — the smallest field-authority seam that
+ * makes the EXISTING BE-11I evidence engine safely usable by the assigned field
+ * actor of a canonical cleaning execution.
+ *
+ * Scope is deliberately one source type. Only `daily-cleaning` is the RN-13
+ * cleaning execution; toilet / public-area / supervisor inspections and
+ * findings keep their existing authority untouched (supervisor inspection and
+ * quality score are out of RN-13 entirely).
+ *
+ * What this adds, and only this: proof that the caller is the actor the work is
+ * assigned to. Everything else was already enforced and is NOT duplicated:
+ *   - task exists and is a canonical cleaning task — `resolveHousekeepingEvidenceSource`
+ *     resolves `daily-cleaning` through `dailyCleaningRepository.findById`, whose
+ *     query INNER JOINs `cleaning_schedule_bindings` (status = 'ACTIVE') and
+ *     `cleaning_areas` (status = 'ACTIVE'). A task with no ACTIVE cleaning
+ *     binding resolves to nothing and 404s, so a non-cleaning task can never
+ *     masquerade as a daily-cleaning evidence parent.
+ *   - Building isolation (BE-02G) — the controller already calls
+ *     `assertBuildingAccess` on the resolved source Building.
+ *
+ * REUSE, NEVER DUPLICATE. Actor executability is delegated verbatim to
+ * `isBoundTaskExecutableByUser`, the same rule the mobile checklist / form
+ * execution commands and the BE-18 reading-due field gate use. Its semantics
+ * are inherited unchanged and not re-implemented:
+ *   - no ACTIVE assignment            → not executable
+ *   - WORKFORCE assigned to another   → not executable
+ *   - WORKFORCE assigned to this      → executable
+ *   - TEAM-only assignment to the     → executable
+ *     caller's team
+ *   - any ACTIVE WORKFORCE assignment → TEAM ignored
+ *   - inactive / missing profile      → not executable
+ * That rule contains NO role-name check and none is added here.
+ *
+ * Applied to evidence SUBMISSION only. Submission records `submittedByUserId`,
+ * so attributing a cleaning execution's evidence to someone who was never
+ * assigned it is a data-integrity fault. Reads are intentionally left on the
+ * existing read permission + Building scope so supervisor and BE-11M reporting
+ * access is not regressed.
+ *
+ * No new route, no new uploader and no new evidence table: this is the same
+ * `POST /housekeeping/daily-cleaning/{taskId}/evidence` engine.
+ */
+export async function assertDailyCleaningEvidenceFieldActor(
+  sourceType: HousekeepingEvidenceSourceType,
+  source: ResolvedEvidenceSource,
+  actorUserId: string,
+): Promise<void> {
+  if (sourceType !== 'daily-cleaning') {
+    return;
+  }
+
+  // `executionId` for daily-cleaning is `generated_tasks.id` (see
+  // resolveHousekeepingEvidenceSource), which is exactly the canonical RN-13
+  // field execution id `reference.taskId`.
+  const executable = await isBoundTaskExecutableByUser(
+    source.executionId,
+    actorUserId,
+  );
+  if (!executable) {
+    throw housekeepingEvidenceFieldUnauthorizedError();
+  }
+}
+
 export async function listEvidenceRequirements(
   sourceType: HousekeepingEvidenceSourceType,
   sourceId: string,
@@ -206,6 +272,7 @@ export async function submitEvidence(
 }
 
 export const housekeepingEvidenceService = {
+  assertDailyCleaningEvidenceFieldActor,
   listEvidenceRequirements,
   listEvidenceSubmissions,
   resolveHousekeepingEvidenceSource,

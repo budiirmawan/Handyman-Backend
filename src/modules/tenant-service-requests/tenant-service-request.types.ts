@@ -1,3 +1,4 @@
+import type { IntakeChannel } from '../tenant-intake';
 import type { WorkOrderPriority } from '../work-orders';
 
 export const TENANT_SERVICE_REQUEST_STATUSES = [
@@ -31,6 +32,11 @@ export type TenantServiceRequestRecord = {
   tenantPicId: string;
   buildingId: string;
   spaceId: string | null;
+  intakeChannel: IntakeChannel | null;
+  createdByUserId: string | null;
+  reporterName: string | null;
+  reporterPhone: string | null;
+  reporterEmail: string | null;
   requestNumber: string;
   requestType: string;
   title: string;
@@ -58,6 +64,10 @@ export type CreateTenantServiceRequestInput = {
   tenantPicId: string;
   buildingId: string;
   spaceId?: string;
+  intakeChannel?: IntakeChannel;
+  reporterName?: string;
+  reporterPhone?: string;
+  reporterEmail?: string;
   requestNumber: string;
   requestType: string;
   title: string;
@@ -71,6 +81,11 @@ export type NewTenantServiceRequest = {
   tenantPicId: string;
   buildingId: string;
   spaceId: string | null;
+  intakeChannel?: IntakeChannel | null;
+  createdByUserId?: string | null;
+  reporterName?: string | null;
+  reporterPhone?: string | null;
+  reporterEmail?: string | null;
   requestNumber: string;
   requestType: string;
   title: string;

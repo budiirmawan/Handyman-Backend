@@ -1,0 +1,127 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 06 — BE-03E SHIFT
+  # (`src/modules/shifts`). The workforce ↔ shift assignment side is BE-03E
+  # reused and is documented under SECTION 09 below.
+  # ---------------------------------------------------------------------------
+
+  /buildings/{buildingId}/shifts:
+    post:
+      operationId: createShift
+      summary: Create a Shift at a Building
+      description: >-
+        BE-03E. Creates one Shift at the Building taken from the route.
+        Requires `shift.manage` AND an ACTIVE BE-02F Building assignment for
+        that `buildingId` — holding the permission alone is not enough, and a
+        caller without the grant is 403 `BUILDING_ACCESS_DENIED` whether or not
+        the Building exists. The Client named in the body is authoritative for
+        ownership and is cross-checked against the Building: Building ownership
+        is derived Building → Property → Client (BE-02), so a Building that
+        resolves to a different Client is 400
+        `SHIFT_BUILDING_CLIENT_MISMATCH`, reported as 400 rather than 404 so
+        the other Client's estate is never observable. Resolution order is
+        deliberate: unknown Client 404, INACTIVE Client 400, unknown Building
+        404, foreign-Client Building 400, duplicate code 409. Times are
+        wall-clock `HH:MM` or `HH:MM:SS` with no date and no zone — the
+        Building supplies the timezone — and are stored as `HH:MM:SS`;
+        `endTime` earlier than `startTime` is a legitimate overnight shift, and
+        `endTime` equal to `startTime` is rejected. `code` is trimmed and
+        upper-cased and must be 2–64 characters of `[A-Z][A-Z0-9_-]*`, unique
+        per Building. `status` defaults to `ACTIVE`. Responds 201 with the
+        created Shift.
+      tags: [Shift]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateShiftRequest" }
+      responses:
+        "201":
+          description: The created Shift.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Shift" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listBuildingShifts
+      summary: List the Shifts operated at a Building
+      description: >-
+        BE-03E. Returns the Shifts of the Building taken from the route,
+        ordered by `startTime` ascending then `code` ascending. Requires
+        `shift.read` AND an ACTIVE BE-02F
+        Building assignment for that `buildingId` (403 `BUILDING_ACCESS_DENIED`
+        otherwise). The Building is validated first, so an unknown Building is
+        404 `BUILDING_NOT_FOUND` rather than an empty list, and the query is
+        scoped to `building_id` so another Building's shifts are never
+        returned.
+      tags: [Shift]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: The Shifts operated at the requested Building.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Shift" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /shifts/{id}:
+    get:
+      operationId: getShift
+      summary: Get one Shift
+      description: >-
+        BE-03E. Returns the single Shift addressed by its own id. Requires
+        `shift.read` only — this path is not Building-nested and therefore
+        carries no BE-02G access gate. An unknown id is 404 `SHIFT_NOT_FOUND`.
+        There is no update, status or delete route: BE-03E specifies
+        `updateShiftStatus` as a minimum service-level operation but publishes
+        no HTTP status endpoint, and `Shift` is a definition only — no
+        attendance, payroll, overtime, leave, timesheet or scheduling
+        behaviour attaches to it.
+      tags: [Shift]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift.read
+      parameters:
+        - $ref: "#/components/parameters/ShiftIdPath"
+      responses:
+        "200":
+          description: The requested Shift.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Shift" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

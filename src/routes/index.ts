@@ -15,6 +15,8 @@ import { createPermitWorkContextRouter } from '../modules/permit-work-contexts/p
 import { createPermitWorkLifecycleRouter } from '../modules/permit-work-lifecycle/permit-work-lifecycle.routes';
 import { createIncidentRouter } from '../modules/incidents/incident.routes';
 import { createOperationalIncidentRouter } from '../modules/operational-incidents/operational-incident.routes';
+import { createSafetyFieldReportRouter } from '../modules/safety-field-reports/safety-field-report.routes';
+import { createSafetyInspectionBindingRouter } from '../modules/safety-inspection-bindings/safety-inspection-binding.routes';
 import { createAssetFailureRouter } from '../modules/asset-failures/asset-failure.routes';
 import { createFindingEscalationRouter } from '../modules/finding-escalations/finding-escalation.routes';
 import { createImmediateActionRouter } from '../modules/immediate-actions/immediate-action.routes';
@@ -36,6 +38,7 @@ import { createPermitRouter } from '../modules/permits/permit.routes';
 import { createAssetCategoryRouter } from '../modules/asset-categories/asset-category.routes';
 import { createAssetCertificationRouter } from '../modules/asset-certifications/asset-certification.routes';
 import { createAssetHistoryRouter } from '../modules/asset-history/asset-history.routes';
+import { createAssetOperationalStateRouter } from '../modules/asset-operational-state/asset-operational-state.routes';
 import { createAssetIdentifierRouter } from '../modules/asset-identifiers/asset-identifier.routes';
 import { createAssetTypeRouter } from '../modules/asset-types/asset-type.routes';
 import { createAssetWarrantyRouter } from '../modules/asset-warranties/asset-warranty.routes';
@@ -227,6 +230,14 @@ import { createAppVersionRouter } from '../modules/app-versions/app-version.rout
 import { createMobileDiagnosticsRouter } from '../modules/mobile-diagnostics/mobile-diagnostics.routes';
 import { createMobileCurrentShiftRouter } from '../modules/mobile-current-shift/mobile-current-shift.routes';
 import { createMobileMyTeamRouter } from '../modules/mobile-my-team/mobile-my-team.routes';
+import { createMobileUnsafeConditionRouter } from '../modules/mobile-unsafe-condition/mobile-unsafe-condition.routes';
+import { createMobileMaterialRequestRouter } from '../modules/mobile-material-requests/mobile-material-request.routes';
+import { createMobileOperationalStateRouter } from '../modules/mobile-operational-state/mobile-operational-state.routes';
+import { createMobileUtilityMeterContextRouter } from '../modules/mobile-utility-meter-context/mobile-utility-meter-context.routes';
+import { createMobileUtilityMeterReadingRouter } from '../modules/mobile-utility-meter-reading/mobile-utility-meter-reading.routes';
+import { createMobileUtilityMeterReadingVerificationRouter } from '../modules/mobile-utility-meter-reading-verification/mobile-utility-meter-reading-verification.routes';
+import { createMobileUtilityMeterReadingLifecycleRouter } from '../modules/mobile-utility-meter-reading-lifecycle/mobile-utility-meter-reading-lifecycle.routes';
+import { createMobilePermitWorkRouter } from '../modules/mobile-permit-work/mobile-permit-work.routes';
 import { createNotificationRouter } from '../modules/notifications/notification.routes';
 import { createNotificationTemplateRouter } from '../modules/notification-templates/notification-template.routes';
 import { createNotificationSubscriptionRouter } from '../modules/notification-subscriptions/notification-subscription.routes';
@@ -256,6 +267,27 @@ import { createConfigurationAuditRouter } from '../modules/configuration-audit/c
 import { createModuleRouter } from '../modules/modules/module.routes';
 import { createOrganizationRouter } from '../modules/organizations/organization.routes';
 import { createPermissionRouter } from '../modules/permissions/permission.routes';
+// CR-BE-SAAS-01 PART 01 — SaaS Control Plane (Gatepro): customer registry
+// + canonical audit read under /platform/*, governed exclusively by the
+// explicit platform.* permission namespace.
+import { createPlatformAuditRouter } from '../modules/platform-audit';
+import { createPlatformCustomerRouter } from '../modules/platform-customers';
+import { createPlatformPricebookRouter } from '../modules/platform-pricebooks';
+import { createPlatformProductRouter } from '../modules/platform-products';
+import { createPlatformAddOnRouter } from '../modules/platform-addons';
+import { createPlatformEntitlementRouter } from '../modules/platform-entitlements';
+import { createPlatformBillingRouter } from '../modules/platform-billing';
+import { createPlatformProvisioningRouter } from '../modules/platform-provisioning';
+import { createPlatformPaymentsRouter } from '../modules/platform-payments';
+import {
+  createMeUsageRouter,
+  createPlatformUsageRouter,
+} from '../modules/platform-usage';
+import { createPlatformHealthRouter } from '../modules/platform-health';
+import { createPlatformSupportRouter } from '../modules/platform-support';
+import { createPlatformConfigurationRouter } from '../modules/platform-configurations';
+import { createPlatformSubscriptionRouter } from '../modules/platform-subscriptions';
+import { createSaasLifecycleRouter } from '../modules/platform-subscriptions/lifecycle';
 import { createPositionRouter } from '../modules/positions/position.routes';
 import { createPropertyRouter } from '../modules/properties/property.routes';
 import { createRoleRouter } from '../modules/roles/role.routes';
@@ -380,6 +412,8 @@ export function createApiRouter(): Router {
   router.use(createAssetCertificationRouter());
   router.use(createAssetIdentifierRouter());
   router.use(createAssetHistoryRouter());
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 02 — Asset operational state.
+  router.use(createAssetOperationalStateRouter());
   router.use(createStructureContextRouter());
   router.use(createSourceFormRouter());
   router.use(createFormTemplateRouter());
@@ -413,6 +447,47 @@ export function createApiRouter(): Router {
   router.use(createMobileDiagnosticsRouter());
   router.use(createMobileCurrentShiftRouter());
   router.use(createMobileMyTeamRouter());
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 01 — mobile unsafe condition report.
+  router.use(createMobileUnsafeConditionRouter());
+  router.use(createMobileMaterialRequestRouter());
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 04 — mobile RN-10 operational-state
+  // read (READ ONLY; mutations stay canonical on /assets).
+  router.use(createMobileOperationalStateRouter());
+  // CR-BE-RN12-METER-FIELD-01 PART 00 — mobile BE-18 utility meter field
+  // context (READ ONLY; meter identity + field-actor authority foundation).
+  router.use(createMobileUtilityMeterContextRouter());
+  // CR-BE-RN12-METER-FIELD-01 PART 01 — mobile BE-18 field meter reading
+  // submit / history / detail, on the SAME readingDue execution identity as
+  // PART 00. Canonical BE-18E write + canonical due completion, made atomic and
+  // replay-safe; one reading per due. Evidence / OCR / abnormal / recheck stay
+  // PART 02+, and the existing BE-10C / BE-25H METER_READING sync kind and
+  // meterReadingBindingService remain untouched.
+  router.use(createMobileUtilityMeterReadingRouter());
+  // CR-BE-RN12-METER-FIELD-01 PART 02 — mobile field reading EVIDENCE and
+  // VERIFICATION on the same readingDue + reading identity: BE-18F reading
+  // evidence (upload / list / readiness / soft remove) behind a field-safe door,
+  // the EXISTING BE-18 OCR candidates exposed as suggestion-only reads plus the
+  // field confirm / reject decision on one of them, and the persisted BE-18G →
+  // BE-18J abnormal signal as a read projection. This router also supplies the
+  // enriched handler for PART 01's reading DETAIL route, which stays registered
+  // in PART 01's router so that path has exactly one registration.
+  //
+  // No OCR / vision engine, no candidate creation, no abnormality rule engine or
+  // evaluation, no consumption creation, no recheck / correction, no
+  // `availableActions`, no QR, no second evidence table or upload path. The
+  // BE-25H METER_READING sync kind, `meterReadingBindingService` (BE-10C) and
+  // every billing / tariff surface remain untouched — no mobile-sync file is
+  // modified by this part.
+  router.use(createMobileUtilityMeterReadingVerificationRouter());
+  // CR-BE-RN12-METER-FIELD-01 PART 03 — field reading recheck / correction.
+  router.use(createMobileUtilityMeterReadingLifecycleRouter());
+  // CR-BE-RN20-PERMIT-FIELD-01 — Work Permit Field Execution: field feed,
+  // field context and thin START / CLOSE commands over the EXISTING BE-20K
+  // Permit Work lifecycle, gated by the dedicated permit_work_field.read /
+  // permit_work_field.execute permissions and the ACTIVE Permit Worker chain.
+  // No HOLD / RESUME / CANCEL, no approval, evidence, finding or assignment
+  // projection, no current-shift gate; /permits/* administration is untouched.
+  router.use(createMobilePermitWorkRouter());
   router.use(createNotificationRouter());
   router.use(createNotificationTemplateRouter());
   router.use(createNotificationSubscriptionRouter());
@@ -529,6 +604,47 @@ export function createApiRouter(): Router {
   router.use(createSupportingDocumentRouter());
   router.use(createInvitationRouter());
   router.use(createAuditRouter());
+  // CR-BE-SAAS-01 PART 01 — SaaS Control Plane surface (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformCustomerRouter());
+  router.use(createPlatformAuditRouter());
+  // CR-BE-SAAS-01 PART 02 — SaaS catalog & pricebook (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformProductRouter());
+  // CR-BE-SAAS-01 PART 13C PART 02 — Add-on catalogue + binding
+  // (frozen §22 add-on subset).
+  router.use(createPlatformAddOnRouter());
+  router.use(createPlatformPricebookRouter());
+  // CR-BE-SAAS-01 PART 03 — SaaS subscription lifecycle (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformSubscriptionRouter());
+  router.use(createSaasLifecycleRouter());
+  // CR-BE-SAAS-01 PART 04 — SaaS entitlement & quota (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformEntitlementRouter());
+  // CR-BE-SAAS-01 PART 06 — SaaS Billing Account & Invoice (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformBillingRouter());
+  // CR-BE-SAAS-01 PART 05 — SaaS Provisioning (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformProvisioningRouter());
+  // CR-BE-SAAS-01 PART 07 — SaaS Payment & Reconciliation (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformPaymentsRouter());
+  // CR-BE-SAAS-01 PART 09 — SaaS Usage & metering (default-deny,
+  // platform.* permissions only; no business-plane scoping applied).
+  router.use(createPlatformUsageRouter());
+  router.use(createMeUsageRouter());
+  // CR-BE-SAAS-01 PART 10 — Tenant health + commercial dashboard
+  // (default-deny, platform.* permissions only; no business-plane
+  // scoping applied).
+  router.use(createPlatformHealthRouter());
+  // CR-BE-SAAS-01 PART 11 — Support sessions (frozen §22 routes,
+  // permission platform.support.access; no Idempotency-Key required
+  // per §17.2).
+  router.use(createPlatformSupportRouter());
+  // CR-BE-SAAS-01 PART 12B — Platform configuration routes (frozen §22).
+  router.use(createPlatformConfigurationRouter());
   router.use(createWorkRequestRouter());
   router.use(createWorkOrderRouter());
   router.use(createWorkOrderAssignmentRouter());
@@ -644,6 +760,8 @@ export function createApiRouter(): Router {
   router.use(createPermitWorkLifecycleRouter());
   router.use(createIncidentRouter());
   router.use(createOperationalIncidentRouter());
+  router.use(createSafetyFieldReportRouter());
+  router.use(createSafetyInspectionBindingRouter());
   router.use(createAssetFailureRouter());
   router.use(createFindingEscalationRouter());
   router.use(createImmediateActionRouter());

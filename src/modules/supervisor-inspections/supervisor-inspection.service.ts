@@ -1,6 +1,10 @@
 import { cleaningAreaRepository } from '../cleaning-areas';
 import { contextAccessService } from '../context-access';
-import { dailyCleaningRepository } from '../daily-cleaning';
+import {
+  dailyCleaningNotFoundError,
+  dailyCleaningRepository,
+} from '../daily-cleaning';
+import { permissionService } from '../permissions';
 import { publicAreaInspectionRepository } from '../public-area-inspections';
 import { toiletInspectionRepository } from '../toilet-inspections';
 import {
@@ -11,13 +15,16 @@ import {
   supervisorInspectionTargetNotReviewableError,
 } from './supervisor-inspection.errors';
 import { supervisorInspectionRepository } from './supervisor-inspection.repository';
-import type {
-  CreateSupervisorInspectionInput,
-  PublicSupervisorInspection,
-  SubmitSupervisorDecisionInput,
-  SupervisorInspectionFilter,
-  SupervisorInspectionRecord,
-  SupervisorInspectionTargetType,
+import {
+  isSupervisorInspectionReviewableTargetStatus,
+  type CreateSupervisorInspectionInput,
+  type DailyCleaningSupervisorInspectionContext,
+  type PublicSupervisorInspection,
+  type SubmitSupervisorDecisionInput,
+  type SupervisorInspectionFilter,
+  type SupervisorInspectionMobileAction,
+  type SupervisorInspectionRecord,
+  type SupervisorInspectionTargetType,
 } from './supervisor-inspection.types';
 
 type ResolvedTarget = {
@@ -37,7 +44,7 @@ async function resolveTarget(
     if (!task) {
       throw supervisorInspectionTargetNotFoundError();
     }
-    if (!['IN_PROGRESS', 'COMPLETED'].includes(task.status)) {
+    if (!isSupervisorInspectionReviewableTargetStatus(task.status)) {
       throw supervisorInspectionTargetNotReviewableError();
     }
     return {
@@ -56,7 +63,7 @@ async function resolveTarget(
     if (!context) {
       throw supervisorInspectionTargetNotFoundError();
     }
-    if (!['IN_PROGRESS', 'COMPLETED'].includes(context.execution_status)) {
+    if (!isSupervisorInspectionReviewableTargetStatus(context.execution_status)) {
       throw supervisorInspectionTargetNotReviewableError();
     }
     return {
@@ -75,7 +82,7 @@ async function resolveTarget(
     if (!context) {
       throw supervisorInspectionTargetNotFoundError();
     }
-    if (!['IN_PROGRESS', 'COMPLETED'].includes(context.execution_status)) {
+    if (!isSupervisorInspectionReviewableTargetStatus(context.execution_status)) {
       throw supervisorInspectionTargetNotReviewableError();
     }
     return {
@@ -233,10 +240,83 @@ export async function submitSupervisorDecision(
   return toPublicSupervisorInspection(record as SupervisorInspectionRecord);
 }
 
+/**
+ * CR-BE-RN14-CLEANING-SUPERVISOR-MOBILE-01 — backend-only command authority.
+ *
+ *   CREATE_INSPECTION — no PENDING inspection, the target is still
+ *                       reviewable, and the caller may manage inspections;
+ *   SUBMIT_DECISION   — a PENDING inspection exists and the caller may
+ *                       manage inspections.
+ *
+ * Building access is asserted by the caller before this resolver runs, so
+ * reaching it already proves the Building condition. The list is therefore
+ * driven purely by live inspection state × the manage permission; mobile
+ * never derives these tokens.
+ */
+export function resolveDailyCleaningSupervisorInspectionActions(input: {
+  hasPendingInspection: boolean;
+  targetReviewable: boolean;
+  canManage: boolean;
+}): SupervisorInspectionMobileAction[] {
+  if (!input.canManage) {
+    return [];
+  }
+  if (input.hasPendingInspection) {
+    return ['SUBMIT_DECISION'];
+  }
+  return input.targetReviewable ? ['CREATE_INSPECTION'] : [];
+}
+
+/**
+ * Target-scoped discovery of the DAILY_CLEANING supervisor inspection for a
+ * Daily Cleaning task, so mobile never scans the global inspection list.
+ *
+ * `taskId` is resolved canonically through Daily Cleaning (the same
+ * authoritative reading BE-11C publishes as `id` / `taskId`, i.e.
+ * `generated_tasks.id`) — no second task lookup is introduced. The Building
+ * authority check runs against the target-derived Building before any
+ * inspection fact is disclosed, so an unrelated-Building caller is denied
+ * rather than shown `inspection: null`.
+ */
+export async function getDailyCleaningSupervisorInspectionContext(
+  taskId: string,
+  actorUserId: string,
+): Promise<DailyCleaningSupervisorInspectionContext> {
+  const task = await dailyCleaningRepository.findById(taskId);
+  if (!task) {
+    throw dailyCleaningNotFoundError();
+  }
+
+  await contextAccessService.assertBuildingAccess(
+    actorUserId,
+    task.building_id,
+  );
+
+  const pending = await supervisorInspectionRepository.findPendingByTarget(
+    'DAILY_CLEANING',
+    taskId,
+  );
+
+  const permissions = new Set(
+    await permissionService.resolvePermissionsForUser(actorUserId),
+  );
+
+  return {
+    inspection: pending ? await toPublicSupervisorInspection(pending) : null,
+    availableActions: resolveDailyCleaningSupervisorInspectionActions({
+      hasPendingInspection: pending !== null,
+      targetReviewable: isSupervisorInspectionReviewableTargetStatus(task.status),
+      canManage: permissions.has('supervisor_inspection.manage'),
+    }),
+  };
+}
+
 export const supervisorInspectionService = {
   createSupervisorInspection,
+  getDailyCleaningSupervisorInspectionContext,
   getSupervisorInspectionById,
   listSupervisorInspections,
+  resolveDailyCleaningSupervisorInspectionActions,
   submitSupervisorDecision,
   toPublicSupervisorInspection,
 };

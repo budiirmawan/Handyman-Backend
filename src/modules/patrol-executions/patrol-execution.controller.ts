@@ -68,6 +68,24 @@ export async function getPatrolExecutionHandler(
   }
 }
 
+export async function getPatrolFieldContextHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const id = parsePatrolExecutionIdParam(paramString(req.params.id));
+    const actorUserId = getActorUserId(req);
+    const result = await patrolExecutionService.getPatrolFieldContext(
+      id,
+      actorUserId,
+    );
+    sendSuccess(res, result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function startPatrolExecutionHandler(
   req: Request,
   res: Response,

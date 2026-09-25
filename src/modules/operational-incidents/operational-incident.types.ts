@@ -163,6 +163,9 @@ export type OperationalIncidentRecord = {
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
+  /** CR-BE-RN17-SECURITY-INCIDENT-FIELD-01 — reporting-time field context. Nullable, only SECURITY derives it. */
+  reportedShiftAssignmentId: string | null;
+  reportedSecurityPostId: string | null;
 };
 
 /**
@@ -224,6 +227,9 @@ export type PublicOperationalIncident = {
   updatedAt: string;
   /** Backend-resolved; the frontend must not recompute these. */
   availableActions: OperationalIncidentAction[];
+  /** CR-BE-RN17-SECURITY-INCIDENT-FIELD-01 — reporting-time field context, identifies REPORTING-TIME shift/post, not occurredAt-time history. */
+  reportedShiftAssignmentId: string | null;
+  reportedSecurityPostId: string | null;
 };
 
 /**
@@ -252,6 +258,9 @@ export type NewOperationalIncident = {
   occurredAt: Date;
   notes: string | null;
   createdByUserId: string;
+  /** CR-BE-RN17-SECURITY-INCIDENT-FIELD-01 — nullable reporting context; only SECURITY populates. */
+  reportedShiftAssignmentId?: string | null;
+  reportedSecurityPostId?: string | null;
 };
 
 /**

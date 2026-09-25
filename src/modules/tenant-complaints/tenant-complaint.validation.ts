@@ -2,6 +2,11 @@ import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { isValidFindingNumber, normalizeFindingNumber } from '../findings';
 import {
+  INTAKE_CHANNELS,
+  isIntakeChannel,
+  type IntakeChannel,
+} from '../tenant-intake';
+import {
   WORK_ORDER_PRIORITIES,
   isValidWorkOrderNumber,
   isWorkOrderPriority,
@@ -46,6 +51,10 @@ export function parseCreateTenantComplaintBody(
   const tenantPicId = readId(body.tenantPicId, 'tenantPicId', true, details);
   const buildingId = readId(body.buildingId, 'buildingId', true, details);
   const spaceId = readId(body.spaceId, 'spaceId', false, details);
+  const intakeChannel = readIntakeChannel(body.intakeChannel, details);
+  const reporterName = optionalString(body.reporterName, 'reporterName', 200, details);
+  const reporterPhone = readReporterPhone(body.reporterPhone, details);
+  const reporterEmail = readReporterEmail(body.reporterEmail, details);
   const complaintNumber = readComplaintNumber(body.complaintNumber, details);
   const complaintType = readComplaintType(body.complaintType, details);
   const title = requiredString(body.title, 'title', 200, details);
@@ -56,6 +65,10 @@ export function parseCreateTenantComplaintBody(
     tenantPicId,
     buildingId,
     ...(spaceId ? { spaceId } : {}),
+    ...(intakeChannel ? { intakeChannel } : {}),
+    ...(reporterName ? { reporterName } : {}),
+    ...(reporterPhone ? { reporterPhone } : {}),
+    ...(reporterEmail ? { reporterEmail } : {}),
     complaintNumber,
     complaintType,
     title,
@@ -181,6 +194,46 @@ function readSeverity(value: unknown, details: Detail[]): WorkOrderPriority | un
     return undefined;
   }
   return value;
+}
+
+function readIntakeChannel(value: unknown, details: Detail[]): IntakeChannel | undefined {
+  if (value === undefined || value === null) return undefined;
+  const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (!isIntakeChannel(normalized)) {
+    details.push({
+      field: 'intakeChannel',
+      message: `intakeChannel must be one of: ${INTAKE_CHANNELS.join(', ')}.`,
+    });
+    return undefined;
+  }
+  return normalized;
+}
+
+const REPORTER_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const REPORTER_PHONE_PATTERN = /^\+?[0-9()\-\s.]{5,}$/;
+
+function readReporterEmail(value: unknown, details: Detail[]): string | undefined {
+  const result = optionalString(value, 'reporterEmail', 255, details)?.toLowerCase();
+  if (result && !REPORTER_EMAIL_PATTERN.test(result)) {
+    details.push({
+      field: 'reporterEmail',
+      message: 'reporterEmail must be a valid email address.',
+    });
+    return undefined;
+  }
+  return result;
+}
+
+function readReporterPhone(value: unknown, details: Detail[]): string | undefined {
+  const result = optionalString(value, 'reporterPhone', 32, details);
+  if (result && !REPORTER_PHONE_PATTERN.test(result)) {
+    details.push({
+      field: 'reporterPhone',
+      message: 'reporterPhone has an invalid format.',
+    });
+    return undefined;
+  }
+  return result;
 }
 function readStatus(value: unknown, details: Detail[]): TenantComplaintStatus | undefined {
   if (value === undefined) return undefined;

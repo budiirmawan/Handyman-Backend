@@ -344,12 +344,42 @@ export function parseCreateBrandingBody(body: unknown): CreateBrandingInput {
   }
   const details: Detail[] = [];
   for (const field of Object.keys(body)) {
-    if (!['brandName', 'logoReference', 'login', 'portal', 'report', 'theme', 'status'].includes(field)) {
+    if (
+      ![
+        'brandName',
+        'logoReference',
+        // PART 12A additive extension (frozen §5 row "Branding"):
+        'supportName',
+        'supportContact',
+        'login',
+        'portal',
+        'report',
+        'theme',
+        'status',
+      ].includes(field)
+    ) {
       details.push({ field, message: `${field} is not allowed.` });
     }
   }
   const brandName = safeText(body.brandName, 'brandName', 160, details, false);
   const logo = logoReference(body.logoReference, details) ?? null;
+  // PART 12A additive extension. safeText with `nullable=true` accepts
+  // explicit null; missing keys become null when stored (no-op for
+  // pre-PART-12 profiles).
+  const supportName = safeText(
+    body.supportName,
+    'supportName',
+    160,
+    details,
+    true,
+  );
+  const supportContact = safeText(
+    body.supportContact,
+    'supportContact',
+    160,
+    details,
+    true,
+  );
   const login = loginBranding(body.login, details, false);
   const portal = portalBranding(body.portal, details, false);
   const report = reportBranding(body.report, details, false);
@@ -361,6 +391,8 @@ export function parseCreateBrandingBody(body: unknown): CreateBrandingInput {
   return {
     brandName,
     logoReference: logo,
+    supportName: supportName ?? null,
+    supportContact: supportContact ?? null,
     login: login as LoginBranding,
     portal: portal as PortalBranding,
     report: report as ReportBranding,
@@ -377,13 +409,32 @@ export function parseUpdateBrandingBody(body: unknown): UpdateBrandingInput {
   }
   const details: Detail[] = [];
   for (const field of Object.keys(body)) {
-    if (!['brandName', 'logoReference', 'login', 'portal', 'report', 'theme', 'status'].includes(field)) {
+    if (
+      ![
+        'brandName',
+        'logoReference',
+        // PART 12A additive extension (frozen §5 row "Branding"):
+        'supportName',
+        'supportContact',
+        'login',
+        'portal',
+        'report',
+        'theme',
+        'status',
+      ].includes(field)
+    ) {
       details.push({ field, message: `${field} is not allowed.` });
     }
   }
   const brandName = safeText(body.brandName, 'brandName', 160, details, false);
   const logo = hasOwn(body, 'logoReference')
     ? logoReference(body.logoReference, details)
+    : undefined;
+  const supportName = hasOwn(body, 'supportName')
+    ? safeText(body.supportName, 'supportName', 160, details, true)
+    : undefined;
+  const supportContact = hasOwn(body, 'supportContact')
+    ? safeText(body.supportContact, 'supportContact', 160, details, true)
     : undefined;
   const login = loginBranding(body.login, details, true);
   const portal = portalBranding(body.portal, details, true);
@@ -399,6 +450,8 @@ export function parseUpdateBrandingBody(body: unknown): UpdateBrandingInput {
   return {
     ...(typeof brandName === 'string' ? { brandName } : {}),
     ...(logo === undefined ? {} : { logoReference: logo }),
+    ...(supportName === undefined ? {} : { supportName }),
+    ...(supportContact === undefined ? {} : { supportContact }),
     ...(login === undefined ? {} : { login }),
     ...(portal === undefined ? {} : { portal }),
     ...(report === undefined ? {} : { report }),

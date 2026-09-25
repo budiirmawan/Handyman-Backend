@@ -1,4 +1,5 @@
 export {
+  dailyCleaningAreaAmbiguousError,
   dailyCleaningInvalidDateError,
   dailyCleaningNotFoundError,
   dailyCleaningTaskMismatchError,

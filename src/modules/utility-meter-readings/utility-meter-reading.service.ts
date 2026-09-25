@@ -25,7 +25,10 @@ import {
   utilityMeterReadingUomMismatchError,
   utilityMeterReadingValueInvalidError,
 } from './utility-meter-reading.errors';
-import { utilityMeterReadingRepository } from './utility-meter-reading.repository';
+import {
+  utilityMeterReadingRepository,
+  type UtilityMeterReadingExecutor,
+} from './utility-meter-reading.repository';
 import type {
   NewUtilityMeterReading,
   PublicUtilityMeterReading,
@@ -283,10 +286,26 @@ async function assertEngineeringContext(
  *   5. precision beyond BE-18B config     → 400 VALUE_INVALID
  *   6. bad BE-10C linkage           → 400 VALIDATION_ERROR
  *   7. duplicate instant            → 409 READING_ALREADY_EXISTS
+ *
+ * CR-BE-RN12-METER-FIELD-01 PART 01 — optional `executor`
+ * -------------------------------------------------------
+ * When supplied, the WRITE path (duplicate-instant lookup, reading INSERT and
+ * the `UTILITY_METER_READING_RECORDED` event) runs on that connection instead
+ * of the pool, so a caller inside `withTransaction` commits the reading and
+ * its audit event atomically. Omitting it preserves the existing behaviour for
+ * every management caller, and the read-only validation above (meter, UOM,
+ * BE-18B precision, BE-18D tenancy, BE-10C linkage) still runs on the pool —
+ * it mutates nothing, so it needs no transactional visibility.
+ *
+ * This closes the pre-existing gap where the reading INSERT and its event were
+ * two separate pool statements: an event failure after a committed reading
+ * could leave an unaudited measurement. It is strengthened for ALL callers,
+ * not just the field path, and no second field-only event is introduced.
  */
 export async function recordUtilityMeterReading(
   input: RecordUtilityMeterReadingInput,
   actorUserId?: string,
+  executor: UtilityMeterReadingExecutor = getPool(),
 ): Promise<PublicUtilityMeterReading> {
   const meter = await loadMeter(input.meterId);
   await assertBuildingAccess(actorUserId, meter.buildingId);
@@ -309,6 +328,7 @@ export async function recordUtilityMeterReading(
   const clash = await utilityMeterReadingRepository.findByMeterAndInstant(
     meter.id,
     input.readingAt,
+    executor,
   );
   if (clash) {
     throw utilityMeterReadingAlreadyExistsError();
@@ -353,7 +373,7 @@ export async function recordUtilityMeterReading(
 
   let record: UtilityMeterReadingRecord;
   try {
-    record = await utilityMeterReadingRepository.create(newReading);
+    record = await utilityMeterReadingRepository.create(newReading, executor);
   } catch (error) {
     if (isUniqueViolation(error, 'utility_meter_readings_meter_instant_unique')) {
       throw utilityMeterReadingAlreadyExistsError();
@@ -385,7 +405,7 @@ export async function recordUtilityMeterReading(
       meterReadingBindingId: record.meterReadingBindingId,
       formInstanceId: record.formInstanceId,
     },
-  });
+  }, executor);
 
   return toPublicUtilityMeterReading(record, { meter, uom });
 }

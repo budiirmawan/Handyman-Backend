@@ -4,7 +4,9 @@ import { notificationRepository } from './notification.repository';
 import { notificationNotFoundError } from './notification.errors';
 import {
   NOTIFICATION_CHANNELS,
+  NOTIFICATION_NAVIGATION_TARGET_TYPES,
   isNotificationChannel,
+  isNotificationNavigationTargetType,
   type NewNotification,
   type NotificationFilters,
   type NotificationRecord,
@@ -43,10 +45,36 @@ export function toPublicNotification(
     sourceEventType: record.sourceEventType,
     templateKey: record.templateKey,
     metadata: record.metadata,
+    navigationTarget: toPublicNavigationTarget(record),
     createdAt: record.createdAt.toISOString(),
     deliveredAt: record.deliveredAt.toISOString(),
     readAt: record.readAt ? record.readAt.toISOString() : null,
     updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * CR-BE-RN21-NOTIFICATION-NAV-01 — maps the persisted target pair onto the
+ * public contract.
+ *
+ * Degrades to `null` rather than throwing: a row is only ever written through
+ * the closed vocabulary (enforced by the migration 0358 CHECK), so an
+ * unrecognised type means the storage no longer honours this contract. Serving
+ * "no target" is the safe failure — the client falls back to the inbox, and it
+ * is never invited to interpret `sourceEntityType` instead.
+ */
+function toPublicNavigationTarget(
+  record: NotificationRecord,
+): PublicNotification['navigationTarget'] {
+  if (
+    !isNotificationNavigationTargetType(record.navigationTargetType) ||
+    record.navigationTargetId === null
+  ) {
+    return null;
+  }
+  return {
+    type: record.navigationTargetType,
+    id: record.navigationTargetId,
   };
 }
 
@@ -80,6 +108,26 @@ function validateNewNotification(input: NewNotification): void {
     }
   }
 
+  // CR-BE-RN21-NOTIFICATION-NAV-01 — a supply-side guard mirroring the
+  // migration 0358 CHECK: either no target at all, or a recognised type with a
+  // valid UUID id. The target is taken from the caller as-is; it is never
+  // synthesised from `sourceEntityType`, `sourceEntityId` or `metadata`.
+  if (input.navigationTarget !== undefined && input.navigationTarget !== null) {
+    const target = input.navigationTarget;
+    if (!isNotificationNavigationTargetType(target.type)) {
+      details.push({
+        field: 'navigationTarget.type',
+        message: `navigationTarget.type must be one of: ${NOTIFICATION_NAVIGATION_TARGET_TYPES.join(', ')}.`,
+      });
+    }
+    if (typeof target.id !== 'string' || !isValidUuid(target.id)) {
+      details.push({
+        field: 'navigationTarget.id',
+        message: 'navigationTarget.id must be a valid UUID.',
+      });
+    }
+  }
+
   if (details.length > 0) {
     throw AppError.validation('Request validation failed.', details);
   }
@@ -99,6 +147,7 @@ export async function recordNotification(
     sourceEventType: input.sourceEventType ?? null,
     templateKey: input.templateKey ?? null,
     metadata: input.metadata ?? {},
+    navigationTarget: input.navigationTarget ?? null,
   });
   return toPublicNotification(record);
 }

@@ -17,6 +17,28 @@ export function cleaningScheduleBindingAlreadyExistsError(): AppError {
   });
 }
 
+/**
+ * CR-BE-RN13-CLEANING-FIELD-01 PART 00 — one ACTIVE cleaning schedule binding
+ * per schedule definition.
+ *
+ * BE-07 generates exactly one task per `(schedule_definition_id,
+ * occurrence_at)`. A schedule definition that is ACTIVE against more than one
+ * Cleaning Area would make that single generated cleaning task resolve to
+ * several areas, so the canonical `cleaningAreaId` of a cleaning execution
+ * would be undefined. The application-level twin of the partial unique index
+ * `cleaning_schedule_bindings_schedule_active_unique` (migration 0352).
+ */
+export function cleaningScheduleBindingScheduleConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.CLEANING_SCHEDULE_BINDING_SCHEDULE_CONFLICT,
+    message:
+      'An active cleaning schedule binding already exists for this schedule definition. ' +
+      'A schedule definition may be actively bound to only one cleaning area, ' +
+      'so a generated cleaning task resolves to exactly one cleaning area.',
+    statusCode: 409,
+  });
+}
+
 export function cleaningScheduleBindingInactiveError(): AppError {
   return new AppError({
     code: ERROR_CODES.CLEANING_SCHEDULE_BINDING_INACTIVE,

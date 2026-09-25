@@ -28,6 +28,8 @@ const SELECT = `
   oi.created_by_user_id AS "createdByUserId",
   oi.created_at AS "createdAt",
   oi.updated_at AS "updatedAt",
+  oi.reported_shift_assignment_id AS "reportedShiftAssignmentId",
+  oi.reported_security_post_id AS "reportedSecurityPostId",
   i.client_id AS "clientId",
   i.building_id AS "buildingId",
   i.incident_number AS "incidentNumber",
@@ -59,8 +61,8 @@ async function create(
   const result = await executor.query<OperationalIncidentRecord>(
     `INSERT INTO operational_incidents
        (id, incident_id, operational_category, occurred_at, notes,
-        created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+        created_by_user_id, reported_shift_assignment_id, reported_security_post_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING
        id,
        incident_id AS "incidentId",
@@ -71,7 +73,9 @@ async function create(
        notes,
        created_by_user_id AS "createdByUserId",
        created_at AS "createdAt",
-       updated_at AS "updatedAt"`,
+       updated_at AS "updatedAt",
+       reported_shift_assignment_id AS "reportedShiftAssignmentId",
+       reported_security_post_id AS "reportedSecurityPostId"`,
     [
       randomUUID(),
       input.incidentId,
@@ -79,6 +83,8 @@ async function create(
       input.occurredAt,
       input.notes,
       input.createdByUserId,
+      input.reportedShiftAssignmentId ?? null,
+      input.reportedSecurityPostId ?? null,
     ],
   );
   return result.rows[0];

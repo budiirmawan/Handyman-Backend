@@ -18,6 +18,20 @@ export const ASSET_HISTORY_EVENT_TYPES = [
   'ASSET_CLASSIFICATION_CHANGED',
   'ASSET_LOCATION_CHANGED',
   'ASSET_STATUS_CHANGED',
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 02 — the Asset operational-state axis
+  // (IN_SERVICE / OUT_OF_SERVICE / ISOLATED / SHUT_DOWN) moved. Recorded here
+  // rather than in a parallel audit engine: the existing append-only Asset
+  // history is structurally capable of representing it (free-TEXT event_type
+  // plus JSONB metadata), and `assets.status` moving is a SEPARATE event
+  // (ASSET_STATUS_CHANGED) because the two axes are independent.
+  'ASSET_OPERATIONAL_STATE_CHANGED',
+  // CR-BE-RN10-SAFE-EQUIPMENT-01 PART 03 — the governed return-to-service
+  // command. A DISTINCT event from ASSET_OPERATIONAL_STATE_CHANGED even though
+  // it also moves the operational axis: this one carries the authorizing
+  // approval facts (approvalMode / approvedByUserId / approvedAt) and the
+  // safety-risk gate outcome, so "who authorized putting this equipment back
+  // into service, and on what evidence" is answerable from the timeline alone.
+  'ASSET_RETURNED_TO_SERVICE',
   'EQUIPMENT_PROFILE_CREATED',
   'EQUIPMENT_PROFILE_UPDATED',
   'WARRANTY_CREATED',

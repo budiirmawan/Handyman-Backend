@@ -1,0 +1,241 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 07 — BE-03C WORKFORCE PROFILE
+  # (`src/modules/workforce`).
+  #
+  # A Workforce Profile is operational personnel identity, NOT a User account:
+  # `userId` may be null, and linking a User never creates credentials and never
+  # grants Role, Permission or Building access. All six operations require
+  # `workforce.read` (reads) or `workforce.manage` (writes).
+  # ---------------------------------------------------------------------------
+
+  /organizations/{organizationId}/workforce-profiles:
+    post:
+      operationId: createWorkforceProfile
+      summary: Create a Workforce Profile in an Organization
+      description: >-
+        BE-03C. Creates one Workforce Profile inside the Organization taken
+        from the route. Requires `workforce.manage`. The Organization is always
+        the path segment and is never read from the body. The full hierarchy
+        Client → Organization → Department → Team → Workforce Profile →
+        Position is re-validated before insert, and every failure is a
+        controlled app code: unknown Organization 404 `ORGANIZATION_NOT_FOUND`,
+        unknown Department 404 `DEPARTMENT_NOT_FOUND`, unknown Team 404
+        `TEAM_NOT_FOUND`, unknown Position 404 `POSITION_NOT_FOUND`, unknown
+        User 404 `USER_NOT_FOUND`; a Department not in the Organization, a Team
+        not in the Department, a Position not in the Organization, or a
+        department-scoped Position not matching the profile's Department is 400
+        `WORKFORCE_HIERARCHY_MISMATCH`; an INACTIVE ancestor hosting an ACTIVE
+        profile is 400 `ORGANIZATION_INACTIVE` / `DEPARTMENT_INACTIVE` /
+        `TEAM_INACTIVE` / `POSITION_INACTIVE`. `employeeCode` is trimmed and
+        upper-cased, must be 2–64 characters of `[A-Z][A-Z0-9_-]*` and is
+        unique per Organization — a duplicate is 409
+        `WORKFORCE_EMPLOYEE_CODE_ALREADY_EXISTS`; a User already linked to
+        another profile is 409 `WORKFORCE_USER_ALREADY_LINKED`. `teamId` and
+        `userId` accept an explicit `null` meaning "unassigned".
+        `workforceType` defaults to `INTERNAL` and `status` to `ACTIVE`.
+        Linking a User is a pure reference and never mutates BE-01 RBAC.
+        Responds 201 with the created profile.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkforceProfileRequest"
+      responses:
+        "201":
+          description: The created Workforce Profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listOrganizationWorkforceProfiles
+      summary: List the Workforce Profiles of an Organization
+      description: >-
+        BE-03C. Returns every Workforce Profile of the Organization taken from
+        the route, ordered by `employeeCode` ascending, as a plain array — no
+        page or limit parameter exists on this route and `meta` is always `{}`.
+        Requires `workforce.read`. The Organization is resolved first, so an
+        unknown id is 404 `ORGANIZATION_NOT_FOUND` rather than a misleading
+        empty list.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/OrganizationIdPathParam"
+      responses:
+        "200":
+          description: The Workforce Profiles of the requested Organization.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WorkforceProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /departments/{departmentId}/workforce-profiles:
+    get:
+      operationId: listDepartmentWorkforceProfiles
+      summary: List the Workforce Profiles of a Department
+      description: >-
+        BE-03C. Returns every Workforce Profile of the Department taken from
+        the route, ordered by `employeeCode` ascending. Requires
+        `workforce.read`. The Department is resolved first, so an unknown id is
+        404 `DEPARTMENT_NOT_FOUND` rather than a misleading empty list.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/DepartmentIdPathParam"
+      responses:
+        "200":
+          description: The Workforce Profiles of the requested Department.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WorkforceProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /teams/{teamId}/workforce-profiles:
+    get:
+      operationId: listTeamWorkforceProfiles
+      summary: List the Workforce Profiles of a Team
+      description: >-
+        BE-03C. Returns every Workforce Profile of the Team taken from the
+        route, ordered by `employeeCode` ascending. Requires `workforce.read`.
+        The Team is resolved first, so an unknown id is 404 `TEAM_NOT_FOUND`
+        rather than a misleading empty list. This is a workforce membership
+        read: it is unrelated to BE-01 Role/Permission state and to the BE-02F
+        User-to-Building access list.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/TeamIdPathParam"
+      responses:
+        "200":
+          description: The Workforce Profiles of the requested Team.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WorkforceProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce-profiles/{id}:
+    get:
+      operationId: getWorkforceProfile
+      summary: Get one Workforce Profile
+      description: >-
+        BE-03C. Returns the single Workforce Profile addressed by its own id.
+        Requires `workforce.read`. An unknown id is 404
+        `WORKFORCE_PROFILE_NOT_FOUND`. The record exposes its structural ids
+        (`organizationId`, `departmentId`, `teamId`, `positionId`, `userId`)
+        without expanding any of them — resolving the nested Organization,
+        Department, Team and Position shapes is the read model's job
+        (`GET /workforce/reporting/{id}`), not this route's.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceProfileIdPath"
+      responses:
+        "200":
+          description: The requested Workforce Profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateWorkforceProfile
+      summary: Update a Workforce Profile
+      description: >-
+        BE-03C partial update. Requires `workforce.manage`. Mutable:
+        `departmentId`, `positionId`, `teamId`, `userId`, `fullName`,
+        `workforceType`, `status`. Immutable and not accepted here:
+        `organizationId` and `employeeCode`, so a profile can never be moved to
+        another Organization or re-coded through this route. `teamId` and
+        `userId` accept an explicit `null`, which genuinely clears the
+        reference. The hierarchy is re-validated against the merged state, so
+        the same 404 / 400 `WORKFORCE_HIERARCHY_MISMATCH` / 400 `*_INACTIVE` /
+        409 `WORKFORCE_USER_ALREADY_LINKED` outcomes apply as on create; an
+        unknown profile id is 404 `WORKFORCE_PROFILE_NOT_FOUND`. There is no
+        minimum-property rule — an empty object returns the unchanged profile.
+        Linking or relinking a User never creates credentials and never
+        mutates BE-01 RBAC.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceProfileIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkforceProfileRequest"
+      responses:
+        "200":
+          description: The updated Workforce Profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceProfile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

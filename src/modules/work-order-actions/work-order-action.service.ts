@@ -89,8 +89,12 @@ export function toPublicWorkOrderAction(
  * assigned team / bound to the assigned vendor) of the given active
  * assignment. The actor's Workforce Profile is the authority, linked to the
  * User through `workforce_profiles.user_id`.
+ *
+ * Exported (CR-BE-RN11-MATERIAL-FIELD-01 PART 01) as the single Work Order
+ * field-authorization seam so field commands outside this module reuse the
+ * exact BE-08F rule instead of a weaker copy. Behavior unchanged.
  */
-async function isActorAuthorized(
+export async function isActorAuthorizedForWorkOrderAssignment(
   actorUserId: string,
   assignment: WorkOrderAssignmentRecord,
 ): Promise<boolean> {
@@ -132,6 +136,27 @@ async function loadActiveAssignment(
 }
 
 /**
+ * CR-BE-RN11-MATERIAL-FIELD-01 PART 01 — "is this actor currently authorized
+ * to perform field work on this Work Order?" Exactly the BE-08F execution
+ * gate (steps 2–3 of `recordWorkOrderAction`):
+ *   no active assignment → 400 WORK_ORDER_EXECUTION_NO_ASSIGNMENT
+ *   actor not assignee   → 403 WORK_ORDER_EXECUTION_UNAUTHORIZED
+ */
+export async function assertWorkOrderFieldActor(
+  workOrderId: string,
+  actorUserId: string,
+): Promise<WorkOrderAssignmentRecord> {
+  const assignment = await loadActiveAssignment(workOrderId);
+  if (!assignment) {
+    throw workOrderExecutionNoAssignmentError();
+  }
+  if (!(await isActorAuthorizedForWorkOrderAssignment(actorUserId, assignment))) {
+    throw workOrderExecutionUnauthorizedError();
+  }
+  return assignment;
+}
+
+/**
  * Records an execution action, reusing the BE-08C lifecycle transition engine
  * and the BE-08E active assignment for validation.
  *
@@ -154,7 +179,7 @@ export async function recordWorkOrderAction(
     if (!assignment) {
       throw workOrderExecutionNoAssignmentError();
     }
-    if (!(await isActorAuthorized(input.actorUserId, assignment))) {
+    if (!(await isActorAuthorizedForWorkOrderAssignment(input.actorUserId, assignment))) {
       throw workOrderExecutionUnauthorizedError();
     }
   }
@@ -221,6 +246,20 @@ const ACTION_TO_EXECUTION_ACTION: Record<
  * assignments; the execution endpoints enforce it directly). `canClose` is
  * resolved separately by the Work Order closure authority so execution rules
  * remain unchanged.
+ *
+ * CR-BE-MOBILE-WO-COMPLETE-01 — `COMPLETE` is appended on the conditions the
+ * resolver already represents: the Work Order is IN_PROGRESS and the caller
+ * holds the assignment authority the BE-08H completion command requires. It
+ * marks the existing completion command, whose endpoint remains
+ * `POST /work-orders/:id/complete`; `CLOSE` stays a separate token for the
+ * separate COMPLETED → CLOSED closure command.
+ *
+ * Required-evidence readiness is deliberately NOT consulted here. Evidence
+ * validation stays inside `completeWorkOrder` (the single authority), so this
+ * resolver performs no evidence query and adds no N+1 read: `COMPLETE` may be
+ * visible while required evidence is still incomplete, and attempting the
+ * completion command still returns the canonical
+ * `WORK_ORDER_COMPLETION_EVIDENCE_INCOMPLETE` error with `missingEvidenceTypes`.
  */
 export function resolveWorkOrderAvailableActions(
   workOrderStatus: WorkOrderStatus,
@@ -238,6 +277,13 @@ export function resolveWorkOrderAvailableActions(
       continue;
     }
     actions.push(ACTION_TO_EXECUTION_ACTION[type]);
+  }
+  if (
+    workOrderStatus === 'IN_PROGRESS' &&
+    hasActiveAssignment &&
+    isActorAuthorized
+  ) {
+    actions.push('COMPLETE');
   }
   if (canClose && workOrderStatus === 'COMPLETED') {
     actions.push('CLOSE');

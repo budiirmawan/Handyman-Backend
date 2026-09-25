@@ -14,6 +14,8 @@ type SubscriptionRow = {
   status: SubscriptionStatus;
   startsAt: Date;
   endsAt: Date | null;
+  /** CR-BE-SAAS-01 (0364): bound SaaS package — nullable for legacy rows. */
+  packageId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -26,6 +28,7 @@ const SUBSCRIPTION_SELECT = `
   status,
   starts_at AS "startsAt",
   ends_at AS "endsAt",
+  package_id AS "packageId",
   created_at AS "createdAt",
   updated_at AS "updatedAt"
 `;
@@ -39,6 +42,7 @@ function mapSubscriptionRow(row: SubscriptionRow): SubscriptionRecord {
     status: row.status,
     startsAt: row.startsAt,
     endsAt: row.endsAt,
+    packageId: row.packageId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

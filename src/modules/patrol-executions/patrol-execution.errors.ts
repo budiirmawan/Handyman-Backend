@@ -83,6 +83,27 @@ export function patrolExecutionIncompleteError(): AppError {
   });
 }
 
+/**
+ * CR-BE-RN16-PATROL-FIELD-01 PART 00 — a generated patrol task resolved to
+ * more than one ACTIVE patrol schedule binding.
+ *
+ * Migration 0354 makes this impossible through the API by allowing only one
+ * ACTIVE patrol schedule binding per schedule definition. If it is ever
+ * observed the data is corrupted (for example a row written before 0354 that
+ * bypassed the migration guard), and the caller must get an explicit failure
+ * rather than an arbitrary Patrol Route silently chosen from the join.
+ */
+export function patrolExecutionBindingAmbiguousError(taskId: string): AppError {
+  return new AppError({
+    code: ERROR_CODES.PATROL_EXECUTION_BINDING_AMBIGUOUS,
+    message:
+      `Generated patrol task ${taskId} resolves to more than one active ` +
+      'patrol schedule binding. Exactly one patrol route per generated patrol ' +
+      'task is required; the binding data is corrupted.',
+    statusCode: 409,
+  });
+}
+
 export function patrolPointVisitNotFoundError(): AppError {
   return new AppError({
     code: ERROR_CODES.PATROL_POINT_VISIT_NOT_FOUND,

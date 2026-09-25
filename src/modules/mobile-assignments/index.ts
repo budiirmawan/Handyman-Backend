@@ -1,4 +1,7 @@
-export { mobileAssignmentService } from './mobile-assignment.service';
+export {
+  findMobileWorkOrderAssignmentsByWorkOrderId,
+  mobileAssignmentService,
+} from './mobile-assignment.service';
 export type { MobileAssignmentQueryOptions } from './mobile-assignment.service';
 export { listMobileAssignmentsHandler } from './mobile-assignment.controller';
 export { createMobileAssignmentRouter } from './mobile-assignment.routes';
