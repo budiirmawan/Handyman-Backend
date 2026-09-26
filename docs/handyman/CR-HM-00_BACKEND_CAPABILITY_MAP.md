@@ -98,3 +98,14 @@
 - REUSE / EXTEND / NEW remain the implementation classifications.
 - Handyman remains isolated from FM business workflows.
 - Backend map is **ready** for cross-repository mapping; this closes the final two blueprint coverage gaps through documented classifications and ownership only.
+
+## Backend Capability Map Freeze
+
+- Status: FROZEN
+- Blueprint capabilities: 37
+- Covered: 37
+- Gap: 0
+- Runtime implementation performed by CR-HM-00: NO
+- This document is implementation mapping authority for Handyman-Backend.
+- Future classification/ownership changes require an explicit CR.
+- COVERED means implementation ownership is mapped; it does NOT mean the capability is already implemented.
