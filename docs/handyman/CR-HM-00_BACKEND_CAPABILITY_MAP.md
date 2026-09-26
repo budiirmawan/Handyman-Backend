@@ -41,3 +41,54 @@
 | Provider & BM Entitlement | NEW | Derive provider earning and BM fee earning from governed Handyman transaction and commercial rules. | `src/modules/vendors` for provider identity; Handyman Customer Transaction Ledger and Commercial Agreement & BM Fee Rules for governed inputs. | SaaS Product Entitlement != Handyman Provider/BM Financial Entitlement. This is financial entitlement, not SaaS product access or subscription entitlement. |
 | Settlement & Reconciliation | NEW | Track EARNED, PAYABLE, INCLUDED_IN_SETTLEMENT, and SETTLED states, including REVERSED / ADJUSTED / DISPUTED exceptions. | Provider & BM Entitlement and Handyman Customer Transaction Ledger for Handyman-owned financial inputs; `src/modules/audit`; `src/modules/integration-outbox` as infrastructure. | Handyman owns settlement and reconciliation states and exceptions; do not infer them from SaaS billing or subscription state. |
 | Handyman Service Warranty & Claim | NEW | Own workmanship warranty, material warranty, warranty claims, free warranty rework, and chargeable additional work. | `src/modules/evidence`; `src/modules/checklist-templates`; `src/modules/findings`; `src/modules/finding-rework` as evidence/QC/finding infrastructure. | Asset Warranty != Handyman Service Warranty. Handyman service warranty and claim semantics are separate from asset warranty semantics; warranty rework and additional charges follow Handyman rules. |
+
+## Backend Blueprint Coverage & Closure
+
+| Blueprint Capability | Mapped Capability | Classification | Coverage | Notes |
+|---|---|---|---|---|
+| building / unit / location context | Building/location | REUSE_WITH_CONTEXT | COVERED | Existing spatial context is mapped for Handyman work. |
+| tenant/customer context | Tenant context; Tenant Service Request | REUSE_WITH_CONTEXT; EXTEND | COVERED | Tenant/building context and Handyman customer request lifecycle are mapped. |
+| service catalog | Service Catalog | EXTEND | COVERED | Handyman services and variants are mapped. |
+| common material discovery | Service Catalog | EXTEND | COVERED | The future material discovery model is included in the catalog extension. |
+| tenant Handyman request | Tenant Service Request | EXTEND | COVERED | Handyman customer request lifecycle is mapped. |
+| triage / inspection / diagnosis | Tenant Service Request; Checklist; Finding/rework | EXTEND; REUSE | GAP | Related request, checklist, and finding engines are mapped, but no Handyman triage/inspection/diagnosis lifecycle is assigned an owner. |
+| specialist escalation | Vendor/provider; Work order | REUSE_WITH_CONTEXT; REUSE | GAP | Provider and work-order capabilities are mapped, but no Handyman specialist escalation capability or lifecycle is assigned an owner. |
+| quotation | Handyman Pricing Execution | NEW | GAP | Pricing modes are mapped; a customer quotation and its lifecycle are not. |
+| customer approval | Tenant Service Request; Handyman Customer Transaction Ledger | EXTEND; NEW | GAP | Request and transaction capabilities are mapped, but customer approval action/state is not explicitly owned. |
+| provider/vendor | Vendor/provider | REUSE_WITH_CONTEXT | COVERED | Provider identity and related capabilities are mapped for Handyman context. |
+| worker/workforce | Workforce | REUSE_WITH_CONTEXT | COVERED | Workforce engine reuse is mapped with Handyman role and scope boundaries. |
+| crew / Lead / helpers | Handyman Work Crew | NEW | COVERED | Lead Worker/PIC, helpers, assignment/replacement/history, and no helper login requirement are mapped. |
+| scheduling | Scheduling | REUSE_WITH_CONTEXT | COVERED | Handyman scheduling capability is mapped with separate rules and lifecycle. |
+| building permit/access | Building/location; Permit | REUSE_WITH_CONTEXT | COVERED | Location and permit capabilities are mapped with Handyman-specific applicability and access boundaries. |
+| arrival/location verification | Handyman Work Session; Building/location | NEW; REUSE_WITH_CONTEXT | GAP | Check-in/out and location context are mapped, but arrival/location verification semantics are not. |
+| crew attendance | Handyman Work Crew; Handyman Work Session | NEW | COVERED | Crew composition and session check-in/out/presence are mapped. |
+| work session | Handyman Work Session | NEW | COVERED | Required session events and separate presence, work, and billable time are mapped. |
+| material lifecycle | Inventory/Material | EXTEND | COVERED | Estimated → Approved → Issued/Purchased → Used → Returned → Final Usage is mapped. |
+| evidence | Evidence | EXTEND | COVERED | Handyman evidence stages and types are mapped. |
+| dynamic QC/checklist | Checklist | REUSE | COVERED | Checklist engine reuse is mapped; Handyman QC templates and criteria remain separate from FM checklists. |
+| defect / rectification / re-inspection | Finding/rework; Checklist | REUSE | COVERED | Handyman-scoped defect/rework and separate checklist execution are mapped. |
+| QC completion | Checklist; Evidence | REUSE; EXTEND | COVERED | Checklist execution and Handyman QC evidence are mapped. |
+| BAST / customer acceptance | BAST | EXTEND | COVERED | Shared BAST capability is mapped for Handyman structured digital service acceptance. |
+| pricing execution | Handyman Pricing Execution | NEW | COVERED | Handyman pricing modes and crew pricing modes are mapped; catalog prices are reference inputs only. |
+| commercial agreement / BM fee | Commercial Agreement & BM Fee Rules | NEW | COVERED | Versioned agreements, configurable fee basis, and the LABOR_ONLY default/reference model are mapped. |
+| customer transaction ledger | Handyman Customer Transaction Ledger | NEW | COVERED | Customer charge lines and immutable financial history are mapped. |
+| payment/refund/reversal/adjustment | Handyman Customer Transaction Ledger | NEW | COVERED | Payment allocation, refunds, reversals, and adjustments are mapped. |
+| provider/BM financial entitlement | Provider & BM Entitlement | NEW | COVERED | Provider and BM fee earnings derived from governed transaction/commercial rules are mapped. |
+| settlement/reconciliation | Settlement & Reconciliation | NEW | COVERED | Settlement states and reversed/adjusted/disputed exceptions are mapped. |
+| service warranty | Handyman Service Warranty & Claim | NEW | COVERED | Workmanship and material service warranty are mapped separately from asset warranty. |
+| warranty claim/rework | Handyman Service Warranty & Claim | NEW | COVERED | Warranty claims, free warranty rework, and chargeable additional work are mapped. |
+| notification | Notification | REUSE | COVERED | Notification and delivery infrastructure is mapped with Handyman event boundaries. |
+| SLA/provider performance | SLA; Vendor/provider | REUSE_WITH_CONTEXT | GAP | Handyman SLA commitments and provider context are mapped, but provider performance ownership/measurement is not explicit. |
+| integration/outbox/webhook | Outbox/webhook | REUSE | COVERED | Integration delivery infrastructure is mapped for separately scoped Handyman event contracts. |
+| audit/security/data scope | Audit; Tenant context | REUSE; REUSE_WITH_CONTEXT | COVERED | Audit context, authorization boundaries, and explicit Handyman tenant/access boundaries are preserved. |
+| BM Super App secure handoff | Secure BM Super App Handoff | NEW | COVERED | Trusted customer/building/unit identity handoff and session/context establishment are mapped; backend authorization remains authoritative. |
+| immutable channel attribution | Immutable Channel Attribution | NEW | COVERED | Originating BM/building/channel attribution is mapped to persist from request through transaction. |
+
+## Backend Mapping Closure
+
+- Total blueprint capabilities checked: 37
+- Covered: 31
+- Gaps: 6
+- REUSE / EXTEND / NEW remain the implementation classifications.
+- Handyman remains isolated from FM business workflows.
+- Backend map is **not ready** for cross-repository mapping while the six documented gaps remain unresolved; this closure records the gaps only and does not solve or implement them.
