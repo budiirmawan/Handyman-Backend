@@ -1,0 +1,17 @@
+## Backend Core Reuse
+
+| Capability | Existing Module/Path | Decision | Handyman Use | Boundary |
+|---|---|---|---|---|
+| Building/location | `src/modules/buildings`; `src/modules/functional-locations`; `src/modules/floors`; `src/modules/rooms`; `src/modules/spaces` | REUSE_WITH_CONTEXT | Resolve and reference physical locations for Handyman work. | Context only; this does not adopt FM operating workflows or ownership rules. |
+| Tenant context | `src/modules/tenant-building-contexts` | REUSE_WITH_CONTEXT | Supply tenant/building context where Handyman work requires it. | Handyman tenant and access rules remain explicit; do not infer FM tenancy workflows. |
+| Vendor/provider | `src/modules/vendors`; `src/modules/vendor-workforce`; `src/modules/vendor-work` | REUSE_WITH_CONTEXT | Reuse provider identity and related service/workforce capabilities when applicable. | Handyman provider relationships and policies remain Handyman-context; no automatic adoption of FM vendor workflows. |
+| Workforce | `src/modules/workforce` | REUSE_WITH_CONTEXT | Reuse workforce engine capabilities for Handyman personnel. | Handyman roles, eligibility, and operational scope remain distinct from FM workforce processes. |
+| Work order | `src/modules/work-orders`; `src/modules/work-order-assignments` | REUSE | Reuse work-order infrastructure for Handyman work. | Handyman work orders remain Handyman-context work; reuse does not adopt FM work-order workflows. |
+| Scheduling | `src/modules/schedules` | REUSE_WITH_CONTEXT | Reuse scheduling capability for Handyman work planning. | Handyman scheduling rules and work lifecycle remain separately scoped. |
+| Permit | `src/modules/permits` | REUSE_WITH_CONTEXT | Reuse permit engine capability where Handyman work requires permits. | Handyman permit applicability, rules, and lifecycle must remain context-specific. |
+| Checklist | `src/modules/checklist-templates`; `src/modules/checklist-executions` | REUSE | Reuse checklist engine capabilities. | Handyman QC templates and criteria remain separate from FM checklists. |
+| Finding/rework | `src/modules/findings`; `src/modules/finding-rework` | REUSE | Reuse finding and rework engine capabilities. | Handyman defects and rework remain Handyman-scoped; FM finding workflows are not adopted. |
+| SLA | `src/modules/sla-definitions`; `src/modules/applied-slas`; `src/modules/work-order-sla-register` | REUSE_WITH_CONTEXT | Reuse SLA capability for Handyman service commitments where applicable. | Handyman targets, clocks, and escalation policies remain separately defined. |
+| Notification | `src/modules/notifications`; `src/modules/notification-delivery` | REUSE | Reuse notification and delivery infrastructure for Handyman events. | Handyman event meaning, recipients, and templates remain context-specific. |
+| Outbox/webhook | `src/modules/integration-outbox`; `src/modules/integration-webhook-endpoints`; `src/modules/integration-webhook-deliveries` | REUSE | Reuse integration delivery infrastructure for Handyman events. | Handyman event contracts and integrations remain separately scoped. |
+| Audit | `src/modules/audit` | REUSE | Reuse audit capability for Handyman actions. | Handyman audit context and authorization boundaries must be preserved. |
