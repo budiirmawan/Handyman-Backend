@@ -43,6 +43,8 @@
 | Handyman Service Warranty & Claim | NEW | Own workmanship warranty, material warranty, warranty claims, free warranty rework, and chargeable additional work. | `src/modules/evidence`; `src/modules/checklist-templates`; `src/modules/findings`; `src/modules/finding-rework` as evidence/QC/finding infrastructure. | Asset Warranty != Handyman Service Warranty. Handyman service warranty and claim semantics are separate from asset warranty semantics; warranty rework and additional charges follow Handyman rules. |
 | Handyman Triage / Inspection / Diagnosis | NEW | Own the Handyman service decision sequence: Request → Initial Triage → Inspection when required → Diagnosis → Scope Classification, including the determination whether work remains within Handyman scope. | `src/modules/tenant-service-requests` for original request intake/history; `src/modules/service-catalog` for service/category reference; `src/modules/work-orders` only for in-scope operational work after the decision. | Handyman-specific decision states and scope authority have no existing owner in these engines. Do not treat request conversion or work-order status as triage/diagnosis, and do not absorb FM workflows. |
 | Handyman Specialist Escalation | NEW | Own the referral decision when diagnosis identifies work outside Handyman capability or requiring a specialist; preserve the original request/history and record the decision and target specialist/service category when applicable. | `src/modules/tenant-service-requests` for original request/history; `src/modules/service-catalog` for service/category reference; `src/modules/work-orders` as operational infrastructure only. | Referral remains Handyman-context; it must not silently convert Handyman work into an FM workflow or replace the original request/history. The referral decision and authority have no existing owner in these engines. |
+| Handyman Quotation | NEW | Create immutable, versioned quotations from diagnosis/scope with labor lines, material lines, other governed charge lines when applicable, a price snapshot, expiry, revisions, and a customer decision bound to the presented version. | Handyman Triage / Inspection / Diagnosis for decision scope; Handyman Pricing Execution for Handyman pricing inputs; `src/modules/price-catalog-entries` as reference-price input only; `src/modules/tenant-service-requests` for original request context. | SaaS Subscription/Billing != Handyman Quotation. Catalog Reference Price != Quotation Snapshot. Quotation snapshots and commercial history are immutable/versioned; later catalog changes do not alter a presented quotation. |
+| Handyman Customer Quotation Approval | NEW | Record auditable customer APPROVE, REJECT, or policy-permitted revision request, bound to the exact quotation version presented. | Handyman Quotation as the versioned decision subject; `src/modules/audit` for shared audit infrastructure; `src/modules/tenant-service-requests` for request context. | Quotation Approval != BAST Acceptance. Quotation Approval != Payment Confirmation. `src/modules/bast-documents` remains post-work acceptance and is not reused as quotation-approval authority. |
 
 ## Backend Blueprint Coverage & Closure
 
@@ -55,8 +57,8 @@
 | tenant Handyman request | Tenant Service Request | EXTEND | COVERED | Handyman customer request lifecycle is mapped. |
 | triage / inspection / diagnosis | Handyman Triage / Inspection / Diagnosis | NEW | COVERED | Handyman owns Request → Initial Triage → Inspection when required → Diagnosis → Scope Classification; existing request/catalog/work-order modules are supporting infrastructure only. |
 | specialist escalation | Handyman Specialist Escalation | NEW | COVERED | Handyman records the referral decision and target specialist/service category where applicable while preserving the original request/history; referral does not become an FM workflow. |
-| quotation | Handyman Pricing Execution | NEW | GAP | Pricing modes are mapped; a customer quotation and its lifecycle are not. |
-| customer approval | Tenant Service Request; Handyman Customer Transaction Ledger | EXTEND; NEW | GAP | Request and transaction capabilities are mapped, but customer approval action/state is not explicitly owned. |
+| quotation | Handyman Quotation | NEW | COVERED | Immutable/versioned quotation with labor, material, and other governed lines; price snapshot, expiry, and revision are mapped. Reference price is input only and later catalog changes do not alter the snapshot. |
+| customer approval | Handyman Customer Quotation Approval | NEW | COVERED | Auditable APPROVE/REJECT or policy-permitted revision request binds to the exact quotation version; later catalog/pricing changes cannot alter the recorded decision. Distinct from BAST acceptance and payment confirmation. |
 | provider/vendor | Vendor/provider | REUSE_WITH_CONTEXT | COVERED | Provider identity and related capabilities are mapped for Handyman context. |
 | worker/workforce | Workforce | REUSE_WITH_CONTEXT | COVERED | Workforce engine reuse is mapped with Handyman role and scope boundaries. |
 | crew / Lead / helpers | Handyman Work Crew | NEW | COVERED | Lead Worker/PIC, helpers, assignment/replacement/history, and no helper login requirement are mapped. |
@@ -89,8 +91,8 @@
 ## Backend Mapping Closure
 
 - Total blueprint capabilities checked: 37
-- Covered: 33
-- Gaps: 4
+- Covered: 35
+- Gaps: 2
 - REUSE / EXTEND / NEW remain the implementation classifications.
 - Handyman remains isolated from FM business workflows.
-- Backend map is **not ready** for cross-repository mapping while the four remaining gaps (quotation, customer approval, arrival/location verification, and SLA/provider performance) remain unresolved; this update resolves only triage/inspection/diagnosis and specialist escalation and does not solve or implement the other gaps.
+- Backend map is **not ready** for cross-repository mapping while the two remaining gaps (arrival/location verification and SLA/provider performance) remain unresolved; this update resolves quotation and customer approval only and does not solve or implement the other gaps.
