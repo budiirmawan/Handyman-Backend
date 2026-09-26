@@ -41,6 +41,8 @@
 | Provider & BM Entitlement | NEW | Derive provider earning and BM fee earning from governed Handyman transaction and commercial rules. | `src/modules/vendors` for provider identity; Handyman Customer Transaction Ledger and Commercial Agreement & BM Fee Rules for governed inputs. | SaaS Product Entitlement != Handyman Provider/BM Financial Entitlement. This is financial entitlement, not SaaS product access or subscription entitlement. |
 | Settlement & Reconciliation | NEW | Track EARNED, PAYABLE, INCLUDED_IN_SETTLEMENT, and SETTLED states, including REVERSED / ADJUSTED / DISPUTED exceptions. | Provider & BM Entitlement and Handyman Customer Transaction Ledger for Handyman-owned financial inputs; `src/modules/audit`; `src/modules/integration-outbox` as infrastructure. | Handyman owns settlement and reconciliation states and exceptions; do not infer them from SaaS billing or subscription state. |
 | Handyman Service Warranty & Claim | NEW | Own workmanship warranty, material warranty, warranty claims, free warranty rework, and chargeable additional work. | `src/modules/evidence`; `src/modules/checklist-templates`; `src/modules/findings`; `src/modules/finding-rework` as evidence/QC/finding infrastructure. | Asset Warranty != Handyman Service Warranty. Handyman service warranty and claim semantics are separate from asset warranty semantics; warranty rework and additional charges follow Handyman rules. |
+| Handyman Triage / Inspection / Diagnosis | NEW | Own the Handyman service decision sequence: Request → Initial Triage → Inspection when required → Diagnosis → Scope Classification, including the determination whether work remains within Handyman scope. | `src/modules/tenant-service-requests` for original request intake/history; `src/modules/service-catalog` for service/category reference; `src/modules/work-orders` only for in-scope operational work after the decision. | Handyman-specific decision states and scope authority have no existing owner in these engines. Do not treat request conversion or work-order status as triage/diagnosis, and do not absorb FM workflows. |
+| Handyman Specialist Escalation | NEW | Own the referral decision when diagnosis identifies work outside Handyman capability or requiring a specialist; preserve the original request/history and record the decision and target specialist/service category when applicable. | `src/modules/tenant-service-requests` for original request/history; `src/modules/service-catalog` for service/category reference; `src/modules/work-orders` as operational infrastructure only. | Referral remains Handyman-context; it must not silently convert Handyman work into an FM workflow or replace the original request/history. The referral decision and authority have no existing owner in these engines. |
 
 ## Backend Blueprint Coverage & Closure
 
@@ -51,8 +53,8 @@
 | service catalog | Service Catalog | EXTEND | COVERED | Handyman services and variants are mapped. |
 | common material discovery | Service Catalog | EXTEND | COVERED | The future material discovery model is included in the catalog extension. |
 | tenant Handyman request | Tenant Service Request | EXTEND | COVERED | Handyman customer request lifecycle is mapped. |
-| triage / inspection / diagnosis | Tenant Service Request; Checklist; Finding/rework | EXTEND; REUSE | GAP | Related request, checklist, and finding engines are mapped, but no Handyman triage/inspection/diagnosis lifecycle is assigned an owner. |
-| specialist escalation | Vendor/provider; Work order | REUSE_WITH_CONTEXT; REUSE | GAP | Provider and work-order capabilities are mapped, but no Handyman specialist escalation capability or lifecycle is assigned an owner. |
+| triage / inspection / diagnosis | Handyman Triage / Inspection / Diagnosis | NEW | COVERED | Handyman owns Request → Initial Triage → Inspection when required → Diagnosis → Scope Classification; existing request/catalog/work-order modules are supporting infrastructure only. |
+| specialist escalation | Handyman Specialist Escalation | NEW | COVERED | Handyman records the referral decision and target specialist/service category where applicable while preserving the original request/history; referral does not become an FM workflow. |
 | quotation | Handyman Pricing Execution | NEW | GAP | Pricing modes are mapped; a customer quotation and its lifecycle are not. |
 | customer approval | Tenant Service Request; Handyman Customer Transaction Ledger | EXTEND; NEW | GAP | Request and transaction capabilities are mapped, but customer approval action/state is not explicitly owned. |
 | provider/vendor | Vendor/provider | REUSE_WITH_CONTEXT | COVERED | Provider identity and related capabilities are mapped for Handyman context. |
@@ -87,8 +89,8 @@
 ## Backend Mapping Closure
 
 - Total blueprint capabilities checked: 37
-- Covered: 31
-- Gaps: 6
+- Covered: 33
+- Gaps: 4
 - REUSE / EXTEND / NEW remain the implementation classifications.
 - Handyman remains isolated from FM business workflows.
-- Backend map is **not ready** for cross-repository mapping while the six documented gaps remain unresolved; this closure records the gaps only and does not solve or implement them.
+- Backend map is **not ready** for cross-repository mapping while the four remaining gaps (quotation, customer approval, arrival/location verification, and SLA/provider performance) remain unresolved; this update resolves only triage/inspection/diagnosis and specialist escalation and does not solve or implement the other gaps.
