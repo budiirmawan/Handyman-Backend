@@ -384,6 +384,7 @@ import { migration0383CreateHandymanRequestReferrals } from './0383_create_handy
 import { migration0384CreateHandymanProviderContexts } from './0384_create_handyman_provider_contexts';
 import { migration0385CreateHandymanWorkerContexts } from './0385_create_handyman_worker_contexts';
 import { migration0386CreateHandymanWorkCrews } from './0386_create_handyman_work_crews';
+import { migration0387CreateHandymanSchedulingReadiness } from './0387_create_handyman_scheduling_readiness';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -775,4 +776,5 @@ export const migrations: readonly Migration[] = [
   migration0384CreateHandymanProviderContexts,
   migration0385CreateHandymanWorkerContexts,
   migration0386CreateHandymanWorkCrews,
+  migration0387CreateHandymanSchedulingReadiness,
 ];

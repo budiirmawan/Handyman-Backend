@@ -37,6 +37,7 @@ export {
 } from './handyman-request-triage.service';
 export {
   handymanServiceRequestAlreadyTriagedError,
+  handymanServiceRequestNotFoundError,
   handymanServiceRequestNotIntakeError,
 } from './handyman-request-triage.errors';
 export {

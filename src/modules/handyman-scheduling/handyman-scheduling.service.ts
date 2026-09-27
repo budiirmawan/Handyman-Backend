@@ -1,0 +1,302 @@
+import { withTransaction } from '../../database';
+import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { recordOperationalEvent } from '../operational-events';
+import { buildingRepository } from '../buildings';
+import {
+  handymanServiceRequestNotFoundError,
+  handymanServiceRequestRepository,
+} from '../handyman-requests';
+import { handymanSchedulingReadinessRepository } from './handyman-scheduling.repository';
+import {
+  handymanSchedulingReadinessAlreadyExistsError,
+  handymanSchedulingReadinessInvalidStatusError,
+  handymanSchedulingReadinessNotFoundError,
+  handymanSchedulingReadinessTimezoneUnavailableError,
+  handymanSchedulingReadinessWindowInvalidError,
+} from './handyman-scheduling.errors';
+import type {
+  CreateHandymanSchedulingReadinessInput,
+  HandymanSchedulingReadinessRecord,
+  PublicHandymanSchedulingReadiness,
+  SupersedeHandymanSchedulingReadinessInput,
+} from './handyman-scheduling.types';
+
+/**
+ * CR-HM-05 PART 01 — Handyman Scheduling Readiness service (FROZEN
+ * containment F1/F2/F7/F8/F9/F10).
+ *
+ * READINESS ONLY. This service never creates an execution schedule,
+ * never binds a provider/crew, never reserves worker capacity, never
+ * creates a job/work order/executionScopeId/targetId, and never
+ * touches recurrence execution, attendance, work session or arrival
+ * verification. clientId, building and timezone are SERVER-DERIVED from
+ * the authoritative request → building chain; the caller supplies only
+ * the request reference and the preferred window. Material changes
+ * supersede rows atomically with append-only journal events; history is
+ * never hard-deleted and is never lifecycle authority.
+ */
+
+function ensureUuid(value: string, field: string): void {
+  const ok =
+    typeof value === 'string' &&
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+      .test(value.trim());
+  if (!ok) {
+    throw handymanSchedulingReadinessNotFoundError();
+  }
+}
+
+/** Strict window parse: valid instants and start strictly before end. */
+function parseWindow(
+  startRaw: string,
+  endRaw: string,
+): { start: Date; end: Date } {
+  if (typeof startRaw !== 'string' || typeof endRaw !== 'string') {
+    throw handymanSchedulingReadinessWindowInvalidError();
+  }
+  const start = new Date(startRaw.trim());
+  const end = new Date(endRaw.trim());
+  if (
+    Number.isNaN(start.getTime()) ||
+    Number.isNaN(end.getTime()) ||
+    start.getTime() >= end.getTime()
+  ) {
+    throw handymanSchedulingReadinessWindowInvalidError();
+  }
+  return { start, end };
+}
+
+/** Timezone is ONLY ever derived from the authoritative building. */
+async function deriveTimezone(buildingId: string): Promise<string> {
+  const building = await buildingRepository.findById(buildingId);
+  const timezone = building?.timezone?.trim();
+  if (!building || !timezone) {
+    throw handymanSchedulingReadinessTimezoneUnavailableError();
+  }
+  return timezone;
+}
+
+function toPublic(
+  record: HandymanSchedulingReadinessRecord,
+): PublicHandymanSchedulingReadiness {
+  return {
+    ...record,
+    preferredWindowStart: record.preferredWindowStart.toISOString(),
+    preferredWindowEnd: record.preferredWindowEnd.toISOString(),
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+function isActiveUniqueViolation(error: unknown): boolean {
+  const e = error as { code?: string; constraint?: string };
+  return (
+    e?.code === '23505' &&
+    e?.constraint === 'handyman_sched_readiness_active_unique'
+  );
+}
+
+/**
+ * Create the ACTIVE readiness fact for a request (one per request).
+ * Atomic: row + CREATED journal event in ONE transaction; a concurrent
+ * create loses the partial-UNIQUE race and surfaces as 409.
+ */
+export async function createHandymanSchedulingReadiness(
+  input: CreateHandymanSchedulingReadinessInput,
+  actorUserId: string,
+): Promise<PublicHandymanSchedulingReadiness> {
+  ensureUuid(input.handymanRequestId, 'handymanRequestId');
+  ensureUuid(actorUserId, 'actorUserId');
+  const { start, end } = parseWindow(
+    input.preferredWindowStart,
+    input.preferredWindowEnd,
+  );
+
+  const request = await handymanServiceRequestRepository.findById(
+    undefined,
+    input.handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
+    throw buildingAccessDeniedError();
+  }
+  const timezone = await deriveTimezone(request.buildingId);
+
+  const journalBase = { clientId: request.clientId, actorUserId };
+  try {
+    return await withTransaction(async (tx) => {
+      const existing = await handymanSchedulingReadinessRepository
+        .findActiveByRequest(tx, request.id);
+      if (existing) throw handymanSchedulingReadinessAlreadyExistsError();
+
+      const row = await handymanSchedulingReadinessRepository.insert(tx, {
+        clientId: request.clientId,
+        handymanRequestId: request.id,
+        timezone,
+        preferredWindowStart: start,
+        preferredWindowEnd: end,
+        createdByUserId: actorUserId,
+      });
+      await recordOperationalEvent(
+        {
+          ...journalBase,
+          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+          entityType: 'HANDYMAN_SCHEDULING_READINESS',
+          entityId: row.id,
+          summary: 'Handyman scheduling readiness created (ACTIVE).',
+          metadata: {
+            readinessId: row.id,
+            handymanRequestId: request.id,
+            buildingId: request.buildingId,
+            timezone: row.timezone,
+            preferredWindowStart: row.preferredWindowStart.toISOString(),
+            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+          },
+        },
+        tx,
+      );
+      return toPublic(row);
+    });
+  } catch (error) {
+    if (isActiveUniqueViolation(error)) {
+      throw handymanSchedulingReadinessAlreadyExistsError();
+    }
+    throw error;
+  }
+}
+
+/**
+ * Material readiness change: supersede the ACTIVE row with a fresh
+ * window. Atomic: old row → INACTIVE + SUPERSEDED event and new ACTIVE
+ * row + CREATED event in ONE transaction. Timezone is re-derived from
+ * the building authority — never accepted and never copied as input.
+ */
+export async function supersedeHandymanSchedulingReadiness(
+  readinessId: string,
+  input: SupersedeHandymanSchedulingReadinessInput,
+  actorUserId: string,
+): Promise<PublicHandymanSchedulingReadiness> {
+  ensureUuid(readinessId, 'readinessId');
+  ensureUuid(actorUserId, 'actorUserId');
+  const { start, end } = parseWindow(
+    input.preferredWindowStart,
+    input.preferredWindowEnd,
+  );
+
+  try {
+    return await withTransaction(async (tx) => {
+      const current = await handymanSchedulingReadinessRepository.lockById(
+        tx,
+        readinessId,
+      );
+      if (!current) throw handymanSchedulingReadinessNotFoundError();
+      if (!(await contextAccessService.canAccessClient(actorUserId, current.clientId))) {
+        throw buildingAccessDeniedError();
+      }
+      if (current.status !== 'ACTIVE') {
+        throw handymanSchedulingReadinessInvalidStatusError();
+      }
+
+      const request = await handymanServiceRequestRepository.findById(
+        tx,
+        current.handymanRequestId,
+      );
+      if (!request) throw handymanServiceRequestNotFoundError();
+      const timezone = await deriveTimezone(request.buildingId);
+
+      const superseded = await handymanSchedulingReadinessRepository
+        .setStatus(tx, current.id, 'INACTIVE');
+      if (!superseded) throw handymanSchedulingReadinessNotFoundError();
+      const row = await handymanSchedulingReadinessRepository.insert(tx, {
+        clientId: current.clientId,
+        handymanRequestId: current.handymanRequestId,
+        timezone,
+        preferredWindowStart: start,
+        preferredWindowEnd: end,
+        createdByUserId: actorUserId,
+      });
+
+      const journalBase = { clientId: current.clientId, actorUserId };
+      await recordOperationalEvent(
+        {
+          ...journalBase,
+          eventType: 'HANDYMAN_SCHEDULING_READINESS_SUPERSEDED',
+          entityType: 'HANDYMAN_SCHEDULING_READINESS',
+          entityId: superseded.id,
+          summary: 'Handyman scheduling readiness superseded (window change).',
+          metadata: {
+            readinessId: superseded.id,
+            supersededByReadinessId: row.id,
+            handymanRequestId: current.handymanRequestId,
+            fromStatus: 'ACTIVE',
+            toStatus: 'INACTIVE',
+          },
+        },
+        tx,
+      );
+      await recordOperationalEvent(
+        {
+          ...journalBase,
+          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+          entityType: 'HANDYMAN_SCHEDULING_READINESS',
+          entityId: row.id,
+          summary: 'Handyman scheduling readiness created (ACTIVE, supersession).',
+          metadata: {
+            readinessId: row.id,
+            supersedesReadinessId: superseded.id,
+            handymanRequestId: current.handymanRequestId,
+            timezone: row.timezone,
+            preferredWindowStart: row.preferredWindowStart.toISOString(),
+            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+          },
+        },
+        tx,
+      );
+      return toPublic(row);
+    });
+  } catch (error) {
+    if (isActiveUniqueViolation(error)) {
+      throw handymanSchedulingReadinessAlreadyExistsError();
+    }
+    throw error;
+  }
+}
+
+/** Bounded read: current ACTIVE fact + full preserved history. */
+export async function getHandymanSchedulingReadiness(
+  handymanRequestId: string,
+  actorUserId?: string,
+): Promise<{
+  current: PublicHandymanSchedulingReadiness | null;
+  history: PublicHandymanSchedulingReadiness[];
+}> {
+  ensureUuid(handymanRequestId, 'handymanRequestId');
+  if (actorUserId !== undefined) ensureUuid(actorUserId, 'actorUserId');
+  const request = await handymanServiceRequestRepository.findById(
+    undefined,
+    handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  if (
+    actorUserId !== undefined &&
+    !(await contextAccessService.canAccessClient(actorUserId, request.clientId))
+  ) {
+    throw buildingAccessDeniedError();
+  }
+  const current = await handymanSchedulingReadinessRepository
+    .findActiveByRequest(undefined, request.id);
+  const history = await handymanSchedulingReadinessRepository.listByRequest(
+    undefined,
+    request.id,
+  );
+  return {
+    current: current ? toPublic(current) : null,
+    history: history.map(toPublic),
+  };
+}
+
+export const handymanSchedulingReadinessService = {
+  createHandymanSchedulingReadiness,
+  supersedeHandymanSchedulingReadiness,
+  getHandymanSchedulingReadiness,
+};
