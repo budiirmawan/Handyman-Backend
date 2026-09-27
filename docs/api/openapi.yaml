@@ -2596,6 +2596,333 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /handyman/catalogue/services:
+    get:
+      operationId: listHandymanCatalogueServices
+      summary: Read the services available for Handyman
+      description: >
+        CR-HM-02 PART 05A — READ-ONLY Handyman catalogue (frozen D1/D3).
+        Returns the ACTIVE service-catalog entries of one Client, each with
+        its ACTIVE Handyman service variants (CR-HM-02 PART 01). The
+        `service_catalog` entry stays the sole service master — a variant is
+        Handyman identity/presentation-only; no catalogue/master mutation
+        surface exists under `/handyman`.
+        Tenant authorization: the Client is taken from the `clientId` query
+        parameter and authorized server-side against the caller's accessible
+        Client scope (same convention as `GET /service-catalog/entries`) — a
+        Client outside the caller's reach yields an empty list, never an
+        existence oracle.
+      tags: [Handyman Catalogue]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          description: Client scope of the catalogue read (must be accessible to the caller).
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Active services with their active Handyman variants.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanCatalogueServiceItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /handyman/catalogue/material-profiles:
+    get:
+      operationId: listHandymanCatalogueMaterialProfiles
+      summary: Read Handyman common material reference profiles
+      description: >
+        CR-HM-02 PART 05A — READ-ONLY catalogue of the Client's ACTIVE
+        Handyman common material reference profiles (CR-HM-02 PART 02):
+        frozen metadata associations between a service entry (or variant)
+        and a material master item. Profiles never store a price — the
+        reference price is composed at read time by
+        `GET /handyman/catalogue/material-profiles/{profileId}`. The
+        material master (`inventory_items`) stays authoritative; no
+        inventory or catalogue-media behavior exists on this surface.
+        Tenant authorization: `clientId` must be inside the caller's
+        accessible Client scope, otherwise 403 `BUILDING_ACCESS_DENIED`.
+      tags: [Handyman Catalogue]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: serviceCatalogId
+          in: query
+          required: false
+          description: Restrict to one service entry.
+          schema: { type: string, format: uuid }
+        - name: serviceVariantId
+          in: query
+          required: false
+          description: Restrict to one Handyman service variant.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Active common material reference profiles.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanCommonMaterialProfile"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /handyman/catalogue/material-profiles/{profileId}:
+    get:
+      operationId: describeHandymanCatalogueMaterialProfile
+      summary: Read one profile with its composed reference price
+      description: >
+        CR-HM-02 PART 05A — READ-ONLY. Returns one common material
+        reference profile together with the CR-HM-02 PART 02 read-time
+        composition through the governed price-catalog lookup.
+        Reference-price semantics (unchanged from PART 02): the returned
+        `referencePrice` is an informational REFERENCE PRICE ONLY — it is
+        NOT a quotation, NOT a price commitment, and NOT a final charge
+        (Reference Price != Quotation != Final Charge). It is composed at
+        read time, is never persisted or copied onto the profile, and
+        fail-closes to `null` whenever the governed lookup cannot resolve an
+        applicable material price (never guessed). `buildingId` anchors the
+        price scope (it must sit in the same Client as the profile);
+        `currency` selects the governed price lane; `asOf` pins the
+        effective-date resolution moment (default: now).
+      tags: [Handyman Catalogue]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: profileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          description: Price-scope anchor building (same Client as the profile).
+          schema: { type: string, format: uuid }
+        - name: currency
+          in: query
+          required: true
+          description: Governed price currency (e.g. IDR).
+          schema: { type: string }
+        - name: asOf
+          in: query
+          required: false
+          description: ISO-8601 resolution moment (default now).
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Profile with its read-time-composed reference price (or null).
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanMaterialProfileCatalogEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /handyman/requests:
+    post:
+      operationId: createHandymanServiceRequest
+      summary: Create a Handyman request from the attribution handle
+      description: >
+        CR-HM-02 PART 05A — customer request intake (frozen D3, built on
+        CR-HM-02 PART 03). The caller provides ONLY the immutable CR-HM-01
+        `channelAttributionId` as the provenance handle plus the catalogue
+        selection and an optional free description. The authoritative
+        customer / company / PIC / building / space / origin-channel context
+        is always derived from the immutable attribution snapshot — any
+        context keys in the body are ignored by contract and can never
+        become authoritative. The created request is in the `INTAKE` state,
+        exactly one request exists per attribution (409 `ALREADY_EXISTS` on
+        repeat), and no lifecycle transition surface exists here: no triage,
+        diagnosis, quotation, work execution, QC/BAST, cancellation, FM
+        workflow, or inventory mutation.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanServiceRequest"
+      responses:
+        "201":
+          description: Handyman request created in INTAKE state.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanServiceRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /handyman/requests/{handymanRequestId}/intake-evidence:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listHandymanIntakeEvidence
+      summary: List intake evidence of one Handyman request
+      description: >
+        CR-HM-02 PART 05A — bounded metadata list of the INTAKE evidence
+        attached to one Handyman request (CR-HM-02 PART 04). The Handyman
+        request is the only context authority: Client authorization
+        derives from the request row server-side. Records never expose
+        internal storage keys; file bytes are downloadable only through the
+        shared evidence file-content convention.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Intake evidence records for the request.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanIntakeEvidence"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: uploadHandymanIntakeEvidence
+      summary: Upload PHOTO/VIDEO intake evidence to a Handyman request
+      description: >
+        CR-HM-02 PART 05A — bounded Handyman INTAKE evidence upload
+        (CR-HM-02 PART 04 policy) through the existing multipart
+        file-upload convention (multipart field `file`, in-memory, single
+        file). The Handyman request in the path is the ONLY context
+        authority — Client authorization derives from the request
+        server-side, and uploading never mutates the request lifecycle
+        (status stays `INTAKE`; intake-only, no BEFORE/DURING/AFTER/QC/BAST
+        stage vocabulary exists).
+        Policy: `evidenceKind` = PHOTO accepts `image/jpeg`, `image/png`,
+        `image/webp` (existing safe PHOTO semantics); `evidenceKind` = VIDEO
+        accepts ONLY `video/mp4`, `video/quicktime`, `video/webm` (explicit
+        bounded Handyman policy, frozen D2). Both kinds share the platform
+        50 MB size limit (`Max 50 MB` per file). Integrity: the server
+        computes the SHA-256 hash of the exact stored bytes and persists it
+        with the record; caller-supplied hashes are never accepted and
+        internal storage paths/keys are never exposed.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, evidenceKind]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Max 50 MB; MIME type must match the evidenceKind policy.
+                evidenceKind:
+                  type: string
+                  enum: [PHOTO, VIDEO]
+                  description: >-
+                    PHOTO: image/jpeg, image/png, image/webp. VIDEO (bounded
+                    Handyman intake policy): video/mp4, video/quicktime,
+                    video/webm. Max 50 MB for both kinds.
+      responses:
+        "201":
+          description: Intake evidence recorded with server-side integrity metadata.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanIntakeEvidence"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /health:
     get:
       operationId: getHealth
@@ -73736,6 +74063,214 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    # ------------------------------------------------------------------
+    # CR-HM-02 PART 05A — customer-facing Handyman catalogue, request
+    # intake and INTAKE evidence (frozen D1–D4)
+    # ------------------------------------------------------------------
+    HandymanServiceVariantStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    HandymanServiceVariant:
+      type: object
+      description: >-
+        CR-HM-02 PART 01 — Handyman-owned identity/presentation variant of a
+        governed `service_catalog` entry. The service entry remains the sole
+        service master; `clientId` is always derived from the parent entry,
+        never caller-supplied.
+      required:
+        [id, clientId, serviceCatalogId, code, name, description, status,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HandymanServiceVariantStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    HandymanCatalogueServiceItem:
+      type: object
+      description: >-
+        One ACTIVE service available for Handyman together with its ACTIVE
+        Handyman variants (READ ONLY catalogue composition).
+      required: [service, variants]
+      properties:
+        service: { $ref: "#/components/schemas/ServiceCatalogEntry" }
+        variants:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanServiceVariant" }
+
+    HandymanMaterialCommonality:
+      type: string
+      enum: [COMMON, OCCASIONAL, RARE]
+    HandymanCustomerMaterialOption:
+      type: string
+      enum: [PROVIDER_SUPPLIED, CUSTOMER_SUPPLIED, CUSTOMER_CHOICE]
+    HandymanCommonMaterialProfileStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    HandymanCommonMaterialProfile:
+      type: object
+      description: >-
+        CR-HM-02 PART 02 — frozen common material reference profile: a
+        metadata-only association between a service entry (or a Handyman
+        variant) and the authoritative material master item. No price is
+        ever stored here; no catalogue-media behavior exists.
+      required:
+        [id, clientId, serviceCatalogId, serviceVariantId, inventoryItemId,
+         specification, compatibility, typicalQuantity, commonality,
+         customerMaterialOption, status, createdByUserId, createdAt,
+         updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        serviceVariantId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        inventoryItemId:
+          $ref: "#/components/schemas/Uuid"
+          description: Material master reference (`inventory_items.id`).
+        specification: { type: string, nullable: true }
+        compatibility: { type: string, nullable: true }
+        typicalQuantity: { type: number, nullable: true }
+        commonality: { $ref: "#/components/schemas/HandymanMaterialCommonality" }
+        customerMaterialOption:
+          $ref: "#/components/schemas/HandymanCustomerMaterialOption"
+        status:
+          $ref: "#/components/schemas/HandymanCommonMaterialProfileStatus"
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    HandymanMaterialReferencePrice:
+      type: object
+      description: >-
+        Informational REFERENCE PRICE composed at read time from the governed
+        price-catalog lookup (CR-HM-02 PART 02): never persisted, never
+        copied onto the profile, and fail-closed to `null` when no
+        applicable price resolves. It is NOT a quotation, NOT a commitment,
+        and NOT a final charge.
+      required: [unitPrice, currency, effectiveFrom, effectiveTo, scopeTier]
+      properties:
+        unitPrice: { type: number }
+        currency: { type: string }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveTo: { type: string, format: date-time, nullable: true }
+        scopeTier: { type: string }
+
+    HandymanMaterialProfileCatalogEntry:
+      allOf:
+        - $ref: "#/components/schemas/HandymanCommonMaterialProfile"
+        - type: object
+          required: [referencePrice]
+          properties:
+            referencePrice:
+              $ref: "#/components/schemas/HandymanMaterialReferencePrice"
+              nullable: true
+              description: >-
+                Read-time-composed reference price, or null when the
+                governed lookup fails closed. Reference Price != Quotation
+                != Final Charge.
+
+    CreateHandymanServiceRequest:
+      type: object
+      description: >-
+        CR-HM-02 PART 03 intake DTO: the immutable CR-HM-01 channel
+        attribution is the ONLY authoritative provenance/context handle.
+        Context keys (`clientId`, `tenantCompanyId`, `tenantPicId`,
+        `buildingId`, `spaceId`, `originChannel`, `originReference`,
+        `createdByUserId`, `status`, …) are never accepted as input — any
+        such keys in the body are ignored by contract.
+      required: [channelAttributionId, serviceCatalogId]
+      properties:
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        serviceVariantId: { $ref: "#/components/schemas/Uuid" }
+        description: { type: string, minLength: 1, maxLength: 1000 }
+
+    HandymanServiceRequestStatus:
+      type: string
+      enum: [INTAKE]
+      description: >-
+        Only the initial INTAKE state exists; no lifecycle transition
+        vocabulary (no triage/diagnosis/quotation/execution/QC/BAST).
+    HandymanServiceRequest:
+      type: object
+      description: >-
+        CR-HM-02 PART 03 — sibling Handyman request entity. Its entire
+        customer/building/space/origin context is an immutable snapshot
+        derived from the CR-HM-01 channel attribution (nullable fields are
+        null exactly when the attribution carried none — never fabricated).
+      required:
+        [id, clientId, channelAttributionId, tenantCompanyId, tenantPicId,
+         buildingId, spaceId, serviceCatalogId, serviceVariantId,
+         originChannel, originReference, description, status,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        tenantCompanyId: { $ref: "#/components/schemas/Uuid" }
+        tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        spaceId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        serviceVariantId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        originChannel:
+          type: string
+          enum: [BM_SUPER_APP]
+        originReference: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    HandymanIntakeEvidenceKind:
+      type: string
+      enum: [PHOTO, VIDEO]
+      description: >-
+        Intake-stage kinds only. VIDEO MIME policy is bounded to the
+        Handyman parent: video/mp4, video/quicktime, video/webm; PHOTO keeps
+        the existing safe PHOTO allowlist (image/jpeg, image/png,
+        image/webp); both kinds share the 50 MB limit.
+    HandymanIntakeEvidence:
+      type: object
+      description: >-
+        CR-HM-02 PART 04 — INTAKE evidence metadata record on the shared
+        evidence engine (`evidence_submissions`, parent `HANDYMAN_REQUEST`).
+        `contentSha256` is the server-computed SHA-256 integrity hash of the
+        stored bytes (exposed by the existing public evidence contract).
+        Internal storage keys/paths are never exposed — no file-reference
+        field exists in this contract.
+      required:
+        [id, clientId, handymanRequestId, evidenceKind, originalFileName,
+         mimeType, fileSize, capturedAt, submittedByUserId, contentSha256,
+         status, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        evidenceKind:
+          $ref: "#/components/schemas/HandymanIntakeEvidenceKind"
+        originalFileName: { type: string }
+        mimeType: { type: string }
+        fileSize: { type: number }
+        capturedAt: { type: string, format: date-time, nullable: true }
+        submittedByUserId:
+          $ref: "#/components/schemas/Uuid"
+          nullable: true
+        contentSha256:
+          type: string
+          description: Server-computed SHA-256 hex of the exact stored bytes.
+        status:
+          type: string
+          enum: [ACTIVE, REMOVED]
+        createdAt: { type: string, format: date-time }
 
     HealthStatus:
       type: object

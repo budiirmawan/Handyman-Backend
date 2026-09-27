@@ -32,6 +32,7 @@ import { createWorkCompletionDocumentRouter } from '../modules/work-completion-d
 import { createBastDocumentRouter } from '../modules/bast-documents/bast-document.routes';
 import { createHandoverDocumentRouter } from '../modules/handover-documents/handover-document.routes';
 import { createHandoffHandymanRouter } from '../modules/handyman-handoff/handoff.routes';
+import { createHandymanApiRouter } from '../modules/handyman-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -775,6 +776,11 @@ export function createApiRouter(): Router {
   // /api/v1 only, never /webhooks; assertion signature auth — a Bearer user
   // session is not a substitute, and none is created).
   router.use(createHandoffHandymanRouter());
+  // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
+  // attribution-bound request intake, and bounded INTAKE evidence upload
+  // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface
+  // and no catalogue/master mutation is exposed.
+  router.use(createHandymanApiRouter());
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;
