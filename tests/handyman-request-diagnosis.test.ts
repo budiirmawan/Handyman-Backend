@@ -554,9 +554,9 @@ describe('CR-HM-03 PART 03 — diagnosis + F9 scope authority', () => {
     );
     const inactive = await q(
       `INSERT INTO handyman_disciplines (id, code, name, scope_class, status)
-       VALUES ($1, 'RETIRED_DISCIPLINE', 'Retired', 'GENERAL_HANDYMAN', 'INACTIVE')
+       VALUES ($1, $2, 'Retired', 'GENERAL_HANDYMAN', 'INACTIVE')
        RETURNING id`,
-      [randomUUID()],
+      [randomUUID(), `RETIRED_${suffix()}`],
     );
     await assert.rejects(
       handymanServiceRequestDiagnosisService.recordHandymanDiagnosis(
