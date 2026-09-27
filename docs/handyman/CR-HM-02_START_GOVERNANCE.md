@@ -25,7 +25,7 @@ interface. Dependencies: CR-HM-01 (satisfied).
 |---|---|---|---|
 | Service master | `src/modules/service-catalog` (migration `0321`): Client-scoped, `code/name/description/category`, ACTIVE/INACTIVE; REST `/service-catalog/entries` (staff RBAC); FM anchor `service_requests.serviceCatalogId` (`0322`) | REUSE + EXTEND | Reuse master as-is; Handyman catalogue exposure is a bounded read surface over ACTIVE entries. |
 | Variants | none anywhere | **NEW** | Handyman-governed Service Variant as child of `service_catalog` entry (frozen chain: Service → Service Variant → Common Material Profile → …). No existing variant notion in repo. |
-| Image/media | none on `service_catalog` or `inventory_items` | **NEW** | Bounded image reference on catalogue/variant/material reference exposure. No existing image field on either master; storage seam must be decided (blocker #1) without inventing new infra. |
+| Image/media | none on `service_catalog` or `inventory_items` | **NEW** | Bounded image reference on catalogue/variant/material reference exposure. No existing image field on either master; storage binding follows frozen D1 (existing storage abstraction; media is NOT evidence). |
 | Reference price | `src/modules/price-catalog-entries` (`0319`) + `price-catalog-lookup.service.ts`: governed DRAFT→ACTIVE→INACTIVE, `sourceMode` MATERIAL/SERVICE, `serviceId`/`itemId` subjects, REFERENCE kind, currency, effective window | REUSE | Exposure = lookup/join at read time. **Reference Price != Quotation != Final Charge.** |
 | Common-material association | none (no link Service/Material exists) | **NEW** | Bounded association: Variant → Material/SKU reference chain (see B). Read-only discovery; never inventory behavior. |
 
@@ -35,7 +35,7 @@ interface. Dependencies: CR-HM-01 (satisfied).
 |---|---|---|---|
 | Material/SKU source | `src/modules/inventory-items` (`0166`): Client-scoped `code/name/itemType(SPARE_PART/MATERIAL/CONSUMABLE)/category/uomId/description`, ACTIVE/INACTIVE, resolved UOM | REUSE | Master stays as-is; Handyman references bounded fields only. |
 | Specification/compatibility | none | **NEW** | Bounded Handyman-facing fields on the material reference exposure — not on the inventory master itself. |
-| Image support | none | **NEW** | Same image-seam decision as catalogue (blocker #1). |
+| Image support | none | **NEW** | Same media-seam as catalogue (frozen D1). |
 | Reference price | `price-catalog-entries` MATERIAL + `itemId` + `uomId` (+lookup) | REUSE | Input/reference only. |
 | Typical quantity | none | **NEW** | On the Handyman material profile (UOM grounded by item `uomId`). |
 | Commonality | none | **NEW** | Governed Handyman classification on the profile. |
@@ -66,7 +66,7 @@ remain refer/escalate only.
 | Concern | Existing seam | Decision | Notes |
 |---|---|---|---|
 | Image/file evidence seam | `src/modules/evidence`: `evidence_requirements` + `evidence_submissions` (0072/0073) polymorphic parent `execution_type/execution_id`; `EVIDENCE_TYPES = PHOTO/DOCUMENT/SIGNATURE`; per-type MIME allowlists (jpeg/png/webp; svg; pdf); ≤50MB; server-side SHA-256 integrity (0303); retention/hold/purge (0304/0305); storage abstraction `evidence/storage`; file API `POST/GET /evidence/:id/file(/content)`; parent-admission convention (e.g. `UTILITY_METER_READING`, `DAILY_CLEANING`) | EXTEND | Admit a Handyman intake parent kind following the existing admission convention (application union + DB CHECK via migration); bind at request intake. |
-| VIDEO support | **none** (zero video hits; MIME tables are image/pdf only) | **NEW** | Bounded VIDEO intake extension within the same evidence engine (MIME/size policy for freeze — blocker #2). |
+| VIDEO support | **none** (zero video hits; MIME tables are image/pdf only) | **NEW** | Bounded VIDEO intake extension within the same evidence engine (MIME/size/retention policy explicit in PART 04 per frozen D2). |
 | Intake-stage vocabulary | none for Handyman (engine is type-level: PHOTO/DOCUMENT/SIGNATURE) | **NEW (bounded)** | CR-HM-02 = INTAKE stage only. Full Handyman stage vocabulary (BEFORE/DURING/AFTER/QC/DEFECT/RECTIFICATION/MATERIAL/BAST/WARRANTY) and QC/verification behavior close in CR-HM-10 — out of scope here (frozen roadmap row 14). |
 
 ---
@@ -106,8 +106,8 @@ remain refer/escalate only.
 
 - **PART 01 — Handyman Service Catalogue foundation (runtime):** NEW
   Handyman-governed Service Variant child of `service_catalog`; bounded
-  catalogue read model (ACTIVE services + variants); focused tests. Includes
-  the decision freeze for blockers #1–#4 before coding.
+  catalogue read model (ACTIVE services + variants); focused tests. Implements
+  frozen D1 media binding decisions.
 - **PART 02 — Common Material reference exposure:** NEW bounded Common
   Material Profile chain (Variant → Material/SKU reference, spec/compatibility
   + image exposure, typical quantity, commonality, customer material option)
@@ -125,23 +125,44 @@ remain refer/escalate only.
   surfaces (paths deferred to PART design per conventions, never invented
   here); OpenAPI parity; focused suites re-run; `CR-HM-02_FINAL_VALIDATION.md`.
 
-## 5. Blockers / open decisions (freeze required before PART 01)
+## 5. Decisions FROZEN
 
-1. **Image/media storage seam for catalogue & material references** — no
-   existing image field/storage on masters; candidate is reusing the
-   evidence storage abstraction pattern. Decision needed: exact authority
-   and storage seam; must not invent new infrastructure lightly and must
-   not overload evidence submissions for non-evidence imagery without an
-   explicit decision.
-2. **VIDEO intake policy** — MIME allowlist, size limit (50MB current cap),
-   retention/integrity application; extends the evidence engine bounds.
-3. **Handyman request placement** — same module row set with distinct
-   governed status vocabulary vs. sibling Handyman request entity under the
-   `tenant-service-requests` module authority; frozen map mandates EXTEND
-   with distinct lifecycle but does not pick the storage shape.
-4. **Customer-facing catalogue intake auth surface** — catalogue reference
-   exposure to a handoff-attributed customer (vs. staff RBAC read) and its
-   bounded DTO; path/prefix decisions deferred to PART 05 conventions.
+**D1 — Catalogue/material media:** Reuse the existing storage
+abstraction/file-security pattern. Catalogue/material images are Handyman
+master-data media, NOT operational Evidence records. Do not couple
+catalogue media lifecycle to evidence requirements, submissions, QC, BAST,
+or retention semantics. Exact schema/storage binding is derived in the
+implementation PARTs.
 
-No STOP-level conflicts with frozen documents: every required piece is
-classifiable REUSE/EXTEND/NEW per the frozen backend map.
+**D2 — Video intake evidence:** Handyman request intake supports VIDEO as a
+bounded Handyman intake evidence capability. Do NOT globally expand the
+existing EvidenceType merely for convenience. Reuse existing
+storage/integrity/security patterns. Exact MIME allowlist, size limit and
+retention policy must be explicit in PART 04 and follow repository
+security/storage conventions.
+
+**D3 — Handyman request storage:** Create a sibling Handyman-owned request
+entity/lifecycle. Do NOT reuse tenant-service-request lifecycle states as
+Handyman business lifecycle authority. Existing tenant-service-request
+patterns/context validation may be reused, but OPEN/CANCELLED/CONVERTED FM
+semantics != Handyman request lifecycle. No FM conversion workflow.
+
+**D4 — Customer catalogue surface:** Expose a bounded READ-ONLY Handyman
+customer catalogue. Existing service-catalog / inventory / price-catalog
+remain reusable master/reference sources. Customer does not receive
+master-data CRUD authority. Customer/building/unit/channel context remains
+server-authoritative.
+
+**Preserved invariants (carried, enforced in every PART):**
+
+- Catalogue Reference Price != Quotation != Final Charge.
+- Common Material Profile != Inventory Reservation/Issue.
+- Request Intake != Triage/Diagnosis.
+- Request Creation != Quotation.
+- Catalogue media != Operational Evidence.
+- Channel Attribution != BM Financial Entitlement.
+- No FM expansion; FM/common-building cases remain refer/escalate only.
+
+*Status note: CR-HM-02 START GOVERNANCE delivered
+(commit `2a6263052e9019e69521765915bf1673d570cc5c`); decisions D1–D4 frozen
+here; PART 01 (Handyman Service Catalogue foundation) is next.*
