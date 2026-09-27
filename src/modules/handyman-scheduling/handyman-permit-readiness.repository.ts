@@ -25,6 +25,7 @@ const SELECT = `
   valid_until AS "validUntil",
   authorization_note AS "authorizationNote",
   status,
+  supersedes_readiness_id AS "supersedesReadinessId",
   authorized_by_user_id AS "authorizedByUserId",
   created_at AS "createdAt",
   updated_at AS "updatedAt"
@@ -41,8 +42,8 @@ async function insert(
        id, client_id, handyman_request_id,
        building_id, floor_id, area_id, room_id, space_id,
        permit_type, valid_from, valid_until, authorization_note,
-       authorized_by_user_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       supersedes_readiness_id, authorized_by_user_id
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING ${SELECT}`,
     [
       randomUUID(),
@@ -57,6 +58,7 @@ async function insert(
       input.validFrom,
       input.validUntil,
       input.authorizationNote,
+      input.supersedesReadinessId,
       input.authorizedByUserId,
     ],
   );

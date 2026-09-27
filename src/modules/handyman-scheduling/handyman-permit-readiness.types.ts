@@ -70,6 +70,8 @@ export type HandymanPermitReadinessRecord = {
   validUntil: Date;
   authorizationNote: string;
   status: HandymanPermitReadinessStatus;
+  /** PART 04 linkage: the ACTIVE row this one replaced (null = chain head). */
+  supersedesReadinessId: string | null;
   authorizedByUserId: string;
   createdAt: Date;
   updatedAt: Date;

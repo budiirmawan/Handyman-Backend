@@ -50,6 +50,8 @@ export type HandymanUnitAccessReadinessRecord = {
   accessWindowEnd: Date;
   authorizationNote: string;
   status: HandymanUnitAccessReadinessStatus;
+  /** PART 04 linkage: the ACTIVE row this one replaced (null = chain head). */
+  supersedesReadinessId: string | null;
   authorizedByUserId: string;
   createdAt: Date;
   updatedAt: Date;

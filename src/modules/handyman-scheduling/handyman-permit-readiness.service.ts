@@ -170,6 +170,7 @@ export async function createHandymanPermitReadiness(
         validFrom: from,
         validUntil: until,
         authorizationNote,
+        supersedesReadinessId: null,
         authorizedByUserId: actorUserId,
       });
       await recordOperationalEvent(
@@ -251,6 +252,7 @@ export async function supersedeHandymanPermitReadiness(
         validFrom: from,
         validUntil: until,
         authorizationNote,
+        supersedesReadinessId: current.id,
         authorizedByUserId: actorUserId,
       });
 
@@ -336,8 +338,34 @@ export async function getHandymanPermitReadiness(
   };
 }
 
+/**
+ * PART 04 — bounded deterministic history read (rows are the lifecycle
+ * authority; no FM PTW semantics exist anywhere in this history, F4).
+ */
+export async function listHandymanPermitReadinessHistory(
+  handymanRequestId: string,
+  actorUserId: string,
+): Promise<PublicHandymanPermitReadiness[]> {
+  ensureUuid(handymanRequestId, 'handymanRequestId');
+  ensureUuid(actorUserId, 'actorUserId');
+  const request = await handymanServiceRequestRepository.findById(
+    undefined,
+    handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
+    throw buildingAccessDeniedError();
+  }
+  const rows = await handymanPermitReadinessRepository.listByRequest(
+    undefined,
+    request.id,
+  );
+  return rows.map(toPublic);
+}
+
 export const handymanPermitReadinessService = {
   createHandymanPermitReadiness,
   supersedeHandymanPermitReadiness,
   getHandymanPermitReadiness,
+  listHandymanPermitReadinessHistory,
 };

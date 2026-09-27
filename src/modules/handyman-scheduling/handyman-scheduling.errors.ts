@@ -48,3 +48,12 @@ export function handymanSchedulingReadinessTimezoneUnavailableError(): AppError 
     statusCode: 400,
   });
 }
+
+/** PART 04: optional change reason exceeds its bounded length. */
+export function handymanSchedulingReadinessReasonInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SCHEDULING_READINESS_REASON_INVALID,
+    message: 'changeReason must be at most 500 characters when provided.',
+    statusCode: 400,
+  });
+}

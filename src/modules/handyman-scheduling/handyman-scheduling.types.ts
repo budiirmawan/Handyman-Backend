@@ -44,6 +44,10 @@ export type HandymanSchedulingReadinessRecord = {
   preferredWindowStart: Date;
   preferredWindowEnd: Date;
   status: HandymanSchedulingReadinessStatus;
+  /** PART 04 linkage: the ACTIVE row this one replaced (null = chain head). */
+  supersedesReadinessId: string | null;
+  /** PART 04: bounded optional scheduling-owned reason (no taxonomy). */
+  changeReason: string | null;
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -58,12 +62,16 @@ export type CreateHandymanSchedulingReadinessInput = {
   handymanRequestId: string;
   preferredWindowStart: string;
   preferredWindowEnd: string;
+  /** PART 04 optional bounded reason (scheduling-owned, no taxonomy). */
+  changeReason?: string;
 };
 
 /** Window replacement for a supersede (material readiness change). */
 export type SupersedeHandymanSchedulingReadinessInput = {
   preferredWindowStart: string;
   preferredWindowEnd: string;
+  /** PART 04 optional bounded reason (scheduling-owned, no taxonomy). */
+  changeReason?: string;
 };
 
 export type NewHandymanSchedulingReadinessRecord = Omit<

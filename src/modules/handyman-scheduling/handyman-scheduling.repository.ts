@@ -19,6 +19,8 @@ const SELECT = `
   preferred_window_start AS "preferredWindowStart",
   preferred_window_end AS "preferredWindowEnd",
   status,
+  supersedes_readiness_id AS "supersedesReadinessId",
+  change_reason AS "changeReason",
   created_by_user_id AS "createdByUserId",
   created_at AS "createdAt",
   updated_at AS "updatedAt"
@@ -34,8 +36,9 @@ async function insert(
     `INSERT INTO handyman_scheduling_readiness (
        id, client_id, handyman_request_id, timezone,
        preferred_window_start, preferred_window_end,
+       supersedes_readiness_id, change_reason,
        created_by_user_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${SELECT}`,
     [
       randomUUID(),
@@ -44,6 +47,8 @@ async function insert(
       input.timezone,
       input.preferredWindowStart,
       input.preferredWindowEnd,
+      input.supersedesReadinessId,
+      input.changeReason,
       input.createdByUserId,
     ],
   );

@@ -9,6 +9,7 @@ import {
 import { handymanSchedulingReadinessRepository } from './handyman-scheduling.repository';
 import {
   handymanSchedulingReadinessAlreadyExistsError,
+  handymanSchedulingReadinessReasonInvalidError,
   handymanSchedulingReadinessInvalidStatusError,
   handymanSchedulingReadinessNotFoundError,
   handymanSchedulingReadinessTimezoneUnavailableError,
@@ -44,6 +45,17 @@ function ensureUuid(value: string, field: string): void {
   if (!ok) {
     throw handymanSchedulingReadinessNotFoundError();
   }
+}
+
+/** PART 04: optional bounded scheduling-owned reason (no taxonomy). */
+function ensureReason(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > 500) {
+    throw handymanSchedulingReadinessReasonInvalidError();
+  }
+  return trimmed;
 }
 
 /** Strict window parse: valid instants and start strictly before end. */
@@ -135,6 +147,8 @@ export async function createHandymanSchedulingReadiness(
         timezone,
         preferredWindowStart: start,
         preferredWindowEnd: end,
+        supersedesReadinessId: null,
+        changeReason: ensureReason(input.changeReason),
         createdByUserId: actorUserId,
       });
       await recordOperationalEvent(
@@ -213,6 +227,8 @@ export async function supersedeHandymanSchedulingReadiness(
         timezone,
         preferredWindowStart: start,
         preferredWindowEnd: end,
+        supersedesReadinessId: current.id,
+        changeReason: ensureReason(input.changeReason),
         createdByUserId: actorUserId,
       });
 
@@ -295,8 +311,36 @@ export async function getHandymanSchedulingReadiness(
   };
 }
 
+/**
+ * PART 04 — bounded deterministic history read (rows are the lifecycle
+ * authority): chronological by insertion (created_at ASC, id ASC);
+ * ACTIVE/INACTIVE facts + row-level supersession links preserved.
+ * Actor must hold existing Client/RBAC access for the request's client.
+ */
+export async function listHandymanSchedulingReadinessHistory(
+  handymanRequestId: string,
+  actorUserId: string,
+): Promise<PublicHandymanSchedulingReadiness[]> {
+  ensureUuid(handymanRequestId, 'handymanRequestId');
+  ensureUuid(actorUserId, 'actorUserId');
+  const request = await handymanServiceRequestRepository.findById(
+    undefined,
+    handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
+    throw buildingAccessDeniedError();
+  }
+  const rows = await handymanSchedulingReadinessRepository.listByRequest(
+    undefined,
+    request.id,
+  );
+  return rows.map(toPublic);
+}
+
 export const handymanSchedulingReadinessService = {
   createHandymanSchedulingReadiness,
   supersedeHandymanSchedulingReadiness,
   getHandymanSchedulingReadiness,
+  listHandymanSchedulingReadinessHistory,
 };

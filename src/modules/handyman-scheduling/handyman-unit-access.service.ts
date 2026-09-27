@@ -181,6 +181,7 @@ export async function createHandymanUnitAccessReadiness(
         accessWindowStart: start,
         accessWindowEnd: end,
         authorizationNote,
+        supersedesReadinessId: null,
         authorizedByUserId: actorUserId,
       });
       await recordOperationalEvent(
@@ -264,6 +265,7 @@ export async function supersedeHandymanUnitAccessReadiness(
         accessWindowStart: start,
         accessWindowEnd: end,
         authorizationNote,
+        supersedesReadinessId: current.id,
         authorizedByUserId: actorUserId,
       });
 
@@ -348,8 +350,35 @@ export async function getHandymanUnitAccessReadiness(
   };
 }
 
+/**
+ * PART 04 — bounded deterministic history read (rows are the lifecycle
+ * authority; operational events stay audit history only). No arrival
+ * semantics exist anywhere in this history (F6).
+ */
+export async function listHandymanUnitAccessReadinessHistory(
+  handymanRequestId: string,
+  actorUserId: string,
+): Promise<PublicHandymanUnitAccessReadiness[]> {
+  ensureUuid(handymanRequestId, 'handymanRequestId');
+  ensureUuid(actorUserId, 'actorUserId');
+  const request = await handymanServiceRequestRepository.findById(
+    undefined,
+    handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
+    throw buildingAccessDeniedError();
+  }
+  const rows = await handymanUnitAccessReadinessRepository.listByRequest(
+    undefined,
+    request.id,
+  );
+  return rows.map(toPublic);
+}
+
 export const handymanUnitAccessReadinessService = {
   createHandymanUnitAccessReadiness,
   supersedeHandymanUnitAccessReadiness,
   getHandymanUnitAccessReadiness,
+  listHandymanUnitAccessReadinessHistory,
 };
