@@ -33,6 +33,7 @@ import { createBastDocumentRouter } from '../modules/bast-documents/bast-documen
 import { createHandoverDocumentRouter } from '../modules/handover-documents/handover-document.routes';
 import { createHandoffHandymanRouter } from '../modules/handyman-handoff/handoff.routes';
 import { createHandymanApiRouter } from '../modules/handyman-api';
+import { createHandymanLifecycleApiRouter } from '../modules/handyman-lifecycle-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -781,6 +782,7 @@ export function createApiRouter(): Router {
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface
   // and no catalogue/master mutation is exposed.
   router.use(createHandymanApiRouter());
+  router.use(createHandymanLifecycleApiRouter());
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;

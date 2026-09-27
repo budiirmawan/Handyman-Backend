@@ -2923,6 +2923,280 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /handyman/requests/{handymanRequestId}/triage:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: recordHandymanRequestTriage
+      summary: Record the triage decision for one Handyman request
+      description: >
+        CR-HM-03 PART 05A (frozen F1/F2/F7/F8) — INTAKE → TRIAGE with the
+        bounded disposition (INSPECTION_REQUIRED | DIAGNOSIS) in one
+        atomic decision record + status projection + journal event. Body
+        inputs are caller-owned only (disposition, note); the actor is the
+        authenticated session user and the request row is the only context
+        authority — smuggled actor/client/building/space/channel keys are
+        structurally ignored. No diagnosis, inspection, classification,
+        referral, provider, quotation, work-order or FM surface exists here.
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordHandymanTriageRequest"
+      responses:
+        "201":
+          description: Immutable triage decision record created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanTriageRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanRequestTriage
+      summary: Read the immutable triage record of one Handyman request
+      description: >
+        CR-HM-03 PART 05A — bounded read of the existing PART 01 triage
+        record (closest existing read-permission convention; the
+        accessible-Client scope is enforced server-side from the
+        request-derived scope).
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing triage record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanTriageRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/inspection:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: recordHandymanInspection
+      summary: Record the structured inspection for one Handyman request
+      description: >
+        CR-HM-03 PART 05A (frozen F1/F2/F3) — valid only while the request
+        is in INSPECTION_REQUIRED; the structured result + notes record is
+        created atomically with the DIAGNOSIS projection and journal
+        event. FROZEN F3: no inspection evidence exists (evidence defers
+        to CR-HM-10; PHOTO/VIDEO intake semantics are untouched).
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordHandymanInspectionRequest"
+      responses:
+        "201":
+          description: Immutable inspection record created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanInspectionRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanRequestInspection
+      summary: Read the immutable inspection record of one Handyman request
+      description: >
+        CR-HM-03 PART 05A — bounded read of the existing PART 02
+        inspection record (accessible-Client scope enforced server-side).
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing inspection record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanInspectionRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/diagnosis:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: recordHandymanDiagnosis
+      summary: Record the F9-discipline-anchored diagnosis
+      description: >
+        CR-HM-03 PART 05A (frozen F1/F2/F4/F9) — valid only while the
+        request is in DIAGNOSIS (reachable through either the direct
+        triage path or the inspection path). The scope classification is
+        SERVER-DERIVED from the referenced F9 discipline's scopeClass and
+        is never accepted as input; the projection is derived
+        (GENERAL_HANDYMAN → READY_FOR_NEXT_STEP, SPECIALIST →
+        SPECIALIST_REQUIRED → READY_FOR_NEXT_STEP, OUT_OF_HANDYMAN_SCOPE →
+        terminal REFERRED). A recommended catalogue anchor must be ACTIVE,
+        same-Client and associated with the selected discipline — the
+        free-text service_catalog.category is never consulted as
+        authority. No referral record, provider assignment, quotation,
+        work order or FM workflow is created here.
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordHandymanDiagnosisRequest"
+      responses:
+        "201":
+          description: Immutable diagnosis decision record created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanDiagnosisRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanRequestDiagnosis
+      summary: Read the immutable diagnosis record of one Handyman request
+      description: >
+        CR-HM-03 PART 05A — bounded read of the existing PART 03 diagnosis
+        record (accessible-Client scope enforced server-side).
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing diagnosis record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanDiagnosisRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/referral:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: recordHandymanReferral
+      summary: Create the diagnosis-derived referral handoff record
+      description: >
+        CR-HM-03 PART 05A (frozen F4/F5/F9) — source authority is the
+        immutable PART 03 diagnosis only: referralType and the target
+        discipline are server-derived and never accepted as input;
+        GENERAL_HANDYMAN diagnoses are rejected (400). There is no request
+        state transition here — SPECIALIST_REQUIRED requests remain
+        READY_FOR_NEXT_STEP, OUT_OF_HANDYMAN_SCOPE requests remain
+        terminal REFERRED. The referral is the handoff fact only: no
+        provider/vendor selection, no worker/crew assignment, no work
+        order, no quotation, no FM request/conversion/execution.
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordHandymanReferralRequest"
+      responses:
+        "201":
+          description: Immutable referral record created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanReferralRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanRequestReferral
+      summary: Read the immutable referral record of one Handyman request
+      description: >
+        CR-HM-03 PART 05A — bounded read of the existing PART 04 referral
+        record (accessible-Client scope enforced server-side).
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing referral record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanReferralRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /health:
     get:
       operationId: getHealth
@@ -74194,10 +74468,154 @@ components:
 
     HandymanServiceRequestStatus:
       type: string
-      enum: [INTAKE]
+      enum:
+        [INTAKE, TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS,
+         READY_FOR_NEXT_STEP, REFERRED]
       description: >-
-        Only the initial INTAKE state exists; no lifecycle transition
-        vocabulary (no triage/diagnosis/quotation/execution/QC/BAST).
+        CR-HM-03 FROZEN F1 vocabulary. REFERRED is terminal; no
+        execution/quotation/provider/work-order vocabulary exists.
+    HandymanTriageDisposition:
+      type: string
+      enum: [INSPECTION_REQUIRED, DIAGNOSIS]
+    HandymanInspectionResult:
+      type: string
+      enum: [INSPECTED, NOT_INSPECTABLE]
+    HandymanScopeClassification:
+      type: string
+      enum: [GENERAL_HANDYMAN, SPECIALIST_REQUIRED, OUT_OF_HANDYMAN_SCOPE]
+      description: >-
+        Server-DERIVED from the F9 discipline's scopeClass by the PART 03
+        service — never accepted as caller input.
+    HandymanReferralType:
+      type: string
+      enum: [SPECIALIST, OUT_OF_SCOPE]
+      description: >-
+        Server-DERIVED from the immutable diagnosis classification —
+        never accepted as caller input.
+    RecordHandymanTriageRequest:
+      type: object
+      required: [disposition, note]
+      description: >-
+        Caller-owned inputs only. Actor comes from the authenticated
+        context; smuggled actor/context keys are structurally ignored.
+      properties:
+        disposition: { $ref: "#/components/schemas/HandymanTriageDisposition" }
+        note: { type: string, minLength: 1, maxLength: 500 }
+    RecordHandymanInspectionRequest:
+      type: object
+      required: [result, notes]
+      description: >-
+        Caller-owned inputs only (F3: no inspection evidence in CR-HM-03 —
+        evidence defers to CR-HM-10).
+      properties:
+        result: { $ref: "#/components/schemas/HandymanInspectionResult" }
+        notes: { type: string, minLength: 1, maxLength: 1000 }
+    RecordHandymanDiagnosisRequest:
+      type: object
+      required: [disciplineId, diagnosis]
+      description: >-
+        Caller-owned inputs only. The F9 disciplineId is the scope anchor;
+        the classification is derived from it and is never an input.
+      properties:
+        disciplineId: { $ref: "#/components/schemas/Uuid" }
+        diagnosis: { type: string, minLength: 1, maxLength: 1000 }
+        recommendedServiceCatalogId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+    RecordHandymanReferralRequest:
+      type: object
+      required: [note]
+      description: >-
+        Note only. `referralType` and the target discipline are derived
+        from the immutable diagnosis and are never body inputs; no request
+        state transition occurs at this endpoint.
+      properties:
+        note: { type: string, minLength: 1, maxLength: 1000 }
+    HandymanTriageRecord:
+      type: object
+      description: >-
+        CR-HM-03 PART 01 (F2 immutable). Timestamps are server-generated;
+        *ByUserId comes from the authenticated context.
+      required:
+        [id, clientId, handymanRequestId, channelAttributionId, buildingId,
+         triageDisposition, triageNote, actorUserId, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        triageDisposition:
+          { $ref: "#/components/schemas/HandymanTriageDisposition" }
+        triageNote: { type: string }
+        actorUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+    HandymanInspectionRecord:
+      type: object
+      description: >-
+        CR-HM-03 PART 02 (F2 immutable; F3 evidence-free).
+      required:
+        [id, clientId, handymanRequestId, channelAttributionId, buildingId,
+         inspectionResult, inspectionNotes, inspectedByUserId, inspectedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        inspectionResult:
+          { $ref: "#/components/schemas/HandymanInspectionResult" }
+        inspectionNotes: { type: string }
+        inspectedByUserId: { $ref: "#/components/schemas/Uuid" }
+        inspectedAt: { type: string, format: date-time }
+    HandymanDiagnosisRecord:
+      type: object
+      description: >-
+        CR-HM-03 PART 03 (F2 immutable; F9 discipline authority). The
+        scopeClassification is SERVER-DERIVED from discipline.scopeClass
+        and is never a caller input. Carries no provider/quotation/
+        execution reference.
+      required:
+        [id, clientId, handymanRequestId, channelAttributionId, buildingId,
+         handymanDisciplineId, disciplineCode, diagnosis, scopeClassification,
+         recommendedServiceCatalogId, diagnosedByUserId, diagnosedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        handymanDisciplineId: { $ref: "#/components/schemas/Uuid" }
+        disciplineCode: { type: string }
+        diagnosis: { type: string }
+        scopeClassification:
+          { $ref: "#/components/schemas/HandymanScopeClassification" }
+        recommendedServiceCatalogId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        diagnosedByUserId: { $ref: "#/components/schemas/Uuid" }
+        diagnosedAt: { type: string, format: date-time }
+    HandymanReferralRecord:
+      type: object
+      description: >-
+        CR-HM-03 PART 04 (F2 immutable). referralType + target discipline
+        are SERVER-DERIVED from the immutable diagnosis; provider/vendor /
+        FM / work-order / quotation references deliberately do not exist.
+      required:
+        [id, clientId, handymanRequestId, channelAttributionId, buildingId,
+         handymanDiagnosisId, referralType, handymanDisciplineId,
+         disciplineCode, referralNote, referredByUserId, referredAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        handymanDiagnosisId: { $ref: "#/components/schemas/Uuid" }
+        referralType: { $ref: "#/components/schemas/HandymanReferralType" }
+        handymanDisciplineId: { $ref: "#/components/schemas/Uuid" }
+        disciplineCode: { type: string }
+        referralNote: { type: string }
+        referredByUserId: { $ref: "#/components/schemas/Uuid" }
+        referredAt: { type: string, format: date-time }
     HandymanServiceRequest:
       type: object
       description: >-

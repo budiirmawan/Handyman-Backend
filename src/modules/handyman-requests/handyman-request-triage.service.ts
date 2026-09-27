@@ -192,8 +192,15 @@ export async function recordHandymanRequestTriage(
 }
 
 /** Bounded read of the F2 triage decision record for one request. */
+/**
+ * Bounded read. CR-HM-03 PART 05A (FROZEN F8): HTTP callers pass the
+ * authenticated actor — the existing accessible-Client scope is then
+ * enforced server-side against the request-derived scope, never from
+ * caller-supplied context.
+ */
 export async function getHandymanRequestTriage(
   handymanRequestId: string,
+  actorUserId?: string,
 ): Promise<PublicHandymanRequestTriage> {
   if (!isValidUuid(handymanRequestId)) {
     throw AppError.validation('Request validation failed.', [
@@ -202,6 +209,26 @@ export async function getHandymanRequestTriage(
         message: 'handymanRequestId must be a valid UUID.',
       },
     ]);
+  }
+  if (actorUserId !== undefined) {
+    if (!isValidUuid(actorUserId)) {
+      throw AppError.validation('Request validation failed.', [
+        { field: 'actorUserId', message: 'actorUserId must be a valid UUID.' },
+      ]);
+    }
+    const request = await handymanServiceRequestRepository.findById(
+      undefined,
+      handymanRequestId,
+    );
+    if (!request) throw handymanServiceRequestNotFoundError();
+    if (
+      !(await contextAccessService.canAccessClient(
+        actorUserId,
+        request.clientId,
+      ))
+    ) {
+      throw buildingAccessDeniedError();
+    }
   }
   const record = await handymanRequestTriageRepository.findByRequest(
     undefined,

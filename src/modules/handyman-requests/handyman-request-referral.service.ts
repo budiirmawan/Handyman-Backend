@@ -185,8 +185,14 @@ export async function recordHandymanReferral(
 }
 
 /** Bounded read of the immutable F2 referral record for one request. */
+/**
+ * Bounded read. CR-HM-03 PART 05A (FROZEN F8): with an authenticated
+ * actor supplied (HTTP), the existing accessible-Client scope is enforced
+ * server-side against the request-derived scope.
+ */
 export async function getHandymanRequestReferral(
   handymanRequestId: string,
+  actorUserId?: string,
 ): Promise<PublicHandymanRequestReferral> {
   if (!isValidUuid(handymanRequestId)) {
     throw AppError.validation('Request validation failed.', [
@@ -195,6 +201,26 @@ export async function getHandymanRequestReferral(
         message: 'handymanRequestId must be a valid UUID.',
       },
     ]);
+  }
+  if (actorUserId !== undefined) {
+    if (!isValidUuid(actorUserId)) {
+      throw AppError.validation('Request validation failed.', [
+        { field: 'actorUserId', message: 'actorUserId must be a valid UUID.' },
+      ]);
+    }
+    const request = await handymanServiceRequestRepository.findById(
+      undefined,
+      handymanRequestId,
+    );
+    if (!request) throw handymanServiceRequestNotFoundError();
+    if (
+      !(await contextAccessService.canAccessClient(
+        actorUserId,
+        request.clientId,
+      ))
+    ) {
+      throw buildingAccessDeniedError();
+    }
   }
   const record = await handymanRequestReferralRepository.findByRequest(
     undefined,
