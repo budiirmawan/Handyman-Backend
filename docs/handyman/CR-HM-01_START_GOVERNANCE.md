@@ -298,30 +298,43 @@ NOT implemented):
 
 Dependency shape: PART 01 → PART 02 → PART 03 → PART 04 →
 PART 05 → PART 06; PART 04 may start once PART 01 lands.
-PART 03/05 are blocked by Decisions D1–D3.
+PART 03/05 follow the D1–D3 decisions frozen in §9.
 
-## 9. Blockers / Unresolved Decisions
+## 9. Decisions FROZEN (Security Decision Freeze)
 
-- D1 (BLOCKER, external) — BM trust material: the mechanism by
-  which the BM Super App authenticates a handoff (e.g. signed
-  payload / shared-secret HMAC per whatsapp convention / other
-  federation) and the key-distribution model are NOT derivable
-  from Handyman-Backend alone. Repository conventions are
-  identified, but choosing the mechanism requires an explicit
-  cross-system decision. Blocks PART 03 and PART 05 wire
-  details only; PART 01–02 and PART 04 are unaffected.
-- D2 (DECISION) — established-context model: whether a
-  successful handoff mints a standard user session
-  (`session.service`) for a customer-bound user, or a separate
-  handoff/session record, depends on the BM customer ↔
-  Handyman user mapping policy (`tenant-pics.userId` is
-  nullable — customers may exist without local users today).
-  Blocks PART 03.
-- D3 (DECISION) — mount convention for the handoff surface:
-  versioned API path (standard convention) vs external
-  `/webhooks/...` mount (whatsapp precedent). Blocks PART 05
-  only.
-- Recorded assumption (to verify at binding time): "unit"
+The following decisions, previously open, are now FROZEN.
+Changes require an explicit new decision record.
+
+- D1 (FROZEN) — TRUST MODEL: server-to-server signed handoff
+  assertion. Credential/key scoped per BM integration.
+  Assertion short-lived. A successful assertion may
+  create/authorize a one-time exchange. A BM app/client payload
+  by itself is never trusted. Secret/private material must not
+  be stored or logged in plaintext. Exact crypto/key
+  storage/schema remains a PART 03 implementation design
+  following existing repository security conventions.
+- D2 (FROZEN) — SESSION MODEL: use distinct short-lived
+  one-time handoff/exchange state first. Do NOT automatically
+  create a standard Handyman user session merely because a BM
+  assertion is valid. Canonical customer/building/unit context
+  must be resolved first (PART 02 resolver). The nullable
+  `tenant-pics.userId` must not be bypassed or fabricated.
+  Any later standard session issuance requires an explicit
+  valid local identity/auth policy.
+- D3 (FROZEN) — API MOUNT: the interactive handoff/exchange
+  surface belongs under the versioned `/api/v1` Handyman API.
+  Do NOT mount it under `/webhooks/`. Exact endpoint path
+  remains PART 05/OpenAPI design.
+
+Preserved invariants:
+
+- origin authentication != business authorization
+- customer != building authorization
+- building != unit authorization
+- channel attribution != BM financial entitlement
+- channel attribution != SaaS entitlement
+
+- Recorded assumption (verified at binding time): "unit"
   corresponds to the existing space model as validated through
   `tenant-spaces` (as tenant-service-requests already does).
 - Out of scope by design: privileged attribution correction
@@ -329,5 +342,7 @@ PART 03/05 are blocked by Decisions D1–D3.
   vocabulary is NOT repurposed as attribution (frozen-map
   boundary: attribution is NEW).
 
-STOP: CR-HM-01 PART 01 is NOT started. No runtime, migration,
-OpenAPI, or frozen-document change is made by this PART.
+STATUS NOTE: CR-HM-01 PARTs 01 (immutable channel attribution
+foundation) and 02 (trusted handoff context resolver) are
+delivered. PART 03 (secure handoff runtime) is next and is
+unblocked by the D1–D3 freeze above.
