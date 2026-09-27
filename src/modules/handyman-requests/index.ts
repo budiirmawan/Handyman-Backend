@@ -50,3 +50,30 @@ export type {
   NewHandymanRequestTriageRecord,
   PublicHandymanRequestTriage,
 } from './handyman-request-triage.types';
+/**
+ * CR-HM-03 PART 02 — bounded inspection record exports (FROZEN F1/F2/F3/F6/F7;
+ * INSPECTION_REQUIRED → DIAGNOSIS only).
+ */
+export {
+  handymanRequestInspectionRepository,
+} from './handyman-request-inspection.repository';
+export {
+  recordHandymanInspection,
+  getHandymanRequestInspection,
+  handymanServiceRequestInspectionService,
+} from './handyman-request-inspection.service';
+export {
+  handymanServiceRequestAlreadyInspectedError,
+  handymanServiceRequestNotInspectionRequiredError,
+} from './handyman-request-inspection.errors';
+export {
+  HANDYMAN_INSPECTION_RESULTS,
+  isHandymanInspectionResult,
+} from './handyman-request-inspection.types';
+export type {
+  CreateHandymanInspectionInput,
+  HandymanInspectionResult,
+  HandymanRequestInspectionRecord,
+  NewHandymanRequestInspectionRecord,
+  PublicHandymanRequestInspection,
+} from './handyman-request-inspection.types';
