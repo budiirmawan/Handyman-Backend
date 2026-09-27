@@ -1,10 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   HandymanChannelAttributionOriginChannel,
   HandymanChannelAttributionRecord,
   NewHandymanChannelAttribution,
 } from './handyman-channel-attribution.types';
+
+/** Default to the shared pool; transactional callers pass a PoolClient. */
+function executor(client?: PoolClient): Pool | PoolClient {
+  return client ?? getPool();
+}
 
 /**
  * CR-HM-01 PART 01 — Handyman Channel Attribution repository.
@@ -23,8 +29,9 @@ const SELECT = `id, client_id AS "clientId",
 
 async function create(
   input: NewHandymanChannelAttribution,
+  client?: PoolClient,
 ): Promise<HandymanChannelAttributionRecord> {
-  const result = await getPool().query<HandymanChannelAttributionRecord>(
+  const result = await executor(client).query<HandymanChannelAttributionRecord>(
     `INSERT INTO handyman_channel_attributions
        (id, client_id, tenant_company_id, tenant_pic_id, building_id,
         space_id, origin_channel, origin_reference, created_by_user_id)
@@ -57,8 +64,9 @@ async function findById(
 async function findByOriginReference(
   originChannel: HandymanChannelAttributionOriginChannel,
   originReference: string,
+  client?: PoolClient,
 ): Promise<HandymanChannelAttributionRecord | null> {
-  const result = await getPool().query<HandymanChannelAttributionRecord>(
+  const result = await executor(client).query<HandymanChannelAttributionRecord>(
     `SELECT ${SELECT} FROM handyman_channel_attributions
      WHERE origin_channel = $1 AND origin_reference = $2`,
     [originChannel, originReference],

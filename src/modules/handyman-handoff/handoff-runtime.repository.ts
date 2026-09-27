@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   HandoffAssertionRecord,
@@ -6,6 +7,11 @@ import type {
   HandoffExchangeRecord,
   HandoffIntegrationRecord,
 } from './handoff-runtime.types';
+
+/** Default to the shared pool; transactional callers pass a PoolClient. */
+function executor(client?: PoolClient): Pool | PoolClient {
+  return client ?? getPool();
+}
 
 /**
  * CR-HM-01 PART 03 — handoff runtime repositories.
@@ -23,7 +29,7 @@ async function createIntegration(input: {
   displayName: string;
   status?: 'ACTIVE' | 'INACTIVE';
 }): Promise<HandoffIntegrationRecord> {
-  const result = await getPool().query<HandoffIntegrationRecord>(
+  const result = await executor().query<HandoffIntegrationRecord>(
     `INSERT INTO handyman_handoff_integrations
        (id, integration_code, display_name, status)
      VALUES ($1,$2,$3,$4) RETURNING ${INTEGRATION_SELECT}`,
@@ -34,11 +40,24 @@ async function createIntegration(input: {
 
 async function findIntegrationByCode(
   integrationCode: string,
+  client?: PoolClient,
 ): Promise<HandoffIntegrationRecord | null> {
-  const result = await getPool().query<HandoffIntegrationRecord>(
+  const result = await executor(client).query<HandoffIntegrationRecord>(
     `SELECT ${INTEGRATION_SELECT} FROM handyman_handoff_integrations
      WHERE integration_code = $1`,
     [integrationCode],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findIntegrationById(
+  id: string,
+  client?: PoolClient,
+): Promise<HandoffIntegrationRecord | null> {
+  const result = await executor(client).query<HandoffIntegrationRecord>(
+    `SELECT ${INTEGRATION_SELECT} FROM handyman_handoff_integrations
+     WHERE id = $1`,
+    [id],
   );
   return result.rows[0] ?? null;
 }
@@ -52,14 +71,26 @@ async function insertAssertion(input: {
   assertionId: string;
   assertionHash: string;
   expiresAt: Date;
-}): Promise<HandoffAssertionRecord> {
-  const result = await getPool().query<HandoffAssertionRecord>(
+}, client?: PoolClient): Promise<HandoffAssertionRecord> {
+  const result = await executor(client).query<HandoffAssertionRecord>(
     `INSERT INTO handyman_handoff_assertions
        (id, integration_id, assertion_id, assertion_hash, expires_at)
      VALUES ($1,$2,$3,$4,$5) RETURNING ${ASSERTION_SELECT}`,
     [randomUUID(), input.integrationId, input.assertionId, input.assertionHash, input.expiresAt],
   );
   return result.rows[0];
+}
+
+async function findAssertionById(
+  id: string,
+  client?: PoolClient,
+): Promise<HandoffAssertionRecord | null> {
+  const result = await executor(client).query<HandoffAssertionRecord>(
+    `SELECT ${ASSERTION_SELECT} FROM handyman_handoff_assertions
+     WHERE id = $1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
 }
 
 const EXCHANGE_SELECT = `id, integration_id AS "integrationId",
@@ -80,7 +111,7 @@ async function createExchange(input: {
   context: HandoffExchangeContextSnapshot;
   expiresAt: Date;
 }): Promise<HandoffExchangeRecord> {
-  const result = await getPool().query<HandoffExchangeRecord>(
+  const result = await executor().query<HandoffExchangeRecord>(
     `INSERT INTO handyman_handoff_exchanges
        (id, integration_id, handoff_assertion_id, token_hash, client_id,
         tenant_company_id, tenant_pic_id, building_id, space_id,
@@ -109,8 +140,9 @@ async function createExchange(input: {
 
 async function findExchangeByTokenHash(
   tokenHash: string,
+  client?: PoolClient,
 ): Promise<HandoffExchangeRecord | null> {
-  const result = await getPool().query<HandoffExchangeRecord>(
+  const result = await executor(client).query<HandoffExchangeRecord>(
     `SELECT ${EXCHANGE_SELECT} FROM handyman_handoff_exchanges
      WHERE token_hash = $1`,
     [tokenHash],
@@ -124,8 +156,9 @@ async function findExchangeByTokenHash(
  */
 async function consumeExchange(
   id: string,
+  client?: PoolClient,
 ): Promise<HandoffExchangeRecord | null> {
-  const result = await getPool().query<HandoffExchangeRecord>(
+  const result = await executor(client).query<HandoffExchangeRecord>(
     `UPDATE handyman_handoff_exchanges
         SET status = 'USED', used_at = NOW(), updated_at = NOW()
       WHERE id = $1 AND status = 'ACTIVE'
@@ -138,7 +171,9 @@ async function consumeExchange(
 export const handoffRuntimeRepository = {
   createIntegration,
   findIntegrationByCode,
+  findIntegrationById,
   insertAssertion,
+  findAssertionById,
   createExchange,
   findExchangeByTokenHash,
   consumeExchange,

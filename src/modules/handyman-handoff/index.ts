@@ -48,3 +48,7 @@ export type {
   HandoffExchangeRecord,
   HandoffIntegrationRecord,
 } from './handoff-runtime.types';
+export {
+  bindHandoffExchangeToChannelAttribution,
+  handoffBindingService,
+} from './handoff-binding.service';

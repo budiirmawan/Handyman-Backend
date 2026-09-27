@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
 import { buildingRepository } from '../buildings';
 import { propertyRepository } from '../properties';
@@ -92,8 +93,16 @@ export function toPublicHandymanChannelAttribution(
   return { ...record, createdAt: record.createdAt.toISOString() };
 }
 
+/**
+ * Creates the immutable attribution after re-validating every server-side
+ * reference and deriving the tenant-isolation root. `client` (existing
+ * withTransaction convention) lets a wrapping unit of work make the insert
+ * atomic with its own writes — the caller-owned transaction then also governs
+ * the origin-reference pre-check below.
+ */
 export async function createChannelAttribution(
   input: CreateHandymanChannelAttributionInput,
+  client?: PoolClient,
 ): Promise<PublicHandymanChannelAttribution> {
   assertOriginChannel(input.originChannel);
   const originReference = normalizeOriginReference(input.originReference);
@@ -167,7 +176,7 @@ export async function createChannelAttribution(
 
   if (originReference !== null) {
     const existing = await handymanChannelAttributionRepository
-      .findByOriginReference(input.originChannel, originReference);
+      .findByOriginReference(input.originChannel, originReference, client);
     if (existing) throw handymanChannelAttributionOriginReferenceConflictError();
   }
 
@@ -181,7 +190,7 @@ export async function createChannelAttribution(
       originChannel: input.originChannel,
       originReference,
       createdByUserId,
-    });
+    }, client);
     return toPublicHandymanChannelAttribution(record);
   } catch (error) {
     if (isOriginReferenceUniqueViolation(error)) {
