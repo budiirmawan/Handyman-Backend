@@ -376,6 +376,7 @@ import { migration0375CreateHandymanHandoffRuntime } from './0375_create_handyma
 import { migration0376CreateHandymanServiceVariants } from './0376_create_handyman_service_variants';
 import { migration0377CreateHandymanCommonMaterialProfiles } from './0377_create_handyman_common_material_profiles';
 import { migration0378CreateHandymanServiceRequests } from './0378_create_handyman_service_requests';
+import { migration0379AdmitHandymanRequestEvidence } from './0379_admit_handyman_request_evidence';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -759,4 +760,5 @@ export const migrations: readonly Migration[] = [
   migration0376CreateHandymanServiceVariants,
   migration0377CreateHandymanCommonMaterialProfiles,
   migration0378CreateHandymanServiceRequests,
+  migration0379AdmitHandymanRequestEvidence,
 ];
