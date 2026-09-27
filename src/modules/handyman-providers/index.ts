@@ -52,3 +52,43 @@ export type {
   NewHandymanWorkerContextRecord,
   PublicHandymanWorkerContext,
 } from './handyman-worker-context.types';
+/**
+ * CR-HM-04 PART 03 — Handyman Work Crew + Membership + Lead
+ * (FROZEN F3/F4/F5/F8/F9/F10).
+ */
+export { handymanWorkCrewRepository } from './handyman-work-crew.repository';
+export {
+  createHandymanWorkCrew,
+  addHandymanCrewMember,
+  setHandymanCrewMemberStatus,
+  designateHandymanCrewLead,
+  setHandymanWorkCrewStatus,
+  getHandymanWorkCrew,
+  handymanWorkCrewService,
+} from './handyman-work-crew.service';
+export {
+  handymanCrewCodeAlreadyExistsError,
+  handymanCrewInvalidStatusError,
+  handymanCrewLeadInvalidError,
+  handymanCrewLeadMembershipLockedError,
+  handymanCrewLeadRequiredError,
+  handymanCrewMemberAlreadyActiveError,
+  handymanCrewMemberNotFoundError,
+  handymanCrewNotFoundError,
+} from './handyman-work-crew.errors';
+export {
+  HANDYMAN_CREW_STATUSES,
+  isHandymanCrewStatus,
+} from './handyman-work-crew.types';
+export type {
+  AddHandymanCrewMemberInput,
+  CreateHandymanWorkCrewInput,
+  DesignateHandymanCrewLeadInput,
+  HandymanCrewLeadRecord,
+  HandymanCrewMembershipRecord,
+  HandymanCrewStatus,
+  HandymanWorkCrewRecord,
+  PublicHandymanCrewLead,
+  PublicHandymanCrewMembership,
+  PublicHandymanWorkCrew,
+} from './handyman-work-crew.types';

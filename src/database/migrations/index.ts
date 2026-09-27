@@ -383,6 +383,7 @@ import { migration0382CreateHandymanDiagnosisScopeAuthority } from './0382_creat
 import { migration0383CreateHandymanRequestReferrals } from './0383_create_handyman_request_referrals';
 import { migration0384CreateHandymanProviderContexts } from './0384_create_handyman_provider_contexts';
 import { migration0385CreateHandymanWorkerContexts } from './0385_create_handyman_worker_contexts';
+import { migration0386CreateHandymanWorkCrews } from './0386_create_handyman_work_crews';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -773,4 +774,5 @@ export const migrations: readonly Migration[] = [
   migration0383CreateHandymanRequestReferrals,
   migration0384CreateHandymanProviderContexts,
   migration0385CreateHandymanWorkerContexts,
+  migration0386CreateHandymanWorkCrews,
 ];
