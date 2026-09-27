@@ -388,6 +388,7 @@ import { migration0387CreateHandymanSchedulingReadiness } from './0387_create_ha
 import { migration0388CreateHandymanUnitAccessReadiness } from './0388_create_handyman_unit_access_readiness';
 import { migration0389CreateHandymanPermitReadiness } from './0389_create_handyman_permit_readiness';
 import { migration0390HandymanReadinessHistoryLinks } from './0390_handyman_readiness_history_links';
+import { migration0391CreateHandymanQuotations } from './0391_create_handyman_quotations';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -783,4 +784,5 @@ export const migrations: readonly Migration[] = [
   migration0388CreateHandymanUnitAccessReadiness,
   migration0389CreateHandymanPermitReadiness,
   migration0390HandymanReadinessHistoryLinks,
+  migration0391CreateHandymanQuotations,
 ];
