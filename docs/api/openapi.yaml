@@ -113,6 +113,16 @@ tags:
       -> TERMINATED`; legacy `ACTIVE`/`INACTIVE` remain readable). Status is
       never set by these endpoints: creation starts at PROSPECT and later
       transitions are server-authoritative (subscription-driven from PART 03+).
+  - name: Handoff
+    description: >-
+      CR-HM-01 PART 03–05 trusted BM Super App handoff (frozen D1/D2/D3).
+      A server-to-server signed assertion (per-BM-integration scoped HMAC,
+      timing-safe verify, short-lived, replay-protected) issues a one-time,
+      short-lived exchange token returned exactly once and stored hash-only.
+      The exchange is NOT a standard user session; consuming it exactly once
+      creates the immutable channel attribution. Channel attribution is never
+      building/unit authorization by itself, never a BM financial
+      entitlement, and never a SaaS entitlement.
   - name: Health
     description: Runtime / readiness probes (public).
   - name: Authentication
@@ -2460,6 +2470,132 @@ tags:
 security: []
 
 paths:
+  /handoff/assertions:
+    post:
+      operationId: acceptHandoffAssertion
+      summary: Accept a signed BM handoff assertion
+      description: >
+        Server-to-server entry of the trusted BM Super App handoff (CR-HM-01
+        PART 03/05; frozen D1/D2/D3). The JSON body is the handoff assertion;
+        its integrity and authenticity are proven by the
+        `x-hub-signature-256` header — an HMAC-SHA256 signature
+        (`sha256=<hex>`) of the canonical assertion payload keyed by the
+        per-BM-integration scoped secret. That integration signature is the
+        ONLY authentication for this endpoint; a Bearer user session is not
+        a substitute, none is consulted, and no standard user session is
+        created.
+
+        The assertion is single-use per integration + `assertionId`
+        (append-only replay record) and must be fresh (short bounded validity
+        window with a small clock-skew allowance). The context claims
+        (`tenantCompanyId`, `buildingId`, optional `tenantPicId` and
+        `spaceId`) are never trusted as authorization: they are re-resolved
+        into the canonical backend context server-side. A malformed,
+        badly-signed, expired, or unknown/inactive-integration assertion all
+        fail with the same non-enumerating 401
+        `HANDYMAN_HANDOFF_ASSERTION_INVALID`.
+
+        On success a short-lived (default 120s), strictly single-use exchange
+        is issued: the raw `exchangeToken` is returned exactly once, only its
+        SHA-256 hash is stored, and it can be consumed exactly once by
+        `POST /handoff/channel-attributions`. No service request is created.
+      tags: [Handoff]
+      security:
+        - handoffAssertionSignature: []
+      parameters:
+        - name: x-hub-signature-256
+          in: header
+          required: true
+          description: >-
+            HMAC-SHA256 signature of the canonical assertion payload,
+            formatted `sha256=<lowercase hex>`; verified timing-safe per
+            integration. The raw signature is never logged or returned.
+          schema:
+            type: string
+            pattern: '^sha256=[0-9a-f]{64}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandoffAssertion"
+      responses:
+        "201":
+          description: Assertion accepted; one-time exchange issued.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandoffExchangeAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/HandoffAssertionInvalid"
+        "409":
+          $ref: "#/components/responses/HandoffAssertionReplayed"
+
+  /handoff/channel-attributions:
+    post:
+      operationId: bindHandoffExchangeToChannelAttribution
+      summary: Consume a one-time exchange and create the channel attribution
+      description: >
+        Consumes the single-use handoff exchange exactly once (atomic,
+        race-safe ACTIVE -> USED transition) and creates the immutable
+        channel attribution (CR-HM-01 PART 01/04). Tenant, building, space
+        and channel identity are NEVER taken from the caller: the
+        attribution derives solely from the consumed exchange's trusted
+        server-side snapshot (canonical context resolved when the assertion
+        was accepted), the origin channel is always `BM_SUPER_APP`, and the
+        originating BM integration + assertion reference provenance is
+        preserved in `originReference`
+        (`bm-handoff:{integrationCode}:{assertionId}`). The created
+        attribution grants no building/unit authorization by itself and is
+        neither a BM financial entitlement nor a SaaS entitlement.
+
+        Binding is transactional: if attribution creation fails, the
+        exchange consumption rolls back with it — an exchange is never left
+        consumed without its attribution. An unknown, expired, or already
+        consumed exchange token all fail with the same non-enumerating 401
+        `HANDYMAN_HANDOFF_EXCHANGE_INVALID`. The exchange is not a session:
+        consuming it never creates a standard user session and never creates
+        a service request. The raw token travels only in this request body
+        (never in the URL) so request logging cannot leak it.
+      tags: [Handoff]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandoffBindingRequest"
+      responses:
+        "201":
+          description: Exchange consumed; immutable channel attribution created.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanChannelAttribution"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/HandoffExchangeInvalid"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /health:
     get:
       operationId: getHealth
@@ -68068,6 +68204,17 @@ components:
       description: >
         Opaque internal User session token returned by `POST /auth/login` and
         carried as `Authorization: Bearer <token>`.
+    handoffAssertionSignature:
+      type: apiKey
+      in: header
+      name: x-hub-signature-256
+      description: >
+        Per-BM-integration scoped HMAC-SHA256 signature of the canonical
+        assertion payload, formatted `sha256=<hex>` (CR-HM-01 frozen D1).
+        Verified timing-safe. The integration secret exists only in server
+        environment configuration and is never stored, exposed, or returned.
+        This is server-to-server authentication: a Bearer user session is not
+        a substitute and is not consulted.
     vendorRfqSession:
       type: http
       scheme: bearer
@@ -70168,6 +70315,66 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
+    HandoffAssertionInvalid:
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestId"
+      description: >
+        The handoff assertion was rejected without enumeration: a malformed
+        assertion, an unknown or inactive BM integration, an unconfigured
+        integration credential, an expired/out-of-window assertion and an
+        invalid signature ALL return the same 401
+        `HANDYMAN_HANDOFF_ASSERTION_INVALID`. The response never exposes the
+        distinguishing cause, the integration secret, or signature material.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            assertionInvalid:
+              value:
+                success: false
+                error:
+                  code: HANDYMAN_HANDOFF_ASSERTION_INVALID
+                  message: The handoff assertion is not valid.
+    HandoffAssertionReplayed:
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestId"
+      description: >-
+        The assertion identifier was already consumed for this integration
+        (append-only replay protection); it can never be accepted again.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            assertionReplayed:
+              value:
+                success: false
+                error:
+                  code: HANDYMAN_HANDOFF_ASSERTION_REPLAYED
+                  message: This handoff assertion was already used.
+    HandoffExchangeInvalid:
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestId"
+      description: >
+        The one-time handoff exchange token is unknown, expired, or already
+        consumed: all cases return the same non-enumerating 401
+        `HANDYMAN_HANDOFF_EXCHANGE_INVALID`. The response never exposes the
+        stored token hash or any exchange internals.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            exchangeInvalid:
+              value:
+                success: false
+                error:
+                  code: HANDYMAN_HANDOFF_EXCHANGE_INVALID
+                  message: The handoff exchange is not valid.
     VersionConflict:
       headers:
         X-Request-ID:
@@ -73335,6 +73542,201 @@ components:
     # ------------------------------------------------------------------
     # Health
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # CR-HM-01 — BM Super App handoff (frozen D1/D2/D3)
+    # ------------------------------------------------------------------
+    HandoffAssertion:
+      type: object
+      description: >-
+        Signed BM handoff assertion (see `POST /handoff/assertions`). The
+        context identifiers are unverified claims: the backend re-resolves
+        them into the canonical context and never treats them as
+        authorization. `expiresAt` must be later than `issuedAt` and within
+        the short bounded validity window (max age 300s, clock skew 60s).
+      required:
+        - integrationCode
+        - assertionId
+        - issuedAt
+        - expiresAt
+        - tenantCompanyId
+        - buildingId
+      properties:
+        integrationCode:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: >-
+            Registered trusted BM integration code (e.g. `BM_SUPER_APP`) whose
+            scoped secret signed this assertion.
+        assertionId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Unique assertion identifier within the integration; the replay
+            key. An id can be accepted only once per integration, ever.
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        tenantCompanyId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Handyman tenant/customer organization claim.
+        buildingId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Building claim.
+        tenantPicId:
+          type: string
+          maxLength: 128
+          description: Optional customer person (Tenant PIC) claim.
+        spaceId:
+          type: string
+          maxLength: 128
+          description: Optional unit/space claim.
+
+    HandoffBindingRequest:
+      type: object
+      description: >-
+        One-time exchange token returned once by `POST /handoff/assertions`.
+        Carried only in this body — never in the URL or a header.
+      required: [exchangeToken]
+      properties:
+        exchangeToken:
+          type: string
+          minLength: 1
+          description: Raw opaque single-use exchange token.
+
+    HandoffContextSnapshot:
+      type: object
+      description: >-
+        Canonical context resolved server-side when the assertion was
+        accepted (never echoed caller claims). Nullable fields are null when
+        the claim was absent or no linkage exists — a linked user is never
+        fabricated.
+      required:
+        - clientId
+        - tenantCompanyId
+        - tenantPicId
+        - buildingId
+        - spaceId
+        - tenantBuildingContextId
+        - tenantSpaceRelationshipId
+        - resolvedUserId
+      properties:
+        clientId:
+          type: string
+          format: uuid
+          description: Derived tenant-isolation root.
+        tenantCompanyId:
+          type: string
+          format: uuid
+        tenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        buildingId:
+          type: string
+          format: uuid
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+        tenantBuildingContextId:
+          type: string
+          format: uuid
+        tenantSpaceRelationshipId:
+          type: string
+          format: uuid
+          nullable: true
+        resolvedUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Linked user of the PIC when it exists; never fabricated.
+
+    HandoffExchangeAccepted:
+      type: object
+      required: [exchangeToken, expiresAt, context]
+      properties:
+        exchangeToken:
+          type: string
+          description: >-
+            Raw opaque single-use exchange token. Returned exactly once; only
+            its SHA-256 hash is stored and it is never logged. Consume it
+            once via `POST /handoff/channel-attributions`.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Exchange expiry (short-lived; default 120s TTL).
+        context:
+          $ref: "#/components/schemas/HandoffContextSnapshot"
+
+    HandymanChannelAttribution:
+      type: object
+      description: >-
+        Immutable, append-only channel attribution created by consuming the
+        one-time exchange (CR-HM-01 PART 01/04). There is no update or delete
+        surface. Backend-owned: tenant isolation (`clientId`) is derived, the
+        origin channel is always `BM_SUPER_APP`, and `originReference`
+        preserves the originating BM integration + assertion provenance.
+        Attribution is never building/unit authorization by itself, never a
+        BM financial entitlement, and never a SaaS entitlement.
+      required:
+        - id
+        - clientId
+        - tenantCompanyId
+        - tenantPicId
+        - buildingId
+        - spaceId
+        - originChannel
+        - originReference
+        - createdByUserId
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        clientId:
+          type: string
+          format: uuid
+        tenantCompanyId:
+          type: string
+          format: uuid
+        tenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        buildingId:
+          type: string
+          format: uuid
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+        originChannel:
+          type: string
+          enum: [BM_SUPER_APP]
+        originReference:
+          type: string
+          nullable: true
+          description: >-
+            Durable origin provenance `bm-handoff:{integrationCode}:{assertionId}`;
+            unique per origin — a second attribution for the same origin
+            reference conflicts (409).
+        createdByUserId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
     HealthStatus:
       type: object
       required: [status, environment, uptimeSeconds, timestamp]

@@ -31,6 +31,7 @@ import { createDocumentApprovalRouter } from '../modules/document-approvals/docu
 import { createWorkCompletionDocumentRouter } from '../modules/work-completion-documents/work-completion-document.routes';
 import { createBastDocumentRouter } from '../modules/bast-documents/bast-document.routes';
 import { createHandoverDocumentRouter } from '../modules/handover-documents/handover-document.routes';
+import { createHandoffHandymanRouter } from '../modules/handyman-handoff/handoff.routes';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -770,6 +771,10 @@ export function createApiRouter(): Router {
   router.use(createCorrectiveActionResponsibilityRouter());
   router.use(createCorrectiveActionVerificationRouter());
   router.use(createIncidentClosureRouter());
+  // CR-HM-01 PART 05 — secure BM Super App handoff exposure (frozen D3:
+  // /api/v1 only, never /webhooks; assertion signature auth — a Bearer user
+  // session is not a substitute, and none is created).
+  router.use(createHandoffHandymanRouter());
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;
