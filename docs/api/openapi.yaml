@@ -3197,6 +3197,450 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /handyman/provider-contexts:
+    post:
+      operationId: createHandymanProviderContext
+      summary: Create the Handyman provider operational context for one vendor
+      description: >
+        CR-HM-04 PART 05A (frozen F1/F8/F9) — caller-owned input is ONLY
+        the vendor reference; `clientId` is derived server-side from the
+        authoritative `vendors` row and the actor comes from the
+        authenticated session — smuggled actor/client/provider-scope keys
+        are structurally ignored. One context per vendor (409 on
+        duplicate). No vendor master data, compliance, capability or
+        commercial state is created or modified here.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanProviderContextRequest"
+      responses:
+        "201":
+          description: ACTIVE provider context created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanProviderContextRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/provider-contexts/by-vendor/{vendorId}:
+    parameters:
+      - name: vendorId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanProviderContextByVendor
+      summary: Read the provider context of exactly one vendor
+      description: >
+        CR-HM-04 PART 05A — bounded existing read by vendor reference
+        (the only PART 01 read seam; NO list/search surface exists).
+        Accessible-Client scope is enforced server-side.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing provider context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanProviderContextRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/provider-contexts/{providerContextId}/status:
+    parameters:
+      - name: providerContextId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: setHandymanProviderContextStatus
+      summary: Change the provider context lifecycle status
+      description: >
+        CR-HM-04 PART 05A (frozen F8) — body accepts ONLY the target
+        status (ACTIVE | INACTIVE); the transition, journal event and
+        history preservation are service-authoritative.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetHandymanLifecycleStatusRequest"
+      responses:
+        "200":
+          description: Provider context after the transition.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanProviderContextRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/worker-contexts:
+    post:
+      operationId: createHandymanWorkerContext
+      summary: Create a Handyman worker context under one ACTIVE provider context
+      description: >
+        CR-HM-04 PART 05A (frozen F2/F5/F9) — inputs are the provider
+        context + workforce profile references only; workforce identity
+        fields are never accepted (the `workforce_profiles` master row is
+        the sole person identity). Client scope, the ACTIVE provider
+        context and the standing vendor-workforce binding are validated
+        server-side. Login-less helper profiles (`userId` null) are
+        permitted as workers; Lead eligibility is NOT granted here.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanWorkerContextRequest"
+      responses:
+        "201":
+          description: ACTIVE worker context created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanWorkerContextRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/worker-contexts/{workerContextId}:
+    parameters:
+      - name: workerContextId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanWorkerContext
+      summary: Read exactly one worker context
+      description: >
+        CR-HM-04 PART 05A — bounded existing read by id (NO list/search
+        surface exists); accessible-Client scope enforced server-side.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing worker context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanWorkerContextRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/worker-contexts/{workerContextId}/status:
+    parameters:
+      - name: workerContextId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: setHandymanWorkerContextStatus
+      summary: Change a worker context lifecycle status
+      description: >
+        CR-HM-04 PART 05A (frozen F8) — body accepts ONLY the target
+        status (ACTIVE | INACTIVE); transition + journal remain
+        service-authoritative.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetHandymanLifecycleStatusRequest"
+      responses:
+        "200":
+          description: Worker context after the transition.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanWorkerContextRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/work-crews:
+    post:
+      operationId: createHandymanWorkCrew
+      summary: Create a work crew transactionally with its initial valid Lead
+      description: >
+        CR-HM-04 PART 05A (frozen F3/F4/F5) — minimum crew fields
+        (code/name) plus the initial Lead worker-context reference; no
+        DRAFT state exists, so the crew, its Lead membership and the Lead
+        designation commit atomically. The Lead must be an ACTIVE worker
+        of the same ACTIVE provider context + same Client with a linked
+        login identity (`workforce_profiles.userId` non-null) — a
+        login-less helper is REJECTED as Lead (400). Client scope is
+        server-derived; assignment is NOT created here (PART 04 defers
+        target binding to the authoritative CR-HM-06 target).
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanWorkCrewRequest"
+      responses:
+        "201":
+          description: ACTIVE crew + Lead membership + Lead designation bundle.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanWorkCrewCreateBundle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/work-crews/{crewId}:
+    parameters:
+      - name: crewId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanWorkCrew
+      summary: Read exactly one crew with memberships and current Lead
+      description: >
+        CR-HM-04 PART 05A — bounded existing read (crew + all preserved
+        memberships + current Lead from append-only history; NO
+        list/search surface exists). Accessible-Client scope enforced
+        server-side.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing crew read bundle.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanWorkCrewReadBundle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/work-crews/{crewId}/status:
+    parameters:
+      - name: crewId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: setHandymanWorkCrewStatus
+      summary: Change a crew lifecycle status
+      description: >
+        CR-HM-04 PART 05A (frozen F4/F8) — body accepts ONLY the target
+        status; activation is rejected (400) unless exactly one valid
+        current Lead chain holds (service-authoritative).
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetHandymanLifecycleStatusRequest"
+      responses:
+        "200":
+          description: Crew after the transition.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanWorkCrewRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/work-crews/{crewId}/members:
+    parameters:
+      - name: crewId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: addHandymanCrewMember
+      summary: Add a worker-context member to an ACTIVE crew
+      description: >
+        CR-HM-04 PART 05A (frozen F3/F5) — input is the worker-context
+        reference only; same provider context + same Client + ACTIVE
+        worker context are validated server-side. A login-less helper is
+        admitted as an ordinary member. History is preserved (409 on
+        duplicate ACTIVE membership; reactivation reuses history, never a
+        hard delete).
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanWorkerContextRefRequest"
+      responses:
+        "201":
+          description: ACTIVE membership created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanCrewMembershipRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/work-crews/{crewId}/lead:
+    parameters:
+      - name: crewId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: designateHandymanCrewLead
+      summary: Designate or change the current crew Lead
+      description: >
+        CR-HM-04 PART 05A (frozen F4/F5) — input is the eligible worker-
+        context reference; the service re-validates ACTIVE membership +
+        ACTIVE worker context + linked login identity. The designation is
+        an append-only history fact (never an overwrite); a login-less
+        helper can never become Lead (400).
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanWorkerContextRefRequest"
+      responses:
+        "201":
+          description: New current Lead designation fact.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanCrewLeadRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/crew-memberships/{membershipId}/status:
+    parameters:
+      - name: membershipId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: setHandymanCrewMemberStatus
+      summary: Change one crew membership lifecycle status
+      description: >
+        CR-HM-04 PART 05A (frozen F4/F8) — body accepts ONLY the target
+        status; deactivating the current Lead's membership while
+        designated is rejected (400 LEAD_MEMBERSHIP_LOCKED, service-
+        authoritative). History is preserved — membership is never
+        hard-deleted.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetHandymanLifecycleStatusRequest"
+      responses:
+        "200":
+          description: Membership after the transition.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanCrewMembershipRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /health:
     get:
       operationId: getHealth
@@ -74530,6 +74974,165 @@ components:
         state transition occurs at this endpoint.
       properties:
         note: { type: string, minLength: 1, maxLength: 1000 }
+    # ----- CR-HM-04 PART 05A — provider / worker / crew surface (frozen F9).
+    # NO assignment, attendance, work-session, billable-time,
+    # skill→discipline authority, marketplace or FM vendor workflow fields
+    # exist in any of these schemas (PART 04 freezes assignment as
+    # contract-only, deferred to the authoritative CR-HM-06 target).
+    CreateHandymanProviderContextRequest:
+      type: object
+      required: [vendorId]
+      description: >-
+        Vendor reference only. `clientId`/actor are server-derived; any
+        smuggled actor, client or scope keys are structurally ignored.
+      properties:
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+    SetHandymanLifecycleStatusRequest:
+      type: object
+      required: [status]
+      description: >-
+        Target lifecycle status only (F8 bounded vocabulary).
+      properties:
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+    CreateHandymanWorkerContextRequest:
+      type: object
+      required: [handymanProviderContextId, workforceProfileId]
+      description: >-
+        Provider context + workforce profile references only. Workforce
+        identity fields are never accepted; provider context ACTIVE,
+        same-Client scope and the standing vendor-workforce binding are
+        validated server-side.
+      properties:
+        handymanProviderContextId: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+    CreateHandymanWorkCrewRequest:
+      type: object
+      required:
+        [handymanProviderContextId, code, name, leadWorkerContextId]
+      description: >-
+        Transactional crew creation (no DRAFT): the referenced initial
+        Lead must be an ACTIVE worker of the same provider context/Client
+        with a linked login identity — validated in the same transaction.
+      properties:
+        handymanProviderContextId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 200 }
+        leadWorkerContextId: { $ref: "#/components/schemas/Uuid" }
+    HandymanWorkerContextRefRequest:
+      type: object
+      required: [handymanWorkerContextId]
+      description: >-
+        Worker-context reference only; eligibility (membership add) or
+        Lead validity (login-linked, ACTIVE chain) is service-derived.
+      properties:
+        handymanWorkerContextId: { $ref: "#/components/schemas/Uuid" }
+    HandymanProviderContextRecord:
+      type: object
+      description: >-
+        CR-HM-04 PART 01 — identity is the authoritative `vendors` row;
+        `clientId` is the server-derived verbatim snapshot.
+      required:
+        [id, clientId, vendorId, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanWorkerContextRecord:
+      type: object
+      description: >-
+        CR-HM-04 PART 02 — person identity is NEVER duplicated here; the
+        `workforce_profiles` master row is authoritative.
+      required:
+        [id, clientId, handymanProviderContextId, workforceProfileId,
+         status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanProviderContextId: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanWorkCrewRecord:
+      type: object
+      description: >-
+        CR-HM-04 PART 03 — per-job operational grouping under exactly one
+        provider context; NEVER the org `teams` entity.
+      required:
+        [id, clientId, handymanProviderContextId, code, name, status,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanProviderContextId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanCrewMembershipRecord:
+      type: object
+      description: >-
+        CR-HM-04 PART 03 — history preserved; membership is distinct from
+        assignment, attendance, work session and billable time (PART 04
+        boundary).
+      required:
+        [id, clientId, handymanCrewId, handymanWorkerContextId, status,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanCrewId: { $ref: "#/components/schemas/Uuid" }
+        handymanWorkerContextId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanCrewLeadRecord:
+      type: object
+      description: >-
+        CR-HM-04 PART 03 — append-only Lead designation fact; current =
+        MAX(leadSeq). Old facts are never overwritten.
+      required:
+        [id, leadSeq, clientId, handymanCrewId, handymanCrewMembershipId,
+         designatedByUserId, designatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        leadSeq: { type: integer, format: int64 }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanCrewId: { $ref: "#/components/schemas/Uuid" }
+        handymanCrewMembershipId: { $ref: "#/components/schemas/Uuid" }
+        designatedByUserId: { $ref: "#/components/schemas/Uuid" }
+        designatedAt: { type: string, format: date-time }
+    HandymanWorkCrewCreateBundle:
+      type: object
+      description: >-
+        Atomic crew creation result: crew + initial Lead membership +
+        current Lead designation.
+      required: [crew, leadMembership, lead]
+      properties:
+        crew: { $ref: "#/components/schemas/HandymanWorkCrewRecord" }
+        leadMembership:
+          { $ref: "#/components/schemas/HandymanCrewMembershipRecord" }
+        lead: { $ref: "#/components/schemas/HandymanCrewLeadRecord" }
+    HandymanWorkCrewReadBundle:
+      type: object
+      description: >-
+        Bounded crew read: crew + preserved memberships + current Lead.
+      required: [crew, members, currentLead]
+      properties:
+        crew: { $ref: "#/components/schemas/HandymanWorkCrewRecord" }
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanCrewMembershipRecord" }
+        currentLead:
+          { $ref: "#/components/schemas/HandymanCrewLeadRecord", nullable: true }
     HandymanTriageRecord:
       type: object
       description: >-
