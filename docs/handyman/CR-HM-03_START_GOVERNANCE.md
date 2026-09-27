@@ -5,7 +5,7 @@ Primary authority: **Handyman-Backend** (frozen roadmap: rows for
 CR-HM-03 contract). Governance-only document — **no code, no migration, no
 runtime change**.
 
-**Status: decisions F1–F8 FROZEN on 2026-09-27** (their authoritative text
+**Status: decisions F1–F9 FROZEN on 2026-09-27** (their authoritative text
 is §6 below; every PART must implement exactly those tokens and boundaries
 — nothing else).
 
@@ -229,7 +229,9 @@ GENERAL_HANDYMAN | SPECIALIST_REQUIRED | OUT_OF_HANDYMAN_SCOPE
 ```
 
 - The specialist target is anchored to the existing service/category
-  reference vocabulary (`service_catalog.category`) where possible.
+  reference vocabulary (`service_catalog.category`) where possible; the
+  scope anchor itself is the FROZEN F9 discipline registry (F9 supersedes
+  this phrase directly).
 - **Electrical and AC are specialist targets only here** — they never
   become General Handyman execution authority.
 - **FM/common-building scope must classify `OUT_OF_HANDYMAN_SCOPE`.**
@@ -259,13 +261,52 @@ convention**. The service layer remains authoritative for scope/state
 validation. Exact permission tokens/routes derive in PART 05A from
 existing repository conventions.
 
+**F9 — HANDYMAN SCOPE / DISCIPLINE AUTHORITY.** The repository has **no
+machine-readable authority** that can classify `service_catalog.category`
+as General Handyman / Specialist / out-of-Handyman scope; therefore:
+
+1. `service_catalog.category` remains **descriptive free-form metadata**.
+   It MUST NOT become scope authority.
+2. A bounded **Handyman-owned Scope/Discipline Registry** is the
+   machine-readable authority for CR-HM-03. Minimum semantics: `code`,
+   `name`, `scopeClass`, where `scopeClass` is exactly
+   `GENERAL_HANDYMAN | SPECIALIST | OUT_OF_HANDYMAN_SCOPE`.
+3. Initial frozen disciplines — `GENERAL_HANDYMAN`: `SIMPLE_PLUMBING`,
+   `FURNITURE`, `MINOR_CIVIL`, `GENERAL_HANDYMAN`; `SPECIALIST`:
+   `ELECTRICAL`, `AC`; `OUT_OF_HANDYMAN_SCOPE`: `FM_COMMON_BUILDING`.
+4. `FM_COMMON_BUILDING` is a **referral classification boundary only**. It
+   does NOT model FM assets / FM work orders / FM preventive maintenance /
+   FM execution / FM provider assignment. It exists only so Handyman
+   diagnosis can deterministically **fail closed** to
+   `OUT_OF_HANDYMAN_SCOPE / REFERRED`.
+5. Diagnosis MUST reference the registry by **authoritative ID/code** —
+   never inferred by matching free-text `service_catalog.category`.
+6. A Handyman service/variant **may** be associated with one registry
+   discipline through a Handyman-owned association; this association does
+   NOT modify `service_catalog.category` semantics.
+7. Classification derivation (caller can never choose a conflicting one):
+   `discipline.scopeClass = GENERAL_HANDYMAN → GENERAL_HANDYMAN`;
+   `= SPECIALIST → SPECIALIST_REQUIRED`;
+   `= OUT_OF_HANDYMAN_SCOPE → OUT_OF_HANDYMAN_SCOPE`.
+8. `ELECTRICAL` / `AC` remain **specialist-only** — they grant no General
+   Handyman execution authority.
+9. The registry authority is **Handyman-bounded**: never reuse
+   `vendor_categories`, `asset_categories`, or incident categories as
+   authority.
+
+**Implementation impact (F9).** PART 03 may add the minimum registry +
+catalogue association persistence needed to establish this authority
+BEFORE diagnosis persistence. No provider/vendor matching is created by
+F9. All F1–F8 decisions are preserved unchanged; F9 supersedes the
+single F4 phrase "(`service_catalog.category`)" as the scope anchor.
+
 ## 7. Recommended SMALL implementation PARTs (≤ 5)
 
 | PART | Scope (minimum migration each) | Focused tests |
 |---|---|---|
 | 01 | Triage foundation: bounded triage decision record (FROZEN F2) + FROZEN F1 lifecycle minimum + journal foundation (FROZEN F6). Triage != Diagnosis enforced | ~8 |
 | 02 | Inspection record on the chain (`INSPECTION_REQUIRED` when-required contract; structured result/notes only — FROZEN F3; optional checklist-execution link) | ~8 |
-| 03 | Diagnosis + FROZEN F4 scope classification (A/B/C outcome chain; category reference; Diagnosis != Quotation; request preserved) | ~8 |
+| 03 | Diagnosis + FROZEN F4 scope classification (A/B/C outcome chain; FROZEN F9 discipline-registry anchor; Diagnosis != Quotation; request preserved) | ~8 |
 | 04 | Specialist escalation / refer outcome (FROZEN F5 terminality; category target; FROZEN F4 Electrical/AC as targets only; no provider/assignment/FM entity; provenance intact) | ~8 |
 | 05A | HTTP + OpenAPI bounded surface for 01–04 per FROZEN F7/F8 + admission/regression checks; 05B final validation + certification doc (CR-HM-02 convention) | ~11 |
 
@@ -276,5 +317,5 @@ decisions.
 
 ---
 
-*Decisions F1–F8 frozen 2026-09-27. Nothing in this document authorizes
+*Decisions F1–F9 frozen 2026-09-27. Nothing in this document authorizes
 code; each PART states its own minimum migration and focused test set.*
