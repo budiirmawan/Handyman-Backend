@@ -25,6 +25,8 @@ export const HANDYMAN_SERVICE_REQUEST_STATUSES = [
   'TRIAGE',
   'INSPECTION_REQUIRED',
   'DIAGNOSIS',
+  'READY_FOR_NEXT_STEP',
+  'REFERRED',
 ] as const;
 export type HandymanServiceRequestStatus =
   (typeof HANDYMAN_SERVICE_REQUEST_STATUSES)[number];

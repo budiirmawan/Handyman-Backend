@@ -77,3 +77,33 @@ export type {
   NewHandymanRequestInspectionRecord,
   PublicHandymanRequestInspection,
 } from './handyman-request-inspection.types';
+/**
+ * CR-HM-03 PART 03 — diagnosis + FROZEN F4/F9 scope authority exports
+ * (server-derived classification + READY_FOR_NEXT_STEP / terminal REFERRED
+ * projection only; no referral/provider/FM/quotation/work-order surface).
+ */
+export {
+  handymanRequestDiagnosisRepository,
+} from './handyman-request-diagnosis.repository';
+export {
+  recordHandymanDiagnosis,
+  getHandymanRequestDiagnosis,
+  handymanServiceRequestDiagnosisService,
+} from './handyman-request-diagnosis.service';
+export {
+  handymanDiagnosisRecommendationInvalidError,
+  handymanServiceRequestAlreadyDiagnosedError,
+  handymanServiceRequestNotInDiagnosisError,
+} from './handyman-request-diagnosis.errors';
+export {
+  HANDYMAN_SCOPE_CLASSIFICATIONS,
+  SCOPE_CLASS_TO_CLASSIFICATION,
+  SCOPE_CLASS_TO_REQUEST_STATUS,
+} from './handyman-request-diagnosis.types';
+export type {
+  CreateHandymanDiagnosisInput,
+  HandymanRequestDiagnosisRecord,
+  HandymanScopeClassification,
+  NewHandymanRequestDiagnosisRecord,
+  PublicHandymanRequestDiagnosis,
+} from './handyman-request-diagnosis.types';
