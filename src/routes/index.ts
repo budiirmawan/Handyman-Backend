@@ -35,6 +35,7 @@ import { createHandoffHandymanRouter } from '../modules/handyman-handoff/handoff
 import { createHandymanApiRouter } from '../modules/handyman-api';
 import { createHandymanLifecycleApiRouter } from '../modules/handyman-lifecycle-api';
 import { createHandymanProviderApiRouter } from '../modules/handyman-provider-api';
+import { createHandymanReadinessApiRouter } from '../modules/handyman-readiness-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -789,6 +790,12 @@ export function createApiRouter(): Router {
   // membership/Lead). NO assignment surface: PART 04 freezes assignment as
   // contract-only, deferred to the authoritative CR-HM-06 target.
   router.use(createHandymanProviderApiRouter());
+  // CR-HM-05 PART 06A — readiness surfaces only (frozen containment):
+  // scheduling / unit-access / permit readiness create, exact read,
+  // supersede (pre-execution reschedule) and immutable history reads.
+  // ZERO target-binding (PART 05 deferred), crew-assignment,
+  // arrival/QR/geofence or FM permit/work-order routes.
+  router.use(createHandymanReadinessApiRouter());
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;

@@ -3641,6 +3641,419 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /handyman/requests/{handymanRequestId}/scheduling-readiness:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: createHandymanSchedulingReadiness
+      summary: Create the scheduling-readiness preference for one Handyman request
+      description: >
+        CR-HM-05 PART 06A (containment F7) — caller-owned inputs are ONLY
+        the preferred window and an optional bounded changeReason;
+        clientId, building, timezone (derived from the building
+        authority), actor and any execution target are server-side —
+        smuggled keys are structurally ignored. ONE ACTIVE readiness per
+        request (409 on duplicate).
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanSchedulingReadinessRequest"
+      responses:
+        "201":
+          description: ACTIVE scheduling readiness created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanSchedulingReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanSchedulingReadiness
+      summary: Read the current scheduling readiness of one Handyman request
+      description: >
+        CR-HM-05 PART 06A — bounded exact read (current ACTIVE fact, or
+        null when none, plus preserved history rows). NOT a list/search
+        surface; the current state derives from immutable readiness
+        rows, never from the journal.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current readiness + preserved history bundle.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanSchedulingReadinessBundle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/scheduling-readiness/history:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listHandymanSchedulingReadinessHistory
+      summary: Read the deterministic scheduling-readiness history chain
+      description: >
+        CR-HM-05 PART 06A — immutable readiness ROWS in insertion
+        (chronological) order with row-level supersession links; the
+        ACTIVE chain tail equals the current state.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Chronological readiness chain.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: "#/components/schemas/HandymanSchedulingReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/scheduling-readiness/{readinessId}/supersede:
+    parameters:
+      - name: readinessId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: supersedeHandymanSchedulingReadiness
+      summary: Supersede the ACTIVE scheduling readiness (pre-execution reschedule)
+      description: >
+        CR-HM-05 PART 06A — the pre-execution reschedule semantic: old
+        row becomes immutable INACTIVE history and a new ACTIVE row is
+        created atomically with journal events. Body accepts ONLY a new
+        preferred window + optional bounded changeReason; this is NOT
+        dispatch and does NOT create any execution target.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanSchedulingReadinessRequest"
+      responses:
+        "201":
+          description: New ACTIVE readiness replacing the previous one.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanSchedulingReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/unit-access-readiness:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: createHandymanUnitAccessReadiness
+      summary: Authorize access readiness for a request's unit/space
+      description: >
+        CR-HM-05 PART 06A — AUTHORIZATION/READINESS only, never arrival
+        verification or check-in. Body accepts ONLY the access window +
+        authorization note; ALL building/floor/area/room/unit-space
+        references are server-derived from the authoritative request +
+        location-master chain (caller redirection is impossible).
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanUnitAccessReadinessRequest"
+      responses:
+        "201":
+          description: ACTIVE unit-access readiness created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanUnitAccessReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanUnitAccessReadiness
+      summary: Read the current unit-access readiness of one Handyman request
+      description: >
+        CR-HM-05 PART 06A — bounded exact read (current + preserved
+        history); never presence/arrival data.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current readiness + preserved history bundle.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanUnitAccessReadinessBundle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/unit-access-readiness/history:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listHandymanUnitAccessReadinessHistory
+      summary: Read the deterministic unit-access readiness history chain
+      description: >
+        CR-HM-05 PART 06A — immutable rows, insertion order, supersession
+        links; ZERO arrival semantics.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Chronological readiness chain.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: "#/components/schemas/HandymanUnitAccessReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/unit-access-readiness/{readinessId}/supersede:
+    parameters:
+      - name: readinessId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: supersedeHandymanUnitAccessReadiness
+      summary: Supersede the ACTIVE unit-access readiness
+      description: >
+        CR-HM-05 PART 06A — material re-authorization with append-only
+        history; body accepts ONLY window + note; location is
+        re-derived server-side.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanUnitAccessReadinessRequest"
+      responses:
+        "201":
+          description: New ACTIVE readiness replacing the previous one.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanUnitAccessReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/permit-readiness:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: createHandymanPermitReadiness
+      summary: Authorize permit readiness for tenant/unit service access
+      description: >
+        CR-HM-05 PART 06A — bounded Handyman permit types ONLY (UNIT,
+        BUILDING_COMMON_AREA); never FM Permit-to-Work and never
+        execution authorization; validity proves no arrival/work start.
+        Body accepts ONLY permitType + validity + note; location is
+        server-derived and must agree with any ACTIVE access readiness.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanPermitReadinessRequest"
+      responses:
+        "201":
+          description: ACTIVE permit readiness created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanPermitReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanPermitReadiness
+      summary: Read the current permit readiness of one Handyman request
+      description: >
+        CR-HM-05 PART 06A — bounded exact read (current + preserved
+        history); no FM PTW fields.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current readiness + preserved history bundle.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanPermitReadinessBundle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/permit-readiness/history:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listHandymanPermitReadinessHistory
+      summary: Read the deterministic permit readiness history chain
+      description: >
+        CR-HM-05 PART 06A — immutable rows, insertion order, supersession
+        links; no FM PTW lifecycle semantics.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Chronological readiness chain.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          { $ref: "#/components/schemas/HandymanPermitReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/permit-readiness/{readinessId}/supersede:
+    parameters:
+      - name: readinessId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: supersedeHandymanPermitReadiness
+      summary: Supersede the ACTIVE permit readiness
+      description: >
+        CR-HM-05 PART 06A — material permit change with append-only
+        history; body accepts ONLY permitType + validity + note.
+      tags: [Handyman Readiness]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanPermitReadinessRequest"
+      responses:
+        "201":
+          description: New ACTIVE readiness replacing the previous one.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanPermitReadinessRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /health:
     get:
       operationId: getHealth
@@ -75026,6 +75439,158 @@ components:
         Lead validity (login-linked, ACTIVE chain) is service-derived.
       properties:
         handymanWorkerContextId: { $ref: "#/components/schemas/Uuid" }
+    # ----- CR-HM-05 PART 06A — readiness surface (containment freeze).
+    # These are READINESS records only: no executionScopeId, targetId,
+    # scheduledWindow (future execution commitment — frozen contract
+    # only in CR-HM-05 PART 05, NEVER a live API field), provider/crew
+    # binding, arrival/QR/geofence, or FM permit/work-order fields.
+    CreateHandymanSchedulingReadinessRequest:
+      type: object
+      required: [preferredWindowStart, preferredWindowEnd]
+      description: >-
+        Scheduling PREFERENCE window (start < end required; start is
+        strictly before end) plus an optional bounded changeReason. This
+        is NOT a scheduled execution window: client/building/timezone/
+        target/crew keys are structurally ignored.
+      properties:
+        preferredWindowStart: { type: string, format: date-time }
+        preferredWindowEnd: { type: string, format: date-time }
+        changeReason: { type: string, minLength: 1, maxLength: 500 }
+    CreateHandymanUnitAccessReadinessRequest:
+      type: object
+      required: [accessWindowStart, accessWindowEnd, authorizationNote]
+      description: >-
+        Access AUTHORIZATION window (start < end) + note. Location is
+        never accepted: all references derive from the authoritative
+        request/master chain.
+      properties:
+        accessWindowStart: { type: string, format: date-time }
+        accessWindowEnd: { type: string, format: date-time }
+        authorizationNote: { type: string, minLength: 1, maxLength: 1000 }
+    CreateHandymanPermitReadinessRequest:
+      type: object
+      required: [permitType, validFrom, validUntil, authorizationNote]
+      description: >-
+        Bounded Handyman permit type + validity (from < until) + note.
+        FM permit/work-order references are never accepted.
+      properties:
+        permitType: { type: string, enum: [UNIT, BUILDING_COMMON_AREA] }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time }
+        authorizationNote: { type: string, minLength: 1, maxLength: 1000 }
+    HandymanSchedulingReadinessRecord:
+      type: object
+      description: >-
+        CR-HM-05 PART 01/04 — customer/request scheduling PREFERENCE.
+        `supersedesReadinessId` links immutable history rows (null =
+        chain head). Not an execution schedule.
+      required:
+        [id, clientId, handymanRequestId, timezone,
+         preferredWindowStart, preferredWindowEnd, status,
+         supersedesReadinessId, changeReason, createdByUserId,
+         createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        timezone: { type: string, description: "Server-derived from buildings.timezone." }
+        preferredWindowStart: { type: string, format: date-time }
+        preferredWindowEnd: { type: string, format: date-time }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        supersedesReadinessId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        changeReason: { type: string, nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanSchedulingReadinessBundle:
+      type: object
+      description: "Bounded exact-read: current ACTIVE fact + preserved history."
+      required: [current, history]
+      properties:
+        current:
+          { $ref: "#/components/schemas/HandymanSchedulingReadinessRecord", nullable: true }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanSchedulingReadinessRecord" }
+    HandymanUnitAccessReadinessRecord:
+      type: object
+      description: >-
+        CR-HM-05 PART 02/04 — access AUTHORIZATION/READINESS for the
+        authoritative building/unit-space. Never proof of presence.
+      required:
+        [id, clientId, handymanRequestId, buildingId, floorId, areaId,
+         roomId, spaceId, accessWindowStart, accessWindowEnd,
+         authorizationNote, status, supersedesReadinessId,
+         authorizedByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        floorId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        areaId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        roomId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        spaceId: { $ref: "#/components/schemas/Uuid" }
+        accessWindowStart: { type: string, format: date-time }
+        accessWindowEnd: { type: string, format: date-time }
+        authorizationNote: { type: string }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        supersedesReadinessId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        authorizedByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanUnitAccessReadinessBundle:
+      type: object
+      description: "Bounded exact-read: current ACTIVE fact + preserved history."
+      required: [current, history]
+      properties:
+        current:
+          { $ref: "#/components/schemas/HandymanUnitAccessReadinessRecord", nullable: true }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanUnitAccessReadinessRecord" }
+    HandymanPermitReadinessRecord:
+      type: object
+      description: >-
+        CR-HM-05 PART 03/04 — bounded Handyman permit AUTHORIZATION/
+        READINESS for tenant/unit service access. Never FM Permit-to-Work
+        and never execution authorization.
+      required:
+        [id, clientId, handymanRequestId, buildingId, floorId, areaId,
+         roomId, spaceId, permitType, validFrom, validUntil,
+         authorizationNote, status, supersedesReadinessId,
+         authorizedByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        floorId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        areaId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        roomId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        spaceId: { $ref: "#/components/schemas/Uuid" }
+        permitType: { type: string, enum: [UNIT, BUILDING_COMMON_AREA] }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time }
+        authorizationNote: { type: string }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        supersedesReadinessId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        authorizedByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanPermitReadinessBundle:
+      type: object
+      description: "Bounded exact-read: current ACTIVE fact + preserved history."
+      required: [current, history]
+      properties:
+        current:
+          { $ref: "#/components/schemas/HandymanPermitReadinessRecord", nullable: true }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanPermitReadinessRecord" }
     HandymanProviderContextRecord:
       type: object
       description: >-
