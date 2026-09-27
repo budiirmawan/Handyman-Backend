@@ -26,3 +26,39 @@ export type {
   NewHandymanServiceVariant,
   PublicHandymanServiceVariant,
 } from './handyman-service-variant.types';
+export {
+  handymanCommonMaterialProfileRepository,
+} from './handyman-common-material-profile.repository';
+export {
+  createHandymanCommonMaterialProfile,
+  describeHandymanCommonMaterialProfile,
+  handymanCommonMaterialProfileService,
+  listHandymanCommonMaterialProfiles,
+} from './handyman-common-material-profile.service';
+export {
+  handymanCommonMaterialProfileAlreadyExistsError,
+  handymanCommonMaterialProfileNotFoundError,
+  handymanCommonMaterialProfileReferenceInactiveError,
+  handymanCommonMaterialProfileScopeMismatchError,
+} from './handyman-common-material-profile.errors';
+export {
+  HANDYMAN_COMMON_MATERIAL_PROFILE_STATUSES,
+  HANDYMAN_CUSTOMER_MATERIAL_OPTIONS,
+  HANDYMAN_MATERIAL_COMMONALITIES,
+  isHandymanCommonMaterialProfileStatus,
+  isHandymanCustomerMaterialOption,
+  isHandymanMaterialCommonality,
+} from './handyman-common-material-profile.types';
+export type {
+  CreateHandymanCommonMaterialProfileInput,
+  HandymanCommonMaterialProfileCatalogEntry,
+  HandymanCommonMaterialProfileFilters,
+  HandymanCommonMaterialProfileRecord,
+  HandymanCommonMaterialProfileStatus,
+  HandymanCustomerMaterialOption,
+  HandymanMaterialCommonality,
+  HandymanMaterialReferencePrice,
+  HandymanMaterialReferencePriceContext,
+  NewHandymanCommonMaterialProfile,
+  PublicHandymanCommonMaterialProfile,
+} from './handyman-common-material-profile.types';

@@ -374,6 +374,7 @@ import { migration0373CreateProductAddOns } from './0373_create_product_add_ons'
 import { migration0374CreateHandymanChannelAttributions } from './0374_create_handyman_channel_attributions';
 import { migration0375CreateHandymanHandoffRuntime } from './0375_create_handyman_handoff_runtime';
 import { migration0376CreateHandymanServiceVariants } from './0376_create_handyman_service_variants';
+import { migration0377CreateHandymanCommonMaterialProfiles } from './0377_create_handyman_common_material_profiles';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -755,4 +756,5 @@ export const migrations: readonly Migration[] = [
   migration0374CreateHandymanChannelAttributions,
   migration0375CreateHandymanHandoffRuntime,
   migration0376CreateHandymanServiceVariants,
+  migration0377CreateHandymanCommonMaterialProfiles,
 ];
