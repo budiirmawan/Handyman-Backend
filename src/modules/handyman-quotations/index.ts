@@ -29,3 +29,27 @@ export type {
 export {
   HANDYMAN_QUOTATION_VERSION_STATUSES,
 } from './handyman-quotation.types';
+export {
+  addHandymanQuotationLine,
+  listHandymanQuotationVersionLines,
+  getHandymanQuotationVersionTotals,
+} from './handyman-quotation-line.service';
+export { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
+export {
+  handymanQuotationVersionNotFoundError,
+  handymanQuotationVersionNotDraftError,
+  handymanQuotationLineInvalidError,
+  handymanQuotationCurrencyMismatchError,
+} from './handyman-quotation.errors';
+export type {
+  HandymanQuotationLineRecord,
+  HandymanQuotationLineType,
+  HandymanQuotationCurrency,
+  PublicHandymanQuotationLine,
+  PublicHandymanQuotationTotals,
+  AddHandymanQuotationLineInput,
+} from './handyman-quotation-line.types';
+export {
+  HANDYMAN_QUOTATION_LINE_TYPES,
+  HANDYMAN_QUOTATION_CURRENCIES,
+} from './handyman-quotation-line.types';

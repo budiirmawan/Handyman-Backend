@@ -146,6 +146,32 @@ async function lockQuotationById(
   return result.rows[0] ? mapQuotation(result.rows[0]) : null;
 }
 
+async function findVersionById(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  id: string,
+): Promise<HandymanQuotationVersionRecord | null> {
+  const result = await executor.query<VersionRow>(
+    `${VERSION_SELECT} WHERE id = $1`,
+    [id],
+  );
+  return result.rows[0] ? mapVersion(result.rows[0]) : null;
+}
+
+/**
+ * PART 02 support — row-level lock on the exact version used by an
+ * add-line transaction (serializes first-currency decision + ordering).
+ */
+async function lockVersionById(
+  executor: Pick<PoolClient, 'query'>,
+  id: string,
+): Promise<HandymanQuotationVersionRecord | null> {
+  const result = await executor.query<VersionRow>(
+    `${VERSION_SELECT} WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  return result.rows[0] ? mapVersion(result.rows[0]) : null;
+}
+
 async function listVersions(
   executor: Pick<PoolClient, 'query'> = getPool(),
   quotationId: string,
@@ -175,6 +201,8 @@ async function maxVersionNumber(
 export const handymanQuotationRepository = {
   insertQuotation,
   insertVersion,
+  findVersionById,
+  lockVersionById,
   findQuotationById,
   findQuotationByRequest,
   lockQuotationById,

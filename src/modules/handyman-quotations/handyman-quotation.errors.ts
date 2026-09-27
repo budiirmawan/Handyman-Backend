@@ -42,3 +42,39 @@ export function handymanQuotationScopeInsufficientError(): AppError {
     statusCode: 400,
   });
 }
+
+export function handymanQuotationVersionNotFoundError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_VERSION_NOT_FOUND,
+    message: 'Handyman quotation version not found.',
+    statusCode: 404,
+  });
+}
+
+export function handymanQuotationVersionNotDraftError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_VERSION_NOT_DRAFT,
+    message:
+      'Quotation lines may only be added to a DRAFT quotation version.',
+    statusCode: 400,
+  });
+}
+
+export function handymanQuotationLineInvalidError(
+  message: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_LINE_INVALID,
+    message,
+    statusCode: 400,
+  });
+}
+
+export function handymanQuotationCurrencyMismatchError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_CURRENCY_MISMATCH,
+    message:
+      'All lines of one quotation version must share the same currency.',
+    statusCode: 400,
+  });
+}
