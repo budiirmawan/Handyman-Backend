@@ -13,7 +13,19 @@
  * originChannel independently — any such fields in input are ignored.
  */
 
-export const HANDYMAN_SERVICE_REQUEST_STATUSES = ['INTAKE'] as const;
+/**
+ * FROZEN F1 bounded vocabulary (CR-HM-03 PART 01): INTAKE creation state
+ * plus the exact triage-chain states. READY_FOR_NEXT_STEP / REFERRED are
+ * FROZEN F1 but arrive with the decision chain (PART 03/04) — adding them
+ * earlier would be a dead state. No execution/quotation/provider state is
+ * ever part of this vocabulary.
+ */
+export const HANDYMAN_SERVICE_REQUEST_STATUSES = [
+  'INTAKE',
+  'TRIAGE',
+  'INSPECTION_REQUIRED',
+  'DIAGNOSIS',
+] as const;
 export type HandymanServiceRequestStatus =
   (typeof HANDYMAN_SERVICE_REQUEST_STATUSES)[number];
 

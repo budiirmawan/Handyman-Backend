@@ -22,3 +22,31 @@ export type {
   NewHandymanServiceRequest,
   PublicHandymanServiceRequest,
 } from './handyman-service-request.types';
+/**
+ * CR-HM-03 PART 01 — bounded triage foundation exports (FROZEN F1/F2/F6/F7;
+ * decision chain starts here; inspection/diagnosis/referral remain later
+ * PARTs of the same CR).
+ */
+export {
+  handymanRequestTriageRepository,
+} from './handyman-request-triage.repository';
+export {
+  recordHandymanRequestTriage,
+  getHandymanRequestTriage,
+  handymanServiceRequestTriageService,
+} from './handyman-request-triage.service';
+export {
+  handymanServiceRequestAlreadyTriagedError,
+  handymanServiceRequestNotIntakeError,
+} from './handyman-request-triage.errors';
+export {
+  HANDYMAN_TRIAGE_DISPOSITIONS,
+  isHandymanTriageDisposition,
+} from './handyman-request-triage.types';
+export type {
+  CreateHandymanRequestTriageInput,
+  HandymanRequestTriageDecisionRecord,
+  HandymanTriageDisposition,
+  NewHandymanRequestTriageRecord,
+  PublicHandymanRequestTriage,
+} from './handyman-request-triage.types';

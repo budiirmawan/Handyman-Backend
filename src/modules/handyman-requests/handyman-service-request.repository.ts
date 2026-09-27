@@ -86,8 +86,49 @@ async function findByChannelAttribution(
   return result.rows[0] ?? null;
 }
 
+/**
+ * CR-HM-03 PART 01 — bounded F1 projection support. Row-level lock for the
+ * atomic "lock request → append triage/journal → project bounded status"
+ * transaction (one transition chain per request, ever).
+ */
+async function lockById(
+  executor: Pick<PoolClient, 'query'>,
+  id: string,
+): Promise<HandymanServiceRequestRecord | null> {
+  const result = await executor.query<HandymanServiceRequestRecord>(
+    `SELECT ${REQUEST_SELECT} FROM handyman_service_requests
+      WHERE id = $1
+      FOR UPDATE`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Bounded F1 projection: the ONLY status mutation pathway introduced for
+ * the request row. It never touches any other column; business-context
+ * snapshot columns are immutable from CR-HM-02 PART 03 onward.
+ */
+async function updateStatus(
+  executor: Pick<PoolClient, 'query'>,
+  id: string,
+  status: HandymanServiceRequestRecord['status'],
+): Promise<HandymanServiceRequestRecord | null> {
+  const result = await executor.query<HandymanServiceRequestRecord>(
+    `UPDATE handyman_service_requests
+        SET status = $2,
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING ${REQUEST_SELECT}`,
+    [id, status],
+  );
+  return result.rows[0] ?? null;
+}
+
 export const handymanServiceRequestRepository = {
   insertRequest,
   findById,
   findByChannelAttribution,
+  lockById,
+  updateStatus,
 };
