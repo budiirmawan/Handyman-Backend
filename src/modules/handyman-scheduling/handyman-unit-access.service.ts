@@ -85,9 +85,10 @@ function ensureNote(value: string): string {
  * room → area → floor → building. The derived building MUST equal the
  * request's snapshot building (caller redirection is impossible; F5/F7).
  * A request without an authoritative unit/space is a bounded rejection —
- * never an invented location.
+ * never an invented location. Exported for CR-HM-05 PART 03 (permit
+ * readiness must follow the identical derivation).
  */
-async function deriveLocationChain(request: {
+export async function deriveHandymanLocationChain(request: {
   buildingId: string;
   spaceId: string | null;
 }): Promise<{
@@ -164,7 +165,7 @@ export async function createHandymanUnitAccessReadiness(
   if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
     throw buildingAccessDeniedError();
   }
-  const location = await deriveLocationChain(request);
+  const location = await deriveHandymanLocationChain(request);
 
   const journalBase = { clientId: request.clientId, actorUserId };
   try {
@@ -251,7 +252,7 @@ export async function supersedeHandymanUnitAccessReadiness(
         current.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      const location = await deriveLocationChain(request);
+      const location = await deriveHandymanLocationChain(request);
 
       const superseded = await handymanUnitAccessReadinessRepository
         .setStatus(tx, current.id, 'INACTIVE');

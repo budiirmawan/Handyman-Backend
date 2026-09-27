@@ -61,3 +61,37 @@ export type {
   PublicHandymanUnitAccessReadiness,
   SupersedeHandymanUnitAccessReadinessInput,
 } from './handyman-unit-access.types';
+/**
+ * CR-HM-05 PART 03 — Handyman Permit Readiness (FROZEN containment
+ * F4/F5/F7/F8). AUTHORIZATION ONLY: never FM PTW, never execution
+ * authorization, never arrival verification.
+ */
+export { handymanPermitReadinessRepository } from './handyman-permit-readiness.repository';
+export {
+  createHandymanPermitReadiness,
+  supersedeHandymanPermitReadiness,
+  getHandymanPermitReadiness,
+  handymanPermitReadinessService,
+} from './handyman-permit-readiness.service';
+export {
+  handymanPermitReadinessAlreadyExistsError,
+  handymanPermitReadinessInvalidStatusError,
+  handymanPermitReadinessNotFoundError,
+  handymanPermitReadinessTypeUnsupportedError,
+  handymanPermitReadinessValidityInvalidError,
+} from './handyman-permit-readiness.errors';
+export {
+  HANDYMAN_PERMIT_TYPES,
+  HANDYMAN_PERMIT_READINESS_STATUSES,
+  isHandymanPermitType,
+  isHandymanPermitReadinessStatus,
+} from './handyman-permit-readiness.types';
+export type {
+  CreateHandymanPermitReadinessInput,
+  HandymanPermitReadinessRecord,
+  HandymanPermitReadinessStatus,
+  HandymanPermitType,
+  NewHandymanPermitReadinessRecord,
+  PublicHandymanPermitReadiness,
+  SupersedeHandymanPermitReadinessInput,
+} from './handyman-permit-readiness.types';
