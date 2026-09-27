@@ -205,4 +205,4 @@ no migration/code in this governance stage.
 ---
 
 *Decisions F1–F10 frozen 2026-09-27. Nothing in this document authorizes
-implementation beyond the F1–F10 tokens and the FROZEN PART seque*nce.
+implementation beyond the F1–F10 tokens and the FROZEN PART sequence.
