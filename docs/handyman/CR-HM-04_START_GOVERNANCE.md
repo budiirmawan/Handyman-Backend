@@ -1,13 +1,9 @@
 # CR-HM-04 — PROVIDER, WORKER & CREW — START GOVERNANCE (2026-09-27)
 
-**Status: GOVERNANCE stage — F1–F10 are DECISIONS REQUIRED (not yet frozen).**
-A follow-up DECISION FREEZE docs-commit precedes any implementation PART.
-This document is the only CR-HM-04 artifact at this stage: **no runtime
-code, no migration, no HTTP** exists or is authorized here.
-
-This document follows the same START → FREEZE → PARTs ≤ 5 → FINAL
-VALIDATION flow proven by CR-HM-01/02/03 (docs-only governance now;
-code only after the freeze).
+**Status: decisions F1–F10 FROZEN on 2026-09-27** (their authoritative
+text is §5 below; every PART must implement exactly those tokens and
+boundaries — nothing else). No implementation exists yet; the PART
+sequence is fixed as 01→02→03→04→05A→05B.
 
 **Repo authority:** Handyman-Backend only. Arena accesses ONLY this repo;
 frozen cross-repo facts in this document are authoritative and are never
@@ -76,85 +72,87 @@ These four are **frozen for CR-HM-04**: they are never edited by this CR.
 | Assignment/composition windows | **REUSE (convention)** | BE-03-style partial-unique ACTIVE windows + preserved history — the per-job crew assignment/replacement/history idiom (infrastructure, never authority). |
 | Discipline authority for capability | **NOT reused — consume F9 registry (CR-HM-03) by reference** | F6 firewall: skills map to `handyman_disciplines` by ID/code; capability records never become discipline authority. |
 
-## 5. F1–F10 — governance questions, with blockers/decisions required
+## 5. F1–F10 — FROZEN DECISIONS (authoritative for implementation)
 
-**F1 — Provider authority.** `vendors` is reusable as the provider
-identity master. DECISION REQUIRED: shape of the bounded Handyman
-**provider operational context** (Handyman-owned row referencing
-`vendors.id` + Handyman-scoped status/notes) versus zero-extension reuse.
-BLOCKER: confirm none of CR-HM-04's acceptance terms need fields the
-vendor master lacks (operational lifecycle fields), else the bounded
-context row is required. The vendor master itself is never modified for
-Handyman semantics.
+**F1 — PROVIDER AUTHORITY.** The existing `vendors` master remains the
+authoritative provider identity/master. CR-HM-04 creates a bounded
+**Handyman-owned provider operational context** linked to a vendor:
+`handyman_provider_contexts` (Handyman-owned row → `vendors.id`).
+It duplicates NO vendor identity and modifies NO vendor-master semantics;
+it represents only the eligibility/state required for Handyman
+operations. Provider context != SaaS Customer; != Marketplace enablement
+(CR-HM-21); != FM vendor workflow.
 
-**F2 — Worker authority.** `workforce_profiles` is the authoritative
-person master; provider linkage = `vendor_workforce_bindings` (existing).
-BLOCKER/DECISION REQUIRED: decide the minimum Handyman role/eligibility
-marker mechanism for Lead-eligibility + helper semantics (e.g., a
-Handyman-owned worker-context row keyed to `workforce_profiles.id`) —
-chosen such that creating it never creates users/credentials and never
-mutates FM workforce state. Prefer composition over schema change.
+**F2 — WORKER AUTHORITY.** `workforce_profiles` remains the
+authoritative person identity. CR-HM-04 creates a Handyman-owned
+worker-context association: Handyman Provider Context → Workforce
+Profile. It duplicates NO person identity and modifies NO
+`workforce_profiles` semantics. The worker context establishes that the
+profile may participate under that Handyman provider;
+`workforce_profiles.userId` may be NULL.
 
-**F3 — Crew model.** `teams` is insufficient (department org entity, no
-job membership). **Handyman Work Crew entity is NEW** (frozen map row
-37): per-job grouping with composition, responsibility, replacement,
-history. DECISION REQUIRED: minimum crew schema (crew row + member rows
-+ assignment/provenance windows reusing BE-03 idiom) within the ≤5 PART
-budget.
+**F3 — CREW AUTHORITY.** `teams` is NOT Handyman Work Crew authority.
+CR-HM-04 creates a Handyman-owned **Work Crew** entity under exactly one
+Handyman provider context. Crew is an operational grouping only: crew !=
+organization department/team; != attendance; != work session;
+!= billable-time authority.
 
-**F4 — Lead Worker.** Exactly one accountable Lead Worker/PIC per crew,
-an app-authenticated user for field execution. DECISION REQUIRED:
-representation (crew.lead bound to a workforce profile that IS linked to
-a User via `userId` — never to a bare helper). Validation: lead must
-exist, be workforce-bound, and carry a non-null `userId` at assignment
-time; swap/replacement preserves history.
+**F4 — LEAD WORKER / PIC.** Every ACTIVE/assignable crew has exactly one
+Lead Worker/PIC. The lead MUST: (a) belong to the same Handyman
+provider's worker context, (b) be an ACTIVE eligible crew member,
+(c) have non-null `workforce_profiles.userId` (app-authenticated field
+execution identity). Lead CHANGES preserve history — historical lead
+facts are never overwritten.
 
-**F5 — Helpers.** Helpers may exist WITHOUT login: `workforce_profiles`
-with `userId = NULL` provides the native seam. Person-side helper
-representation = plain workforce profile (bounded context per F2);
-crew-side membership binding persists provenance (needed later by
-CR-HM-12/13 attendance/session). BLOCKER/DECISION REQUIRED: confirm no
-minimal identity fields are needed beyond the profile for F5 (keep
-helper row composition minimal; session/attendance specifics are later
-CRs).
+**F5 — HELPERS.** A helper uses the existing `workforce_profiles`
+identity; application login is NOT required (`userId` may be NULL).
+Minimum helper identity = whatever `workforce_profiles` authoritatively
+provides. No shadow/helper person identity exists in Handyman. Crew
+membership supplies the Handyman participation context; later
+attendance/work-session CRs (CR-HM-12/13+) consume this identity.
 
-**F6 — Skill/capability.** Worker skills (`workforce_skill_assignments`,
-`skills`) and vendor capabilities (`vendor_capabilities`) are
-**informational only**. Freezing rule (mirror F9.10): capability records
-NEVER become discipline authority; any Handyman-scoped capability
-statement references `handyman_disciplines` by ID/code (READ-only use of
-the CR-HM-03 F9 registry). DECISION REQUIRED: whether CR-HM-04 needs a
-Handyman skill→discipline link row at PART-time or remains unlinked for
-now (prefer minimum: link only if assignment contracts require it).
+**F6 — SKILL / DISCIPLINE.** `skills`, `workforce_skill_assignments`,
+and `vendor_capabilities` remain informational/reference capability
+sources. CR-HM-04 creates NO skill→discipline authority mapping. The
+CR-HM-03 **F9 Handyman Discipline Registry remains the ONLY Handyman
+scope/discipline authority**; provider/worker capability MUST NEVER
+redefine `discipline.scopeClass`. Any future capability-to-discipline
+eligibility rule requires explicit later governance.
 
-**F7 — Assignment boundary.** The frozen roadmap scope row places
-**"crew assignment" explicitly inside CR-HM-04**; scheduling/rescheduling
-lives in CR-HM-05; execution/QC/session/attendance in CR-HM-12/13/14
-(roadmap rows); arrival/location verification in CR-HM-07/12 (matrix row
-12). CR-HM-04 OWNS: provider/worker/crew lifecycle, crew composition,
-lead designation, helper representation, crew assignment to a request
-(job) with history. CR-HM-04 DOES NOT OWN: scheduling decisions,
-arrival/verification, session/presence/billing, execution outcome,
-quotation, provider commercial enablement.
+**F7 — ASSIGNMENT BOUNDARY.** CR-HM-04 owns **provider-authored crew
+assignment history**: the provider selects an existing Handyman crew for
+a Handyman operational target when such target is valid and available.
+CR-HM-04 does NOT own: scheduling/time-slot selection (CR-HM-05),
+permit/unit access, arrival verification (CR-HM-07/12), work session,
+attendance, billable time, quotation, provider marketplace matching
+(CR-HM-21). A CR-HM-03 referral does NOT automatically assign a
+provider/crew. **No job/work-order entity is invented merely to satisfy
+assignment.** **PART 04 STOP RULE (FROZEN): if no authoritative
+assignable Handyman target exists at implementation time, preserve the
+assignment model/contract boundary but DEFER target-binding runtime to
+the owning CR.**
 
-**F8 — Lifecycle statuses.** Minimum vocabularies only, chosen at
-FREEZE; candidates (existing family conventions): provider context /
-worker context / crew = ACTIVE / INACTIVE; assignments = effective
-windows (no status field). BLOCKER: no evidence exists that more statuses
-are needed — minimum follows.
+**F8 — LIFECYCLE.** Minimum bounded statuses only:
+Provider Context / Worker Context / Crew / Crew Membership =
+`ACTIVE | INACTIVE`. No commercial/compliance/FM workflow states.
+INACTIVE records remain historical; operational history is never
+hard-deleted.
 
-**F9 — Actor/scope.** Mutations by authenticated local user with
-existing accessible-Client / RBAC conventions (same derivation as
-CR-HM-02/03 PART 05 surfaces). Assignments are Provider-authored in the
-Handyman context (never BM/customer-authored for worker assignment) —
-enforced at the service layer; HTTP permission binding deferred to the
-HTTP PART (closest existing read/manage convention).
+**F9 — ACTOR / SCOPE.** Provider/worker/crew management requires an
+authenticated local user plus the existing client/RBAC scope. The actor
+is NEVER derived from vendor PIC, workforce profile, tenantPic, channel
+attribution, or BM handoff identity. Provider-authored actions validate
+that the acting authority is permitted for that provider/client using
+existing RBAC/context seams. Exact HTTP permission tokens are deferred
+to PART 05A (closest existing read/manage convention).
 
-**F10 — Audit/history.** Material changes journal on the existing
-append-only authority (`operational_events`) following the CR-HM-03 F6
-pattern (Handyman-bounded event rows: provider/worker/crew lifecycle
-events + crew assignment/replacement history incl. prior-lead
-references). Journal = audit only, never lifecycle authority.
+**F10 — AUDIT / HISTORY.** Material Handyman provider/worker/crew
+changes journal as append-only operational-event history following the
+CR-HM-03 convention (`operational_events` authority; journal is history/
+audit only, NEVER lifecycle authority). At minimum history preserves:
+provider-context state changes; worker-context state changes; crew state
+changes; membership add/remove/deactivate; lead designation/change;
+assignment changes once assignment runtime becomes valid.
 
 ## 6. Authority boundaries (binding invariants)
 
@@ -180,20 +178,21 @@ references). Journal = audit only, never lifecycle authority.
   request row/status vocabulary of CR-HM-02/03 — consumed, never
   modified.
 
-## 7. Recommended implementation PARTs (≤ 5, DRAFT — sized for the FREEZE)
+## 7. IMPLEMENTATION PARTs — FROZEN sequence
 
 | PART | Scope (minimum migration each) | Focused tests |
 |---|---|---|
-| 01 | Provider operational context: bounded Handyman provider context/profile linked to `vendors` (REUSE identity; NEW context) + F1 freeze artifacts on lifecycle/status; journal foundation | ~8 |
-| 02 | Worker context: Handyman-side person-context binding to `workforce_profiles` (REUSE person master) incl. helper representation (`userId` nullable) + Lead-eligibility marker (F2/F5) | ~8 |
-| 03 | Crew entity: Handyman Work Crew + membership/composition (F3), exactly-one Lead Worker/PIC validation (F4), BE-03-idiom assignment windows | ~8 |
-| 04 | Crew assignment to a Handyman request/job: provider-authored assignment + replacement + history (F7/F10), RBAC/service guards (F9), boundary proofs vs CR-HM-5/12/13 | ~8 |
-| 05A | HTTP + OpenAPI bounded surface (F8/F9 tokens) + 05B final validation + certification doc (CR-HM-03 convention) | ~12 |
+| 01 | Handyman Provider Context (F1): Handyman-owned provider operational context → `vendors`; status lifecycle (F8); journal foundation (F10) | ~8 |
+| 02 | Handyman Worker Context (F2/F5): Provider Context → `workforce_profiles` association; helper representation via nullable `userId`; Lead eligibility grounded here | ~8 |
+| 03 | Work Crew + Membership + Lead Worker (F3/F4): crew under one provider context; ACTIVE membership; exactly-one-lead invariant with history | ~8 |
+| 04 | Crew Assignment / History (F7/F9/F10): provider-authored crew assignment + replacement + history; **STOP RULE: defer target-binding runtime if no authoritative Handyman target exists — never invent one** | ~8 |
+| 05A | HTTP + OpenAPI bounded surface for 01–04 (F8/F9 tokens) | ~12 |
+| 05B | Final validation + certification doc (CR-HM-03 convention) | — |
 
 Sequencing: 01→02→03→04→05A→05B. Any PART must STOP/report rather than
 touch unrelated tables, adopt FM vendor/workforce workflow semantics,
 create commercial/marketplace state, or invent vocabulary outside the
-frozen decisions (once F1–F10 are frozen).
+FROZEN F1–F10 decisions.
 
 ## 8. Explicit non-goals for CR-HM-04
 
@@ -205,5 +204,5 @@ no migration/code in this governance stage.
 
 ---
 
-*CR-HM-04 governance STARTED 2026-09-27. Decisions F1–F10 are candidates
-for the follow-up DECISION FREEZE; nothing here authorizes implementation.*
+*Decisions F1–F10 frozen 2026-09-27. Nothing in this document authorizes
+implementation beyond the F1–F10 tokens and the FROZEN PART seque*nce.
