@@ -172,6 +172,45 @@ async function lockVersionById(
   return result.rows[0] ? mapVersion(result.rows[0]) : null;
 }
 
+/** PART 03 — the single current ISSUED version of a thread (locked). */
+async function findCurrentIssued(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  quotationId: string,
+): Promise<HandymanQuotationVersionRecord | null> {
+  const result = await executor.query<VersionRow>(
+    `${VERSION_SELECT} WHERE quotation_id = $1 AND status = 'ISSUED'
+     ORDER BY version_number DESC
+     LIMIT 1
+     FOR UPDATE`,
+    [quotationId],
+  );
+  return result.rows[0] ? mapVersion(result.rows[0]) : null;
+}
+
+/**
+ * PART 03 — bounded LIFECYCLE PROJECTION ONLY: status (+ validUntil for
+ * new issuance). The 0391 trigger refuses any other column change, so
+ * identity/version/commercial facts can never be rewritten here.
+ */
+async function updateVersionLifecycle(
+  executor: Pick<PoolClient, 'query'>,
+  id: string,
+  status: HandymanQuotationVersionRecord['status'],
+  validUntil: Date | null | undefined,
+): Promise<HandymanQuotationVersionRecord | null> {
+  const result = await executor.query<VersionRow>(
+    `UPDATE handyman_quotation_versions
+        SET status = $2,
+            valid_until = COALESCE($3, valid_until),
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, quotation_id, version_number, status, valid_until,
+                created_by_user_id, created_at, updated_at`,
+    [id, status, validUntil ?? null],
+  );
+  return result.rows[0] ? mapVersion(result.rows[0]) : null;
+}
+
 async function listVersions(
   executor: Pick<PoolClient, 'query'> = getPool(),
   quotationId: string,
@@ -203,6 +242,8 @@ export const handymanQuotationRepository = {
   insertVersion,
   findVersionById,
   lockVersionById,
+  findCurrentIssued,
+  updateVersionLifecycle,
   findQuotationById,
   findQuotationByRequest,
   lockQuotationById,

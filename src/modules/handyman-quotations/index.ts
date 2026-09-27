@@ -53,3 +53,15 @@ export {
   HANDYMAN_QUOTATION_LINE_TYPES,
   HANDYMAN_QUOTATION_CURRENCIES,
 } from './handyman-quotation-line.types';
+export {
+  issueHandymanQuotationVersion,
+  expireHandymanQuotationVersion,
+  supersedeHandymanQuotationVersion,
+  getCurrentHandymanIssuedQuotationVersion,
+} from './handyman-quotation-lifecycle.service';
+export {
+  handymanQuotationInvalidTransitionError,
+  handymanQuotationNoLinesError,
+  handymanQuotationValidityInvalidError,
+  handymanQuotationNotExpirableError,
+} from './handyman-quotation.errors';

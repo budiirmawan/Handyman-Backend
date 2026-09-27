@@ -78,3 +78,35 @@ export function handymanQuotationCurrencyMismatchError(): AppError {
     statusCode: 400,
   });
 }
+
+export function handymanQuotationInvalidTransitionError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_INVALID_TRANSITION,
+    message: 'The requested quotation version lifecycle transition is not allowed.',
+    statusCode: 400,
+  });
+}
+
+export function handymanQuotationNoLinesError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_NO_LINES,
+    message: 'A quotation version must contain at least one line before it can be issued.',
+    statusCode: 400,
+  });
+}
+
+export function handymanQuotationValidityInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_VALIDITY_INVALID,
+    message: 'A validUntil strictly greater than server time is required to issue a quotation version.',
+    statusCode: 400,
+  });
+}
+
+export function handymanQuotationNotExpirableError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_NOT_EXPIRABLE,
+    message: 'This quotation version cannot expire yet (validUntil has not been reached).',
+    statusCode: 400,
+  });
+}
