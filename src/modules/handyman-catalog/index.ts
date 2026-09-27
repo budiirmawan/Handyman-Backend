@@ -12,6 +12,7 @@ export {
 } from './handyman-service-variant.service';
 export {
   handymanServiceVariantCodeAlreadyExistsError,
+  handymanServiceVariantNotActiveError,
   handymanServiceVariantNotFoundError,
 } from './handyman-service-variant.errors';
 export {

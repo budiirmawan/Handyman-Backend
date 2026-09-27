@@ -24,3 +24,11 @@ export function handymanServiceVariantCodeAlreadyExistsError(): AppError {
     statusCode: 409,
   });
 }
+
+export function handymanServiceVariantNotActiveError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE,
+    message: 'The selected Handyman service variant is not ACTIVE.',
+    statusCode: 409,
+  });
+}
