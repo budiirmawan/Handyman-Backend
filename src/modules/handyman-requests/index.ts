@@ -107,3 +107,32 @@ export type {
   NewHandymanRequestDiagnosisRecord,
   PublicHandymanRequestDiagnosis,
 } from './handyman-request-diagnosis.types';
+/**
+ * CR-HM-03 PART 04 — referral foundation exports (FROZEN F4/F5/F9;
+ * diagnosis-derived eligibility/type/target only; request state preserved;
+ * no provider/crew/work-order/quotation/FM surface).
+ */
+export {
+  handymanRequestReferralRepository,
+} from './handyman-request-referral.repository';
+export {
+  recordHandymanReferral,
+  getHandymanRequestReferral,
+  handymanServiceRequestReferralService,
+} from './handyman-request-referral.service';
+export {
+  handymanReferralNotEligibleError,
+  handymanServiceRequestAlreadyReferredError,
+} from './handyman-request-referral.errors';
+export {
+  HANDYMAN_REFERRAL_TYPES,
+  CLASSIFICATION_TO_REFERRAL_TYPE,
+  isReferralEligibleClassification,
+} from './handyman-request-referral.types';
+export type {
+  CreateHandymanReferralInput,
+  HandymanReferralType,
+  HandymanRequestReferralRecord,
+  NewHandymanRequestReferralRecord,
+  PublicHandymanRequestReferral,
+} from './handyman-request-referral.types';
