@@ -8,6 +8,15 @@ import {
 } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from '../handyman-requests';
+import { handymanExecutionScopeRepository }
+  from './handyman-execution-scope.repository';
+import {
+  buildExecutionScopeInput,
+  handymanExecutionScopeConflictError,
+  toPublicExecutionScope,
+} from './handyman-execution-scope.service';
+import type { PublicHandymanExecutionScope }
+  from './handyman-execution-scope.types';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationDecisionRepository }
   from './handyman-quotation-decision.repository';
@@ -95,11 +104,24 @@ function toPublicDecision(
  * Explicit customer decision (APPROVE | REJECT) against the exact
  * ISSUED version. One authoritative decision per version, ever.
  */
+/**
+ * PART 05 extension of the PART 04 approval boundary (FROZEN F8/F9):
+ * the first successful APPROVE creates the Execution Scope INSIDE this
+ * same transaction (any failure rolls back decision + projection +
+ * scope + journal together). REJECT never creates a scope. Replay
+ * returns the existing decision AND the existing scope — additively
+ * widened result keeps the PART 04 decision contract intact.
+ */
+export type HandymanQuotationDecisionResult =
+  PublicHandymanQuotationDecision & {
+    executionScope: PublicHandymanExecutionScope | null;
+  };
+
 export async function decideHandymanQuotation(
   quotationVersionId: string,
   input: DecideHandymanQuotationInput,
   actorUserId: string,
-): Promise<PublicHandymanQuotationDecision> {
+): Promise<HandymanQuotationDecisionResult> {
   assertUuid(quotationVersionId, 'quotationVersionId');
   assertUuid(actorUserId, 'actorUserId');
   if (
@@ -158,7 +180,15 @@ export async function decideHandymanQuotation(
         existing.requestFingerprint === fingerprint &&
         existing.decision === input.decision
       ) {
-        return toPublicDecision(existing); // replay-safe identical result
+        // Replay-safe: the ORIGINAL authoritative facts, nothing new.
+        const priorScope = await handymanExecutionScopeRepository
+          .findScopeByApprovedVersion(tx, version.id);
+        return {
+          ...toPublicDecision(existing),
+          executionScope: priorScope
+            ? toPublicExecutionScope(priorScope)
+            : null,
+        };
       }
       throw decisionConflictError();
     }
@@ -207,6 +237,62 @@ export async function decideHandymanQuotation(
       .updateVersionLifecycle(tx, version.id, status, undefined);
     if (!projection) throw handymanQuotationVersionNotFoundError();
 
+    // PART 05 (F8/F9): APPROVE-only Execution Scope creation, same
+    // transaction. REJECT never reaches this branch. Location and all
+    // authority fields are server-derived; scope creation failure
+    // rolls back decision + projection + scope + events together.
+    let scope: PublicHandymanExecutionScope | null = null;
+    if (input.decision === 'APPROVE') {
+      const scopeInput = await buildExecutionScopeInput({
+        clientId: quotation.clientId,
+        handymanRequestId: request.id,
+        channelAttributionId: request.channelAttributionId,
+        quotationId: quotation.id,
+        approvedQuotationVersionId: version.id,
+        quotationDecisionId: record.id,
+        tenantCompanyId: request.tenantCompanyId,
+        tenantPicId: request.tenantPicId,
+        derivedBuildingId: request.buildingId,
+        derivedSpaceId: request.spaceId,
+        createdByUserId: actorUserId,
+      });
+      let scopeRow;
+      try {
+        scopeRow = await handymanExecutionScopeRepository.insertScope(
+          tx,
+          scopeInput,
+        );
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505') {
+          throw handymanExecutionScopeConflictError();
+        }
+        throw error;
+      }
+      scope = toPublicExecutionScope(scopeRow);
+      await recordOperationalEvent(
+        {
+          clientId: quotation.clientId,
+          eventType: 'HANDYMAN_EXECUTION_SCOPE_CREATED',
+          entityType: 'HANDYMAN_EXECUTION_SCOPE',
+          entityId: scopeRow.id,
+          actorUserId,
+          summary: `Handyman execution scope created for quotation version ${version.versionNumber}.`,
+          metadata: {
+            executionScopeId: scopeRow.id,
+            quotationId: quotation.id,
+            quotationVersionId: version.id,
+            versionNumber: version.versionNumber,
+            decisionId: record.id,
+            handymanRequestId: request.id,
+            tenantCompanyId: request.tenantCompanyId,
+            buildingId: scopeRow.buildingId,
+            spaceId: scopeRow.spaceId,
+          },
+        },
+        tx,
+      );
+    }
+
     // 6) Audit-only journal.
     await recordOperationalEvent(
       {
@@ -232,7 +318,7 @@ export async function decideHandymanQuotation(
       },
       tx,
     );
-    return toPublicDecision(record);
+    return { ...toPublicDecision(record), executionScope: scope };
   });
 }
 

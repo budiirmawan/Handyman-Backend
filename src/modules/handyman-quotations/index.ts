@@ -54,6 +54,23 @@ export {
   HANDYMAN_QUOTATION_CURRENCIES,
 } from './handyman-quotation-line.types';
 export {
+  getHandymanExecutionScopeByQuotationVersion,
+} from './handyman-execution-scope.service';
+export { handymanExecutionScopeRepository }
+  from './handyman-execution-scope.repository';
+export {
+  handymanExecutionScopeNotFoundError,
+  handymanExecutionScopeConflictError,
+  handymanExecutionScopeLocationInconsistentError,
+} from './handyman-execution-scope.service';
+export type {
+  HandymanExecutionScopeRecord,
+  HandymanExecutionScopeStatus,
+  PublicHandymanExecutionScope,
+} from './handyman-execution-scope.types';
+export { HANDYMAN_EXECUTION_SCOPE_STATUSES }
+  from './handyman-execution-scope.types';
+export {
   decideHandymanQuotation,
   getHandymanQuotationDecision,
 } from './handyman-quotation-decision.service';

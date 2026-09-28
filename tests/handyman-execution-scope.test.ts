@@ -52,11 +52,12 @@ import { priceCatalogEntryService } from '../src/modules/price-catalog-entries';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
- * CR-HM-06 PART 04 — focused tests for version-bound customer
- * decision (FROZEN Decision Freeze F6/F7/F8): eligibility against the
- * exact current ISSUED version, server-derived customer context,
- * replay-safe idempotency, atomic immutable decision + projection,
- * and zero execution-scope/payment/BAST/FM/crew/scheduling effects.
+ * CR-HM-06 PART 05 — focused tests for approved Execution Scope
+ * creation (FROZEN Decision Freeze F8/F9/F10/F11/F12): APPROVE-only
+ * atomic scope creation, server-derived lineage/location snapshot,
+ * one-scope-per-approved-version, replay safety, full transactional
+ * rollback on scope failure, and zero FM/crew/schedule/arrival/
+ * payment/BAST side effects.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _keepRef = () => ({ handymanServiceRequestInspectionService });
@@ -342,16 +343,6 @@ async function insertActivePriceEntry(
 }
 const FUTURE = () => new Date(Date.now() + 3_600_000).toISOString();
 
-/** Decision count scoped to one quotation thread (shared DB safe). */
-async function decisionCount(quotationId: string): Promise<number> {
-  const r = await q(
-    `SELECT count(*)::int AS n FROM handyman_quotation_decisions
-      WHERE quotation_id = $1`,
-    [quotationId],
-  );
-  return r.rows[0].n as number;
-}
-
 async function issuedFixture() {
   const f = await diagnosedFixture();
   const bundle = await createHandymanQuotation(
@@ -369,8 +360,69 @@ async function issuedFixture() {
   return { ...f, bundle, version, uomId };
 }
 
-describe('CR-HM-06 PART 04 — quotation customer decision', () => {
-  it('1: current ISSUED exact version can APPROVE', async (t) => {
+/** Scope count scoped to one quotation version (shared DB safe). */
+async function scopeCount(versionId: string): Promise<number> {
+  const r = await q(
+    `SELECT count(*)::int AS n FROM handyman_execution_scopes
+      WHERE approved_quotation_version_id = $1`,
+    [versionId],
+  );
+  return r.rows[0].n as number;
+}
+
+/** Issued chain rooted at a building-only attribution (no space). */
+async function spacelessIssuedFixture() {
+  const f = await attributedFixture();
+  const attributionNoSpace = await createChannelAttribution({
+    tenantCompanyId: f.company.id,
+    buildingId: f.building.id,
+    originChannel: 'BM_SUPER_APP',
+    originReference: `bm-handoff:BM_SUPER_APP:${randomUUID()}`,
+    createdByUserId: f.linkedUser.id,
+  });
+  const service = await serviceEntry(f.client.id);
+  const request = await handymanServiceRequestService
+    .createHandymanServiceRequest(
+      {
+        channelAttributionId: attributionNoSpace.id,
+        serviceCatalogId: service.id,
+      },
+      adminUserId,
+    );
+  assert.equal(request.spaceId, null);
+  await handymanServiceRequestTriageService.recordHandymanRequestTriage(
+    {
+      handymanRequestId: request.id,
+      triageDisposition: 'DIAGNOSIS',
+      triageNote: 'Direct to diagnosis.',
+    },
+    adminUserId,
+  );
+  await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis(
+    {
+      handymanRequestId: request.id,
+      disciplineId: disciplineIds.GENERAL_HANDYMAN,
+      diagnosis: 'Spaceless fixture diagnosis.',
+    },
+    adminUserId,
+  );
+  const bundle = await createHandymanQuotation(
+    { handymanRequestId: request.id }, adminUserId,
+  );
+  const version = bundle.versions[0];
+  const uomId = await insertUom(f.client.id);
+  await addHandymanQuotationLine(version.id, {
+    lineType: 'LABOR', description: 'L1', quantity: 1, uomId,
+    currency: 'IDR', finalQuotedUnitAmount: 50,
+  }, adminUserId);
+  await issueHandymanQuotationVersion(
+    version.id, { validUntil: FUTURE() }, adminUserId,
+  );
+  return { ...f, request, bundle, version };
+}
+
+describe('CR-HM-06 PART 05 — approved execution scope', () => {
+  it('1: APPROVE creates exactly one AUTHORIZED execution scope', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const decision = await decideHandymanQuotation(
@@ -378,141 +430,65 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
     );
-    assert.equal(decision.decision, 'APPROVE');
-    assert.equal(decision.quotationVersionId, f.version.id);
-    assert.equal(decision.clientId, f.client.id);
-    const versionRow = await q(
-      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
-      [f.version.id],
-    );
-    assert.equal(versionRow.rows[0].status, 'APPROVED');
-    const events = await q(
-      `SELECT event_type FROM operational_events
-        WHERE metadata->>'quotationVersionId' = $1
-          AND event_type = 'HANDYMAN_QUOTATION_APPROVED'`,
-      [f.version.id],
-    );
-    assert.equal(events.rows.length, 1);
-    // PART 05 final semantics: APPROVE atomically created the scope.
-    const scope = await getHandymanExecutionScopeByQuotationVersion(
-      f.version.id, adminUserId,
-    );
+    const scope = decision.executionScope;
+    assert.ok(scope);
     assert.equal(scope.status, 'AUTHORIZED');
-    assert.equal(scope.approvedQuotationVersionId, f.version.id);
-    assert.equal(scope.quotationDecisionId, decision.id);
-    assert.equal(decision.executionScope?.id, scope.id);
+    assert.equal(await scopeCount(f.version.id), 1);
+    const event = await q(
+      `SELECT event_type, entity_type FROM operational_events
+        WHERE metadata->>'executionScopeId' = $1`,
+      [scope.id],
+    );
+    assert.equal(event.rows.length, 1);
+    assert.equal(event.rows[0].event_type,
+      'HANDYMAN_EXECUTION_SCOPE_CREATED');
+    assert.equal(event.rows[0].entity_type, 'HANDYMAN_EXECUTION_SCOPE');
   });
 
-  it('2: current ISSUED exact version can REJECT', async (t) => {
+  it('2: scope lineage matches exact approved quotation/version/decision/request', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const decision = await decideHandymanQuotation(
       f.version.id,
-      { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
+      { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
     );
-    assert.equal(decision.decision, 'REJECT');
-    const versionRow = await q(
-      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
-      [f.version.id],
-    );
-    assert.equal(versionRow.rows[0].status, 'REJECTED');
-    const events = await q(
-      `SELECT event_type FROM operational_events
-        WHERE metadata->>'quotationVersionId' = $1
-          AND event_type = 'HANDYMAN_QUOTATION_REJECTED'`,
-      [f.version.id],
-    );
-    assert.equal(events.rows.length, 1);
+    const scope = decision.executionScope!;
+    assert.equal(scope.clientId, f.client.id);
+    assert.equal(scope.handymanRequestId, f.request.id);
+    assert.equal(scope.channelAttributionId, f.attribution.id);
+    assert.equal(scope.quotationId, f.bundle.quotation.id);
+    assert.equal(scope.approvedQuotationVersionId, f.version.id);
+    assert.equal(scope.quotationDecisionId, decision.id);
+    assert.equal(scope.createdByUserId, adminUserId);
   });
 
-  it('3: DRAFT/SUPERSEDED/EXPIRED cannot be decided', async (t) => {
+  it('3: customer + location snapshot server-derived', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const v2 = await createHandymanQuotationRevision(
-      f.bundle.quotation.id, adminUserId,
-    );
-    for (const status of ['DRAFT', 'SUPERSEDED', 'EXPIRED'] as const) {
-      await q(`UPDATE handyman_quotation_versions SET status = $2
-                WHERE id = $1`, [v2.id, status]);
-      await assert.rejects(
-        decideHandymanQuotation(
-          v2.id,
-          { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-          adminUserId,
-        ),
-        (e: unknown) =>
-          errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
-        `decide ${status}`,
-      );
-    }
-    assert.equal(await decisionCount(f.bundle.quotation.id), 0);
-  });
-
-  it('4: expired-by-server-time ISSUED cannot be approved/rejected', async (t) => {
-    if (!requireDatabase(t)) return;
-    const f = await issuedFixture();
-    await q(`UPDATE handyman_quotation_versions
-                SET valid_until = NOW() - INTERVAL '1 hour'
-              WHERE id = $1`, [f.version.id]);
-    for (const decision of ['APPROVE', 'REJECT'] as const) {
-      await assert.rejects(
-        decideHandymanQuotation(
-          f.version.id,
-          { decision, idempotencyKey: `k-${randomUUID()}` },
-          adminUserId,
-        ),
-        (e: unknown) =>
-          errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
-      );
-    }
-    assert.equal(await decisionCount(f.bundle.quotation.id), 0);
-    const row = await q(
-      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
-      [f.version.id],
-    );
-    assert.equal(row.rows[0].status, 'ISSUED');
-  });
-
-  it('5: customer context derived server-side; smuggling cannot override', async (t) => {
-    if (!requireDatabase(t)) return;
-    const f = await issuedFixture();
-    const otherCompany = await tenantCompanyService.createTenantCompany(
-      { clientId: f.client.id, tenantCode: `T_${suffix()}`,
-        tenantName: 'Other' },
+    const decision = await decideHandymanQuotation(
+      f.version.id,
+      { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
     );
-    const smuggled = {
-      decision: 'APPROVE',
-      idempotencyKey: `k-${randomUUID()}`,
-      clientId: randomUUID(),
-      tenantCompanyId: otherCompany.id,
-      tenantPicId: null,
-      buildingId: randomUUID(),
-      status: 'APPROVED',
-    } as unknown as Parameters<typeof decideHandymanQuotation>[1];
-    const decision = await decideHandymanQuotation(
-      f.version.id, smuggled, adminUserId,
+    const scope = decision.executionScope!;
+    assert.equal(scope.tenantCompanyId, f.company.id);
+    assert.equal(scope.tenantPicId, f.pic.id);
+    assert.equal(scope.buildingId, f.building.id);
+    assert.equal(scope.spaceId, f.space.id);
+    // Frozen chain: floor/area/room resolved server-side (non-null).
+    assert.ok(scope.floorId);
+    assert.ok(scope.areaId);
+    assert.ok(scope.roomId);
+    const read = await getHandymanExecutionScopeByQuotationVersion(
+      f.version.id, adminUserId,
     );
-    assert.equal(decision.tenantCompanyId, f.company.id);
-    assert.equal(decision.tenantPicId, f.pic.id);
-    assert.equal(decision.clientId, f.client.id);
+    assert.equal(read.id, scope.id);
+    assert.equal(read.tenantCompanyId, f.company.id);
   });
 
-  it('6: actor derived from authenticated local user; NULL PIC never fabricated', async (t) => {
+  it('4: NULL tenantPic remains NULL', async (t) => {
     if (!requireDatabase(t)) return;
-    const f = await issuedFixture();
-    const smuggled = {
-      decision: 'APPROVE',
-      idempotencyKey: `k-${randomUUID()}`,
-      decidedByUserId: randomUUID(),
-    } as unknown as Parameters<typeof decideHandymanQuotation>[1];
-    const decision = await decideHandymanQuotation(
-      f.version.id, smuggled, adminUserId,
-    );
-    assert.equal(decision.decidedByUserId, adminUserId);
-    // A request chain without a PIC keeps tenantPicId NULL (lineage
-    // NULL is never fabricated into an identity).
     const g = await attributedFixture();
     const attributionNoPic = await createChannelAttribution({
       tenantCompanyId: g.company.id,
@@ -522,54 +498,98 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       originReference: `bm-handoff:BM_SUPER_APP:${randomUUID()}`,
       createdByUserId: g.linkedUser.id,
     });
-    const service2 = await serviceEntry(g.client.id);
-    const request2 = await handymanServiceRequestService
+    const service = await serviceEntry(g.client.id);
+    const request = await handymanServiceRequestService
       .createHandymanServiceRequest(
         {
           channelAttributionId: attributionNoPic.id,
-          serviceCatalogId: service2.id,
+          serviceCatalogId: service.id,
         },
         adminUserId,
       );
-    assert.equal(request2.tenantPicId, null);
     await handymanServiceRequestTriageService.recordHandymanRequestTriage(
       {
-        handymanRequestId: request2.id,
+        handymanRequestId: request.id,
         triageDisposition: 'DIAGNOSIS',
-        triageNote: 'Direct to diagnosis.',
+        triageNote: 'Direct.',
       },
       adminUserId,
     );
     await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis(
       {
-        handymanRequestId: request2.id,
+        handymanRequestId: request.id,
         disciplineId: disciplineIds.GENERAL_HANDYMAN,
-        diagnosis: 'No-PIC fixture diagnosis.',
+        diagnosis: 'No-PIC scope test.',
       },
       adminUserId,
     );
-    const bundle2 = await createHandymanQuotation(
-      { handymanRequestId: request2.id }, adminUserId,
+    const bundle = await createHandymanQuotation(
+      { handymanRequestId: request.id }, adminUserId,
     );
-    const v = bundle2.versions[0];
-    const uomId2 = await insertUom(g.client.id);
-    await addHandymanQuotationLine(v.id, {
-      lineType: 'LABOR', description: 'L1', quantity: 1, uomId: uomId2,
-      currency: 'IDR', finalQuotedUnitAmount: 100,
+    const version = bundle.versions[0];
+    const uomId = await insertUom(g.client.id);
+    await addHandymanQuotationLine(version.id, {
+      lineType: 'LABOR', description: 'L1', quantity: 1, uomId,
+      currency: 'IDR', finalQuotedUnitAmount: 10,
     }, adminUserId);
     await issueHandymanQuotationVersion(
-      v.id, { validUntil: FUTURE() }, adminUserId,
+      version.id, { validUntil: FUTURE() }, adminUserId,
     );
-    const decision2 = await decideHandymanQuotation(
-      v.id,
+    const decision = await decideHandymanQuotation(
+      version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
     );
-    assert.equal(decision2.tenantPicId, null);
-    assert.equal(decision2.tenantCompanyId, g.company.id);
+    assert.equal(decision.executionScope?.tenantPicId, null);
   });
 
-  it('7: same idempotency key + same fingerprint replays same decision', async (t) => {
+  it('5: REJECT creates zero execution scope', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await issuedFixture();
+    const decision = await decideHandymanQuotation(
+      f.version.id,
+      { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
+      adminUserId,
+    );
+    assert.equal(decision.executionScope, null);
+    assert.equal(await scopeCount(f.version.id), 0);
+    const events = await q(
+      `SELECT event_type FROM operational_events
+        WHERE event_type = 'HANDYMAN_EXECUTION_SCOPE_CREATED'
+          AND metadata->>'quotationVersionId' = $1`,
+      [f.version.id],
+    );
+    assert.equal(events.rows.length, 0);
+  });
+
+  it('6: non-approved quotation version cannot create scope directly', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await issuedFixture();
+    for (const status of ['DRAFT', 'SUPERSEDED', 'EXPIRED'] as const) {
+      await q(`UPDATE handyman_quotation_versions SET status = $2
+                WHERE id = $1`, [f.version.id, status]);
+      await assert.rejects(
+        decideHandymanQuotation(
+          f.version.id,
+          { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+          adminUserId,
+        ),
+        (e: unknown) =>
+          errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
+      );
+    }
+    assert.equal(await scopeCount(f.version.id), 0);
+    // Direct scope read against an unapproved version → 404.
+    await assert.rejects(
+      getHandymanExecutionScopeByQuotationVersion(
+        f.version.id, adminUserId,
+      ),
+      (e: unknown) =>
+        errorCode(e) === 'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND',
+    );
+  });
+
+  it('7: same APPROVE replay returns same decision + same scope, no duplicate', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const key = `k-${randomUUID()}`;
@@ -582,58 +602,68 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       adminUserId,
     );
     assert.equal(replay.id, first.id);
-    assert.equal(replay.decision, 'APPROVE');
-    assert.equal(await decisionCount(f.bundle.quotation.id), 1);
-    const eventCount = await q(
+    assert.equal(
+      replay.executionScope?.id, first.executionScope?.id,
+    );
+    assert.equal(await scopeCount(f.version.id), 1);
+    const events = await q(
       `SELECT count(*)::int AS n FROM operational_events
-        WHERE metadata->>'quotationVersionId' = $1
-          AND event_type = 'HANDYMAN_QUOTATION_APPROVED'`,
+        WHERE event_type = 'HANDYMAN_EXECUTION_SCOPE_CREATED'
+          AND metadata->>'quotationVersionId' = $1`,
       [f.version.id],
     );
-    assert.equal(eventCount.rows[0].n, 1);
+    assert.equal(events.rows[0].n, 1);
   });
 
-  it('8: conflicting replay / second different decision rejected', async (t) => {
+  it('8: conflicting/concurrent scope creation cannot violate one-scope-per-version', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const key = `k-${randomUUID()}`;
-    await decideHandymanQuotation(
-      f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
-    );
-    // Same key + conflicting decision.
-    await assert.rejects(
-      decideHandymanQuotation(
-        f.version.id, { decision: 'REJECT', idempotencyKey: key },
-        adminUserId,
+    const results = await Promise.allSettled(
+      [0, 1].map((i) =>
+        decideHandymanQuotation(
+          f.version.id,
+          {
+            decision: 'APPROVE',
+            idempotencyKey: `k-${randomUUID()}-c${i}`,
+          },
+          adminUserId,
+        ),
       ),
-      (e: unknown) => errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
     );
-    // Different key + decided version.
+    const winners = results.filter((r) => r.status === 'fulfilled');
+    const losers = results.filter((r) => r.status === 'rejected');
+    assert.equal(winners.length, 1);
+    assert.equal(losers.length, 1);
+    assert.equal(
+      errorCode((losers[0] as PromiseRejectedResult).reason),
+      'HANDYMAN_QUOTATION_DECISION_CONFLICT',
+    );
+    assert.equal(await scopeCount(f.version.id), 1);
+    // One-scope invariant is DB-enforced for direct duplicates too.
     await assert.rejects(
-      decideHandymanQuotation(
-        f.version.id,
-        { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-        adminUserId,
-      ),
-      (e: unknown) => errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
+      q(`INSERT INTO handyman_execution_scopes (
+           id, client_id, handyman_request_id, channel_attribution_id,
+           quotation_id, approved_quotation_version_id,
+           quotation_decision_id, tenant_company_id, tenant_pic_id,
+           building_id, floor_id, area_id, room_id, space_id,
+           created_by_user_id
+         ) SELECT $1, client_id, handyman_request_id,
+                  channel_attribution_id, quotation_id,
+                  approved_quotation_version_id, quotation_decision_id,
+                  tenant_company_id, tenant_pic_id, building_id,
+                  floor_id, area_id, room_id, space_id, created_by_user_id
+             FROM handyman_execution_scopes
+            WHERE approved_quotation_version_id = $2`,
+      [randomUUID(), f.version.id]),
     );
-    assert.equal(await decisionCount(f.bundle.quotation.id), 1);
-    const row = await q(
-      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
-      [f.version.id],
-    );
-    assert.equal(row.rows[0].status, 'APPROVED');
   });
 
-  it('9: APPROVE/REJECT transition + immutable decision are atomic', async (t) => {
+  it('9: forced scope-creation failure rolls back decision + APPROVED status + events + scope', async (t) => {
     if (!requireDatabase(t)) return;
-    // Failure path atomicity: conflicting decision writes NOTHING.
-    const f = await issuedFixture();
-    await q(`UPDATE handyman_quotation_versions SET status = 'SUPERSEDED'
-              WHERE id = $1`, [f.version.id]);
+    const f = await spacelessIssuedFixture();
     const before = {
       decisions: await tableCount('handyman_quotation_decisions'),
+      scopes: await tableCount('handyman_execution_scopes'),
       events: await tableCount('operational_events'),
     };
     await assert.rejects(
@@ -642,84 +672,62 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
         { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
         adminUserId,
       ),
+      (e: unknown) =>
+        errorCode(e) === 'HANDYMAN_EXECUTION_SCOPE_LOCATION_INCONSISTENT',
     );
     assert.equal(
       await tableCount('handyman_quotation_decisions'), before.decisions);
+    assert.equal(
+      await tableCount('handyman_execution_scopes'), before.scopes);
     assert.equal(await tableCount('operational_events'), before.events);
-    // Success path: decision + projection appear together.
-    const ok = await decideHandymanQuotation(
-      (await issuedFixture()).version.id,
-      { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+    const row = await q(
+      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
+      [f.version.id],
     );
-    const joined = await q(
-      `SELECT d.decision, v.status
-         FROM handyman_quotation_decisions d
-         JOIN handyman_quotation_versions v
-           ON v.id = d.quotation_version_id
-        WHERE d.id = $1`,
-      [ok.id],
-    );
-    assert.deepEqual(
-      [joined.rows[0].decision, joined.rows[0].status],
-      ['REJECT', 'REJECTED'],
-    );
-    // Decision is immutable (DB backstop).
-    await assert.rejects(
-      q(`UPDATE handyman_quotation_decisions SET decision = 'APPROVE'
-          WHERE id = $1`, [ok.id]),
-    );
-    await assert.rejects(
-      q('DELETE FROM handyman_quotation_decisions WHERE id = $1', [ok.id]),
-    );
-    const read = await getHandymanQuotationDecision(
-      ok.quotationVersionId, adminUserId,
-    );
-    assert.equal(read.decision, 'REJECT');
+    assert.equal(row.rows[0].status, 'ISSUED');
   });
 
-  it('10: zero execution-scope/payment/BAST/FM/crew/scheduling side effects', async (t) => {
+  it('10: zero FM work_order/crew/schedule/arrival/payment/BAST side effects', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const before = {
-      vendorQuotations: await tableCount('vendor_quotations'),
       workOrders: await tableCount('work_orders'),
+      vendorQuotations: await tableCount('vendor_quotations'),
       bast: await tableCount('bast_documents'),
       crews: await tableCount('handyman_work_crews'),
       moves: await tableCount('inventory_stock_movements'),
     };
-    await decideHandymanQuotation(
+    const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
     );
     const after = {
-      vendorQuotations: await tableCount('vendor_quotations'),
       workOrders: await tableCount('work_orders'),
+      vendorQuotations: await tableCount('vendor_quotations'),
       bast: await tableCount('bast_documents'),
       crews: await tableCount('handyman_work_crews'),
       moves: await tableCount('inventory_stock_movements'),
     };
     assert.deepEqual(after, before);
-    const scopeCount = await q(
-      `SELECT count(*)::int AS n FROM handyman_execution_scopes
-        WHERE approved_quotation_version_id = $1`,
-      [f.version.id],
+    // Scope row: no FM/binding/arrival/payment columns ever.
+    const cols = await q(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'handyman_execution_scopes'`,
     );
-    assert.equal(scopeCount.rows[0].n, 1);
-    const events = await q(
-      `SELECT event_type, metadata FROM operational_events
-        WHERE metadata->>'quotationVersionId' = $1
-          AND event_type IN ('HANDYMAN_QUOTATION_APPROVED',
-                             'HANDYMAN_QUOTATION_REJECTED')`,
-      [f.version.id],
-    );
-    assert.equal(events.rows.length, 1);
-    for (const k of Object.keys(events.rows[0].metadata as object)) {
+    for (const row of cols.rows) {
       assert.ok(
-        !/executionscope|payment|bast|workorder|crew|schedul/i.test(k),
-        `forbidden journal key ${k}`,
+        !/work_?order|vendor|crew|provider|schedul|arrival|qr|geofence|payment|bast|session/i.test(
+          String(row.column_name),
+        ),
+        `forbidden scope column ${row.column_name}`,
       );
     }
+    // Oracle: scope is exactly what PART 04 decision + PART 02/03 says.
+    const scope = await getHandymanExecutionScopeByQuotationVersion(
+      f.version.id, adminUserId,
+    );
+    assert.equal(scope.id, decision.executionScope?.id);
+    assert.equal(scope.quotationDecisionId, decision.id);
   });
 });
