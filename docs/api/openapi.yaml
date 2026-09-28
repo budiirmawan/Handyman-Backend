@@ -4348,6 +4348,77 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+
+  /handyman/execution-scopes/{executionScopeId}/assignment:
+    post:
+      tags: [Handyman Scope Assignments]
+      operationId: assignHandymanExecutionScopeCrew
+      summary: Assign an ACTIVE Handyman crew to an Execution Scope
+      description: "Provider-authored crew assignment whose only target is HANDYMAN_EXECUTION_SCOPE (scope must exist with status AUTHORIZED). clientId, status, Lead identity and timestamps are server-derived; smuggled keys are structurally ignored. An existing ACTIVE assignment is a conflict (409) - reassignment is the only replacement path. Assignment does not mean verified arrival, does not start work, and does not create any schedule."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignHandymanScopeCrewRequest'
+      responses:
+        '201':
+          description: ACTIVE assignment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanScopeAssignmentRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Scope Assignments]
+      operationId: getHandymanExecutionScopeAssignment
+      summary: Bounded read of the current ACTIVE assignment (+ dynamically-resolved Lead)
+      description: "Returns the current ACTIVE crew assignment for the Execution Scope, with Lead identity composed dynamically from CR-HM-04 crew authority (current Lead -> ACTIVE worker context -> non-null userId); never a snapshot and never a second authority. Assignment is NOT arrival verification and NOT a work session."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Current ACTIVE assignment view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanScopeAssignmentView'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/assignment/reassign:
+    post:
+      tags: [Handyman Scope Assignments]
+      operationId: reassignHandymanExecutionScopeCrew
+      summary: Atomically reassign the Execution Scope to a new crew
+      description: "Atomic reassignment in one transaction: the current ACTIVE assignment is superseded and exactly one new ACTIVE assignment is created with supersession provenance. The new provider/crew/Lead is fully validated BEFORE any mutation; any failure rolls back everything (the old ACTIVE assignment remains untouched). Never a gap and never two ACTIVE assignments. Assignment does not start work and does not create a schedule."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignHandymanScopeCrewRequest'
+      responses:
+        '201':
+          description: New ACTIVE assignment (old superseded)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanScopeAssignmentRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /health:
     get:
       operationId: getHealth
@@ -70256,6 +70327,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    ExecutionScopeIdPath:
+      name: executionScopeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -75891,6 +75967,46 @@ components:
           type: array
           items: { $ref: "#/components/schemas/HandymanPermitReadinessRecord" }
 
+    AssignHandymanScopeCrewRequest:
+      type: object
+      description: Caller-established references ONLY. clientId, status, leadWorkerId, leadUserId, assignedAt, supersedesAssignmentId are never accepted (smuggled keys structurally ignored).
+      required: [providerContextId, crewId]
+      properties:
+        providerContextId: { type: string, format: uuid }
+        crewId: { type: string, format: uuid }
+    HandymanScopeAssignmentRecord:
+      type: object
+      description: Append-only crew assignment fact (status projection moves ACTIVE -> SUPERSEDED only). NO Lead snapshot - lead authority stays in CR-HM-04.
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        handymanProviderContextId: { type: string, format: uuid }
+        handymanCrewId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [ACTIVE, SUPERSEDED]
+        assignedByUserId: { type: string, format: uuid }
+        assignedAt: { type: string, format: date-time }
+        supersedesAssignmentId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanScopeAssignmentView:
+      type: object
+      description: Bounded operational view of the current ACTIVE assignment with Lead identity dynamically derived from CR-HM-04 crew authority at read time. Assignment does not mean arrival and does not start work.
+      properties:
+        assignmentId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        providerContextId: { type: string, format: uuid }
+        crewId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [ACTIVE]
+        assignedByUserId: { type: string, format: uuid }
+        assignedAt: { type: string, format: date-time }
+        supersedesAssignmentId: { type: string, format: uuid, nullable: true }
+        leadWorkerContextId: { type: string, format: uuid, nullable: true }
+        leadUserId: { type: string, format: uuid, nullable: true }
     HandymanQuotationRecord:
       type: object
       description: Handyman-owned quotation root bound to exactly one Handyman service request; client/request lineage is server-derived.
