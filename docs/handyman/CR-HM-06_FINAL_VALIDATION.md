@@ -1,12 +1,18 @@
-# CR-HM-06 — FINAL VALIDATION & CERTIFICATION (PART 07B)
+# CR-HM-06 — FINAL VALIDATION & CERTIFICATION (PART 07B +
+RE-CERTIFICATION)
 
-**Status: certified against base `2b1a985`, 2026-09-28.** Certification
-only: runtime=0, migration=0, route/OpenAPI=0, roadmap=0, node_modules
-never staged. Gates re-verified against the committed runtime
+**Status: certified COMPLETE, re-certification base `5af3b99`,
+2026-09-28.** Certification chain: `2b1a985` → `671651d` initial
+certification run (correctly NOT_COMPLETE at 58/60, §13/§14) →
+`5af3b99` bounded test-only remediation → this re-certification
+(docs-only: runtime=0, migration=0, test edits=0, route/OpenAPI=0,
+roadmap/governance=0, node_modules never staged). Runtime gates
+re-verified against the committed implementation
 (`e7e8af2` PART 01 → `cf62045` PART 02 → `294a7b4`
 PART 03 → `18eb831` PART 04 → `df9e41d` PART 05 → `398c965` PART 06 →
 `2b1a985` PART 07A), the frozen START GOVERNANCE, the Decision Freeze
-F1–F12, and the frozen PART 06 downstream binding contract.
+F1–F12, and the frozen PART 06 downstream binding contract. All
+§1–§12 runtimes findings below remain current and PASS.
 
 ## 1. Decision Freeze F1–F12 compliance
 
@@ -161,6 +167,9 @@ No unrelated schema mutation introduced by CR-HM-06.
 
 ## 13. Focused validation result
 
+### 13a. Initial PART 07B run (preserved history — base `2b1a985`,
+certification commit `671651d`)
+
 Command (real migrated PostgreSQL 18.4 embedded, single worker,
 `DB_PASSWORD=postgres`):
 
@@ -186,6 +195,40 @@ npx tsx --test --test-concurrency=1 \
 **Total: 58/60 PASS.** OpenAPI YAML parse: PASS. Runtime/OpenAPI
 parity (API suite t10): PASS. `git diff --check`: clean. Project-wide
 tsc/build deliberately not used as a certification gate (mandate).
+The initial PART 07B correctly stopped here: the only failures were
+the two stale pre-PART-05 test assertions recorded below (§14.D1/D2).
+
+### 13b. Test-only remediation (commit `5af3b99`)
+
+Bounded test-harness hardening PART, exactly the two mandated files:
+
+- `tests/handyman-quotation-line.test.ts` (PART 02 t10)
+- `tests/handyman-quotation-lifecycle.test.ts` (PART 03 t10)
+
+(+63/−16). Both `information_schema` "table absent" expectations were
+replaced by **version-scoped row-count invariants** that strengthen —
+not weaken — the frozen side-effect contracts: PART 02 t10 proves
+line authoring creates/mutates zero `handyman_execution_scopes`
+(`approved_quotation_version_id`) and zero `handyman_quotation_decisions`
+(`quotation_version_id`) rows for the fixture version (0 → 0);
+PART 03 t10 proves issue/revision/supersede create/mutate zero such
+rows across the whole thread (v1 + replacement v2, 0 → 0). FM
+`work_orders`/payment/BAST/inventory-movement and journal-vocabulary
+assertions remain intact and unchanged. **No assertion that the
+legitimate PART 05 table is absent; the PART 05 APPROVE invariant is
+untouched.** Semantics: runtime=0, migration=0, OpenAPI=0, production
+behavior unchanged. `git diff --check`: clean; `git status`
+afterwards: exactly the two files.
+
+### 13c. Final validation (post-remediation, base `5af3b99`)
+
+- Focused pair (`handyman-quotation-line` + `handyman-quotation-lifecycle`):
+  **20/20 PASS**.
+- All six CR-HM-06 suites: **60/60 PASS**
+  (PART 01 10/10, PART 02 10/10, PART 03 10/10, PART 04 10/10,
+  PART 05 10/10, PART 07A 10/10).
+- OpenAPI YAML parse: PASS. Runtime/OpenAPI parity (API suite t10):
+  PASS. `git diff --check`: clean.
 
 ## 14. Defects
 
@@ -205,16 +248,18 @@ defects below.
   `tests/handyman-quotation-lifecycle.test.ts:681`).** Same root
   cause, same failure shape.
 
-Both failing assertions demand that a FROZEN F8/F9 deliverable (the
+Both failing assertions demanded that a FROZEN F8/F9 deliverable (the
 execution-scope table) NOT exist; every behavioural assertion in the
 same tests still passes, including `handyman_execution_scopes` row
 counts (`scopeCount(versionId)` == expected) in PART 05 and the full
 PART 07A HTTP surface. The runtime satisfies the freeze; the two
-expectations predate it. Required remediation (future test-only
-hardening PART, out of certification scope): update both
-`information_schema` expectations to the PART 05 shape (exactly
-`handyman_execution_scopes` present, zero `%quotation_approval%`)
-and re-certify to 60/60.
+expectations predate it.
+
+**Resolution (closed):** D1 and D2 were remediated by the bounded
+test-only PART committed as `5af3b99` (§13b) exactly as prescribed
+here. Post-remediation evidence: §13c (20/20 pair, 60/60 total).
+Implementation defects: **0**. Remaining certification blockers:
+**0**.
 
 ## 15. Known non-blocking debt
 
@@ -238,23 +283,51 @@ and re-certify to 60/60.
 
 ## 16. Final status
 
+### 16a. Historical (initial PART 07B, `671651d` — preserved)
+
 | Gate | Result |
 |---|---|
 | F1–F12 freeze compliance (§1–§10) | PASS |
 | Migrations 0391–0395 (§11) | PASS |
 | HTTP/OpenAPI 13 ops / 10 paths + parity + YAML parse (§12) | PASS |
-| Focused validation (§13) | **FAIL — 58/60 (2 stale pre-0395 assertions, §14 D1/D2)** |
+| Focused validation (§13a) | **FAIL — 58/60 (2 stale pre-0395 assertions, §14 D1/D2)** |
 | Implementation defects | NONE |
 | Known non-blocking debt | Recorded (§15) |
 
-**CR_HM_06_STATUS=NOT_COMPLETE** — every runtime certification gate
-F1–F12 passes and no implementation defect exists, but the mandate
-requires all gates PASS for `COMPLETE`, and the focused validation
-gate cannot reach 60/60 without the two-line test-harness remediation
-recorded in §14, which certification explicitly forbids performing
-here. Next lawful step (outside this certification): a bounded
-test-only hardening PART applying §14 remediation, then a re-run of
-PART 07B (expects 60/60 and `CR_HM_06_STATUS=COMPLETE`).
+At that point the verdict was **CR_HM_06_STATUS=NOT_COMPLETE** —
+correctly, because the mandate requires all gates PASS for `COMPLETE`
+and the focused validation gate could not reach 60/60 without the
+test-harness remediation, which certification forbids performing.
+The prescribed next lawful step (bounded test-only hardening PART +
+re-certification) has since been executed.
+
+### 16b. Current (re-certification, base `5af3b99`)
+
+| Gate | Result |
+|---|---|
+| F1–F12 freeze compliance (§1–§10) | PASS (unchanged; runtime/migration/OpenAPI untouched by remediation) |
+| Migrations 0391–0395 (§11) | PASS (unchanged) |
+| HTTP/OpenAPI 13 ops / 10 paths + parity + YAML parse (§12) | PASS (unchanged) |
+| Focused validation (§13c) | **PASS — 60/60 (pair 20/20)** |
+| Implementation defects | NONE (0) |
+| Certification blockers | NONE (0) |
+| Known non-blocking debt | Recorded (§15; unchanged, not CR-HM-06 blockers) |
+
+**CR_HM_06_STATUS=COMPLETE.**
+
+Certification chain:
+
+```
+2b1a985  PART 07A runtime surface frozen
+671651d  initial PART 07B certification  → NOT_COMPLETE (58/60,
+         two stale pre-PART-05 test assertions only; 0 runtime defects)
+5af3b99  bounded test-only remediation    → 60/60 achieved
+         re-certification (this doc)       → COMPLETE
+```
+
+No runtime, migration, or OpenAPI change occurred anywhere in the
+chain since `2b1a985`; only test-harness alignment and this docs
+append happened in between.
 
 ---
 *This document is certification evidence only. Any
