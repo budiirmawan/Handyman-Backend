@@ -36,6 +36,7 @@ import { createHandymanApiRouter } from '../modules/handyman-api';
 import { createHandymanLifecycleApiRouter } from '../modules/handyman-lifecycle-api';
 import { createHandymanProviderApiRouter } from '../modules/handyman-provider-api';
 import { createHandymanReadinessApiRouter } from '../modules/handyman-readiness-api';
+import { createHandymanQuotationsApiRouter } from '../modules/handyman-quotations-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -796,6 +797,7 @@ export function createApiRouter(): Router {
   // ZERO target-binding (PART 05 deferred), crew-assignment,
   // arrival/QR/geofence or FM permit/work-order routes.
   router.use(createHandymanReadinessApiRouter());
+  router.use(createHandymanQuotationsApiRouter()); // CR-HM-06 PART 07A — quotation surface
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;

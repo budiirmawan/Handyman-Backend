@@ -4054,6 +4054,300 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+
+  /handyman/requests/{handymanRequestId}/quotation:
+    post:
+      tags: [Handyman Quotations]
+      operationId: createHandymanQuotation
+      summary: Create a Handyman quotation thread (initial DRAFT version 1) for a diagnosed request
+      description: "Quotation creation is request-bound: client, customer and location lineage are derived server-side from the CR-HM-02 request and its CR-HM-03 diagnosis/scope authority; the caller supplies IDs only through the URL. DRAFT is not customer-presented."
+      parameters:
+        - $ref: '#/components/parameters/HandymanRequestIdPath'
+      responses:
+        '201':
+          description: Quotation created with initial DRAFT version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationBundle'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Quotations]
+      operationId: getHandymanQuotation
+      summary: Exact bounded read of a quotation thread (root + immutable version list)
+      parameters:
+        - $ref: '#/components/parameters/HandymanRequestIdPath'
+      responses:
+        '200':
+          description: Quotation bundle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationBundle'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/requests/{handymanRequestId}/quotation/presented:
+    get:
+      tags: [Handyman Quotations]
+      operationId: getCurrentHandymanIssuedQuotationVersion
+      summary: Current customer-presentable ISSUED quotation version (null when none)
+      description: "Only an ISSUED version is customer-presentable: a DRAFT is never presented, a SUPERSEDED version keeps its immutable facts but is not current, and EXPIRED versions are never presented. At most one ISSUED version exists per quotation thread."
+      parameters:
+        - $ref: '#/components/parameters/HandymanRequestIdPath'
+      responses:
+        '200':
+          description: Current ISSUED version (null when none)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotations/{quotationId}/versions:
+    post:
+      tags: [Handyman Quotations]
+      operationId: createHandymanQuotationRevision
+      summary: Create a new immutable DRAFT revision (version number monotonic; lines are never copied)
+      parameters:
+        - name: quotationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '201':
+          description: New DRAFT version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotation-versions/{quotationVersionId}/lines:
+    post:
+      tags: [Handyman Quotations]
+      operationId: addHandymanQuotationLine
+      summary: Add an immutable commercial snapshot line (LABOR or MATERIAL) to a DRAFT version
+      description: "Lines are immutable snapshots of bounded commercial facts: the operator supplies description/quantity/UOM/currency and the final quoted unit amount; lineTotal is server-calculated only (quantity x final quoted unit amount) and a governed reference price (when available) is snapshotted for material provenance. Reference price is never the final quoted charge. Only DRAFT versions accept lines; one currency per version; no tax/discount exist."
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHandymanQuotationLineRequest'
+      responses:
+        '201':
+          description: Immutable line snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationLineRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Handyman Quotations]
+      operationId: listHandymanQuotationVersionLines
+      summary: Exact bounded read of one version's immutable lines
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Immutable line snapshots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HandymanQuotationLineRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotation-versions/{quotationVersionId}/totals:
+    get:
+      tags: [Handyman Quotations]
+      operationId: getHandymanQuotationVersionTotals
+      summary: Derived totals (labor/material subtotals, total, currency) computed from immutable lines
+      description: "Totals are derived from immutable lines on every read and are never persisted; no tax or discount exists anywhere in this quotation lifecycle."
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Derived totals
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationTotals'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotation-versions/{quotationVersionId}/issue:
+    post:
+      tags: [Handyman Quotations]
+      operationId: issueHandymanQuotationVersion
+      summary: Issue a DRAFT quotation version (DRAFT to ISSUED; atomically supersedes any current ISSUED version)
+      description: "Issuing requires at least one line and a validUntil strictly greater than server time; issuing a new version as replacement atomically marks the previous current ISSUED version SUPERSEDED. DRAFT is not equal to ISSUED; SUPERSEDED facts remain immutable history."
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueHandymanQuotationVersionRequest'
+      responses:
+        '200':
+          description: Issued version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotation-versions/{quotationVersionId}/expire:
+    post:
+      tags: [Handyman Quotations]
+      operationId: expireHandymanQuotationVersion
+      summary: Expire an ISSUED quotation version (server-time authoritative)
+      description: "Expiry is allowed only at/after the server-stored validUntil; a caller can never supply the expiry moment."
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Expired version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotation-versions/{quotationVersionId}/supersede:
+    post:
+      tags: [Handyman Quotations]
+      operationId: supersedeHandymanQuotationVersion
+      summary: Supersede (withdraw) an ISSUED quotation version explicitly
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Superseded version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotation-versions/{quotationVersionId}/decision:
+    post:
+      tags: [Handyman Quotations]
+      operationId: decideHandymanQuotation
+      summary: Customer decision (APPROVE or REJECT) bound to the exact ISSUED quotation version
+      description: "The decision is explicit and version-bound: actor is the authenticated session user; customer/tenant context is server-derived from the immutable request/attribution lineage; idempotency follows the existing Idempotency-Key header convention. A successful APPROVE atomically creates the authoritative Handyman Execution Scope and returns it on the decision result for downstream target discovery; REJECT never creates scope. Quotation approval is not BAST acceptance, not payment, and not authorization of payment."
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecideHandymanQuotationRequest'
+      responses:
+        '201':
+          description: Immutable decision (APPROVE includes the created Execution Scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationDecisionResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Quotations]
+      operationId: getHandymanQuotationDecision
+      summary: Exact read of the immutable decision for a quotation version
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Immutable decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQuotationDecisionRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotation-versions/{quotationVersionId}/execution-scope:
+    get:
+      tags: [Handyman Quotations]
+      operationId: getHandymanExecutionScopeByQuotationVersion
+      summary: Minimum Execution Scope read for downstream target discovery (bounded, by approved quotation version)
+      description: "The Execution Scope is the authoritative downstream target created only by a successful APPROVE: it is not an FM work order, not a work session, not a crew assignment, not a schedule, not an arrival verification, and its AUTHORIZED state means only 'approved and targetable' - not assigned, not scheduled, not arrived, not started, not checked in. No crew/scheduling/arrival/work-session APIs exist on the quotation surface."
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Execution Scope (404 when no APPROVE has occurred)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanExecutionScopeRecord'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /health:
     get:
       operationId: getHealth
@@ -69957,6 +70251,11 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/Uuid"
+    HandymanRequestIdPath:
+      name: handymanRequestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -75591,6 +75890,160 @@ components:
         history:
           type: array
           items: { $ref: "#/components/schemas/HandymanPermitReadinessRecord" }
+
+    HandymanQuotationRecord:
+      type: object
+      description: Handyman-owned quotation root bound to exactly one Handyman service request; client/request lineage is server-derived.
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationVersionRecord:
+      type: object
+      description: Immutable quotation version; lifecycle projection only (status/validUntil) may change - version identity and facts are never rewritten. DRAFT is not customer-presented.
+      properties:
+        id: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        versionNumber: { type: integer, minimum: 1 }
+        status:
+          type: string
+          enum: [DRAFT, ISSUED, APPROVED, REJECTED, EXPIRED, SUPERSEDED]
+        validUntil: { type: string, format: date-time, nullable: true }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationBundle:
+      type: object
+      description: Bounded exact-read bundle; quotation root plus its immutable version thread.
+      properties:
+        quotation:
+          $ref: '#/components/schemas/HandymanQuotationRecord'
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+    CreateHandymanQuotationLineRequest:
+      type: object
+      description: Whitelisted commercial facts only; lineTotal, reference amounts, lineage and any identity/location fields are server-derived and must not be supplied.
+      required: [lineType, description, quantity, uomId, currency, finalQuotedUnitAmount]
+      properties:
+        lineType:
+          type: string
+          enum: [LABOR, MATERIAL]
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        uomId: { type: string, format: uuid }
+        currency:
+          type: string
+          enum: [IDR, USD, SGD, MYR, AUD, EUR, GBP, JPY, CNY]
+        finalQuotedUnitAmount: { type: number, minimum: 0 }
+        sourceItemId:
+          type: string
+          format: uuid
+          description: Optional MATERIAL provenance reference (never re-prices the immutable line later).
+    HandymanQuotationLineRecord:
+      type: object
+      description: Immutable commercial snapshot line; referenceUnitAmount is a governed reference-price snapshot (informational), never the final quoted charge; lineTotal is server-calculated (quantity x finalQuotedUnitAmount).
+      properties:
+        id: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        lineType:
+          type: string
+          enum: [LABOR, MATERIAL]
+        description: { type: string }
+        quantity: { type: number }
+        uomId: { type: string, format: uuid }
+        referenceUnitAmount: { type: number, nullable: true }
+        finalQuotedUnitAmount: { type: number }
+        lineTotal: { type: number }
+        currency: { type: string }
+        sourceItemId: { type: string, format: uuid, nullable: true }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationTotals:
+      type: object
+      description: Derived-from-lines totals (never persisted); no tax/discount exists.
+      properties:
+        laborSubtotal: { type: number }
+        materialSubtotal: { type: number }
+        total: { type: number }
+        currency:
+          type: string
+          nullable: true
+          enum: [IDR, USD, SGD, MYR, AUD, EUR, GBP, JPY, CNY, null]
+        lineCount: { type: integer }
+    IssueHandymanQuotationVersionRequest:
+      type: object
+      required: [validUntil]
+      properties:
+        validUntil:
+          type: string
+          format: date-time
+          description: Issued-validity expiry instant; must be strictly greater than server time.
+    DecideHandymanQuotationRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [APPROVE, REJECT]
+          description: Explicit customer decision bound to the exact ISSUED version; idempotency key/fingerprint derive from the Idempotency-Key header plus this payload.
+    HandymanQuotationDecisionRecord:
+      type: object
+      description: Immutable, version-bound customer decision record; tenant context is a server-derived lineage snapshot (tenantPicId may be null and is never fabricated). Quotation approval is not BAST acceptance and not payment.
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        decision:
+          type: string
+          enum: [APPROVE, REJECT]
+        tenantCompanyId: { type: string, format: uuid }
+        tenantPicId: { type: string, format: uuid, nullable: true }
+        decidedByUserId: { type: string, format: uuid }
+        idempotencyKey: { type: string }
+        decidedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationDecisionResult:
+      allOf:
+        - $ref: '#/components/schemas/HandymanQuotationDecisionRecord'
+        - type: object
+          properties:
+            executionScope:
+              $ref: '#/components/schemas/HandymanExecutionScopeRecord'
+              nullable: true
+              description: Present only for a successful APPROVE (the atomically-created authoritative Execution Scope); always null for REJECT.
+    HandymanExecutionScopeRecord:
+      type: object
+      description: "The authoritative downstream Handyman execution target created ONLY by a successful quotation APPROVE; immutable server-derived snapshot of quotation/request/attribution/location lineage. It is not an FM work order, not a work session, not a crew assignment, not a schedule, and not an arrival verification; status AUTHORIZED means approved-and-targetable only (not assigned, not scheduled, not arrived, not started, not checked in)."
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        channelAttributionId: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        approvedQuotationVersionId: { type: string, format: uuid }
+        quotationDecisionId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        tenantPicId: { type: string, format: uuid, nullable: true }
+        buildingId: { type: string, format: uuid }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        status:
+          type: string
+          enum: [AUTHORIZED]
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
     HandymanProviderContextRecord:
       type: object
       description: >-
