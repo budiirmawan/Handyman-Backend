@@ -585,10 +585,12 @@ describe('CR-HM-07 PART 04A — arrival result persistence', () => {
       'HANDYMAN_ARRIVAL_RESULT_REVERSE_GEOCODE_STATUSES',
       'HANDYMAN_ARRIVAL_RESULT_STATUSES',
       'arrivalResultConflictError',
+      'evaluateHandymanArrivalVerification',
       'findHandymanArrivalResultByChallengeId',
       'handymanArrivalResultRepository',
+      'handymanArrivalResultService',
       'insertHandymanArrivalVerificationResult',
-    ], 'module exports exactly the persistence surface');
+    ], 'module exports exactly the PART 04A persistence surface plus the PART 04B atomic evaluator');
     assert.deepEqual(
       Object.keys(mod.handymanArrivalResultRepository).sort(), [
         'findHandymanArrivalResultByChallengeId',

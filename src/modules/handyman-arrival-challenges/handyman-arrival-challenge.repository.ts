@@ -196,6 +196,26 @@ async function findChallengeById(
   return result.rows[0] ? map(result.rows[0]) : null;
 }
 
+/**
+ * Replay-token binding lookup (PART 04B): the challenge bound to one
+ * (scope, actor, tokenHash) — any lifecycle status. READ ONLY; token
+ * material never leaves the hash comparison boundary.
+ */
+async function findByScopeActorTokenHash(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  executionScopeId: string,
+  actorUserId: string,
+  tokenHash: string,
+): Promise<HandymanArrivalChallengeRecord | null> {
+  const result = await executor.query(
+    `${CHALLENGE_SELECT}
+      WHERE execution_scope_id = $1 AND actor_user_id = $2
+        AND token_hash = $3`,
+    [executionScopeId, actorUserId, tokenHash],
+  );
+  return result.rows[0] ? map(result.rows[0]) : null;
+}
+
 export const handymanArrivalChallengeRepository = {
   insertChallenge,
   lockChallengeById,
@@ -205,4 +225,5 @@ export const handymanArrivalChallengeRepository = {
   consumeIfPending,
   expireIfPendingOverdue,
   findChallengeById,
+  findByScopeActorTokenHash,
 };

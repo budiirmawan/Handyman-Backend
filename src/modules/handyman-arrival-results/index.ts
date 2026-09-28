@@ -20,3 +20,9 @@ export {
   handymanArrivalResultRepository,
   insertHandymanArrivalVerificationResult,
 } from './handyman-arrival-result.repository';
+export {
+  evaluateHandymanArrivalVerification,
+  handymanArrivalResultService,
+} from './handyman-arrival-result.service';
+export type { EvaluateHandymanArrivalInput }
+  from './handyman-arrival-result.service';
