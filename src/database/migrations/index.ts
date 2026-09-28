@@ -395,6 +395,8 @@ import { migration0394CreateHandymanQuotationDecisions } from './0394_create_han
 import { migration0395CreateHandymanExecutionScopes } from './0395_create_handyman_execution_scopes';
 import { migration0396CreateHandymanExecutionScopeAssignments } from './0396_create_handyman_execution_scope_assignments';
 import { migration0397CreateHandymanArrivalChallenges } from './0397_create_handyman_arrival_challenges';
+import { migration0398CreateHandymanArrivalLocationIdentifiers }
+  from './0398_create_handyman_arrival_location_identifiers';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -797,4 +799,5 @@ export const migrations: readonly Migration[] = [
   migration0395CreateHandymanExecutionScopes,
   migration0396CreateHandymanExecutionScopeAssignments,
   migration0397CreateHandymanArrivalChallenges,
+  migration0398CreateHandymanArrivalLocationIdentifiers,
 ];
