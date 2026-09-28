@@ -37,6 +37,8 @@ import { createHandymanLifecycleApiRouter } from '../modules/handyman-lifecycle-
 import { createHandymanProviderApiRouter } from '../modules/handyman-provider-api';
 import { createHandymanReadinessApiRouter } from '../modules/handyman-readiness-api';
 import { createHandymanQuotationsApiRouter } from '../modules/handyman-quotations-api';
+import { createHandymanArrivalVerificationApiRouter }
+  from '../modules/handyman-arrival-verification-api';
 import { createHandymanScopeAssignmentsApiRouter } from '../modules/handyman-scope-assignments-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
@@ -800,6 +802,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanReadinessApiRouter());
   router.use(createHandymanQuotationsApiRouter()); // CR-HM-06 PART 07A — quotation surface
   router.use(createHandymanScopeAssignmentsApiRouter()); // CR-HM-04 activation PART C — assignment surface
+  router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;

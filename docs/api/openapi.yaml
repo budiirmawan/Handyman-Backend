@@ -4419,6 +4419,32 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /handyman/execution-scopes/{executionScopeId}/arrival-verification:
+    post:
+      tags: [Handyman Arrival Verification]
+      operationId: verifyHandymanArrival
+      summary: Terminal Handyman arrival verification (atomic, single-use)
+      description: "CR-HM-07 PART 04C — authenticated terminal arrival evaluation against the Execution Scope. Eligibility, challenge resolution, QR evaluation, expected-location comparison and per-Building geofence evaluation are authoritative server-side ONLY: the actor is the authenticated session's user (caller can never author actorUserId/workerId/crewId/assignmentId/clientId/expected location/policyId/distance/geofence/status/primaryReason; unknown authority-shaped body keys are structurally ignored). The bound Handyman arrival challenge is consumed exactly once and the immutable terminal result is persisted atomically; replaying the same token returns the EXISTING result unchanged (idempotent). Terminal FAILED / MANUAL_REVIEW_REQUIRED / EXPIRED are successful evaluation responses (200) — never HTTP failures. A VERIFIED result means ARRIVAL VERIFIED only: it does not check in, start work, record attendance/presence/billable time, create a work session, or touch FM. Reverse-geocode enrichment is NOT consulted by this authoritative decision."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanArrivalVerificationRequest'
+      responses:
+        '200':
+          description: Immutable terminal arrival result (replay returns the same result)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanArrivalVerificationResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /health:
     get:
       operationId: getHealth
@@ -75974,6 +76000,44 @@ components:
       properties:
         providerContextId: { type: string, format: uuid }
         crewId: { type: string, format: uuid }
+    HandymanArrivalVerificationRequest:
+      type: object
+      required: [challengeToken, qrOpaqueCode]
+      description: "Bounded caller input ONLY. challengeToken is the one-time server-issued arrival challenge token; qrOpaqueCode is the scanned opaque QR code compared against the expected-location snapshot authority. deviceLocation carries (nullable) device coordinates; when omitted and an ACTIVE building geospatial policy exists, the terminal result is MANUAL_REVIEW_REQUIRED (never VERIFIED). Authority/derived keys (actorUserId/workerId/crewId/assignmentId/expected location/policyId/distanceMeters/geofenceSignal/status/primaryReason/clientId/enrichment fields) in the payload are structurally ignored — the server resolves everything authoritatively."
+      properties:
+        challengeToken: { type: string, minLength: 1 }
+        qrOpaqueCode: { type: string, minLength: 1 }
+        deviceLocation:
+          nullable: true
+          type: object
+          required: [latitude, longitude, accuracyMeters, capturedAt]
+          properties:
+            latitude: { type: number, minimum: -90, maximum: 90 }
+            longitude: { type: number, minimum: -180, maximum: 180 }
+            accuracyMeters: { type: number, minimum: 0 }
+            capturedAt: { type: string, format: date-time }
+    HandymanArrivalVerificationResult:
+      type: object
+      description: "Immutable terminal arrival result snapshot. Statuses exactly VERIFIED / FAILED / MANUAL_REVIEW_REQUIRED / EXPIRED with primaryReason from the exact PART 04A set; replay returns the same id/status/primaryReason/evaluatedAt. VERIFIED = arrival verified only (no check-in / start work / attendance / presence / billable time / work session / FM meaning); provider enrichment is not an arrival authority."
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        challengeId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [VERIFIED, FAILED, MANUAL_REVIEW_REQUIRED, EXPIRED]
+        primaryReason:
+          type: string
+          enum: [ALL_POSITIVE_EVIDENCE, QR_MISMATCH, GEOFENCE_OUTSIDE, ACTOR_ASSIGNMENT_INVALID, QR_UNKNOWN, QR_INACTIVE, NO_GEOSPATIAL_POLICY, LOW_ACCURACY, GEOFENCE_UNAVAILABLE, CHALLENGE_EXPIRED]
+        qrSignal:
+          type: string
+          enum: [MATCH, MISMATCH, UNKNOWN, INACTIVE]
+        geofenceSignal:
+          type: string
+          nullable: true
+          enum: [INSIDE, OUTSIDE, LOW_ACCURACY, UNAVAILABLE, null]
+        distanceMeters: { type: number, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
     HandymanScopeAssignmentRecord:
       type: object
       description: Append-only crew assignment fact (status projection moves ACTIVE -> SUPERSEDED only). NO Lead snapshot - lead authority stays in CR-HM-04.
