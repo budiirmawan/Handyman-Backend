@@ -393,6 +393,7 @@ import { migration0392CreateHandymanQuotationLines } from './0392_create_handyma
 import { migration0393HandymanQuotationIssuedUniqueness } from './0393_handyman_quotation_issued_uniqueness';
 import { migration0394CreateHandymanQuotationDecisions } from './0394_create_handyman_quotation_decisions';
 import { migration0395CreateHandymanExecutionScopes } from './0395_create_handyman_execution_scopes';
+import { migration0396CreateHandymanExecutionScopeAssignments } from './0396_create_handyman_execution_scope_assignments';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -793,4 +794,5 @@ export const migrations: readonly Migration[] = [
   migration0393HandymanQuotationIssuedUniqueness,
   migration0394CreateHandymanQuotationDecisions,
   migration0395CreateHandymanExecutionScopes,
+  migration0396CreateHandymanExecutionScopeAssignments,
 ];
