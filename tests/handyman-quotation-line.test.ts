@@ -599,12 +599,28 @@ describe('CR-HM-06 PART 02 — quotation commercial snapshot lines', () => {
     const f = await lineFixture();
     const uomId = await insertUom(f.client.id);
     const item = await insertMaterialItem(f.client.id, uomId);
+    // Approval/execution-scope rows are owned by PART 04/05 (their
+    // tables legitimately exist); line authoring must never create
+    // or mutate them. Scoped row counts are version-bound.
+    const scopedRowCount = async (table: string, column: string) => {
+      const r = await q(
+        `SELECT count(*)::int AS n FROM ${table} WHERE ${column} = $1`,
+        [f.version.id],
+      );
+      return r.rows[0].n as number;
+    };
     const before = {
       inventoryItems: await tableCount('inventory_items'),
       movements: await tableCount('inventory_stock_movements'),
       vendorQuotations: await tableCount('vendor_quotations'),
       workOrders: await tableCount('work_orders'),
       bast: await tableCount('bast_documents'),
+      executionScopes: await scopedRowCount(
+        'handyman_execution_scopes', 'approved_quotation_version_id',
+      ),
+      decisions: await scopedRowCount(
+        'handyman_quotation_decisions', 'quotation_version_id',
+      ),
     };
     await addHandymanQuotationLine(f.version.id, {
       lineType: 'MATERIAL', description: 'Pipe', quantity: 1, uomId,
@@ -616,16 +632,16 @@ describe('CR-HM-06 PART 02 — quotation commercial snapshot lines', () => {
       vendorQuotations: await tableCount('vendor_quotations'),
       workOrders: await tableCount('work_orders'),
       bast: await tableCount('bast_documents'),
+      executionScopes: await scopedRowCount(
+        'handyman_execution_scopes', 'approved_quotation_version_id',
+      ),
+      decisions: await scopedRowCount(
+        'handyman_quotation_decisions', 'quotation_version_id',
+      ),
     };
+    assert.equal(before.executionScopes, 0);
+    assert.equal(before.decisions, 0);
     assert.deepEqual(after, before);
-    // No approval/execution-scope tables exist or were created either.
-    const tables = await q(
-      `SELECT table_name FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND (table_name LIKE '%execution_scope%'
-            OR table_name LIKE '%quotation_approval%')`,
-    );
-    assert.equal(tables.rows.length, 0);
     const events = await q(
       `SELECT event_type FROM operational_events
         WHERE entity_type = 'HANDYMAN_QUOTATION_VERSION'

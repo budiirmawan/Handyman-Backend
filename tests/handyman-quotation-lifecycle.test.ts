@@ -648,12 +648,34 @@ describe('CR-HM-06 PART 03 — quotation lifecycle', () => {
   it('10: zero approval/execution-scope/payment/BAST/FM side effects', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await lineFixture();
+    // Approval/execution-scope rows are owned by PART 04/05 (their
+    // tables legitimately exist); lifecycle operations must never
+    // create or mutate them. Scoped row counts are version-bound.
+    const scopedRowCount = async (table: string, column: string,
+      ids: string[]) => {
+      const r = await q(
+        `SELECT count(*)::int AS n FROM ${table}
+          WHERE ${column} = ANY($1::uuid[])`,
+        [ids],
+      );
+      return r.rows[0].n as number;
+    };
     const before = {
       vendorQuotations: await tableCount('vendor_quotations'),
       workOrders: await tableCount('work_orders'),
       bast: await tableCount('bast_documents'),
       moves: await tableCount('inventory_stock_movements'),
+      executionScopes: await scopedRowCount(
+        'handyman_execution_scopes', 'approved_quotation_version_id',
+        [f.version.id],
+      ),
+      decisions: await scopedRowCount(
+        'handyman_quotation_decisions', 'quotation_version_id',
+        [f.version.id],
+      ),
     };
+    assert.equal(before.executionScopes, 0);
+    assert.equal(before.decisions, 0);
     await issueHandymanQuotationVersion(
       f.version.id, { validUntil: FUTURE() }, adminUserId,
     );
@@ -671,14 +693,23 @@ describe('CR-HM-06 PART 03 — quotation lifecycle', () => {
       bast: await tableCount('bast_documents'),
       moves: await tableCount('inventory_stock_movements'),
     };
-    assert.deepEqual(after, before);
-    const tables = await q(
-      `SELECT table_name FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND (table_name LIKE '%execution_scope%'
-            OR table_name LIKE '%quotation_approval%')`,
-    );
-    assert.equal(tables.rows.length, 0);
+    assert.deepEqual(after, {
+      vendorQuotations: before.vendorQuotations,
+      workOrders: before.workOrders,
+      bast: before.bast,
+      moves: before.moves,
+    });
+    // Neither lifecycle step created approval/scope rows for any
+    // version of this quotation thread (v1 + replacement v2).
+    const bothVersions = [f.version.id, v2.id];
+    assert.equal(await scopedRowCount(
+      'handyman_execution_scopes', 'approved_quotation_version_id',
+      bothVersions,
+    ), 0);
+    assert.equal(await scopedRowCount(
+      'handyman_quotation_decisions', 'quotation_version_id',
+      bothVersions,
+    ), 0);
     // Journal rows carry no approval/scope/payment vocabulary.
     const events = await q(
       `SELECT event_type, entity_type, metadata
