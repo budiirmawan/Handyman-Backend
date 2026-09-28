@@ -134,27 +134,33 @@ API.CO.ID outcomes are never part of this conjunction.
 
 ## 11. FAILED RULE
 
-`FAILED` only for deterministic negative evidence, including:
+`FAILED` only for deterministic negative evidence, exactly one of:
 
 - QR `MISMATCH` against the expected location snapshot,
 - geofence `OUTSIDE` (with usable/fresh/accurate observation),
 - actor/assignment no longer authoritative at evaluation
-  (actor is not the active assigned Crew Lead),
-- scope no longer `AUTHORIZED` at evaluation.
+  (actor is not the active assigned Crew Lead, or the assignment is
+  invalid/inactive).
+
+If the scope is no longer `AUTHORIZED` at evaluation time, terminal
+evaluation does NOT PROCEED: no terminal result is created and the
+challenge is NOT consumed (the scope state itself is the authority —
+parallel to the ^2 TARGET precondition).
 
 `FAILED` is NEVER produced by: provider outage/auth/malformed
-response, missing enrichment, ability to establish proof being
-incomplete without deterministic negative evidence.
+response, missing enrichment, or inability to establish positive
+proof without deterministic negative evidence.
 
 ## 12. MANUAL_REVIEW_REQUIRED RULE
 
 `MANUAL_REVIEW_REQUIRED` for inability to establish positive proof
-WITHOUT deterministic negative evidence, including:
+WITHOUT deterministic negative evidence, exactly one of:
 
+- QR registry signal `UNKNOWN`,
+- QR registry signal `INACTIVE`,
 - no ACTIVE building geospatial policy (§7),
 - `LOW_ACCURACY` device observation,
-- geofence `UNAVAILABLE` (stale/unusable observation),
-- QR `UNKNOWN` or `INACTIVE` registry signal.
+- geofence `UNAVAILABLE` (stale/unusable/missing observation).
 
 ## 13. EXPIRED RULE
 
@@ -167,8 +173,8 @@ Bounded primary reason codes, exactly one per terminal result:
 | Status | Reason codes |
 | --- | --- |
 | `VERIFIED` | `ALL_POSITIVE_EVIDENCE` |
-| `FAILED` | `QR_MISMATCH`, `GEOFENCE_OUTSIDE`, `ACTOR_NOT_AUTHORITATIVE`, `SCOPE_NOT_AUTHORIZED` |
-| `MANUAL_REVIEW_REQUIRED` | `NO_ACTIVE_GEOFENCE_POLICY`, `GEOFENCE_LOW_ACCURACY`, `GEOFENCE_UNAVAILABLE`, `QR_SIGNAL_NOT_RESOLVABLE`, `DEVICE_LOCATION_UNUSABLE` |
+| `FAILED` | `QR_MISMATCH`, `GEOFENCE_OUTSIDE`, `ACTOR_ASSIGNMENT_INVALID` |
+| `MANUAL_REVIEW_REQUIRED` | `QR_UNKNOWN`, `QR_INACTIVE`, `NO_GEOSPATIAL_POLICY`, `LOW_ACCURACY`, `GEOFENCE_UNAVAILABLE` |
 | `EXPIRED` | `CHALLENGE_EXPIRED` |
 
 - Exactly ONE primary terminal reason is required per result.
