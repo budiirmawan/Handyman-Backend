@@ -54,6 +54,19 @@ export {
   HANDYMAN_QUOTATION_CURRENCIES,
 } from './handyman-quotation-line.types';
 export {
+  decideHandymanQuotation,
+  getHandymanQuotationDecision,
+} from './handyman-quotation-decision.service';
+export { handymanQuotationDecisionRepository }
+  from './handyman-quotation-decision.repository';
+export type {
+  HandymanQuotationDecision,
+  HandymanQuotationDecisionRecord,
+  PublicHandymanQuotationDecision,
+  DecideHandymanQuotationInput,
+} from './handyman-quotation-decision.types';
+export { HANDYMAN_QUOTATION_DECISIONS } from './handyman-quotation-decision.types';
+export {
   issueHandymanQuotationVersion,
   expireHandymanQuotationVersion,
   supersedeHandymanQuotationVersion,
