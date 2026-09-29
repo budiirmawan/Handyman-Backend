@@ -4,7 +4,28 @@ export {
   handymanEvidenceRecordNotFoundError,
   handymanQcRunNotFoundError,
   handymanDefectNotFoundError,
+  handymanEvidenceValidationError,
+  handymanEvidenceNotAuthorizedError,
+  handymanEvidenceAlreadyFinalizedError,
+  handymanEvidenceIdempotencyConflictError,
+  handymanEvidenceStorageKeyConflictError,
 } from './handyman-evidence-qc.errors';
+export {
+  createHandymanEvidenceRecord,
+  addHandymanEvidenceFile,
+  finalizeHandymanEvidenceRecord,
+  listHandymanEvidenceRecordsByScope,
+  getHandymanEvidenceRecordDetail,
+} from './handyman-evidence-qc.service';
+export type {
+  CreateHandymanEvidenceRecordInput,
+  AddHandymanEvidenceFileInput,
+  FinalizeHandymanEvidenceRecordInput,
+  HandymanEvidenceCommandResult,
+  HandymanEvidenceFileAddResult,
+  HandymanEvidenceRecordView,
+  HandymanEvidenceRecordDetailView,
+} from './handyman-evidence-qc.service';
 export {
   HANDYMAN_EVIDENCE_STAGES,
   HANDYMAN_EVIDENCE_MEDIA_KINDS,

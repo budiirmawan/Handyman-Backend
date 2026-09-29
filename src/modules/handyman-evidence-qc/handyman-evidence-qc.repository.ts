@@ -387,6 +387,91 @@ async function listEvidenceEventsByRecord(
   return result.rows.map(mapEvidenceEvent);
 }
 
+/**
+ * CREATE replay lookup for PART 03: a CREATE command's idempotency
+ * key is scoped by the EXECUTION SCOPE (the record does not exist
+ * yet). Returns the originally-created record + its CREATE event,
+ * or null when the key was never applied on this scope.
+ */
+async function findEvidenceCreateReplayByScope(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+  idempotencyKey: string,
+): Promise<{
+  record: HandymanEvidenceRecordRecord;
+  event: HandymanEvidenceEventRecord;
+} | null> {
+  const result = await executor.query(
+    `SELECT r.id            AS r_id,
+            r.client_id     AS r_client_id,
+            r.execution_scope_id AS r_scope_id,
+            r.session_id    AS r_session_id,
+            r.stage         AS r_stage,
+            r.description   AS r_description,
+            r.created_at    AS r_created_at,
+            r.updated_at    AS r_updated_at,
+            e.id            AS e_id,
+            e.record_id     AS e_record_id,
+            e.client_id     AS e_client_id,
+            e.event_type    AS e_event_type,
+            e.idempotency_key AS e_idempotency_key,
+            e.actor_user_id AS e_actor_user_id,
+            e.occurred_at   AS e_occurred_at,
+            e.created_at    AS e_created_at
+       FROM handyman_evidence_record_events e
+       JOIN handyman_evidence_records r ON r.id = e.record_id
+      WHERE r.execution_scope_id = $1
+        AND e.event_type = 'CREATE'
+        AND e.idempotency_key = $2
+      ORDER BY e.created_at, e.id
+      LIMIT 1`,
+    [executionScopeId, idempotencyKey],
+  );
+  if (!result.rows[0]) return null;
+  const row = result.rows[0];
+  return {
+    record: {
+      id: row.r_id,
+      clientId: row.r_client_id,
+      executionScopeId: row.r_scope_id,
+      sessionId: row.r_session_id,
+      stage: row.r_stage as HandymanEvidenceStage,
+      description: row.r_description,
+      createdAt: toTimestamp(row.r_created_at) as string,
+      updatedAt: toTimestamp(row.r_updated_at) as string,
+    },
+    event: {
+      id: row.e_id,
+      recordId: row.e_record_id,
+      clientId: row.e_client_id,
+      eventType: row.e_event_type as HandymanEvidenceEventType,
+      idempotencyKey: row.e_idempotency_key,
+      actorUserId: row.e_actor_user_id,
+      occurredAt: toTimestamp(row.e_occurred_at) as string,
+      createdAt: toTimestamp(row.e_created_at) as string,
+    },
+  };
+}
+
+/**
+ * FINALIZE stable-state check (D6 file-set lock): the record has an
+ * implicit lifecycle (no status column) — FINALIZED state IS the
+ * presence of a FINALIZE event. Returns that event or null.
+ */
+async function findEvidenceFinalizeEventByRecord(
+  executor: Executor = getPool(),
+  recordId: string,
+): Promise<HandymanEvidenceEventRecord | null> {
+  const result = await executor.query(
+    `${EVIDENCE_EVENT_SELECT}
+      WHERE record_id = $1 AND event_type = 'FINALIZE'
+      ORDER BY occurred_at, created_at, id
+      LIMIT 1`,
+    [recordId],
+  );
+  return result.rows[0] ? mapEvidenceEvent(result.rows[0]) : null;
+}
+
 /* ---- QC runs (aggregate B head) -------------------------------- */
 
 async function createQcRun(
@@ -720,6 +805,8 @@ export const handymanEvidenceQcRepository = {
   appendEvidenceEvent,
   findEvidenceEventByIdempotency,
   listEvidenceEventsByRecord,
+  findEvidenceCreateReplayByScope,
+  findEvidenceFinalizeEventByRecord,
   createQcRun,
   findQcRunById,
   findQcRunByIdForUpdate,

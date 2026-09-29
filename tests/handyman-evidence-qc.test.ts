@@ -693,12 +693,14 @@ describe('CR-HM-10 PART 02 — evidence/QC/defect persistence', () => {
     ]);
     assert.deepEqual([...referenced].sort(),
       [...allowed].sort());
-    // Module surface: exactly the 4 persistence files; NO service,
-    // controller, routes, or OpenAPI sibling exists in PART 02.
+    // Module surface: persistence files + the PART 03 EVIDENCE
+    // command service; NO controller, routes, or OpenAPI sibling
+    // exists (PART 05 owns those).
     assert.deepEqual(readdirSync('src/modules/handyman-evidence-qc')
       .sort(), [
       'handyman-evidence-qc.errors.ts',
       'handyman-evidence-qc.repository.ts',
+      'handyman-evidence-qc.service.ts',
       'handyman-evidence-qc.types.ts',
       'index.ts',
     ].sort());
@@ -717,6 +719,7 @@ describe('CR-HM-10 PART 02 — evidence/QC/defect persistence', () => {
       'handyman-evidence-qc.types.ts',
       'handyman-evidence-qc.errors.ts',
       'handyman-evidence-qc.repository.ts',
+      'handyman-evidence-qc.service.ts',
       'index.ts',
     ]) {
       const src = strip(readFileSync(
