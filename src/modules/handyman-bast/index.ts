@@ -41,6 +41,18 @@ export {
   isPart01BastAction,
 } from './handyman-bast.lifecycle';
 
+export {
+  HANDYMAN_NOT_BAST_ACCEPTANCE,
+  isHandymanCustomerBastAccepted,
+  isHandymanWarrantyStartEligible,
+  isNotBastAcceptanceAlias,
+  toHandymanBastAcceptanceReadContract,
+} from './handyman-bast.read-contract';
+export type {
+  HandymanBastAcceptanceReadContract,
+  HandymanNotBastAcceptance,
+} from './handyman-bast.read-contract';
+
 export { handymanBastRepository } from './handyman-bast.repository';
 
 export {
