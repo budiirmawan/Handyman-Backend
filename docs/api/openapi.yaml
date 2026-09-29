@@ -4668,6 +4668,213 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/estimate:
+    post:
+      tags: [Handyman Material Execution]
+      operationId: estimateHandymanMaterialExecutionLine
+      summary: Estimate/Link one MATERIAL quotation line as an execution line (PART 03)
+      description: "CR-HM-09 PART 06 — authenticated ESTIMATE command over the PART 03 service. Binds ONE approved MATERIAL quotation line of the CURRENT authoritative APPROVED quotation version to execution (authority client/quotation resolved SERVER-SIDE ONLY — caller can never author actorUserId/clientId/status/absolute quantities; unknown authority-shaped keys are structurally ignored). approvedQty copies exactly the linked quotation line quantity. Atomic: line head + ESTIMATE event + replay-safe idempotencyKey. UNKNOWN version/line (bound to a DIFFERENT client) = 404; NOT the CURRENT Crew Lead = 403; same quotationLineId already linked = 409. NO purchasing/stock carries ANY acquisition."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanMaterialExecutionEstimateRequest'
+      responses:
+        '200':
+          description: Execution line + recorded ESTIMATE event (replay returns the same rows)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialExecutionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/final-charge-ready:
+    get:
+      tags: [Handyman Material Execution]
+      operationId: getHandymanMaterialFinalChargeReadyProjection
+      summary: Read the scope-level FINAL_CHARGE_READY quantity projection (PART 05)
+      description: "CR-HM-09 PART 06 — authenticated READ-ONLY projection over ONE execution scope (PART 05 service authority): the exact SETTLED lines (status FINAL_CHARGE_READY only; lines still in flight are absent) and ONE aggregated quantity figure totalFinalUsedQty = SUM(usedQty - returnedQty). EXECUTION TRUTH ONLY — quantity and reference data; NO amount/currency/rate/price/charge/billing/payment field can exist (CR-HM-12/13 own pricing/ledger). Same Lead authority; unknown scope = 404."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Settled lines + aggregated final-used quantity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialFinalChargeReadyProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/approve:
+    post:
+      tags: [Handyman Material Execution]
+      operationId: approveHandymanMaterialExecutionLine
+      summary: Approve the estimated execution line (ESTIMATED -> APPROVED; PART 03)
+      description: "CR-HM-09 PART 06 — authenticated APPROVE command. CURRENT Crew Lead authority only. approvedQty immutable; replay of the same idempotencyKey returns the SAME event/row; a new key beyond APPROVED = bounded 409 illegal transition. NOT an acquisition."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/MaterialLineIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanMaterialExecutionKeyedRequest'
+      responses:
+        '200':
+          description: Execution line + recorded APPROVE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialExecutionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/issue:
+    post:
+      tags: [Handyman Material Execution]
+      operationId: issueHandymanMaterialExecutionLine
+      summary: Issue quantity from client-held execution storage (APPROVED -> ISSUED; PART 04)
+      description: "CR-HM-09 PART 06 — authenticated ISSUE command over the PART 04 acquisition service. `quantity` is a DELTA on the ISSUED axis, never absolute: partial issues are legal and cumulative, HARD-capped by approvedQty (bounded 400 when exceeded). The line adopts exactly ONE acquisition mode — mixing ISSUE and PURCHASE = bounded 409 with the head UNCHANGED. Supplier reference records NOTHING on ISSUE (pure reference scope). Replay of the same idempotencyKey returns the SAME event."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/MaterialLineIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanMaterialExecutionQuantityRequest'
+      responses:
+        '200':
+          description: Execution line + recorded ISSUE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialExecutionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/purchase:
+    post:
+      tags: [Handyman Material Execution]
+      operationId: purchaseHandymanMaterialExecutionLine
+      summary: Purchase quantity via lead-local supplier (APPROVED -> PURCHASED; PART 04)
+      description: "CR-HM-09 PART 06 — authenticated PURCHASE command. Same delta/cap/mode-exclusivity rules as ISSUE. `supplierReference` is a BOUNDED free-text reference snapshot (invoice/receipt/etc. — reference ONLY; NO FM/PO/GR chain exists or can be implied). Replay of the same idempotencyKey returns the SAME event; cumulative purchasedQty hard-capped by approvedQty (bounded 400)."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/MaterialLineIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanMaterialExecutionQuantityRequest'
+      responses:
+        '200':
+          description: Execution line + recorded PURCHASE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialExecutionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/use:
+    post:
+      tags: [Handyman Material Execution]
+      operationId: useHandymanMaterialExecutionLine
+      summary: Consume held quantity as used (ISSUED|PURCHASED -> USED on first use; PART 05)
+      description: "CR-HM-09 PART 06 — authenticated USE command over the PART 05 service. `quantity` is a DELTA: partial USEs accumulate while still on the USED axis, HARD-capped by usedQty <= issuedQty + purchasedQty - returnedQty (bounded 400). Refused before acquisition (APPROVED) and after settle = bounded 409. NEVER publishes a final-charge amount."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/MaterialLineIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanMaterialExecutionQuantityRequest'
+      responses:
+        '200':
+          description: Execution line + recorded USE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialExecutionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/return:
+    post:
+      tags: [Handyman Material Execution]
+      operationId: returnHandymanMaterialExecutionLine
+      summary: Return held-not-used quantity (PART 05)
+      description: "CR-HM-09 PART 06 — authenticated RETURN command. `quantity` is a DELTA on the RETURNED axis (RETURN is NOT a sticky status — the line persists on its previous state), HARD-capped by returnedQty <= issuedQty + purchasedQty - usedQty (bounded 400). Returns REDUCE the final usage basis (finalUsedQty = usedQty - returnedQty). Refused after settle = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/MaterialLineIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanMaterialExecutionQuantityRequest'
+      responses:
+        '200':
+          description: Execution line + recorded RETURN event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialExecutionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/settle:
+    post:
+      tags: [Handyman Material Execution]
+      operationId: settleHandymanMaterialExecutionLine
+      summary: Settle the line → FINAL_CHARGE_READY (PART 05)
+      description: "CR-HM-09 PART 06 — authenticated SETTLE command. Legal ONLY from ISSUED/PURCHASED/USED (the line must have passed acquisition): transitions to FINAL_CHARGE_READY with an atomic event. AFTER settle, every further ESTIMATE-override/USE/RETURN/ISSUE/PURCHASE adjust on this line is a bounded 409 — corrections live downstream in CR-HM-13 reversal/adjustment, NEVER by history rewrite here. Replay of the same idempotencyKey returns the SAME event; a second SETTLE with a NEW key = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/MaterialLineIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanMaterialExecutionKeyedRequest'
+      responses:
+        '200':
+          description: Execution line + recorded FINAL_CHARGE_READY event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanMaterialExecutionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /health:
     get:
       operationId: getHealth
@@ -70581,6 +70788,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    MaterialLineIdPath:
+      name: lineId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -76330,6 +76542,85 @@ components:
         presenceSeconds: { type: number, minimum: 0 }
         actualWorkSeconds: { type: number, minimum: 0 }
         sessionClosed: { type: boolean }
+    HandymanMaterialExecutionEstimateRequest:
+      type: object
+      required: [quotationVersionId, quotationLineId, estimatedQty, idempotencyKey]
+      description: "Bounded ESTIMATE input (PART 03). executionScopeId comes from the URL; actorUserId/clientId/any status/timestamps/absolute-quantity override are structurally IGNORED. estimatedQty is copied as the opening estimatedQty AND the approved authority (approvedQty follows the linked MATERIAL quotation line quantity exactly, via the service)."
+      properties:
+        quotationVersionId: { type: string, format: uuid }
+        quotationLineId: { type: string, format: uuid }
+        estimatedQty: { type: number, exclusiveMinimum: 0 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanMaterialExecutionKeyedRequest:
+      type: object
+      required: [idempotencyKey]
+      description: "Bounded mutation input for APPROVE/SETTLE: idempotencyKey ONLY (offline-replay safety). UNKNOWN keys are structurally ignored — actorUserId/clientId/lineId (path)/status/timestamps/quantities can never be steered by the caller."
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanMaterialExecutionQuantityRequest:
+      type: object
+      required: [quantity, idempotencyKey]
+      description: "Bounded mutator input for ISSUE/PURCHASE/USE/RETURN. `quantity` is the DELTA added to the targeted axis (never the absolute quantity); supplierReference is honoured ONLY on PURCHASE (reference-only snapshot, max 200 chars — no FM/PO/GR chain). Every authority-shaped key (actorUserId/clientId/status/timestamps/mode/absolute-quantity) is structurally ignored."
+      properties:
+        quantity: { type: number, exclusiveMinimum: 0 }
+        supplierReference: { type: string, minLength: 1, maxLength: 200, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanMaterialExecutionLineRecord:
+      type: object
+      description: "Execution-TRUTH line projection (bounded). Statuses exactly ESTIMATED / APPROVED / ISSUED / PURCHASED / USED / FINAL_CHARGE_READY. Quantities sit on FOUR mutually consistent axes: approved authority (immutable), ISSUED / PURCHASED acquisition (exactly ONE mode), USED consumption, RETURNED adjustments. ZERO amount/currency/rate/price/charge/billing/payment field."
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        quotationLineId: { type: string, format: uuid }
+        sourceItemId: { type: string, format: uuid, nullable: true }
+        status:
+          type: string
+          enum: [ESTIMATED, APPROVED, ISSUED, PURCHASED, USED, FINAL_CHARGE_READY]
+        acquisitionMode:
+          type: string
+          enum: [ISSUED, PURCHASED]
+          nullable: true
+        estimatedQty: { type: number, minimum: 0 }
+        approvedQty: { type: number, minimum: 0 }
+        issuedQty: { type: number, minimum: 0 }
+        purchasedQty: { type: number, minimum: 0 }
+        usedQty: { type: number, minimum: 0 }
+        returnedQty: { type: number, minimum: 0 }
+        supplierReference: { type: string, maxLength: 200, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanMaterialExecutionEventRecord:
+      type: object
+      description: "Append-only command-evidence event (event types exactly ESTIMATE / APPROVE / ISSUE / PURCHASE / USE / RETURN / FINAL_CHARGE_READY; server-clock occurredAt)."
+      properties:
+        id: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        eventType:
+          type: string
+          enum: [ESTIMATE, APPROVE, ISSUE, PURCHASE, USE, RETURN, FINAL_CHARGE_READY]
+        idempotencyKey: { type: string }
+        occurredAt: { type: string, format: date-time }
+    HandymanMaterialExecutionCommandResult:
+      type: object
+      description: "Mutation result: execution line projection + the recorded event; replayed=true means the SAME previously recorded rows were returned (no second transition, quantities NEVER re-adjusted)."
+      properties:
+        line:
+          $ref: '#/components/schemas/HandymanMaterialExecutionLineRecord'
+        event:
+          $ref: '#/components/schemas/HandymanMaterialExecutionEventRecord'
+        replayed: { type: boolean }
+    HandymanMaterialFinalChargeReadyProjection:
+      type: object
+      description: "Scope-level FINAL_CHARGE_READY projection (PART 05, READ-ONLY): the exact SETTLED lines + ONE aggregated usage figure totalFinalUsedQty = SUM(usedQty - returnedQty). EXECUTION TRUTH ONLY — the sole quantity handoff to CR-HM-12/13 pricing/ledger; NO financial field can exist here."
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanMaterialExecutionLineRecord'
+        totalFinalUsedQty: { type: number }
         projectedAt: { type: string, format: date-time }
     HandymanScopeAssignmentRecord:
       type: object
