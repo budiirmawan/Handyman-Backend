@@ -107,6 +107,9 @@ READ-ONLY inputs consumed to freeze this CR:
 | `ENTITLEMENT_BASIS` | `LEDGER_NET_CHARGED` (correction-netted, gated) |
 | `FUNDING_BASIS` | `LEDGER_COLLECTED_NET` (`applied` / `netReceived`) |
 | `BM_FEE_BASIS` | `LABOR_ONLY`, exact agreement version, mode `DEFAULT` only |
+| `BM_FEE_TERM_AUTHORITY` | `CR_HM_12_COMMERCIAL_AGREEMENT_VERSION` (kind `PERCENTAGE_OF_BASIS`; see prerequisite decision §2) |
+| `BM_BENEFICIARY_SEAT` | `VERSION_BOUND_EXPLICIT_FACT` (kind `CLIENT_ORGANIZATION`; no channel/client inference; see prerequisite decision §3) |
+| `CR_HM_12_FOLLOWUP` | `CR_HM_12_PART_06_BM_FEE_TERM_AND_BENEFICIARY` (gates BM fee VALUES) |
 | `DERIVATION_GATE` | `ledger.authority.authoritativeForEntitlement === true` |
 | `PROVIDER_ATTRIBUTION` | `ACTIVE_CR_HM_04_EXECUTION_SCOPE_ASSIGNMENT` (one per scope) |
 | `SETTLEMENT_STATES` | `EARNED, PAYABLE, INCLUDED_IN_SETTLEMENT, SETTLED` |
@@ -226,10 +229,15 @@ consumed figure is a correction-netted fact at its own instant.
    `asOf = the ledger transaction's posted instant`, and the
    derivation persists the returned `binding` (`clientId`,
    `agreementId`, `agreementVersionId`, `versionNumber`, window) plus
-   `ruleRowId`, `basis`, `mode`. A `REFERENCE` rule
+   `ruleRowId`, `basis`, `mode`. Per
+   `CR-HM-14_PREREQUISITE_DECISION_BM_FEE.md` §2/§3 the same read is
+   extended by the CR-HM-12 follow-up with the **version-bound numeric
+   term** (`PERCENTAGE_OF_BASIS`, exact rate) and the **version-bound
+   financial beneficiary**, whose ids are then persisted as anchors too;
+   both are READ-ONLY inputs CR-HM-14 never authors. A `REFERENCE` rule
    (`authoritativeForEntitlement: false`) **must never** feed
-   derivation; a missing rule, a non-exact resolution, or a
-   fail-closed bounded error STOPS derivation. "Latest" is never
+   derivation; a missing rule/term/beneficiary, a non-exact resolution,
+   or a fail-closed bounded error STOPS derivation. "Latest" is never
    resolved.
 3. **LABOR_ONLY, never merged.** The frozen basis vocabulary is exactly
    `LABOR_ONLY` ⇒ the BM fee base is `transaction.laborNet` **only**.
@@ -249,13 +257,19 @@ consumed figure is a correction-netted fact at its own instant.
    separate customer invoice, and is never a percentage of or side
    effect of SaaS package price, subscription tier, or platform
    billing.
-6. **Value authoring is BLOCKED pending two decisions.** No governed
-   numeric fee term exists anywhere in the repository, and no governed
-   BM beneficiary identity seat exists (§13 **HARD-1**, **HARD-2**).
-   The *contract* (basis, mode, anchors, invariants, settlement
-   hosting) is frozen here; a fee **VALUE** may not be authored by any
-   PART until an explicit committed decision resolves both. CR-HM-14
-   must never invent a rate, a default percentage, or a payee.
+6. **Value authoring is BLOCKED pending the prerequisite delivery.**
+   Both prerequisite decisions are now made — the numeric term authority
+   (exact-version CR-HM-12 commercial agreement, `DEFAULT`-only) and the
+   explicit version-bound financial beneficiary — in
+   `CR-HM-14_PREREQUISITE_DECISION_BM_FEE.md` (which resolves §13
+   **HARD-1** / **HARD-2**). The *contract* (basis, mode, anchors,
+   invariants, settlement hosting) is frozen here and there; a fee
+   **VALUE** may not be authored by any PART until the smallest CR-HM-12
+   follow-up (`CR-HM-12 PART 06 — BM Fee Term & Beneficiary
+   Prerequisite`, §13/§14) delivers the version-bound term + beneficiary
+   seats and is merged and certified. An unconfigured version yields NO
+   BM fee entitlement, fail-closed. CR-HM-14 must never invent a rate, a
+   default percentage, or a payee.
 
 ## §6 Settlement / reconciliation authority (frozen)
 
@@ -489,12 +503,18 @@ certified in CR-HM-06/09/12/13) and applied to this domain:
 
 ## §13 BLOCKERS
 
-### HARD — must be resolved by an explicit committed decision before any PART authors the affected value
+### HARD — resolved (decision record), delivery gated by the CR-HM-12 follow-up
+
+Resolved by `CR-HM-14_PREREQUISITE_DECISION_BM_FEE.md` (FROZEN,
+base `a0acbd4`), which selects path **A**. The rows below are retained
+with their original evidence; the **STOP on BM fee VALUE authoring
+stands until `CR-HM-12 PART 06 — BM Fee Term & Beneficiary
+Prerequisite` is merged and certified**.
 
 | ID | Blocker | Evidence | Rule |
 | --- | --- | --- | --- |
-| **HARD-1** | **No governed numeric BM fee term exists.** `handyman_bm_fee_rule_definitions` stores basis (`LABOR_ONLY`) + mode (`DEFAULT`/`REFERENCE`) only — migration 0409 states verbatim: *"stores NO numeric rule facts at all: no percentage, no rate, no amount, no fee value"*, and its test proves every column is TEXT/UUID/TIMESTAMPTZ. CR-HM-12 §7 assigns *fee rule definition + versioning* (incl. the rule's configuration) to CR-HM-12 and *fee amount derivation* to CR-HM-14 — but the configuration term itself does not exist anywhere. Matrix row 21→22 requires *"versioned commercial agreements and **configurable fee basis** must exist before BM fee entitlement calculation"* | Rule table + migration 0409 + CR-HM-12 §7/§9 B6; repo-wide scan finds no rate/percentage/amount column for any fee | **STOP** on authoring any BM fee **VALUE**. Resolution path (choose ONE and commit it as a decision record before the affected PART): **(A)** a governed CR-HM-12 follow-up PART adds the versioned numeric term seat to the fee-rule family (respects row 21→22 gating and CR-HM-12 §7 ownership; recommended), or **(B)** an explicit decision record assigns a versioned numeric term seat to CR-HM-14's own domain bound to the exact CR-HM-12 `agreementVersionId` (never mutating CR-HM-12 tables), with a written authority rationale. Silent invention of a rate, default percentage, or "fallback" value is FORBIDDEN |
-| **HARD-2** | **No governed BM beneficiary identity seat exists.** The BM fee implies a payee; the repository declares no BM party identity. The only candidate seats are (a) the agreement's `clients` row (the tenant/customer organization the agreement binds to), (b) the CR-HM-01 channel attribution (`BM_SUPER_APP` + bounded free-text `originReference`, explicitly *not* an identity authority and carrying *"no BM financial entitlement"*), or (c) a future governed seat | `handyman_commercial_agreements.client_id` FK; `handyman_channel_attributions` doc/type comments; no BM/party table or column anywhere | **STOP** on attributing any BM fee fact to a payee. Resolution: an explicit committed decision naming the beneficiary seat (or deferring BM fee attribution to a later governed change). Deriving a BM fee amount whose payee is undefined is FORBIDDEN; the provider side is unaffected (provider beneficiary identity IS governed — provider context + crew from the assignment) |
+| **HARD-1** | **No governed numeric BM fee term exists.** `handyman_bm_fee_rule_definitions` stores basis (`LABOR_ONLY`) + mode (`DEFAULT`/`REFERENCE`) only — migration 0409 states verbatim: *"stores NO numeric rule facts at all: no percentage, no rate, no amount, no fee value"*, and its test proves every column is TEXT/UUID/TIMESTAMPTZ. CR-HM-12 §7 assigns *fee rule definition + versioning* (incl. the rule's configuration) to CR-HM-12 and *fee amount derivation* to CR-HM-14 — but the configuration term itself does not exist anywhere. Matrix row 21→22 requires *"versioned commercial agreements and **configurable fee basis** must exist before BM fee entitlement calculation"* | Rule table + migration 0409 + CR-HM-12 §7/§9 B6; repo-wide scan finds no rate/percentage/amount column for any fee | **RESOLVED — authority seat decided (decision record §2):** the numeric term is a **CR-HM-12 commercial agreement authority**, bound to the EXACT agreement version, kind vocabulary closed to `PERCENTAGE_OF_BASIS`, exact `NUMERIC` rate `> 0` and `≤ 100`, integer-basis-points arithmetic, `DEFAULT`-only. **Seat delivery + STOP on any BM fee VALUE = `CR-HM-12 PART 06` merged and certified**; silent invention of a rate, default percentage, or "fallback" value remains FORBIDDEN |
+| **HARD-2** | **No governed BM beneficiary identity seat exists.** The BM fee implies a payee; the repository declares no BM party identity. The only candidate seats are (a) the agreement's `clients` row (the tenant/customer organization the agreement binds to), (b) the CR-HM-01 channel attribution (`BM_SUPER_APP` + bounded free-text `originReference`, explicitly *not* an identity authority and carrying *"no BM financial entitlement"*), or (c) a future governed seat | `handyman_commercial_agreements.client_id` FK; `handyman_channel_attributions` doc/type comments; no BM/party table or column anywhere | **RESOLVED — identity seat decided (decision record §3):** an **explicit version-bound financial beneficiary fact** on the same CR-HM-12 agreement-version boundary, kind vocabulary closed to `CLIENT_ORGANIZATION` whose governed reference is that version's own `client_id`; recorded, never derived; **zero client/channel-attribution inference**. **Seat delivery = `CR-HM-12 PART 06`**; a missing beneficiary fact makes the fee underivable (fail-closed) and **no fallback identity may ever be used**. The provider side is unaffected (provider beneficiary identity IS governed — provider context + crew from the assignment) |
 
 Neither HARD-1 nor HARD-2 blocks this governance PART, the entitlement
 fact foundation, provider entitlement derivation, settlement of provider
@@ -546,7 +566,7 @@ decision beyond §13 HARD-1/HARD-2 resolution paths.
 | --- | --- | --- | --- |
 | **00** | START GOVERNANCE (this document) | Freeze authority, provider/BM fee entitlement, settlement/reconciliation states, correction law, ledger handoff, invariants, blockers, split | Runtime, migration, API/OpenAPI, tests |
 | **01** | Entitlement fact foundation | Entitlement fact tables (provider + BM fee kinds) anchored to `transactionId`/`executionScopeId`, assignment + agreement-version/rule anchors, currency/amount CHECKs, closed kind/state vocabularies, append-only triggers, single-use idempotency, uniqueness per (transaction, kind, beneficiary, basis anchor) | Derivation policy, settlement states, reconciliation, gateway/payout vocabulary, ledger writes, HTTP |
-| **02** | Entitlement derivation from governed inputs | Provider entitlement derivation end-to-end: gate enforcement, net-basis consumption, assignment attribution with the fail-closed conflict rule, transaction-level base, forward-only corrections bound to their ledger cause; **BM fee derivation contract** (exact version, `DEFAULT`-only, `LABOR_ONLY`, anchors, fail-closed when HARD-1/HARD-2 unresolved) | Invented rate/percentage/payee, `REFERENCE` rules, gross bases, proration, ledger writes, settlement states |
+| **02** | Entitlement derivation from governed inputs | Provider entitlement derivation end-to-end: gate enforcement, net-basis consumption, assignment attribution with the fail-closed conflict rule, transaction-level base, forward-only corrections bound to their ledger cause; **BM fee derivation contract** (exact version, `DEFAULT`-only, `LABOR_ONLY`, anchors, read-only version-bound term + beneficiary, fail-closed while the CR-HM-12 follow-up is not yet delivered/unconfigured) | Invented rate/percentage/payee, `REFERENCE` rules, gross bases, proration, ledger writes, settlement states |
 | **03** | Settlement lifecycle + reconciliation | Settlement units and transition facts for the four frozen states + three exceptions; funding-bounded inclusion/settlement; terminal `SETTLED`; reconciliation runs/variance/exception facts against gated ledger basis; one currency per unit | Payout execution/rails/banks, external statement ingestion, SaaS reads, ledger writes, dispute adjudication workflow |
 | **04** | Published read contract + firewall verification | Read-only, write-incapable consumption family for CR-HM-17/CR-HM-22 (entitlement + settlement + reconciliation facts/states, net-funded figures, exception visibility); SaaS-entitlement/no-FM + invariant verification battery; byte-stability/no-mutation proof | New authority, any mutation verb, HTTP where unneeded |
 | **05** | Thin HTTP/OpenAPI surface (conditional) | Bounded endpoints over PART 01–04 commands only, whitelist parsers, ignored authority-shaped body keys, OpenAPI parity | New business rules, payout/provider endpoints, entitlement-inference endpoints, any second write path |
@@ -559,12 +579,18 @@ Merge / order rules:
   (E3), the funding law (E6) and the attribution conflict rule (§4.4)
   ship in the same commit as the fact tables and their suite proves
   them.
-- **HARD-1 / HARD-2 gate rule.** No PART may author a BM fee VALUE or
-  payee until one resolution path per blocker is committed as a
-  decision record. PART 01 may declare the BM fee fact kind; PART 02
-  must refuse BM fee value authoring structurally (bounded, fail-closed)
-  while unresolved; PART 03 settles only derivable (provider-side)
-  entitlements in that state.
+- **HARD-1 / HARD-2 gate rule (updated by the prerequisite decision
+  record).** Both blockers are RESOLVED (decision record
+  `CR-HM-14_PREREQUISITE_DECISION_BM_FEE.md` §2/§3); the gate is now
+  **delivery**: no PART may author a BM fee VALUE or payee until
+  `CR-HM-12 PART 06 — BM Fee Term & Beneficiary Prerequisite` is merged
+  and certified. PART 01 may declare the BM fee fact kind; PART 02 must
+  refuse BM fee value authoring structurally (bounded, fail-closed)
+  until then, and forever fail closed for a version lacking a term or
+  beneficiary fact; PART 03 settles only derivable (provider-side)
+  entitlements in that state. CR-HM-14 may never add its own numeric
+  term or beneficiary seat — that would void the decision record and
+  re-open HARD-1/HARD-2.
 - **PART 03 split allowance.** If reconciliation cannot be reviewed in
   one PART together with the settlement lifecycle, it splits into
   `03a settlement` + `03b reconciliation` — both remain bound by this
@@ -601,8 +627,15 @@ Merge / order rules:
   gate is mandatory on every derivation.
 - **CR-HM-12** — rule facts are consumed version-exactly and
   `DEFAULT`-only; `REFERENCE ≠ final`; CR-HM-14 never re-reads
-  catalogue/reference prices as a base. HARD-1 may require a governed
-  CR-HM-12 follow-up (path A) before BM fee values exist.
+  catalogue/reference prices as a base and never writes a CR-HM-12
+  fact. HARD-1/HARD-2 are RESOLVED by
+  `CR-HM-14_PREREQUISITE_DECISION_BM_FEE.md` (numeric term = CR-HM-12
+  commercial agreement authority, exact-version, `DEFAULT`-only;
+  beneficiary = explicit version-bound financial beneficiary fact, no
+  channel/client inference) and are **delivery-gated** on
+  `CR-HM-12 PART 06 — BM Fee Term & Beneficiary Prerequisite`
+  (migration ≥ 0415, two version-bound seats, extended basis-fact read,
+  zero fee VALUE) before any BM fee value exists.
 - **CR-HM-04** — provider/crew identity and the single `ACTIVE`
   assignment are the only attribution authority; CR-HM-14 never assigns,
   reassigns, or mutates crews, and fails closed on ambiguous
