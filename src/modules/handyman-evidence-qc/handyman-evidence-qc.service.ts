@@ -19,12 +19,18 @@ import {
   handymanEvidenceRecordNotFoundError,
   handymanEvidenceStorageKeyConflictError,
   handymanEvidenceValidationError,
+  handymanQcIdempotencyConflictError,
+  handymanQcNotAuthorizedError,
+  handymanQcRunAlreadyOpenError,
+  handymanQcRunIllegalTransitionError,
+  handymanQcRunNotFoundError,
 } from './handyman-evidence-qc.errors';
 import { handymanEvidenceQcRepository }
   from './handyman-evidence-qc.repository';
 import {
   HANDYMAN_EVIDENCE_MEDIA_KINDS,
   HANDYMAN_EVIDENCE_STAGES,
+  HANDYMAN_QC_ITEM_OUTCOMES,
 } from './handyman-evidence-qc.types';
 import type {
   HandymanEvidenceEventRecord,
@@ -32,6 +38,11 @@ import type {
   HandymanEvidenceMediaKind,
   HandymanEvidenceRecordRecord,
   HandymanEvidenceStage,
+  HandymanQcItemOutcome,
+  HandymanQcRunEventRecord,
+  HandymanQcRunItemRecord,
+  HandymanQcRunRecord,
+  HandymanQcRunStatus,
 } from './handyman-evidence-qc.types';
 
 /**
@@ -506,4 +517,338 @@ export async function getHandymanEvidenceRecordDetail(
   const finalized = events.some((event) =>
     event.eventType === 'FINALIZE');
   return { record, files, events, finalized };
+}
+
+/* ==================================================================
+ * CR-HM-10 PART 04 — QC commands ONLY (governance PART 03):
+ * OPEN run, ITEM_SET, FINISH (server-evaluated), run+item read
+ * models. ONE OPEN run per scope (bounded 409 on a second).
+ * Reopening is FORBIDDEN — a new run is a fresh OPEN row (history
+ * is additive). NO defect commands here (later PART).
+ * ================================================================== */
+
+function ensureOutcome(value: string): HandymanQcItemOutcome {
+  if (!(HANDYMAN_QC_ITEM_OUTCOMES as readonly string[])
+    .includes(value)) {
+    throw handymanEvidenceValidationError('outcome');
+  }
+  return value as HandymanQcItemOutcome;
+}
+
+function ensureItemKey(value: string): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw.length === 0 || raw.length > 128) {
+    throw handymanEvidenceValidationError('itemKey');
+  }
+  return raw;
+}
+
+function ensureChecklistIdentity(value: string): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw.length === 0 || raw.length > 200) {
+    throw handymanEvidenceValidationError('checklistIdentity');
+  }
+  return raw;
+}
+
+/**
+ * Same preamble as PART 03 but 403 maps to the QC vocabulary —
+ * identical authority chain, module-local error code only.
+ */
+async function qcAuthorityPreamble(
+  scopeUuid: string,
+  actorUserId: string,
+) {
+  const scope = await handymanExecutionScopeRepository.findScopeById(
+    undefined,
+    scopeUuid,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await contextAccessService.canAccessClient(
+    actorUserId,
+    scope.clientId,
+  ))) {
+    throw buildingAccessDeniedError();
+  }
+  const resolution = await resolveHandymanAssignmentLead(
+    scopeUuid,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
+    throw handymanQcNotAuthorizedError();
+  }
+  return { scope, resolution };
+}
+
+/* ---- QC OPEN ---------------------------------------------------- */
+
+export type OpenHandymanQcRunInput = {
+  executionScopeId: string;
+  checklistIdentity: string;
+  sessionId?: string | null;
+  idempotencyKey: string;
+};
+
+export type HandymanQcOpenResult = {
+  run: HandymanQcRunRecord;
+  event: HandymanQcRunEventRecord;
+  replayed: boolean;
+};
+
+/**
+ * OPEN (D3): ONE OPEN run per scope — a second OPEN (fresh key) is
+ * a bounded 409 ALREADY_OPEN (the DB partial-unique index is the
+ * final wall inside the transaction). Replay of the same key +
+ * same shape returns the SAME run/event; same key + different
+ * shape is a bounded 409 idempotency conflict.
+ */
+export async function openHandymanQcRun(
+  input: OpenHandymanQcRunInput,
+  actorUserId: string,
+): Promise<HandymanQcOpenResult> {
+  const scopeUuid = ensureUuid(input.executionScopeId,
+    'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+  const checklistIdentity = ensureChecklistIdentity(
+    input.checklistIdentity);
+  const sessionRaw = input.sessionId === undefined
+    ? null
+    : input.sessionId;
+  const sessionId = sessionRaw === null
+    ? null
+    : ensureUuid(sessionRaw, 'sessionId');
+  const { scope } = await qcAuthorityPreamble(scopeUuid, actorUuid);
+  const boundSessionId = await ensureSessionBinding(sessionId,
+    scopeUuid);
+
+  return withTransaction(async (tx: PoolClient) => {
+    const replay = await handymanEvidenceQcRepository
+      .findQcOpenReplayByScope(tx, scopeUuid, key);
+    if (replay) {
+      if (replay.run.checklistIdentity !== checklistIdentity
+          || (replay.run.sessionId ?? null) !== boundSessionId) {
+        throw handymanQcIdempotencyConflictError();
+      }
+      return { run: replay.run, event: replay.event,
+        replayed: true };
+    }
+    // ONE OPEN per scope: any existing OPEN run (different key) is
+    // a bounded 409; replay handled above.
+    const openRun = await handymanEvidenceQcRepository
+      .findOpenQcRunByScope(tx, scopeUuid);
+    if (openRun) throw handymanQcRunAlreadyOpenError();
+    const run = await handymanEvidenceQcRepository
+      .createQcRun(tx, {
+        clientId: scope.clientId,
+        executionScopeId: scopeUuid,
+        sessionId: boundSessionId,
+        checklistIdentity,
+      });
+    const event = await handymanEvidenceQcRepository
+      .appendQcRunEvent(tx, {
+        runId: run.id,
+        clientId: scope.clientId,
+        eventType: 'OPEN',
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { run, event, replayed: false };
+  });
+}
+
+/* ---- QC ITEM_SET ------------------------------------------------ */
+
+export type SetHandymanQcRunItemOutcomeInput = {
+  qcRunId: string;
+  itemKey: string;
+  outcome: HandymanQcItemOutcome;
+  note?: string | null;
+  idempotencyKey: string;
+};
+
+export type HandymanQcItemSetResult = {
+  item: HandymanQcRunItemRecord;
+  event: HandymanQcRunEventRecord;
+  replayed: boolean;
+};
+
+/**
+ * ITEM_SET (D3): sets the outcome of one checklist item on an OPEN
+ * run — terminal runs take no item writes (bounded 409). The item
+ * row upserts (run,item_key); the EVENT log is append-only, so the
+ * full set-history survives. Replay of the same key replays the
+ * SAME event.
+ */
+export async function setHandymanQcRunItemOutcome(
+  input: SetHandymanQcRunItemOutcomeInput,
+  actorUserId: string,
+): Promise<HandymanQcItemSetResult> {
+  const runUuid = ensureUuid(input.qcRunId, 'qcRunId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+  const itemKey = ensureItemKey(input.itemKey);
+  const outcome = ensureOutcome(input.outcome);
+  const note = input.note === undefined ? null : input.note;
+  if (note !== null && typeof note !== 'string') {
+    throw handymanEvidenceValidationError('note');
+  }
+
+  return withTransaction(async (tx: PoolClient) => {
+    const run = await handymanEvidenceQcRepository
+      .findQcRunByIdForUpdate(tx, runUuid);
+    if (!run) throw handymanQcRunNotFoundError();
+    await qcAuthorityPreamble(run.executionScopeId, actorUuid);
+
+    // Replay before the transition check (same key replays).
+    const replayEvent = await handymanEvidenceQcRepository
+      .findQcRunEventByIdempotency(tx, runUuid, 'ITEM_SET', key);
+    if (replayEvent) {
+      const items = await handymanEvidenceQcRepository
+        .listQcRunItems(tx, runUuid);
+      const item = items.find((candidate) =>
+        candidate.itemKey === itemKey) ?? null;
+      if (!item) throw handymanQcIdempotencyConflictError();
+      return { item, event: replayEvent, replayed: true };
+    }
+
+    if (run.status !== 'OPEN') {
+      throw handymanQcRunIllegalTransitionError();
+    }
+
+    const item = await handymanEvidenceQcRepository
+      .setQcRunItemOutcome(tx, { runId: runUuid, itemKey, outcome,
+        note });
+    const event = await handymanEvidenceQcRepository
+      .appendQcRunEvent(tx, {
+        runId: runUuid,
+        clientId: run.clientId,
+        eventType: 'ITEM_SET',
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { item, event, replayed: false };
+  });
+}
+
+/* ---- QC FINISH -------------------------------------------------- */
+
+export type FinishHandymanQcRunInput = {
+  qcRunId: string;
+  idempotencyKey: string;
+};
+
+export type HandymanQcFinishResult = {
+  run: HandymanQcRunRecord;
+  event: HandymanQcRunEventRecord;
+  replayed: boolean;
+};
+
+/**
+ * FINISH (D3): the terminal evaluation is computed SERVER-SIDE —
+ * PASSED iff EVERY item outcome is PASS or NA; ANY DEFECT or
+ * remaining NOT_CHECKED → FAILED. The caller never picks the
+ * result. Terminal runs cannot be reopened: a fresh FINISH key on
+ * a terminal run is a bounded 409; replay with the same key
+ * returns the SAME event.
+ */
+export async function finishHandymanQcRun(
+  input: FinishHandymanQcRunInput,
+  actorUserId: string,
+): Promise<HandymanQcFinishResult> {
+  const runUuid = ensureUuid(input.qcRunId, 'qcRunId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+
+  return withTransaction(async (tx: PoolClient) => {
+    const run = await handymanEvidenceQcRepository
+      .findQcRunByIdForUpdate(tx, runUuid);
+    if (!run) throw handymanQcRunNotFoundError();
+    await qcAuthorityPreamble(run.executionScopeId, actorUuid);
+
+    const replayEvent = await handymanEvidenceQcRepository
+      .findQcRunEventByIdempotency(tx, runUuid, 'FINISH', key);
+    if (replayEvent) {
+      return { run, event: replayEvent, replayed: true };
+    }
+
+    if (run.status !== 'OPEN') {
+      throw handymanQcRunIllegalTransitionError();
+    }
+
+    // Server-evaluated terminal status (D3).
+    const items = await handymanEvidenceQcRepository
+      .listQcRunItems(tx, runUuid);
+    const hasFailure = items.some((item) =>
+      item.outcome === 'DEFECT' || item.outcome === 'NOT_CHECKED');
+    const terminalStatus: HandymanQcRunStatus = hasFailure
+      ? 'FAILED'
+      : 'PASSED';
+
+    const updated = await handymanEvidenceQcRepository
+      .updateQcRunStatus(tx, runUuid, terminalStatus);
+    if (!updated) throw handymanQcRunNotFoundError();
+    const event = await handymanEvidenceQcRepository
+      .appendQcRunEvent(tx, {
+        runId: runUuid,
+        clientId: run.clientId,
+        eventType: 'FINISH',
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { run: updated, event, replayed: false };
+  });
+}
+
+/* ---- QC reads (Lead-gated projections) -------------------------- */
+
+export type HandymanQcRunView = {
+  run: HandymanQcRunRecord;
+  items: HandymanQcRunItemRecord[];
+};
+
+/**
+ * Per-scope QC run listing (run + items), Lead-gated, READ-ONLY
+ * projections over committed state.
+ */
+export async function listHandymanQcRunsByScope(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanQcRunView[]> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  await qcAuthorityPreamble(scopeUuid, actorUuid);
+  const runs = await handymanEvidenceQcRepository
+    .listQcRunsByScope(undefined, scopeUuid);
+  const views = [] as HandymanQcRunView[];
+  for (const run of runs) {
+    const items = await handymanEvidenceQcRepository
+      .listQcRunItems(undefined, run.id);
+    views.push({ run, items });
+  }
+  return views;
+}
+
+export type HandymanQcRunDetailView = {
+  run: HandymanQcRunRecord;
+  items: HandymanQcRunItemRecord[];
+  events: HandymanQcRunEventRecord[];
+};
+
+/** Single-run detail (run + items + append-only event chain). */
+export async function getHandymanQcRunDetail(
+  qcRunId: string,
+  actorUserId: string,
+): Promise<HandymanQcRunDetailView> {
+  const runUuid = ensureUuid(qcRunId, 'qcRunId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const run = await handymanEvidenceQcRepository
+    .findQcRunById(undefined, runUuid);
+  if (!run) throw handymanQcRunNotFoundError();
+  await qcAuthorityPreamble(run.executionScopeId, actorUuid);
+  const items = await handymanEvidenceQcRepository
+    .listQcRunItems(undefined, runUuid);
+  const events = await handymanEvidenceQcRepository
+    .listQcRunEvents(undefined, runUuid);
+  return { run, items, events };
 }

@@ -9,6 +9,10 @@ export {
   handymanEvidenceAlreadyFinalizedError,
   handymanEvidenceIdempotencyConflictError,
   handymanEvidenceStorageKeyConflictError,
+  handymanQcNotAuthorizedError,
+  handymanQcRunAlreadyOpenError,
+  handymanQcRunIllegalTransitionError,
+  handymanQcIdempotencyConflictError,
 } from './handyman-evidence-qc.errors';
 export {
   createHandymanEvidenceRecord,
@@ -16,6 +20,11 @@ export {
   finalizeHandymanEvidenceRecord,
   listHandymanEvidenceRecordsByScope,
   getHandymanEvidenceRecordDetail,
+  openHandymanQcRun,
+  setHandymanQcRunItemOutcome,
+  finishHandymanQcRun,
+  listHandymanQcRunsByScope,
+  getHandymanQcRunDetail,
 } from './handyman-evidence-qc.service';
 export type {
   CreateHandymanEvidenceRecordInput,
@@ -25,6 +34,14 @@ export type {
   HandymanEvidenceFileAddResult,
   HandymanEvidenceRecordView,
   HandymanEvidenceRecordDetailView,
+  OpenHandymanQcRunInput,
+  SetHandymanQcRunItemOutcomeInput,
+  FinishHandymanQcRunInput,
+  HandymanQcOpenResult,
+  HandymanQcItemSetResult,
+  HandymanQcFinishResult,
+  HandymanQcRunView,
+  HandymanQcRunDetailView,
 } from './handyman-evidence-qc.service';
 export {
   HANDYMAN_EVIDENCE_STAGES,

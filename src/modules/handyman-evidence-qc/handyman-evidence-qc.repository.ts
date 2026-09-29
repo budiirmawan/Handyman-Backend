@@ -661,6 +661,71 @@ async function listQcRunEvents(
   return result.rows.map(mapQcRunEvent);
 }
 
+/**
+ * OPEN replay lookup for PART 04: an OPEN command's idempotency key
+ * is scoped by the EXECUTION SCOPE (the run does not exist yet).
+ * Returns the originally-created run + its OPEN event, or null.
+ */
+async function findQcOpenReplayByScope(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+  idempotencyKey: string,
+): Promise<{
+  run: HandymanQcRunRecord;
+  event: HandymanQcRunEventRecord;
+} | null> {
+  const result = await executor.query(
+    `SELECT r.id            AS r_id,
+            r.client_id     AS r_client_id,
+            r.execution_scope_id AS r_scope_id,
+            r.session_id    AS r_session_id,
+            r.checklist_identity AS r_checklist_identity,
+            r.status        AS r_status,
+            r.created_at    AS r_created_at,
+            r.updated_at    AS r_updated_at,
+            e.id            AS e_id,
+            e.run_id        AS e_run_id,
+            e.client_id     AS e_client_id,
+            e.event_type    AS e_event_type,
+            e.idempotency_key AS e_idempotency_key,
+            e.actor_user_id AS e_actor_user_id,
+            e.occurred_at   AS e_occurred_at,
+            e.created_at    AS e_created_at
+       FROM handyman_qc_run_events e
+       JOIN handyman_qc_runs r ON r.id = e.run_id
+      WHERE r.execution_scope_id = $1
+        AND e.event_type = 'OPEN'
+        AND e.idempotency_key = $2
+      ORDER BY e.created_at, e.id
+      LIMIT 1`,
+    [executionScopeId, idempotencyKey],
+  );
+  if (!result.rows[0]) return null;
+  const row = result.rows[0];
+  return {
+    run: {
+      id: row.r_id,
+      clientId: row.r_client_id,
+      executionScopeId: row.r_scope_id,
+      sessionId: row.r_session_id,
+      checklistIdentity: row.r_checklist_identity,
+      status: row.r_status as HandymanQcRunStatus,
+      createdAt: toTimestamp(row.r_created_at) as string,
+      updatedAt: toTimestamp(row.r_updated_at) as string,
+    },
+    event: {
+      id: row.e_id,
+      runId: row.e_run_id,
+      clientId: row.e_client_id,
+      eventType: row.e_event_type as HandymanQcRunEventType,
+      idempotencyKey: row.e_idempotency_key,
+      actorUserId: row.e_actor_user_id,
+      occurredAt: toTimestamp(row.e_occurred_at) as string,
+      createdAt: toTimestamp(row.e_created_at) as string,
+    },
+  };
+}
+
 /* ---- Defect records (aggregate C head) ------------------------- */
 
 async function createDefectRecord(
@@ -818,6 +883,7 @@ export const handymanEvidenceQcRepository = {
   appendQcRunEvent,
   findQcRunEventByIdempotency,
   listQcRunEvents,
+  findQcOpenReplayByScope,
   createDefectRecord,
   findDefectById,
   findDefectByIdForUpdate,

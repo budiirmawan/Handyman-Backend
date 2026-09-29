@@ -86,3 +86,47 @@ export function handymanEvidenceStorageKeyConflictError(): AppError {
     statusCode: 409,
   });
 }
+
+/* ---- CR-HM-10 PART 04 — QC command errors --------------------- */
+
+/** Actor is not the CURRENT authoritative Crew Lead of the scope. */
+export function handymanQcNotAuthorizedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_NOT_AUTHORIZED,
+    message:
+      'Only the CURRENT authoritative Crew Lead may write or read '
+      + 'Handyman QC for this scope.',
+    statusCode: 403,
+  });
+}
+
+/** ONE OPEN run per scope (D3): a second OPEN is a bounded 409. */
+export function handymanQcRunAlreadyOpenError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_RUN_ALREADY_OPEN,
+    message:
+      'This execution scope already has an OPEN QC run.',
+    statusCode: 409,
+  });
+}
+
+/** Command is not legal for the run's CURRENT status. */
+export function handymanQcRunIllegalTransitionError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_RUN_ILLEGAL_TRANSITION,
+    message:
+      'Illegal Handyman QC run transition: the run is no longer '
+      + 'OPEN (terminal runs accept no ITEM_SET/FINISH).',
+    statusCode: 409,
+  });
+}
+
+/** Same idempotency key replayed with a different command shape. */
+export function handymanQcIdempotencyConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_IDEMPOTENCY_CONFLICT,
+    message:
+      'Idempotency key was already used with a different request.',
+    statusCode: 409,
+  });
+}
