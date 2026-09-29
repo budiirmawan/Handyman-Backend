@@ -39,6 +39,15 @@ export function handymanBastSignOffReservedError(action: string): AppError {
   });
 }
 
+export function handymanBastSignatureRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_BAST_SIGNATURE_REQUIRED,
+    message:
+      'Customer ACCEPT requires a signature digest bound to the BAST.',
+    statusCode: 400,
+  });
+}
+
 export function handymanBastActiveConflictError(
   executionScopeId: string,
 ): AppError {

@@ -56,19 +56,7 @@ describe('CR-HM-11 PART 01 BAST lifecycle', () => {
     );
   });
 
-  it('ACCEPT/REJECT are reserved (PART 02); COMPLETE is not acceptance', () => {
-    assert.throws(
-      () => nextHandymanBastStatus('ISSUED', 'ACCEPT'),
-      (err: unknown) =>
-        err instanceof AppError
-        && err.code === ERROR_CODES.HANDYMAN_BAST_SIGN_OFF_RESERVED,
-    );
-    assert.throws(
-      () => nextHandymanBastStatus('ISSUED', 'REJECT'),
-      (err: unknown) =>
-        err instanceof AppError
-        && err.code === ERROR_CODES.HANDYMAN_BAST_SIGN_OFF_RESERVED,
-    );
+  it('COMPLETE is not acceptance', () => {
     assert.throws(
       () => nextHandymanBastStatus('DRAFT', 'COMPLETE'),
       (err: unknown) =>

@@ -4,11 +4,13 @@ import { getPool } from '../../database';
 import { handymanBastActiveConflictError } from './handyman-bast.errors';
 import type {
   HandymanBastEventRecord,
-  HandymanBastPart01EventType,
+  HandymanBastEventType,
   HandymanBastRecord,
+  HandymanBastSignOffRecord,
   HandymanBastStatus,
   NewHandymanBast,
   NewHandymanBastEvent,
+  NewHandymanBastSignOff,
 } from './handyman-bast.types';
 
 type Row = QueryResultRow;
@@ -17,7 +19,8 @@ const PG_UNIQUE_VIOLATION = '23505';
 
 const BAST_SELECT = `
   SELECT id, client_id, execution_scope_id, status,
-         issued_at, voided_at, created_at, updated_at
+         issued_at, accepted_at, rejected_at, voided_at,
+         created_at, updated_at
     FROM handyman_bast_documents`;
 
 const EVENT_SELECT = `
@@ -32,6 +35,8 @@ function mapBast(row: Row): HandymanBastRecord {
     executionScopeId: row.execution_scope_id,
     status: row.status as HandymanBastStatus,
     issuedAt: row.issued_at,
+    acceptedAt: row.accepted_at ?? null,
+    rejectedAt: row.rejected_at ?? null,
     voidedAt: row.voided_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -44,7 +49,7 @@ function mapEvent(row: Row): HandymanBastEventRecord {
     clientId: row.client_id,
     bastId: row.bast_id,
     executionScopeId: row.execution_scope_id,
-    eventType: row.event_type as HandymanBastPart01EventType,
+    eventType: row.event_type as HandymanBastEventType,
     idempotencyKey: row.idempotency_key,
     actorUserId: row.actor_user_id,
     occurredAt: row.occurred_at,
@@ -63,7 +68,8 @@ async function createBast(
          id, client_id, execution_scope_id, status
        ) VALUES ($1, $2, $3, 'DRAFT')
        RETURNING id, client_id, execution_scope_id, status,
-                 issued_at, voided_at, created_at, updated_at`,
+                 issued_at, accepted_at, rejected_at, voided_at,
+                 created_at, updated_at`,
       [id, record.clientId, record.executionScopeId],
     );
     return mapBast(result.rows[0]);
@@ -108,6 +114,12 @@ async function updateBastStatus(
   const issuedAtSql = status === 'ISSUED'
     ? 'issued_at = COALESCE(issued_at, NOW())'
     : 'issued_at = issued_at';
+  const acceptedAtSql = status === 'ACCEPTED'
+    ? 'accepted_at = COALESCE(accepted_at, NOW())'
+    : 'accepted_at = accepted_at';
+  const rejectedAtSql = status === 'REJECTED'
+    ? 'rejected_at = COALESCE(rejected_at, NOW())'
+    : 'rejected_at = rejected_at';
   const voidedAtSql = status === 'VOID'
     ? 'voided_at = NOW()'
     : 'voided_at = voided_at';
@@ -115,11 +127,14 @@ async function updateBastStatus(
     `UPDATE handyman_bast_documents
         SET status = $2,
             ${issuedAtSql},
+            ${acceptedAtSql},
+            ${rejectedAtSql},
             ${voidedAtSql},
             updated_at = NOW()
       WHERE id = $1
       RETURNING id, client_id, execution_scope_id, status,
-                issued_at, voided_at, created_at, updated_at`,
+                issued_at, accepted_at, rejected_at, voided_at,
+                created_at, updated_at`,
     [id, status],
   );
   return mapBast(result.rows[0]);
@@ -153,7 +168,7 @@ async function insertEvent(
 async function findEventByIdempotency(
   executor: Executor = getPool(),
   bastId: string,
-  eventType: HandymanBastPart01EventType,
+  eventType: HandymanBastEventType,
   idempotencyKey: string,
 ): Promise<HandymanBastEventRecord | null> {
   const result = await executor.query(
@@ -164,6 +179,49 @@ async function findEventByIdempotency(
   return result.rows[0] ? mapEvent(result.rows[0]) : null;
 }
 
+function mapSignOff(row: Row): HandymanBastSignOffRecord {
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    bastId: row.bast_id,
+    eventId: row.event_id,
+    executionScopeId: row.execution_scope_id,
+    decision: row.decision,
+    signatureDigest: row.signature_digest,
+    evidenceRecordId: row.evidence_record_id,
+    rejectReason: row.reject_reason,
+    createdAt: row.created_at,
+  };
+}
+
+async function insertSignOff(
+  executor: Executor = getPool(),
+  record: NewHandymanBastSignOff,
+): Promise<HandymanBastSignOffRecord> {
+  const id = randomUUID();
+  const result = await executor.query(
+    `INSERT INTO handyman_bast_sign_offs (
+       id, client_id, bast_id, event_id, execution_scope_id,
+       decision, signature_digest, evidence_record_id, reject_reason
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, client_id, bast_id, event_id, execution_scope_id,
+               decision, signature_digest, evidence_record_id,
+               reject_reason, created_at`,
+    [
+      id,
+      record.clientId,
+      record.bastId,
+      record.eventId,
+      record.executionScopeId,
+      record.decision,
+      record.signatureDigest,
+      record.evidenceRecordId,
+      record.rejectReason,
+    ],
+  );
+  return mapSignOff(result.rows[0]);
+}
+
 export const handymanBastRepository = {
   createBast,
   findBastById,
@@ -171,4 +229,5 @@ export const handymanBastRepository = {
   updateBastStatus,
   insertEvent,
   findEventByIdempotency,
+  insertSignOff,
 };

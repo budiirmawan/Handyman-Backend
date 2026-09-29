@@ -1,9 +1,10 @@
 /**
  * CR-HM-11 PART 01 — Handyman BAST aggregate types ONLY (FROZEN
  * `CR-HM-11_START_GOVERNANCE.md` §3–§8). Status vocabulary is the
- * full frozen set. PART 01 event types are PREPARE/ISSUE/VOID only.
- * ACCEPT/REJECT are reserved for PART 02 (not implemented here).
- * NO signature, NO payment, NO warranty, NO FM BAST FK.
+ * full frozen set. PART 01 events: PREPARE/ISSUE/VOID.
+ * PART 02 events: ACCEPT/REJECT (state-gated sign-off).
+ * Sign-off rows are evidence, never a second status authority.
+ * NO payment, NO warranty, NO FM BAST FK.
  */
 
 export const HANDYMAN_BAST_STATUSES = [
@@ -23,7 +24,7 @@ export function isHandymanBastStatus(
   return (HANDYMAN_BAST_STATUSES as readonly string[]).includes(value);
 }
 
-/** PART 01 write actions. ACCEPT/REJECT are not in this set. */
+/** PART 01 write actions. */
 export const HANDYMAN_BAST_PART01_EVENT_TYPES = [
   'PREPARE',
   'ISSUE',
@@ -40,12 +41,37 @@ export function isHandymanBastPart01EventType(
     .includes(value);
 }
 
+/** PART 02 customer sign-off actions. */
+export const HANDYMAN_BAST_PART02_EVENT_TYPES = [
+  'ACCEPT',
+  'REJECT',
+] as const;
+
+export type HandymanBastPart02EventType =
+  (typeof HANDYMAN_BAST_PART02_EVENT_TYPES)[number];
+
+export const HANDYMAN_BAST_EVENT_TYPES = [
+  ...HANDYMAN_BAST_PART01_EVENT_TYPES,
+  ...HANDYMAN_BAST_PART02_EVENT_TYPES,
+] as const;
+
+export type HandymanBastEventType =
+  (typeof HANDYMAN_BAST_EVENT_TYPES)[number];
+
+export function isHandymanBastEventType(
+  value: string,
+): value is HandymanBastEventType {
+  return (HANDYMAN_BAST_EVENT_TYPES as readonly string[]).includes(value);
+}
+
 export type HandymanBastRecord = {
   id: string;
   clientId: string;
   executionScopeId: string;
   status: HandymanBastStatus;
   issuedAt: Date | null;
+  acceptedAt: Date | null;
+  rejectedAt: Date | null;
   voidedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -61,7 +87,7 @@ export type HandymanBastEventRecord = {
   clientId: string;
   bastId: string;
   executionScopeId: string;
-  eventType: HandymanBastPart01EventType;
+  eventType: HandymanBastEventType;
   idempotencyKey: string;
   actorUserId: string;
   occurredAt: Date;
@@ -72,7 +98,31 @@ export type NewHandymanBastEvent = {
   clientId: string;
   bastId: string;
   executionScopeId: string;
-  eventType: HandymanBastPart01EventType;
+  eventType: HandymanBastEventType;
   idempotencyKey: string;
   actorUserId: string;
+};
+
+export type HandymanBastSignOffRecord = {
+  id: string;
+  clientId: string;
+  bastId: string;
+  eventId: string;
+  executionScopeId: string;
+  decision: HandymanBastPart02EventType;
+  signatureDigest: string;
+  evidenceRecordId: string | null;
+  rejectReason: string | null;
+  createdAt: Date;
+};
+
+export type NewHandymanBastSignOff = {
+  clientId: string;
+  bastId: string;
+  eventId: string;
+  executionScopeId: string;
+  decision: HandymanBastPart02EventType;
+  signatureDigest: string;
+  evidenceRecordId: string | null;
+  rejectReason: string | null;
 };
