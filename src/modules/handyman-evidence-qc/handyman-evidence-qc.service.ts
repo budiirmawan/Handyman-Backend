@@ -24,6 +24,10 @@ import {
   handymanQcRunAlreadyOpenError,
   handymanQcRunIllegalTransitionError,
   handymanQcRunNotFoundError,
+  handymanDefectIdempotencyConflictError,
+  handymanDefectIllegalTransitionError,
+  handymanDefectNotAuthorizedError,
+  handymanDefectNotFoundError,
 } from './handyman-evidence-qc.errors';
 import { handymanEvidenceQcRepository }
   from './handyman-evidence-qc.repository';
@@ -33,6 +37,10 @@ import {
   HANDYMAN_QC_ITEM_OUTCOMES,
 } from './handyman-evidence-qc.types';
 import type {
+  HandymanDefectEventRecord,
+  HandymanDefectEventType,
+  HandymanDefectRecordRecord,
+  HandymanDefectStatus,
   HandymanEvidenceEventRecord,
   HandymanEvidenceFileRecord,
   HandymanEvidenceMediaKind,
@@ -851,4 +859,307 @@ export async function getHandymanQcRunDetail(
   const events = await handymanEvidenceQcRepository
     .listQcRunEvents(undefined, runUuid);
   return { run, items, events };
+}
+
+/* ==================================================================
+ * CR-HM-10 PART 05 — DEFECT / RECTIFICATION / REINSPECTION commands
+ * (governance PART 04): OPEN_DEFECT (optional run/item link,
+ * provenance server-verified), START_RECTIFICATION,
+ * RECORD_RECTIFICATION, REQUEST_REINSPECTION (loop),
+ * PASS_REINSPECTION (terminal VERIFIED) + defect read models. ZERO
+ * commercial coupling — defects NEVER adjust any settled amount.
+ * NO API/OpenAPI here (later PART).
+ * ================================================================== */
+
+/**
+ * Frozen status ladder (D3): OPENED → RECTIFYING → RECTIFIED →
+ * VERIFIED; REINSPECTION loops RECTIFIED → RECTIFYING; VERIFIED is
+ * locked. The FROM-set empty entries are open commands (creation).
+ */
+const DEFECT_TRANSITIONS: Record<Exclude<HandymanDefectEventType,
+'OPEN_DEFECT'>, {
+  from: readonly HandymanDefectStatus[];
+  to: HandymanDefectStatus;
+}> = {
+  START_RECTIFICATION: { from: ['OPENED'], to: 'RECTIFYING' },
+  RECORD_RECTIFICATION: { from: ['RECTIFYING'], to: 'RECTIFIED' },
+  REQUEST_REINSPECTION: { from: ['RECTIFIED'], to: 'RECTIFYING' },
+  PASS_REINSPECTION: { from: ['RECTIFIED'], to: 'VERIFIED' },
+};
+
+/**
+ * Same preamble as PART 03/04 but 403 maps to the defect
+ * vocabulary — identical authority chain, module-local error code.
+ */
+async function defectAuthorityPreamble(
+  scopeUuid: string,
+  actorUserId: string,
+) {
+  const scope = await handymanExecutionScopeRepository.findScopeById(
+    undefined,
+    scopeUuid,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await contextAccessService.canAccessClient(
+    actorUserId,
+    scope.clientId,
+  ))) {
+    throw buildingAccessDeniedError();
+  }
+  const resolution = await resolveHandymanAssignmentLead(
+    scopeUuid,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
+    throw handymanDefectNotAuthorizedError();
+  }
+  return { scope, resolution };
+}
+
+/**
+ * Provenance link resolution (D3/D6): the optional run/item link
+ * must resolve INSIDE this scope — a run from another scope is a
+ * bounded 400; an item is resolved to its own run server-side
+ * (callers never smuggle cross-scope or cross-run pairs; the DB
+ * provenance trigger is the final wall).
+ */
+async function resolveDefectRunItemLink(
+  scopeUuid: string,
+  runId: string | null,
+  itemId: string | null,
+): Promise<{ runId: string | null; itemId: string | null }> {
+  let resolvedRunId = runId;
+  if (resolvedRunId !== null) {
+    const run = await handymanEvidenceQcRepository
+      .findQcRunById(undefined, resolvedRunId);
+    if (!run || run.executionScopeId !== scopeUuid) {
+      throw handymanEvidenceValidationError('runId');
+    }
+  }
+  if (itemId === null) {
+    return { runId: resolvedRunId, itemId: null };
+  }
+  const item = await handymanEvidenceQcRepository
+    .findQcRunItemById(undefined, itemId);
+  if (!item) throw handymanEvidenceValidationError('itemId');
+  if (resolvedRunId !== null && item.runId !== resolvedRunId) {
+    // Item must belong to the SAME run the caller linked; never
+    // silently repoint the pair (DB provenance trigger backstop).
+    throw handymanEvidenceValidationError('itemId');
+  }
+  if (resolvedRunId === null) {
+    resolvedRunId = item.runId;
+    const run = await handymanEvidenceQcRepository
+      .findQcRunById(undefined, resolvedRunId);
+    if (!run || run.executionScopeId !== scopeUuid) {
+      throw handymanEvidenceValidationError('itemId');
+    }
+  }
+  return { runId: resolvedRunId, itemId };
+}
+
+function ensureDefectDescription(value: string): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw.length === 0 || raw.length > 4000) {
+    throw handymanEvidenceValidationError('description');
+  }
+  return raw;
+}
+
+/* ---- OPEN_DEFECT ------------------------------------------------ */
+
+export type OpenHandymanDefectInput = {
+  executionScopeId: string;
+  description: string;
+  runId?: string | null;
+  itemId?: string | null;
+  idempotencyKey: string;
+};
+
+export type HandymanDefectCommandResult = {
+  defect: HandymanDefectRecordRecord;
+  event: HandymanDefectEventRecord;
+  replayed: boolean;
+};
+
+/**
+ * OPEN_DEFECT (D3): creates the defect head + OPEN_DEFECT event in
+ * one atomic transaction (status OPENED server-side). Replay of
+ * the same key + same link-shape returns the SAME rows; same key +
+ * different shape is a bounded 409 idempotency conflict.
+ */
+export async function openHandymanDefect(
+  input: OpenHandymanDefectInput,
+  actorUserId: string,
+): Promise<HandymanDefectCommandResult> {
+  const scopeUuid = ensureUuid(input.executionScopeId,
+    'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+  const description = ensureDefectDescription(input.description);
+  const runRaw = input.runId === undefined ? null : input.runId;
+  const itemRaw = input.itemId === undefined ? null : input.itemId;
+  const runExpl = runRaw === null ? null : ensureUuid(runRaw, 'runId');
+  const itemExpl = itemRaw === null ? null
+    : ensureUuid(itemRaw, 'itemId');
+  const { scope } = await defectAuthorityPreamble(scopeUuid,
+    actorUuid);
+  const link = await resolveDefectRunItemLink(scopeUuid, runExpl,
+    itemExpl);
+
+  return withTransaction(async (tx: PoolClient) => {
+    const replay = await handymanEvidenceQcRepository
+      .findDefectOpenReplayByScope(tx, scopeUuid, key);
+    if (replay) {
+      if ((replay.defect.runId ?? null) !== link.runId
+          || (replay.defect.itemId ?? null) !== link.itemId
+          || replay.defect.description !== description) {
+        throw handymanDefectIdempotencyConflictError();
+      }
+      return { defect: replay.defect, event: replay.event,
+        replayed: true };
+    }
+    const defect = await handymanEvidenceQcRepository
+      .createDefectRecord(tx, {
+        clientId: scope.clientId,
+        executionScopeId: scopeUuid,
+        runId: link.runId,
+        itemId: link.itemId,
+        description,
+      });
+    const event = await handymanEvidenceQcRepository
+      .appendDefectEvent(tx, {
+        defectId: defect.id,
+        clientId: scope.clientId,
+        eventType: 'OPEN_DEFECT',
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { defect, event, replayed: false };
+  });
+}
+
+/* ---- ladder transitions ----------------------------------------- */
+
+export type TransitionHandymanDefectInput = {
+  defectId: string;
+  idempotencyKey: string;
+};
+
+/**
+ * Shared ladder executor (D3/D7): row-lock → replay-check →
+ * stable-state check (frozen FROM set) → head status write → event
+ * append — one transaction. VERIFIED is locked: every post-VERIFIED
+ * mutation key is a bounded 409.
+ */
+async function transitionHandymanDefect(
+  input: TransitionHandymanDefectInput,
+  actorUserId: string,
+  eventType: Exclude<HandymanDefectEventType, 'OPEN_DEFECT'>,
+): Promise<HandymanDefectCommandResult> {
+  const defectUuid = ensureUuid(input.defectId, 'defectId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+
+  return withTransaction(async (tx: PoolClient) => {
+    const defect = await handymanEvidenceQcRepository
+      .findDefectByIdForUpdate(tx, defectUuid);
+    if (!defect) throw handymanDefectNotFoundError();
+    await defectAuthorityPreamble(defect.executionScopeId, actorUuid);
+
+    const replayEvent = await handymanEvidenceQcRepository
+      .findDefectEventByIdempotency(tx, defectUuid, eventType, key);
+    if (replayEvent) {
+      return { defect, event: replayEvent, replayed: true };
+    }
+
+    const rule = DEFECT_TRANSITIONS[eventType];
+    if (!rule.from.includes(defect.status)) {
+      throw handymanDefectIllegalTransitionError(defect.status,
+        eventType);
+    }
+    const updated = await handymanEvidenceQcRepository
+      .updateDefectStatus(tx, defectUuid, rule.to);
+    if (!updated) throw handymanDefectNotFoundError();
+    const event = await handymanEvidenceQcRepository
+      .appendDefectEvent(tx, {
+        defectId: defectUuid,
+        clientId: defect.clientId,
+        eventType,
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { defect: updated, event, replayed: false };
+  });
+}
+
+/** START_RECTIFICATION: OPENED → RECTIFYING. */
+export async function startHandymanDefectRectification(
+  input: TransitionHandymanDefectInput,
+  actorUserId: string,
+): Promise<HandymanDefectCommandResult> {
+  return transitionHandymanDefect(input, actorUserId,
+    'START_RECTIFICATION');
+}
+
+/** RECORD_RECTIFICATION: RECTIFYING → RECTIFIED. */
+export async function recordHandymanDefectRectification(
+  input: TransitionHandymanDefectInput,
+  actorUserId: string,
+): Promise<HandymanDefectCommandResult> {
+  return transitionHandymanDefect(input, actorUserId,
+    'RECORD_RECTIFICATION');
+}
+
+/** REQUEST_REINSPECTION (loop): RECTIFIED → RECTIFYING. */
+export async function requestHandymanDefectReinspection(
+  input: TransitionHandymanDefectInput,
+  actorUserId: string,
+): Promise<HandymanDefectCommandResult> {
+  return transitionHandymanDefect(input, actorUserId,
+    'REQUEST_REINSPECTION');
+}
+
+/** PASS_REINSPECTION (terminal): RECTIFIED → VERIFIED (locked). */
+export async function passHandymanDefectReinspection(
+  input: TransitionHandymanDefectInput,
+  actorUserId: string,
+): Promise<HandymanDefectCommandResult> {
+  return transitionHandymanDefect(input, actorUserId,
+    'PASS_REINSPECTION');
+}
+
+/* ---- defect reads (Lead-gated projections) ----------------------- */
+
+export type HandymanDefectDetailView = {
+  defect: HandymanDefectRecordRecord;
+  events: HandymanDefectEventRecord[];
+};
+
+/** Per-scope defect listing (current status snapshot), Lead-gated. */
+export async function listHandymanDefectsByScope(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanDefectRecordRecord[]> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  await defectAuthorityPreamble(scopeUuid, actorUuid);
+  return handymanEvidenceQcRepository
+    .listDefectsByScope(undefined, scopeUuid);
+}
+
+/** Single-defect detail (head + append-only event chain). */
+export async function getHandymanDefectDetail(
+  defectId: string,
+  actorUserId: string,
+): Promise<HandymanDefectDetailView> {
+  const defectUuid = ensureUuid(defectId, 'defectId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const defect = await handymanEvidenceQcRepository
+    .findDefectById(undefined, defectUuid);
+  if (!defect) throw handymanDefectNotFoundError();
+  await defectAuthorityPreamble(defect.executionScopeId, actorUuid);
+  const events = await handymanEvidenceQcRepository
+    .listDefectEvents(undefined, defectUuid);
+  return { defect, events };
 }

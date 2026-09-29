@@ -608,6 +608,18 @@ async function listQcRunItems(
   return result.rows.map(mapQcRunItem);
 }
 
+/** PART 05: defect provenance link resolution (item → its run). */
+async function findQcRunItemById(
+  executor: Executor = getPool(),
+  itemId: string,
+): Promise<HandymanQcRunItemRecord | null> {
+  const result = await executor.query(
+    `${QC_ITEM_SELECT} WHERE id = $1`,
+    [itemId],
+  );
+  return result.rows[0] ? mapQcRunItem(result.rows[0]) : null;
+}
+
 /* ---- QC run events (append-only) ------------------------------- */
 
 async function appendQcRunEvent(
@@ -856,6 +868,74 @@ async function listDefectEvents(
   return result.rows.map(mapDefectEvent);
 }
 
+/**
+ * OPEN_DEFECT replay lookup for PART 05: an OPEN_DEFECT command's
+ * idempotency key is scoped by the EXECUTION SCOPE (the defect does
+ * not exist yet). Returns the original defect + its OPEN_DEFECT
+ * event, or null.
+ */
+async function findDefectOpenReplayByScope(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+  idempotencyKey: string,
+): Promise<{
+  defect: HandymanDefectRecordRecord;
+  event: HandymanDefectEventRecord;
+} | null> {
+  const result = await executor.query(
+    `SELECT d.id            AS d_id,
+            d.client_id     AS d_client_id,
+            d.execution_scope_id AS d_scope_id,
+            d.run_id        AS d_run_id,
+            d.item_id       AS d_item_id,
+            d.description   AS d_description,
+            d.status        AS d_status,
+            d.created_at    AS d_created_at,
+            d.updated_at    AS d_updated_at,
+            e.id            AS e_id,
+            e.defect_id     AS e_defect_id,
+            e.client_id     AS e_client_id,
+            e.event_type    AS e_event_type,
+            e.idempotency_key AS e_idempotency_key,
+            e.actor_user_id AS e_actor_user_id,
+            e.occurred_at   AS e_occurred_at,
+            e.created_at    AS e_created_at
+       FROM handyman_defect_events e
+       JOIN handyman_defect_records d ON d.id = e.defect_id
+      WHERE d.execution_scope_id = $1
+        AND e.event_type = 'OPEN_DEFECT'
+        AND e.idempotency_key = $2
+      ORDER BY e.created_at, e.id
+      LIMIT 1`,
+    [executionScopeId, idempotencyKey],
+  );
+  if (!result.rows[0]) return null;
+  const row = result.rows[0];
+  return {
+    defect: {
+      id: row.d_id,
+      clientId: row.d_client_id,
+      executionScopeId: row.d_scope_id,
+      runId: row.d_run_id,
+      itemId: row.d_item_id,
+      description: row.d_description,
+      status: row.d_status as HandymanDefectStatus,
+      createdAt: toTimestamp(row.d_created_at) as string,
+      updatedAt: toTimestamp(row.d_updated_at) as string,
+    },
+    event: {
+      id: row.e_id,
+      defectId: row.e_defect_id,
+      clientId: row.e_client_id,
+      eventType: row.e_event_type as HandymanDefectEventType,
+      idempotencyKey: row.e_idempotency_key,
+      actorUserId: row.e_actor_user_id,
+      occurredAt: toTimestamp(row.e_occurred_at) as string,
+      createdAt: toTimestamp(row.e_created_at) as string,
+    },
+  };
+}
+
 export { PG_RAISE_EXCEPTION, PG_UNIQUE_VIOLATION };
 
 export const handymanEvidenceQcRepository = {
@@ -880,6 +960,7 @@ export const handymanEvidenceQcRepository = {
   updateQcRunStatus,
   setQcRunItemOutcome,
   listQcRunItems,
+  findQcRunItemById,
   appendQcRunEvent,
   findQcRunEventByIdempotency,
   listQcRunEvents,
@@ -892,4 +973,5 @@ export const handymanEvidenceQcRepository = {
   appendDefectEvent,
   findDefectEventByIdempotency,
   listDefectEvents,
+  findDefectOpenReplayByScope,
 };

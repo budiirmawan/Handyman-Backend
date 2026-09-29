@@ -130,3 +130,46 @@ export function handymanQcIdempotencyConflictError(): AppError {
     statusCode: 409,
   });
 }
+
+/* ---- CR-HM-10 PART 05 — defect/rectification errors ------------ */
+
+/** Actor is not the CURRENT authoritative Crew Lead of the scope. */
+export function handymanDefectNotAuthorizedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_NOT_AUTHORIZED,
+    message:
+      'Only the CURRENT authoritative Crew Lead may write or read '
+      + 'Handyman defects for this scope.',
+    statusCode: 403,
+  });
+}
+
+/**
+ * Command is not legal for the defect's CURRENT status. The frozen
+ * ladder is OPENED → RECTIFYING → RECTIFIED → VERIFIED (REINSPECTION
+ * may loop RECTIFIED → RECTIFYING); VERIFIED is locked — every
+ * mutation past it is a bounded 409.
+ */
+export function handymanDefectIllegalTransitionError(
+  status: string,
+  eventType: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_ILLEGAL_TRANSITION,
+    message:
+      `Illegal Handyman defect transition ${eventType} from status `
+      + `${status}.`,
+    statusCode: 409,
+    details: [`status=${status}`, `eventType=${eventType}`],
+  });
+}
+
+/** Same idempotency key replayed with a different command shape. */
+export function handymanDefectIdempotencyConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_IDEMPOTENCY_CONFLICT,
+    message:
+      'Idempotency key was already used with a different request.',
+    statusCode: 409,
+  });
+}

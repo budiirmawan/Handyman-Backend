@@ -13,6 +13,9 @@ export {
   handymanQcRunAlreadyOpenError,
   handymanQcRunIllegalTransitionError,
   handymanQcIdempotencyConflictError,
+  handymanDefectNotAuthorizedError,
+  handymanDefectIllegalTransitionError,
+  handymanDefectIdempotencyConflictError,
 } from './handyman-evidence-qc.errors';
 export {
   createHandymanEvidenceRecord,
@@ -25,6 +28,13 @@ export {
   finishHandymanQcRun,
   listHandymanQcRunsByScope,
   getHandymanQcRunDetail,
+  openHandymanDefect,
+  startHandymanDefectRectification,
+  recordHandymanDefectRectification,
+  requestHandymanDefectReinspection,
+  passHandymanDefectReinspection,
+  listHandymanDefectsByScope,
+  getHandymanDefectDetail,
 } from './handyman-evidence-qc.service';
 export type {
   CreateHandymanEvidenceRecordInput,
@@ -42,6 +52,10 @@ export type {
   HandymanQcFinishResult,
   HandymanQcRunView,
   HandymanQcRunDetailView,
+  OpenHandymanDefectInput,
+  TransitionHandymanDefectInput,
+  HandymanDefectCommandResult,
+  HandymanDefectDetailView,
 } from './handyman-evidence-qc.service';
 export {
   HANDYMAN_EVIDENCE_STAGES,
