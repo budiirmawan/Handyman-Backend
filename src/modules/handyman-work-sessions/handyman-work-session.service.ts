@@ -742,3 +742,28 @@ export async function getHandymanWorkSessionTimeProjection(
     projectedAt: serverNow,
   };
 }
+
+/**
+ * PART 05 READ accessor — the ACTIVE (non-CHECKED_OUT) session for a
+ * scope under the same Lead authority preamble. Read-only; NO
+ * lifecycle effect.
+ */
+export type HandymanWorkSessionActiveResult = {
+  session: HandymanWorkSessionRecord;
+  helperPresence: HandymanWorkSessionHelperPresenceRecord[];
+};
+
+export async function getActiveHandymanWorkSession(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanWorkSessionActiveResult> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  await authorityPreamble(scopeUuid, actorUuid);
+  const session = await handymanWorkSessionRepository
+    .findActiveWorkSessionByExecutionScope(undefined, scopeUuid);
+  if (!session) throw handymanWorkSessionNotFoundError();
+  const helperPresence = await handymanWorkSessionRepository
+    .listWorkSessionHelperPresenceBySession(undefined, session.id);
+  return { session, helperPresence };
+}

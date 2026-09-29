@@ -4445,6 +4445,229 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/check-in:
+    post:
+      tags: [Handyman Work Sessions]
+      operationId: checkInHandymanWorkSession
+      summary: Check in the field crew to the Execution Scope (ARRIVAL_VERIFIED gated)
+      description: "CR-HM-08 PART 05 — authenticated CHECK_IN command. The Execution Scope must be AUTHORIZED and carry an immutable CR-HM-07 VERIFIED arrival result for the SAME scope; the authenticated actor is resolved server-side as the CURRENT authoritative assigned Crew Lead (caller can never author actorUserId/workerId/crewId/assignmentId/helper list/arrivalResultId/timestamps; unknown authority-shaped keys are structurally ignored). Creates the ONE active CHECKED_IN session, appends the CHECK_IN event with server timestamps, and snapshots CURRENT helper crew membership server-side — atomically. Replaying the same idempotencyKey returns the SAME session/event. CHECK_IN is NOT START_WORK and never resolves billing."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanWorkSessionMutationRequest'
+      responses:
+        '200':
+          description: Session + recorded CHECK_IN event (replay returns the same rows)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/start-work:
+    post:
+      tags: [Handyman Work Sessions]
+      operationId: startWorkHandymanWorkSession
+      summary: Start the actual-work clock on the checked-in session
+      description: "CR-HM-08 PART 05 — authenticated START_WORK command. Same CURRENT authoritative Crew Lead authority; the active session must be CHECKED_IN. Transitions to IN_PROGRESS with server-clock startedWorkAt and appends the START_WORK event — atomically. Replay of the same idempotencyKey returns the SAME event; a new key on a started session is a bounded 409 illegal transition. START_WORK is NOT billable time."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanWorkSessionMutationRequest'
+      responses:
+        '200':
+          description: Session + recorded START_WORK event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/pause:
+    post:
+      tags: [Handyman Work Sessions]
+      operationId: pauseHandymanWorkSession
+      summary: Pause the actual-work clock (presence stays live)
+      description: "CR-HM-08 PART 05 — authenticated PAUSE command (IN_PROGRESS -> PAUSED only). Halts the actual-work clock; session identity and presence remain live. Atomic server-timestamped PAUSE event; idempotent replay; illegal state = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanWorkSessionMutationRequest'
+      responses:
+        '200':
+          description: Session + recorded PAUSE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/material-run:
+    post:
+      tags: [Handyman Work Sessions]
+      operationId: materialRunHandymanWorkSession
+      summary: Suspend the work clock for a material run (presence stays live)
+      description: "CR-HM-08 PART 05 — authenticated MATERIAL_RUN command (IN_PROGRESS -> MATERIAL_RUN only). A bounded actual-work-clock halt for material acquisition with the session and presence PRESERVED; it creates NO material transaction/quantity/cost (material truth is CR-HM-09). Atomic server-timestamped event; idempotent replay; illegal state = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanWorkSessionMutationRequest'
+      responses:
+        '200':
+          description: Session + recorded MATERIAL_RUN event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/resume:
+    post:
+      tags: [Handyman Work Sessions]
+      operationId: resumeHandymanWorkSession
+      summary: Resume the actual-work clock from PAUSED or MATERIAL_RUN
+      description: "CR-HM-08 PART 05 — authenticated RESUME command (PAUSED -> IN_PROGRESS or MATERIAL_RUN -> IN_PROGRESS). Re-opens the actual-work clock without ever resetting the server-clock startedWorkAt. Atomic server-timestamped event; idempotent replay; illegal state = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanWorkSessionMutationRequest'
+      responses:
+        '200':
+          description: Session + recorded RESUME event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/complete:
+    post:
+      tags: [Handyman Work Sessions]
+      operationId: completeHandymanWorkSession
+      summary: Declare field work complete (Leaded, work clock closes)
+      description: "CR-HM-08 PART 05 — authenticated COMPLETE command (IN_PROGRESS / PAUSED / MATERIAL_RUN -> COMPLETED) with server-clock completedAt. FIELD WORK COMPLETE ONLY: it does NOT complete QC, accept BAST, settle payment, close warranty, or calculate billing (downstream firewall). Atomic server-timestamped event; idempotent replay; illegal state = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanWorkSessionMutationRequest'
+      responses:
+        '200':
+          description: Session + recorded COMPLETE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/check-out:
+    post:
+      tags: [Handyman Work Sessions]
+      operationId: checkOutHandymanWorkSession
+      summary: Check out and close presence (terminal)
+      description: "CR-HM-08 PART 05 — authenticated CHECK_OUT command (CHECKED_IN abandon / COMPLETED -> CHECKED_OUT, terminal) with server-clock checkedOutAt, appends the CHECK_OUT event and snapshots the CURRENT helper presence server-side for closure. Presence closure ONLY: NOT customer acceptance (CR-HM-11). Atomic + idempotent; illegal state = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanWorkSessionMutationRequest'
+      responses:
+        '200':
+          description: Session + recorded CHECK_OUT event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions/active:
+    get:
+      tags: [Handyman Work Sessions]
+      operationId: getActiveHandymanWorkSession
+      summary: Read the ACTIVE work session for the Execution Scope
+      description: "CR-HM-08 PART 05 — read the ACTIVE (non-CHECKED_OUT) session plus its append-only helper-presence snapshot rows. Same CURRENT authoritative Crew Lead authority; when no active session exists the mapping is a bounded 404."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Active session + helper presence snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionActiveResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/work-sessions/{sessionId}/time-projection:
+    get:
+      tags: [Handyman Work Sessions]
+      operationId: getHandymanWorkSessionTimeProjection
+      summary: Read the server-side presence/actual-work time projection
+      description: "CR-HM-08 PART 05 — internal READ-ONLY projection over the append-only event stream (the only authority): presenceTime = CHECK_IN -> CHECK_OUT (open tail projects against server-now; nothing is fabricated or persisted); actualWorkTime = the SUM of IN_PROGRESS intervals ONLY (PAUSED and MATERIAL_RUN excluded). NO billable time, rate, or charge exists. Same Lead authority."
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Server-side time projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanWorkSessionTimeProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /health:
     get:
       operationId: getHealth
@@ -76038,6 +76261,76 @@ components:
           enum: [INSIDE, OUTSIDE, LOW_ACCURACY, UNAVAILABLE, null]
         distanceMeters: { type: number, nullable: true }
         evaluatedAt: { type: string, format: date-time }
+    HandymanWorkSessionMutationRequest:
+      type: object
+      required: [idempotencyKey]
+      description: "Bounded caller input for EVERY work-session mutation: idempotencyKey only (offline-replay safety). Authority/derived keys (actorUserId/workerId/crewId/assignmentId/helper list/arrivalResultId/timestamps/status) in the payload are structurally ignored — actor and client context come from the authenticated request ONLY, and the server resolves every transition authoritatively."
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanWorkSessionRecord:
+      type: object
+      description: "Session projection (bounded). Statuses exactly CHECKED_IN / IN_PROGRESS / PAUSED / MATERIAL_RUN / COMPLETED / CHECKED_OUT with server-clock timestamps only."
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [CHECKED_IN, IN_PROGRESS, PAUSED, MATERIAL_RUN, COMPLETED, CHECKED_OUT]
+        checkedInAt: { type: string, format: date-time }
+        startedWorkAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        checkedOutAt: { type: string, format: date-time, nullable: true }
+    HandymanWorkSessionEventRecord:
+      type: object
+      description: "Append-only transition event evidence (event types exactly CHECK_IN / START_WORK / PAUSE / MATERIAL_RUN / RESUME / COMPLETE / CHECK_OUT; server-clock occurredAt)."
+      properties:
+        id: { type: string, format: uuid }
+        eventType:
+          type: string
+          enum: [CHECK_IN, START_WORK, PAUSE, MATERIAL_RUN, RESUME, COMPLETE, CHECK_OUT]
+        occurredAt: { type: string, format: date-time }
+        idempotencyKey: { type: string }
+    HandymanWorkSessionHelperPresence:
+      type: object
+      description: "Append-only helper presence snapshot row (presence evidence ONLY — NEVER billable manpower; helpers need no login)."
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        helperWorkerId: { type: string, format: uuid }
+        helperUserId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanWorkSessionCommandResult:
+      type: object
+      description: "Mutation result: session projection + the recorded event; replayed=true means the SAME previously recorded rows were returned (no second transition)."
+      properties:
+        session:
+          $ref: '#/components/schemas/HandymanWorkSessionRecord'
+        event:
+          $ref: '#/components/schemas/HandymanWorkSessionEventRecord'
+        replayed: { type: boolean }
+    HandymanWorkSessionActiveResult:
+      type: object
+      description: ACTIVE session view (404 when none is active).
+      properties:
+        session:
+          $ref: '#/components/schemas/HandymanWorkSessionRecord'
+        helperPresence:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanWorkSessionHelperPresence'
+    HandymanWorkSessionTimeProjection:
+      type: object
+      description: "Server-side READ-ONLY projection: presenceSeconds (CHECK_IN -> CHECK_OUT or server-now) vs actualWorkSeconds (IN_PROGRESS intervals ONLY). NO billable/rate/charge projection can ever exist."
+      properties:
+        sessionId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [CHECKED_IN, IN_PROGRESS, PAUSED, MATERIAL_RUN, COMPLETED, CHECKED_OUT]
+        presenceSeconds: { type: number, minimum: 0 }
+        actualWorkSeconds: { type: number, minimum: 0 }
+        sessionClosed: { type: boolean }
+        projectedAt: { type: string, format: date-time }
     HandymanScopeAssignmentRecord:
       type: object
       description: Append-only crew assignment fact (status projection moves ACTIVE -> SUPERSEDED only). NO Lead snapshot - lead authority stays in CR-HM-04.

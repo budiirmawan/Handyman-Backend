@@ -34,6 +34,7 @@ export {
   checkInHandymanWorkSession,
   checkOutHandymanWorkSession,
   completeHandymanWorkSession,
+  getActiveHandymanWorkSession,
   getHandymanWorkSessionTimeProjection,
   materialRunHandymanWorkSession,
   pauseHandymanWorkSession,
@@ -45,6 +46,7 @@ export type {
   HandymanWorkSessionCheckInResult,
   HandymanWorkSessionStartWorkInput,
   HandymanWorkSessionStartWorkResult,
+  HandymanWorkSessionActiveResult,
   HandymanWorkSessionTimeProjection,
   HandymanWorkSessionWorkClockResult,
 } from './handyman-work-session.service';
