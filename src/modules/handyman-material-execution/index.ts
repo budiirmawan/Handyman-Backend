@@ -21,7 +21,24 @@ export type {
 
 export {
   handymanMaterialExecutionLineNotFoundError,
+  handymanMaterialExecutionNotAuthorizedError,
+  handymanMaterialExecutionScopeNotEligibleError,
+  handymanMaterialExecutionLinkInvalidError,
+  handymanMaterialExecutionEstimateInvalidError,
+  handymanMaterialExecutionLinkConflictError,
+  handymanMaterialExecutionIllegalTransitionError,
+  handymanMaterialExecutionValidationError,
 } from './handyman-material-execution.errors';
+
+export {
+  estimateHandymanMaterialExecutionLine,
+  approveHandymanMaterialExecutionLine,
+} from './handyman-material-execution.service';
+export type {
+  EstimateHandymanMaterialLineInput,
+  ApproveHandymanMaterialLineInput,
+  HandymanMaterialExecutionCommandResult,
+} from './handyman-material-execution.types';
 
 export { handymanMaterialExecutionRepository }
   from './handyman-material-execution.repository';

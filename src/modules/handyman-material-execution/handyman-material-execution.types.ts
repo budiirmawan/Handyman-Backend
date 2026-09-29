@@ -88,6 +88,31 @@ export type NewHandymanMaterialExecutionLine = {
   supplierReference?: string | null;
 };
 
+/* ---- PART 03 command surface (ESTIMATE + LINK + APPROVE) ------- */
+
+/** Bounded ESTIMATE input; commercial fields are NEVER accepted. */
+export type EstimateHandymanMaterialLineInput = {
+  executionScopeId: string;
+  quotationVersionId: string;
+  quotationLineId: string;
+  estimatedQty: number;
+  sourceItemId?: string | null;
+  supplierReference?: string | null;
+  idempotencyKey: string;
+};
+
+export type ApproveHandymanMaterialLineInput = {
+  executionScopeId: string;
+  lineId: string;
+  idempotencyKey: string;
+};
+
+export type HandymanMaterialExecutionCommandResult = {
+  line: HandymanMaterialExecutionLineRecord;
+  event: HandymanMaterialExecutionEventRecord;
+  replayed: boolean;
+};
+
 /** Head mutation payload (primitive only — no lifecycle decisions). */
 export type HandymanMaterialExecutionLineHead = {
   status: HandymanMaterialExecutionStatus;

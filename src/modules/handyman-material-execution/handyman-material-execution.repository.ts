@@ -153,6 +153,24 @@ async function listMaterialExecutionLinesByScope(
 }
 
 /**
+ * One-link-per-quotation-line lookup: at most ONE execution line may
+ * realize a given quotation line (the link is an authority anchor,
+ * never a duplicate target).
+ */
+async function findMaterialExecutionLineByQuotationLine(
+  executor: Executor = getPool(),
+  quotationLineId: string,
+): Promise<HandymanMaterialExecutionLineRecord | null> {
+  const result = await executor.query(
+    `${LINE_SELECT}
+      WHERE quotation_line_id = $1
+      ORDER BY created_at, id LIMIT 1`,
+    [quotationLineId],
+  );
+  return result.rows[0] ? mapLine(result.rows[0]) : null;
+}
+
+/**
  * Head mutation primitive: updates ONLY the mutable projection head
  * (status/acquisition/quantities/supplier reference) with a fresh
  * server-clock updated_at. Identity columns are not parameters and
@@ -260,6 +278,7 @@ export const handymanMaterialExecutionRepository = {
   createMaterialExecutionLine,
   findMaterialExecutionLineById,
   findMaterialExecutionLineByIdForUpdate,
+  findMaterialExecutionLineByQuotationLine,
   listMaterialExecutionLinesByScope,
   updateMaterialExecutionLineHead,
   appendMaterialExecutionEvent,
