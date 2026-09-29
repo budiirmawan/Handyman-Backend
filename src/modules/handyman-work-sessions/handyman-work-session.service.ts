@@ -71,6 +71,22 @@ export type HandymanWorkSessionStartWorkResult = {
   replayed: boolean;
 };
 
+/** PART 03 result surface is identical in shape (session + event). */
+export type HandymanWorkSessionWorkClockResult =
+  HandymanWorkSessionStartWorkResult;
+
+/** Frozen PART 03 work-clock transitions (governance §5/§9). */
+type WorkClockAction = 'PAUSE' | 'MATERIAL_RUN' | 'RESUME';
+
+const WORK_CLOCK_RULES: Record<WorkClockAction, {
+  from: readonly string[];
+  to: string;
+}> = {
+  PAUSE: { from: ['IN_PROGRESS'], to: 'PAUSED' },
+  MATERIAL_RUN: { from: ['IN_PROGRESS'], to: 'MATERIAL_RUN' },
+  RESUME: { from: ['PAUSED', 'MATERIAL_RUN'], to: 'IN_PROGRESS' },
+};
+
 function ensureUuid(value: string, field: string): string {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!isValidUuid(raw)) {
@@ -343,4 +359,129 @@ export async function startWorkHandymanWorkSession(
       replayed: false,
     };
   });
+}
+
+/**
+ * PART 03 shared work-clock transition (governance §5/§6/§9/§11).
+ * Row lock → replay check → conditional status transition → event
+ * insert, ALL in ONE transaction. TIME SEMANTICS: only the status
+ * column moves — IN_PROGRESS keeps the actual-work clock open,
+ * PAUSED / MATERIAL_RUN halt it; presence is untouched in all three.
+ * NO started_work_at mutation, NO timestamps from the caller, NO
+ * billable/rate/charge computation, NO material truth (CR-HM-09).
+ */
+async function workClockTransition(
+  input: HandymanWorkSessionStartWorkInput,
+  actorUserId: string,
+  action: WorkClockAction,
+): Promise<HandymanWorkSessionWorkClockResult> {
+  const scopeUuid = ensureUuid(input.executionScopeId,
+    'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+  const rule = WORK_CLOCK_RULES[action];
+
+  await authorityPreamble(scopeUuid, actorUuid);
+
+  return withTransaction(async (tx) => {
+    const locked = await tx.query(
+      `SELECT id FROM handyman_work_sessions
+        WHERE execution_scope_id = $1 AND status <> 'CHECKED_OUT'
+        FOR UPDATE`,
+      [scopeUuid],
+    );
+    const sessionId = locked.rows[0]?.id as string | undefined;
+    if (!sessionId) throw handymanWorkSessionNotFoundError();
+
+    const replayEvent = await handymanWorkSessionRepository
+      .findWorkSessionEventByIdempotency(tx, sessionId, action, key);
+    const current = await handymanWorkSessionRepository
+      .findWorkSessionById(tx, sessionId);
+    if (!current) throw handymanWorkSessionNotFoundError();
+    if (replayEvent) {
+      return { session: current, event: replayEvent, replayed: true };
+    }
+
+    const transitioned = await tx.query(
+      `UPDATE handyman_work_sessions
+          SET status = $2, updated_at = NOW()
+        WHERE id = $1 AND status = ANY($3::text[])
+        RETURNING id, client_id, execution_scope_id, assignment_id,
+                  lead_worker_id, lead_user_id, status, checked_in_at,
+                  started_work_at, completed_at, checked_out_at,
+                  created_at, updated_at`,
+      [sessionId, rule.to, [...rule.from]],
+    );
+    if (transitioned.rows.length === 0) {
+      throw handymanWorkSessionIllegalTransitionError(
+        current.status,
+        action,
+      );
+    }
+    const event = await handymanWorkSessionRepository
+      .appendWorkSessionEvent(tx, {
+        clientId: current.clientId,
+        sessionId,
+        executionScopeId: scopeUuid,
+        eventType: action,
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    const row = transitioned.rows[0];
+    return {
+      session: {
+        id: row.id,
+        clientId: row.client_id,
+        executionScopeId: row.execution_scope_id,
+        assignmentId: row.assignment_id,
+        leadWorkerId: row.lead_worker_id,
+        leadUserId: row.lead_user_id,
+        status: row.status,
+        checkedInAt: row.checked_in_at,
+        startedWorkAt: row.started_work_at,
+        completedAt: row.completed_at,
+        checkedOutAt: row.checked_out_at,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      },
+      event,
+      replayed: false,
+    };
+  });
+}
+
+/**
+ * PAUSE (§5): IN_PROGRESS → PAUSED. Actual-work clock halts; the
+ * session and presence stay live. Atomic + idempotent per key.
+ */
+export async function pauseHandymanWorkSession(
+  input: HandymanWorkSessionStartWorkInput,
+  actorUserId: string,
+): Promise<HandymanWorkSessionWorkClockResult> {
+  return workClockTransition(input, actorUserId, 'PAUSE');
+}
+
+/**
+ * MATERIAL_RUN (§9): IN_PROGRESS → MATERIAL_RUN. A bounded work-
+ * clock halting for material acquisition; the session and presence
+ * are PRESERVED. Material truth (issued/purchased/used) is CR-HM-09
+ * — zero coupling here. Atomic + idempotent per key.
+ */
+export async function materialRunHandymanWorkSession(
+  input: HandymanWorkSessionStartWorkInput,
+  actorUserId: string,
+): Promise<HandymanWorkSessionWorkClockResult> {
+  return workClockTransition(input, actorUserId, 'MATERIAL_RUN');
+}
+
+/**
+ * RESUME (§5): PAUSED → IN_PROGRESS or MATERIAL_RUN → IN_PROGRESS.
+ * The actual-work clock re-opens; presence was never interrupted.
+ * Atomic + idempotent per key.
+ */
+export async function resumeHandymanWorkSession(
+  input: HandymanWorkSessionStartWorkInput,
+  actorUserId: string,
+): Promise<HandymanWorkSessionWorkClockResult> {
+  return workClockTransition(input, actorUserId, 'RESUME');
 }
