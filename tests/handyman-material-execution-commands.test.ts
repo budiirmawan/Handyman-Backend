@@ -385,26 +385,26 @@ describe('CR-HM-09 PART 03 — estimate + link + approve commands', () => {
       }, f.leadUserId));
   });
 
-  it('6: zero ISSUE/PURCHASE/USE/RETURN/API/SQL/FM surface in PART 03', async (t) => {
+  it('6: PART 03 scope fence — ESTIMATE/APPROVE only, zero HTTP/FM', async (t) => {
     if (!requireDatabase(t)) return;
-    // Only ESTIMATE + APPROVE commands exist in the module; lifecycle
-    // beyond APPROVED is decided by later PARTs AND cannot be opened
-    // from this PART's surface (no service functions for them).
     const serviceSrc = (await import('node:fs')).readFileSync(
       'src/modules/handyman-material-execution/'
         + 'handyman-material-execution.service.ts', 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '');
-    assert.equal(/export async function issue/i.test(serviceSrc),
-      false);
-    assert.equal(/export async function purchase/i.test(serviceSrc),
-      false);
-    assert.equal(/export async function use/i.test(serviceSrc),
-      false);
-    assert.equal(/export async function return/i.test(serviceSrc),
-      false);
-    assert.equal(/(ISSUE|PURCHASE)\s*\w*\s*:\s*'APPROVED'/i
-      .test(serviceSrc), false);
+    // NOTE (certification): the ISSUE/PURCHASE (PART 04) and
+    // USE/RETURN/SETTLE (PART 05) exports lawfully landed on top of
+    // these PART 03 commands. The TRUE invariant that survives
+    // certification is the PART-boundary one: PART 03's OWN two
+    // exports are still exactly the estimation pair and carry no
+    // acquisition/usage state mutation of their own — the durable
+    // functional proof is in t5 (a PART-03-only line stalls at
+    // APPROVED with both events only until a LATER PART's command
+    // is invoked, never via PART 03 itself).
+    assert.equal(/export async function estimate/i.test(serviceSrc),
+      true);
+    assert.equal(/export async function approve/i.test(serviceSrc),
+      true);
     // Module contains exactly the PART-partitioned file set.
     const files = (await import('node:fs'))
       .readdirSync('src/modules/handyman-material-execution').sort();
@@ -415,11 +415,20 @@ describe('CR-HM-09 PART 03 — estimate + link + approve commands', () => {
       'handyman-material-execution.types.ts',
       'index.ts',
     ].sort());
-    // NO API/OpenAPI additions for CR-HM-09 (no *-api module).
+    // NOTE (certification): PART 06 lawfully created the sibling
+    // `handyman-material-execution-api` module as the ONLY HTTP
+    // surface — the durable PART-03 invariant is that NO
+    // controller/routes file ever lives inside THIS domain module
+    // (HTTP is exclusively the -api sibling's job).
     const modules = (await import('node:fs'))
       .readdirSync('src/modules');
-    assert.equal(
-      modules.includes('handyman-material-execution-api'), false);
+    assert.ok(
+      modules.includes('handyman-material-execution-api'),
+      'PART 06 -api module exists as sole HTTP surface');
+    const httpFilesInDomainModule = (await import('node:fs'))
+      .readdirSync('src/modules/handyman-material-execution')
+      .filter((name) => /controller|routes/.test(name)).length;
+    assert.equal(httpFilesInDomainModule, 0);
     // After APPROVE, the frozen statuses beyond APPROVED are NOT
     // reachable via PART-03 commands: ISSUED requires ISSUE (PART 04).
     // The repository head mutation carries no lifecycle evaluator —

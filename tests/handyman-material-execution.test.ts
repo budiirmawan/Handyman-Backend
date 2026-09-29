@@ -573,7 +573,16 @@ describe('CR-HM-09 PART 01 — material execution persistence', () => {
         // name (usage-basis handoff complete), NOT a commercial
         // charge field — exempt it from the commercial-token scan
         // before matching (governance D-boundary).
-        .replaceAll('final_charge_ready', 'settled_state');
+        .replaceAll('final_charge_ready', 'settled_state')
+        // NOTE (certification): PART 05 lawfully added the
+        // camelCase projection TYPE identifier
+        // HandymanMaterialFinalChargeReadyProjection (the same
+        // usage-basis handoff name in identifier form) plus the
+        // PART 05 command inputs on top of this foundation — that is
+        // the frozen lifecycle's SETTLE state (governance §3: the
+        // only place the word "charge" may appear), NOT commercial
+        // vocabulary.
+        .replaceAll('finalchargeready', 'settledbasis');
       for (const token of ['amount', 'currency', 'price', 'charge',
         'billing', 'payment', 'invoice', 'rate', 'stock_movement',
         'reservation', 'purchase_order', 'material_request',
@@ -586,15 +595,25 @@ describe('CR-HM-09 PART 01 — material execution persistence', () => {
         .test(src), false,
         `zero FM imports in ${file}`);
     }
-    // NO service/controller/routes file exists in this PART.
+    // NOTE (certification): the PART 02–04 command/service surface
+    // lawfully landed in this domain module since PART 03 onward —
+    // the FROZEN invariant here is that the domain module files are
+    // exactly the certified set and NEVER contain an HTTP layer
+    // (controllers/routes live _only_ in the PART 06 sibling
+    // `-api` module).
     assert.deepEqual(
       readdirSync('src/modules/handyman-material-execution').sort(),
       [
         'handyman-material-execution.errors.ts',
         'handyman-material-execution.repository.ts',
+        'handyman-material-execution.service.ts',
         'handyman-material-execution.types.ts',
         'index.ts',
       ].sort());
+    const httpFiles = readdirSync(
+      'src/modules/handyman-material-execution')
+      .filter((name) => /controller|routes/.test(name)).length;
+    assert.equal(httpFiles, 0);
     // helpers' inventory seam was exercised here ONLY as an offered
     // service (the module itself never imports it).
     const uomRows = await q(

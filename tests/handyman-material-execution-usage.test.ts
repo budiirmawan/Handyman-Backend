@@ -621,11 +621,16 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       assert.equal(serviceSrc.includes(token), false,
         `zero ${token} in service`);
     }
-    // No API module for material execution exists.
+    // NOTE (certification): PART 06 lawfully created the sibling
+    // `handyman-material-execution-api` module as the ONLY HTTP
+    // surface; the durable PART-05 invariant is that NO
+    // controller/routes file ever lives inside THIS domain module
+    // (HTTP is exclusively the -api sibling's job).
     const modules = (await import('node:fs'))
       .readdirSync('src/modules');
-    assert.equal(
-      modules.includes('handyman-material-execution-api'), false);
+    assert.ok(
+      modules.includes('handyman-material-execution-api'),
+      'PART 06 -api module exists as sole HTTP surface');
     // Module file set is exactly the PART-partitioned 5 files.
     const files = (await import('node:fs'))
       .readdirSync('src/modules/handyman-material-execution').sort();
@@ -636,6 +641,9 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       'handyman-material-execution.types.ts',
       'index.ts',
     ].sort());
+    const httpFilesInDomainModule = files
+      .filter((name) => /controller|routes/.test(name)).length;
+    assert.equal(httpFilesInDomainModule, 0);
     // The projection record carries no financial identity: verify the
     // module type records via a column scan on the execution tables
     // (db-level) — zero price/rate/charge/... columns exist.

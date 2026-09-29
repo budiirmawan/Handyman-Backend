@@ -452,27 +452,31 @@ describe('CR-HM-09 PART 04 — issue / purchase acquisition commands', () => {
       }, f.leadUserId));
   });
 
-  it('6: zero USE/RETURN/FINAL_CHARGE_READY/FM/API surface in PART 04', async (t) => {
+  it('6: PART 04 scope fence — ISSUE/PURCHASE only, zero HTTP/FM', async (t) => {
     if (!requireDatabase(t)) return;
-    // The PART-04 surface adds ONLY ISSUE+PURCHASE; later-axis and
-    // settlement commands remain ABSENT from the service module.
+    // The PART-04 surface adds exactly ISSUE+PURCHASE under the same
+    // authority; later-axis commands were added by PART 05 via the
+    // same authoritative stack.
     const serviceSrc = (await import('node:fs')).readFileSync(
       'src/modules/handyman-material-execution/'
         + 'handyman-material-execution.service.ts', 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '');
-    for (const banned of [
-      /export async function use/i,
-      /export async function return/i,
-      /export async function settle/i,
-      /'SETTLED'/,
-      /eventType:\s*'USE'/i,
-      /eventType:\s*'RETURN'/i,
-      /eventType:\s*'FINAL_CHARGE_READY'/i,
-    ]) {
-      assert.equal(banned.test(serviceSrc), false,
-        `absent: ${banned}`);
-    }
+    // NOTE (certification): PART 05 lawfully added its USE/RETURN/
+    // SETTLE exports and the FINAL_CHARGE_READY state/event names
+    // on top of PART 04's ISSUE/PURCHASE pair. The TRUE invariant
+    // surviving certification is the axis one: PART 04's OWN two
+    // exports stay an isolated acquisition pair that never writes
+    // usedQty/returnedQty (functional proof below — the issued
+    // head keeps zero usage axes), and the durable DISCIPLINE is
+    // exactly that PART 04 exports exist as ESTIMATE/ladder
+    // commands ONLY.
+    assert.equal(/export async function issue/i.test(serviceSrc),
+      true);
+    assert.equal(/export async function purchase/i.test(serviceSrc),
+      true);
+    // The domain module never opens ANY HTTP surface of its own
+    // (that layer lives exclusively in the PART 06 -api sibling).
     // Module file set + no -api module.
     const files = (await import('node:fs'))
       .readdirSync('src/modules/handyman-material-execution').sort();
@@ -483,10 +487,19 @@ describe('CR-HM-09 PART 04 — issue / purchase acquisition commands', () => {
       'handyman-material-execution.types.ts',
       'index.ts',
     ].sort());
+    // NOTE (certification): PART 06 lawfully created the sibling
+    // `handyman-material-execution-api` module as the ONLY HTTP
+    // surface; the TRUE invariant surviving certification is that
+    // NO controller/routes file ever lives inside THIS domain
+    // module (HTTP is exclusively the -api sibling's job).
     const modules = (await import('node:fs'))
       .readdirSync('src/modules');
-    assert.equal(
-      modules.includes('handyman-material-execution-api'), false);
+    assert.ok(
+      modules.includes('handyman-material-execution-api'),
+      'PART 06 -api module exists as sole HTTP surface');
+    const httpFilesInDomainModule = files
+      .filter((name) => /controller|routes/.test(name)).length;
+    assert.equal(httpFilesInDomainModule, 0);
     // Acquisition NEVER mutates used/returned axes or estimation:
     // issue a line and verify the untouched axes.
     const f = await approvedLineFixture();
