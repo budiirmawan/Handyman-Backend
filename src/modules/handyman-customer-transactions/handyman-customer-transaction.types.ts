@@ -32,6 +32,51 @@ export const HANDYMAN_CUSTOMER_TRANSACTION_EVENT_TYPES = [
 export type HandymanCustomerTransactionEventType =
   (typeof HANDYMAN_CUSTOMER_TRANSACTION_EVENT_TYPES)[number];
 
+/**
+ * PART 02 — the closed composition vocabulary. Every posted charge
+ * line names EXACTLY how its amount was composed from governed
+ * read-only inputs: the customer-approved snapshot alone, or the
+ * approved snapshot bounded by a governed quantity mode whose
+ * definition lives on the exact CR-HM-12 agreement version.
+ */
+export const HANDYMAN_CHARGE_COMPOSITION_KINDS = [
+  'LABOR_APPROVED_SNAPSHOT',
+  'MATERIAL_APPROVED_SNAPSHOT',
+  'MATERIAL_SETTLED_USAGE',
+  'MATERIAL_APPROVED_QTY',
+] as const;
+
+export type HandymanChargeCompositionKind =
+  (typeof HANDYMAN_CHARGE_COMPOSITION_KINDS)[number];
+
+export function isHandymanChargeCompositionKind(
+  value: string,
+): value is HandymanChargeCompositionKind {
+  return (HANDYMAN_CHARGE_COMPOSITION_KINDS as readonly string[])
+    .includes(value);
+}
+
+/**
+ * Which authority the composition consumed: the CR-HM-06 approved
+ * snapshot alone, or a CR-HM-12 basis fact bound to an exact
+ * agreement version. Never a third value — a fee/entitlement fact can
+ * never compose a customer charge.
+ */
+export const HANDYMAN_CHARGE_BASIS_FACT_KINDS = [
+  'CR_HM_06_APPROVED_SNAPSHOT',
+  'CR_HM_12_BASIS_FACT',
+] as const;
+
+export type HandymanChargeBasisFactKind =
+  (typeof HANDYMAN_CHARGE_BASIS_FACT_KINDS)[number];
+
+export function isHandymanChargeBasisFactKind(
+  value: string,
+): value is HandymanChargeBasisFactKind {
+  return (HANDYMAN_CHARGE_BASIS_FACT_KINDS as readonly string[])
+    .includes(value);
+}
+
 export function isHandymanCustomerTransactionEventType(
   value: string,
 ): value is HandymanCustomerTransactionEventType {
@@ -77,6 +122,44 @@ export type HandymanChargeLineRecord = {
   updatedAt: string;
 };
 
+/**
+ * PART 02 — the immutable COMPOSITION ANCHOR of one charge line
+ * (governance I11): which governed inputs produced the amount, bound
+ * to the exact CR-HM-12 agreement version where one applied. Money
+ * crossing this boundary is a canonical decimal string, and the
+ * frozen law `amount = ROUND(unitAmount * appliedQty, 2)` holds with
+ * `unitAmount` always the CR-HM-06 approved snapshot unit amount.
+ */
+export type HandymanChargeLineBasisRecord = {
+  id: string;
+  clientId: string;
+  transactionId: string;
+  chargeLineId: string;
+  quotationVersionId: string;
+  quotationLineId: string;
+  lineKind: HandymanChargeLineKind;
+  compositionKind: HandymanChargeCompositionKind;
+  basisFactKind: HandymanChargeBasisFactKind;
+  currency: HandymanCustomerTransactionCurrency;
+  /** NUMERIC(14,3) canonical decimal string. */
+  appliedQty: string;
+  /** NUMERIC(18,2) — the approved snapshot unit amount, never re-authored. */
+  unitAmount: string;
+  /** NUMERIC(18,2) — the composed charge amount. */
+  amount: string;
+  agreementId: string | null;
+  agreementVersionId: string | null;
+  agreementVersionNumber: number | null;
+  /** No lawful per-row mode selection exists in this PART: always null. */
+  laborBasisRowId: string | null;
+  /** The CR-HM-12 material basis row that governed, when one applied. */
+  materialBasisRowId: string | null;
+  idempotencyKey: string;
+  actorUserId: string;
+  occurredAt: string;
+  createdAt: string;
+};
+
 export type HandymanCustomerTransactionEventRecord = {
   id: string;
   clientId: string;
@@ -109,6 +192,28 @@ export type NewHandymanChargeLine = {
   createdByUserId: string;
 };
 
+export type NewHandymanChargeLineBasis = {
+  clientId: string;
+  transactionId: string;
+  chargeLineId: string;
+  quotationVersionId: string;
+  quotationLineId: string;
+  lineKind: HandymanChargeLineKind;
+  compositionKind: HandymanChargeCompositionKind;
+  basisFactKind: HandymanChargeBasisFactKind;
+  currency: HandymanCustomerTransactionCurrency;
+  appliedQty: string;
+  unitAmount: string;
+  amount: string;
+  agreementId: string | null;
+  agreementVersionId: string | null;
+  agreementVersionNumber: number | null;
+  laborBasisRowId: string | null;
+  materialBasisRowId: string | null;
+  idempotencyKey: string;
+  actorUserId: string;
+};
+
 export type NewHandymanCustomerTransactionEvent = {
   clientId: string;
   transactionId: string;
@@ -132,15 +237,20 @@ export type OpenHandymanCustomerTransactionInput = {
 };
 
 /**
- * POST_CHARGE_LINE input: the quotation line reference + idempotency
- * key ONLY. amount/currency/lineKind/status are NOT accepted from the
- * caller — the immutable snapshot is the only amount authority (§4.3).
+ * POST_CHARGE_LINE / COMPOSE_CHARGE_LINE input: the quotation line
+ * reference + idempotency key ONLY. amount/currency/lineKind/quantity/
+ * composition kind/asOf are NOT accepted from the caller — the
+ * immutable snapshot plus the governed CR-HM-12/CR-HM-09 inputs are
+ * the only amount authority, and the composition instant is
+ * server-derived (§4.3, §9.6, B7).
  */
 export type PostHandymanChargeLineInput = {
   executionScopeId: string;
   quotationLineId: string;
   idempotencyKey: string;
 };
+
+export type ComposeHandymanChargeLineInput = PostHandymanChargeLineInput;
 
 export type HandymanCustomerTransactionCommandResult = {
   transaction: HandymanCustomerTransactionRecord;
@@ -151,4 +261,6 @@ export type HandymanCustomerTransactionCommandResult = {
 export type HandymanChargeLineCommandResult =
   HandymanCustomerTransactionCommandResult & {
     chargeLine: HandymanChargeLineRecord;
+    /** PART 02 — the immutable composition anchor of the charge line. */
+    basis: HandymanChargeLineBasisRecord;
   };

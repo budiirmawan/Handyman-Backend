@@ -583,11 +583,16 @@ describe('CR-HM-13 PART 01 — transaction / charge-line foundation', () => {
       assert.ok(!migration.includes(forbidden),
         `migration must not mention ${forbidden}`);
     }
+    // DURABLE PART 01 fence (narrowed when PART 02 landed, exactly as
+    // the CR-HM-09 certification narrowed staleness-bound guards): the
+    // CR-HM-12 material composition read is now a LAWFUL PART 02 input
+    // (`CR-HM-13_START_GOVERNANCE.md` §13 row 02). The durable
+    // invariants asserted here are that no payment-era vocabulary, no
+    // CR-HM-12 fee/entitlement surface, and no HTTP surface exists.
     for (const forbidden of [
       'midtrans', 'xendit', 'gateway', 'allocation', 'refund',
       'reversal', 'adjustment', 'settlement', 'entitlement',
       'payout', 'platformClaims', 'readHandymanBmFeeRule',
-      'readHandymanMaterialPricingCompositionAt',
       'getHandymanMaterialFinalChargeReadyProjection',
       'controller', 'routes', 'openapi',
     ]) {
