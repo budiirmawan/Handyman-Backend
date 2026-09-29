@@ -694,8 +694,9 @@ describe('CR-HM-10 PART 02 — evidence/QC/defect persistence', () => {
     assert.deepEqual([...referenced].sort(),
       [...allowed].sort());
     // Module surface: persistence files + the PART 03 EVIDENCE
-    // command service; NO controller, routes, or OpenAPI sibling
-    // exists (PART 05 owns those).
+    // command service; NO controller/routes ever ships inside the
+    // domain module itself — HTTP lives exclusively in the
+    // PART 06 sibling -api module (lawfully present by PART 06).
     assert.deepEqual(readdirSync('src/modules/handyman-evidence-qc')
       .sort(), [
       'handyman-evidence-qc.errors.ts',
@@ -705,8 +706,12 @@ describe('CR-HM-10 PART 02 — evidence/QC/defect persistence', () => {
       'index.ts',
     ].sort());
     const modules = readdirSync('src/modules');
-    assert.equal(modules.includes('handyman-evidence-qc-api'),
-      false);
+    assert.equal(
+      readdirSync('src/modules/handyman-evidence-qc-api').length > 0,
+      true); // sibling HTTP surface exists (PART 06)
+    assert.equal(modules.filter((name) =>
+      name.startsWith('handyman-evidence-qc')).join(','),
+      'handyman-evidence-qc,handyman-evidence-qc-api');
     // Source firewall: zero commercial/FM tokens in module files +
     // migration (comment-stripped scan; the freeze-name
     // 'final_charge_ready' does not exist in this module at all —
