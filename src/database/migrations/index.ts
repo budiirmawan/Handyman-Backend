@@ -815,4 +815,5 @@ export const migrations: readonly Migration[] = [
   migration0401CreateHandymanWorkSessions,
   migration0402CreateHandymanMaterialExecution,
   migration0403CreateHandymanEvidenceQc,
+  migration0404CreateHandymanBast,
 ];
