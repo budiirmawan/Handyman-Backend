@@ -21,7 +21,22 @@ export type {
 } from './handyman-work-session.types';
 export {
   handymanWorkSessionActiveConflictError,
+  handymanWorkSessionArrivalRequiredError,
+  handymanWorkSessionIllegalTransitionError,
+  handymanWorkSessionNotAuthorizedError,
   handymanWorkSessionNotFoundError,
+  handymanWorkSessionScopeNotEligibleError,
+  handymanWorkSessionValidationError,
 } from './handyman-work-session.errors';
 export { handymanWorkSessionRepository }
   from './handyman-work-session.repository';
+export {
+  checkInHandymanWorkSession,
+  startWorkHandymanWorkSession,
+} from './handyman-work-session.service';
+export type {
+  HandymanWorkSessionCheckInInput,
+  HandymanWorkSessionCheckInResult,
+  HandymanWorkSessionStartWorkInput,
+  HandymanWorkSessionStartWorkResult,
+} from './handyman-work-session.service';
