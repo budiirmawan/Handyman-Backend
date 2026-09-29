@@ -417,6 +417,8 @@ import { migration0407CreateHandymanLaborPricingBasis }
   from './0407_create_handyman_labor_pricing_basis';
 import { migration0408CreateHandymanMaterialPricingBasis }
   from './0408_create_handyman_material_pricing_basis';
+import { migration0409CreateHandymanBmFeeRules }
+  from './0409_create_handyman_bm_fee_rules';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -830,4 +832,5 @@ export const migrations: readonly Migration[] = [
   migration0406CreateHandymanCommercialAgreements,
   migration0407CreateHandymanLaborPricingBasis,
   migration0408CreateHandymanMaterialPricingBasis,
+  migration0409CreateHandymanBmFeeRules,
 ];
