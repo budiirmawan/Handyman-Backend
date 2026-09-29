@@ -4875,6 +4875,403 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/evidence:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: createHandymanEvidenceRecord
+      summary: Create an evidence record on a stage-bounded lifecycle (PART 03)
+      description: "CR-HM-10 PART 06 — authenticated CREATE command over the PART 03 evidence service. Stage must be one of the frozen 7 vocabulary values (BEFORE/DURING/AFTER/QC/DEFECT/RECTIFICATION/MATERIAL — BAST/WARRANTY are NOT accepted here). executionScopeId comes from the URL; actorUserId/clientId/timestamps can never be steered (structurally ignored). Atomic: record head + CREATE event + replay-safe idempotencyKey (same key + same shape = SAME rows; same key + different shape = 409)."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanEvidenceCreateRequest'
+      responses:
+        '200':
+          description: Evidence record + recorded CREATE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanEvidenceCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: listHandymanEvidenceRecordsByScope
+      summary: Per-scope evidence listing (Lead-gated read model, PART 03)
+      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: records with file counts and FINALIZE flag. NO client/actor identity leakage."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Records with file counts and finalize projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanEvidenceScopeView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/evidence-records/{evidenceRecordId}/files:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: addHandymanEvidenceFile
+      summary: Append one immutable storage reference pre-FINALIZE (PART 03)
+      description: "CR-HM-10 PART 06 — authenticated FILE_ADD command over the PART 03 evidence service. Server-validated: MIME kind per media kind (bounded mirror of the shared evidence-engine policy), byteSize ceiling 52,428,800, sha256Digest 64-hex, managed storage-key discipline, capture_time ≤ server-now + 5 minutes. NO file bytes are transported here — bounded storage references only. Post-FINALIZE attempt = bounded 409; duplicate storage key across records = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/EvidenceRecordIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanEvidenceFileAddRequest'
+      responses:
+        '200':
+          description: Evidence file reference + recorded FILE_ADD event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanEvidenceFileAddResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/evidence-records/{evidenceRecordId}/finalize:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: finalizeHandymanEvidenceRecord
+      summary: Lock the evidence file set (PART 03)
+      description: "CR-HM-10 PART 06 — authenticated FINALIZE command over the PART 03 evidence service. Appends the terminal FINALIZE event (implicit lifecycle — no status column). Replay with the same key returns the SAME event; a fresh FINALIZE key after finalize = bounded 409 ALREADY_FINALIZED."
+      parameters:
+        - $ref: '#/components/parameters/EvidenceRecordIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanKeyedRequest'
+      responses:
+        '200':
+          description: Evidence record + recorded FINALIZE event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanEvidenceCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/evidence-records/{evidenceRecordId}:
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: getHandymanEvidenceRecordDetail
+      summary: Evidence record detail — file references + append-only event chain (PART 03)
+      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: record + tamper-evident file references (SHA-256 digests) + the immutable CREATE/FILE_ADD/FINALIZE event chain. storageKey is part of the file ADD response surface ONLY and is echoed for the caller's own key; reads do not re-issue it... (file references carry digests)."
+      parameters:
+        - $ref: '#/components/parameters/EvidenceRecordIdPath'
+      responses:
+        '200':
+          description: Record + files + events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanEvidenceDetailView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/qc-runs:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: openHandymanQcRun
+      summary: Open a QC run — ONE OPEN run per execution scope (PART 04)
+      description: "CR-HM-10 PART 06 — authenticated OPEN command over the PART 04 QC service. ONE OPEN run per scope: a second OPEN (fresh key) while one is still OPEN = bounded 409 ALREADY_OPEN (DB partial-unique is the final wall). checklistIdentity is a bounded label value (the Handyman checklist identity — no FM engine coupling). Atomic: run + OPEN event + replay-safe idempotencyKey."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanQcOpenRequest'
+      responses:
+        '200':
+          description: QC run + recorded OPEN event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQcOpenResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: listHandymanQcRunsByScope
+      summary: Per-scope QC run listing with items (PART 04)
+      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: runs (including terminal) with their current item outcomes. Additive history — closed runs remain listed."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Runs with items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQcScopeView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/qc-runs/{qcRunId}/items:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: setHandymanQcRunItemOutcome
+      summary: Set one checklist item outcome on an OPEN run (PART 04)
+      description: "CR-HM-10 PART 06 — authenticated ITEM_SET command over the PART 04 QC service. Outcome vocabulary is frozen (PASS/DEFECT/NA/NOT_CHECKED). The item row upserts per (run,itemKey) while the ITEM_SET event chain stays append-only (full set-history). Item writes on a terminal run = bounded 409 ILLEGAL_TRANSITION."
+      parameters:
+        - $ref: '#/components/parameters/QcRunIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanQcItemSetRequest'
+      responses:
+        '200':
+          description: QC run item + recorded ITEM_SET event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQcItemSetResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/qc-runs/{qcRunId}/finish:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: finishHandymanQcRun
+      summary: Finish the run — SERVER-evaluated PASSED/FAILED (PART 04)
+      description: "CR-HM-10 PART 06 — authenticated FINISH command over the PART 04 QC service. The terminal status is computed SERVER-SIDE from recorded items: PASSED iff every item outcome is PASS or NA; ANY DEFECT or remaining NOT_CHECKED → FAILED. The caller NEVER picks the result. Closed runs cannot be reopened — a fresh OPEN mints a NEW run row (additive history)."
+      parameters:
+        - $ref: '#/components/parameters/QcRunIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanKeyedRequest'
+      responses:
+        '200':
+          description: QC run + recorded FINISH event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQcFinishResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/qc-runs/{qcRunId}:
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: getHandymanQcRunDetail
+      summary: QC run detail — items + append-only event chain (PART 04)
+      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: run + current item outcomes + the immutable OPEN/ITEM_SET/FINISH event chain."
+      parameters:
+        - $ref: '#/components/parameters/QcRunIdPath'
+      responses:
+        '200':
+          description: Run + items + events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanQcDetailView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/defects:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: openHandymanDefect
+      summary: Open a defect record with optional run/item provenance (PART 05)
+      description: "CR-HM-10 PART 06 — authenticated OPEN_DEFECT command over the PART 05 defect service. Provenance links are server-verified (run must be on the same scope; item resolves its own run). ZERO commercial coupling — a defect NEVER adjusts any settled amount (CR-HM-13 territory). Atomic: defect + OPEN_DEFECT event + replay-safe idempotencyKey."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanDefectOpenRequest'
+      responses:
+        '200':
+          description: Defect record + recorded OPEN_DEFECT event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanDefectCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: listHandymanDefectsByScope
+      summary: Per-scope defect listing with current statuses (PART 05)
+      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: defects with their current ladder status (OPENED/RECTIFYING/RECTIFIED/VERIFIED)."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Defects with current statuses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanDefectScopeView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/defects/{defectId}/start-rectification:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: startHandymanDefectRectification
+      summary: START_RECTIFICATION — OPENED → RECTIFYING (PART 05)
+      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. Illegal transition from any other status = bounded 409; replay of the same key = SAME event."
+      parameters:
+        - $ref: '#/components/parameters/DefectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanKeyedRequest'
+      responses:
+        '200':
+          description: Defect + recorded START_RECTIFICATION event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanDefectCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/defects/{defectId}/record-rectification:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: recordHandymanDefectRectification
+      summary: RECORD_RECTIFICATION — RECTIFYING → RECTIFIED (PART 05)
+      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. Marks the rectification complete and moves to RECTIFIED (awaiting reinspection)."
+      parameters:
+        - $ref: '#/components/parameters/DefectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanKeyedRequest'
+      responses:
+        '200':
+          description: Defect + recorded RECORD_RECTIFICATION event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanDefectCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/defects/{defectId}/request-reinspection:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: requestHandymanDefectReinspection
+      summary: REQUEST_REINSPECTION — RECTIFIED → RECTIFYING loop (PART 05)
+      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. A failed reinspection loops the defect back to RECTIFYING; the record can then be re-rectified."
+      parameters:
+        - $ref: '#/components/parameters/DefectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanKeyedRequest'
+      responses:
+        '200':
+          description: Defect + recorded REQUEST_REINSPECTION event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanDefectCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/defects/{defectId}/pass-reinspection:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: passHandymanDefectReinspection
+      summary: PASS_REINSPECTION — RECTIFIED → VERIFIED terminal (PART 05)
+      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. VERIFIED is terminal and LOCKED: every further mutation key = bounded 409."
+      parameters:
+        - $ref: '#/components/parameters/DefectIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanKeyedRequest'
+      responses:
+        '200':
+          description: Defect + recorded PASS_REINSPECTION event
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanDefectCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/defects/{defectId}:
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: getHandymanDefectDetail
+      summary: Defect detail — current status + append-only event chain (PART 05)
+      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: defect head + the immutable OPEN_DEFECT/START_RECTIFICATION/RECORD_RECTIFICATION/REQUEST_REINSPECTION/PASS_REINSPECTION event chain."
+      parameters:
+        - $ref: '#/components/parameters/DefectIdPath'
+      responses:
+        '200':
+          description: Defect + events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanDefectDetailView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /health:
     get:
       operationId: getHealth
@@ -70793,6 +71190,21 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    EvidenceRecordIdPath:
+      name: evidenceRecordId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QcRunIdPath:
+      name: qcRunId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DefectIdPath:
+      name: defectId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -76542,6 +76954,280 @@ components:
         presenceSeconds: { type: number, minimum: 0 }
         actualWorkSeconds: { type: number, minimum: 0 }
         sessionClosed: { type: boolean }
+    HandymanKeyedRequest:
+      type: object
+      required: [idempotencyKey]
+      description: "Bounded mutation input for key-only CR-HM-10 transitions (FINALIZE/FINISH/defect ladder): idempotencyKey ONLY (offline-replay safety). UNKNOWN keys are structurally ignored — actorUserId/clientId/status/timestamps can never be steered by the caller."
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanEvidenceCreateRequest:
+      type: object
+      required: [stage, idempotencyKey]
+      description: "Bounded CREATE input (PART 03). executionScopeId comes from the URL; stage must be one of the frozen 7 (BEFORE/DURING/AFTER/QC/DEFECT/RECTIFICATION/MATERIAL); BAST/WARRANTY stages are NOT accepted here; actorUserId/clientId/timestamps are structurally ignored."
+      properties:
+        stage:
+          type: string
+          enum: [BEFORE, DURING, AFTER, QC, DEFECT, RECTIFICATION, MATERIAL]
+        description: { type: string, nullable: true }
+        sessionId: { type: string, format: uuid, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanEvidenceFileAddRequest:
+      type: object
+      required: [mediaKind, storageKey, contentType, byteSize, sha256Digest, idempotencyKey]
+      description: "Bounded FILE_ADD input (PART 03): a storage REFERENCE only — the shared evidence-engine file bytes storage stays outside this module. MIME/size/S HA-256/skew all server-validated; post-FINALIZE = 409."
+      properties:
+        mediaKind:
+          type: string
+          enum: [PHOTO, DOCUMENT, VIDEO]
+        storageKey: { type: string, minLength: 1 }
+        contentType: { type: string, minLength: 1 }
+        byteSize: { type: integer, minimum: 1 }
+        sha256Digest: { type: string, minLength: 64, maxLength: 64 }
+        captureTime: { type: string, format: date-time, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanQcOpenRequest:
+      type: object
+      required: [checklistIdentity, idempotencyKey]
+      description: "Bounded OPEN input (PART 04): checklist identity value label (no FM engine reference). ONE OPEN run per scope — a second fresh-key attempt = 409."
+      properties:
+        checklistIdentity: { type: string, minLength: 1, maxLength: 200 }
+        sessionId: { type: string, format: uuid, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanQcItemSetRequest:
+      type: object
+      required: [itemKey, outcome, idempotencyKey]
+      description: "Bounded ITEM_SET input (PART 04). Frozen outcome vocabulary PASS/DEFECT/NA/NOT_CHECKED."
+      properties:
+        itemKey: { type: string, minLength: 1, maxLength: 128 }
+        outcome:
+          type: string
+          enum: [PASS, DEFECT, NA, NOT_CHECKED]
+        note: { type: string, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanDefectOpenRequest:
+      type: object
+      required: [description, idempotencyKey]
+      description: "Bounded OPEN_DEFECT input (PART 05). Optional run/item provenance links server-verified against the scope; ZERO commercial fields."
+      properties:
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        runId: { type: string, format: uuid, nullable: true }
+        itemId: { type: string, format: uuid, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanEvidenceRecord:
+      type: object
+      description: "Evidence record head (implicit lifecycle; FINALIZE state derived from the event chain). NO client/actor identity leakage in the HTTP projection."
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid, nullable: true }
+        stage:
+          type: string
+          enum: [BEFORE, DURING, AFTER, QC, DEFECT, RECTIFICATION, MATERIAL]
+        description: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanEvidenceFile:
+      type: object
+      description: "Immutably-bound evidence file reference: SHA-256 integrity digest, content type, size, optional caller-claimed capture_time (skew-bounded server-side)."
+      properties:
+        id: { type: string, format: uuid }
+        recordId: { type: string, format: uuid }
+        mediaKind:
+          type: string
+          enum: [PHOTO, DOCUMENT, VIDEO]
+        storageKey: { type: string, minLength: 1 }
+        contentType: { type: string, minLength: 1 }
+        byteSize: { type: integer, minimum: 1 }
+        sha256Digest: { type: string, minLength: 64, maxLength: 64 }
+        captureTime: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanEvidenceEvent:
+      type: object
+      description: "Append-only evidence event (CREATE/FILE_ADD/FINALIZE)."
+      properties:
+        id: { type: string, format: uuid }
+        recordId: { type: string, format: uuid }
+        eventType:
+          type: string
+          enum: [CREATE, FILE_ADD, FINALIZE]
+        occurredAt: { type: string, format: date-time }
+    HandymanQcRun:
+      type: object
+      description: "QC run head (OPEN → PASSED | FAILED; one OPEN per scope at any time)."
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid, nullable: true }
+        checklistIdentity: { type: string }
+        status:
+          type: string
+          enum: [OPEN, PASSED, FAILED]
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQcRunItem:
+      type: object
+      description: "Check-item outcome entry (upsert per (run, itemKey)); event chain keeps the full set-history."
+      properties:
+        id: { type: string, format: uuid }
+        runId: { type: string, format: uuid }
+        itemKey: { type: string }
+        outcome:
+          type: string
+          enum: [PASS, DEFECT, NA, NOT_CHECKED]
+        note: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQcRunEvent:
+      type: object
+      description: "Append-only QC run event (OPEN/ITEM_SET/FINISH)."
+      properties:
+        id: { type: string, format: uuid }
+        runId: { type: string, format: uuid }
+        eventType:
+          type: string
+          enum: [OPEN, ITEM_SET, FINISH]
+        occurredAt: { type: string, format: date-time }
+    HandymanDefectRecord:
+      type: object
+      description: "Defect/rectification/reinspection head (OPENED → RECTIFYING → RECTIFIED → VERIFIED; REINSPECTION loops RECTIFIED → RECTIFYING)."
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        runId: { type: string, format: uuid, nullable: true }
+        itemId: { type: string, format: uuid, nullable: true }
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        status:
+          type: string
+          enum: [OPENED, RECTIFYING, RECTIFIED, VERIFIED]
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanDefectEvent:
+      type: object
+      description: "Append-only defect ladder event (OPEN_DEFECT → PASS_REINSPECTION)."
+      properties:
+        id: { type: string, format: uuid }
+        defectId: { type: string, format: uuid }
+        eventType:
+          type: string
+          enum: [OPEN_DEFECT, START_RECTIFICATION, RECORD_RECTIFICATION, REQUEST_REINSPECTION, PASS_REINSPECTION]
+        occurredAt: { type: string, format: date-time }
+    HandymanEvidenceCommandResult:
+      type: object
+      properties:
+        record:
+          $ref: '#/components/schemas/HandymanEvidenceRecord'
+        event:
+          $ref: '#/components/schemas/HandymanEvidenceEvent'
+        replayed: { type: boolean }
+    HandymanEvidenceFileAddResult:
+      type: object
+      properties:
+        file:
+          $ref: '#/components/schemas/HandymanEvidenceFile'
+        event:
+          $ref: '#/components/schemas/HandymanEvidenceEvent'
+        replayed: { type: boolean }
+    HandymanEvidenceScopeView:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            type: object
+            properties:
+              record:
+                $ref: '#/components/schemas/HandymanEvidenceRecord'
+              fileCount: { type: integer, minimum: 0 }
+              finalized: { type: boolean }
+    HandymanEvidenceDetailView:
+      type: object
+      properties:
+        record:
+          $ref: '#/components/schemas/HandymanEvidenceRecord'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanEvidenceFile'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanEvidenceEvent'
+        finalized: { type: boolean }
+    HandymanQcOpenResult:
+      type: object
+      properties:
+        run:
+          $ref: '#/components/schemas/HandymanQcRun'
+        event:
+          $ref: '#/components/schemas/HandymanQcRunEvent'
+        replayed: { type: boolean }
+    HandymanQcItemSetResult:
+      type: object
+      properties:
+        item:
+          $ref: '#/components/schemas/HandymanQcRunItem'
+        event:
+          $ref: '#/components/schemas/HandymanQcRunEvent'
+        replayed: { type: boolean }
+    HandymanQcFinishResult:
+      type: object
+      properties:
+        run:
+          $ref: '#/components/schemas/HandymanQcRun'
+        event:
+          $ref: '#/components/schemas/HandymanQcRunEvent'
+        replayed: { type: boolean }
+    HandymanQcScopeView:
+      type: object
+      properties:
+        runs:
+          type: array
+          items:
+            type: object
+            properties:
+              run:
+                $ref: '#/components/schemas/HandymanQcRun'
+              items:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HandymanQcRunItem'
+    HandymanQcDetailView:
+      type: object
+      properties:
+        run:
+          $ref: '#/components/schemas/HandymanQcRun'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanQcRunItem'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanQcRunEvent'
+    HandymanDefectCommandResult:
+      type: object
+      properties:
+        defect:
+          $ref: '#/components/schemas/HandymanDefectRecord'
+        event:
+          $ref: '#/components/schemas/HandymanDefectEvent'
+        replayed: { type: boolean }
+    HandymanDefectScopeView:
+      type: object
+      properties:
+        defects:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanDefectRecord'
+    HandymanDefectDetailView:
+      type: object
+      properties:
+        defect:
+          $ref: '#/components/schemas/HandymanDefectRecord'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanDefectEvent'
     HandymanMaterialExecutionEstimateRequest:
       type: object
       required: [quotationVersionId, quotationLineId, estimatedQty, idempotencyKey]
