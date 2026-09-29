@@ -487,7 +487,13 @@ describe('CR-HM-08 PART 01 — work session persistence foundation', () => {
       const src = strip(readFileSync(
         `src/modules/handyman-work-sessions/${file}`, 'utf8'))
         .toLowerCase();
-      for (const token of ['work_order', 'work-order', 'arrival',
+      // NOTE: PART 02 lawfully added the ARRIVAL_GATE identifier
+      // surface (`handymanWorkSessionArrivalRequiredError`, service
+      // re-export) on top of this foundation — that is the frozen §3
+      // gate, NOT arrival mutation. The foundation invariant is: no
+      // arrival-MODULE imports (checked separately below) and none of
+      // the other forbidden surfaces.
+      for (const token of ['work_order', 'work-order',
         'reverse-geocode', 'api.co.id', 'bast', 'payment', 'pricing',
         'warranty', 'rectification', 'checklist']) {
         assert.equal(src.includes(token), false,
@@ -510,11 +516,13 @@ describe('CR-HM-08 PART 01 — work session persistence foundation', () => {
     const index = readFileSync(
       'src/database/migrations/index.ts', 'utf8');
     assert.ok(index.includes('migration0401CreateHandymanWorkSessions'));
-    // The module is ONLY persistence: zero service/controller/routes
-    // files exist.
-    const serviceFiles = readdirSync(
+    // Persistence module carries NO HTTP layer: the PART 02–04
+    // command service lawfully lives here from PART 02 onward, but
+    // controllers/routes are EXCLUSIVELY in the separate -api module
+    // (PART 05) — zero such files can ever appear here.
+    const httpFiles = readdirSync(
       'src/modules/handyman-work-sessions')
-      .filter((name) => /service|controller|routes/.test(name)).length;
-    assert.equal(serviceFiles, 0);
+      .filter((name) => /controller|routes/.test(name)).length;
+    assert.equal(httpFiles, 0);
   });
 });
