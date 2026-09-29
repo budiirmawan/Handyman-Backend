@@ -64,6 +64,22 @@ export function handymanMaterialExecutionEstimateInvalidError(
   });
 }
 
+/**
+ * Acquisition quantity caps: the issued/purchased axis may never
+ * exceed the approved quotation quantity authority (governance D4).
+ */
+export function handymanMaterialExecutionQuantityExceededError(
+  reason: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED,
+    message:
+      'Handyman material execution quantity exceeds the approved authority.',
+    statusCode: 400,
+    details: [`reason=${reason}`],
+  });
+}
+
 /** One execution line per quotation line (one-link-per-quotation-line). */
 export function handymanMaterialExecutionLinkConflictError(): AppError {
   return new AppError({

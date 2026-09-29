@@ -19,15 +19,19 @@ import {
   handymanMaterialExecutionLinkConflictError,
   handymanMaterialExecutionLinkInvalidError,
   handymanMaterialExecutionNotAuthorizedError,
+  handymanMaterialExecutionQuantityExceededError,
   handymanMaterialExecutionScopeNotEligibleError,
   handymanMaterialExecutionValidationError,
 } from './handyman-material-execution.errors';
 import { handymanMaterialExecutionRepository }
   from './handyman-material-execution.repository';
 import type {
+  AcquireHandymanMaterialLineInput,
   ApproveHandymanMaterialLineInput,
   EstimateHandymanMaterialLineInput,
+  HandymanMaterialAcquisitionMode,
   HandymanMaterialExecutionCommandResult,
+  HandymanMaterialExecutionEventType,
 } from './handyman-material-execution.types';
 
 /**
@@ -270,4 +274,143 @@ export async function approveHandymanMaterialExecutionLine(
       });
     return { line: headed, event, replayed: false };
   });
+}
+
+
+/* ---- PART 04 — ISSUE / PURCHASE acquisition commands ------------
+ * Governance D4: ISSUED = drawn from provider/company-managed stock;
+ * PURCHASED = procured by the field team (bounded supplierReference
+ * only — receipt media lives in CR-HM-10 evidence). Exactly ONE
+ * acquisition mode per line (mutually exclusive once chosen; further
+ * partial acquisitions accumulate on the SAME axis). The accumulated
+ * axis quantity is capped by approvedQty (quantity authority copied
+ * from the APPROVED quotation snapshot at ESTIMATE). Acquisition is
+ * POSSESSION recording — it NEVER implies USED. Idempotent replay
+ * per (line, event_type, key).
+ */
+
+const ACQUISITION_CONFIG: Record<HandymanMaterialAcquisitionMode, {
+  eventType: HandymanMaterialExecutionEventType;
+}> = {
+  ISSUED: { eventType: 'ISSUE' },
+  PURCHASED: { eventType: 'PURCHASE' },
+};
+
+function ensureDeltaQuantity(value: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw handymanMaterialExecutionQuantityExceededError(
+      'not-a-number');
+  }
+  if (value <= 0) {
+    throw handymanMaterialExecutionQuantityExceededError(
+      'not-positive');
+  }
+  return value;
+}
+
+async function acquireHandymanMaterialLine(
+  mode: HandymanMaterialAcquisitionMode,
+  input: AcquireHandymanMaterialLineInput,
+  actorUserId: string,
+): Promise<HandymanMaterialExecutionCommandResult> {
+  const config = ACQUISITION_CONFIG[mode];
+  const scopeUuid = ensureUuid(input.executionScopeId,
+    'executionScopeId');
+  const lineUuid = ensureUuid(input.lineId, 'lineId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+  const deltaQty = ensureDeltaQuantity(input.quantity);
+
+  await authorityPreamble(scopeUuid, actorUuid);
+
+  return withTransaction(async (tx) => {
+    const current = await handymanMaterialExecutionRepository
+      .findMaterialExecutionLineByIdForUpdate(tx, lineUuid);
+    if (!current || current.executionScopeId !== scopeUuid) {
+      throw handymanMaterialExecutionLineNotFoundError();
+    }
+    const replayEvent = await handymanMaterialExecutionRepository
+      .findMaterialExecutionEventByIdempotency(tx, lineUuid,
+        config.eventType, key);
+    if (replayEvent) {
+      return { line: current, event: replayEvent, replayed: true };
+    }
+    // A line adopts exactly ONE acquisition mode; a mismatch between
+    // the chosen axis and the requested command is a bounded 409.
+    if (current.acquisitionMode !== null
+        && current.acquisitionMode !== mode) {
+      throw handymanMaterialExecutionIllegalTransitionError(
+        current.acquisitionMode, config.eventType);
+    }
+    // Legal opens: first acquisition from APPROVED; further partial
+    // acquisitions while the line stays on THIS axis (ISSUED/PURCHASED).
+    if (current.status !== 'APPROVED' && current.status !== mode) {
+      throw handymanMaterialExecutionIllegalTransitionError(
+        current.status, config.eventType);
+    }
+    const nextIssued = mode === 'ISSUED'
+      ? current.issuedQty + deltaQty
+      : current.issuedQty;
+    const nextPurchased = mode === 'PURCHASED'
+      ? current.purchasedQty + deltaQty
+      : current.purchasedQty;
+    // Quantity cap: accumulated possession may never exceed the
+    // approved snapshot authority.
+    if (nextIssued > current.approvedQty
+        || nextPurchased > current.approvedQty) {
+      throw handymanMaterialExecutionQuantityExceededError(
+        'exceeds-approved-snapshot-quantity');
+    }
+    const headed = await handymanMaterialExecutionRepository
+      .updateMaterialExecutionLineHead(tx, lineUuid, {
+        status: mode,
+        acquisitionMode: mode,
+        approvedQty: current.approvedQty,
+        issuedQty: nextIssued,
+        purchasedQty: nextPurchased,
+        usedQty: current.usedQty,
+        returnedQty: current.returnedQty,
+        supplierReference: input.supplierReference
+          ?? current.supplierReference,
+      });
+    if (!headed) throw handymanMaterialExecutionLineNotFoundError();
+    const event = await handymanMaterialExecutionRepository
+      .appendMaterialExecutionEvent(tx, {
+        clientId: current.clientId,
+        lineId: lineUuid,
+        executionScopeId: scopeUuid,
+        eventType: config.eventType,
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { line: headed, event, replayed: false };
+  });
+}
+
+/**
+ * ISSUE: draw `quantity` from provider/company stock for the scope.
+ * Legal only from APPROVED (first acquisition) or ISSUED (further
+ * partial issues); cumulative issuedQty <= approvedQty. Possession
+ * recording ONLY — never implies USED.
+ */
+export async function issueHandymanMaterialExecutionLine(
+  input: AcquireHandymanMaterialLineInput,
+  actorUserId: string,
+): Promise<HandymanMaterialExecutionCommandResult> {
+  return acquireHandymanMaterialLine('ISSUED', input, actorUserId);
+}
+
+/**
+ * PURCHASE: field procurement of `quantity` for the scope. Legal
+ * only from APPROVED (first acquisition) or PURCHASED (further
+ * partial purchases); cumulative purchasedQty <= approvedQty. A
+ * bounded supplierReference may accompany (or update) the record —
+ * it is a REFERENCE, never financial truth and never an FM
+ * purchase-order chain.
+ */
+export async function purchaseHandymanMaterialExecutionLine(
+  input: AcquireHandymanMaterialLineInput,
+  actorUserId: string,
+): Promise<HandymanMaterialExecutionCommandResult> {
+  return acquireHandymanMaterialLine('PURCHASED', input, actorUserId);
 }

@@ -25,6 +25,7 @@ export {
   handymanMaterialExecutionScopeNotEligibleError,
   handymanMaterialExecutionLinkInvalidError,
   handymanMaterialExecutionEstimateInvalidError,
+  handymanMaterialExecutionQuantityExceededError,
   handymanMaterialExecutionLinkConflictError,
   handymanMaterialExecutionIllegalTransitionError,
   handymanMaterialExecutionValidationError,
@@ -33,10 +34,13 @@ export {
 export {
   estimateHandymanMaterialExecutionLine,
   approveHandymanMaterialExecutionLine,
+  issueHandymanMaterialExecutionLine,
+  purchaseHandymanMaterialExecutionLine,
 } from './handyman-material-execution.service';
 export type {
   EstimateHandymanMaterialLineInput,
   ApproveHandymanMaterialLineInput,
+  AcquireHandymanMaterialLineInput,
   HandymanMaterialExecutionCommandResult,
 } from './handyman-material-execution.types';
 

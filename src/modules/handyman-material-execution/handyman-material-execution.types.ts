@@ -107,6 +107,23 @@ export type ApproveHandymanMaterialLineInput = {
   idempotencyKey: string;
 };
 
+/* ---- PART 04 command surface (ISSUE / PURCHASE) ----------------- */
+
+/**
+ * Bounded ISSUE/PURCHASE input. `quantity` is the delta applied on
+ * the line's acquisition axis (NOT the absolute quantity) — the
+ * service computes the new head server-side. A line adopts exactly
+ * ONE acquisition mode; further partial acquisitions accumulate on
+ * the same axis (capped by approved authority).
+ */
+export type AcquireHandymanMaterialLineInput = {
+  executionScopeId: string;
+  lineId: string;
+  quantity: number;
+  supplierReference?: string | null;
+  idempotencyKey: string;
+};
+
 export type HandymanMaterialExecutionCommandResult = {
   line: HandymanMaterialExecutionLineRecord;
   event: HandymanMaterialExecutionEventRecord;
