@@ -371,6 +371,42 @@ import { migration0370CreatePlatformConfigurations } from './0370_create_platfor
 import { migration0371CreateSaasUsage } from './0371_create_saas_usage';
 import { migration0372CreatePlatformSupportSessions } from './0372_create_platform_support_sessions';
 import { migration0373CreateProductAddOns } from './0373_create_product_add_ons';
+import { migration0374CreateHandymanChannelAttributions } from './0374_create_handyman_channel_attributions';
+import { migration0375CreateHandymanHandoffRuntime } from './0375_create_handyman_handoff_runtime';
+import { migration0376CreateHandymanServiceVariants } from './0376_create_handyman_service_variants';
+import { migration0377CreateHandymanCommonMaterialProfiles } from './0377_create_handyman_common_material_profiles';
+import { migration0378CreateHandymanServiceRequests } from './0378_create_handyman_service_requests';
+import { migration0379AdmitHandymanRequestEvidence } from './0379_admit_handyman_request_evidence';
+import { migration0380CreateHandymanRequestTriage } from './0380_create_handyman_request_triage';
+import { migration0381CreateHandymanRequestInspections } from './0381_create_handyman_request_inspections';
+import { migration0382CreateHandymanDiagnosisScopeAuthority } from './0382_create_handyman_diagnosis_scope_authority';
+import { migration0383CreateHandymanRequestReferrals } from './0383_create_handyman_request_referrals';
+import { migration0384CreateHandymanProviderContexts } from './0384_create_handyman_provider_contexts';
+import { migration0385CreateHandymanWorkerContexts } from './0385_create_handyman_worker_contexts';
+import { migration0386CreateHandymanWorkCrews } from './0386_create_handyman_work_crews';
+import { migration0387CreateHandymanSchedulingReadiness } from './0387_create_handyman_scheduling_readiness';
+import { migration0388CreateHandymanUnitAccessReadiness } from './0388_create_handyman_unit_access_readiness';
+import { migration0389CreateHandymanPermitReadiness } from './0389_create_handyman_permit_readiness';
+import { migration0390HandymanReadinessHistoryLinks } from './0390_handyman_readiness_history_links';
+import { migration0391CreateHandymanQuotations } from './0391_create_handyman_quotations';
+import { migration0392CreateHandymanQuotationLines } from './0392_create_handyman_quotation_lines';
+import { migration0393HandymanQuotationIssuedUniqueness } from './0393_handyman_quotation_issued_uniqueness';
+import { migration0394CreateHandymanQuotationDecisions } from './0394_create_handyman_quotation_decisions';
+import { migration0395CreateHandymanExecutionScopes } from './0395_create_handyman_execution_scopes';
+import { migration0396CreateHandymanExecutionScopeAssignments } from './0396_create_handyman_execution_scope_assignments';
+import { migration0397CreateHandymanArrivalChallenges } from './0397_create_handyman_arrival_challenges';
+import { migration0398CreateHandymanArrivalLocationIdentifiers }
+  from './0398_create_handyman_arrival_location_identifiers';
+import { migration0399CreateHandymanBuildingGeospatialPolicies }
+  from './0399_create_handyman_building_geospatial_policies';
+import { migration0400CreateHandymanArrivalVerificationResults }
+  from './0400_create_handyman_arrival_verification_results';
+import { migration0401CreateHandymanWorkSessions }
+  from './0401_create_handyman_work_sessions';
+import { migration0402CreateHandymanMaterialExecution }
+  from './0402_create_handyman_material_execution';
+import { migration0403CreateHandymanEvidenceQc }
+  from './0403_create_handyman_evidence_qc';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -749,4 +785,34 @@ export const migrations: readonly Migration[] = [
   migration0371CreateSaasUsage,
   migration0372CreatePlatformSupportSessions,
   migration0373CreateProductAddOns,
+  migration0374CreateHandymanChannelAttributions,
+  migration0375CreateHandymanHandoffRuntime,
+  migration0376CreateHandymanServiceVariants,
+  migration0377CreateHandymanCommonMaterialProfiles,
+  migration0378CreateHandymanServiceRequests,
+  migration0379AdmitHandymanRequestEvidence,
+  migration0380CreateHandymanRequestTriage,
+  migration0381CreateHandymanRequestInspections,
+  migration0382CreateHandymanDiagnosisScopeAuthority,
+  migration0383CreateHandymanRequestReferrals,
+  migration0384CreateHandymanProviderContexts,
+  migration0385CreateHandymanWorkerContexts,
+  migration0386CreateHandymanWorkCrews,
+  migration0387CreateHandymanSchedulingReadiness,
+  migration0388CreateHandymanUnitAccessReadiness,
+  migration0389CreateHandymanPermitReadiness,
+  migration0390HandymanReadinessHistoryLinks,
+  migration0391CreateHandymanQuotations,
+  migration0392CreateHandymanQuotationLines,
+  migration0393HandymanQuotationIssuedUniqueness,
+  migration0394CreateHandymanQuotationDecisions,
+  migration0395CreateHandymanExecutionScopes,
+  migration0396CreateHandymanExecutionScopeAssignments,
+  migration0397CreateHandymanArrivalChallenges,
+  migration0398CreateHandymanArrivalLocationIdentifiers,
+  migration0399CreateHandymanBuildingGeospatialPolicies,
+  migration0400CreateHandymanArrivalVerificationResults,
+  migration0401CreateHandymanWorkSessions,
+  migration0402CreateHandymanMaterialExecution,
+  migration0403CreateHandymanEvidenceQc,
 ];

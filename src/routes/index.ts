@@ -31,6 +31,21 @@ import { createDocumentApprovalRouter } from '../modules/document-approvals/docu
 import { createWorkCompletionDocumentRouter } from '../modules/work-completion-documents/work-completion-document.routes';
 import { createBastDocumentRouter } from '../modules/bast-documents/bast-document.routes';
 import { createHandoverDocumentRouter } from '../modules/handover-documents/handover-document.routes';
+import { createHandoffHandymanRouter } from '../modules/handyman-handoff/handoff.routes';
+import { createHandymanApiRouter } from '../modules/handyman-api';
+import { createHandymanLifecycleApiRouter } from '../modules/handyman-lifecycle-api';
+import { createHandymanProviderApiRouter } from '../modules/handyman-provider-api';
+import { createHandymanReadinessApiRouter } from '../modules/handyman-readiness-api';
+import { createHandymanQuotationsApiRouter } from '../modules/handyman-quotations-api';
+import { createHandymanArrivalVerificationApiRouter }
+  from '../modules/handyman-arrival-verification-api';
+import { createHandymanWorkSessionsApiRouter }
+  from '../modules/handyman-work-sessions-api';
+import { createHandymanMaterialExecutionApiRouter }
+  from '../modules/handyman-material-execution-api';
+import { createHandymanEvidenceQcApiRouter }
+  from '../modules/handyman-evidence-qc-api';
+import { createHandymanScopeAssignmentsApiRouter } from '../modules/handyman-scope-assignments-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -770,6 +785,33 @@ export function createApiRouter(): Router {
   router.use(createCorrectiveActionResponsibilityRouter());
   router.use(createCorrectiveActionVerificationRouter());
   router.use(createIncidentClosureRouter());
+  // CR-HM-01 PART 05 — secure BM Super App handoff exposure (frozen D3:
+  // /api/v1 only, never /webhooks; assertion signature auth — a Bearer user
+  // session is not a substitute, and none is created).
+  router.use(createHandoffHandymanRouter());
+  // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
+  // attribution-bound request intake, and bounded INTAKE evidence upload
+  // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface
+  // and no catalogue/master mutation is exposed.
+  router.use(createHandymanApiRouter());
+  router.use(createHandymanLifecycleApiRouter());
+  // CR-HM-04 PART 05A — provider/worker/crew surface (frozen F9): exactly
+  // the existing PART 01–03 service operations (create/exact read/status/
+  // membership/Lead). NO assignment surface: PART 04 freezes assignment as
+  // contract-only, deferred to the authoritative CR-HM-06 target.
+  router.use(createHandymanProviderApiRouter());
+  // CR-HM-05 PART 06A — readiness surfaces only (frozen containment):
+  // scheduling / unit-access / permit readiness create, exact read,
+  // supersede (pre-execution reschedule) and immutable history reads.
+  // ZERO target-binding (PART 05 deferred), crew-assignment,
+  // arrival/QR/geofence or FM permit/work-order routes.
+  router.use(createHandymanReadinessApiRouter());
+  router.use(createHandymanQuotationsApiRouter()); // CR-HM-06 PART 07A — quotation surface
+  router.use(createHandymanScopeAssignmentsApiRouter()); // CR-HM-04 activation PART C — assignment surface
+  router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification
+  router.use(createHandymanWorkSessionsApiRouter()); // CR-HM-08 PART 05 — work session field-execution surface
+  router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface
+  router.use(createHandymanEvidenceQcApiRouter()); // CR-HM-10 PART 06 — evidence/QC/defect surface
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;
