@@ -32,6 +32,9 @@ import type {
   HandymanMaterialAcquisitionMode,
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialExecutionEventType,
+  SettleHandymanMaterialLineInput,
+  UsageHandymanMaterialLineInput,
+  HandymanMaterialFinalChargeReadyProjection,
 } from './handyman-material-execution.types';
 
 /**
@@ -413,4 +416,209 @@ export async function purchaseHandymanMaterialExecutionLine(
   actorUserId: string,
 ): Promise<HandymanMaterialExecutionCommandResult> {
   return acquireHandymanMaterialLine('PURCHASED', input, actorUserId);
+}
+
+/* ---- PART 05 — USE / RETURN adjustments + FINAL_CHARGE_READY ----
+ * Governance D2/D5: the final usage basis is ONLY
+ * finalUsedQty = usedQty - returnedQty. USE/RETURN are bounded
+ * quantity adjustments (partials legal) on the factual axes; RETURN
+ * is never a sticky status. SETTLE (FINAL_CHARGE_READY) closes the
+ * line: after that, ANY further USE/RETURN/ISSUE/PURCHASE is a
+ * bounded 409 MATERIAL_LINE_SETTLED — corrections live downstream in
+ * CR-HM-13 reversal/adjustment, NEVER by history rewrite here.
+ * Execution truth ONLY: this layer computes NO amounts, NO pricing,
+ * NO billing.
+ */
+
+async function adjustUsageHandymanMaterialLine(
+  kind: 'USE' | 'RETURN',
+  input: UsageHandymanMaterialLineInput,
+  actorUserId: string,
+): Promise<HandymanMaterialExecutionCommandResult> {
+  const scopeUuid = ensureUuid(input.executionScopeId,
+    'executionScopeId');
+  const lineUuid = ensureUuid(input.lineId, 'lineId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+  const deltaQty = ensureDeltaQuantity(input.quantity);
+
+  await authorityPreamble(scopeUuid, actorUuid);
+
+  return withTransaction(async (tx) => {
+    const current = await handymanMaterialExecutionRepository
+      .findMaterialExecutionLineByIdForUpdate(tx, lineUuid);
+    if (!current || current.executionScopeId !== scopeUuid) {
+      throw handymanMaterialExecutionLineNotFoundError();
+    }
+    const replayEvent = await handymanMaterialExecutionRepository
+      .findMaterialExecutionEventByIdempotency(tx, lineUuid,
+        kind, key);
+    if (replayEvent) {
+      return { line: current, event: replayEvent, replayed: true };
+    }
+    // Legal opening states: anything after acquisition opened
+    // (ISSUED/PURCHASED/USED). FINAL_CHARGE_READY closes adjustment.
+    if (current.status !== 'ISSUED'
+        && current.status !== 'PURCHASED'
+        && current.status !== 'USED') {
+      throw handymanMaterialExecutionIllegalTransitionError(
+        current.status, kind);
+    }
+    const nextUsed = kind === 'USE'
+      ? current.usedQty + deltaQty
+      : current.usedQty;
+    const nextReturned = kind === 'RETURN'
+      ? current.returnedQty + deltaQty
+      : current.returnedQty;
+    // Frozen quantity caps: the usage basis may never go negative —
+    // (a) used, including this delta, may not exceed what is held
+    // after previously returned quantities;
+    // (b) returned, including this delta, may not exceed what
+    // remains used.
+    if (nextUsed > current.issuedQty + current.purchasedQty
+          - nextReturned) {
+      throw handymanMaterialExecutionQuantityExceededError(
+        'use-exceeds-held-quantity');
+    }
+    if (nextReturned > current.issuedQty + current.purchasedQty
+          - nextUsed) {
+      throw handymanMaterialExecutionQuantityExceededError(
+        'return-exceeds-used-quantity');
+    }
+    const headed = await handymanMaterialExecutionRepository
+      .updateMaterialExecutionLineHead(tx, lineUuid, {
+        status: kind === 'USE' ? 'USED' : current.status,
+        acquisitionMode: current.acquisitionMode,
+        approvedQty: current.approvedQty,
+        issuedQty: current.issuedQty,
+        purchasedQty: current.purchasedQty,
+        usedQty: nextUsed,
+        returnedQty: nextReturned,
+        supplierReference: current.supplierReference,
+      });
+    if (!headed) throw handymanMaterialExecutionLineNotFoundError();
+    const event = await handymanMaterialExecutionRepository
+      .appendMaterialExecutionEvent(tx, {
+        clientId: current.clientId,
+        lineId: lineUuid,
+        executionScopeId: scopeUuid,
+        eventType: kind,
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { line: headed, event, replayed: false };
+  });
+}
+
+/**
+ * USE: consume `quantity` on the count-as-used axis. Consumption
+ * follows the acquisition axis semantics (never changes the mode
+ * chosen at acquisition). Partial uses are legal. First USE moves
+ * the line ISSUED|PURCHASED -> USED; further USEs accumulate.
+ */
+export async function useHandymanMaterialExecutionLine(
+  input: UsageHandymanMaterialLineInput,
+  actorUserId: string,
+): Promise<HandymanMaterialExecutionCommandResult> {
+  return adjustUsageHandymanMaterialLine('USE', input, actorUserId);
+}
+
+/**
+ * RETURN: hand back `quantity` of the held-not-used remainder.
+ * Partial returns are legal; the status is NOT sticky (RETURNED is
+ * not a status). The returned quantity reduces the final usage
+ * basis: finalUsedQty = usedQty - returnedQty.
+ */
+export async function returnHandymanMaterialExecutionLine(
+  input: UsageHandymanMaterialLineInput,
+  actorUserId: string,
+): Promise<HandymanMaterialExecutionCommandResult> {
+  return adjustUsageHandymanMaterialLine('RETURN', input,
+    actorUserId);
+}
+
+/**
+ * FINAL_CHARGE_READY: close one line's execution history for
+ * downstream pricing/ledger. The line must have passed acquisition
+ * (ISSUED/PURCHASED/USED). Replay of the same SETTLE key returns the
+ * SAME event; a new key afterward is a bounded 409.
+ */
+export async function settleHandymanMaterialExecutionLine(
+  input: SettleHandymanMaterialLineInput,
+  actorUserId: string,
+): Promise<HandymanMaterialExecutionCommandResult> {
+  const scopeUuid = ensureUuid(input.executionScopeId,
+    'executionScopeId');
+  const lineUuid = ensureUuid(input.lineId, 'lineId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+
+  await authorityPreamble(scopeUuid, actorUuid);
+
+  return withTransaction(async (tx) => {
+    const current = await handymanMaterialExecutionRepository
+      .findMaterialExecutionLineByIdForUpdate(tx, lineUuid);
+    if (!current || current.executionScopeId !== scopeUuid) {
+      throw handymanMaterialExecutionLineNotFoundError();
+    }
+    const replayEvent = await handymanMaterialExecutionRepository
+      .findMaterialExecutionEventByIdempotency(tx, lineUuid,
+        'FINAL_CHARGE_READY', key);
+    if (replayEvent) {
+      return { line: current, event: replayEvent, replayed: true };
+    }
+    if (current.status !== 'ISSUED'
+        && current.status !== 'PURCHASED'
+        && current.status !== 'USED') {
+      throw handymanMaterialExecutionIllegalTransitionError(
+        current.status, 'FINAL_CHARGE_READY');
+    }
+    const headed = await handymanMaterialExecutionRepository
+      .updateMaterialExecutionLineHead(tx, lineUuid, {
+        status: 'FINAL_CHARGE_READY',
+        acquisitionMode: current.acquisitionMode,
+        approvedQty: current.approvedQty,
+        issuedQty: current.issuedQty,
+        purchasedQty: current.purchasedQty,
+        usedQty: current.usedQty,
+        returnedQty: current.returnedQty,
+        supplierReference: current.supplierReference,
+      });
+    if (!headed) throw handymanMaterialExecutionLineNotFoundError();
+    const event = await handymanMaterialExecutionRepository
+      .appendMaterialExecutionEvent(tx, {
+        clientId: current.clientId,
+        lineId: lineUuid,
+        executionScopeId: scopeUuid,
+        eventType: 'FINAL_CHARGE_READY',
+        idempotencyKey: key,
+        actorUserId: actorUuid,
+      });
+    return { line: headed, event, replayed: false };
+  });
+}
+
+/**
+ * FINAL_CHARGE_READY usage-basis read projection over ONE execution
+ * scope (READ-ONLY, server-side): the exact settled lines and ONE
+ * aggregated final-used figure. This module NEVER computes amounts;
+ * the projection hands nothing but quantities to CR-HM-12/13.
+ */
+export async function getHandymanMaterialFinalChargeReadyProjection(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanMaterialFinalChargeReadyProjection> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  await authorityPreamble(scopeUuid, ensureUuid(actorUserId,
+    'actorUserId'));
+  const lines = (await handymanMaterialExecutionRepository
+    .listMaterialExecutionLinesByScope(undefined, scopeUuid))
+    .filter((line) => line.status === 'FINAL_CHARGE_READY');
+  const totalFinalUsedQty = lines.reduce(
+    (sum, line) => sum + (line.usedQty - line.returnedQty), 0);
+  return {
+    executionScopeId: scopeUuid,
+    lines,
+    totalFinalUsedQty,
+  };
 }

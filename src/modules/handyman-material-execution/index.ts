@@ -36,12 +36,19 @@ export {
   approveHandymanMaterialExecutionLine,
   issueHandymanMaterialExecutionLine,
   purchaseHandymanMaterialExecutionLine,
+  useHandymanMaterialExecutionLine,
+  returnHandymanMaterialExecutionLine,
+  settleHandymanMaterialExecutionLine,
+  getHandymanMaterialFinalChargeReadyProjection,
 } from './handyman-material-execution.service';
 export type {
   EstimateHandymanMaterialLineInput,
   ApproveHandymanMaterialLineInput,
   AcquireHandymanMaterialLineInput,
+  UsageHandymanMaterialLineInput,
+  SettleHandymanMaterialLineInput,
   HandymanMaterialExecutionCommandResult,
+  HandymanMaterialFinalChargeReadyProjection,
 } from './handyman-material-execution.types';
 
 export { handymanMaterialExecutionRepository }

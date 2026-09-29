@@ -110,11 +110,12 @@ export type ApproveHandymanMaterialLineInput = {
 /* ---- PART 04 command surface (ISSUE / PURCHASE) ----------------- */
 
 /**
- * Bounded ISSUE/PURCHASE input. `quantity` is the delta applied on
- * the line's acquisition axis (NOT the absolute quantity) — the
- * service computes the new head server-side. A line adopts exactly
- * ONE acquisition mode; further partial acquisitions accumulate on
- * the same axis (capped by approved authority).
+ * Bounded ISSUE/PURCHASE/USE/RETURN input. `quantity` is the delta
+ * applied on the targeted axis (NOT the absolute quantity) — the
+ * service computes the new head server-side. For ISSUE/PURCHASE the
+ * line adopts exactly ONE acquisition mode; further partial
+ * acquisitions accumulate on the same axis (capped by approved
+ * authority).
  */
 export type AcquireHandymanMaterialLineInput = {
   executionScopeId: string;
@@ -124,10 +125,40 @@ export type AcquireHandymanMaterialLineInput = {
   idempotencyKey: string;
 };
 
+/* ---- PART 05 command surface (USE / RETURN / SETTLE) ------------ */
+
+/** Bounded USE/RETURN input (NO session reference in PART 05). */
+export type UsageHandymanMaterialLineInput = {
+  executionScopeId: string;
+  lineId: string;
+  quantity: number;
+  idempotencyKey: string;
+};
+
+/** Bounded FINAL_CHARGE_READY (settle) input. */
+export type SettleHandymanMaterialLineInput = {
+  executionScopeId: string;
+  lineId: string;
+  idempotencyKey: string;
+};
+
 export type HandymanMaterialExecutionCommandResult = {
   line: HandymanMaterialExecutionLineRecord;
   event: HandymanMaterialExecutionEventRecord;
   replayed: boolean;
+};
+
+/**
+ * FINAL_CHARGE_READY projection over one execution scope
+ * (governance PART 05 read model): EXECUTION TRUTH ONLY — a list of
+ * all settled lines with their frozen quantities and ONE aggregated
+ * usage figure (sum of used - returned). This is the ONLY handoff
+ * artifact to CR-HM-12/13 pricing/ledger authority.
+ */
+export type HandymanMaterialFinalChargeReadyProjection = {
+  executionScopeId: string;
+  lines: HandymanMaterialExecutionLineRecord[];
+  totalFinalUsedQty: number;
 };
 
 /** Head mutation payload (primitive only — no lifecycle decisions). */
