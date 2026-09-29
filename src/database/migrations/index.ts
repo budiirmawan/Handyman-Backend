@@ -403,6 +403,8 @@ import { migration0400CreateHandymanArrivalVerificationResults }
   from './0400_create_handyman_arrival_verification_results';
 import { migration0401CreateHandymanWorkSessions }
   from './0401_create_handyman_work_sessions';
+import { migration0402CreateHandymanMaterialExecution }
+  from './0402_create_handyman_material_execution';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -809,4 +811,5 @@ export const migrations: readonly Migration[] = [
   migration0399CreateHandymanBuildingGeospatialPolicies,
   migration0400CreateHandymanArrivalVerificationResults,
   migration0401CreateHandymanWorkSessions,
+  migration0402CreateHandymanMaterialExecution,
 ];
