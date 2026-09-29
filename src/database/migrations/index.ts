@@ -423,6 +423,8 @@ import { migration0410CreateHandymanCustomerTransactions }
   from './0410_create_handyman_customer_transactions';
 import { migration0411HandymanChargeComposition }
   from './0411_handyman_charge_composition';
+import { migration0412CreateHandymanCustomerPayments }
+  from './0412_create_handyman_customer_payments';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -839,4 +841,5 @@ export const migrations: readonly Migration[] = [
   migration0409CreateHandymanBmFeeRules,
   migration0410CreateHandymanCustomerTransactions,
   migration0411HandymanChargeComposition,
+  migration0412CreateHandymanCustomerPayments,
 ];
