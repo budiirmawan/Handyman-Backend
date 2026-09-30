@@ -431,6 +431,12 @@ import { migration0414HandymanLedgerCorrections }
   from './0414_handyman_ledger_corrections';
 import { migration0415CreateHandymanBmFeePrerequisite }
   from './0415_create_handyman_bm_fee_prerequisite';
+import { migration0416CreateHandymanEntitlementFacts }
+  from './0416_create_handyman_entitlement_facts';
+import { migration0417CreateHandymanEntitlementCorrections }
+  from './0417_create_handyman_entitlement_corrections';
+import { migration0418HandymanSettlementReconciliation }
+  from './0418_handyman_settlement_reconciliation';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -851,4 +857,7 @@ export const migrations: readonly Migration[] = [
   migration0413HandymanPaymentAllocations,
   migration0414HandymanLedgerCorrections,
   migration0415CreateHandymanBmFeePrerequisite,
+  migration0416CreateHandymanEntitlementFacts,
+  migration0417CreateHandymanEntitlementCorrections,
+  migration0418HandymanSettlementReconciliation,
 ];
