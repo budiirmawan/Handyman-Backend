@@ -445,6 +445,8 @@ import { migration0421CreateHandymanServiceWarrantyReworks }
   from './0421_create_handyman_service_warranty_reworks';
 import { migration0422CreateHandymanChargeableAdditionalWorks }
   from './0422_create_handyman_chargeable_additional_works';
+import { migration0423HandymanSlaSubjectBinding }
+  from './0423_handyman_sla_subject_binding';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -872,4 +874,5 @@ export const migrations: readonly Migration[] = [
   migration0420CreateHandymanServiceWarrantyClaims,
   migration0421CreateHandymanServiceWarrantyReworks,
   migration0422CreateHandymanChargeableAdditionalWorks,
+  migration0423HandymanSlaSubjectBinding,
 ];
