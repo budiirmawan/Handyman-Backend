@@ -437,6 +437,8 @@ import { migration0417CreateHandymanEntitlementCorrections }
   from './0417_create_handyman_entitlement_corrections';
 import { migration0418HandymanSettlementReconciliation }
   from './0418_handyman_settlement_reconciliation';
+import { migration0419CreateHandymanServiceWarranty }
+  from './0419_create_handyman_service_warranty';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -860,4 +862,5 @@ export const migrations: readonly Migration[] = [
   migration0416CreateHandymanEntitlementFacts,
   migration0417CreateHandymanEntitlementCorrections,
   migration0418HandymanSettlementReconciliation,
+  migration0419CreateHandymanServiceWarranty,
 ];
