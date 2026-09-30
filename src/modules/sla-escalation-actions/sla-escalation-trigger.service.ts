@@ -78,7 +78,13 @@ export type SlaEscalationDispatchResult = {
   skipped: number;
 };
 
-/** Template variables offered to the snapshotted BE-26B template. */
+/** Template variables offered to the snapshotted BE-26B template.
+ *
+ * CR-HM-16 PART 02: `subjectType` / `subjectId` are offered to every template
+ * (Work Order rows report their Work Order identity through them as well).
+ * Work Order presentation keys stay empty for Handyman subjects — the trigger
+ * NEVER reads a Handyman domain table; Handyman templates bind to the subject
+ * identity and the frozen action facts only. */
 function templateValues(
   action: SlaEscalationActionRecord,
   workOrder: { workOrderNumber: string; title: string; workType: string; priority: string } | null,
@@ -88,6 +94,8 @@ function templateValues(
     workOrderTitle: workOrder?.title ?? '',
     workType: workOrder?.workType ?? '',
     priority: workOrder?.priority ?? '',
+    subjectType: action.subjectType,
+    subjectId: action.workOrderId ?? action.subjectId ?? '',
     clockType: action.clockType,
     level: action.level,
     breachedAt: action.breachedAt.toISOString(),
@@ -139,7 +147,11 @@ async function executeClaimed(
     return;
   }
 
-  const workOrder = await workOrderRepository.findById(action.workOrderId);
+  // CR-HM-16 PART 02: the Work Order row is a template-variable enrichment for
+  // Work Order actions ONLY. Handyman subject actions never read a domain row
+  // here (the frozen action row is their identity authority), so notifications
+  // can never write — nor depend on live — Handyman lifecycle state.
+  const workOrder = action.workOrderId ? await workOrderRepository.findById(action.workOrderId) : null;
   const rendered = renderTemplate(
     { subject: template.subject, body: template.body },
     templateValues(action, workOrder),
@@ -153,8 +165,8 @@ async function executeClaimed(
       channel: 'IN_APP',
       title: rendered.subject,
       body: rendered.body,
-      sourceEntityType: 'WORK_ORDER',
-      sourceEntityId: action.workOrderId,
+      sourceEntityType: action.subjectType,
+      sourceEntityId: action.workOrderId ?? action.subjectId!,
       sourceEventType: SOURCE_EVENT_TYPE,
       templateKey: action.templateKey,
       // CR-BE-RN21-NOTIFICATION-NAV-01 — the EXPLICIT backend-owned navigation
@@ -163,10 +175,13 @@ async function executeClaimed(
       // against (`action.workOrderId`, used verbatim above for the source
       // entity), so the target is READ from the frozen action row — never
       // inferred from `sourceEntityType`, and never taken from `metadata`.
-      navigationTarget: {
-        type: 'WORK_ORDER_FIELD_WORK',
-        id: action.workOrderId,
-      },
+      // CR-HM-16 PART 02: Handyman subject actions deliberately declare NO
+      // navigation target (no Handyman navigation-target type exists); the
+      // client falls back to the inbox, and no client-side interpretation of
+      // the source entity is needed or permitted.
+      ...(action.workOrderId
+        ? { navigationTarget: { type: 'WORK_ORDER_FIELD_WORK' as const, id: action.workOrderId } }
+        : {}),
       metadata: {
         escalationActionId: action.id,
         slaClockId: action.slaClockId,
@@ -201,8 +216,8 @@ async function completeTrigger(
       {
         clientId: action.clientId,
         buildingId: action.buildingId,
-        entityType: 'WORK_ORDER',
-        entityId: action.workOrderId,
+        entityType: action.subjectType,
+        entityId: action.workOrderId ?? action.subjectId!,
         eventType: SOURCE_EVENT_TYPE,
         summary: `SLA escalation level ${action.level} triggered for the ${action.clockType} breach`,
         metadata: {

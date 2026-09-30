@@ -73,6 +73,13 @@ async function findCreatorUserId(workOrderId: string): Promise<string | null> {
  * relation, a workforce member with no reporting line. An unresolvable target
  * legitimately contributes no recipients (governance §5.5) — it is not an
  * execution failure.
+ *
+ * CR-HM-16 PART 02: the `WORK_ORDER_*` derived kinds follow Work Order links
+ * and therefore expand only for Work Order-bound actions — a Handyman subject
+ * action expands them to nothing (never a guess). The generic
+ * `BUILDING_ROLE` / `BUILDING_PERMISSION` kinds expand identically for both
+ * binding kinds; Handyman recipient contracts use those plus static BE-26C
+ * specs. No Handyman audience engine is invented here.
  */
 async function expandTarget(
   target: SlaEscalationDerivedTarget,
@@ -80,6 +87,7 @@ async function expandTarget(
 ): Promise<RecipientSpec[]> {
   switch (target.kind) {
     case 'WORK_ORDER_ASSIGNEE': {
+      if (!action.workOrderId) return [];
       const assignment = await findActiveAssignment(action.workOrderId);
       if (!assignment) return [];
       // VENDOR_WORKFORCE carries both a vendor and a workforce profile; the
@@ -92,6 +100,7 @@ async function expandTarget(
       return [];
     }
     case 'WORK_ORDER_ASSIGNEE_SUPERVISOR': {
+      if (!action.workOrderId) return [];
       const assignment = await findActiveAssignment(action.workOrderId);
       // No assignee, or an assignee that is a Team/Vendor rather than a person:
       // there is no supervisor relation to follow and none is invented.
@@ -101,6 +110,7 @@ async function expandTarget(
       return [{ kind: 'WORKFORCE', workforceProfileId: supervisor.supervisorWorkforceProfileId }];
     }
     case 'WORK_ORDER_CREATOR': {
+      if (!action.workOrderId) return [];
       const userId = await findCreatorUserId(action.workOrderId);
       return userId ? [{ kind: 'USER', userId }] : [];
     }

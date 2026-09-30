@@ -62,9 +62,9 @@ function selectPolicy(candidates: ApplicableEscalationPolicy[]): {
   return tied.length > 1 ? { selected: null, tied } : { selected: top, tied: [] };
 }
 
-/** All escalation events share the Work Order entity and the applied SLA's scope. */
+/** All escalation events share the breach subject entity and the applied SLA's scope (CR-HM-16 PART 02: Work Order or Handyman subject). */
 async function event(
-  ctx: SlaBreachContext | Pick<SlaEscalationActionRecord, 'clientId' | 'buildingId' | 'workOrderId'>,
+  ctx: SlaBreachContext | Pick<SlaEscalationActionRecord, 'clientId' | 'buildingId' | 'workOrderId' | 'subjectId' | 'subjectType'>,
   eventType: string,
   summary: string,
   metadata: Record<string, unknown>,
@@ -74,8 +74,8 @@ async function event(
     {
       clientId: ctx.clientId,
       buildingId: ctx.buildingId,
-      entityType: 'WORK_ORDER',
-      entityId: ctx.workOrderId,
+      entityType: ctx.subjectType,
+      entityId: ctx.workOrderId ?? ctx.subjectId!,
       eventType,
       summary,
       metadata,
@@ -197,4 +197,5 @@ export const slaEscalationActionService = {
   cancelPendingEscalationActions,
   listActionsForClock: slaEscalationActionRepository.listActionsForClock,
   listActionsForWorkOrder: slaEscalationActionRepository.listActionsForWorkOrder,
+  listActionsForSubject: slaEscalationActionRepository.listActionsForSubject,
 };

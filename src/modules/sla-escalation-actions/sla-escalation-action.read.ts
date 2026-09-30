@@ -80,7 +80,11 @@ export function toPublicSlaEscalationAction(
 ): PublicSlaEscalationAction {
   return {
     id: action.id,
-    workOrderId: action.workOrderId,
+    // Projected only for Work Order-bound actions (`listActionsForWorkOrder`
+    // narrows by `work_order_id`); Handyman subject bindings (CR-HM-16 PART 02)
+    // stay out of this curated surface until a read contract deliberately
+    // publishes them.
+    workOrderId: action.workOrderId!,
     appliedSlaId: action.appliedSlaId,
     slaClockId: action.slaClockId,
     clientId: action.clientId,
