@@ -1,8 +1,10 @@
 import type { WorkOrderPriority } from '../work-orders';
+import { HANDYMAN_SLA_SUBJECT_TYPES, type HandymanSlaSubjectType } from './handyman-sla-subjects';
 export const SLA_DEFINITION_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
-export const SLA_OPERATIONAL_TYPES = ['WORK_ORDER'] as const;
+/** CR-HM-16 PART 01: shared engine subject-type registry — Work Order (FM v1 consumer) + closed Handyman subject vocabulary. */
+export const SLA_OPERATIONAL_TYPES = ['WORK_ORDER', ...HANDYMAN_SLA_SUBJECT_TYPES] as const;
 export type SlaDefinitionStatus = (typeof SLA_DEFINITION_STATUSES)[number];
-export type SlaOperationalType = (typeof SLA_OPERATIONAL_TYPES)[number];
+export type SlaOperationalType = 'WORK_ORDER' | HandymanSlaSubjectType;
 export type SlaDefinitionRecord = {
   id:string; clientId:string; buildingId:string|null; code:string; name:string;
   operationalType:SlaOperationalType; workType:string|null; priority:WorkOrderPriority|null;

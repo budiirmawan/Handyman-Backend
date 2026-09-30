@@ -1,4 +1,5 @@
 import type { SlaClockType } from '../applied-slas/applied-sla.types';
+import type { SlaOperationalType } from '../sla-definitions/sla-definition.types';
 import type { SlaEscalationRecipientRule } from '../sla-escalation-policies/sla-escalation-policy.types';
 
 /**
@@ -21,7 +22,12 @@ export type SlaEscalationActionRecord = {
   id: string;
   appliedSlaId: string;
   slaClockId: string;
-  workOrderId: string;
+  /** Work Order binding (FM v1 consumer); null for Handyman subject bindings. */
+  workOrderId: string | null;
+  /** Handyman subject binding (CR-HM-16 PART 02); null for Work Order bindings. */
+  subjectId: string | null;
+  /** Frozen source-entity type for notification intent: 'WORK_ORDER' or a Handyman subject type. */
+  subjectType: SlaOperationalType;
   clientId: string;
   buildingId: string;
   clockType: SlaClockType;
@@ -68,7 +74,9 @@ export type SlaBreachContext = {
   appliedSlaId: string;
   slaClockId: string;
   clockType: SlaClockType;
-  workOrderId: string;
+  workOrderId: string | null;
+  subjectId: string | null;
+  subjectType: SlaOperationalType;
   clientId: string;
   buildingId: string;
   workType: string;

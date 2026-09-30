@@ -13,7 +13,7 @@ import type {
 /** Any executor: the pool, or the caller's open transaction client. */
 type Q = Pick<Pool | PoolClient, 'query'>;
 
-const A = `id,applied_sla_id AS "appliedSlaId",sla_clock_id AS "slaClockId",work_order_id AS "workOrderId",client_id AS "clientId",building_id AS "buildingId",clock_type AS "clockType",policy_id AS "policyId",escalation_level_id AS "escalationLevelId",level,template_key AS "templateKey",recipient_rule AS "recipientRule",breached_at AS "breachedAt",due_at AS "dueAt",status,triggered_at AS "triggeredAt",cancelled_at AS "cancelledAt",cancel_reason AS "cancelReason",recipients_resolved AS "recipientsResolved",notifications_created AS "notificationsCreated",failure_reason AS "failureReason",created_at AS "createdAt",updated_at AS "updatedAt"`;
+const A = `id,applied_sla_id AS "appliedSlaId",sla_clock_id AS "slaClockId",work_order_id AS "workOrderId",subject_id AS "subjectId",subject_type AS "subjectType",client_id AS "clientId",building_id AS "buildingId",clock_type AS "clockType",policy_id AS "policyId",escalation_level_id AS "escalationLevelId",level,template_key AS "templateKey",recipient_rule AS "recipientRule",breached_at AS "breachedAt",due_at AS "dueAt",status,triggered_at AS "triggeredAt",cancelled_at AS "cancelledAt",cancel_reason AS "cancelReason",recipients_resolved AS "recipientsResolved",notifications_created AS "notificationsCreated",failure_reason AS "failureReason",created_at AS "createdAt",updated_at AS "updatedAt"`;
 
 const LEVEL = `id,policy_id AS "policyId",level,offset_minutes AS "offsetMinutes",template_key AS "templateKey",recipient_rule AS "recipientRule",status,created_at AS "createdAt",updated_at AS "updatedAt"`;
 
@@ -22,12 +22,14 @@ const LEVEL = `id,policy_id AS "policyId",level,offset_minutes AS "offsetMinutes
  * Building 8, exact `clock_type` (not `ANY`) 4, `work_type` 2, `priority` 1.
  *
  * The filter mirrors SLA-01's `selectApplicable` shape exactly — same Client,
- * ACTIVE, effective at the breach instant, `WORK_ORDER`, Building/work type/
+ * ACTIVE, effective at the breach instant, the breach's subject type
+ * (`operational_type=$7`; Work Order breaches match 'WORK_ORDER' policies,
+ * Handyman breaches match their subject type), Building/work type/
  * priority NULL-or-equal — plus the `ANY` clock-type widening. Ordering is
  * deterministic so the caller can compare the top two scores for a tie.
  */
 async function findApplicablePolicies(
-  ctx: Pick<SlaBreachContext, 'clientId' | 'buildingId' | 'clockType' | 'workType' | 'priority' | 'breachedAt'>,
+  ctx: Pick<SlaBreachContext, 'clientId' | 'buildingId' | 'subjectType' | 'clockType' | 'workType' | 'priority' | 'breachedAt'>,
   q: Q,
 ): Promise<ApplicableEscalationPolicy[]> {
   return (
@@ -40,14 +42,14 @@ async function findApplicablePolicies(
          FROM sla_escalation_policies
         WHERE client_id=$1
           AND (building_id IS NULL OR building_id=$2)
-          AND operational_type='WORK_ORDER'
+          AND operational_type=$7
           AND status='ACTIVE'
           AND (clock_type=$3 OR clock_type='ANY')
           AND effective_from<=$6 AND (effective_to IS NULL OR effective_to>$6)
           AND (work_type IS NULL OR work_type=$4)
           AND (priority IS NULL OR priority=$5)
         ORDER BY specificity DESC,code`,
-      [ctx.clientId, ctx.buildingId, ctx.clockType, ctx.workType, ctx.priority, ctx.breachedAt],
+      [ctx.clientId, ctx.buildingId, ctx.clockType, ctx.workType, ctx.priority, ctx.breachedAt, ctx.subjectType],
     )
   ).rows;
 }
@@ -78,8 +80,8 @@ async function insertAction(
 ): Promise<SlaEscalationActionRecord | null> {
   return (
     await q.query<SlaEscalationActionRecord>(
-      `INSERT INTO sla_escalation_actions(id,applied_sla_id,sla_clock_id,work_order_id,client_id,building_id,clock_type,policy_id,escalation_level_id,level,template_key,recipient_rule,breached_at,due_at)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::timestamptz,$13::timestamptz+make_interval(mins=>$14::int))
+      `INSERT INTO sla_escalation_actions(id,applied_sla_id,sla_clock_id,work_order_id,subject_id,subject_type,client_id,building_id,clock_type,policy_id,escalation_level_id,level,template_key,recipient_rule,breached_at,due_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::timestamptz,$15::timestamptz+make_interval(mins=>$16::int))
        ON CONFLICT ON CONSTRAINT sla_escalation_actions_clock_level_unique DO NOTHING
        RETURNING ${A}`,
       [
@@ -87,6 +89,8 @@ async function insertAction(
         ctx.appliedSlaId,
         ctx.slaClockId,
         ctx.workOrderId,
+        ctx.subjectId,
+        ctx.subjectType,
         ctx.clientId,
         ctx.buildingId,
         ctx.clockType,
@@ -215,6 +219,16 @@ async function listActionsForWorkOrder(workOrderId: string, q: Q = getPool()): P
   ).rows;
 }
 
+/** CR-HM-16 PART 02 — read seam for the ledger of one Handyman subject (ordered). */
+async function listActionsForSubject(subjectId: string, q: Q = getPool()): Promise<SlaEscalationActionRecord[]> {
+  return (
+    await q.query<SlaEscalationActionRecord>(
+      `SELECT ${A} FROM sla_escalation_actions WHERE subject_id=$1 ORDER BY clock_type,level`,
+      [subjectId],
+    )
+  ).rows;
+}
+
 export const slaEscalationActionRepository = {
   findApplicablePolicies,
   findActiveLevels,
@@ -226,4 +240,5 @@ export const slaEscalationActionRepository = {
   findActionById,
   listActionsForClock,
   listActionsForWorkOrder,
+  listActionsForSubject,
 };
