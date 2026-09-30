@@ -29,8 +29,10 @@ import type {
   HandymanMaterialPricingMode,
 } from '../handyman-material-pricing';
 import type {
+  HandymanBmFeeBeneficiaryKind,
   HandymanBmFeeRuleBasis,
   HandymanBmFeeRuleMode,
+  HandymanBmFeeTermKind,
 } from '../handyman-bm-fee-rules';
 
 /** Discriminant labeling every published figure as a governed
@@ -153,4 +155,76 @@ export type HandymanPricingContractMaterialComposition = {
 export type HandymanPricingContractBmFeeRuleConsumption = {
   binding: HandymanPricingContractBinding;
   rule: HandymanPricingContractBmFeeRuleView;
+};
+
+/* ------------------------------------------------------------------
+ * CR-HM-12 PART 06B — BM fee CONFIGURATION read (FROZEN
+ * `CR-HM-12_PART_06_BM_FEE_PREREQUISITE.md` §5). ADDITIVE ONLY: the
+ * published PART 05 shapes above are untouched, and the existing
+ * `readHandymanBmFeeRuleConsumptionAt` behaviour (including
+ * `authoritativeForEntitlement === (mode === 'DEFAULT')`) is
+ * unchanged.
+ *
+ * The configuration read publishes the version-bound numeric term and
+ * the explicit beneficiary as DATA — never a fee value, never a
+ * settlement or entitlement state. A missing slot is published as an
+ * explicit `null` plus `unconfiguredSlots`, with the configuration
+ * non-authoritative: `null` is never a zero rate, never a 0 %, and
+ * never "use the reference model" (a consumer must fail closed).
+ * ------------------------------------------------------------------ */
+
+/** Frozen slot vocabulary for `unconfiguredSlots` (sorted, bounded). */
+export const HANDYMAN_PRICING_CONTRACT_BM_FEE_UNCONFIGURED_SLOTS = [
+  'TERM',
+  'BENEFICIARY',
+] as const;
+
+export type HandymanPricingContractBmFeeUnconfiguredSlot =
+  (typeof HANDYMAN_PRICING_CONTRACT_BM_FEE_UNCONFIGURED_SLOTS)[number];
+
+/**
+ * The exact version's numeric BM fee term as data. `ratePercent` is a
+ * CANONICAL DECIMAL STRING (exactly 4 decimals, e.g. `"2.5000"`) — no
+ * float represents it anywhere. No amount, no computed figure, and no
+ * currency: a percentage is currency-free, and the derived value's
+ * currency is CR-HM-14's governed ledger currency.
+ */
+export type HandymanPricingContractBmFeeTermView = {
+  termRowId: string;
+  agreementVersionId: string;
+  termKind: HandymanBmFeeTermKind;
+  ratePercent: string;
+  factKind: HandymanPricingContractFactKind;
+};
+
+/**
+ * The exact version's explicit financial beneficiary as data
+ * (`CLIENT_ORGANIZATION` = the version's own governed client). It is
+ * an identity fact — never a payout instruction, rail, or bank
+ * identity.
+ */
+export type HandymanPricingContractBmFeeBeneficiaryView = {
+  beneficiaryRowId: string;
+  agreementVersionId: string;
+  beneficiaryKind: HandymanBmFeeBeneficiaryKind;
+  beneficiaryReferenceId: string;
+  factKind: HandymanPricingContractFactKind;
+};
+
+/**
+ * The additive configuration read CR-HM-14 consumes before deriving a
+ * BM fee entitlement. `authoritativeForEntitlement` is true ONLY when
+ * the rule is `DEFAULT` AND both the term and the beneficiary are
+ * configured AND the shape is bound to the exact resolved version.
+ */
+export type HandymanPricingContractBmFeeConfiguration = {
+  binding: HandymanPricingContractBinding;
+  rule: HandymanPricingContractBmFeeRuleView;
+  term: HandymanPricingContractBmFeeTermView | null;
+  beneficiary: HandymanPricingContractBmFeeBeneficiaryView | null;
+  /** Sorted; empty iff term and beneficiary are both configured. */
+  unconfiguredSlots: HandymanPricingContractBmFeeUnconfiguredSlot[];
+  authoritativeForEntitlement: boolean;
+  factKind: HandymanPricingContractFactKind;
+  isFinalCharge: false;
 };

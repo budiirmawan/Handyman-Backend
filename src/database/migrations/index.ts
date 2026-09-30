@@ -429,6 +429,8 @@ import { migration0413HandymanPaymentAllocations }
   from './0413_handyman_payment_allocations';
 import { migration0414HandymanLedgerCorrections }
   from './0414_handyman_ledger_corrections';
+import { migration0415CreateHandymanBmFeePrerequisite }
+  from './0415_create_handyman_bm_fee_prerequisite';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -848,4 +850,5 @@ export const migrations: readonly Migration[] = [
   migration0412CreateHandymanCustomerPayments,
   migration0413HandymanPaymentAllocations,
   migration0414HandymanLedgerCorrections,
+  migration0415CreateHandymanBmFeePrerequisite,
 ];
