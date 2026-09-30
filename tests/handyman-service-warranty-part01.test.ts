@@ -426,9 +426,16 @@ describe('CR-HM-15 PART 01 service warranty persistence', () => {
           .test(row.target),
         `unexpected FK target ${row.tbl} -> ${row.target}`);
     }
+    // Scoped to PART 01's OWN tables (the same three as the FK scan
+    // above): later PARTs legitimately own claim_id / rework_id columns
+    // in their own families, and this law must never read them as PART
+    // 01 vocabulary.
     const columns = await q(
       `SELECT column_name FROM information_schema.columns
-        WHERE table_name LIKE 'handyman_service_warranty%'`);
+        WHERE table_name IN (
+          'handyman_service_warranties',
+          'handyman_service_warranty_coverages',
+          'handyman_service_warranty_events')`);
     for (const name of columns.rows.map((r) => r.column_name)) {
       assert.ok(
         !/amount|price|currency|charge|payment|settle|claim|rework|invoice|asset/
