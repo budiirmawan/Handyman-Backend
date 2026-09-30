@@ -12,15 +12,23 @@
  *   read-direction sense — never a write path back).
  * - CR-HM-14: derives entitlements ONLY from DEFAULT-published
  *   rules (authoritativeForEntitlement) + governed transactions;
- *   zero SaaS state reads.
+ *   zero SaaS state reads. PART 06B adds the ADDITIVE
+ *   `readHandymanBmFeeConfigurationAt` (rule + version-bound numeric
+ *   term + explicit beneficiary + `unconfiguredSlots`); the PART 05
+ *   exports and their semantics are unchanged, and a missing slot is
+ *   published as explicit `null` with a non-authoritative flag —
+ *   never a default rate or payee.
  * - CR-HM-13: composes final charges from its own inputs; contract
  *   figures are basis facts, never ledger rows.
  * - CR-HM-17: presents bundle/evaluation views verbatim; zero
  *   client-side rule evaluation.
  */
 
-export { HANDYMAN_PRICING_CONTRACT_FACT_KIND, isHandymanPricingContractFactKind }
-  from './handyman-pricing-contract.types';
+export {
+  HANDYMAN_PRICING_CONTRACT_BM_FEE_UNCONFIGURED_SLOTS,
+  HANDYMAN_PRICING_CONTRACT_FACT_KIND,
+  isHandymanPricingContractFactKind,
+} from './handyman-pricing-contract.types';
 export type {
   HandymanPricingContractFactKind,
   HandymanPricingContractBinding,
@@ -31,6 +39,10 @@ export type {
   HandymanPricingContractLaborEvaluation,
   HandymanPricingContractMaterialComposition,
   HandymanPricingContractBmFeeRuleConsumption,
+  HandymanPricingContractBmFeeTermView,
+  HandymanPricingContractBmFeeBeneficiaryView,
+  HandymanPricingContractBmFeeConfiguration,
+  HandymanPricingContractBmFeeUnconfiguredSlot,
 } from './handyman-pricing-contract.types';
 
 export {
@@ -38,4 +50,5 @@ export {
   readHandymanLaborPricingEvaluationAt,
   readHandymanMaterialPricingCompositionAt,
   readHandymanBmFeeRuleConsumptionAt,
+  readHandymanBmFeeConfigurationAt,
 } from './handyman-pricing-contract.service';

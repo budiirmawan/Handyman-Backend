@@ -18,16 +18,24 @@ import {
   type HandymanMaterialPricingBasisRecord,
 } from '../handyman-material-pricing';
 import {
+  getHandymanBmFeeBeneficiaryForVersion,
   getHandymanBmFeeRuleForVersion,
+  getHandymanBmFeeTermForVersion,
   resolveHandymanBmFeeRuleAt,
+  type HandymanBmFeeBeneficiaryRecord,
   type HandymanBmFeeRuleRecord,
+  type HandymanBmFeeTermRecord,
 } from '../handyman-bm-fee-rules';
 import {
   HANDYMAN_PRICING_CONTRACT_FACT_KIND,
   type HandymanPricingContract,
   type HandymanPricingContractBinding,
+  type HandymanPricingContractBmFeeBeneficiaryView,
+  type HandymanPricingContractBmFeeConfiguration,
   type HandymanPricingContractBmFeeRuleConsumption,
   type HandymanPricingContractBmFeeRuleView,
+  type HandymanPricingContractBmFeeTermView,
+  type HandymanPricingContractBmFeeUnconfiguredSlot,
   type HandymanPricingContractLaborBasisView,
   type HandymanPricingContractLaborEvaluation,
   type HandymanPricingContractMaterialBasisView,
@@ -294,5 +302,91 @@ export async function readHandymanBmFeeRuleConsumptionAt(
   return {
     binding: buildBinding(version, instant),
     rule: bmFeeRuleView(rule),
+  };
+}
+
+function bmFeeTermView(
+  term: HandymanBmFeeTermRecord,
+): HandymanPricingContractBmFeeTermView {
+  return {
+    termRowId: term.id,
+    agreementVersionId: term.agreementVersionId,
+    termKind: term.termKind,
+    // Canonical decimal string end-to-end: the numeric term NEVER
+    // becomes a float, and nothing is multiplied or applied here.
+    ratePercent: term.ratePercent,
+    factKind: HANDYMAN_PRICING_CONTRACT_FACT_KIND,
+  };
+}
+
+function bmFeeBeneficiaryView(
+  beneficiary: HandymanBmFeeBeneficiaryRecord,
+): HandymanPricingContractBmFeeBeneficiaryView {
+  return {
+    beneficiaryRowId: beneficiary.id,
+    agreementVersionId: beneficiary.agreementVersionId,
+    beneficiaryKind: beneficiary.beneficiaryKind,
+    beneficiaryReferenceId: beneficiary.beneficiaryReferenceId,
+    factKind: HANDYMAN_PRICING_CONTRACT_FACT_KIND,
+  };
+}
+
+/**
+ * CR-HM-12 PART 06B — the ADDITIVE BM fee configuration read
+ * (`CR-HM-12_PART_06_BM_FEE_PREREQUISITE.md` §5). Publishes the
+ * version's rule PLUS the version-bound numeric term and the explicit
+ * financial beneficiary as data, so CR-HM-14 can derive a BM fee
+ * entitlement from governed inputs alone.
+ *
+ * Fail-closed and machine-readable:
+ *  - exact version resolution (PART 01 anchor) — never "latest";
+ *  - a missing RULE keeps the existing bounded NOT_EFFECTIVE refusal
+ *    (unchanged for existing consumers);
+ *  - a missing TERM or BENEFICIARY does NOT throw: the slot is
+ *    published as explicit `null`, listed in `unconfiguredSlots`, and
+ *    the configuration is non-authoritative — `null` is never zero,
+ *    never 0 %, never "use the reference model";
+ *  - term/beneficiary are read for the EXACT resolved version and
+ *    cross-checked against it;
+ *  - no fee VALUE, entitlement, settlement, or SaaS/FM state exists in
+ *    the published shape, and this module still imports zero database
+ *    layer (read-only composition).
+ */
+export async function readHandymanBmFeeConfigurationAt(
+  clientId: string,
+  asOf: string,
+): Promise<HandymanPricingContractBmFeeConfiguration> {
+  const client = ensureUuid(clientId, 'clientId');
+  const instant = parseHandymanAgreementTimestamp(asOf, 'asOf');
+  const [version, rule] = await Promise.all([
+    resolveHandymanCommercialAgreementAt(client, instant.toISOString()),
+    resolveHandymanBmFeeRuleAt(client, instant.toISOString()),
+  ]);
+  assertBoundToVersion(rule, version);
+
+  const [term, beneficiary] = await Promise.all([
+    getHandymanBmFeeTermForVersion(version.id),
+    getHandymanBmFeeBeneficiaryForVersion(version.id),
+  ]);
+  if (term) assertBoundToVersion(term, version);
+  if (beneficiary) assertBoundToVersion(beneficiary, version);
+
+  const unconfiguredSlots: HandymanPricingContractBmFeeUnconfiguredSlot[] = [
+    ...(term ? [] : (['TERM'] as const)),
+    ...(beneficiary ? [] : (['BENEFICIARY'] as const)),
+  ].sort();
+
+  return {
+    binding: buildBinding(version, instant),
+    rule: bmFeeRuleView(rule),
+    term: term ? bmFeeTermView(term) : null,
+    beneficiary: beneficiary ? bmFeeBeneficiaryView(beneficiary) : null,
+    unconfiguredSlots,
+    // DEFAULT-only AND fully configured: the frozen §7 firewall plus
+    // the prerequisite law, in one machine-checkable flag.
+    authoritativeForEntitlement:
+      rule.mode === 'DEFAULT' && term !== null && beneficiary !== null,
+    factKind: HANDYMAN_PRICING_CONTRACT_FACT_KIND,
+    isFinalCharge: false,
   };
 }
