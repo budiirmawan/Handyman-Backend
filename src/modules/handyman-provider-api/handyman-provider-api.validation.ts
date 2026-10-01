@@ -14,6 +14,7 @@ import type {
   HandymanCrewStatus,
   HandymanProviderContextStatus,
   HandymanWorkerContextStatus,
+  ListHandymanProviderAvailabilityInput,
 } from '../handyman-providers';
 
 /**
@@ -257,4 +258,50 @@ export function parseCrewMembershipStatusBody(
   );
   if (!status || details.length) fail(details);
   return status;
+}
+
+/**
+ * GET /handyman/provider-availability — CR-HM-17 GAP PART 02 (B4) bounded
+ * query parser. Requires `clientId` or `executionScopeId`, plus optional
+ * `providerContextId`.
+ */
+export function parseProviderAvailabilityQuery(
+  query: unknown,
+): ListHandymanProviderAvailabilityInput {
+  const source = isRecord(query) ? query : {};
+  const details: Detail[] = [];
+
+  const readOptionalUuid = (
+    value: unknown,
+    field: string,
+  ): string | undefined => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+    return readId(value, field, details);
+  };
+
+  const clientId = readOptionalUuid(source.clientId, 'clientId');
+  const executionScopeId = readOptionalUuid(
+    source.executionScopeId,
+    'executionScopeId',
+  );
+  const providerContextId = readOptionalUuid(
+    source.providerContextId,
+    'providerContextId',
+  );
+
+  if (!clientId && !executionScopeId && details.length === 0) {
+    details.push({
+      field: 'clientId',
+      message: 'clientId or executionScopeId is required.',
+    });
+  }
+  if (details.length > 0) fail(details);
+
+  return {
+    ...(clientId ? { clientId } : {}),
+    ...(executionScopeId ? { executionScopeId } : {}),
+    ...(providerContextId ? { providerContextId } : {}),
+  };
 }

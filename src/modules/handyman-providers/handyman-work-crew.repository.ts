@@ -301,4 +301,20 @@ export const handymanWorkCrewRepository = {
     );
     return result.rows.map(mapLead);
   },
+
+  async listActiveCrewsByProviderContext(
+    executor: Pick<PoolClient, 'query'> = getPool(),
+    clientId: string,
+    providerContextId: string,
+  ): Promise<HandymanWorkCrewRecord[]> {
+    const result = await executor.query<CrewRow>(
+      `${CREW_SELECT}
+        WHERE client_id = $1
+          AND handyman_provider_context_id = $2
+          AND status = 'ACTIVE'
+        ORDER BY code ASC, created_at ASC, id ASC`,
+      [clientId, providerContextId],
+    );
+    return result.rows.map(mapCrew);
+  },
 };

@@ -3340,6 +3340,60 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /handyman/provider-availability:
+    get:
+      operationId: listHandymanProviderAvailability
+      summary: List assignable ACTIVE Handyman provider contexts, crews, Leads, and occupancy facts
+      description: >
+        CR-HM-17 GAP PART 02 (B4) — bounded Customer Care provider availability
+        read projection over existing CR-HM-04 (`handyman_provider_contexts`,
+        `handyman_worker_contexts`, `handyman_work_crews`,
+        `handyman_crew_memberships`, `handyman_crew_leads`,
+        `workforce_profiles`), CR-HM-04A
+        (`handyman_execution_scope_assignments`), and CR-HM-08
+        (`handyman_work_sessions`) authorities. Requires `tenant_company.read`
+        and accessible-Client scope (`canAccessClient`). Returns only ACTIVE
+        provider contexts, assignable ACTIVE crews with a valid current
+        login-capable Lead, and active assignment/session occupancy facts.
+        Does not create availability or lifecycle authority; no assignment
+        commands; no FM/SaaS fallback.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: executionScopeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: providerContextId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Bounded Handyman provider availability projection.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanProviderAvailabilityItem"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /handyman/provider-contexts:
     post:
       operationId: createHandymanProviderContext
@@ -77866,6 +77920,101 @@ components:
           items: { $ref: "#/components/schemas/HandymanCrewMembershipRecord" }
         currentLead:
           { $ref: "#/components/schemas/HandymanCrewLeadRecord", nullable: true }
+    HandymanAssignableCrewLeadProjection:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — validated current login-capable Lead
+        projection for an assignable ACTIVE crew (CR-HM-04 F4 + CR-HM-04A
+        eligibility invariant: ACTIVE membership, ACTIVE worker context in
+        same provider/Client, and non-null `workforce_profiles.userId`).
+      required:
+        [id, leadSeq, membershipId, workerContextId, workforceProfileId,
+         userId, designatedByUserId, designatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        leadSeq: { type: integer, format: int64 }
+        membershipId: { $ref: "#/components/schemas/Uuid" }
+        workerContextId: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        userId: { $ref: "#/components/schemas/Uuid" }
+        designatedByUserId: { $ref: "#/components/schemas/Uuid" }
+        designatedAt: { type: string, format: date-time }
+    HandymanCrewOccupancyProjection:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — active assignment (CR-HM-04A ACTIVE
+        assignments) and active work-session (CR-HM-08 non-CHECKED_OUT
+        sessions) occupancy facts for an assignable ACTIVE crew.
+      required:
+        [activeAssignmentCount, activeAssignmentIds, activeExecutionScopeIds,
+         activeWorkSessionCount, activeWorkSessionIds, hasActiveAssignment,
+         hasActiveWorkSession]
+      properties:
+        activeAssignmentCount: { type: integer, minimum: 0 }
+        activeAssignmentIds:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid" }
+        activeExecutionScopeIds:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid" }
+        activeWorkSessionCount: { type: integer, minimum: 0 }
+        activeWorkSessionIds:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid" }
+        hasActiveAssignment: { type: boolean }
+        hasActiveWorkSession: { type: boolean }
+    HandymanAssignableCrewAvailability:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — assignable ACTIVE Handyman work crew
+        with its valid current login-capable Lead and active
+        assignment/session occupancy facts.
+      required:
+        [id, clientId, handymanProviderContextId, code, name, status,
+         createdByUserId, createdAt, updatedAt, lead, occupancy,
+         activeAssignmentCount, activeWorkSessionCount,
+         hasActiveAssignment, hasActiveWorkSession]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanProviderContextId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [ACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lead:
+          $ref: "#/components/schemas/HandymanAssignableCrewLeadProjection"
+        occupancy:
+          $ref: "#/components/schemas/HandymanCrewOccupancyProjection"
+        activeAssignmentCount: { type: integer, minimum: 0 }
+        activeWorkSessionCount: { type: integer, minimum: 0 }
+        hasActiveAssignment: { type: boolean }
+        hasActiveWorkSession: { type: boolean }
+    HandymanProviderAvailabilityItem:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — ACTIVE Handyman provider context with
+        its assignable ACTIVE crews, valid current login-capable Leads, and
+        active assignment/session occupancy facts.
+      required:
+        [id, clientId, vendorId, status, createdByUserId, createdAt,
+         updatedAt, providerContext, crews]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        providerContext:
+          $ref: "#/components/schemas/HandymanProviderContextRecord"
+        crews:
+          type: array
+          items:
+            $ref: "#/components/schemas/HandymanAssignableCrewAvailability"
     HandymanTriageRecord:
       type: object
       description: >-

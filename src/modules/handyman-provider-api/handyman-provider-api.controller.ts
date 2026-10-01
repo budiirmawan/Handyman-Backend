@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import {
+  handymanProviderAvailabilityService,
   handymanProviderContextService,
   handymanWorkerContextService,
   handymanWorkCrewService,
@@ -10,6 +11,7 @@ import {
   parseCrewMemberBody,
   parseCrewMembershipStatusBody,
   parseProviderApiUuidParam,
+  parseProviderAvailabilityQuery,
   parseProviderContextCreateBody,
   parseProviderContextStatusBody,
   parseWorkerContextCreateBody,
@@ -242,6 +244,27 @@ export async function postHandymanCrewMembershipStatusHandler(
     const record = await handymanWorkCrewService
       .setHandymanCrewMemberStatus(membershipId, status, req.auth.userId);
     sendSuccess(res, record, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /handyman/provider-availability — CR-HM-17 GAP PART 02 (B4) bounded
+ * Customer Care provider availability read projection (ACTIVE provider
+ * contexts, assignable ACTIVE crews, valid current login-capable Lead, and
+ * active assignment/session occupancy facts).
+ */
+export async function getHandymanProviderAvailabilityHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const input = parseProviderAvailabilityQuery(req.query);
+    const items = await handymanProviderAvailabilityService
+      .listHandymanProviderAvailability(input, req.auth.userId);
+    sendSuccess(res, items, 200);
   } catch (error) {
     next(error);
   }
