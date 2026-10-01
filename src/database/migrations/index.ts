@@ -453,6 +453,8 @@ import { migration0425AddHandymanCareActorRegistry }
   from './0425_add_handyman_care_actor_registry';
 import { migration0426AddHandymanHandoffExchangeActorProvenance }
   from './0426_add_handyman_handoff_exchange_actor_provenance';
+import { migration0427HandymanAttributionActorProvenance }
+  from './0427_handyman_attribution_actor_provenance';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -884,4 +886,5 @@ export const migrations: readonly Migration[] = [
   migration0424HandymanSlaEscalationNotificationBinding,
   migration0425AddHandymanCareActorRegistry,
   migration0426AddHandymanHandoffExchangeActorProvenance,
+  migration0427HandymanAttributionActorProvenance,
 ];
