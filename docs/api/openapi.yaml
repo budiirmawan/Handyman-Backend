@@ -6215,6 +6215,123 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/sla/subjects/{subjectType}/{subjectId}:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanSubjectSla
+      summary: Read Handyman subject SLA clocks & milestone coordinates (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `appliedSlaService.getBySubject` and `HANDYMAN_SLA_SUBJECT_MILESTONES`. Rejects non-Handyman SLA subject types."
+      parameters:
+        - $ref: '#/components/parameters/HandymanSlaSubjectTypePath'
+        - $ref: '#/components/parameters/HandymanSlaSubjectIdPath'
+      responses:
+        '200':
+          description: Handyman subject SLA snapshot and milestone coordinates
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanSubjectSlaReadView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/provider-performance:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanProviderPerformance
+      summary: Read derived Handyman provider performance snapshot (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `deriveHandymanProviderPerformance`: response/resolution attainment, 9-milestone adherence, and sequenced domain operational truth."
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Derived Handyman provider performance read contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanProviderPerformanceSnapshot'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /handyman/requests/{id}/status-visibility:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanRequestStatusVisibility
+      summary: Read Handyman request stage/status facts and 9-milestone SLA visibility (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — bounded read-only Customer Care projection (`tenant_company.read` + `canAccessClient`) composing authoritative CR-HM-02..15 stage statuses with the 9 frozen Handyman SLA milestones across the request lineage."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Authoritative stage statuses and 9-milestone SLA visibility for the request
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanStatusVisibilityReadView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{id}/status-visibility:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanExecutionScopeStatusVisibility
+      summary: Read Handyman execution-scope stage/status facts and 9-milestone SLA visibility (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — bounded read-only Customer Care projection (`tenant_company.read` + `canAccessClient`) composing authoritative CR-HM-02..15 stage statuses with the 9 frozen Handyman SLA milestones across the execution-scope lineage."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Authoritative stage statuses and 9-milestone SLA visibility for the execution scope
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanStatusVisibilityReadView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /health:
     get:
       operationId: getHealth
@@ -72178,6 +72295,17 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    HandymanSlaSubjectTypePath:
+      name: subjectType
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/HandymanSlaSubjectType'
+    HandymanSlaSubjectIdPath:
+      name: subjectId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -79542,6 +79670,448 @@ components:
         warrantyStatus: { type: string }
         claimStatus: { type: string }
         replayed: { type: boolean }
+    HandymanSlaSubjectType:
+      type: string
+      enum:
+        - HANDYMAN_SERVICE_REQUEST
+        - HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT
+        - HANDYMAN_EXECUTION_SCOPE
+        - HANDYMAN_DEFECT_RECORD
+        - HANDYMAN_SERVICE_WARRANTY_CLAIM
+    HandymanSlaMilestoneName:
+      type: string
+      enum:
+        - REQUEST_ACKNOWLEDGEMENT
+        - QUOTATION_TURNAROUND
+        - PROVIDER_ACCEPT_DECLINE
+        - WORKER_ASSIGNMENT
+        - ARRIVAL
+        - WORK_COMPLETION
+        - DEFECT_CLOSURE
+        - WARRANTY_RESPONSE
+        - WARRANTY_REWORK
+    HandymanSlaClockProjection:
+      type: object
+      required:
+        - id
+        - appliedSlaId
+        - clockType
+        - milestone
+        - targetMinutes
+        - startedAt
+        - status
+        - satisfiedAt
+        - terminatedAt
+        - breachedAt
+        - isPaused
+        - totalPausedMilliseconds
+        - effectiveElapsedMilliseconds
+        - pauseIntervals
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        appliedSlaId: { type: string, format: uuid }
+        clockType:
+          type: string
+          enum: [RESPONSE, RESOLUTION]
+        milestone:
+          allOf:
+            - $ref: '#/components/schemas/HandymanSlaMilestoneName'
+          nullable: true
+        targetMinutes: { type: integer, minimum: 1 }
+        startedAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [RUNNING, SATISFIED, TERMINATED]
+        satisfiedAt: { type: string, format: date-time, nullable: true }
+        terminatedAt: { type: string, format: date-time, nullable: true }
+        breachedAt: { type: string, format: date-time, nullable: true }
+        isPaused: { type: boolean }
+        totalPausedMilliseconds: { type: integer, minimum: 0 }
+        effectiveElapsedMilliseconds: { type: integer, minimum: 0 }
+        pauseIntervals:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - slaClockId
+              - pausedAt
+              - resumedAt
+              - pauseSource
+              - pauseActorUserId
+              - resumeActorUserId
+              - createdAt
+              - updatedAt
+            properties:
+              id: { type: string, format: uuid }
+              slaClockId: { type: string, format: uuid }
+              pausedAt: { type: string, format: date-time }
+              resumedAt: { type: string, format: date-time, nullable: true }
+              pauseSource: { type: string }
+              pauseActorUserId: { type: string, format: uuid, nullable: true }
+              resumeActorUserId: { type: string, format: uuid, nullable: true }
+              createdAt: { type: string, format: date-time }
+              updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanSubjectSlaMilestoneView:
+      type: object
+      required: [milestone, subjectType, clockType, clock]
+      properties:
+        milestone: { $ref: '#/components/schemas/HandymanSlaMilestoneName' }
+        subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+        clockType:
+          type: string
+          enum: [RESPONSE, RESOLUTION]
+        clock:
+          allOf:
+            - $ref: '#/components/schemas/HandymanSlaClockProjection'
+          nullable: true
+    HandymanSubjectSlaReadView:
+      type: object
+      required:
+        - subjectType
+        - subjectId
+        - clientId
+        - buildingId
+        - appliedSla
+        - milestones
+      properties:
+        subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+        subjectId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid, nullable: true }
+        appliedSla:
+          type: object
+          nullable: true
+          required:
+            - id
+            - slaDefinitionId
+            - subjectId
+            - subjectType
+            - clientId
+            - buildingId
+            - definitionCode
+            - definitionWorkType
+            - definitionPriority
+            - subjectWorkType
+            - subjectPriority
+            - responseTargetMinutes
+            - resolutionTargetMinutes
+            - definitionEffectiveFrom
+            - definitionEffectiveTo
+            - appliedAt
+            - createdAt
+            - clocks
+          properties:
+            id: { type: string, format: uuid }
+            slaDefinitionId: { type: string, format: uuid }
+            subjectId: { type: string, format: uuid }
+            subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+            clientId: { type: string, format: uuid }
+            buildingId: { type: string, format: uuid }
+            definitionCode: { type: string }
+            definitionWorkType: { type: string, nullable: true }
+            definitionPriority: { type: string, nullable: true }
+            subjectWorkType: { type: string, nullable: true }
+            subjectPriority: { type: string, nullable: true }
+            responseTargetMinutes: { type: integer, nullable: true }
+            resolutionTargetMinutes: { type: integer, nullable: true }
+            definitionEffectiveFrom: { type: string, format: date-time }
+            definitionEffectiveTo: { type: string, format: date-time, nullable: true }
+            appliedAt: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+            clocks:
+              type: array
+              items: { $ref: '#/components/schemas/HandymanSlaClockProjection' }
+        milestones:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanSubjectSlaMilestoneView' }
+    HandymanProviderPerformanceSnapshot:
+      type: object
+      required:
+        - scope
+        - derivedAt
+        - inputs
+        - responseResolutionAttainment
+        - milestoneAdherence
+        - operationalTruth
+      properties:
+        scope:
+          type: object
+          required: [clientId, buildingId, from, to]
+          properties:
+            clientId: { type: string, format: uuid }
+            buildingId: { type: string, format: uuid, nullable: true }
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        derivedAt: { type: string, format: date-time }
+        inputs:
+          type: object
+          required: [slaClocks, operationalEvents]
+          properties:
+            slaClocks: { type: integer, minimum: 0 }
+            operationalEvents: { type: integer, minimum: 0 }
+        responseResolutionAttainment:
+          type: array
+          items:
+            type: object
+            required:
+              - clockType
+              - clocks
+              - satisfied
+              - satisfiedWithinTarget
+              - breached
+              - terminated
+              - running
+              - attainmentPercent
+            properties:
+              clockType:
+                type: string
+                enum: [RESPONSE, RESOLUTION]
+              clocks: { type: integer, minimum: 0 }
+              satisfied: { type: integer, minimum: 0 }
+              satisfiedWithinTarget: { type: integer, minimum: 0 }
+              breached: { type: integer, minimum: 0 }
+              terminated: { type: integer, minimum: 0 }
+              running: { type: integer, minimum: 0 }
+              attainmentPercent: { type: number, nullable: true }
+        milestoneAdherence:
+          type: array
+          items:
+            type: object
+            required:
+              - milestone
+              - subjectType
+              - clockType
+              - clocks
+              - satisfied
+              - satisfiedWithinTarget
+              - breached
+              - terminated
+              - running
+              - attainmentPercent
+            properties:
+              milestone: { $ref: '#/components/schemas/HandymanSlaMilestoneName' }
+              subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+              clockType:
+                type: string
+                enum: [RESPONSE, RESOLUTION]
+              clocks: { type: integer, minimum: 0 }
+              satisfied: { type: integer, minimum: 0 }
+              satisfiedWithinTarget: { type: integer, minimum: 0 }
+              breached: { type: integer, minimum: 0 }
+              terminated: { type: integer, minimum: 0 }
+              running: { type: integer, minimum: 0 }
+              attainmentPercent: { type: number, nullable: true }
+        operationalTruth:
+          type: array
+          items:
+            type: object
+            required:
+              - eventType
+              - occurrences
+              - firstOccurredAt
+              - lastOccurredAt
+            properties:
+              eventType: { type: string }
+              occurrences: { type: integer, minimum: 1 }
+              firstOccurredAt: { type: string, format: date-time }
+              lastOccurredAt: { type: string, format: date-time }
+    HandymanLineageSlaMilestoneView:
+      type: object
+      required:
+        - milestone
+        - subjectType
+        - clockType
+        - subjectId
+        - appliedSlaId
+        - definitionCode
+        - clock
+      properties:
+        milestone: { $ref: '#/components/schemas/HandymanSlaMilestoneName' }
+        subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+        clockType:
+          type: string
+          enum: [RESPONSE, RESOLUTION]
+        subjectId: { type: string, format: uuid, nullable: true }
+        appliedSlaId: { type: string, format: uuid, nullable: true }
+        definitionCode: { type: string, nullable: true }
+        clock:
+          allOf:
+            - $ref: '#/components/schemas/HandymanSlaClockProjection'
+          nullable: true
+    HandymanStatusVisibilityReadView:
+      type: object
+      required:
+        - anchorType
+        - clientId
+        - buildingId
+        - handymanRequestId
+        - executionScopeId
+        - stages
+        - slaMilestones
+      properties:
+        anchorType:
+          type: string
+          enum: [HANDYMAN_SERVICE_REQUEST, HANDYMAN_EXECUTION_SCOPE]
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid, nullable: true }
+        stages:
+          type: object
+          required:
+            - request
+            - readiness
+            - quotation
+            - executionScope
+            - assignment
+            - arrival
+            - workSession
+            - materialExecution
+            - qc
+            - defects
+            - bast
+            - customerLedger
+            - serviceWarranty
+          properties:
+            request:
+              type: object
+              required: [requestId, status, triageOutcome, diagnosisStatus, referralType]
+              properties:
+                requestId: { type: string, format: uuid }
+                status: { type: string }
+                triageOutcome: { type: string, nullable: true }
+                diagnosisStatus: { type: string, nullable: true }
+                referralType: { type: string, nullable: true }
+            readiness:
+              type: object
+              required:
+                - schedulingReadinessId
+                - schedulingStatus
+                - unitAccessReadinessId
+                - unitAccessStatus
+                - permitReadinessId
+                - permitStatus
+              properties:
+                schedulingReadinessId: { type: string, format: uuid, nullable: true }
+                schedulingStatus: { type: string, nullable: true }
+                unitAccessReadinessId: { type: string, format: uuid, nullable: true }
+                unitAccessStatus: { type: string, nullable: true }
+                permitReadinessId: { type: string, format: uuid, nullable: true }
+                permitStatus: { type: string, nullable: true }
+            quotation:
+              type: object
+              required:
+                - quotationId
+                - latestVersionId
+                - latestVersionNumber
+                - latestVersionStatus
+                - approvedVersionId
+              properties:
+                quotationId: { type: string, format: uuid, nullable: true }
+                latestVersionId: { type: string, format: uuid, nullable: true }
+                latestVersionNumber: { type: integer, nullable: true }
+                latestVersionStatus: { type: string, nullable: true }
+                approvedVersionId: { type: string, format: uuid, nullable: true }
+            executionScope:
+              type: object
+              required: [executionScopeId, status]
+              properties:
+                executionScopeId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+            assignment:
+              type: object
+              required: [assignmentId, status, providerContextId, crewId]
+              properties:
+                assignmentId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                providerContextId: { type: string, format: uuid, nullable: true }
+                crewId: { type: string, format: uuid, nullable: true }
+            arrival:
+              type: object
+              required: [arrivalVerificationResultId, status, primaryReason]
+              properties:
+                arrivalVerificationResultId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                primaryReason: { type: string, nullable: true }
+            workSession:
+              type: object
+              required: [workSessionId, status, sessionCount]
+              properties:
+                workSessionId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                sessionCount: { type: integer, minimum: 0 }
+            materialExecution:
+              type: object
+              required: [lineCount, latestStatus, settledLineCount]
+              properties:
+                lineCount: { type: integer, minimum: 0 }
+                latestStatus: { type: string, nullable: true }
+                settledLineCount: { type: integer, minimum: 0 }
+            qc:
+              type: object
+              required: [latestQcRunId, latestStatus, evidenceRecordCount]
+              properties:
+                latestQcRunId: { type: string, format: uuid, nullable: true }
+                latestStatus: { type: string, nullable: true }
+                evidenceRecordCount: { type: integer, minimum: 0 }
+            defects:
+              type: object
+              required: [defectCount, openDefectCount, latestDefectId, latestStatus]
+              properties:
+                defectCount: { type: integer, minimum: 0 }
+                openDefectCount: { type: integer, minimum: 0 }
+                latestDefectId: { type: string, format: uuid, nullable: true }
+                latestStatus: { type: string, nullable: true }
+            bast:
+              type: object
+              required: [bastId, status, customerAccepted, warrantyStartEligible]
+              properties:
+                bastId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                customerAccepted: { type: boolean }
+                warrantyStartEligible: { type: boolean }
+            customerLedger:
+              type: object
+              required:
+                - transactionId
+                - currency
+                - chargeLineCount
+                - confirmedPaymentCount
+                - pendingPaymentCount
+              properties:
+                transactionId: { type: string, format: uuid, nullable: true }
+                currency: { type: string, nullable: true }
+                chargeLineCount: { type: integer, minimum: 0 }
+                confirmedPaymentCount: { type: integer, minimum: 0 }
+                pendingPaymentCount: { type: integer, minimum: 0 }
+            serviceWarranty:
+              type: object
+              required:
+                - warrantyId
+                - warrantyStatus
+                - latestClaimId
+                - latestClaimStatus
+                - latestReworkId
+                - latestReworkStatus
+                - latestChargeableAdditionalWorkId
+                - latestChargeableAdditionalWorkStatus
+              properties:
+                warrantyId: { type: string, format: uuid, nullable: true }
+                warrantyStatus: { type: string, nullable: true }
+                latestClaimId: { type: string, format: uuid, nullable: true }
+                latestClaimStatus: { type: string, nullable: true }
+                latestReworkId: { type: string, format: uuid, nullable: true }
+                latestReworkStatus: { type: string, nullable: true }
+                latestChargeableAdditionalWorkId: { type: string, format: uuid, nullable: true }
+                latestChargeableAdditionalWorkStatus: { type: string, nullable: true }
+        slaMilestones:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanLineageSlaMilestoneView' }
     HandymanMaterialExecutionEstimateRequest:
       type: object
       required: [quotationVersionId, quotationLineId, estimatedQty, idempotencyKey]
