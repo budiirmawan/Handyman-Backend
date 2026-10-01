@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
+import { requirePermission } from '../auth/rbac.middleware';
 import {
+  getMaterialLinesHandler,
   getProjectionHandler,
   postApproveHandler,
   postEstimateHandler,
@@ -34,8 +36,10 @@ import {
 export function createHandymanMaterialExecutionApiRouter(): Router {
   const router = Router();
   const auth = authenticationMiddleware;
+  const read = requirePermission('tenant_company.read');
   const base =
     '/handyman/execution-scopes/:executionScopeId/material-lines';
+  router.get(base, auth, read, getMaterialLinesHandler);
   router.post(`${base}/estimate`, auth, postEstimateHandler);
   router.get(`${base}/final-charge-ready`, auth, getProjectionHandler);
   router.post(`${base}/:lineId/approve`, auth, postApproveHandler);

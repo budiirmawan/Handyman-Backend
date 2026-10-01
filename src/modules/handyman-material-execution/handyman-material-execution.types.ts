@@ -161,6 +161,27 @@ export type HandymanMaterialFinalChargeReadyProjection = {
   totalFinalUsedQty: number;
 };
 
+/**
+ * CR-HM-17 GAP PART 03 — Customer Care material execution line read item
+ * across all governed statuses, with recorded events and settled final
+ * used quantity (zero money columns).
+ */
+export type HandymanCustomerCareMaterialLineItem = {
+  line: HandymanMaterialExecutionLineRecord;
+  events: HandymanMaterialExecutionEventRecord[];
+  finalUsedQty: number | null;
+};
+
+/**
+ * CR-HM-17 GAP PART 03 — Customer Care material execution read projection
+ * for an execution scope.
+ */
+export type HandymanCustomerCareMaterialLinesProjection = {
+  executionScopeId: string;
+  lines: HandymanCustomerCareMaterialLineItem[];
+  totalFinalUsedQty: number;
+};
+
 /** Head mutation payload (primitive only — no lifecycle decisions). */
 export type HandymanMaterialExecutionLineHead = {
   status: HandymanMaterialExecutionStatus;

@@ -5,6 +5,7 @@ import {
   approveHandymanMaterialExecutionLine,
   estimateHandymanMaterialExecutionLine,
   getHandymanMaterialFinalChargeReadyProjection,
+  getHandymanMaterialLinesCustomerCareView,
   issueHandymanMaterialExecutionLine,
   purchaseHandymanMaterialExecutionLine,
   returnHandymanMaterialExecutionLine,
@@ -12,6 +13,8 @@ import {
   useHandymanMaterialExecutionLine,
 } from '../handyman-material-execution';
 import type {
+  HandymanCustomerCareMaterialLineItem,
+  HandymanCustomerCareMaterialLinesProjection,
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialExecutionEventRecord,
   HandymanMaterialExecutionLineRecord,
@@ -89,6 +92,26 @@ function toProjectionPayload(
   return {
     executionScopeId: projection.executionScopeId,
     lines: projection.lines.map(toLinePayload),
+    totalFinalUsedQty: projection.totalFinalUsedQty,
+  };
+}
+
+function toCustomerCareLineItemPayload(
+  item: HandymanCustomerCareMaterialLineItem,
+) {
+  return {
+    ...toLinePayload(item.line),
+    finalUsedQty: item.finalUsedQty,
+    events: item.events.map(toEventPayload),
+  };
+}
+
+function toCustomerCareLinesPayload(
+  projection: HandymanCustomerCareMaterialLinesProjection,
+) {
+  return {
+    executionScopeId: projection.executionScopeId,
+    lines: projection.lines.map(toCustomerCareLineItemPayload),
     totalFinalUsedQty: projection.totalFinalUsedQty,
   };
 }
@@ -267,6 +290,33 @@ export async function getProjectionHandler(
       res,
       toProjectionPayload(
         await getHandymanMaterialFinalChargeReadyProjection(
+          executionScopeId,
+          actor(req),
+        ),
+      ),
+      200,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-17 GAP PART 03 — GET Customer Care material execution lines
+ * projection across all governed statuses on an execution scope.
+ */
+export async function getMaterialLinesHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseMaterialScopeParam(
+      p(req.params.executionScopeId));
+    sendSuccess(
+      res,
+      toCustomerCareLinesPayload(
+        await getHandymanMaterialLinesCustomerCareView(
           executionScopeId,
           actor(req),
         ),

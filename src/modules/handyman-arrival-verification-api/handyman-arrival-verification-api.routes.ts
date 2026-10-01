@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
-import { postHandymanArrivalVerificationHandler }
-  from './handyman-arrival-verification-api.controller';
+import { requirePermission } from '../auth/rbac.middleware';
+import {
+  getHandymanArrivalVerificationHandler,
+  postHandymanArrivalVerificationHandler,
+} from './handyman-arrival-verification-api.controller';
 
 /**
  * CR-HM-07 PART 04C — terminal arrival verification HTTP surface:
@@ -19,6 +22,13 @@ import { postHandymanArrivalVerificationHandler }
 export function createHandymanArrivalVerificationApiRouter(): Router {
   const router = Router();
   const auth = authenticationMiddleware;
+  const read = requirePermission('tenant_company.read');
+  router.get(
+    '/handyman/execution-scopes/:executionScopeId/arrival-verification',
+    auth,
+    read,
+    getHandymanArrivalVerificationHandler,
+  );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/arrival-verification',
     auth,

@@ -6,6 +6,7 @@ import {
   checkOutHandymanWorkSession,
   completeHandymanWorkSession,
   getActiveHandymanWorkSession,
+  getHandymanWorkSessionsCustomerCareView,
   getHandymanWorkSessionTimeProjection,
   handymanWorkSessionNotFoundError,
   materialRunHandymanWorkSession,
@@ -14,6 +15,8 @@ import {
   startWorkHandymanWorkSession,
 } from '../handyman-work-sessions';
 import type {
+  HandymanCustomerCareWorkSessionItem,
+  HandymanCustomerCareWorkSessionsProjection,
   HandymanWorkSessionActiveResult,
   HandymanWorkSessionEventRecord,
   HandymanWorkSessionRecord,
@@ -137,6 +140,35 @@ function toProjectionPayload(
   };
 }
 
+function toCustomerCareWorkSessionItemPayload(
+  item: HandymanCustomerCareWorkSessionItem,
+) {
+  return {
+    ...toSessionPayload(item.session),
+    events: item.events.map(toEventPayload),
+    helperPresence: item.helperPresence.map(toHelperPayload),
+    presenceSeconds: item.presenceSeconds,
+    actualWorkSeconds: item.actualWorkSeconds,
+    sessionClosed: item.sessionClosed,
+    projectedAt: item.projectedAt.toISOString(),
+  };
+}
+
+function toCustomerCareWorkSessionsPayload(
+  p: HandymanCustomerCareWorkSessionsProjection,
+) {
+  return {
+    executionScopeId: p.executionScopeId,
+    activeSession: p.activeSession
+      ? toCustomerCareWorkSessionItemPayload(p.activeSession)
+      : null,
+    sessions: p.sessions.map(toCustomerCareWorkSessionItemPayload),
+    presenceSeconds: p.presenceSeconds,
+    actualWorkSeconds: p.actualWorkSeconds,
+    projectedAt: p.projectedAt.toISOString(),
+  };
+}
+
 /** Shared thin mutation pipeline: parse → service → serialize. */
 async function runMutation(
   req: Request,
@@ -237,6 +269,35 @@ export async function getHandymanWorkSessionActiveHandler(
         executionScopeId,
         actor(req),
       )),
+      200,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-17 GAP PART 03 — GET Customer Care work sessions projection
+ * (active + CHECKED_OUT sessions, events, helper presence, and
+ * presenceSeconds + actualWorkSeconds) for the execution scope.
+ */
+export async function getHandymanWorkSessionsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseWorkSessionScopeParam(
+      p(req.params.executionScopeId),
+    );
+    sendSuccess(
+      res,
+      toCustomerCareWorkSessionsPayload(
+        await getHandymanWorkSessionsCustomerCareView(
+          executionScopeId,
+          actor(req),
+        ),
+      ),
       200,
     );
   } catch (error) {

@@ -670,6 +670,59 @@ export type HandymanWorkSessionTimeProjection = {
   projectedAt: Date;
 };
 
+function computeSessionTimeFromEvents(
+  events: HandymanWorkSessionEventRecord[],
+  serverNow: Date,
+): {
+  presenceSeconds: number;
+  actualWorkSeconds: number;
+  sessionClosed: boolean;
+} {
+  let presenceSeconds = 0;
+  let actualWorkSeconds = 0;
+  let workClockOpenedAt: Date | null = null;
+  let checkedInAt: Date | null = null;
+  let checkedOutAt: Date | null = null;
+  const ms = (a: Date, b: Date) => Math.max(0, b.getTime() - a.getTime());
+
+  for (const event of events) {
+    const at = event.occurredAt;
+    if (event.eventType === 'CHECK_IN') checkedInAt = at;
+    if (event.eventType === 'START_WORK' || event.eventType === 'RESUME') {
+      workClockOpenedAt = at;
+    }
+    if (
+      event.eventType === 'PAUSE' ||
+      event.eventType === 'MATERIAL_RUN' ||
+      event.eventType === 'COMPLETE'
+    ) {
+      if (workClockOpenedAt) {
+        actualWorkSeconds += ms(workClockOpenedAt, at) / 1000;
+        workClockOpenedAt = null;
+      }
+    }
+    if (event.eventType === 'CHECK_OUT') {
+      checkedOutAt = at;
+      if (workClockOpenedAt) {
+        actualWorkSeconds += ms(workClockOpenedAt, at) / 1000;
+        workClockOpenedAt = null;
+      }
+    }
+  }
+  if (workClockOpenedAt) {
+    actualWorkSeconds += ms(workClockOpenedAt, serverNow) / 1000;
+  }
+  if (checkedInAt) {
+    presenceSeconds = ms(checkedInAt, checkedOutAt ?? serverNow) / 1000;
+  }
+
+  return {
+    presenceSeconds,
+    actualWorkSeconds,
+    sessionClosed: checkedOutAt !== null,
+  };
+}
+
 export async function getHandymanWorkSessionTimeProjection(
   executionScopeId: string,
   actorUserId: string,
@@ -694,43 +747,8 @@ export async function getHandymanWorkSessionTimeProjection(
 
   const events = await handymanWorkSessionRepository
     .listWorkSessionEventsBySession(undefined, sessionRow.id);
-
-  let presenceSeconds = 0;
-  let actualWorkSeconds = 0;
-  let workClockOpenedAt: Date | null = null;
-  let checkedInAt: Date | null = null;
-  let checkedOutAt: Date | null = null;
-  const ms = (a: Date, b: Date) => Math.max(0,
-    b.getTime() - a.getTime());
-
-  for (const event of events) {
-    const at = event.occurredAt;
-    if (event.eventType === 'CHECK_IN') checkedInAt = at;
-    if (event.eventType === 'START_WORK' || event.eventType === 'RESUME') {
-      workClockOpenedAt = at;
-    }
-    if (event.eventType === 'PAUSE' || event.eventType === 'MATERIAL_RUN'
-      || event.eventType === 'COMPLETE') {
-      if (workClockOpenedAt) {
-        actualWorkSeconds += ms(workClockOpenedAt, at) / 1000;
-        workClockOpenedAt = null;
-      }
-    }
-    if (event.eventType === 'CHECK_OUT') {
-      checkedOutAt = at;
-      if (workClockOpenedAt) {
-        actualWorkSeconds += ms(workClockOpenedAt, at) / 1000;
-        workClockOpenedAt = null;
-      }
-    }
-  }
-  if (workClockOpenedAt) {
-    // Still working: open tail projects against server-now only.
-    actualWorkSeconds += ms(workClockOpenedAt, serverNow) / 1000;
-  }
-  if (checkedInAt) {
-    presenceSeconds = ms(checkedInAt, checkedOutAt ?? serverNow) / 1000;
-  }
+  const { presenceSeconds, actualWorkSeconds, sessionClosed } =
+    computeSessionTimeFromEvents(events, serverNow);
 
   return {
     sessionId: sessionRow.id,
@@ -738,7 +756,7 @@ export async function getHandymanWorkSessionTimeProjection(
     status: sessionRow.status,
     presenceSeconds,
     actualWorkSeconds,
-    sessionClosed: checkedOutAt !== null,
+    sessionClosed,
     projectedAt: serverNow,
   };
 }
@@ -767,3 +785,105 @@ export async function getActiveHandymanWorkSession(
     .listWorkSessionHelperPresenceBySession(undefined, session.id);
   return { session, helperPresence };
 }
+
+/**
+ * CR-HM-17 GAP PART 03 — Customer Care work session read item
+ * (active + CHECKED_OUT sessions, events, helper presence, and
+ * server-derived presenceSeconds + actualWorkSeconds).
+ */
+export type HandymanCustomerCareWorkSessionItem = {
+  session: HandymanWorkSessionRecord;
+  events: HandymanWorkSessionEventRecord[];
+  helperPresence: HandymanWorkSessionHelperPresenceRecord[];
+  presenceSeconds: number;
+  actualWorkSeconds: number;
+  sessionClosed: boolean;
+  projectedAt: Date;
+};
+
+export type HandymanCustomerCareWorkSessionsProjection = {
+  executionScopeId: string;
+  activeSession: HandymanCustomerCareWorkSessionItem | null;
+  sessions: HandymanCustomerCareWorkSessionItem[];
+  presenceSeconds: number;
+  actualWorkSeconds: number;
+  projectedAt: Date;
+};
+
+/**
+ * CR-HM-17 GAP PART 03 — Customer Care read projection for all work
+ * sessions (active + CHECKED_OUT) on an execution scope. Enforces
+ * `canAccessClient(actorUserId, scope.clientId)` without requiring
+ * Crew Lead identity.
+ */
+export async function getHandymanWorkSessionsCustomerCareView(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanCustomerCareWorkSessionsProjection> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    scopeUuid,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+
+  const allowed = await contextAccessService.canAccessClient(
+    actorUuid,
+    scope.clientId,
+  );
+  if (!allowed) throw buildingAccessDeniedError();
+
+  const nowRow = await getPool().query(`SELECT NOW() AS server_now`);
+  const serverNow: Date = nowRow.rows[0].server_now;
+
+  const sessionRows = await handymanWorkSessionRepository
+    .listWorkSessionsByExecutionScope(undefined, scopeUuid);
+
+  const sessions: HandymanCustomerCareWorkSessionItem[] = [];
+  let totalPresenceSeconds = 0;
+  let totalActualWorkSeconds = 0;
+
+  for (const session of sessionRows) {
+    const [events, helperPresence] = await Promise.all([
+      handymanWorkSessionRepository.listWorkSessionEventsBySession(
+        undefined,
+        session.id,
+      ),
+      handymanWorkSessionRepository.listWorkSessionHelperPresenceBySession(
+        undefined,
+        session.id,
+      ),
+    ]);
+    const { presenceSeconds, actualWorkSeconds, sessionClosed } =
+      computeSessionTimeFromEvents(events, serverNow);
+    totalPresenceSeconds += presenceSeconds;
+    totalActualWorkSeconds += actualWorkSeconds;
+
+    sessions.push({
+      session,
+      events,
+      helperPresence,
+      presenceSeconds,
+      actualWorkSeconds,
+      sessionClosed,
+      projectedAt: serverNow,
+    });
+  }
+
+  const activeSession =
+    sessions.find((item) => item.session.status !== 'CHECKED_OUT') ?? null;
+
+  return {
+    executionScopeId: scopeUuid,
+    activeSession,
+    sessions,
+    presenceSeconds: totalPresenceSeconds,
+    actualWorkSeconds: totalActualWorkSeconds,
+    projectedAt: serverNow,
+  };
+}
+
+export const listHandymanWorkSessionsByScope =
+  getHandymanWorkSessionsCustomerCareView;

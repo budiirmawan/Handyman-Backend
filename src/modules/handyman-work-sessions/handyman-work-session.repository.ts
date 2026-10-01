@@ -160,6 +160,19 @@ async function findActiveWorkSessionByExecutionScope(
   return result.rows[0] ? mapSession(result.rows[0]) : null;
 }
 
+async function listWorkSessionsByExecutionScope(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+): Promise<HandymanWorkSessionRecord[]> {
+  const result = await executor.query(
+    `${SESSION_SELECT}
+      WHERE execution_scope_id = $1
+      ORDER BY created_at ASC, id ASC`,
+    [executionScopeId],
+  );
+  return result.rows.map(mapSession);
+}
+
 /**
  * Appends a transition event with server-clock occurred_at. The
  * (session, event_type, idempotency_key) unique index backstops
@@ -267,6 +280,7 @@ export const handymanWorkSessionRepository = {
   createWorkSession,
   findWorkSessionById,
   findActiveWorkSessionByExecutionScope,
+  listWorkSessionsByExecutionScope,
   appendWorkSessionEvent,
   findWorkSessionEventByIdempotency,
   listWorkSessionEventsBySession,

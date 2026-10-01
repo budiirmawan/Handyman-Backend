@@ -29,6 +29,8 @@ import type {
   AcquireHandymanMaterialLineInput,
   ApproveHandymanMaterialLineInput,
   EstimateHandymanMaterialLineInput,
+  HandymanCustomerCareMaterialLineItem,
+  HandymanCustomerCareMaterialLinesProjection,
   HandymanMaterialAcquisitionMode,
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialExecutionEventType,
@@ -622,3 +624,59 @@ export async function getHandymanMaterialFinalChargeReadyProjection(
     totalFinalUsedQty,
   };
 }
+
+/**
+ * CR-HM-17 GAP PART 03 — Customer Care material execution lines read
+ * projection across all governed statuses on an execution scope.
+ * Enforces `canAccessClient(actorUserId, scope.clientId)` without
+ * requiring Crew Lead identity.
+ */
+export async function getHandymanMaterialLinesCustomerCareView(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanCustomerCareMaterialLinesProjection> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+
+  const scope = await handymanExecutionScopeRepository.findScopeById(
+    undefined,
+    scopeUuid,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+
+  const allowed = await contextAccessService.canAccessClient(
+    actorUuid,
+    scope.clientId,
+  );
+  if (!allowed) throw buildingAccessDeniedError();
+
+  const lineRecords = await handymanMaterialExecutionRepository
+    .listMaterialExecutionLinesByScope(undefined, scopeUuid);
+
+  const lines: HandymanCustomerCareMaterialLineItem[] = [];
+  let totalFinalUsedQty = 0;
+
+  for (const line of lineRecords) {
+    const events = await handymanMaterialExecutionRepository
+      .listMaterialExecutionEventsByLine(undefined, line.id);
+    const isSettled = line.status === 'FINAL_CHARGE_READY';
+    const finalUsedQty = isSettled ? line.usedQty - line.returnedQty : null;
+    if (isSettled) {
+      totalFinalUsedQty += line.usedQty - line.returnedQty;
+    }
+    lines.push({
+      line,
+      events,
+      finalUsedQty,
+    });
+  }
+
+  return {
+    executionScopeId: scopeUuid,
+    lines,
+    totalFinalUsedQty,
+  };
+}
+
+export const listHandymanMaterialLinesByScope =
+  getHandymanMaterialLinesCustomerCareView;

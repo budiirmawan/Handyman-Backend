@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
+import { requirePermission } from '../auth/rbac.middleware';
 import {
   getHandymanWorkSessionActiveHandler,
+  getHandymanWorkSessionsHandler,
   getHandymanWorkSessionTimeProjectionHandler,
   postHandymanWorkSessionCheckInHandler,
   postHandymanWorkSessionCheckOutHandler,
@@ -35,8 +37,10 @@ import {
 export function createHandymanWorkSessionsApiRouter(): Router {
   const router = Router();
   const auth = authenticationMiddleware;
+  const read = requirePermission('tenant_company.read');
   const base =
     '/handyman/execution-scopes/:executionScopeId/work-sessions';
+  router.get(base, auth, read, getHandymanWorkSessionsHandler);
   router.post(`${base}/check-in`, auth,
     postHandymanWorkSessionCheckInHandler);
   router.post(`${base}/start-work`, auth,

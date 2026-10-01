@@ -4617,6 +4617,24 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
 
   /handyman/execution-scopes/{executionScopeId}/arrival-verification:
+    get:
+      tags: [Handyman Arrival Verification]
+      operationId: getHandymanArrivalVerificationByScope
+      summary: Read Customer Care arrival verification projection for an Execution Scope
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for arrival verification on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns scope-keyed status, expected location facts, and terminal arrival verification results with zero challenge token or token hash exposure."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Scope-keyed arrival verification status and location projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanCustomerCareArrivalVerificationProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [Handyman Arrival Verification]
       operationId: verifyHandymanArrival
@@ -4642,6 +4660,25 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions:
+    get:
+      tags: [Handyman Work Sessions]
+      operationId: listHandymanWorkSessionsByScope
+      summary: Read Customer Care work sessions projection for an Execution Scope
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for work sessions on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns active + CHECKED_OUT sessions, events, helper presence snapshots, and server-derived presenceSeconds + actualWorkSeconds."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Active + CHECKED_OUT work sessions, events, helper presence, and time projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanCustomerCareWorkSessionsProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /handyman/execution-scopes/{executionScopeId}/work-sessions/check-in:
     post:
       tags: [Handyman Work Sessions]
@@ -4861,6 +4898,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HandymanWorkSessionTimeProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines:
+    get:
+      tags: [Handyman Material Execution]
+      operationId: listHandymanMaterialLinesByScope
+      summary: Read Customer Care material execution lines projection for an Execution Scope
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for material execution lines on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns all governed material execution statuses, quantities, events, and totalFinalUsedQty with zero money columns."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Material execution lines, events, and settled quantity projection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandymanCustomerCareMaterialLinesProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -77204,6 +77260,103 @@ components:
           enum: [INSIDE, OUTSIDE, LOW_ACCURACY, UNAVAILABLE, null]
         distanceMeters: { type: number, nullable: true }
         evaluatedAt: { type: string, format: date-time }
+    HandymanCustomerCareExpectedLocation:
+      type: object
+      description: "Immutable CR-HM-06 Execution Scope expected location snapshot."
+      required: [buildingId, floorId, areaId, roomId, spaceId]
+      properties:
+        buildingId: { type: string, format: uuid }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+    HandymanCustomerCareArrivalResultItem:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — bounded Customer Care terminal arrival verification result item (no challenge token or token hash)."
+      required: [id, executionScopeId, assignmentId, challengeId, expectedLocation, status, primaryReason, qrSignal, geofenceSignal, distanceMeters, evaluatedAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        challengeId: { type: string, format: uuid }
+        expectedLocation:
+          $ref: '#/components/schemas/HandymanCustomerCareExpectedLocation'
+        status:
+          type: string
+          enum: [VERIFIED, FAILED, MANUAL_REVIEW_REQUIRED, EXPIRED]
+        primaryReason:
+          type: string
+          enum: [ALL_POSITIVE_EVIDENCE, QR_MISMATCH, GEOFENCE_OUTSIDE, ACTOR_ASSIGNMENT_INVALID, QR_UNKNOWN, QR_INACTIVE, NO_GEOSPATIAL_POLICY, LOW_ACCURACY, GEOFENCE_UNAVAILABLE, CHALLENGE_EXPIRED]
+        qrSignal:
+          type: string
+          enum: [MATCH, MISMATCH, UNKNOWN, INACTIVE]
+        geofenceSignal:
+          type: string
+          nullable: true
+          enum: [INSIDE, OUTSIDE, LOW_ACCURACY, UNAVAILABLE, null]
+        distanceMeters: { type: number, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    HandymanCustomerCareArrivalVerificationProjection:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — scope-keyed Customer Care arrival verification read projection."
+      required: [executionScopeId, expectedLocation, arrivalVerified, latestResult, results]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        expectedLocation:
+          $ref: '#/components/schemas/HandymanCustomerCareExpectedLocation'
+        arrivalVerified: { type: boolean }
+        latestResult:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCustomerCareArrivalResultItem'
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanCustomerCareArrivalResultItem'
+    HandymanCustomerCareWorkSessionItem:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care work session item (active + CHECKED_OUT) with events, helper presence snapshots, and server-derived presenceSeconds + actualWorkSeconds."
+      required: [id, executionScopeId, status, checkedInAt, startedWorkAt, completedAt, checkedOutAt, events, helperPresence, presenceSeconds, actualWorkSeconds, sessionClosed, projectedAt]
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [CHECKED_IN, IN_PROGRESS, PAUSED, MATERIAL_RUN, COMPLETED, CHECKED_OUT]
+        checkedInAt: { type: string, format: date-time }
+        startedWorkAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        checkedOutAt: { type: string, format: date-time, nullable: true }
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanWorkSessionEventRecord'
+        helperPresence:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanWorkSessionHelperPresence'
+        presenceSeconds: { type: number, minimum: 0 }
+        actualWorkSeconds: { type: number, minimum: 0 }
+        sessionClosed: { type: boolean }
+        projectedAt: { type: string, format: date-time }
+    HandymanCustomerCareWorkSessionsProjection:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care work sessions read projection for an Execution Scope."
+      required: [executionScopeId, activeSession, sessions, presenceSeconds, actualWorkSeconds, projectedAt]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        activeSession:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCustomerCareWorkSessionItem'
+          nullable: true
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanCustomerCareWorkSessionItem'
+        presenceSeconds: { type: number, minimum: 0 }
+        actualWorkSeconds: { type: number, minimum: 0 }
+        projectedAt: { type: string, format: date-time }
     HandymanWorkSessionMutationRequest:
       type: object
       required: [idempotencyKey]
@@ -77627,6 +77780,48 @@ components:
             $ref: '#/components/schemas/HandymanMaterialExecutionLineRecord'
         totalFinalUsedQty: { type: number }
         projectedAt: { type: string, format: date-time }
+    HandymanCustomerCareMaterialLineItem:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care material execution line read item across all governed statuses, with recorded events and settled finalUsedQty (zero money columns)."
+      required: [id, executionScopeId, quotationVersionId, quotationLineId, sourceItemId, status, acquisitionMode, estimatedQty, approvedQty, issuedQty, purchasedQty, usedQty, returnedQty, finalUsedQty, supplierReference, createdAt, updatedAt, events]
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        quotationLineId: { type: string, format: uuid }
+        sourceItemId: { type: string, format: uuid, nullable: true }
+        status:
+          type: string
+          enum: [ESTIMATED, APPROVED, ISSUED, PURCHASED, USED, FINAL_CHARGE_READY]
+        acquisitionMode:
+          type: string
+          enum: [ISSUED, PURCHASED]
+          nullable: true
+        estimatedQty: { type: number, minimum: 0 }
+        approvedQty: { type: number, minimum: 0 }
+        issuedQty: { type: number, minimum: 0 }
+        purchasedQty: { type: number, minimum: 0 }
+        usedQty: { type: number, minimum: 0 }
+        returnedQty: { type: number, minimum: 0 }
+        finalUsedQty: { type: number, minimum: 0, nullable: true }
+        supplierReference: { type: string, maxLength: 200, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanMaterialExecutionEventRecord'
+    HandymanCustomerCareMaterialLinesProjection:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care material execution lines read projection for an Execution Scope."
+      required: [executionScopeId, lines, totalFinalUsedQty]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanCustomerCareMaterialLineItem'
+        totalFinalUsedQty: { type: number, minimum: 0 }
     HandymanScopeAssignmentRecord:
       type: object
       description: Append-only crew assignment fact (status projection moves ACTIVE -> SUPERSEDED only). NO Lead snapshot - lead authority stays in CR-HM-04.
