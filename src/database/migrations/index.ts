@@ -449,6 +449,12 @@ import { migration0423HandymanSlaSubjectBinding }
   from './0423_handyman_sla_subject_binding';
 import { migration0424HandymanSlaEscalationNotificationBinding }
   from './0424_handyman_sla_escalation_notification_binding';
+import { migration0425AddHandymanCareActorRegistry }
+  from './0425_add_handyman_care_actor_registry';
+import { migration0426AddHandymanHandoffExchangeActorProvenance }
+  from './0426_add_handyman_handoff_exchange_actor_provenance';
+import { migration0427HandymanAttributionActorProvenance }
+  from './0427_handyman_attribution_actor_provenance';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -878,4 +884,7 @@ export const migrations: readonly Migration[] = [
   migration0422CreateHandymanChargeableAdditionalWorks,
   migration0423HandymanSlaSubjectBinding,
   migration0424HandymanSlaEscalationNotificationBinding,
+  migration0425AddHandymanCareActorRegistry,
+  migration0426AddHandymanHandoffExchangeActorProvenance,
+  migration0427HandymanAttributionActorProvenance,
 ];

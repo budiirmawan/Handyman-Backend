@@ -1,4 +1,5 @@
 import { withTransaction } from '../../database';
+import type { HandymanCareActorType } from '../handyman-care-actors/handyman-care-actor.types';
 import {
   createChannelAttribution,
   type PublicHandymanChannelAttribution,
@@ -29,6 +30,16 @@ import { handoffRuntimeRepository } from './handoff-runtime.repository';
  *   origin-reference conflict rules still apply for any direct re-creation;
  * - no standard user session is created, and no service request is created;
  *   attribution grants no financial or SaaS entitlement by itself.
+ *
+ * PART 10 (AMENDMENT 01) — actor provenance:
+ * - an attested Customer Care handoff records the actor columns
+ *   (actor_type / care_actor_id / actor_reference) taken ONLY from the
+ *   consumed snapshot, and records createdByUserId as null: the represented
+ *   customer's linked user is never borrowed as the acting user;
+ * - a legacy handoff (no actor) behaves exactly as before — actor columns
+ *   null and createdByUserId still the resolved customer user;
+ * - represented tenant/customer/building/space attribution is unchanged in
+ *   both flows.
  */
 
 /** Server-derived provenance: trusted chain integration + assertion key. */
@@ -86,10 +97,38 @@ export async function bindHandoffExchangeToChannelAttribution(
       throw new Error('Handoff exchange provenance record is missing.');
     }
 
-    // 4) Create the immutable attribution from the consumed snapshot only.
+    // 4) PART 10 — attested Customer Care actor provenance, taken verbatim
+    //    from the consumed snapshot (server-derived in PART 08/09). The
+    //    storage coherence constraint guarantees all-or-nothing, but a
+    //    half-populated snapshot is a server defect, so it must roll back
+    //    rather than produce an untraceable attribution.
+    let actorInput: {
+      actorType: HandymanCareActorType;
+      careActorId: string;
+      actorReference: string;
+    } | null = null;
+    if (consumed.actorType !== null) {
+      if (consumed.careActorId === null || consumed.actorReference === null) {
+        throw new Error('Handoff exchange actor provenance is incomplete.');
+      }
+      actorInput = {
+        actorType: consumed.actorType,
+        careActorId: consumed.careActorId,
+        actorReference: consumed.actorReference,
+      };
+    }
+
+    // 5) Create the immutable attribution from the consumed snapshot only.
     //    PART 01 re-validates all references and derives tenant isolation
     //    itself; its conflict rules are preserved unchanged. Any failure here
     //    rolls back the exchange consumption with the transaction.
+    //
+    //    Represented context (tenant company/PIC, building, space) is always
+    //    attributed unchanged. The acting identity differs by flow:
+    //    - legacy handoff: the resolved customer user, exactly as before;
+    //    - attested Customer Care handoff: the care actor only — the
+    //      represented customer's linked user is deliberately NOT passed as
+    //      `createdByUserId`, so it can never be recorded as the acting user.
     return createChannelAttribution({
       tenantCompanyId: consumed.tenantCompanyId,
       buildingId: consumed.buildingId,
@@ -102,7 +141,14 @@ export async function bindHandoffExchangeToChannelAttribution(
         integration.integrationCode,
         assertion.assertionId,
       ),
-      ...(consumed.resolvedUserId !== null
+      ...(actorInput !== null
+        ? {
+            actorType: actorInput.actorType,
+            careActorId: actorInput.careActorId,
+            actorReference: actorInput.actorReference,
+          }
+        : {}),
+      ...(actorInput === null && consumed.resolvedUserId !== null
         ? { createdByUserId: consumed.resolvedUserId }
         : {}),
     }, client);

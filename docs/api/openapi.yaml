@@ -115,14 +115,24 @@ tags:
       transitions are server-authoritative (subscription-driven from PART 03+).
   - name: Handoff
     description: >-
-      CR-HM-01 PART 03–05 trusted BM Super App handoff (frozen D1/D2/D3).
-      A server-to-server signed assertion (per-BM-integration scoped HMAC,
+      CR-HM-01 PART 03–05 trusted BM Super App handoff (frozen D1/D2/D3),
+      extended by AMENDMENT 01 PARTs 07–11 (Customer Care actor). A
+      server-to-server signed assertion (per-BM-integration scoped HMAC,
       timing-safe verify, short-lived, replay-protected) issues a one-time,
       short-lived exchange token returned exactly once and stored hash-only.
       The exchange is NOT a standard user session; consuming it exactly once
       creates the immutable channel attribution. Channel attribution is never
       building/unit authorization by itself, never a BM financial
       entitlement, and never a SaaS entitlement.
+
+      When Customer Care operates Handyman through the BM Super App on behalf
+      of a tenant, the signed assertion MAY carry an optional `actor` block.
+      The acting Customer Care identity is distinct from the represented
+      tenant/customer: it is attested by the integration signature, resolved
+      server-side against an integration-scoped registry, and recorded as
+      immutable attribution provenance. It is never a local User, never a
+      Tenant PIC, and never a session; an actor-bearing assertion is never
+      downgraded to legacy tenant-origin semantics.
   - name: Health
     description: Runtime / readiness probes (public).
   - name: Authentication
@@ -2499,6 +2509,22 @@ paths:
         is issued: the raw `exchangeToken` is returned exactly once, only its
         SHA-256 hash is stored, and it can be consumed exactly once by
         `POST /handoff/channel-attributions`. No service request is created.
+
+        Customer Care (AMENDMENT 01 PART 09): the assertion MAY additionally
+        carry an optional `actor` block. It is covered by the SAME
+        `x-hub-signature-256` signature — there is no separate, weaker actor
+        channel. When present it MUST resolve server-side (ACTIVE integration
+        + `CUSTOMER_CARE` actor capability + ACTIVE registry row of the SAME
+        integration); the assertion is then a Customer Care handoff whose
+        acting actor is distinct from the represented tenant/customer. When
+        the `actor` key is absent the request is exactly a legacy
+        tenant-origin handoff and behavior is unchanged. An actor-bearing
+        assertion that cannot be attested is rejected with the same
+        non-enumerating 401 `HANDYMAN_HANDOFF_ASSERTION_INVALID`: it is never
+        silently downgraded to legacy semantics, and the failure creates no
+        exchange and consumes no replay record. The exchange token, TTL,
+        hash-only storage, single-use and replay protections are identical
+        for both flows.
       tags: [Handoff]
       security:
         - handoffAssertionSignature: []
@@ -2567,6 +2593,19 @@ paths:
         consuming it never creates a standard user session and never creates
         a service request. The raw token travels only in this request body
         (never in the URL) so request logging cannot leak it.
+
+        Customer Care (AMENDMENT 01 PART 10): the created attribution carries
+        the attested `actorType`/`careActorId`/`actorReference` provenance
+        taken ONLY from the consumed exchange snapshot — never from the
+        caller (this endpoint accepts nothing but the exchange token).
+        `careActorId` identifies the acting Customer Care operator and is
+        strictly distinct from the represented tenant/customer: the
+        represented context (`tenantCompanyId`, `tenantPicId`, `buildingId`,
+        `spaceId`) is attributed unchanged, and `createdByUserId` is null for
+        an attested actor flow — the represented customer's linked user is
+        never borrowed as the acting user. Legacy handoffs keep the previous
+        behavior exactly (`createdByUserId` = resolved customer user, actor
+        fields null).
       tags: [Handoff]
       requestBody:
         required: true
@@ -76305,6 +76344,54 @@ components:
           type: string
           maxLength: 128
           description: Optional unit/space claim.
+        actor:
+          allOf:
+            - $ref: "#/components/schemas/HandoffCareActorClaim"
+          description: >-
+            OPTIONAL (AMENDMENT 01). Present ⇒ this is a Customer Care handoff
+            acting on behalf of the represented tenant claim above, and the
+            block is covered by the `x-hub-signature-256` signature. Absent ⇒
+            exactly a legacy tenant-origin handoff (behavior unchanged). The
+            value is an unverified claim until the backend attests it; an
+            actor-bearing assertion is never downgraded to legacy semantics.
+
+    HandoffCareActorClaim:
+      type: object
+      description: >-
+        OPTIONAL signed Customer Care actor block (CR-HM-01 AMENDMENT 01
+        PART 11; governance D4/D5). It describes WHO is acting (a Customer
+        Care operator using the BM Super App), never WHOM they represent: the
+        acting Customer Care identity is always distinct from the represented
+        tenant/customer, which stays in the assertion's context claims and is
+        resolved independently by the backend. The block is part of the
+        signature-covered canonical payload; the backend verifies the
+        integration is ACTIVE and holds the `CUSTOMER_CARE` capability, then
+        resolves the reference against an integration-scoped registry of
+        pre-provisioned, ACTIVE actors. `actorReference` is an opaque
+        operational reference (not a User id, not a Tenant PIC id, not a
+        token/session) and is meaningful only inside the attesting
+        integration. Unknown/inactive/foreign/incapable references fail
+        closed with the non-enumerating 401. Additional members are not part
+        of the contract and cause the assertion to be rejected, never
+        ignored.
+      required: [type, actorReference]
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum: [CUSTOMER_CARE]
+          description: >-
+            Actor class. The vocabulary is closed; `CUSTOMER_CARE` is the only
+            value. The actor is always distinct from the represented
+            tenant/customer and from any local User or Tenant PIC.
+        actorReference:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            Opaque, integration-scoped Customer Care operator reference
+            provisioned server-side. It is attested (never client-authoritative)
+            and is never resolved against users or tenant PICs.
 
     HandoffBindingRequest:
       type: object
@@ -76334,6 +76421,9 @@ components:
         - tenantBuildingContextId
         - tenantSpaceRelationshipId
         - resolvedUserId
+        - actorType
+        - careActorId
+        - actorReference
       properties:
         clientId:
           type: string
@@ -76365,6 +76455,34 @@ components:
           format: uuid
           nullable: true
           description: Linked user of the PIC when it exists; never fabricated.
+        actorType:
+          type: string
+          enum: [CUSTOMER_CARE]
+          nullable: true
+          description: >-
+            AMENDMENT 01 — attested acting actor class, server-derived from the
+            signed assertion. `null` for a legacy tenant-origin handoff. The
+            actor is distinct from the represented customer above.
+        careActorId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            AMENDMENT 01 — authoritative registry identity of the acting
+            Customer Care operator (server-derived; never caller-supplied),
+            distinct from the represented tenant/customer. Informational
+            provenance only, never client authority: it is NOT a `users` id,
+            grants no permission, session, entitlement or building/unit
+            authorization, and must never be treated by clients as an
+            authority token. It is never accepted as an input on any endpoint.
+        actorReference:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: >-
+            AMENDMENT 01 — the attested, integration-scoped operator reference
+            behind `careActorId`. Echo of server-derived provenance; never
+            accepted as input anywhere.
 
     HandoffExchangeAccepted:
       type: object
@@ -76393,6 +76511,17 @@ components:
         preserves the originating BM integration + assertion provenance.
         Attribution is never building/unit authorization by itself, never a
         BM financial entitlement, and never a SaaS entitlement.
+
+        AMENDMENT 01 PART 10 — an attribution from an attested Customer Care
+        handoff additionally records the acting Customer Care operator
+        (`actorType` = `CUSTOMER_CARE`, `careActorId`, `actorReference`) as
+        immutable provenance. The represented tenant/customer columns
+        (`tenantCompanyId`, `tenantPicId`, `buildingId`, `spaceId`) keep their
+        exact meaning: the actor is an ADDITIONAL, distinct identity, not a
+        replacement, and `createdByUserId` is `null` for such rows — the
+        represented customer's linked user is never recorded as the acting
+        user. Legacy attributions keep `createdByUserId` as before and have
+        null actor fields.
       required:
         - id
         - clientId
@@ -76403,6 +76532,9 @@ components:
         - originChannel
         - originReference
         - createdByUserId
+        - actorType
+        - careActorId
+        - actorReference
         - createdAt
       properties:
         id:
@@ -76439,6 +76571,35 @@ components:
           type: string
           format: uuid
           nullable: true
+          description: >-
+            Acting local user, when recorded. Always `null` for an attested
+            Customer Care attribution (AMENDMENT 01): the represented
+            customer's linked user is never borrowed as the acting user.
+        actorType:
+          type: string
+          enum: [CUSTOMER_CARE]
+          nullable: true
+          description: >-
+            AMENDMENT 01 — attested acting actor class; `null` for legacy
+            attributions. Immutable, like the rest of the record.
+        careActorId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            AMENDMENT 01 — authoritative registry identity of the acting
+            Customer Care operator, distinct from the represented
+            tenant/customer. READ-ONLY, informational provenance, never client
+            authority: it is never a `users` id, it grants no permission,
+            session, entitlement, or building/unit authorization, and it is
+            never accepted as an input on any endpoint.
+        actorReference:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: >-
+            AMENDMENT 01 — attested, integration-scoped operator reference
+            behind `careActorId`; read-only provenance, never input.
         createdAt:
           type: string
           format: date-time

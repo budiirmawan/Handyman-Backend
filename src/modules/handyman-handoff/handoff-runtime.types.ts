@@ -1,3 +1,8 @@
+import type {
+  HandoffCareActorClaim,
+  HandymanCareActorType,
+} from '../handyman-care-actors/handyman-care-actor.types';
+
 /**
  * CR-HM-01 PART 03 — Secure handoff runtime types (frozen D1/D2).
  *
@@ -20,6 +25,14 @@ export type HandoffAssertion = {
   buildingId: string;
   tenantPicId?: string;
   spaceId?: string;
+  /**
+   * CR-HM-01 AMENDMENT 01 PART 09 — optional attested Customer Care actor
+   * block. When the key is ABSENT the assertion is exactly a legacy
+   * tenant-origin handoff (canonical signing payload and behavior unchanged).
+   * When present it is part of the signed payload, must resolve through the
+   * PART 08 resolver, and is never silently downgraded to legacy semantics.
+   */
+  actor?: HandoffCareActorClaim;
 };
 
 export type HandoffIntegrationRecord = {
@@ -50,7 +63,24 @@ export type HandoffExchangeContextSnapshot = Readonly<{
   tenantBuildingContextId: string;
   tenantSpaceRelationshipId: string | null;
   resolvedUserId: string | null;
+  /**
+   * PART 09 — server-derived Customer Care actor provenance (never caller
+   * claims, never a user/PIC). All three are null for legacy handoffs.
+   */
+  actorType: HandymanCareActorType | null;
+  careActorId: string | null;
+  actorReference: string | null;
 }>;
+
+/**
+ * PART 09 — the context half of an exchange: everything the PART 02 resolver
+ * produces. Actor provenance is attested separately (PART 08) and is
+ * deliberately NOT part of `ResolvedHandoffContext`.
+ */
+export type HandoffExchangeContextInput = Omit<
+  HandoffExchangeContextSnapshot,
+  'actorType' | 'careActorId' | 'actorReference'
+>;
 
 export type HandoffExchangeRecord = {
   id: string;
@@ -65,6 +95,9 @@ export type HandoffExchangeRecord = {
   tenantBuildingContextId: string;
   tenantSpaceRelationshipId: string | null;
   resolvedUserId: string | null;
+  actorType: HandymanCareActorType | null;
+  careActorId: string | null;
+  actorReference: string | null;
   status: 'ACTIVE' | 'USED';
   expiresAt: Date;
   usedAt: Date | null;

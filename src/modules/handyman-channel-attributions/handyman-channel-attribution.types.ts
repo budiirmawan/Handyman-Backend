@@ -7,7 +7,17 @@
  * type. Channel Attribution != BM financial entitlement != SaaS entitlement,
  * and persisting attribution never grants building/unit authorization by
  * itself.
+ *
+ * CR-HM-01 AMENDMENT 01 PART 10 — an attribution may additionally carry the
+ * attested Customer Care ACTOR (server-derived from the one-time exchange
+ * snapshot). The represented tenant/customer columns keep their meaning: the
+ * actor is an ADDITIONAL, distinct identity, never a replacement and never the
+ * customer's linked local user.
  */
+
+import type {
+  HandymanCareActorType,
+} from '../handyman-care-actors/handyman-care-actor.types';
 
 export const HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_CHANNELS = [
   'BM_SUPER_APP',
@@ -42,8 +52,18 @@ export type HandymanChannelAttributionRecord = {
   originChannel: HandymanChannelAttributionOriginChannel;
   /** Durable external origin reference, when present. */
   originReference: string | null;
-  /** Optional human/server actor attribution (audit-compatible creation). */
+  /**
+   * Acting local user, when the attribution records one. For an attested
+   * Customer Care attribution this is ALWAYS null: the customer's linked user
+   * is never borrowed as the acting user (PART 10 / D8).
+   */
   createdByUserId: string | null;
+  /** Attested Customer Care actor provenance; null for legacy attributions. */
+  actorType: HandymanCareActorType | null;
+  /** Authoritative registry identity of the acting Customer Care operator. */
+  careActorId: string | null;
+  /** Attested, integration-scoped opaque actor reference. */
+  actorReference: string | null;
   createdAt: Date;
 };
 
@@ -66,7 +86,20 @@ export type CreateHandymanChannelAttributionInput = {
   tenantPicId?: string;
   spaceId?: string;
   originReference?: string;
+  /**
+   * Acting local user. Must NOT be supplied together with an attested
+   * Customer Care actor (the actor is not a customer user).
+   */
   createdByUserId?: string;
+  /**
+   * PART 10 — server-derived attested actor provenance, supplied ONLY by the
+   * trusted handoff binding seam from the consumed exchange snapshot. All
+   * three are required together; the caller can never invent them from a
+   * request (the handoff binding takes nothing but the exchange token).
+   */
+  actorType?: HandymanCareActorType;
+  careActorId?: string;
+  actorReference?: string;
 };
 
 /** Fully-resolved data ready for persistence. */
@@ -79,4 +112,7 @@ export type NewHandymanChannelAttribution = {
   originChannel: HandymanChannelAttributionOriginChannel;
   originReference: string | null;
   createdByUserId: string | null;
+  actorType: HandymanCareActorType | null;
+  careActorId: string | null;
+  actorReference: string | null;
 };

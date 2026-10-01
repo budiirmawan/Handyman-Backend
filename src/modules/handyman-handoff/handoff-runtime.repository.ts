@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../../database';
+import type { ResolvedCareActorProvenance } from '../handyman-care-actors/handyman-care-actor.types';
 import type {
   HandoffAssertionRecord,
-  HandoffExchangeContextSnapshot,
+  HandoffExchangeContextInput,
   HandoffExchangeRecord,
   HandoffIntegrationRecord,
 } from './handoff-runtime.types';
@@ -100,15 +101,23 @@ const EXCHANGE_SELECT = `id, integration_id AS "integrationId",
   space_id AS "spaceId",
   tenant_building_context_id AS "tenantBuildingContextId",
   tenant_space_relationship_id AS "tenantSpaceRelationshipId",
-  resolved_user_id AS "resolvedUserId", status,
+  resolved_user_id AS "resolvedUserId",
+  actor_type AS "actorType", care_actor_id AS "careActorId",
+  actor_reference AS "actorReference", status,
   expires_at AS "expiresAt", used_at AS "usedAt",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
+/**
+ * PART 09 — `actor` carries the PART 08 provenance when (and only when) the
+ * assertion carried an attested actor block; it is written into the exchange
+ * snapshot. Legacy handoffs pass null and every actor column stays NULL.
+ */
 async function createExchange(input: {
   integrationId: string;
   handoffAssertionId: string;
   tokenHash: string;
-  context: HandoffExchangeContextSnapshot;
+  context: HandoffExchangeContextInput;
+  actor: ResolvedCareActorProvenance | null;
   expiresAt: Date;
 }): Promise<HandoffExchangeRecord> {
   const result = await executor().query<HandoffExchangeRecord>(
@@ -116,8 +125,9 @@ async function createExchange(input: {
        (id, integration_id, handoff_assertion_id, token_hash, client_id,
         tenant_company_id, tenant_pic_id, building_id, space_id,
         tenant_building_context_id, tenant_space_relationship_id,
-        resolved_user_id, expires_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        resolved_user_id, actor_type, care_actor_id, actor_reference,
+        expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      RETURNING ${EXCHANGE_SELECT}`,
     [
       randomUUID(),
@@ -132,6 +142,9 @@ async function createExchange(input: {
       input.context.tenantBuildingContextId,
       input.context.tenantSpaceRelationshipId,
       input.context.resolvedUserId,
+      input.actor?.actorType ?? null,
+      input.actor?.careActorId ?? null,
+      input.actor?.actorReference ?? null,
       input.expiresAt,
     ],
   );

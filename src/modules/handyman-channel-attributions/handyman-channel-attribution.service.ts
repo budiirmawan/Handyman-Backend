@@ -1,6 +1,12 @@
 import type { PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
 import { buildingRepository } from '../buildings';
+import { handymanCareActorRepository } from '../handyman-care-actors/handyman-care-actor.repository';
+import {
+  HANDYMAN_CARE_ACTOR_REFERENCE_MAX_LENGTH,
+  HANDYMAN_CARE_ACTOR_TYPE,
+  type HandymanCareActorType,
+} from '../handyman-care-actors/handyman-care-actor.types';
 import { propertyRepository } from '../properties';
 import { tenantBuildingContextRepository } from '../tenant-building-contexts';
 import {
@@ -93,6 +99,104 @@ export function toPublicHandymanChannelAttribution(
   return { ...record, createdAt: record.createdAt.toISOString() };
 }
 
+type ResolvedActorInput = {
+  actorType: HandymanCareActorType;
+  careActorId: string;
+  actorReference: string;
+};
+
+/**
+ * PART 10 — validates server-derived actor provenance supplied by the trusted
+ * handoff binding seam. Rules (governance §3.5 / D8):
+ * - the three actor fields are all-or-nothing;
+ * - the actor type vocabulary is closed (CUSTOMER_CARE only);
+ * - the registry row referenced by `careActorId` must EXIST and its stored
+ *   reference must equal the attested `actorReference`, so a care attribution
+ *   can never point at a users/tenant_pics identity or a mismatched reference
+ *   (the FK to the registry makes the same guarantee at the storage layer);
+ * - a local `createdByUserId` must not accompany an attested actor: for a
+ *   Customer Care handoff the acting identity is the actor, and the
+ *   represented customer's linked user must never be borrowed as the acting
+ *   user.
+ *
+ * Lifecycle note: ACTIVE was authoritative when the exchange was issued
+ * (PART 08/09). Binding records that already-resolved provenance, so it
+ * re-validates integrity — not the current registry status — and a
+ * deactivation cannot retroactively invalidate an exchange that was validly
+ * issued.
+ */
+async function resolveActorInput(
+  input: CreateHandymanChannelAttributionInput,
+): Promise<ResolvedActorInput | null> {
+  const hasAnyActorField =
+    input.actorType !== undefined ||
+    input.careActorId !== undefined ||
+    input.actorReference !== undefined;
+  if (!hasAnyActorField) return null;
+
+  const hasAllActorFields =
+    input.actorType !== undefined &&
+    input.careActorId !== undefined &&
+    input.actorReference !== undefined;
+  if (!hasAllActorFields) {
+    throw AppError.validation('Attribution validation failed.', [
+      {
+        field: 'actorType',
+        message:
+          'Attested actor provenance requires actorType, careActorId and actorReference together.',
+      },
+    ]);
+  }
+  if (input.actorType !== HANDYMAN_CARE_ACTOR_TYPE) {
+    throw AppError.validation('Attribution validation failed.', [
+      {
+        field: 'actorType',
+        message: 'actorType is not a recognized Handyman actor type.',
+      },
+    ]);
+  }
+  const careActorId = input.careActorId as string;
+  const actorReference =
+    typeof input.actorReference === 'string' ? input.actorReference.trim() : '';
+  if (
+    actorReference.length === 0 ||
+    actorReference.length > HANDYMAN_CARE_ACTOR_REFERENCE_MAX_LENGTH
+  ) {
+    throw AppError.validation('Attribution validation failed.', [
+      {
+        field: 'actorReference',
+        message: `actorReference must be 1-${HANDYMAN_CARE_ACTOR_REFERENCE_MAX_LENGTH} characters when provided.`,
+      },
+    ]);
+  }
+  if (input.createdByUserId !== undefined) {
+    throw AppError.validation('Attribution validation failed.', [
+      {
+        field: 'createdByUserId',
+        message:
+          'createdByUserId must not be supplied for an attested Customer Care actor attribution.',
+      },
+    ]);
+  }
+
+  const registryRow = await handymanCareActorRepository.findById(careActorId);
+  if (!registryRow || registryRow.actorReference !== actorReference) {
+    throw AppError.validation('Attribution validation failed.', [
+      {
+        field: 'careActorId',
+        message:
+          'careActorId must reference an existing Customer Care actor whose stored reference matches actorReference.',
+      },
+    ]);
+  }
+
+  return {
+    actorType: HANDYMAN_CARE_ACTOR_TYPE,
+    careActorId: registryRow.id,
+    actorReference: registryRow.actorReference,
+  };
+}
+
 /**
  * Creates the immutable attribution after re-validating every server-side
  * reference and deriving the tenant-isolation root. `client` (existing
@@ -106,6 +210,8 @@ export async function createChannelAttribution(
 ): Promise<PublicHandymanChannelAttribution> {
   assertOriginChannel(input.originChannel);
   const originReference = normalizeOriginReference(input.originReference);
+  // PART 10 — attested Customer Care actor provenance (server-derived only).
+  const actor = await resolveActorInput(input);
 
   const company = await tenantCompanyRepository.findById(input.tenantCompanyId);
   if (!company) throw tenantCompanyNotFoundError();
@@ -160,10 +266,14 @@ export async function createChannelAttribution(
     spaceId = input.spaceId;
   }
 
+  // Acting local user. `resolveActorInput` already rejected supplying one
+  // together with an attested actor, so this can only be a legacy/manual
+  // attribution (no actor) — the represented PIC user is never borrowed here
+  // for Customer Care flows.
   let createdByUserId: string | null = null;
   if (input.createdByUserId !== undefined) {
-    const actor = await userRepository.findById(input.createdByUserId);
-    if (!actor) {
+    const actingUser = await userRepository.findById(input.createdByUserId);
+    if (!actingUser) {
       throw AppError.validation('Attribution validation failed.', [
         {
           field: 'createdByUserId',
@@ -171,7 +281,7 @@ export async function createChannelAttribution(
         },
       ]);
     }
-    createdByUserId = actor.id;
+    createdByUserId = actingUser.id;
   }
 
   if (originReference !== null) {
@@ -190,6 +300,9 @@ export async function createChannelAttribution(
       originChannel: input.originChannel,
       originReference,
       createdByUserId,
+      actorType: actor?.actorType ?? null,
+      careActorId: actor?.careActorId ?? null,
+      actorReference: actor?.actorReference ?? null,
     }, client);
     return toPublicHandymanChannelAttribution(record);
   } catch (error) {

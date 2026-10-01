@@ -25,7 +25,9 @@ const SELECT = `id, client_id AS "clientId",
   tenant_company_id AS "tenantCompanyId", tenant_pic_id AS "tenantPicId",
   building_id AS "buildingId", space_id AS "spaceId",
   origin_channel AS "originChannel", origin_reference AS "originReference",
-  created_by_user_id AS "createdByUserId", created_at AS "createdAt"`;
+  created_by_user_id AS "createdByUserId",
+  actor_type AS "actorType", care_actor_id AS "careActorId",
+  actor_reference AS "actorReference", created_at AS "createdAt"`;
 
 async function create(
   input: NewHandymanChannelAttribution,
@@ -34,8 +36,9 @@ async function create(
   const result = await executor(client).query<HandymanChannelAttributionRecord>(
     `INSERT INTO handyman_channel_attributions
        (id, client_id, tenant_company_id, tenant_pic_id, building_id,
-        space_id, origin_channel, origin_reference, created_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${SELECT}`,
+        space_id, origin_channel, origin_reference, created_by_user_id,
+        actor_type, care_actor_id, actor_reference)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING ${SELECT}`,
     [
       randomUUID(),
       input.clientId,
@@ -46,6 +49,9 @@ async function create(
       input.originChannel,
       input.originReference,
       input.createdByUserId,
+      input.actorType,
+      input.careActorId,
+      input.actorReference,
     ],
   );
   return result.rows[0];
