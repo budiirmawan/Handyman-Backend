@@ -1,6 +1,7 @@
 export { handymanCareActorRepository } from './handyman-care-actor.repository';
 export {
   handymanCareActorResolver,
+  parseHandoffCareActorClaim,
   resolveCareActorClaim,
 } from './handyman-care-actor.resolver';
 export {

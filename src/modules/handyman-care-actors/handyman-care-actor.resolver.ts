@@ -44,10 +44,16 @@ const CLAIM_KEYS: readonly string[] = ['type', 'actorReference'];
 /**
  * Validates the closed actor block. Unknown members fail closed (no smuggled
  * semantics); `type` must be exactly CUSTOMER_CARE; the reference must be a
- * bounded, non-blank string. Returns the canonical (trimmed) reference, or
- * null for every defect — the caller collapses all of them into one failure.
+ * bounded, non-blank string. Returns the canonical (trimmed) claim, or null
+ * for every defect — callers collapse all of them into one failure.
+ *
+ * Exported as the single structural authority for the actor block: the
+ * assertion validator (PART 09) uses it to reject defects BEFORE any
+ * signature work, and the resolver re-validates so it is safe standalone.
  */
-function readActorClaim(claim: unknown): HandoffCareActorClaim | null {
+export function parseHandoffCareActorClaim(
+  claim: unknown,
+): HandoffCareActorClaim | null {
   if (typeof claim !== 'object' || claim === null || Array.isArray(claim)) {
     return null;
   }
@@ -78,7 +84,7 @@ function readActorClaim(claim: unknown): HandoffCareActorClaim | null {
 export async function resolveCareActorClaim(
   input: ResolveCareActorClaimInput,
 ): Promise<ResolvedCareActorProvenance> {
-  const claim = readActorClaim(input?.actorClaim);
+  const claim = parseHandoffCareActorClaim(input?.actorClaim);
   if (!claim) throw handoffAssertionInvalidError();
 
   const integrationCode =

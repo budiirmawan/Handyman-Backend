@@ -44,6 +44,7 @@ export type {
   ConsumedHandoffExchange,
   HandoffAssertion,
   HandoffAssertionRecord,
+  HandoffExchangeContextInput,
   HandoffExchangeContextSnapshot,
   HandoffExchangeRecord,
   HandoffIntegrationRecord,

@@ -1,4 +1,8 @@
 import { logger } from '../../shared/logger';
+import {
+  parseHandoffCareActorClaim,
+  resolveCareActorClaim,
+} from '../handyman-care-actors/handyman-care-actor.resolver';
 import { resolveHandoffContext } from './handoff-context.service';
 import {
   handoffAssertionInvalidError,
@@ -38,6 +42,14 @@ import type {
  * once; the exchange is NOT a standard user session (none is created);
  * tenant-pics.userId is never fabricated; no channel attribution and no
  * service request is created here.
+ *
+ * PART 09 (AMENDMENT 01) adds ONE optional member to the signed assertion —
+ * the Customer Care `actor` block. Its presence is decided by key presence:
+ * absent ⇒ byte-identical legacy behavior (canonical payload, resolver and
+ * exchange snapshot unchanged); present ⇒ the block is covered by the same
+ * integration signature, MUST resolve through the PART 08 attested resolver,
+ * and its server-derived provenance is carried into the exchange snapshot.
+ * An actor-bearing assertion is never downgraded to legacy semantics.
  */
 
 const ASSERTION_ID_MAX_LENGTH = 128;
@@ -57,10 +69,19 @@ function isOptionalReference(value: unknown): value is string | undefined {
   return value === undefined || isNonEmptyString(value, REFERENCE_MAX_LENGTH);
 }
 
-/** Structural validation of an assertion payload (untrusted input). */
+/**
+ * Structural validation of an assertion payload (untrusted input).
+ *
+ * PART 09: `actor` is optional. The check is on KEY PRESENCE — an absent
+ * `actor` key is the legacy shape, while a present `actor` (including
+ * `null`/`undefined` and any unknown member) must be a valid closed actor
+ * block or the whole assertion is rejected. This is what makes "never
+ * silently downgrade an actor-bearing assertion" true at the first gate.
+ */
 export function isHandoffAssertion(value: unknown): value is HandoffAssertion {
   if (typeof value !== 'object' || value === null) return false;
   const a = value as Record<string, unknown>;
+  const hasActor = Object.prototype.hasOwnProperty.call(a, 'actor');
   return (
     isNonEmptyString(a.integrationCode, 64) &&
     isNonEmptyString(a.assertionId, ASSERTION_ID_MAX_LENGTH) &&
@@ -69,7 +90,8 @@ export function isHandoffAssertion(value: unknown): value is HandoffAssertion {
     isNonEmptyString(a.tenantCompanyId, REFERENCE_MAX_LENGTH) &&
     isNonEmptyString(a.buildingId, REFERENCE_MAX_LENGTH) &&
     isOptionalReference(a.tenantPicId) &&
-    isOptionalReference(a.spaceId)
+    isOptionalReference(a.spaceId) &&
+    (!hasActor || parseHandoffCareActorClaim(a.actor) !== null)
   );
 }
 
@@ -85,6 +107,9 @@ function toExchangeContextSnapshot(
     tenantBuildingContextId: record.tenantBuildingContextId,
     tenantSpaceRelationshipId: record.tenantSpaceRelationshipId,
     resolvedUserId: record.resolvedUserId,
+    actorType: record.actorType,
+    careActorId: record.careActorId,
+    actorReference: record.actorReference,
   };
 }
 
@@ -144,11 +169,28 @@ export async function acceptHandoffAssertion(
     throw handoffAssertionInvalidError();
   }
 
-  // 2) Timing-safe signature + freshness window.
+  // 2) Timing-safe signature + freshness window. The actor block, when
+  //    present, is a member of the canonical payload and is therefore covered
+  //    by this very signature — there is no separate, weaker actor channel.
   if (!verifyHandoffAssertionSignature(assertion, signature, secret)) {
     throw handoffAssertionInvalidError();
   }
   assertAssertionFreshness(assertion, config);
+
+  // 2.5) PART 09 actor attestation. Key presence decides the mode; an
+  //      actor-bearing assertion MUST resolve through the PART 08 resolver
+  //      (integration ACTIVE + CUSTOMER_CARE capability + ACTIVE registry row
+  //      of the same integration). Resolution failures propagate as the same
+  //      non-enumerating 401 — there is deliberately NO fallback that would
+  //      downgrade an actor-bearing assertion to legacy tenant-origin
+  //      semantics, and no replay/append-only record is burned for it.
+  const hasActorClaim = Object.prototype.hasOwnProperty.call(assertion, 'actor');
+  const actorProvenance = hasActorClaim
+    ? await resolveCareActorClaim({
+        integrationCode: integration.integrationCode,
+        actorClaim: assertion.actor,
+      })
+    : null;
 
   // 3) Replay protection: append-only acceptance record; one assertion id
   //    per integration, ever.
@@ -176,7 +218,11 @@ export async function acceptHandoffAssertion(
     ...(assertion.spaceId !== undefined ? { spaceId: assertion.spaceId } : {}),
   });
 
-  // 5) Short-lived one-time exchange (D2) — token hash-only at rest.
+  // 5) Short-lived one-time exchange (D2) — token hash-only at rest; TTL,
+  //    opacity, single-use and replay semantics are unchanged by PART 09. The
+  //    server-derived actor provenance travels in the exchange snapshot only
+  //    (null for legacy handoffs); it is never returned as caller input and
+  //    never minted into a token/session.
   const exchangeToken = generateHandoffExchangeToken();
   const expiresAt = new Date(Date.now() + config.exchangeTtlSeconds * 1000);
   const exchange = await handoffRuntimeRepository.createExchange({
@@ -184,6 +230,7 @@ export async function acceptHandoffAssertion(
     handoffAssertionId: assertionRecord.id,
     tokenHash: hashHandoffExchangeToken(exchangeToken),
     context: resolved,
+    actor: actorProvenance,
     expiresAt,
   });
 
