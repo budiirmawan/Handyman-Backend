@@ -5666,6 +5666,187 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/customer-ledger:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: getHandymanExecutionScopeCustomerLedger
+      summary: Read execution-scope customer transaction ledger (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanLedgerTransactionAt`: separated `LABOR` and `MATERIAL` charge lines, provider-neutral customer payments, allocations, forward-only corrections, and authoritative gross/net totals."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Execution-scope customer transaction ledger read contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerLedgerTransactionRead'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/customer-ledger:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: getHandymanClientCustomerLedger
+      summary: Read client-scoped customer transaction ledger basis (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanLedgerClientBasisAt`: windowed per-transaction net basis and aggregate totals for one client."
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
+      responses:
+        '200':
+          description: Client-scoped customer transaction ledger basis read contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerLedgerClientBasisRead'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: listHandymanExecutionScopeCustomerPayments
+      summary: List customer payments for an execution scope (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `listHandymanCustomerPayments`."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Execution-scope customer payment list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentsListView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Handyman Customer Ledger]
+      operationId: recordHandymanCustomerPayment
+      summary: Record a customer payment claim (`PENDING`) on an execution scope (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `recordHandymanCustomerPayment`. Records a provider-neutral payment claim (`PENDING`) in the transaction's own currency."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanCustomerPaymentRecordRequest'
+      responses:
+        '200':
+          description: Recorded customer payment fact (`PENDING`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/confirm:
+    post:
+      tags: [Handyman Customer Ledger]
+      operationId: confirmHandymanCustomerPayment
+      summary: Confirm a `PENDING` customer payment (`CONFIRMED`) (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `confirmHandymanCustomerPayment`."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/CustomerPaymentIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanCustomerPaymentConfirmRequest'
+      responses:
+        '200':
+          description: Confirmed customer payment fact + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/reject:
+    post:
+      tags: [Handyman Customer Ledger]
+      operationId: rejectHandymanCustomerPayment
+      summary: Reject a `PENDING` customer payment (`REJECTED`) (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `rejectHandymanCustomerPayment`."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/CustomerPaymentIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanCustomerPaymentRejectRequest'
+      responses:
+        '200':
+          description: Rejected customer payment fact + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /health:
     get:
       operationId: getHealth
@@ -71604,6 +71785,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    CustomerPaymentIdPath:
+      name: paymentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -78030,6 +78216,427 @@ components:
           allOf:
             - $ref: '#/components/schemas/HandymanBastSignOff'
           nullable: true
+        replayed: { type: boolean }
+    HandymanCustomerLedgerLineKind:
+      type: string
+      enum: [LABOR, MATERIAL]
+    HandymanCustomerLedgerAuthorityDenial:
+      type: string
+      enum: [NO_POSTED_CHARGE_FACTS, PROVISIONAL_PAYMENTS_PENDING]
+    HandymanCustomerLedgerAuthority:
+      type: object
+      required: [authoritativeForEntitlement, deniedBy]
+      properties:
+        authoritativeForEntitlement: { type: boolean }
+        deniedBy:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthorityDenial' }
+    HandymanCustomerLedgerClientAuthority:
+      type: object
+      required: [authoritativeForEntitlement, deniedBy, nonAuthoritativeTransactionIds]
+      properties:
+        authoritativeForEntitlement: { type: boolean }
+        deniedBy:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthorityDenial' }
+        nonAuthoritativeTransactionIds:
+          type: array
+          items: { type: string, format: uuid }
+    HandymanCustomerLedgerChargeLine:
+      type: object
+      required:
+        - chargeLineId
+        - quotationLineId
+        - lineKind
+        - compositionKind
+        - basisFactKind
+        - currency
+        - amount
+        - adjusted
+        - netAmount
+        - allocated
+        - reversedAllocations
+        - applied
+        - outstanding
+      properties:
+        chargeLineId: { type: string, format: uuid }
+        quotationLineId: { type: string, format: uuid }
+        lineKind: { $ref: '#/components/schemas/HandymanCustomerLedgerLineKind' }
+        compositionKind: { type: string, nullable: true }
+        basisFactKind: { type: string, nullable: true }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        adjusted: { type: string }
+        netAmount: { type: string }
+        allocated: { type: string }
+        reversedAllocations: { type: string }
+        applied: { type: string }
+        outstanding: { type: string }
+    HandymanCustomerLedgerPaymentRead:
+      type: object
+      required:
+        - paymentId
+        - status
+        - channel
+        - currency
+        - amount
+        - receivedAt
+        - allocated
+        - reversedAllocations
+        - applied
+        - refunded
+        - reversedPayment
+        - netReceived
+        - authoritativeForEntitlement
+      properties:
+        paymentId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanCustomerPaymentStatus' }
+        channel: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        receivedAt: { type: string, format: date-time }
+        allocated: { type: string }
+        reversedAllocations: { type: string }
+        applied: { type: string }
+        refunded: { type: string }
+        reversedPayment: { type: string }
+        netReceived: { type: string }
+        authoritativeForEntitlement: { type: boolean }
+    HandymanCustomerLedgerAllocation:
+      type: object
+      required:
+        - allocationId
+        - paymentId
+        - chargeLineId
+        - lineKind
+        - currency
+        - amount
+        - occurredAt
+        - reversed
+      properties:
+        allocationId: { type: string, format: uuid }
+        paymentId: { type: string, format: uuid }
+        chargeLineId: { type: string, format: uuid }
+        lineKind: { $ref: '#/components/schemas/HandymanCustomerLedgerLineKind' }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        occurredAt: { type: string, format: date-time }
+        reversed: { type: boolean }
+    HandymanCustomerLedgerCorrection:
+      type: object
+      required:
+        - correctionId
+        - correctionKind
+        - sourceKind
+        - sourcePaymentId
+        - sourceAllocationId
+        - sourceChargeLineId
+        - currency
+        - amount
+        - reason
+        - correctedByUserId
+        - occurredAt
+      properties:
+        correctionId: { type: string, format: uuid }
+        correctionKind: { type: string, enum: [REFUND, REVERSAL, ADJUSTMENT] }
+        sourceKind: { type: string, enum: [PAYMENT, ALLOCATION, CHARGE_LINE, TRANSACTION] }
+        sourcePaymentId: { type: string, format: uuid, nullable: true }
+        sourceAllocationId: { type: string, format: uuid, nullable: true }
+        sourceChargeLineId: { type: string, format: uuid, nullable: true }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        reason: { type: string }
+        correctedByUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+    HandymanCustomerLedgerCorrectionCounts:
+      type: object
+      required: [refunds, reversals, adjustments]
+      properties:
+        refunds: { type: integer, minimum: 0 }
+        reversals: { type: integer, minimum: 0 }
+        adjustments: { type: integer, minimum: 0 }
+    HandymanCustomerLedgerTotals:
+      type: object
+      required:
+        - chargedGross
+        - laborGross
+        - materialGross
+        - laborAdjusted
+        - materialAdjusted
+        - adjustedTransactionScope
+        - adjusted
+        - chargedNet
+        - laborNet
+        - materialNet
+        - allocated
+        - reversedAllocations
+        - applied
+        - receivedGross
+        - receivedReversed
+        - receivedNet
+        - refunded
+        - netReceived
+        - outstanding
+        - corrections
+      properties:
+        chargedGross: { type: string }
+        laborGross: { type: string }
+        materialGross: { type: string }
+        laborAdjusted: { type: string }
+        materialAdjusted: { type: string }
+        adjustedTransactionScope: { type: string }
+        adjusted: { type: string }
+        chargedNet: { type: string }
+        laborNet: { type: string }
+        materialNet: { type: string }
+        allocated: { type: string }
+        reversedAllocations: { type: string }
+        applied: { type: string }
+        receivedGross: { type: string }
+        receivedReversed: { type: string }
+        receivedNet: { type: string }
+        refunded: { type: string }
+        netReceived: { type: string }
+        outstanding: { type: string }
+        corrections: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrectionCounts' }
+    HandymanCustomerLedgerTransactionRead:
+      type: object
+      required:
+        - contractVersion
+        - readOnly
+        - transaction
+        - chargeLines
+        - payments
+        - allocations
+        - corrections
+        - totals
+        - authority
+      properties:
+        contractVersion: { type: string, enum: [CR-HM-13-PART-06] }
+        readOnly: { type: boolean, enum: [true] }
+        transaction:
+          type: object
+          required:
+            - transactionId
+            - clientId
+            - executionScopeId
+            - quotationVersionId
+            - currency
+            - createdAt
+          properties:
+            transactionId: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            quotationVersionId: { type: string, format: uuid }
+            currency: { type: string, minLength: 3, maxLength: 3 }
+            createdAt: { type: string, format: date-time }
+        chargeLines:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerChargeLine' }
+        payments:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerPaymentRead' }
+        allocations:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerAllocation' }
+        corrections:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrection' }
+        totals: { $ref: '#/components/schemas/HandymanCustomerLedgerTotals' }
+        authority: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthority' }
+    HandymanCustomerLedgerClientBasisEntry:
+      type: object
+      required:
+        - transactionId
+        - executionScopeId
+        - currency
+        - openedAt
+        - chargedNet
+        - laborNet
+        - materialNet
+        - adjusted
+        - applied
+        - receivedNet
+        - refunded
+        - reversedAllocations
+        - receivedReversed
+        - netReceived
+        - outstanding
+        - corrections
+        - authority
+      properties:
+        transactionId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        openedAt: { type: string, format: date-time }
+        chargedNet: { type: string }
+        laborNet: { type: string }
+        materialNet: { type: string }
+        adjusted: { type: string }
+        applied: { type: string }
+        receivedNet: { type: string }
+        refunded: { type: string }
+        reversedAllocations: { type: string }
+        receivedReversed: { type: string }
+        netReceived: { type: string }
+        outstanding: { type: string }
+        corrections: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrectionCounts' }
+        authority: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthority' }
+    HandymanCustomerLedgerClientBasisRead:
+      type: object
+      required:
+        - contractVersion
+        - readOnly
+        - clientId
+        - from
+        - to
+        - limit
+        - transactions
+        - totals
+        - authority
+      properties:
+        contractVersion: { type: string, enum: [CR-HM-13-PART-06] }
+        readOnly: { type: boolean, enum: [true] }
+        clientId: { type: string, format: uuid }
+        from: { type: string, format: date-time, nullable: true }
+        to: { type: string, format: date-time, nullable: true }
+        limit: { type: integer, minimum: 1, maximum: 500 }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerClientBasisEntry' }
+        totals:
+          type: object
+          required:
+            - transactionCount
+            - chargedNet
+            - laborNet
+            - materialNet
+            - adjusted
+            - applied
+            - receivedNet
+            - refunded
+            - reversedAllocations
+            - receivedReversed
+            - netReceived
+            - outstanding
+            - corrections
+          properties:
+            transactionCount: { type: integer, minimum: 0 }
+            chargedNet: { type: string }
+            laborNet: { type: string }
+            materialNet: { type: string }
+            adjusted: { type: string }
+            applied: { type: string }
+            receivedNet: { type: string }
+            refunded: { type: string }
+            reversedAllocations: { type: string }
+            receivedReversed: { type: string }
+            netReceived: { type: string }
+            outstanding: { type: string }
+            corrections: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrectionCounts' }
+        authority: { $ref: '#/components/schemas/HandymanCustomerLedgerClientAuthority' }
+    HandymanCustomerPaymentChannel:
+      type: string
+      enum: [CASH, BANK_TRANSFER, VIRTUAL_ACCOUNT, QRIS, CARD, OTHER]
+    HandymanCustomerPaymentStatus:
+      type: string
+      enum: [PENDING, CONFIRMED, REJECTED]
+    HandymanCustomerPaymentEventType:
+      type: string
+      enum: [RECORD_PAYMENT, CONFIRM_PAYMENT, REJECT_PAYMENT]
+    HandymanCustomerPaymentRecord:
+      type: object
+      required:
+        - id
+        - clientId
+        - transactionId
+        - status
+        - amount
+        - currency
+        - channel
+        - providerName
+        - providerReference
+        - externalReference
+        - receivedAt
+        - recordedByUserId
+        - decidedAt
+        - decidedByUserId
+        - rejectionReason
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        transactionId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanCustomerPaymentStatus' }
+        amount: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        channel: { $ref: '#/components/schemas/HandymanCustomerPaymentChannel' }
+        providerName: { type: string, maxLength: 200, nullable: true }
+        providerReference: { type: string, maxLength: 200, nullable: true }
+        externalReference: { type: string, maxLength: 200, nullable: true }
+        receivedAt: { type: string, format: date-time }
+        recordedByUserId: { type: string, format: uuid }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        decidedByUserId: { type: string, format: uuid, nullable: true }
+        rejectionReason: { type: string, maxLength: 200, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanCustomerPaymentEventRecord:
+      type: object
+      required:
+        - id
+        - clientId
+        - paymentId
+        - transactionId
+        - eventType
+        - idempotencyKey
+        - actorUserId
+        - occurredAt
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        paymentId: { type: string, format: uuid }
+        transactionId: { type: string, format: uuid }
+        eventType: { $ref: '#/components/schemas/HandymanCustomerPaymentEventType' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        actorUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    HandymanCustomerPaymentsListView:
+      type: object
+      required: [executionScopeId, payments]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        payments:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerPaymentRecord' }
+    HandymanCustomerPaymentRecordRequest:
+      type: object
+      required: [amount, channel, idempotencyKey]
+      properties:
+        amount: { type: string }
+        channel: { $ref: '#/components/schemas/HandymanCustomerPaymentChannel' }
+        providerName: { type: string, maxLength: 200, nullable: true }
+        providerReference: { type: string, maxLength: 200, nullable: true }
+        externalReference: { type: string, maxLength: 200, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanCustomerPaymentConfirmRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanCustomerPaymentRejectRequest:
+      type: object
+      required: [idempotencyKey, reason]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        reason: { type: string, minLength: 1, maxLength: 200 }
+    HandymanCustomerPaymentCommandResult:
+      type: object
+      required: [payment, event, replayed]
+      properties:
+        payment: { $ref: '#/components/schemas/HandymanCustomerPaymentRecord' }
+        event: { $ref: '#/components/schemas/HandymanCustomerPaymentEventRecord' }
         replayed: { type: boolean }
     HandymanMaterialExecutionEstimateRequest:
       type: object

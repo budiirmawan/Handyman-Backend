@@ -47,6 +47,8 @@ import { createHandymanEvidenceQcApiRouter }
   from '../modules/handyman-evidence-qc-api';
 import { createHandymanBastApiRouter }
   from '../modules/handyman-bast-api';
+import { createHandymanCustomerLedgerApiRouter }
+  from '../modules/handyman-customer-ledger-api';
 import { createHandymanScopeAssignmentsApiRouter } from '../modules/handyman-scope-assignments-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
@@ -815,6 +817,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface
   router.use(createHandymanEvidenceQcApiRouter()); // CR-HM-10 PART 06 — evidence/QC/defect surface
   router.use(createHandymanBastApiRouter()); // CR-HM-17 GAP PART 04 — CR-HM-11 BAST read & sign-off surface
+  router.use(createHandymanCustomerLedgerApiRouter()); // CR-HM-17 GAP PART 05 — CR-HM-13 customer ledger & payment surface
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;
