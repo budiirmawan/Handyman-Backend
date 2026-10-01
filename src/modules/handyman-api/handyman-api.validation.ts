@@ -4,7 +4,12 @@ import {
   isHandymanIntakeEvidenceKind,
   type HandymanIntakeEvidenceKind,
 } from '../handyman-evidence';
-import type { CreateHandymanServiceRequestInput } from '../handyman-requests';
+import {
+  isHandymanServiceRequestStatus,
+  type CreateHandymanServiceRequestInput,
+  type HandymanServiceRequestListFilters,
+  type HandymanServiceRequestStatus,
+} from '../handyman-requests';
 
 /**
  * CR-HM-02 PART 05A — request/DTO parsing for the customer-facing Handyman
@@ -134,6 +139,60 @@ export function parseHandymanRequestIdParam(raw: string): string {
   const id = readId(raw, 'handymanRequestId', true, details);
   if (!id || details.length) fail(details);
   return id;
+}
+
+/**
+ * CR-HM-17 GAP PART 01 — Customer Care request list query parser.
+ * `clientId` is required; optional `tenantCompanyId`, `buildingId`,
+ * `spaceId`, `channelAttributionId`, and governed F1 `status` narrow the
+ * Client-scoped query.
+ */
+export function parseHandymanServiceRequestListQuery(
+  query: unknown,
+): HandymanServiceRequestListFilters {
+  const source = isRecord(query) ? query : {};
+  const details: Detail[] = [];
+  const clientId = readId(source.clientId, 'clientId', true, details);
+  const tenantCompanyId = readId(
+    source.tenantCompanyId,
+    'tenantCompanyId',
+    false,
+    details,
+  );
+  const buildingId = readId(source.buildingId, 'buildingId', false, details);
+  const spaceId = readId(source.spaceId, 'spaceId', false, details);
+  const channelAttributionId = readId(
+    source.channelAttributionId,
+    'channelAttributionId',
+    false,
+    details,
+  );
+  let status: HandymanServiceRequestStatus | undefined;
+  if (
+    source.status !== undefined &&
+    source.status !== null &&
+    source.status !== ''
+  ) {
+    const normalized =
+      typeof source.status === 'string' ? source.status.trim() : source.status;
+    if (!isHandymanServiceRequestStatus(normalized)) {
+      details.push({
+        field: 'status',
+        message: 'status is not a recognized Handyman request status.',
+      });
+    } else {
+      status = normalized;
+    }
+  }
+  if (!clientId || details.length) fail(details);
+  return {
+    clientId,
+    ...(tenantCompanyId ? { tenantCompanyId } : {}),
+    ...(buildingId ? { buildingId } : {}),
+    ...(spaceId ? { spaceId } : {}),
+    ...(channelAttributionId ? { channelAttributionId } : {}),
+    ...(status ? { status } : {}),
+  };
 }
 
 export function parseHandymanMaterialProfileIdParam(raw: string): string {

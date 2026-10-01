@@ -2804,6 +2804,67 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   /handyman/requests:
+    get:
+      operationId: listHandymanServiceRequests
+      summary: List Customer Care Handyman requests for a Client scope
+      description: >
+        CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request list read
+        projection. Requires `tenant_company.read` and accessible-Client
+        scope (`canAccessClient`). Returns only governed request/status,
+        Backend-resolved attribution/care-actor provenance from the immutable
+        `handyman_channel_attributions` row, and the execution-scope pointer
+        (`executionScopeId`) where present. No lifecycle commands, no local
+        status inference, and no FM/SaaS fallback exist here.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: channelAttributionId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
+      responses:
+        "200":
+          description: Bounded Customer Care Handyman request list projection.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanCustomerCareServiceRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
     post:
       operationId: createHandymanServiceRequest
       summary: Create a Handyman request from the attribution handle
@@ -2853,6 +2914,49 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+
+  /handyman/requests/{handymanRequestId}:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanServiceRequestDetail
+      summary: Get one Customer Care Handyman request detail projection
+      description: >
+        CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request detail read
+        projection. Requires `tenant_company.read` and accessible-Client
+        scope (`canAccessClient`). Returns only governed request/status,
+        Backend-resolved attribution/care-actor provenance from the immutable
+        `handyman_channel_attributions` row, and the execution-scope pointer
+        (`executionScopeId`) where present. No lifecycle commands, no local
+        status inference, and no FM/SaaS fallback exist here.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Bounded Customer Care Handyman request detail projection.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanCustomerCareServiceRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /handyman/requests/{handymanRequestId}/intake-evidence:
     parameters:
@@ -77879,6 +77983,75 @@ components:
         createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+
+    HandymanRequestAttributionProvenance:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 01 (B3) — Backend-resolved attribution and
+        care-actor provenance composed from the immutable
+        `handyman_channel_attributions` row bound to the request.
+      required:
+        [id, originChannel, originReference, createdByUserId,
+         actorType, careActorId, actorReference, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        originChannel:
+          type: string
+          enum: [BM_SUPER_APP]
+        originReference: { type: string, nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        actorType:
+          type: string
+          enum: [CUSTOMER_CARE]
+          nullable: true
+        careActorId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        actorReference: { type: string, maxLength: 128, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    HandymanCustomerCareServiceRequest:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request read
+        projection (list + detail). Includes only governed request/status,
+        Backend-resolved attribution/care-actor provenance, and
+        execution-scope pointer where present. No local status inference;
+        no FM/SaaS fallback.
+      required:
+        [id, clientId, channelAttributionId, tenantCompanyId, tenantPicId,
+         buildingId, spaceId, serviceCatalogId, serviceVariantId,
+         originChannel, originReference, description, status,
+         createdByUserId, createdAt, updatedAt, actorType, careActorId,
+         actorReference, attribution, executionScopeId]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        tenantCompanyId: { $ref: "#/components/schemas/Uuid" }
+        tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        spaceId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        serviceVariantId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        originChannel:
+          type: string
+          enum: [BM_SUPER_APP]
+        originReference: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        actorType:
+          type: string
+          enum: [CUSTOMER_CARE]
+          nullable: true
+        careActorId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        actorReference: { type: string, maxLength: 128, nullable: true }
+        attribution:
+          $ref: "#/components/schemas/HandymanRequestAttributionProvenance"
+        executionScopeId:
+          $ref: "#/components/schemas/Uuid"
+          nullable: true
 
     HandymanIntakeEvidenceKind:
       type: string

@@ -15,13 +15,18 @@ import {
 } from '../service-catalog';
 import {
   handymanServiceRequestAlreadyExistsError,
+  handymanServiceRequestNotFoundError,
   handymanServiceRequestScopeMismatchError,
 } from './handyman-service-request.errors';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
-import type {
-  CreateHandymanServiceRequestInput,
-  HandymanServiceRequestRecord,
-  PublicHandymanServiceRequest,
+import {
+  isHandymanServiceRequestStatus,
+  type CreateHandymanServiceRequestInput,
+  type HandymanCustomerCareServiceRequestRecord,
+  type HandymanServiceRequestListFilters,
+  type HandymanServiceRequestRecord,
+  type PublicHandymanCustomerCareServiceRequest,
+  type PublicHandymanServiceRequest,
 } from './handyman-service-request.types';
 
 /**
@@ -70,6 +75,43 @@ function toPublic(
     ...record,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+function toCustomerCarePublic(
+  record: HandymanCustomerCareServiceRequestRecord,
+): PublicHandymanCustomerCareServiceRequest {
+  return {
+    id: record.id,
+    clientId: record.clientId,
+    channelAttributionId: record.channelAttributionId,
+    tenantCompanyId: record.tenantCompanyId,
+    tenantPicId: record.tenantPicId,
+    buildingId: record.buildingId,
+    spaceId: record.spaceId,
+    serviceCatalogId: record.serviceCatalogId,
+    serviceVariantId: record.serviceVariantId,
+    originChannel: record.originChannel,
+    originReference: record.originReference,
+    description: record.description,
+    status: record.status,
+    createdByUserId: record.createdByUserId,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+    actorType: record.actorType,
+    careActorId: record.careActorId,
+    actorReference: record.actorReference,
+    attribution: {
+      id: record.channelAttributionId,
+      originChannel: record.originChannel,
+      originReference: record.originReference,
+      createdByUserId: record.createdByUserId,
+      actorType: record.actorType,
+      careActorId: record.careActorId,
+      actorReference: record.actorReference,
+      createdAt: record.attributionCreatedAt.toISOString(),
+    },
+    executionScopeId: record.executionScopeId,
   };
 }
 
@@ -190,6 +232,85 @@ export async function createHandymanServiceRequest(
   }
 }
 
+/**
+ * CR-HM-17 GAP PART 01 — bounded Customer Care request list read projection.
+ * Includes only governed request/status, Backend-resolved attribution /
+ * care-actor provenance, and execution-scope pointer where present.
+ * Enforces `contextAccessService.canAccessClient(actorUserId, filters.clientId)`.
+ */
+export async function listHandymanServiceRequests(
+  filters: HandymanServiceRequestListFilters,
+  actorUserId: string,
+): Promise<PublicHandymanCustomerCareServiceRequest[]> {
+  assertUuid(filters.clientId, 'clientId');
+  if (filters.tenantCompanyId !== undefined) {
+    assertUuid(filters.tenantCompanyId, 'tenantCompanyId');
+  }
+  if (filters.buildingId !== undefined) {
+    assertUuid(filters.buildingId, 'buildingId');
+  }
+  if (filters.spaceId !== undefined) {
+    assertUuid(filters.spaceId, 'spaceId');
+  }
+  if (filters.channelAttributionId !== undefined) {
+    assertUuid(filters.channelAttributionId, 'channelAttributionId');
+  }
+  if (
+    filters.status !== undefined &&
+    !isHandymanServiceRequestStatus(filters.status)
+  ) {
+    throw AppError.validation('Request query validation failed.', [
+      {
+        field: 'status',
+        message: 'status is not a recognized Handyman request status.',
+      },
+    ]);
+  }
+
+  if (
+    !(await contextAccessService.canAccessClient(actorUserId, filters.clientId))
+  ) {
+    throw buildingAccessDeniedError();
+  }
+
+  const records =
+    await handymanServiceRequestRepository.listCustomerCareProjectionsScoped(
+      undefined,
+      filters,
+    );
+  return records.map(toCustomerCarePublic);
+}
+
+/**
+ * CR-HM-17 GAP PART 01 — bounded Customer Care request detail read projection.
+ * Includes only governed request/status, Backend-resolved attribution /
+ * care-actor provenance, and execution-scope pointer where present.
+ * Enforces `contextAccessService.canAccessClient(actorUserId, record.clientId)`.
+ */
+export async function getHandymanServiceRequestDetail(
+  handymanRequestId: string,
+  actorUserId: string,
+): Promise<PublicHandymanCustomerCareServiceRequest> {
+  assertUuid(handymanRequestId, 'handymanRequestId');
+
+  const record =
+    await handymanServiceRequestRepository.findCustomerCareProjectionById(
+      undefined,
+      handymanRequestId,
+    );
+  if (!record) throw handymanServiceRequestNotFoundError();
+
+  if (
+    !(await contextAccessService.canAccessClient(actorUserId, record.clientId))
+  ) {
+    throw buildingAccessDeniedError();
+  }
+
+  return toCustomerCarePublic(record);
+}
+
 export const handymanServiceRequestService = {
   createHandymanServiceRequest,
+  listHandymanServiceRequests,
+  getHandymanServiceRequestDetail,
 };
