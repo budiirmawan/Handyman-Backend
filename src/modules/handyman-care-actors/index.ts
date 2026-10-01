@@ -1,5 +1,9 @@
 export { handymanCareActorRepository } from './handyman-care-actor.repository';
 export {
+  handymanCareActorResolver,
+  resolveCareActorClaim,
+} from './handyman-care-actor.resolver';
+export {
   activateCareActor,
   createCareActor,
   deactivateCareActor,
@@ -14,6 +18,7 @@ export {
   HANDYMAN_CARE_ACTOR_DISPLAY_NAME_MAX_LENGTH,
   HANDYMAN_CARE_ACTOR_REFERENCE_MAX_LENGTH,
   HANDYMAN_CARE_ACTOR_STATUSES,
+  HANDYMAN_CARE_ACTOR_TYPE,
   HANDYMAN_HANDOFF_INTEGRATION_ACTOR_CAPABILITIES,
   isHandymanCareActorStatus,
   isHandymanHandoffIntegrationActorCapability,
@@ -26,9 +31,13 @@ export {
 } from './handyman-care-actor.errors';
 export type {
   CreateHandymanCareActorInput,
+  HandoffCareActorClaim,
   HandymanCareActorRecord,
   HandymanCareActorStatus,
+  HandymanCareActorType,
   HandymanHandoffIntegrationActorCapability,
   HandymanHandoffIntegrationActorScope,
   PublicHandymanCareActor,
+  ResolveCareActorClaimInput,
+  ResolvedCareActorProvenance,
 } from './handyman-care-actor.types';

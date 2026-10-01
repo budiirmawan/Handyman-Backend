@@ -86,3 +86,42 @@ export type CreateHandymanCareActorInput = {
   actorReference: string;
   displayName: string;
 };
+
+/**
+ * PART 08 — closed actor-type vocabulary. Only `CUSTOMER_CARE` exists; any
+ * other value fails closed (never ignored, never downgraded to legacy).
+ */
+export const HANDYMAN_CARE_ACTOR_TYPE = 'CUSTOMER_CARE' as const;
+export type HandymanCareActorType = typeof HANDYMAN_CARE_ACTOR_TYPE;
+
+/** Structural shape of the signed `actor` block carried by an assertion. */
+export type HandoffCareActorClaim = {
+  type: HandymanCareActorType;
+  actorReference: string;
+};
+
+/** Resolver input: the authenticated integration plus the untrusted claim. */
+export type ResolveCareActorClaimInput = {
+  /**
+   * Integration code the handoff layer authenticated (signature scope). It is
+   * re-resolved here against the registry — never assumed trustworthy.
+   */
+  integrationCode: string;
+  /** Raw, untrusted actor block from the assertion payload. */
+  actorClaim: unknown;
+};
+
+/**
+ * AUTHORITATIVE server-derived actor provenance (PART 08). Contains registry
+ * identity only: it is deliberately NOT a local user, NOT a Tenant PIC, and
+ * NOT a session, and it grants no business authorization by itself.
+ */
+export type ResolvedCareActorProvenance = Readonly<{
+  actorType: HandymanCareActorType;
+  /** Registry row id — the only actor identity downstream PARTs may record. */
+  careActorId: string;
+  /** Integration the actor is scoped to (attestation scope). */
+  integrationId: string;
+  integrationCode: string;
+  actorReference: string;
+}>;
