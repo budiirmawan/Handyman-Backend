@@ -346,3 +346,11 @@ STATUS NOTE: CR-HM-01 PARTs 01 (immutable channel attribution
 foundation) and 02 (trusted handoff context resolver) are
 delivered. PART 03 (secure handoff runtime) is next and is
 unblocked by the D1–D3 freeze above.
+
+AMENDMENT NOTE: CR-HM-01 PARTs 01–06 are COMPLETE (see
+CR-HM-01_FINAL_VALIDATION.md). AMENDMENT 01 — Customer Care
+actor handoff (authenticated BM-attested Customer Care actor
+distinct from the represented tenant) is recorded in
+CR-HM-01_AMENDMENT_01_CUSTOMER_CARE_ACTOR_HANDOFF.md as
+GOVERNANCE/DESIGN ONLY: it freezes D4–D8 and schedules
+implementation PARTs 07–12 (NOT started).
