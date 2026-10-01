@@ -4630,7 +4630,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanCustomerCareArrivalVerificationProjection'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerCareArrivalVerificationProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -4674,7 +4679,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanCustomerCareWorkSessionsProjection'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerCareWorkSessionsProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -4916,7 +4926,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanCustomerCareMaterialLinesProjection'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerCareMaterialLinesProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5157,8 +5172,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: listHandymanEvidenceRecordsByScope
-      summary: Per-scope evidence listing (Lead-gated read model, PART 03)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: records with file counts and FINALIZE flag. NO client/actor identity leakage."
+      summary: Customer Care per-scope evidence listing
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Records with file counts and finalized facts; storage keys are never returned. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -5167,7 +5182,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanEvidenceScopeView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanEvidenceScopeView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5228,8 +5248,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: getHandymanEvidenceRecordDetail
-      summary: Evidence record detail — file references + append-only event chain (PART 03)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: record + tamper-evident file references (SHA-256 digests) + the immutable CREATE/FILE_ADD/FINALIZE event chain. storageKey is part of the file ADD response surface ONLY and is echoed for the caller's own key; reads do not re-issue it... (file references carry digests)."
+      summary: Customer Care evidence record detail
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Record, safe file metadata/digests and append-only evidence events; storage keys are never returned. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/EvidenceRecordIdPath'
       responses:
@@ -5238,7 +5258,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanEvidenceDetailView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanEvidenceDetailView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5272,8 +5297,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: listHandymanQcRunsByScope
-      summary: Per-scope QC run listing with items (PART 04)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: runs (including terminal) with their current item outcomes. Additive history — closed runs remain listed."
+      summary: Customer Care per-scope QC run listing
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative QC runs and current statuses; no QC command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -5282,7 +5307,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQcScopeView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanQcScopeView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5343,8 +5373,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: getHandymanQcRunDetail
-      summary: QC run detail — items + append-only event chain (PART 04)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: run + current item outcomes + the immutable OPEN/ITEM_SET/FINISH event chain."
+      summary: Customer Care QC run detail
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative run, item outcomes and append-only QC event chain; no QC command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/QcRunIdPath'
       responses:
@@ -5353,7 +5383,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQcDetailView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanQcDetailView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5387,8 +5422,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: listHandymanDefectsByScope
-      summary: Per-scope defect listing with current statuses (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: defects with their current ladder status (OPENED/RECTIFYING/RECTIFIED/VERIFIED)."
+      summary: Customer Care per-scope defect listing
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative defect records and current statuses; no defect command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -5397,7 +5432,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanDefectScopeView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanDefectScopeView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5510,8 +5550,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: getHandymanDefectDetail
-      summary: Defect detail — current status + append-only event chain (PART 05)
-      description: "CR-HM-10 PART 06 / CR-HM-17 GAP PART 04 — authenticated READ-ONLY detail (`tenant_company.read` + `canAccessClient`): defect head + the immutable OPEN_DEFECT/START_RECTIFICATION/RECORD_RECTIFICATION/REQUEST_REINSPECTION/PASS_REINSPECTION event chain."
+      summary: Customer Care defect detail
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative defect head and append-only rectification/reinspection event chain; no defect command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       responses:
@@ -5520,7 +5560,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanDefectDetailView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanDefectDetailView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -75650,8 +75695,7 @@ components:
           type: boolean
           const: true
         data:
-          type: object
-          description: Response payload. Concrete shape is per-endpoint.
+          description: Response payload (object, array, or null as declared by the endpoint schema).
         meta:
           type: object
           description: Pagination/context metadata (see PaginationMeta).
@@ -79159,11 +79203,11 @@ components:
       enum:
         - INELIGIBLE
         - ACTIVE
-        - CLAIM_SUBMITTED
+        - CLAIM_OPEN
         - CLAIM_APPROVED
         - CLAIM_REJECTED
         - REWORK_IN_PROGRESS
-        - REWORK_VERIFIED
+        - REWORK_COMPLETE
         - EXPIRED
     HandymanServiceWarrantyCoverageType:
       type: string
@@ -79193,8 +79237,8 @@ components:
         - readiness
       properties:
         contractVersion:
-          type: integer
-          enum: [1]
+          type: string
+          enum: ['1']
         contractSource:
           type: string
           enum: [HANDYMAN_SERVICE_WARRANTY]
@@ -80539,7 +80583,10 @@ components:
          userId, designatedByUserId, designatedAt]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
-        leadSeq: { type: integer, format: int64 }
+        leadSeq:
+          type: string
+          pattern: '^[0-9]+$'
+          description: PostgreSQL BIGSERIAL sequence serialized as a decimal string (no precision loss).
         membershipId: { $ref: "#/components/schemas/Uuid" }
         workerContextId: { $ref: "#/components/schemas/Uuid" }
         workforceProfileId: { $ref: "#/components/schemas/Uuid" }

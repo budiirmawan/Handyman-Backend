@@ -1027,7 +1027,8 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
         ?.get;
     assert.ok(arrivalGet, 'GET arrival-verification path must exist');
     assert.equal(
-      arrivalGet.responses['200'].content['application/json'].schema.$ref,
+      arrivalGet.responses['200'].content['application/json'].schema.allOf[1]
+        .properties.data.$ref,
       '#/components/schemas/HandymanCustomerCareArrivalVerificationProjection',
     );
 
@@ -1036,7 +1037,8 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
         ?.get;
     assert.ok(workSessionsGet, 'GET work-sessions path must exist');
     assert.equal(
-      workSessionsGet.responses['200'].content['application/json'].schema.$ref,
+      workSessionsGet.responses['200'].content['application/json'].schema.allOf[1]
+        .properties.data.$ref,
       '#/components/schemas/HandymanCustomerCareWorkSessionsProjection',
     );
 
@@ -1046,9 +1048,19 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
       ]?.get;
     assert.ok(materialLinesGet, 'GET material-lines path must exist');
     assert.equal(
-      materialLinesGet.responses['200'].content['application/json'].schema.$ref,
+      materialLinesGet.responses['200'].content['application/json'].schema.allOf[1]
+        .properties.data.$ref,
       '#/components/schemas/HandymanCustomerCareMaterialLinesProjection',
     );
+
+    // PART 08 certification: responses are full SuccessEnvelope bodies;
+    // the existing projection contract is bound under data, not at the root.
+    for (const operation of [arrivalGet, workSessionsGet, materialLinesGet]) {
+      assert.equal(
+        operation.responses['200'].content['application/json'].schema.allOf[0].$ref,
+        '#/components/schemas/SuccessEnvelope',
+      );
+    }
 
     assert.ok(
       doc.components?.schemas?.HandymanCustomerCareArrivalVerificationProjection,
