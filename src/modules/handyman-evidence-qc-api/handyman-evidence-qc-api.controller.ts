@@ -6,12 +6,12 @@ import {
   createHandymanEvidenceRecord,
   finalizeHandymanEvidenceRecord,
   finishHandymanQcRun,
-  getHandymanDefectDetail,
-  getHandymanEvidenceRecordDetail,
-  getHandymanQcRunDetail,
-  listHandymanDefectsByScope,
-  listHandymanEvidenceRecordsByScope,
-  listHandymanQcRunsByScope,
+  getHandymanDefectCustomerCareDetail,
+  getHandymanEvidenceRecordCustomerCareDetail,
+  getHandymanQcRunCustomerCareDetail,
+  listHandymanDefectsCustomerCareView,
+  listHandymanEvidenceRecordsCustomerCareView,
+  listHandymanQcRunsCustomerCareView,
   openHandymanDefect,
   openHandymanQcRun,
   passHandymanDefectReinspection,
@@ -27,6 +27,7 @@ import type {
   HandymanEvidenceCommandResult,
   HandymanEvidenceEventRecord,
   HandymanEvidenceFileAddResult,
+  HandymanEvidenceFileReadProjection,
   HandymanEvidenceFileRecord,
   HandymanEvidenceRecordRecord,
   HandymanQcFinishResult,
@@ -82,13 +83,17 @@ function toEvidenceRecordPayload(record: HandymanEvidenceRecordRecord) {
   };
 }
 
-function toEvidenceFilePayload(file: HandymanEvidenceFileRecord,
-  includeStorageKey = false) {
+function toEvidenceFilePayload(
+  file: HandymanEvidenceFileRecord | HandymanEvidenceFileReadProjection,
+  includeStorageKey = false,
+) {
   return {
     id: file.id,
     recordId: file.recordId,
     mediaKind: file.mediaKind,
-    ...(includeStorageKey ? { storageKey: file.storageKey } : {}),
+    ...(includeStorageKey && 'storageKey' in file
+      ? { storageKey: file.storageKey }
+      : {}),
     contentType: file.contentType,
     byteSize: file.byteSize,
     sha256Digest: file.sha256Digest,
@@ -259,7 +264,7 @@ export async function getEvidenceByScopeHandler(
   try {
     const executionScopeId = parseScopeParam(
       p(req.params.executionScopeId));
-    const views = await listHandymanEvidenceRecordsByScope(
+    const views = await listHandymanEvidenceRecordsCustomerCareView(
       executionScopeId, actor(req));
     sendSuccess(res, {
       records: views.map((view) => ({
@@ -282,11 +287,11 @@ export async function getEvidenceRecordHandler(
   try {
     const evidenceRecordId = parseEvidenceRecordIdParam(
       p(req.params.evidenceRecordId));
-    const view = await getHandymanEvidenceRecordDetail(
+    const view = await getHandymanEvidenceRecordCustomerCareDetail(
       evidenceRecordId, actor(req));
     sendSuccess(res, {
       record: toEvidenceRecordPayload(view.record),
-      files: view.files.map((file) => toEvidenceFilePayload(file)),
+      files: view.files.map((file) => toEvidenceFilePayload(file, false)),
       events: view.events.map(toEvidenceEventPayload),
       finalized: view.finalized,
     }, 200);
@@ -382,8 +387,8 @@ export async function getQcRunsByScopeHandler(
   try {
     const executionScopeId = parseScopeParam(
       p(req.params.executionScopeId));
-    const views = await listHandymanQcRunsByScope(executionScopeId,
-      actor(req));
+    const views = await listHandymanQcRunsCustomerCareView(
+      executionScopeId, actor(req));
     sendSuccess(res, {
       runs: views.map((view) => ({
         run: toQcRunPayload(view.run),
@@ -403,7 +408,8 @@ export async function getQcRunHandler(
 ): Promise<void> {
   try {
     const qcRunId = parseQcRunIdParam(p(req.params.qcRunId));
-    const view = await getHandymanQcRunDetail(qcRunId, actor(req));
+    const view = await getHandymanQcRunCustomerCareDetail(
+      qcRunId, actor(req));
     sendSuccess(res, {
       run: toQcRunPayload(view.run),
       items: view.items.map(toQcRunItemPayload),
@@ -517,8 +523,8 @@ export async function getDefectsByScopeHandler(
   try {
     const executionScopeId = parseScopeParam(
       p(req.params.executionScopeId));
-    const defects = await listHandymanDefectsByScope(executionScopeId,
-      actor(req));
+    const defects = await listHandymanDefectsCustomerCareView(
+      executionScopeId, actor(req));
     sendSuccess(res, { defects: defects.map(toDefectPayload) }, 200);
   } catch (error) {
     next(error);
@@ -533,7 +539,8 @@ export async function getDefectHandler(
 ): Promise<void> {
   try {
     const defectId = parseDefectIdParam(p(req.params.defectId));
-    const view = await getHandymanDefectDetail(defectId, actor(req));
+    const view = await getHandymanDefectCustomerCareDetail(
+      defectId, actor(req));
     sendSuccess(res, {
       defect: toDefectPayload(view.defect),
       events: view.events.map(toDefectEventPayload),

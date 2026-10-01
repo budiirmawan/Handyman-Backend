@@ -5511,7 +5511,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: getHandymanDefectDetail
       summary: Defect detail — current status + append-only event chain (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: defect head + the immutable OPEN_DEFECT/START_RECTIFICATION/RECORD_RECTIFICATION/REQUEST_REINSPECTION/PASS_REINSPECTION event chain."
+      description: "CR-HM-10 PART 06 / CR-HM-17 GAP PART 04 — authenticated READ-ONLY detail (`tenant_company.read` + `canAccessClient`): defect head + the immutable OPEN_DEFECT/START_RECTIFICATION/RECORD_RECTIFICATION/REQUEST_REINSPECTION/PASS_REINSPECTION event chain."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       responses:
@@ -5525,6 +5525,147 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/bast:
+    get:
+      tags: [Handyman BAST]
+      operationId: getHandymanExecutionScopeBast
+      summary: Read execution-scope Handyman BAST and acceptance contract (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — authenticated Customer Care READ-ONLY projection (`tenant_company.read` + `canAccessClient`) over CR-HM-11 BAST authority for one execution scope: active/latest BAST document, published acceptance read contract (`customerAccepted`, `warrantyStartEligible`), append-only event chain, and sign-off evidence rows."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Execution-scope BAST read projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastExecutionScopeView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/bast/{bastId}:
+    get:
+      tags: [Handyman BAST]
+      operationId: getHandymanBastById
+      summary: Read Handyman BAST detail by ID (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — authenticated Customer Care READ-ONLY detail (`tenant_company.read` + `canAccessClient`) over CR-HM-11 BAST authority: BAST document, published acceptance read contract, append-only event chain, and sign-off evidence rows."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      responses:
+        '200':
+          description: BAST detail read projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastDetailView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/bast/{bastId}/accept:
+    post:
+      tags: [Handyman BAST]
+      operationId: acceptHandymanBast
+      summary: Customer ACCEPT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — governed customer acceptance sign-off (`tenant_company.manage` + `canAccessClient`) over `acceptHandymanBast`. Legal only from `ISSUED`; requires a non-empty `signatureDigest` and `idempotencyKey`. Worker/provider preparation, issuance, and voiding commands are not exposed."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastAcceptRequest'
+      responses:
+        '200':
+          description: Accepted BAST + recorded ACCEPT event + sign-off evidence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastSignOffCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/bast/{bastId}/reject:
+    post:
+      tags: [Handyman BAST]
+      operationId: rejectHandymanBast
+      summary: Customer REJECT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — governed customer rejection sign-off (`tenant_company.manage` + `canAccessClient`) over `rejectHandymanBast`. Legal only from `ISSUED`; requires `idempotencyKey` and optional `rejectReason` / `signatureDigest` / `evidenceRecordId`."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastRejectRequest'
+      responses:
+        '200':
+          description: Rejected BAST + recorded REJECT event + sign-off evidence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastSignOffCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/bast/{bastId}/sign-off:
+    post:
+      tags: [Handyman BAST]
+      operationId: signOffHandymanBast
+      summary: Governed customer ACCEPT/REJECT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — governed customer sign-off (`tenant_company.manage` + `canAccessClient`) over `acceptHandymanBast` / `rejectHandymanBast` (`decision: ACCEPT | REJECT`). Worker/provider commands (`PREPARE`, `ISSUE`, `VOID`) are rejected."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastSignOffRequest'
+      responses:
+        '200':
+          description: Updated BAST + recorded sign-off event + sign-off evidence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastSignOffCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /health:
     get:
       operationId: getHealth
@@ -71458,6 +71599,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    BastIdPath:
+      name: bastId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -77611,6 +77757,20 @@ components:
                 $ref: '#/components/schemas/HandymanEvidenceRecord'
               fileCount: { type: integer, minimum: 0 }
               finalized: { type: boolean }
+    HandymanEvidenceFileReadView:
+      type: object
+      description: "Read-only evidence file reference (storageKey omitted on reads)."
+      properties:
+        id: { type: string, format: uuid }
+        recordId: { type: string, format: uuid }
+        mediaKind:
+          type: string
+          enum: [PHOTO, DOCUMENT, VIDEO]
+        contentType: { type: string, minLength: 1 }
+        byteSize: { type: integer, minimum: 1 }
+        sha256Digest: { type: string, minLength: 64, maxLength: 64 }
+        captureTime: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
     HandymanEvidenceDetailView:
       type: object
       properties:
@@ -77619,7 +77779,7 @@ components:
         files:
           type: array
           items:
-            $ref: '#/components/schemas/HandymanEvidenceFile'
+            $ref: '#/components/schemas/HandymanEvidenceFileReadView'
         events:
           type: array
           items:
@@ -77700,6 +77860,177 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HandymanDefectEvent'
+    HandymanBastStatus:
+      type: string
+      enum: [DRAFT, ISSUED, ACCEPTED, REJECTED, VOID]
+    HandymanBastEventType:
+      type: string
+      enum: [PREPARE, ISSUE, VOID, ACCEPT, REJECT]
+    HandymanBastDecision:
+      type: string
+      enum: [ACCEPT, REJECT]
+    HandymanBastDocument:
+      type: object
+      required:
+        - id
+        - executionScopeId
+        - status
+        - issuedAt
+        - acceptedAt
+        - rejectedAt
+        - voidedAt
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanBastStatus' }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        voidedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanBastAcceptanceReadContract:
+      type: object
+      required:
+        - bastId
+        - executionScopeId
+        - status
+        - customerAccepted
+        - warrantyStartEligible
+        - issuedAt
+        - acceptedAt
+        - rejectedAt
+        - voidedAt
+      properties:
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanBastStatus' }
+        customerAccepted: { type: boolean }
+        warrantyStartEligible: { type: boolean }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        voidedAt: { type: string, format: date-time, nullable: true }
+    HandymanBastEvent:
+      type: object
+      required:
+        - id
+        - bastId
+        - executionScopeId
+        - eventType
+        - idempotencyKey
+        - actorUserId
+        - occurredAt
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        eventType: { $ref: '#/components/schemas/HandymanBastEventType' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        actorUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    HandymanBastSignOff:
+      type: object
+      required:
+        - id
+        - bastId
+        - eventId
+        - executionScopeId
+        - decision
+        - signatureDigest
+        - evidenceRecordId
+        - rejectReason
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        bastId: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        decision: { $ref: '#/components/schemas/HandymanBastDecision' }
+        signatureDigest: { type: string }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+        rejectReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanBastExecutionScopeView:
+      type: object
+      required: [executionScopeId, bast, acceptance, events, signOffs]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        bast:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastDocument'
+          nullable: true
+        acceptance:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastAcceptanceReadContract'
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastEvent'
+        signOffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastSignOff'
+    HandymanBastDetailView:
+      type: object
+      required: [bast, acceptance, events, signOffs]
+      properties:
+        bast:
+          $ref: '#/components/schemas/HandymanBastDocument'
+        acceptance:
+          $ref: '#/components/schemas/HandymanBastAcceptanceReadContract'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastEvent'
+        signOffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastSignOff'
+    HandymanBastAcceptRequest:
+      type: object
+      required: [idempotencyKey, signatureDigest]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        signatureDigest: { type: string, minLength: 1, maxLength: 512 }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+    HandymanBastRejectRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        signatureDigest: { type: string, maxLength: 512 }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+        rejectReason: { type: string, maxLength: 2000, nullable: true }
+    HandymanBastSignOffRequest:
+      type: object
+      required: [decision, idempotencyKey]
+      properties:
+        decision: { $ref: '#/components/schemas/HandymanBastDecision' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        signatureDigest: { type: string, maxLength: 512 }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+        rejectReason: { type: string, maxLength: 2000, nullable: true }
+    HandymanBastSignOffCommandResult:
+      type: object
+      required: [bast, acceptance, event, signOff, replayed]
+      properties:
+        bast:
+          $ref: '#/components/schemas/HandymanBastDocument'
+        acceptance:
+          $ref: '#/components/schemas/HandymanBastAcceptanceReadContract'
+        event:
+          $ref: '#/components/schemas/HandymanBastEvent'
+        signOff:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastSignOff'
+          nullable: true
+        replayed: { type: boolean }
     HandymanMaterialExecutionEstimateRequest:
       type: object
       required: [quotationVersionId, quotationLineId, estimatedQty, idempotencyKey]

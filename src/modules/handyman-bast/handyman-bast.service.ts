@@ -1,6 +1,10 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
+import {
+  buildingAccessDeniedError,
+  contextAccessService,
+} from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import { handymanScopeAssignmentRepository }
@@ -16,6 +20,8 @@ import {
   assertHandymanBastSignature,
   nextHandymanBastStatus,
 } from './handyman-bast.lifecycle';
+import { toHandymanBastAcceptanceReadContract } from './handyman-bast.read-contract';
+import type { HandymanBastAcceptanceReadContract } from './handyman-bast.read-contract';
 import { handymanBastRepository } from './handyman-bast.repository';
 import type {
   HandymanBastEventRecord,
@@ -244,6 +250,27 @@ async function applyCustomerSignOff(
     if (!bast) {
       throw handymanBastNotFoundError();
     }
+    const allowed = await contextAccessService.canAccessClient(
+      actor,
+      bast.clientId,
+    );
+    if (!allowed) {
+      throw buildingAccessDeniedError();
+    }
+    if (evidenceRecordId) {
+      const ev = await client.query(
+        `SELECT execution_scope_id
+           FROM handyman_evidence_records
+          WHERE id = $1`,
+        [evidenceRecordId],
+      );
+      if (
+        !ev.rows[0]
+        || ev.rows[0].execution_scope_id !== bast.executionScopeId
+      ) {
+        throw handymanBastValidationError('evidenceRecordId');
+      }
+    }
     const replay = await handymanBastRepository.findEventByIdempotency(
       client,
       bast.id,
@@ -256,7 +283,17 @@ async function applyCustomerSignOff(
         bast.id,
       );
       if (!current) throw handymanBastNotFoundError();
-      return { bast: current, event: replay, replayed: true };
+      const existingSignOff =
+        await handymanBastRepository.findSignOffByEventId(
+          client,
+          replay.id,
+        );
+      return {
+        bast: current,
+        event: replay,
+        ...(existingSignOff ? { signOff: existingSignOff } : {}),
+        replayed: true,
+      };
     }
     const next = nextHandymanBastStatus(bast.status, action);
     const updated = await handymanBastRepository.updateBastStatus(
@@ -294,4 +331,107 @@ export async function getHandymanBastById(
   const bast = await handymanBastRepository.findBastById(getPool(), id);
   if (!bast) throw handymanBastNotFoundError();
   return bast;
+}
+
+export type HandymanBastDetailView = {
+  bast: HandymanBastRecord;
+  acceptance: HandymanBastAcceptanceReadContract;
+  events: HandymanBastEventRecord[];
+  signOffs: HandymanBastSignOffRecord[];
+};
+
+export type HandymanExecutionScopeBastView = {
+  executionScopeId: string;
+  bast: HandymanBastRecord | null;
+  acceptance: HandymanBastAcceptanceReadContract | null;
+  events: HandymanBastEventRecord[];
+  signOffs: HandymanBastSignOffRecord[];
+};
+
+export async function getHandymanBastCustomerCareDetail(
+  bastId: string,
+  actorUserId: string,
+): Promise<HandymanBastDetailView> {
+  const id = ensureUuid(bastId, 'bastId');
+  const actor = ensureUuid(actorUserId, 'actorUserId');
+  const bast = await handymanBastRepository.findBastById(getPool(), id);
+  if (!bast) {
+    throw handymanBastNotFoundError();
+  }
+  const allowed = await contextAccessService.canAccessClient(
+    actor,
+    bast.clientId,
+  );
+  if (!allowed) {
+    throw buildingAccessDeniedError();
+  }
+  const events = await handymanBastRepository.listEventsByBastId(
+    getPool(),
+    bast.id,
+  );
+  const signOffs = await handymanBastRepository.listSignOffsByBastId(
+    getPool(),
+    bast.id,
+  );
+  return {
+    bast,
+    acceptance: toHandymanBastAcceptanceReadContract(bast),
+    events,
+    signOffs,
+  };
+}
+
+export async function getHandymanExecutionScopeBastCustomerCareView(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanExecutionScopeBastView> {
+  const scopeId = ensureUuid(executionScopeId, 'executionScopeId');
+  const actor = ensureUuid(actorUserId, 'actorUserId');
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    getPool(),
+    scopeId,
+  );
+  if (!scope) {
+    throw handymanExecutionScopeNotFoundError();
+  }
+  const allowed = await contextAccessService.canAccessClient(
+    actor,
+    scope.clientId,
+  );
+  if (!allowed) {
+    throw buildingAccessDeniedError();
+  }
+  const bast =
+    (await handymanBastRepository.findActiveBastByScopeId(
+      getPool(),
+      scope.id,
+    ))
+    ?? (await handymanBastRepository.findLatestBastByScopeId(
+      getPool(),
+      scope.id,
+    ));
+  if (!bast) {
+    return {
+      executionScopeId: scope.id,
+      bast: null,
+      acceptance: null,
+      events: [],
+      signOffs: [],
+    };
+  }
+  const events = await handymanBastRepository.listEventsByBastId(
+    getPool(),
+    bast.id,
+  );
+  const signOffs = await handymanBastRepository.listSignOffsByBastId(
+    getPool(),
+    bast.id,
+  );
+  return {
+    executionScopeId: scope.id,
+    bast,
+    acceptance: toHandymanBastAcceptanceReadContract(bast),
+    events,
+    signOffs,
+  };
 }

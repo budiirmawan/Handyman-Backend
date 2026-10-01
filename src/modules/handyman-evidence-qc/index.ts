@@ -35,6 +35,12 @@ export {
   passHandymanDefectReinspection,
   listHandymanDefectsByScope,
   getHandymanDefectDetail,
+  listHandymanEvidenceRecordsCustomerCareView,
+  getHandymanEvidenceRecordCustomerCareDetail,
+  listHandymanQcRunsCustomerCareView,
+  getHandymanQcRunCustomerCareDetail,
+  listHandymanDefectsCustomerCareView,
+  getHandymanDefectCustomerCareDetail,
 } from './handyman-evidence-qc.service';
 export type {
   CreateHandymanEvidenceRecordInput,
@@ -44,6 +50,8 @@ export type {
   HandymanEvidenceFileAddResult,
   HandymanEvidenceRecordView,
   HandymanEvidenceRecordDetailView,
+  HandymanEvidenceFileReadProjection,
+  HandymanEvidenceCustomerCareDetailView,
   OpenHandymanQcRunInput,
   SetHandymanQcRunItemOutcomeInput,
   FinishHandymanQcRunInput,

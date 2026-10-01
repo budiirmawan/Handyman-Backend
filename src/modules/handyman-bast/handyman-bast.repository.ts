@@ -106,6 +106,19 @@ async function findActiveBastByScopeId(
   return result.rows[0] ? mapBast(result.rows[0]) : null;
 }
 
+async function findLatestBastByScopeId(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+): Promise<HandymanBastRecord | null> {
+  const result = await executor.query(
+    `${BAST_SELECT}
+      WHERE execution_scope_id = $1
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [executionScopeId],
+  );
+  return result.rows[0] ? mapBast(result.rows[0]) : null;
+}
+
 async function updateBastStatus(
   executor: Executor = getPool(),
   id: string,
@@ -179,6 +192,25 @@ async function findEventByIdempotency(
   return result.rows[0] ? mapEvent(result.rows[0]) : null;
 }
 
+async function listEventsByBastId(
+  executor: Executor = getPool(),
+  bastId: string,
+): Promise<HandymanBastEventRecord[]> {
+  const result = await executor.query(
+    `${EVENT_SELECT}
+      WHERE bast_id = $1
+      ORDER BY occurred_at ASC, created_at ASC, id ASC`,
+    [bastId],
+  );
+  return result.rows.map(mapEvent);
+}
+
+const SIGN_OFF_SELECT = `
+  SELECT id, client_id, bast_id, event_id, execution_scope_id,
+         decision, signature_digest, evidence_record_id,
+         reject_reason, created_at
+    FROM handyman_bast_sign_offs`;
+
 function mapSignOff(row: Row): HandymanBastSignOffRecord {
   return {
     id: row.id,
@@ -222,12 +254,40 @@ async function insertSignOff(
   return mapSignOff(result.rows[0]);
 }
 
+async function findSignOffByEventId(
+  executor: Executor = getPool(),
+  eventId: string,
+): Promise<HandymanBastSignOffRecord | null> {
+  const result = await executor.query(
+    `${SIGN_OFF_SELECT} WHERE event_id = $1`,
+    [eventId],
+  );
+  return result.rows[0] ? mapSignOff(result.rows[0]) : null;
+}
+
+async function listSignOffsByBastId(
+  executor: Executor = getPool(),
+  bastId: string,
+): Promise<HandymanBastSignOffRecord[]> {
+  const result = await executor.query(
+    `${SIGN_OFF_SELECT}
+      WHERE bast_id = $1
+      ORDER BY created_at ASC, id ASC`,
+    [bastId],
+  );
+  return result.rows.map(mapSignOff);
+}
+
 export const handymanBastRepository = {
   createBast,
   findBastById,
   findActiveBastByScopeId,
+  findLatestBastByScopeId,
   updateBastStatus,
   insertEvent,
   findEventByIdempotency,
+  listEventsByBastId,
   insertSignOff,
+  findSignOffByEventId,
+  listSignOffsByBastId,
 };

@@ -62,10 +62,14 @@ export {
   acceptHandymanBast,
   rejectHandymanBast,
   getHandymanBastById,
+  getHandymanBastCustomerCareDetail,
+  getHandymanExecutionScopeBastCustomerCareView,
 } from './handyman-bast.service';
 export type {
   HandymanBastPrepareInput,
   HandymanBastTransitionInput,
   HandymanBastSignOffInput,
   HandymanBastCommandResult,
+  HandymanBastDetailView,
+  HandymanExecutionScopeBastView,
 } from './handyman-bast.service';
