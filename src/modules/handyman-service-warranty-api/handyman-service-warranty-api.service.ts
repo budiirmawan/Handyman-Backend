@@ -33,6 +33,11 @@ import {
   handymanServiceWarrantyValidationError,
 } from '../handyman-service-warranties';
 import {
+  computeChargeableWorkAvailableActions,
+  computeClaimAvailableActions,
+  computeReworkAvailableActions,
+} from '../handyman-service-warranties/handyman-service-warranty.available-actions';
+import {
   approveHandymanServiceWarrantyClaim,
   handymanServiceWarrantyClaimNotAuthorizedError,
   handymanServiceWarrantyClaimValidationError,
@@ -91,6 +96,7 @@ function serializeContract(contract: HandymanServiceWarrantyContract) {
       createdAt: claim.createdAt.toISOString(),
       reworkId: claim.reworkId,
       chargeableAdditionalWorkId: claim.chargeableAdditionalWorkId,
+      availableActions: computeClaimAvailableActions(claim.status),
     })),
     reworks: contract.reworks.map((rework) => ({
       id: rework.id,
@@ -104,6 +110,7 @@ function serializeContract(contract: HandymanServiceWarrantyContract) {
       verifiedAt: toIso(rework.verifiedAt),
       verificationEvidenceRecordId: rework.verificationEvidenceRecordId,
       verificationQcRunId: rework.verificationQcRunId,
+      availableActions: computeReworkAvailableActions(rework.status),
     })),
     chargeableAdditionalWorks: contract.chargeableAdditionalWorks.map(
       (work) => ({
@@ -114,6 +121,7 @@ function serializeContract(contract: HandymanServiceWarrantyContract) {
         proposedAt: work.proposedAt.toISOString(),
         decidedAt: toIso(work.decidedAt),
         paymentTriggerEmittedAt: toIso(work.paymentTriggerEmittedAt),
+        availableActions: computeChargeableWorkAvailableActions(work.status),
       }),
     ),
     anchors: { ...contract.anchors },
@@ -161,6 +169,7 @@ function serializeClaimCommandResult(
       withdrawnAt: toIso(result.claim.withdrawnAt),
       createdAt: result.claim.createdAt.toISOString(),
       updatedAt: result.claim.updatedAt.toISOString(),
+      availableActions: computeClaimAvailableActions(result.claim.status),
     },
     event: {
       id: result.event.id,
@@ -208,6 +217,7 @@ function serializeReworkCommandResult(
       verificationQcRunId: result.rework.verificationQcRunId,
       createdAt: result.rework.createdAt.toISOString(),
       updatedAt: result.rework.updatedAt.toISOString(),
+      availableActions: computeReworkAvailableActions(result.rework.status),
     },
     event: {
       id: result.event.id,
@@ -270,6 +280,7 @@ function serializeChargeableWorkCommandResult(
       paymentTriggerEmittedAt: toIso(result.work.paymentTriggerEmittedAt),
       createdAt: result.work.createdAt.toISOString(),
       updatedAt: result.work.updatedAt.toISOString(),
+      availableActions: computeChargeableWorkAvailableActions(result.work.status),
     },
     event: serializeChargeableWorkEvent(result.event),
     paymentTrigger: result.paymentTrigger

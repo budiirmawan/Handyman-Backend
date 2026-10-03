@@ -17,6 +17,7 @@ import type {
   HandymanBastSignOffRecord,
 } from '../handyman-bast';
 import { toHandymanBastArtifactReference } from '../handyman-bast';
+import { computeBastAvailableActions } from '../handyman-bast/handyman-bast.available-actions';
 import {
   parseBastDecisionSignOffBody,
   parseBastIdParam,
@@ -58,6 +59,7 @@ function toBastPayload(bast: HandymanBastRecord) {
       ref: artifact.ref,
       version: artifact.version,
     },
+    availableActions: computeBastAvailableActions(bast.status),
   };
 }
 

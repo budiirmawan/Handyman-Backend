@@ -22,6 +22,7 @@ import {
   type HandymanCustomerPaymentEventRecord,
   type HandymanCustomerPaymentRecord,
 } from '../handyman-customer-payments';
+import { computePaymentAvailableActions } from '../handyman-customer-payments/handyman-customer-payment.available-actions';
 import {
   parseConfirmCustomerPaymentBody,
   parseCustomerLedgerClientBasisQuery,
@@ -85,6 +86,7 @@ function toLedgerPaymentPayload(payment: HandymanLedgerReadPayment) {
     reversedPayment: payment.reversedPayment,
     netReceived: payment.netReceived,
     authoritativeForEntitlement: payment.authoritativeForEntitlement,
+    availableActions: computePaymentAvailableActions(payment.status),
   };
 }
 
@@ -258,6 +260,7 @@ function toPaymentRecordPayload(payment: HandymanCustomerPaymentRecord) {
     decidedByUserId: payment.decidedByUserId,
     rejectionReason: payment.rejectionReason,
     createdAt: payment.createdAt,
+    availableActions: computePaymentAvailableActions(payment.status),
   };
 }
 
