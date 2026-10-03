@@ -10,11 +10,13 @@ import {
 } from '../handyman-bast';
 import type {
   HandymanBastAcceptanceReadContract,
+  HandymanBastApprovedSignOffBinding,
   HandymanBastCommandResult,
   HandymanBastEventRecord,
   HandymanBastRecord,
   HandymanBastSignOffRecord,
 } from '../handyman-bast';
+import { toHandymanBastArtifactReference } from '../handyman-bast';
 import {
   parseBastDecisionSignOffBody,
   parseBastIdParam,
@@ -41,6 +43,7 @@ function actor(req: Request): string {
 }
 
 function toBastPayload(bast: HandymanBastRecord) {
+  const artifact = toHandymanBastArtifactReference(bast);
   return {
     id: bast.id,
     executionScopeId: bast.executionScopeId,
@@ -51,6 +54,10 @@ function toBastPayload(bast: HandymanBastRecord) {
     voidedAt: bast.voidedAt,
     createdAt: bast.createdAt,
     updatedAt: bast.updatedAt,
+    artifact: {
+      ref: artifact.ref,
+      version: artifact.version,
+    },
   };
 }
 
@@ -67,6 +74,24 @@ function toBastAcceptancePayload(
     acceptedAt: acceptance.acceptedAt,
     rejectedAt: acceptance.rejectedAt,
     voidedAt: acceptance.voidedAt,
+    artifactRef: acceptance.artifactRef,
+    approvedSignOff: toApprovedSignOffPayload(acceptance.approvedSignOff),
+    signOffComplete: acceptance.signOffComplete,
+  };
+}
+
+function toApprovedSignOffPayload(
+  binding: HandymanBastApprovedSignOffBinding | null,
+) {
+  if (!binding) return null;
+  return {
+    signOffId: binding.signOffId,
+    eventId: binding.eventId,
+    signatureDigest: binding.signatureDigest,
+    evidenceRecordId: binding.evidenceRecordId,
+    actorUserId: binding.actorUserId,
+    occurredAt: binding.occurredAt,
+    createdAt: binding.createdAt,
   };
 }
 
@@ -98,10 +123,12 @@ function toBastSignOffPayload(signOff: HandymanBastSignOffRecord) {
 }
 
 function toCommandPayload(result: HandymanBastCommandResult) {
+  const events = [result.event];
+  const signOffs = result.signOff ? [result.signOff] : [];
   return {
     bast: toBastPayload(result.bast),
     acceptance: toBastAcceptancePayload(
-      toHandymanBastAcceptanceReadContract(result.bast),
+      toHandymanBastAcceptanceReadContract(result.bast, events, signOffs),
     ),
     event: toBastEventPayload(result.event),
     signOff: result.signOff ? toBastSignOffPayload(result.signOff) : null,

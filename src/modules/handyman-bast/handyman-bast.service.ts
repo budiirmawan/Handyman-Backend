@@ -375,7 +375,7 @@ export async function getHandymanBastCustomerCareDetail(
   );
   return {
     bast,
-    acceptance: toHandymanBastAcceptanceReadContract(bast),
+    acceptance: toHandymanBastAcceptanceReadContract(bast, events, signOffs),
     events,
     signOffs,
   };
@@ -430,7 +430,7 @@ export async function getHandymanExecutionScopeBastCustomerCareView(
   return {
     executionScopeId: scope.id,
     bast,
-    acceptance: toHandymanBastAcceptanceReadContract(bast),
+    acceptance: toHandymanBastAcceptanceReadContract(bast, events, signOffs),
     events,
     signOffs,
   };

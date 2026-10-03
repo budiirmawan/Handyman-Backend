@@ -47,10 +47,15 @@ export {
   isHandymanWarrantyStartEligible,
   isNotBastAcceptanceAlias,
   toHandymanBastAcceptanceReadContract,
+  computeBastArtifactVersion,
+  toHandymanBastArtifactReference,
+  resolveApprovedSignOff,
 } from './handyman-bast.read-contract';
 export type {
   HandymanBastAcceptanceReadContract,
-  HandymanNotBastAcceptance,
+  HandymanBastNotBastAcceptance,
+  HandymanBastArtifactReference,
+  HandymanBastApprovedSignOffBinding,
 } from './handyman-bast.read-contract';
 
 export { handymanBastRepository } from './handyman-bast.repository';
