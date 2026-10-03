@@ -7,7 +7,7 @@
  * - B6 Payment: CONFIRM/REJECT only when PENDING
  * - B7 Claim: APPROVE/REJECT/WITHDRAW rules per claim status
  * - B7 Rework: AUTHORIZE only when REWORK_DRAFT
- * - B7 Chargeable: no BM actions (customer decides)
+ * - B7 Chargeable: ACCEPT/REJECT only when CHARGEABLE_PROPOSED
  * - No lifecycle authority weakening
  */
 
@@ -190,9 +190,9 @@ describe('CR-HM-17 P1 FIX02 — B7 chargeable work availableActions', () => {
     'CHARGEABLE_PROPOSED', 'CHARGEABLE_AUTHORIZED', 'CHARGEABLE_REJECTED',
   ];
 
-  it('CHARGEABLE_PROPOSED → no BM actions (customer decides)', () => {
+  it('CHARGEABLE_PROPOSED → ACCEPT and REJECT', () => {
     const actions = computeChargeableWorkAvailableActions('CHARGEABLE_PROPOSED');
-    assert.deepEqual([...actions], []);
+    assert.deepEqual([...actions], ['ACCEPT', 'REJECT']);
   });
 
   it('CHARGEABLE_AUTHORIZED → no actions (terminal)', () => {
@@ -205,10 +205,14 @@ describe('CR-HM-17 P1 FIX02 — B7 chargeable work availableActions', () => {
     assert.deepEqual([...actions], []);
   });
 
-  it('all statuses have empty actions (customer-only decisions)', () => {
+  it('only CHARGEABLE_PROPOSED has actions', () => {
     for (const status of allStatuses) {
       const actions = computeChargeableWorkAvailableActions(status);
-      assert.equal(actions.length, 0, `${status} should have no BM actions`);
+      if (status === 'CHARGEABLE_PROPOSED') {
+        assert.ok(actions.length > 0, `CHARGEABLE_PROPOSED should have actions`);
+      } else {
+        assert.equal(actions.length, 0, `${status} should have no actions`);
+      }
     }
   });
 });
@@ -248,12 +252,17 @@ describe('CR-HM-17 P1 FIX02 — authority preservation', () => {
     assert.equal(actions.length, 1);
   });
 
-  it('B7 chargeable: no BM actions (customer-only decisions)', () => {
-    // Chargeable additional works are customer decisions
-    // BM/Customer Care only reads, never acts
-    for (const status of ['CHARGEABLE_PROPOSED', 'CHARGEABLE_AUTHORIZED', 'CHARGEABLE_REJECTED'] as const) {
-      const actions = computeChargeableWorkAvailableActions(status);
-      assert.equal(actions.length, 0);
-    }
+  it('B7 chargeable: PROPOSED allows ACCEPT/REJECT (terminal statuses empty)', () => {
+    // CHARGEABLE_PROPOSED allows Customer Care to ACCEPT or REJECT
+    // This matches CR-HM-15 PART 04 chargeable work decision authority
+    const proposedActions = computeChargeableWorkAvailableActions('CHARGEABLE_PROPOSED');
+    assert.ok(proposedActions.includes('ACCEPT'));
+    assert.ok(proposedActions.includes('REJECT'));
+    assert.equal(proposedActions.length, 2);
+    // Terminal statuses have no actions
+    const authorizedActions = computeChargeableWorkAvailableActions('CHARGEABLE_AUTHORIZED');
+    assert.equal(authorizedActions.length, 0);
+    const rejectedActions = computeChargeableWorkAvailableActions('CHARGEABLE_REJECTED');
+    assert.equal(rejectedActions.length, 0);
   });
 });

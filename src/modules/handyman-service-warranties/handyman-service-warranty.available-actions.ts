@@ -9,8 +9,7 @@
  * Customer Care (BM Super App) represents BM-side authority for:
  *   - Claims: APPROVE / REJECT when submitted; WITHDRAW when draft.
  *   - Free Reworks: AUTHORIZE when proposed (DRAFT).
- *   - Chargeable Works: (customer decisions ACCEPT/REJECT — NOT BM;
- *     Customer Care sees them as no-action from BM perspective).
+ *   - Chargeable Works: ACCEPT / REJECT when PROPOSED (customer decision).
  */
 
 import type { HandymanServiceWarrantyClaimStatus }
@@ -56,13 +55,18 @@ export function computeReworkAvailableActions(
 /* ---- B7c: Chargeable additional work available actions ------------- */
 
 /**
- * Customer Care (BM) has NO actions on chargeable additional works.
- * The customer alone decides ACCEPT/REJECT. BM only reads.
+ * Customer Care (BM Super App) executes customer decisions on behalf of
+ * the customer. ACCEPT/REJECT are available when the work is PROPOSED.
  */
-export type HandymanChargeableAdditionalWorkAvailableAction = never;
+export type HandymanChargeableAdditionalWorkAvailableAction =
+  | 'ACCEPT'
+  | 'REJECT';
 
 export function computeChargeableWorkAvailableActions(
-  _status: HandymanChargeableAdditionalWorkStatus,
+  status: HandymanChargeableAdditionalWorkStatus,
 ): readonly HandymanChargeableAdditionalWorkAvailableAction[] {
+  if (status === 'CHARGEABLE_PROPOSED') {
+    return ['ACCEPT', 'REJECT'] as const;
+  }
   return [] as const;
 }
