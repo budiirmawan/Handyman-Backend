@@ -4608,6 +4608,60 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
+  /handyman/lead/assigned-scopes/{executionScopeId}/arrival-challenge:
+    post:
+      tags: [Handyman Lead Reads]
+      operationId: createHandymanLeadArrivalChallenge
+      summary: Issue a one-time arrival challenge for a currently assigned scope
+      description: >-
+        Reuses the CR-HM-07 challenge authority for the authenticated current
+        Lead. The Backend resolves the authorized Execution Scope, Client
+        access, ACTIVE assignment, and current Lead; caller-selected authority
+        fields are not accepted. The challenge has the existing 120-second
+        server-clock TTL and one-live-challenge-per-scope-and-actor behavior.
+        The raw challengeToken is returned once and only its hash is stored.
+        QR, geofence, and device-location evidence do not grant arrival
+        authority; terminal arrival evaluation remains Backend-authoritative.
+        This operation accepts no request body and returns no-store data.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: executionScopeId
+          in: path
+          required: true
+          description: Existing authorized Execution Scope currently assigned to this Lead.
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        '201':
+          description: One-time challenge issued for the authenticated current Lead.
+          headers:
+            Cache-Control:
+              description: The one-time challenge response must not be cached.
+              schema: { type: string, enum: [no-store] }
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanLeadArrivalChallengeIssueData"
+        '400': { $ref: "#/components/responses/BadRequest" }
+        '401': { $ref: "#/components/responses/Unauthorized" }
+        '403': { $ref: "#/components/responses/Forbidden" }
+        '404': { $ref: "#/components/responses/NotFound" }
+        '409': { $ref: "#/components/responses/Conflict" }
+        '500':
+          description: Unexpected server error.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
   /handyman/lead/assigned-scopes/{executionScopeId}:
     get:
       tags: [Handyman Lead Reads]
@@ -80423,6 +80477,19 @@ components:
         supersedesAssignmentId: { type: string, format: uuid, nullable: true }
         leadWorkerContextId: { type: string, format: uuid, nullable: true }
         leadUserId: { type: string, format: uuid, nullable: true }
+    HandymanLeadArrivalChallengeIssueData:
+      type: object
+      description: Minimal one-time CR-HM-07 arrival challenge response for the authenticated current Lead.
+      additionalProperties: false
+      required: [challengeId, executionScopeId, challengeToken, expiresAt]
+      properties:
+        challengeId: { $ref: "#/components/schemas/Uuid" }
+        executionScopeId: { $ref: "#/components/schemas/Uuid" }
+        challengeToken:
+          type: string
+          minLength: 43
+          description: Raw secure challenge token returned exactly once; never persisted in raw form.
+        expiresAt: { type: string, format: date-time }
     HandymanLeadPaginationMeta:
       type: object
       description: Counts only scopes currently visible to the authenticated Lead.

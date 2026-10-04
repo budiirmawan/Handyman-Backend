@@ -434,6 +434,64 @@ describe('CR-HM-07 PART 04B — atomic terminal arrival evaluator', () => {
     assert.equal(replayed.id, result.id);
   });
 
+  it('7b: records and replays a result for a challenge already expired by issuance cleanup', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture({ withChallenge: false });
+    const stale = await expireChallenge(
+      new Date(Date.now() - 60_000),
+      f.scope.id,
+      f.assignmentId,
+      f.actorUserId,
+      f.realm.client.id,
+    );
+
+    // Issuing the current Lead's new challenge performs the existing
+    // server-clock cleanup and leaves the old challenge EXPIRED without
+    // an arrival result. Evaluation must finish that terminal projection.
+    const renewed = await createHandymanArrivalChallenge(
+      { executionScopeId: f.scope.id },
+      f.actorUserId,
+    );
+    assert.equal(renewed.challenge.status, 'PENDING');
+    const expiredState = await q(
+      `SELECT status FROM handyman_arrival_challenges WHERE id = $1`,
+      [stale.id],
+    );
+    assert.equal(expiredState.rows[0].status, 'EXPIRED');
+
+    const result = await evaluateHandymanArrivalVerification({
+      executionScopeId: f.scope.id,
+      challengeToken: stale.token,
+      qrOpaqueCode: f.matchingQr!.value,
+      deviceLocation: goodDevice(),
+    }, f.actorUserId);
+    assert.equal(result.status, 'EXPIRED');
+    assert.equal(result.primaryReason, 'CHALLENGE_EXPIRED');
+    assert.equal(result.challengeId, stale.id);
+
+    const replay = await evaluateHandymanArrivalVerification({
+      executionScopeId: f.scope.id,
+      challengeToken: stale.token,
+      qrOpaqueCode: f.matchingQr!.value,
+      deviceLocation: goodDevice(),
+    }, f.actorUserId);
+    assert.equal(replay.id, result.id);
+    assert.equal(replay.status, 'EXPIRED');
+    const persisted = await q(
+      `SELECT count(*)::int AS n FROM handyman_arrival_verification_results
+        WHERE challenge_id = $1`,
+      [stale.id],
+    );
+    assert.equal(persisted.rows[0].n, 1);
+    const expiryEvents = await q(
+      `SELECT count(*)::int AS n FROM operational_events
+        WHERE entity_id = $1 AND event_type = 'ARRIVAL_CHALLENGE_EXPIRED'`,
+      [stale.id],
+    );
+    assert.equal(expiryEvents.rows[0].n, 1,
+      'evaluation does not reapply or duplicate the expiry transition');
+  });
+
   it('8: invalid token / non-AUTHORIZED scope => NO result + NO consume', async (t) => {
     if (!requireDatabase(t)) return;
     // Wrong token => bonding invalid, zero state mutation.

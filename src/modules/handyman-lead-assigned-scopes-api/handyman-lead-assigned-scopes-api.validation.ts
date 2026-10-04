@@ -11,6 +11,21 @@ function invalid(field: string, message: string): never {
   ]);
 }
 
+/** Challenge issuance derives its only target from the path. */
+export function parseHandymanLeadArrivalChallengeBody(
+  body: unknown,
+): void {
+  if (body === undefined) return;
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    Array.isArray(body) ||
+    Object.keys(body).length > 0
+  ) {
+    invalid('body', 'Arrival challenge issuance does not accept a request body.');
+  }
+}
+
 function positiveInteger(
   value: unknown,
   field: 'page' | 'pageSize',

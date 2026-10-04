@@ -301,11 +301,12 @@ export async function evaluateHandymanArrivalVerification(
     };
   }
 
-  // ATOMIC TERMINAL WRITE — one transaction carries BOTH the
-  // challenge lifecycle projection (consume exactly once, or the
-  // EXPIRED projection) AND the immutable result insert; any failure
-  // rolls back both (no CONSUMED-without-result / result-with-PENDING
-  // state can ever be committed).
+  // ATOMIC TERMINAL WRITE — the row lock/replay check and result insert
+  // share one transaction. A live challenge is consumed or projected
+  // EXPIRED with the result. If issue-time cleanup already projected it
+  // EXPIRED, persist the missing immutable result under the same lock
+  // without repeating the lifecycle transition; a failed insert remains
+  // retryable and cannot create a duplicate result.
   return withTransaction(async (tx) => {
     const locked = await handymanArrivalChallengeRepository
       .lockChallengeById(tx, challenge.id);
@@ -318,7 +319,20 @@ export async function evaluateHandymanArrivalVerification(
     if (existing) return existing;
     let effectiveDecision = decision;
     let projectedChallenge = locked;
-    if (decision.consume) {
+    if (locked.status === 'EXPIRED') {
+      // Challenge creation may already have projected an overdue PENDING
+      // row to EXPIRED. Do not repeat that transition. A still-current
+      // Lead gets the required expiry result; preserve the existing
+      // assignment-invalid decision if the actor is no longer current.
+      effectiveDecision = actorIsAuthoritativeLead
+        ? {
+            ...decision,
+            status: 'EXPIRED',
+            primaryReason: 'CHALLENGE_EXPIRED',
+            consume: false,
+          }
+        : { ...decision, consume: false };
+    } else if (decision.consume) {
       const consumed = await handymanArrivalChallengeRepository
         .consumeIfPending(tx, challenge.id);
       if (!consumed) {

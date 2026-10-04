@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it, type TestContext } from 'node:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import YAML from 'yaml';
 import type { Pool } from 'pg';
@@ -387,6 +387,102 @@ describe('CR-HM-18 BE03 — Lead assigned-scope reads', () => {
     assert.equal(unassignedDetail.status, 404);
   });
 
+  it('issues a minimal one-time arrival challenge only to the authorized current Lead', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const first = await baseFixture();
+    const unassigned = await scopeFixture(
+      first.realm,
+      await locationChain(first.realm),
+    );
+    const foreignRealm = await realmFixture();
+    const foreign = await scopeFixture(
+      foreignRealm,
+      await locationChain(foreignRealm),
+    );
+    const crew = await crewFixture(first.realm);
+    const assignment = await assignToCrew(first.scope.id, crew);
+    const leadToken = await loginAs(crew.leadUser);
+    const challengePath = `${LEAD_READS}/${first.scope.id}/arrival-challenge`;
+
+    const unauthenticated = await api().post(challengePath).send({});
+    assert.equal(unauthenticated.status, 401);
+    const smuggledBody = await api().post(challengePath)
+      .set(auth(leadToken))
+      .send({ clientId: first.realm.client.id });
+    assert.equal(smuggledBody.status, 400);
+
+    const issued = await api().post(challengePath)
+      .set(auth(leadToken))
+      .send({});
+    assert.equal(issued.status, 201, JSON.stringify(issued.body));
+    assert.equal(issued.headers['cache-control'], 'no-store');
+    assert.deepEqual(Object.keys(issued.body.data).sort(), [
+      'challengeId',
+      'challengeToken',
+      'executionScopeId',
+      'expiresAt',
+    ].sort());
+    assert.equal(issued.body.data.executionScopeId, first.scope.id);
+    assert.equal(typeof issued.body.data.challengeToken, 'string');
+    assert.ok(issued.body.data.challengeToken.length >= 43);
+    assert.ok(Number.isFinite(Date.parse(issued.body.data.expiresAt)));
+
+    const stored = await q(
+      `SELECT client_id, execution_scope_id, assignment_id, actor_user_id,
+              token_hash, status,
+              EXTRACT(EPOCH FROM (expires_at - created_at))::int AS ttl_seconds
+         FROM handyman_arrival_challenges
+        WHERE id = $1`,
+      [issued.body.data.challengeId],
+    );
+    assert.equal(stored.rows.length, 1);
+    assert.equal(stored.rows[0].client_id, first.realm.client.id);
+    assert.equal(stored.rows[0].execution_scope_id, first.scope.id);
+    assert.equal(stored.rows[0].assignment_id, assignment.id);
+    assert.equal(stored.rows[0].actor_user_id, crew.leadUser.id);
+    assert.equal(stored.rows[0].status, 'PENDING');
+    assert.equal(Number(stored.rows[0].ttl_seconds), 120);
+    assert.equal(
+      stored.rows[0].token_hash,
+      createHash('sha256')
+        .update(issued.body.data.challengeToken, 'utf8')
+        .digest('hex'),
+    );
+
+    const duplicate = await api().post(challengePath)
+      .set(auth(leadToken))
+      .send({});
+    assert.equal(duplicate.status, 409);
+    assert.equal(
+      duplicate.body.error.code,
+      'HANDYMAN_ARRIVAL_CHALLENGE_LIVE_CONFLICT',
+    );
+
+    const helper = await addLinkedHelper(first.realm, crew);
+    const helperBeforeDesignation = await api().post(challengePath)
+      .set(auth(helper.token))
+      .send({});
+    assert.equal(helperBeforeDesignation.status, 403);
+    await handymanWorkCrewService.designateHandymanCrewLead({
+      handymanCrewId: crew.crew.id,
+      handymanWorkerContextId: helper.workerContext.id,
+    }, adminUserId);
+    const formerLead = await api().post(challengePath)
+      .set(auth(leadToken))
+      .send({});
+    assert.equal(formerLead.status, 403);
+
+    const noAssignment = await api().post(
+      `${LEAD_READS}/${unassigned.scope.id}/arrival-challenge`,
+    ).set(auth(helper.token)).send({});
+    assert.equal(noAssignment.status, 403);
+    const noClientAccess = await api().post(
+      `${LEAD_READS}/${foreign.scope.id}/arrival-challenge`,
+    ).set(auth(helper.token)).send({});
+    assert.equal(noClientAccess.status, 403);
+  });
+
   it('omits unlabelled and customer/tenant/PIC personal names from field projections', async (t) => {
     if (!requireDatabase(t)) return;
 
@@ -584,5 +680,39 @@ describe('CR-HM-18 BE03 — Lead assigned-scope reads', () => {
     );
     assert.equal(list.get.security[0].bearerAuth.length, 0);
     assert.equal(detail.get.security[0].bearerAuth.length, 0);
+  });
+
+  it('publishes the frozen authenticated arrival-challenge operation in OpenAPI', () => {
+    const document = YAML.parse(readFileSync('docs/api/openapi.yaml', 'utf8'));
+    const path = document.paths[
+      '/handyman/lead/assigned-scopes/{executionScopeId}/arrival-challenge'
+    ];
+    assert.deepEqual(Object.keys(path), ['post']);
+    assert.equal(path.post.operationId, 'createHandymanLeadArrivalChallenge');
+    assert.equal(path.post.requestBody, undefined);
+    assert.deepEqual(
+      path.post.parameters.map((parameter: { name: string }) => parameter.name),
+      ['executionScopeId'],
+    );
+    assert.equal(path.post.security[0].bearerAuth.length, 0);
+    assert.deepEqual(
+      path.post.responses['201'].headers['Cache-Control'].schema.enum,
+      ['no-store'],
+    );
+    const challengeData = document.components.schemas
+      .HandymanLeadArrivalChallengeIssueData;
+    assert.equal(challengeData.additionalProperties, false);
+    assert.deepEqual(challengeData.required, [
+      'challengeId',
+      'executionScopeId',
+      'challengeToken',
+      'expiresAt',
+    ]);
+    assert.deepEqual(Object.keys(challengeData.properties).sort(), [
+      'challengeId',
+      'executionScopeId',
+      'challengeToken',
+      'expiresAt',
+    ].sort());
   });
 });

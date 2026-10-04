@@ -1,13 +1,42 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
+import { createHandymanArrivalChallenge }
+  from '../handyman-arrival-challenges';
 import {
   getHandymanLeadAssignedScope,
   listHandymanLeadAssignedScopes,
 } from '../handyman-lead-assigned-scopes';
 import {
+  parseHandymanLeadArrivalChallengeBody,
   parseHandymanLeadAssignedScopesPagination,
   parseHandymanLeadExecutionScopeId,
 } from './handyman-lead-assigned-scopes-api.validation';
+
+export async function createHandymanLeadArrivalChallengeHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseHandymanLeadExecutionScopeId(
+      req.params.executionScopeId,
+    );
+    parseHandymanLeadArrivalChallengeBody(req.body);
+    const created = await createHandymanArrivalChallenge(
+      { executionScopeId },
+      req.auth.userId,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    sendSuccess(res, {
+      challengeId: created.challenge.id,
+      executionScopeId: created.challenge.executionScopeId,
+      challengeToken: created.token,
+      expiresAt: created.challenge.expiresAt,
+    }, 201);
+  } catch (error) {
+    next(error);
+  }
+}
 
 export async function listHandymanLeadAssignedScopesHandler(
   req: Request,
