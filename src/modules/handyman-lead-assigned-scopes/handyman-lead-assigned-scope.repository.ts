@@ -3,10 +3,11 @@ import { getPool } from '../../database';
 import type {
   HandymanLeadAssignedScopeCandidate,
   HandymanLeadCurrentScope,
+  HandymanLeadLocationSource,
   HandymanLeadPermitReadinessRecord,
   HandymanLeadSchedulingReadinessRecord,
   HandymanLeadUnitAccessReadinessRecord,
-  HandymanLeadWorkItem,
+  HandymanLeadWorkItemRecord,
 } from './handyman-lead-assigned-scope.types';
 
 type Row = QueryResultRow;
@@ -90,11 +91,11 @@ const FIELD_SCOPE_SELECT = `
   s.handyman_request_id AS "handymanRequestId",
   s.approved_quotation_version_id AS "approvedQuotationVersionId",
   svc.name AS "serviceLabel",
-  b.name AS "buildingLabel",
-  f.name AS "floorLabel",
-  ar.name AS "areaLabel",
-  rm.name AS "roomLabel",
-  sp.name AS "spaceLabel"
+  b.code AS "buildingCode",
+  f.level_number AS "floorLevelNumber",
+  ar.code AS "areaCode",
+  rm.code AS "roomCode",
+  sp.code AS "spaceCode"
 `;
 
 const CARD_ROW_SELECT = `
@@ -132,11 +133,11 @@ async function listCurrentLeadAssignedScopeCards(
     handymanRequestId: string | null;
     approvedQuotationVersionId: string | null;
     serviceLabel: string | null;
-    buildingLabel: string | null;
-    floorLabel: string | null;
-    areaLabel: string | null;
-    roomLabel: string | null;
-    spaceLabel: string | null;
+    buildingCode: string | null;
+    floorLevelNumber: number | null;
+    areaCode: string | null;
+    roomCode: string | null;
+    spaceCode: string | null;
     preferredWindowStart: Date | null;
     preferredWindowEnd: Date | null;
     preferredWindowTimezone: string | null;
@@ -181,11 +182,11 @@ async function listCurrentLeadAssignedScopeCards(
       approvedQuotationVersionId: row.approvedQuotationVersionId as string,
       serviceLabel: row.serviceLabel as string,
       location: {
-        buildingLabel: row.buildingLabel as string,
-        floorLabel: row.floorLabel,
-        areaLabel: row.areaLabel,
-        roomLabel: row.roomLabel,
-        spaceLabel: row.spaceLabel,
+        buildingCode: row.buildingCode as string,
+        floorLevelNumber: row.floorLevelNumber,
+        areaCode: row.areaCode,
+        roomCode: row.roomCode,
+        spaceCode: row.spaceCode,
       },
       preferredWindowStart: row.preferredWindowStart,
       preferredWindowEnd: row.preferredWindowEnd,
@@ -217,21 +218,20 @@ async function findCurrentLeadAssignedScope(
     approvedQuotationVersionId: row.approvedQuotationVersionId as string,
     serviceLabel: row.serviceLabel as string,
     location: {
-      buildingLabel: row.buildingLabel as string,
-      floorLabel: row.floorLabel as string | null,
-      areaLabel: row.areaLabel as string | null,
-      roomLabel: row.roomLabel as string | null,
-      spaceLabel: row.spaceLabel as string | null,
+      buildingCode: row.buildingCode as string,
+      floorLevelNumber: row.floorLevelNumber as number | null,
+      areaCode: row.areaCode as string | null,
+      roomCode: row.roomCode as string | null,
+      spaceCode: row.spaceCode as string | null,
     },
   };
 }
 
 async function listApprovedWorkItems(
   executionScopeId: string,
-): Promise<HandymanLeadWorkItem[]> {
+): Promise<HandymanLeadWorkItemRecord[]> {
   const result = await getPool().query<Row>(
     `SELECT ql.line_type AS "lineType",
-            ql.description,
             ql.quantity::double precision AS quantity,
             u.name AS "unitLabel"
        FROM handyman_execution_scopes s
@@ -246,7 +246,6 @@ async function listApprovedWorkItems(
   );
   return result.rows.map((row) => ({
     lineType: row.lineType as 'LABOR' | 'MATERIAL',
-    description: row.description as string,
     quantity: Number(row.quantity),
     unitLabel: row.unitLabel as string,
   }));

@@ -106,27 +106,33 @@ export async function realmFixture(label = 'Realm') {
 
 export async function locationChain(
   realm: Awaited<ReturnType<typeof realmFixture>>,
+  labelOverrides: {
+    floorName?: string;
+    areaName?: string;
+    roomName?: string;
+    spaceName?: string;
+  } = {},
 ) {
   const floor = await floorService.createFloor({
     buildingId: realm.building.id,
     code: `F_${suffix()}`,
-    name: 'Floor',
+    name: labelOverrides.floorName ?? 'Floor',
     levelNumber: 1,
   });
   const area = await areaService.createArea({
     floorId: floor.id,
     code: `A_${suffix()}`,
-    name: 'Area',
+    name: labelOverrides.areaName ?? 'Area',
   });
   const room = await roomService.createRoom({
     areaId: area.id,
     code: `R_${suffix()}`,
-    name: 'Room',
+    name: labelOverrides.roomName ?? 'Room',
   });
   const space = await spaceService.createSpace({
     roomId: room.id,
     code: `S_${suffix()}`,
-    name: 'Tenant Space',
+    name: labelOverrides.spaceName ?? 'Tenant Space',
   });
   return { floor, area, room, space };
 }
@@ -188,6 +194,7 @@ export async function crewFixture(
 export async function scopeFixture(
   realm: Awaited<ReturnType<typeof realmFixture>>,
   chain: Awaited<ReturnType<typeof locationChain>>,
+  workDescription = 'Hours',
 ) {
   const company = await tenantCompanyService.createTenantCompany({
     clientId: realm.client.id,
@@ -266,7 +273,7 @@ export async function scopeFixture(
     [uomId, realm.client.id, `M_${suffix()}`, 'Meter', 'm', 'LENGTH'],
   );
   await addHandymanQuotationLine(version.id, {
-    lineType: 'LABOR', description: 'Hours', quantity: 1, uomId,
+    lineType: 'LABOR', description: workDescription, quantity: 1, uomId,
     currency: 'IDR', finalQuotedUnitAmount: 100,
   }, adminUserId);
   await issueHandymanQuotationVersion(version.id, {

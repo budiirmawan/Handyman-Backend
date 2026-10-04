@@ -10,14 +10,17 @@ import type {
   HandymanLeadAssignedScopeDetail,
   HandymanLeadAssignedScopePage,
   HandymanLeadCurrentReadiness,
+  HandymanLeadLocationSource,
   HandymanLeadPermitReadiness,
   HandymanLeadPreferredWindow,
   HandymanLeadSchedulingReadiness,
+  HandymanLeadScopeLocation,
   HandymanLeadUnitAccessReadiness,
   HandymanLeadWorkItem,
+  HandymanLeadWorkItemRecord,
 } from './handyman-lead-assigned-scope.types';
 
-const MAX_LABEL_LENGTH = 160;
+const STRUCTURED_CODE_PATTERN = /^[A-Z][A-Z0-9_-]{0,63}$/;
 
 function iso(value: Date | string): string {
   return new Date(value).toISOString();
@@ -32,41 +35,38 @@ function fieldText(value: string | null | undefined, maxLength: number): string 
     .trim();
 }
 
-function locationLabel(
-  value: string | null | undefined,
+/** Emit identifiers from validated master-code fields, never display names. */
+function structuredCodeLabel(
+  prefix: 'Building' | 'Area' | 'Room' | 'Space',
+  value: string | null,
 ): string | null {
-  const safe = fieldText(value, MAX_LABEL_LENGTH)
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted]')
-    .replace(
-      /(?<![\w])(?:\+?62|0)[\s().-]*(?:\d[\s().-]*){8,12}(?!\d)/g,
-      '[redacted]',
-    )
-    .replace(/\b\d{4,}(?:[.,]\d+)?\b/g, '[redacted]')
-    .replace(
-      /\b(?:customer|tenant|client|pic|contact(?: person)?|resident|homeowner|requester)\s*[:=-]\s*[^;,.]+/gi,
-      '[redacted]',
-    )
-    .replace(
-      /\b(?:mr|mrs|ms|miss|dr)\.?\s+\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+)?/gu,
-      '[redacted]',
-    )
-    .trim();
-  return safe || null;
+  const code = value?.trim() ?? '';
+  if (!STRUCTURED_CODE_PATTERN.test(code)) return null;
+  return `${prefix} ${code}`;
 }
 
-function fieldLocation(source: {
-  buildingLabel: string;
-  floorLabel: string | null;
-  areaLabel: string | null;
-  roomLabel: string | null;
-  spaceLabel: string | null;
-}) {
+function floorLevelLabel(levelNumber: number | null): string | null {
+  if (
+    levelNumber === null ||
+    !Number.isInteger(levelNumber) ||
+    levelNumber < -100 ||
+    levelNumber > 500
+  ) {
+    return null;
+  }
+  return `Floor ${levelNumber}`;
+}
+
+function fieldLocation(
+  source: HandymanLeadLocationSource,
+): HandymanLeadScopeLocation {
   return {
-    buildingLabel: locationLabel(source.buildingLabel) || 'Building',
-    floorLabel: locationLabel(source.floorLabel),
-    areaLabel: locationLabel(source.areaLabel),
-    roomLabel: locationLabel(source.roomLabel),
-    spaceLabel: locationLabel(source.spaceLabel),
+    buildingLabel: structuredCodeLabel('Building', source.buildingCode)
+      || 'Building',
+    floorLabel: floorLevelLabel(source.floorLevelNumber),
+    areaLabel: structuredCodeLabel('Area', source.areaCode),
+    roomLabel: structuredCodeLabel('Room', source.roomCode),
+    spaceLabel: structuredCodeLabel('Space', source.spaceCode),
   };
 }
 
@@ -94,13 +94,7 @@ function toCard(row: {
   assignmentId: string;
   assignedAt: Date;
   serviceLabel: string;
-  location: {
-    buildingLabel: string;
-    floorLabel: string | null;
-    areaLabel: string | null;
-    roomLabel: string | null;
-    spaceLabel: string | null;
-  };
+  location: HandymanLeadLocationSource;
   preferredWindowStart: Date | null;
   preferredWindowEnd: Date | null;
   preferredWindowTimezone: string | null;
@@ -118,53 +112,15 @@ function toCard(row: {
 }
 
 /**
- * The source is an approved, operator-authored quotation work item. The
- * field projection never reads the customer request description or identity
- * lineage; obvious contact details and labeled customer/contact fragments in
- * the work description are also removed before they reach the field client.
+ * A fixed field label is derived only from the approved line-type enum. The
+ * free-text quotation description is intentionally not read or projected.
  */
-function sanitizeOperationalDescription(value: string): string {
-  const normalized = value
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  // If an approved line has become a commercial note rather than a field
-  // instruction, fail closed instead of forwarding an amount or quote text.
-  if (
-    /\b(price|cost|amount|total|discount|quote|quoted|invoice|payment|currency|budget|tax|vat)\b/i
-      .test(normalized)
-  ) {
-    return 'Approved work item';
-  }
-  const sanitized = normalized
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted]')
-    .replace(
-      /(?<![\w])(?:\+?62|0)[\s().-]*(?:\d[\s().-]*){8,12}(?!\d)/g,
-      '[redacted]',
-    )
-    .replace(
-      /(?:\b(?:IDR|RUPIAH|USD|EUR|SGD)\b|Rp\.?|[$€£])\s*\d[\d.,]*/gi,
-      '[redacted]',
-    )
-    .replace(/\b\d{4,}(?:[.,]\d+)?\b/g, '[redacted]')
-    .replace(
-      /\b(customer|tenant|client|pic|contact(?: person)?|resident|homeowner|requester|phone|email|mobile|whatsapp)\s*[:=-]\s*[^;,.]+/gi,
-      '$1: [redacted]',
-    )
-    .slice(0, 500)
-    .trim();
-  return sanitized || 'Approved work item';
-}
-
-function toWorkItem(row: {
-  lineType: 'LABOR' | 'MATERIAL';
-  description: string;
-  quantity: number;
-  unitLabel: string;
-}): HandymanLeadWorkItem {
+function toWorkItem(row: HandymanLeadWorkItemRecord): HandymanLeadWorkItem {
   return {
     lineType: row.lineType,
-    description: sanitizeOperationalDescription(row.description),
+    description: row.lineType === 'LABOR'
+      ? 'Labor work item'
+      : 'Material work item',
     quantity: Number(row.quantity),
     unitLabel: fieldText(row.unitLabel, 80) || 'unit',
   };

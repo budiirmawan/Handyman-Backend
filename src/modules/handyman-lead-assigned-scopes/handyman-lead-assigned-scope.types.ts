@@ -6,6 +6,15 @@ export type HandymanLeadScopeLocation = {
   spaceLabel: string | null;
 };
 
+/** Internal, structured-only location facts used to form field labels. */
+export type HandymanLeadLocationSource = {
+  buildingCode: string;
+  floorLevelNumber: number | null;
+  areaCode: string | null;
+  roomCode: string | null;
+  spaceCode: string | null;
+};
+
 export type HandymanLeadPreferredWindow = {
   preferredWindowStart: string;
   preferredWindowEnd: string;
@@ -26,6 +35,13 @@ export type HandymanLeadAssignedScopeCard = {
 export type HandymanLeadWorkItem = {
   lineType: 'LABOR' | 'MATERIAL';
   description: string;
+  quantity: number;
+  unitLabel: string;
+};
+
+/** Internal work-item facts; arbitrary quotation description is excluded. */
+export type HandymanLeadWorkItemRecord = {
+  lineType: 'LABOR' | 'MATERIAL';
   quantity: number;
   unitLabel: string;
 };
@@ -83,7 +99,7 @@ export type HandymanLeadAssignedScopeCandidate = {
   handymanRequestId: string;
   approvedQuotationVersionId: string;
   serviceLabel: string;
-  location: HandymanLeadScopeLocation;
+  location: HandymanLeadLocationSource;
   preferredWindowStart: Date | null;
   preferredWindowEnd: Date | null;
   preferredWindowTimezone: string | null;

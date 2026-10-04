@@ -32,6 +32,7 @@ import {
   crewFixture,
   initHandymanFixtures,
   locationChain,
+  realmFixture,
   scopeFixture,
 } from './helpers/handyman-fixtures';
 import { parseHandymanLeadAssignedScopesPagination, parseHandymanLeadExecutionScopeId }
@@ -321,14 +322,17 @@ describe('CR-HM-18 BE03 — Lead assigned-scope reads', () => {
     assert.equal(scope.assignmentStatus, 'ACTIVE');
     assert.equal(scope.scopeStatus, 'AUTHORIZED');
     assert.equal(scope.serviceLabel, 'Handyman Service');
-    assert.equal(scope.location.buildingLabel, 'Building');
-    assert.equal(scope.location.floorLabel, 'Floor');
-    assert.equal(scope.location.areaLabel, 'Area');
-    assert.equal(scope.location.roomLabel, 'Room');
-    assert.equal(scope.location.spaceLabel, 'Tenant Space');
+    assert.equal(
+      scope.location.buildingLabel,
+      `Building ${first.realm.building.code}`,
+    );
+    assert.equal(scope.location.floorLabel, `Floor ${first.chain.floor.levelNumber}`);
+    assert.equal(scope.location.areaLabel, `Area ${first.chain.area.code}`);
+    assert.equal(scope.location.roomLabel, `Room ${first.chain.room.code}`);
+    assert.equal(scope.location.spaceLabel, `Space ${first.chain.space.code}`);
     assert.deepEqual(scope.workItems, [{
       lineType: 'LABOR',
-      description: 'Hours',
+      description: 'Labor work item',
       quantity: 1,
       unitLabel: 'Meter',
     }]);
@@ -381,6 +385,96 @@ describe('CR-HM-18 BE03 — Lead assigned-scope reads', () => {
       `${LEAD_READS}/${unassigned.scope.id}`,
     ).set(auth(token));
     assert.equal(unassignedDetail.status, 404);
+  });
+
+  it('omits unlabelled and customer/tenant/PIC personal names from field projections', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const realm = await realmFixture();
+    const unlabelledName = 'Rina Wijaya';
+    const customerName = 'Budi Santoso';
+    const tenantName = 'Siti Rahma';
+    const picName = 'Dimas Putra';
+    const chain = await locationChain(realm, {
+      floorName: unlabelledName,
+      areaName: `Customer: ${customerName}`,
+      roomName: `Tenant: ${tenantName}`,
+      spaceName: `PIC: ${picName}`,
+    });
+    const workDescription = [
+      `Inspect for ${unlabelledName}`,
+      `Customer: ${customerName}`,
+      `Tenant: ${tenantName}`,
+      `PIC: ${picName}`,
+    ].join('; ');
+    const { scope } = await scopeFixture(realm, chain, workDescription);
+    const crew = await crewFixture(realm);
+    await assignToCrew(scope.id, crew);
+    const token = await loginAs(crew.leadUser);
+
+    const detail = await api().get(`${LEAD_READS}/${scope.id}`)
+      .set(auth(token));
+    assert.equal(detail.status, 200, JSON.stringify(detail.body));
+    const listed = await api().get(LEAD_READS).set(auth(token));
+    assert.equal(listed.status, 200, JSON.stringify(listed.body));
+    const serialized = JSON.stringify({
+      detail: detail.body.data,
+      list: listed.body.data,
+    });
+    assert.equal(serialized.includes(workDescription), false);
+    for (const personalName of [
+      unlabelledName,
+      customerName,
+      tenantName,
+      picName,
+    ]) {
+      assert.equal(serialized.includes(personalName), false);
+    }
+    assert.equal(serialized.includes('Customer:'), false);
+    assert.equal(serialized.includes('Tenant:'), false);
+    assert.equal(serialized.includes('PIC:'), false);
+    const expectedLocation = {
+      buildingLabel: `Building ${realm.building.code}`,
+      floorLabel: `Floor ${chain.floor.levelNumber}`,
+      areaLabel: `Area ${chain.area.code}`,
+      roomLabel: `Room ${chain.room.code}`,
+      spaceLabel: `Space ${chain.space.code}`,
+    };
+    assert.deepEqual(detail.body.data.location, expectedLocation);
+    assert.deepEqual(listed.body.data[0].location, expectedLocation);
+    assert.deepEqual(detail.body.data.workItems, [{
+      lineType: 'LABOR',
+      description: 'Labor work item',
+      quantity: 1,
+      unitLabel: 'Meter',
+    }]);
+  });
+
+  it('isolates assigned-scope reads across Clients for a current Lead', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const local = await baseFixture();
+    const foreignRealm = await realmFixture();
+    const foreignChain = await locationChain(foreignRealm);
+    const foreign = await scopeFixture(foreignRealm, foreignChain);
+    const localCrew = await crewFixture(local.realm);
+    const foreignCrew = await crewFixture(foreignRealm);
+    await assignToCrew(local.scope.id, localCrew);
+    await assignToCrew(foreign.scope.id, foreignCrew);
+    const localLeadToken = await loginAs(localCrew.leadUser);
+
+    const listed = await api().get(LEAD_READS).set(auth(localLeadToken));
+    assert.equal(listed.status, 200, JSON.stringify(listed.body));
+    assert.deepEqual(
+      listed.body.data.map((row: { executionScopeId: string }) =>
+        row.executionScopeId),
+      [local.scope.id],
+    );
+    assert.equal(listed.body.meta.total, 1);
+    const foreignDetail = await api().get(
+      `${LEAD_READS}/${foreign.scope.id}`,
+    ).set(auth(localLeadToken));
+    assert.equal(foreignDetail.status, 404);
   });
 
   it('requires the authenticated current Lead chain and Client access on each read', async (t) => {
