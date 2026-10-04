@@ -26,6 +26,7 @@ export {
   handymanWorkSessionNotAuthorizedError,
   handymanWorkSessionNotFoundError,
   handymanWorkSessionScopeNotEligibleError,
+  handymanWorkSessionStaleConflictError,
   handymanWorkSessionValidationError,
 } from './handyman-work-session.errors';
 export { handymanWorkSessionRepository }

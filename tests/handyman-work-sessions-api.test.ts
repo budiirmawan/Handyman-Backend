@@ -43,7 +43,7 @@ import { api } from './helpers/http';
  * time-projection read. Actor/client context from the authenticated
  * request ONLY; forbidden authority-shaped inputs are structurally
  * ignored; bounded error mapping (400/401/403/404/409); exact
- * OpenAPI parity. Nine focused cases.
+ * OpenAPI parity. Twelve focused cases.
  */
 
 const SLEEP_MS = 40;
@@ -230,13 +230,25 @@ function sessionsBase(scopeId: string): string {
   return `${V1}/handyman/execution-scopes/${scopeId}/work-sessions`;
 }
 
+type WorkSessionAction =
+  | 'check-in'
+  | 'start-work'
+  | 'pause'
+  | 'material-run'
+  | 'resume'
+  | 'complete'
+  | 'check-out';
+
 function mutate(
   token: string,
-  scopeId: string,
-  action: string,
+  targetId: string,
+  action: WorkSessionAction,
   body: Record<string, unknown>,
 ) {
-  return api().post(`${sessionsBase(scopeId)}/${action}`)
+  const path = action === 'check-in'
+    ? `${sessionsBase(targetId)}/check-in`
+    : `${V1}/handyman/work-sessions/${targetId}/${action}`;
+  return api().post(path)
     .set('Authorization', `Bearer ${token}`)
     .send(body);
 }
@@ -255,6 +267,7 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
     assert.equal(first.body.data.replayed, false);
     assert.ok(first.body.data.session.checkedInAt);
     assert.equal(first.body.data.session.startedWorkAt, null);
+    const sessionId = first.body.data.session.id as string;
     // Replay: SAME key → SAME session/event over HTTP.
     const replay = await mutate(f.token, f.scope.id, 'check-in', {
       idempotencyKey: key,
@@ -265,24 +278,24 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
       first.body.data.session.id);
     assert.equal(replay.body.data.event.id, first.body.data.event.id);
     // START_WORK.
-    const start = await mutate(f.token, f.scope.id, 'start-work', {
+    const start = await mutate(f.token, sessionId, 'start-work', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(start.status, 200);
     assert.equal(start.body.data.session.status, 'IN_PROGRESS');
     assert.ok(start.body.data.session.startedWorkAt);
     // Bounded mapping: unauthenticated → 401; non-Lead → 403;
-    // unknown scope → 404; missing key → 400.
+    // unknown session → 404; missing key → 400.
     const unauth = await api()
-      .post(`${sessionsBase(f.scope.id)}/pause`)
+      .post(`${V1}/handyman/work-sessions/${sessionId}/pause`)
       .send({ idempotencyKey: `k-${randomUUID()}` });
     assert.equal(unauth.status, 401);
     const outsider = await createPlainSession();
     const forbiddenRes = await mutate(
-      outsider, f.scope.id, 'pause',
+      outsider, sessionId, 'pause',
       { idempotencyKey: `k-${randomUUID()}` });
     assert.equal(forbiddenRes.status, 403);
-    const missing = await mutate(f.token, f.scope.id, 'pause', {});
+    const missing = await mutate(f.token, sessionId, 'pause', {});
     assert.equal(missing.status, 400);
     const unknown = await mutate(
       f.token, randomUUID(), 'start-work',
@@ -293,33 +306,34 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
   it('2: PAUSE / MATERIAL_RUN / RESUME over HTTP with bounded 409s', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await authorityFixture();
-    await mutate(f.token, f.scope.id, 'check-in', {
+    const checkin = await mutate(f.token, f.scope.id, 'check-in', {
       idempotencyKey: `k-${randomUUID()}`,
     });
-    await mutate(f.token, f.scope.id, 'start-work', {
+    const sessionId = checkin.body.data.session.id as string;
+    await mutate(f.token, sessionId, 'start-work', {
       idempotencyKey: `k-${randomUUID()}`,
     });
-    const pause = await mutate(f.token, f.scope.id, 'pause', {
+    const pause = await mutate(f.token, sessionId, 'pause', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(pause.status, 200);
     assert.equal(pause.body.data.session.status, 'PAUSED');
     // MATERIAL_RUN is entered from IN_PROGRESS only (frozen).
     const runFromPaused = await mutate(
-      f.token, f.scope.id, 'material-run',
+      f.token, sessionId, 'material-run',
       { idempotencyKey: `k-${randomUUID()}` });
     assert.equal(runFromPaused.status, 409);
-    const resume = await mutate(f.token, f.scope.id, 'resume', {
+    const resume = await mutate(f.token, sessionId, 'resume', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(resume.status, 200);
     assert.equal(resume.body.data.session.status, 'IN_PROGRESS');
-    const run = await mutate(f.token, f.scope.id, 'material-run', {
+    const run = await mutate(f.token, sessionId, 'material-run', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(run.status, 200);
     assert.equal(run.body.data.session.status, 'MATERIAL_RUN');
-    const resume2 = await mutate(f.token, f.scope.id, 'resume', {
+    const resume2 = await mutate(f.token, sessionId, 'resume', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(resume2.status, 200);
@@ -336,36 +350,38 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
     ]);
   });
 
-  it('3: COMPLETE + CHECK_OUT over HTTP; afterwards bounded 404', async (t) => {
+  it('3: COMPLETE + CHECK_OUT over HTTP; stale commands conflict', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await authorityFixture();
-    await mutate(f.token, f.scope.id, 'check-in', {
+    const checkin = await mutate(f.token, f.scope.id, 'check-in', {
       idempotencyKey: `k-${randomUUID()}`,
     });
-    // CHECK_OUT abandon is legal from CHECKED_IN? This fixture must
-    // START first for the COMPLETE route; abandon covered in t4.
-    await mutate(f.token, f.scope.id, 'start-work', {
+    const sessionId = checkin.body.data.session.id as string;
+    // CHECK_OUT abandon is legal from CHECKED_IN; this fixture starts
+    // work to exercise the COMPLETE path (abandon is covered in t4).
+    await mutate(f.token, sessionId, 'start-work', {
       idempotencyKey: `k-${randomUUID()}`,
     });
-    const complete = await mutate(f.token, f.scope.id, 'complete', {
+    const complete = await mutate(f.token, sessionId, 'complete', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(complete.status, 200);
     assert.equal(complete.body.data.session.status, 'COMPLETED');
     assert.ok(complete.body.data.session.completedAt);
-    const out = await mutate(f.token, f.scope.id, 'check-out', {
+    const out = await mutate(f.token, sessionId, 'check-out', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(out.status, 200);
     assert.equal(out.body.data.session.status, 'CHECKED_OUT');
     assert.ok(out.body.data.session.checkedOutAt);
-    // Terminal: no ACTIVE session → every mutation is a bounded 404.
-    const after = await mutate(f.token, f.scope.id, 'complete', {
+    // A new command against the closed target is explicitly stale.
+    const after = await mutate(f.token, sessionId, 'complete', {
       idempotencyKey: `k-${randomUUID()}`,
     });
-    assert.equal(after.status, 404);
+    assert.equal(after.status, 409);
+    assert.equal(after.body.error.code,
+      'HANDYMAN_WORK_SESSION_STALE_CONFLICT');
     // Closure snapshot present and bound to the CHECK_OUT event.
-    const sessionId = out.body.data.session.id as string;
     const presence = await q(
       `SELECT event_id FROM handyman_work_session_helper_presence
         WHERE session_id = $1 ORDER BY created_at`,
@@ -382,9 +398,10 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
       .get(`${sessionsBase(f.scope.id)}/active`)
       .set('Authorization', `Bearer ${f.token}`);
     assert.equal(beforeCheckIn.status, 404);
-    await mutate(f.token, f.scope.id, 'check-in', {
+    const checkedIn = await mutate(f.token, f.scope.id, 'check-in', {
       idempotencyKey: `k-${randomUUID()}`,
     });
+    const sessionId = checkedIn.body.data.session.id as string;
     const active = await api()
       .get(`${sessionsBase(f.scope.id)}/active`)
       .set('Authorization', `Bearer ${f.token}`);
@@ -400,7 +417,7 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
       'executionScopeId', 'id', 'startedWorkAt', 'status',
     ]);
     // Direct CHECKED_IN -> CHECK_OUT (abandon) then 404 again.
-    await mutate(f.token, f.scope.id, 'check-out', {
+    await mutate(f.token, sessionId, 'check-out', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     const closed = await api()
@@ -415,22 +432,22 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
     const checkin = await mutate(f.token, f.scope.id, 'check-in', {
       idempotencyKey: `k-${randomUUID()}`,
     });
-    await mutate(f.token, f.scope.id, 'start-work', {
+    const sessionId = checkin.body.data.session.id as string;
+    await mutate(f.token, sessionId, 'start-work', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     await sleep(SLEEP_MS); // working
-    await mutate(f.token, f.scope.id, 'pause', {
+    await mutate(f.token, sessionId, 'pause', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     await sleep(SLEEP_MS); // halted
-    await mutate(f.token, f.scope.id, 'complete', {
+    await mutate(f.token, sessionId, 'complete', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     await sleep(SLEEP_MS); // halted tail
-    await mutate(f.token, f.scope.id, 'check-out', {
+    await mutate(f.token, sessionId, 'check-out', {
       idempotencyKey: `k-${randomUUID()}`,
     });
-    const sessionId = checkin.body.data.session.id as string;
     const projection = await api()
       .get(`${V1}/handyman/work-sessions/${sessionId}/time-projection`)
       .set('Authorization', `Bearer ${f.token}`);
@@ -469,7 +486,7 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
     });
     assert.equal(first.status, 200, JSON.stringify(first.body));
     const olderSessionId = first.body.data.session.id as string;
-    const checkedOut = await mutate(f.token, f.scope.id, 'check-out', {
+    const checkedOut = await mutate(f.token, olderSessionId, 'check-out', {
       idempotencyKey: `k-${randomUUID()}`,
     });
     assert.equal(checkedOut.status, 200, JSON.stringify(checkedOut.body));
@@ -559,25 +576,186 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
     assert.equal(noClientAccess.status, 403);
   });
 
-  it('9: OpenAPI parity + forbidden caller fields absent/ignored', async (t) => {
+  it('9: delayed commands for a closed session never touch its replacement', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const first = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    const sessionA = first.body.data.session.id as string;
+    const checkedOut = await mutate(f.token, sessionA, 'check-out', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(checkedOut.status, 200, JSON.stringify(checkedOut.body));
+
+    const second = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    const sessionB = second.body.data.session.id as string;
+    assert.notEqual(sessionA, sessionB);
+
+    const delayed = await mutate(f.token, sessionA, 'start-work', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(delayed.status, 409, JSON.stringify(delayed.body));
+    assert.equal(delayed.body.error.code,
+      'HANDYMAN_WORK_SESSION_STALE_CONFLICT');
+
+    const active = await api()
+      .get(`${sessionsBase(f.scope.id)}/active`)
+      .set('Authorization', `Bearer ${f.token}`);
+    assert.equal(active.status, 200, JSON.stringify(active.body));
+    assert.equal(active.body.data.session.id, sessionB);
+    assert.equal(active.body.data.session.status, 'CHECKED_IN');
+    const eventsB = await q(
+      `SELECT event_type FROM handyman_work_session_events
+        WHERE session_id = $1 ORDER BY occurred_at, created_at`,
+      [sessionB]);
+    assert.deepEqual(eventsB.rows.map((row) => row.event_type),
+      ['CHECK_IN']);
+  });
+
+  it('10: terminal CHECK_OUT retries replay after closure without touching a newer session', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const first = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    const sessionA = first.body.data.session.id as string;
+    const checkoutKey = `k-${randomUUID()}`;
+    const checkout = await mutate(f.token, sessionA, 'check-out', {
+      idempotencyKey: checkoutKey,
+    });
+    assert.equal(checkout.status, 200, JSON.stringify(checkout.body));
+
+    const second = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    const sessionB = second.body.data.session.id as string;
+    assert.notEqual(sessionA, sessionB);
+    const replay = await mutate(f.token, sessionA, 'check-out', {
+      idempotencyKey: checkoutKey,
+    });
+    assert.equal(replay.status, 200, JSON.stringify(replay.body));
+    assert.equal(replay.body.data.replayed, true);
+    assert.equal(replay.body.data.session.id, sessionA);
+    assert.equal(replay.body.data.session.status, 'CHECKED_OUT');
+    assert.equal(replay.body.data.event.id, checkout.body.data.event.id);
+
+    const active = await api()
+      .get(`${sessionsBase(f.scope.id)}/active`)
+      .set('Authorization', `Bearer ${f.token}`);
+    assert.equal(active.status, 200, JSON.stringify(active.body));
+    assert.equal(active.body.data.session.id, sessionB);
+    const eventsB = await q(
+      `SELECT event_type FROM handyman_work_session_events
+        WHERE session_id = $1 ORDER BY occurred_at, created_at`,
+      [sessionB]);
+    assert.deepEqual(eventsB.rows.map((row) => row.event_type),
+      ['CHECK_IN']);
+  });
+
+  it('11: CHECK_IN retries after checkout replay instead of creating a session', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const checkinKey = `k-${randomUUID()}`;
+    const first = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: checkinKey,
+    });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    const sessionA = first.body.data.session.id as string;
+    const checkedOut = await mutate(f.token, sessionA, 'check-out', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(checkedOut.status, 200, JSON.stringify(checkedOut.body));
+
+    const second = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    const sessionB = second.body.data.session.id as string;
+    assert.notEqual(sessionA, sessionB);
+    const [replayA, replayB] = await Promise.all([
+      mutate(f.token, f.scope.id, 'check-in', {
+        idempotencyKey: checkinKey,
+      }),
+      mutate(f.token, f.scope.id, 'check-in', {
+        idempotencyKey: checkinKey,
+      }),
+    ]);
+    for (const replay of [replayA, replayB]) {
+      assert.equal(replay.status, 200, JSON.stringify(replay.body));
+      assert.equal(replay.body.data.replayed, true);
+      assert.equal(replay.body.data.session.id, sessionA);
+      assert.equal(replay.body.data.event.id, first.body.data.event.id);
+    }
+
+    const count = await q(
+      `SELECT count(*)::int AS n FROM handyman_work_sessions
+        WHERE execution_scope_id = $1`,
+      [f.scope.id]);
+    assert.equal(count.rows[0].n, 2);
+    const active = await api()
+      .get(`${sessionsBase(f.scope.id)}/active`)
+      .set('Authorization', `Bearer ${f.token}`);
+    assert.equal(active.status, 200, JSON.stringify(active.body));
+    assert.equal(active.body.data.session.id, sessionB);
+  });
+
+  it('12: OpenAPI parity + forbidden caller fields absent/ignored', async (t) => {
     assert.ok(requireDatabase(t));
     const doc = YAML.parse(readFileSync(
       'docs/api/openapi.yaml', 'utf8'));
     const scopeBase =
       '/handyman/execution-scopes/{executionScopeId}/work-sessions';
-    for (const action of ['check-in', 'start-work', 'pause',
-      'material-run', 'resume', 'complete', 'check-out']) {
-      const path = doc.paths[`${scopeBase}/${action}`];
-      assert.ok(path, `OpenAPI path ${action} missing`);
-      assert.ok(path.post, `OpenAPI POST ${action} missing`);
+    const checkInPath = doc.paths[`${scopeBase}/check-in`];
+    assert.ok(checkInPath?.post, 'OpenAPI CHECK_IN missing');
+    assert.equal(checkInPath.post.parameters[0].$ref,
+      '#/components/parameters/ExecutionScopeIdPath');
+    const mutationRequestRef = checkInPath.post.requestBody
+      .content['application/json'].schema.$ref as string;
+    assert.equal(mutationRequestRef,
+      '#/components/schemas/HandymanWorkSessionMutationRequest');
+    for (const code of ['200', '400', '401', '403', '404', '409']) {
+      assert.ok(checkInPath.post.responses[code],
+        `CHECK_IN response ${code} missing`);
+    }
+    const checkInResponse = checkInPath.post.responses['200']
+      .content['application/json'].schema;
+    assert.equal(checkInResponse.allOf[0].$ref,
+      '#/components/schemas/SuccessEnvelope');
+    assert.equal(checkInResponse.allOf[1].properties.data.$ref,
+      '#/components/schemas/HandymanWorkSessionCommandResult');
+
+    const sessionBase = '/handyman/work-sessions/{sessionId}';
+    for (const action of ['start-work', 'pause', 'material-run',
+      'resume', 'complete', 'check-out']) {
+      const path = doc.paths[`${sessionBase}/${action}`];
+      assert.ok(path?.post, `OpenAPI session path ${action} missing`);
+      assert.equal(path.post.parameters[0].$ref,
+        '#/components/parameters/HandymanWorkSessionIdPath');
       for (const code of ['200', '400', '401', '403', '404', '409']) {
         assert.ok(path.post.responses[code],
           `${action} response ${code} missing`);
       }
+      assert.ok(path.post.description.includes(
+        'HANDYMAN_WORK_SESSION_STALE_CONFLICT'));
       const reqRef = path.post.requestBody.content['application/json']
         .schema.$ref as string;
       assert.equal(reqRef,
         '#/components/schemas/HandymanWorkSessionMutationRequest');
+      const response = path.post.responses['200']
+        .content['application/json'].schema;
+      assert.equal(response.allOf[0].$ref,
+        '#/components/schemas/SuccessEnvelope');
+      assert.equal(response.allOf[1].properties.data.$ref,
+        '#/components/schemas/HandymanWorkSessionCommandResult');
+      assert.equal(doc.paths[`${scopeBase}/${action}`], undefined,
+        `scope-addressed ${action} route must not remain`);
     }
     assert.ok(doc.paths[`${scopeBase}/active`].get);
     const projectionOperation = doc.paths[

@@ -219,6 +219,21 @@ async function findWorkSessionEventByIdempotency(
   return result.rows[0] ? mapEvent(result.rows[0]) : null;
 }
 
+async function findWorkSessionCheckInEventByIdempotency(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+  idempotencyKey: string,
+): Promise<HandymanWorkSessionEventRecord | null> {
+  const result = await executor.query(
+    `${EVENT_SELECT}
+      WHERE execution_scope_id = $1 AND event_type = 'CHECK_IN'
+        AND idempotency_key = $2
+      ORDER BY created_at, id LIMIT 1`,
+    [executionScopeId, idempotencyKey],
+  );
+  return result.rows[0] ? mapEvent(result.rows[0]) : null;
+}
+
 async function listWorkSessionEventsBySession(
   executor: Executor = getPool(),
   sessionId: string,
@@ -283,6 +298,7 @@ export const handymanWorkSessionRepository = {
   listWorkSessionsByExecutionScope,
   appendWorkSessionEvent,
   findWorkSessionEventByIdempotency,
+  findWorkSessionCheckInEventByIdempotency,
   listWorkSessionEventsBySession,
   insertWorkSessionHelperPresence,
   listWorkSessionHelperPresenceBySession,

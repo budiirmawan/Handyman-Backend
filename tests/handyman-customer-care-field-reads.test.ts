@@ -438,23 +438,23 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
       crew.leadUser.id,
     );
     await startWorkHandymanWorkSession(
-      { executionScopeId: f.scope.id, idempotencyKey: `k-${randomUUID()}` },
+      { sessionId: s1.session.id, idempotencyKey: `k-${randomUUID()}` },
       crew.leadUser.id,
     );
     await pauseHandymanWorkSession(
-      { executionScopeId: f.scope.id, idempotencyKey: `k-${randomUUID()}` },
+      { sessionId: s1.session.id, idempotencyKey: `k-${randomUUID()}` },
       crew.leadUser.id,
     );
     await resumeHandymanWorkSession(
-      { executionScopeId: f.scope.id, idempotencyKey: `k-${randomUUID()}` },
+      { sessionId: s1.session.id, idempotencyKey: `k-${randomUUID()}` },
       crew.leadUser.id,
     );
     await completeHandymanWorkSession(
-      { executionScopeId: f.scope.id, idempotencyKey: `k-${randomUUID()}` },
+      { sessionId: s1.session.id, idempotencyKey: `k-${randomUUID()}` },
       crew.leadUser.id,
     );
     await checkOutHandymanWorkSession(
-      { executionScopeId: f.scope.id, idempotencyKey: `k-${randomUUID()}` },
+      { sessionId: s1.session.id, idempotencyKey: `k-${randomUUID()}` },
       crew.leadUser.id,
     );
 
@@ -464,7 +464,7 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
       crew.leadUser.id,
     );
     await startWorkHandymanWorkSession(
-      { executionScopeId: f.scope.id, idempotencyKey: `k-${randomUUID()}` },
+      { sessionId: s2.session.id, idempotencyKey: `k-${randomUUID()}` },
       crew.leadUser.id,
     );
 

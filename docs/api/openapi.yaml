@@ -4860,7 +4860,7 @@ paths:
       tags: [Handyman Work Sessions]
       operationId: checkInHandymanWorkSession
       summary: Check in the field crew to the Execution Scope (ARRIVAL_VERIFIED gated)
-      description: "CR-HM-08 PART 05 — authenticated CHECK_IN command. The Execution Scope must be AUTHORIZED and carry an immutable CR-HM-07 VERIFIED arrival result for the SAME scope; the authenticated actor is resolved server-side as the CURRENT authoritative assigned Crew Lead (caller can never author actorUserId/workerId/crewId/assignmentId/helper list/arrivalResultId/timestamps; unknown authority-shaped keys are structurally ignored). Creates the ONE active CHECKED_IN session, appends the CHECK_IN event with server timestamps, and snapshots CURRENT helper crew membership server-side — atomically. Replaying the same idempotencyKey returns the SAME session/event. CHECK_IN is NOT START_WORK and never resolves billing."
+      description: "CR-HM-18 BE09 — authenticated CHECK_IN creates a session for the Execution Scope. The scope must be AUTHORIZED and have an immutable CR-HM-07 VERIFIED arrival result for that scope; the authenticated actor must have Client access and resolve server-side as the CURRENT authoritative assigned Crew Lead. The Backend ignores caller-supplied authority, helper, arrival-result, status, and timestamp fields. A same idempotencyKey retry replays the original CHECK_IN session/event even after CHECKED_OUT and never creates a second session; use a fresh key for a new check-in. CHECK_IN is NOT START_WORK and has no billing effect."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       requestBody:
@@ -4875,20 +4875,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /handyman/execution-scopes/{executionScopeId}/work-sessions/start-work:
+  /handyman/work-sessions/{sessionId}/start-work:
     post:
       tags: [Handyman Work Sessions]
       operationId: startWorkHandymanWorkSession
       summary: Start the actual-work clock on the checked-in session
-      description: "CR-HM-08 PART 05 — authenticated START_WORK command. Same CURRENT authoritative Crew Lead authority; the active session must be CHECKED_IN. Transitions to IN_PROGRESS with server-clock startedWorkAt and appends the START_WORK event — atomically. Replay of the same idempotencyKey returns the SAME event; a new key on a started session is a bounded 409 illegal transition. START_WORK is NOT billable time."
+      description: "CR-HM-18 BE09 — authenticated START_WORK command, bound to exactly the sessionId in the path; the Backend never substitutes an active/latest session. Current Lead/Client authority and the frozen transition rules are rechecked by the Backend. An exact command/session/idempotencyKey retry replays its stored result even after CHECKED_OUT; a new command on a terminal target returns 409 HANDYMAN_WORK_SESSION_STALE_CONFLICT. CHECKED_IN -> IN_PROGRESS with server-clock startedWorkAt. START_WORK is NOT billable time."
       parameters:
-        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/HandymanWorkSessionIdPath'
       requestBody:
         required: true
         content:
@@ -4901,20 +4907,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /handyman/execution-scopes/{executionScopeId}/work-sessions/pause:
+  /handyman/work-sessions/{sessionId}/pause:
     post:
       tags: [Handyman Work Sessions]
       operationId: pauseHandymanWorkSession
       summary: Pause the actual-work clock (presence stays live)
-      description: "CR-HM-08 PART 05 — authenticated PAUSE command (IN_PROGRESS -> PAUSED only). Halts the actual-work clock; session identity and presence remain live. Atomic server-timestamped PAUSE event; idempotent replay; illegal state = bounded 409."
+      description: "CR-HM-18 BE09 — authenticated PAUSE command, bound to exactly the sessionId in the path; the Backend never substitutes an active/latest session. Current Lead/Client authority and the frozen transition rules are rechecked by the Backend. An exact command/session/idempotencyKey retry replays its stored result even after CHECKED_OUT; a new command on a terminal target returns 409 HANDYMAN_WORK_SESSION_STALE_CONFLICT. IN_PROGRESS -> PAUSED only; halts the actual-work clock while presence remains live."
       parameters:
-        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/HandymanWorkSessionIdPath'
       requestBody:
         required: true
         content:
@@ -4927,20 +4939,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /handyman/execution-scopes/{executionScopeId}/work-sessions/material-run:
+  /handyman/work-sessions/{sessionId}/material-run:
     post:
       tags: [Handyman Work Sessions]
       operationId: materialRunHandymanWorkSession
       summary: Suspend the work clock for a material run (presence stays live)
-      description: "CR-HM-08 PART 05 — authenticated MATERIAL_RUN command (IN_PROGRESS -> MATERIAL_RUN only). A bounded actual-work-clock halt for material acquisition with the session and presence PRESERVED; it creates NO material transaction/quantity/cost (material truth is CR-HM-09). Atomic server-timestamped event; idempotent replay; illegal state = bounded 409."
+      description: "CR-HM-18 BE09 — authenticated MATERIAL_RUN command, bound to exactly the sessionId in the path; the Backend never substitutes an active/latest session. Current Lead/Client authority and the frozen transition rules are rechecked by the Backend. An exact command/session/idempotencyKey retry replays its stored result even after CHECKED_OUT; a new command on a terminal target returns 409 HANDYMAN_WORK_SESSION_STALE_CONFLICT. IN_PROGRESS -> MATERIAL_RUN only; this changes the clock state and creates NO material transaction, quantity, or cost."
       parameters:
-        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/HandymanWorkSessionIdPath'
       requestBody:
         required: true
         content:
@@ -4953,20 +4971,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /handyman/execution-scopes/{executionScopeId}/work-sessions/resume:
+  /handyman/work-sessions/{sessionId}/resume:
     post:
       tags: [Handyman Work Sessions]
       operationId: resumeHandymanWorkSession
       summary: Resume the actual-work clock from PAUSED or MATERIAL_RUN
-      description: "CR-HM-08 PART 05 — authenticated RESUME command (PAUSED -> IN_PROGRESS or MATERIAL_RUN -> IN_PROGRESS). Re-opens the actual-work clock without ever resetting the server-clock startedWorkAt. Atomic server-timestamped event; idempotent replay; illegal state = bounded 409."
+      description: "CR-HM-18 BE09 — authenticated RESUME command, bound to exactly the sessionId in the path; the Backend never substitutes an active/latest session. Current Lead/Client authority and the frozen transition rules are rechecked by the Backend. An exact command/session/idempotencyKey retry replays its stored result even after CHECKED_OUT; a new command on a terminal target returns 409 HANDYMAN_WORK_SESSION_STALE_CONFLICT. PAUSED or MATERIAL_RUN -> IN_PROGRESS; startedWorkAt is never reset."
       parameters:
-        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/HandymanWorkSessionIdPath'
       requestBody:
         required: true
         content:
@@ -4979,20 +5003,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /handyman/execution-scopes/{executionScopeId}/work-sessions/complete:
+  /handyman/work-sessions/{sessionId}/complete:
     post:
       tags: [Handyman Work Sessions]
       operationId: completeHandymanWorkSession
       summary: Declare field work complete (Leaded, work clock closes)
-      description: "CR-HM-08 PART 05 — authenticated COMPLETE command (IN_PROGRESS / PAUSED / MATERIAL_RUN -> COMPLETED) with server-clock completedAt. FIELD WORK COMPLETE ONLY: it does NOT complete QC, accept BAST, settle payment, close warranty, or calculate billing (downstream firewall). Atomic server-timestamped event; idempotent replay; illegal state = bounded 409."
+      description: "CR-HM-18 BE09 — authenticated COMPLETE command, bound to exactly the sessionId in the path; the Backend never substitutes an active/latest session. Current Lead/Client authority and the frozen transition rules are rechecked by the Backend. An exact command/session/idempotencyKey retry replays its stored result even after CHECKED_OUT; a new command on a terminal target returns 409 HANDYMAN_WORK_SESSION_STALE_CONFLICT. IN_PROGRESS / PAUSED / MATERIAL_RUN -> COMPLETED with server-clock completedAt. FIELD WORK COMPLETE ONLY; it does not complete QC, accept BAST, settle payment, close warranty, or calculate billing."
       parameters:
-        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/HandymanWorkSessionIdPath'
       requestBody:
         required: true
         content:
@@ -5005,20 +5035,26 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /handyman/execution-scopes/{executionScopeId}/work-sessions/check-out:
+  /handyman/work-sessions/{sessionId}/check-out:
     post:
       tags: [Handyman Work Sessions]
       operationId: checkOutHandymanWorkSession
       summary: Check out and close presence (terminal)
-      description: "CR-HM-08 PART 05 — authenticated CHECK_OUT command (CHECKED_IN abandon / COMPLETED -> CHECKED_OUT, terminal) with server-clock checkedOutAt, appends the CHECK_OUT event and snapshots the CURRENT helper presence server-side for closure. Presence closure ONLY: NOT customer acceptance (CR-HM-11). Atomic + idempotent; illegal state = bounded 409."
+      description: "CR-HM-18 BE09 — authenticated CHECK_OUT command, bound to exactly the sessionId in the path; the Backend never substitutes an active/latest session. Current Lead/Client authority and the frozen transition rules are rechecked by the Backend. An exact command/session/idempotencyKey retry replays its stored result even after CHECKED_OUT; a new command on a terminal target returns 409 HANDYMAN_WORK_SESSION_STALE_CONFLICT. CHECKED_IN abandon / COMPLETED -> CHECKED_OUT with server-clock checkedOutAt and helper-presence closure snapshot. Presence closure ONLY; NOT customer acceptance."
       parameters:
-        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/HandymanWorkSessionIdPath'
       requestBody:
         required: true
         content:
@@ -5031,7 +5067,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -72462,6 +72504,12 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    HandymanWorkSessionIdPath:
+      name: sessionId
+      in: path
+      description: Exact Work Session targeted by a transition command.
+      required: true
+      schema: { type: string, format: uuid }
     MaterialLineIdPath:
       name: lineId
       in: path
@@ -78424,7 +78472,7 @@ components:
     HandymanWorkSessionMutationRequest:
       type: object
       required: [idempotencyKey]
-      description: "Bounded caller input for EVERY work-session mutation: idempotencyKey only (offline-replay safety). Authority/derived keys (actorUserId/workerId/crewId/assignmentId/helper list/arrivalResultId/timestamps/status) in the payload are structurally ignored — actor and client context come from the authenticated request ONLY, and the server resolves every transition authoritatively."
+      description: "Bounded caller body for every work-session mutation: idempotencyKey only. CHECK_IN scope identity and existing-session command sessionId come from their respective paths; authority/derived keys in the payload are structurally ignored, with actor and Client context derived from the authenticated request and Backend records."
       properties:
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
     HandymanWorkSessionRecord:

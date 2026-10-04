@@ -661,7 +661,7 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
     );
     await startWorkHandymanWorkSession(
       {
-        executionScopeId: scope.id,
+        sessionId: session.session.id,
         idempotencyKey: `ws-sw-${id()}`,
       },
       crew.leadUser.id,

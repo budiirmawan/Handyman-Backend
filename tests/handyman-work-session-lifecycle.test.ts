@@ -51,7 +51,7 @@ import { ensureTestDatabase } from './helpers/postgres';
  * presence CLOSURE snapshot, server-clock presence vs actual-work
  * projections over the append-only event stream. Boundaries: COMPLETE
  * = field work complete ONLY; CHECK_OUT = presence closure ONLY. NO
- * QC/BAST/payment/warranty/billing/FM. Six focused cases.
+ * QC/BAST/payment/warranty/billing/FM. Seven focused cases.
  */
 
 const SLEEP_MS = Number(process.env.HM_TEST_SLEEP_MS ?? 60);
@@ -236,7 +236,7 @@ async function startedFixture() {
     idempotencyKey: `k-${randomUUID()}`,
   }, f.leadUserId);
   const start = await startWorkHandymanWorkSession({
-    executionScopeId: f.scope.id,
+    sessionId: checkin.session.id,
     idempotencyKey: `k-${randomUUID()}`,
   }, f.leadUserId);
   return { ...f, checkin, start };
@@ -263,7 +263,7 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
     if (!requireDatabase(t)) return;
     const f = await startedFixture();
     const complete = await completeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(complete.replayed, false);
@@ -284,11 +284,11 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
     if (!requireDatabase(t)) return;
     const paused = await startedFixture();
     await pauseHandymanWorkSession({
-      executionScopeId: paused.scope.id,
+      sessionId: paused.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, paused.leadUserId);
     const fromPaused = await completeHandymanWorkSession({
-      executionScopeId: paused.scope.id,
+      sessionId: paused.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, paused.leadUserId);
     assert.equal(fromPaused.session.status, 'COMPLETED');
@@ -297,11 +297,11 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
 
     const running = await startedFixture();
     await materialRunHandymanWorkSession({
-      executionScopeId: running.scope.id,
+      sessionId: running.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, running.leadUserId);
     const fromRun = await completeHandymanWorkSession({
-      executionScopeId: running.scope.id,
+      sessionId: running.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, running.leadUserId);
     assert.equal(fromRun.session.status, 'COMPLETED');
@@ -313,11 +313,11 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
     if (!requireDatabase(t)) return;
     const f = await startedFixture();
     await completeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const out = await checkOutHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(out.replayed, false);
@@ -355,7 +355,7 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const out = await checkOutHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(out.session.status, 'CHECKED_OUT');
@@ -378,16 +378,16 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
     const f = await startedFixture();
     // Open session: halted windows must NOT inflate actual work.
     await sleep(SLEEP_MS); // working
-    await pauseHandymanWorkSession({ executionScopeId: f.scope.id,
+    await pauseHandymanWorkSession({ sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}` }, f.leadUserId);
     await sleep(SLEEP_MS); // halted (PAUSED)
-    await resumeHandymanWorkSession({ executionScopeId: f.scope.id,
+    await resumeHandymanWorkSession({ sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}` }, f.leadUserId);
     await sleep(SLEEP_MS); // working
-    await materialRunHandymanWorkSession({ executionScopeId: f.scope.id,
+    await materialRunHandymanWorkSession({ sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}` }, f.leadUserId);
     await sleep(SLEEP_MS); // halted (MATERIAL_RUN)
-    await resumeHandymanWorkSession({ executionScopeId: f.scope.id,
+    await resumeHandymanWorkSession({ sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}` }, f.leadUserId);
     await sleep(SLEEP_MS); // working
     const open = await getHandymanWorkSessionTimeProjection(
@@ -399,11 +399,11 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
     assert.equal(open.status, 'IN_PROGRESS');
     // Close: projections FIX (no server-now drift on a closed
     // session; repeated reads are identical).
-    await completeHandymanWorkSession({ executionScopeId: f.scope.id,
+    await completeHandymanWorkSession({ sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}` }, f.leadUserId);
     await sleep(SLEEP_MS); // halted tail before check-out
     const out = await checkOutHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const closedA = await getHandymanWorkSessionTimeProjection(
@@ -464,12 +464,12 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
       buildingId: f.realm.building.id,
     });
     await assert.rejects(async () => completeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, outsider.id), (error: unknown) =>
       statusCode(error) === 403);
     await assert.rejects(async () => checkOutHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, outsider.id), (error: unknown) =>
       statusCode(error) === 403);
@@ -477,7 +477,7 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
     // a bounded 409 (must declare work complete or abandon first...
     // abandon is only legal BEFORE work starts).
     await assert.rejects(async () => checkOutHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId), (error: unknown) =>
       statusCode(error) === 409
@@ -486,18 +486,18 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
     // Replay: same key returns the SAME complete event.
     const key = `k-${randomUUID()}`;
     const first = await completeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: key,
     }, f.leadUserId);
     const replay = await completeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: key,
     }, f.leadUserId);
     assert.equal(replay.replayed, true);
     assert.equal(replay.event.id, first.event.id);
     // New key once COMPLETED is a bounded 409.
     await assert.rejects(async () => completeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId), (error: unknown) => statusCode(error) === 409);
     assert.deepEqual(await eventTypes(f.checkin.session.id),
@@ -527,4 +527,41 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
       [f.checkin.session.id]);
     assert.equal(result.rows[0].n, 3);
   });
+
+  it(
+    '7: CHECK_IN retry after CHECK_OUT replays only its original presence snapshot',
+    async (t) => {
+      if (!requireDatabase(t)) return;
+      const f = await authorityFixture();
+      await arriveVerified(f);
+      const checkinKey = `k-${randomUUID()}`;
+      const first = await checkInHandymanWorkSession({
+        executionScopeId: f.scope.id,
+        idempotencyKey: checkinKey,
+      }, f.leadUserId);
+      const checkedOut = await checkOutHandymanWorkSession({
+        sessionId: first.session.id,
+        idempotencyKey: `k-${randomUUID()}`,
+      }, f.leadUserId);
+      assert.equal(checkedOut.session.status, 'CHECKED_OUT');
+
+      const replay = await checkInHandymanWorkSession({
+        executionScopeId: f.scope.id,
+        idempotencyKey: checkinKey,
+      }, f.leadUserId);
+      assert.equal(replay.replayed, true);
+      assert.equal(replay.session.id, first.session.id);
+      assert.equal(replay.session.status, 'CHECKED_OUT');
+      assert.equal(replay.event.id, first.event.id);
+      assert.deepEqual(
+        replay.helperPresence.map((presence) => presence.eventId),
+        first.helperPresence.map((presence) => presence.eventId),
+      );
+      const sessions = await q(
+        `SELECT count(*)::int AS n FROM handyman_work_sessions
+          WHERE execution_scope_id = $1`,
+        [f.scope.id]);
+      assert.equal(sessions.rows[0].n, 1);
+    },
+  );
 });

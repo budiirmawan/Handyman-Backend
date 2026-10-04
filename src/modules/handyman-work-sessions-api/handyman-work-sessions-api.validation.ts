@@ -1,12 +1,11 @@
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
-import type { HandymanWorkSessionStartWorkInput }
-  from '../handyman-work-sessions';
-
 /**
  * CR-HM-08 PART 05 — work-session HTTP input validation. Whitelist
  * parsers ONLY: callers may submit exactly `{ idempotencyKey }`;
- * executionScopeId comes from the URL. EVERYTHING else —
+ * CHECK_IN executionScopeId or existing-session sessionId comes from
+ * its path.
+ * EVERYTHING else —
  * actorUserId/workerId/crewId/assignmentId/helper list/timestamps/
  * arrivalResultId/status override — is structurally ignored (never
  * spread, never forwarded into the PART 02–04 services).
@@ -51,7 +50,7 @@ export function parseWorkSessionIdParam(
  */
 export function parseWorkSessionMutationBody(
   body: unknown,
-): HandymanWorkSessionStartWorkInput {
+): { idempotencyKey: string } {
   const source = (body ?? {}) as Record<string, unknown>;
   const raw = typeof source.idempotencyKey === 'string'
     ? source.idempotencyKey.trim()
@@ -68,7 +67,6 @@ export function parseWorkSessionMutationBody(
         message: 'idempotencyKey must not exceed 200 characters.' },
     ]);
   }
-  // Positional/bounded: the parsed shape is rebuilt from scratch —
-  // scope binding arrives from the URL at the controller boundary.
-  return { executionScopeId: '', idempotencyKey: raw };
+  // Positional/bounded: identity is supplied only by the route path.
+  return { idempotencyKey: raw };
 }

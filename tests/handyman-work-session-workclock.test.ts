@@ -233,7 +233,7 @@ async function startedFixture() {
     idempotencyKey: `k-${randomUUID()}`,
   }, f.leadUserId);
   const start = await startWorkHandymanWorkSession({
-    executionScopeId: f.scope.id,
+    sessionId: checkin.session.id,
     idempotencyKey: `k-${randomUUID()}`,
   }, f.leadUserId);
   return { ...f, checkin, start };
@@ -252,7 +252,7 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
     if (!requireDatabase(t)) return;
     const f = await startedFixture();
     const pause = await pauseHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(pause.replayed, false);
@@ -276,7 +276,7 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
     if (!requireDatabase(t)) return;
     const f = await startedFixture();
     const run = await materialRunHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(run.replayed, false);
@@ -306,11 +306,11 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
     if (!requireDatabase(t)) return;
     const f = await startedFixture();
     await pauseHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const resume = await resumeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(resume.replayed, false);
@@ -331,11 +331,11 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
     if (!requireDatabase(t)) return;
     const f = await startedFixture();
     await materialRunHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const resume = await resumeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(resume.session.status, 'IN_PROGRESS');
@@ -355,7 +355,7 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
       buildingId: f.realm.building.id,
     });
     await assert.rejects(async () => pauseHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, outsider.id), (error: unknown) =>
       statusCode(error) === 403
@@ -363,7 +363,7 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
         === 'HANDYMAN_WORK_SESSION_NOT_AUTHORIZED');
     // RESUME from IN_PROGRESS is illegal (nothing is halted).
     await assert.rejects(async () => resumeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId), (error: unknown) =>
       statusCode(error) === 409
@@ -372,11 +372,11 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
     // MATERIAL_RUN entered from PAUSED only via RESUME first
     // (frozen §5): PAUSED -> MATERIAL_RUN is bounded.
     await pauseHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     await assert.rejects(async () => materialRunHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId), (error: unknown) =>
       statusCode(error) === 409
@@ -384,7 +384,7 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
         === 'HANDYMAN_WORK_SESSION_ILLEGAL_TRANSITION');
     // PAUSE from PAUSED is illegal (already halted).
     await assert.rejects(async () => pauseHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId), (error: unknown) =>
       statusCode(error) === 409);
@@ -397,11 +397,11 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
     const f = await startedFixture();
     const key = `k-${randomUUID()}`;
     const first = await pauseHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: key,
     }, f.leadUserId);
     const replay = await pauseHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: key,
     }, f.leadUserId);
     assert.equal(replay.replayed, true);
@@ -410,7 +410,7 @@ describe('CR-HM-08 PART 03 — pause / material-run / resume', () => {
     // Same key under a DIFFERENT action is NOT a replay → bounded
     // evaluation as a new command (RESUME from PAUSED is legal).
     const resumed = await resumeHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: f.checkin.session.id,
       idempotencyKey: key,
     }, f.leadUserId);
     assert.equal(resumed.replayed, false);

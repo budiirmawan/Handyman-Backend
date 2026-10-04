@@ -18,12 +18,12 @@ import {
  * CR-HM-08 PART 05 — work-session HTTP surface:
  *
  *   POST   /handyman/execution-scopes/:executionScopeId/work-sessions/check-in
- *   POST   /handyman/execution-scopes/:executionScopeId/work-sessions/start-work
- *   POST   /handyman/execution-scopes/:executionScopeId/work-sessions/pause
- *   POST   /handyman/execution-scopes/:executionScopeId/work-sessions/material-run
- *   POST   /handyman/execution-scopes/:executionScopeId/work-sessions/resume
- *   POST   /handyman/execution-scopes/:executionScopeId/work-sessions/complete
- *   POST   /handyman/execution-scopes/:executionScopeId/work-sessions/check-out
+ *   POST   /handyman/work-sessions/:sessionId/start-work
+ *   POST   /handyman/work-sessions/:sessionId/pause
+ *   POST   /handyman/work-sessions/:sessionId/material-run
+ *   POST   /handyman/work-sessions/:sessionId/resume
+ *   POST   /handyman/work-sessions/:sessionId/complete
+ *   POST   /handyman/work-sessions/:sessionId/check-out
  *   GET    /handyman/execution-scopes/:executionScopeId/work-sessions/active
  *   GET    /handyman/work-sessions/:sessionId/time-projection
  *
@@ -43,17 +43,18 @@ export function createHandymanWorkSessionsApiRouter(): Router {
   router.get(base, auth, read, getHandymanWorkSessionsHandler);
   router.post(`${base}/check-in`, auth,
     postHandymanWorkSessionCheckInHandler);
-  router.post(`${base}/start-work`, auth,
+  const sessionBase = '/handyman/work-sessions/:sessionId';
+  router.post(`${sessionBase}/start-work`, auth,
     postHandymanWorkSessionStartWorkHandler);
-  router.post(`${base}/pause`, auth,
+  router.post(`${sessionBase}/pause`, auth,
     postHandymanWorkSessionPauseHandler);
-  router.post(`${base}/material-run`, auth,
+  router.post(`${sessionBase}/material-run`, auth,
     postHandymanWorkSessionMaterialRunHandler);
-  router.post(`${base}/resume`, auth,
+  router.post(`${sessionBase}/resume`, auth,
     postHandymanWorkSessionResumeHandler);
-  router.post(`${base}/complete`, auth,
+  router.post(`${sessionBase}/complete`, auth,
     postHandymanWorkSessionCompleteHandler);
-  router.post(`${base}/check-out`, auth,
+  router.post(`${sessionBase}/check-out`, auth,
     postHandymanWorkSessionCheckOutHandler);
   router.get(`${base}/active`, auth,
     getHandymanWorkSessionActiveHandler);

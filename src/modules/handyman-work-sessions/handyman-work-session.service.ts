@@ -18,6 +18,7 @@ import {
   handymanWorkSessionNotAuthorizedError,
   handymanWorkSessionNotFoundError,
   handymanWorkSessionScopeNotEligibleError,
+  handymanWorkSessionStaleConflictError,
   handymanWorkSessionValidationError,
 } from './handyman-work-session.errors';
 import { handymanWorkSessionRepository }
@@ -37,12 +38,13 @@ import type {
  * `resolveHandymanAssignmentLead` for CURRENT Lead authority, CR-HM-04
  * ACTIVE crew membership for the server-derived helper snapshot.
  *
- * The caller supplies ONLY executionScopeId + idempotencyKey; the
- * actor comes from the authenticated context. Caller-supplied crew
- * id, worker id, assignment id, helper list, arrival result id, or
- * timestamps are NEVER accepted/derived. All writes are one atomic
- * transaction with server-clock timestamps. Idempotent replay of the
- * same key returns the SAME session/event, never a second row.
+ * CHECK_IN accepts ONLY executionScopeId + idempotencyKey; commands
+ * for an existing session accept ONLY sessionId + idempotencyKey. The
+ * actor comes from authenticated context. Caller-supplied crew id,
+ * worker id, assignment id, helper list, arrival result id, or
+ * timestamps are NEVER accepted/derived. Writes are atomic with
+ * server-clock timestamps; exact command/session/key retries replay
+ * their stored result, never a second transition/session.
  *
  * NOT here: PAUSE / RESUME / MATERIAL_RUN / COMPLETE / CHECK_OUT
  * (PART 03+), billing, HTTP/OpenAPI, FM.
@@ -54,7 +56,7 @@ export type HandymanWorkSessionCheckInInput = {
 };
 
 export type HandymanWorkSessionStartWorkInput = {
-  executionScopeId: string;
+  sessionId: string;
   idempotencyKey: string;
 };
 
@@ -182,14 +184,45 @@ async function authorityPreamble(
   return { scope, resolution };
 }
 
+/** Resolves authorization from the requested session's persisted scope. */
+async function sessionCommandPreamble(
+  sessionId: string,
+  actorUserId: string,
+) {
+  const target = await handymanWorkSessionRepository
+    .findWorkSessionById(undefined, sessionId);
+  if (!target) throw handymanWorkSessionNotFoundError();
+  const { resolution } = await authorityPreamble(
+    target.executionScopeId,
+    actorUserId,
+  );
+  return { resolution };
+}
+
+/** Locks and re-reads exactly one target row before replay or transition. */
+async function lockWorkSession(
+  tx: PoolClient,
+  sessionId: string,
+): Promise<HandymanWorkSessionRecord> {
+  const locked = await tx.query(
+    `SELECT id FROM handyman_work_sessions WHERE id = $1 FOR UPDATE`,
+    [sessionId],
+  );
+  if (locked.rows.length === 0) throw handymanWorkSessionNotFoundError();
+  const current = await handymanWorkSessionRepository
+    .findWorkSessionById(tx, sessionId);
+  if (!current) throw handymanWorkSessionNotFoundError();
+  return current;
+}
+
 /**
  * CHECK_IN (governance §3/§5/§7): AUTHORIZED scope + immutable
  * CR-HM-07 VERIFIED arrival result + CURRENT authoritative Crew Lead
  * → create ONE CHECKED_IN session, append the CHECK_IN event, and
  * snapshot CURRENT helper crew membership — atomically, server-clock
- * timestamps only. Replay of the same idempotency key returns the
- * SAME session/event; any other active session is a bounded 409
- * active-conflict.
+ * timestamps only. The same scope/key CHECK_IN retry resolves against
+ * event history before active-session checks, including after closure;
+ * a distinct key conflicts with any currently active session.
  */
 export async function checkInHandymanWorkSession(
   input: HandymanWorkSessionCheckInInput,
@@ -200,32 +233,58 @@ export async function checkInHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  const { scope, resolution } = await authorityPreamble(
+  const { resolution } = await authorityPreamble(
     scopeUuid,
     actorUuid,
   );
-  if (scope.status !== 'AUTHORIZED') {
-    throw handymanWorkSessionScopeNotEligibleError();
-  }
-  if (!(await findVerifiedArrivalResultId(undefined, scopeUuid))) {
-    throw handymanWorkSessionArrivalRequiredError(scopeUuid);
-  }
 
   return withTransaction(async (tx) => {
+    // Serialize check-in attempts even when the scope has no active
+    // session yet. This makes the scope/key replay lookup race-safe.
+    const scopeLock = await tx.query(
+      `SELECT id FROM handyman_execution_scopes
+        WHERE id = $1 FOR UPDATE`,
+      [scopeUuid],
+    );
+    if (scopeLock.rows.length === 0) {
+      throw handymanExecutionScopeNotFoundError();
+    }
+    const scope = await handymanScopeAssignmentRepository
+      .findScopeById(tx, scopeUuid);
+    if (!scope) throw handymanExecutionScopeNotFoundError();
+
+    // CHECK_IN has no pre-existing sessionId. Its stable replay key is
+    // therefore resolved across this scope's complete event history,
+    // before any new-session preconditions or active-session lookup.
+    const replayEvent = await handymanWorkSessionRepository
+      .findWorkSessionCheckInEventByIdempotency(tx, scopeUuid, key);
+    if (replayEvent) {
+      const priorSession = await handymanWorkSessionRepository
+        .findWorkSessionById(tx, replayEvent.sessionId);
+      if (!priorSession) throw handymanWorkSessionNotFoundError();
+      const helperPresence = await handymanWorkSessionRepository
+        .listWorkSessionHelperPresenceBySession(tx, priorSession.id);
+      const checkInPresence = helperPresence.filter(
+        (presence) => presence.eventId === replayEvent.id,
+      );
+      return {
+        session: priorSession,
+        event: replayEvent,
+        helperPresence: checkInPresence,
+        replayed: true,
+      };
+    }
+
+    if (scope.status !== 'AUTHORIZED') {
+      throw handymanWorkSessionScopeNotEligibleError();
+    }
+    if (!(await findVerifiedArrivalResultId(tx, scopeUuid))) {
+      throw handymanWorkSessionArrivalRequiredError(scopeUuid);
+    }
+
     const existing = await handymanWorkSessionRepository
       .findActiveWorkSessionByExecutionScope(tx, scopeUuid);
     if (existing) {
-      // Idempotent replay: the SAME check-in key replays the SAME
-      // session/event (never a second row).
-      const replayEvent = await handymanWorkSessionRepository
-        .findWorkSessionEventByIdempotency(tx, existing.id,
-          'CHECK_IN', key);
-      if (replayEvent) {
-        const helperPresence = await handymanWorkSessionRepository
-          .listWorkSessionHelperPresenceBySession(tx, existing.id);
-        return { session: existing, event: replayEvent,
-          helperPresence, replayed: true };
-      }
       throw handymanWorkSessionActiveConflictError(scopeUuid);
     }
 
@@ -274,42 +333,30 @@ export async function checkInHandymanWorkSession(
  * START_WORK (governance §5): same CURRENT authoritative Lead;
  * session must be CHECKED_IN → transitions to IN_PROGRESS with
  * server-clock startedWorkAt and appends the START_WORK event —
- * atomically. Replay of the same key returns the SAME recorded
- * event. Any other status is a bounded 409 illegal transition; no
- * active session is a bounded 404.
+ * atomically. The exact session/key replay is checked before state
+ * validation, including after CHECKED_OUT; a new command against a
+ * closed target is a bounded stale 409. A missing session is 404.
  */
 export async function startWorkHandymanWorkSession(
   input: HandymanWorkSessionStartWorkInput,
   actorUserId: string,
 ): Promise<HandymanWorkSessionStartWorkResult> {
-  const scopeUuid = ensureUuid(input.executionScopeId,
-    'executionScopeId');
+  const sessionId = ensureUuid(input.sessionId, 'sessionId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  await authorityPreamble(scopeUuid, actorUuid);
+  await sessionCommandPreamble(sessionId, actorUuid);
 
   return withTransaction(async (tx) => {
-    // Row lock first: transitions are single-threaded per session.
-    const locked = await tx.query(
-      `SELECT id FROM handyman_work_sessions
-        WHERE execution_scope_id = $1 AND status <> 'CHECKED_OUT'
-        FOR UPDATE`,
-      [scopeUuid],
-    );
-    const sessionId = locked.rows[0]?.id as string | undefined;
-    if (!sessionId) throw handymanWorkSessionNotFoundError();
-
-    // Idempotent replay BEFORE the transition check: a recorded
-    // START_WORK with the same key replays the original evidence.
+    const current = await lockWorkSession(tx, sessionId);
     const replayEvent = await handymanWorkSessionRepository
       .findWorkSessionEventByIdempotency(tx, sessionId,
         'START_WORK', key);
-    const current = await handymanWorkSessionRepository
-      .findWorkSessionById(tx, sessionId);
-    if (!current) throw handymanWorkSessionNotFoundError();
     if (replayEvent) {
       return { session: current, event: replayEvent, replayed: true };
+    }
+    if (current.status === 'CHECKED_OUT') {
+      throw handymanWorkSessionStaleConflictError(sessionId);
     }
 
     const transitioned = await tx.query(
@@ -333,7 +380,7 @@ export async function startWorkHandymanWorkSession(
       .appendWorkSessionEvent(tx, {
         clientId: current.clientId,
         sessionId,
-        executionScopeId: scopeUuid,
+        executionScopeId: current.executionScopeId,
         eventType: 'START_WORK',
         idempotencyKey: key,
         actorUserId: actorUuid,
@@ -362,10 +409,11 @@ export async function startWorkHandymanWorkSession(
 }
 
 /**
- * PART 03 shared work-clock transition (governance §5/§6/§9/§11).
- * Row lock → replay check → conditional status transition → event
- * insert, ALL in ONE transaction. TIME SEMANTICS: only the status
- * column moves — IN_PROGRESS keeps the actual-work clock open,
+ * PART 03 shared session-bound work-clock transition (governance
+ * §5/§6/§9/§11). Lock the requested row → exact replay check → stale
+ * terminal check → conditional transition/event in ONE transaction.
+ * TIME SEMANTICS: only the status column moves — IN_PROGRESS keeps
+ * the actual-work clock open,
  * PAUSED / MATERIAL_RUN halt it; presence is untouched in all three.
  * NO started_work_at mutation, NO timestamps from the caller, NO
  * billable/rate/charge computation, NO material truth (CR-HM-09).
@@ -375,31 +423,22 @@ async function workClockTransition(
   actorUserId: string,
   action: WorkClockAction,
 ): Promise<HandymanWorkSessionWorkClockResult> {
-  const scopeUuid = ensureUuid(input.executionScopeId,
-    'executionScopeId');
+  const sessionId = ensureUuid(input.sessionId, 'sessionId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
   const rule = WORK_CLOCK_RULES[action];
 
-  await authorityPreamble(scopeUuid, actorUuid);
+  await sessionCommandPreamble(sessionId, actorUuid);
 
   return withTransaction(async (tx) => {
-    const locked = await tx.query(
-      `SELECT id FROM handyman_work_sessions
-        WHERE execution_scope_id = $1 AND status <> 'CHECKED_OUT'
-        FOR UPDATE`,
-      [scopeUuid],
-    );
-    const sessionId = locked.rows[0]?.id as string | undefined;
-    if (!sessionId) throw handymanWorkSessionNotFoundError();
-
+    const current = await lockWorkSession(tx, sessionId);
     const replayEvent = await handymanWorkSessionRepository
       .findWorkSessionEventByIdempotency(tx, sessionId, action, key);
-    const current = await handymanWorkSessionRepository
-      .findWorkSessionById(tx, sessionId);
-    if (!current) throw handymanWorkSessionNotFoundError();
     if (replayEvent) {
       return { session: current, event: replayEvent, replayed: true };
+    }
+    if (current.status === 'CHECKED_OUT') {
+      throw handymanWorkSessionStaleConflictError(sessionId);
     }
 
     const transitioned = await tx.query(
@@ -422,7 +461,7 @@ async function workClockTransition(
       .appendWorkSessionEvent(tx, {
         clientId: current.clientId,
         sessionId,
-        executionScopeId: scopeUuid,
+        executionScopeId: current.executionScopeId,
         eventType: action,
         idempotencyKey: key,
         actorUserId: actorUuid,
@@ -501,11 +540,11 @@ const SESSION_CLOSE_RULES: Record<SessionCloseAction, {
 };
 
 /**
- * PART 04 shared closing transition (governance §5/§10/§11). Row
- * lock → replay → conditional transition with server-clock
- * completed_at / checked_out_at → event append → (CHECK_OUT only)
- * server-derived CURRENT helper-presence closure snapshot — ALL in
- * ONE transaction.
+ * PART 04 shared session-bound closing transition (governance
+ * §5/§10/§11). Lock the requested row → exact replay (including after
+ * checkout) → stale terminal check → conditional transition and event;
+ * CHECK_OUT also snapshots current helper presence, all in ONE
+ * transaction.
  *
  * BOUNDARIES (FROZEN §10): COMPLETE means FIELD WORK COMPLETE only —
  * it never completes QC, accepts BAST, settles payment, closes
@@ -518,31 +557,25 @@ async function sessionCloseTransition(
   actorUserId: string,
   action: SessionCloseAction,
 ): Promise<HandymanWorkSessionWorkClockResult> {
-  const scopeUuid = ensureUuid(input.executionScopeId,
-    'executionScopeId');
+  const sessionId = ensureUuid(input.sessionId, 'sessionId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
   const rule = SESSION_CLOSE_RULES[action];
 
-  const { resolution } = await authorityPreamble(scopeUuid, actorUuid);
+  const { resolution } = await sessionCommandPreamble(
+    sessionId,
+    actorUuid,
+  );
 
   return withTransaction(async (tx) => {
-    const locked = await tx.query(
-      `SELECT id FROM handyman_work_sessions
-        WHERE execution_scope_id = $1 AND status <> 'CHECKED_OUT'
-        FOR UPDATE`,
-      [scopeUuid],
-    );
-    const sessionId = locked.rows[0]?.id as string | undefined;
-    if (!sessionId) throw handymanWorkSessionNotFoundError();
-
+    const current = await lockWorkSession(tx, sessionId);
     const replayEvent = await handymanWorkSessionRepository
       .findWorkSessionEventByIdempotency(tx, sessionId, action, key);
-    const current = await handymanWorkSessionRepository
-      .findWorkSessionById(tx, sessionId);
-    if (!current) throw handymanWorkSessionNotFoundError();
     if (replayEvent) {
       return { session: current, event: replayEvent, replayed: true };
+    }
+    if (current.status === 'CHECKED_OUT') {
+      throw handymanWorkSessionStaleConflictError(sessionId);
     }
 
     const transitioned = await tx.query(
@@ -569,7 +602,7 @@ async function sessionCloseTransition(
       .appendWorkSessionEvent(tx, {
         clientId: current.clientId,
         sessionId,
-        executionScopeId: scopeUuid,
+        executionScopeId: current.executionScopeId,
         eventType: action,
         idempotencyKey: key,
         actorUserId: actorUuid,
@@ -589,7 +622,7 @@ async function sessionCloseTransition(
             clientId: current.clientId,
             sessionId,
             eventId: event.id,
-            executionScopeId: scopeUuid,
+            executionScopeId: current.executionScopeId,
             helperWorkerId: helper.workerId,
             helperUserId: helper.userId,
           });

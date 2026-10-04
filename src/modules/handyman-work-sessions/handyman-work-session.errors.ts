@@ -29,6 +29,18 @@ export function handymanWorkSessionActiveConflictError(
   });
 }
 
+/** Target session is terminal and cannot accept a new command (§5). */
+export function handymanWorkSessionStaleConflictError(
+  sessionId: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_WORK_SESSION_STALE_CONFLICT,
+    message: 'Handyman work session is no longer commandable.',
+    statusCode: 409,
+    details: [`sessionId=${sessionId}`],
+  });
+}
+
 /** CHECK_IN target: scope exists but is not AUTHORIZED (CR-HM-06). */
 export function handymanWorkSessionScopeNotEligibleError(): AppError {
   return new AppError({

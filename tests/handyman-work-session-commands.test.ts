@@ -270,6 +270,10 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
     if (!requireDatabase(t)) return;
     const f = await authorityFixture();
     await arriveVerified(f);
+    const checkin = await checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
     // Outsider: another user WITH the same client/building access
     // but NO Lead authority → bounded 403.
     const outsider = await userService.createUser({
@@ -287,7 +291,7 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
       && (error as { code?: string }).code
         === 'HANDYMAN_WORK_SESSION_NOT_AUTHORIZED');
     await assert.rejects(async () => startWorkHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, outsider.id), (error: unknown) =>
       statusCode(error) === 403);
@@ -389,7 +393,7 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const start = await startWorkHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     assert.equal(start.replayed, false);
@@ -419,9 +423,9 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
     if (!requireDatabase(t)) return;
     const f = await authorityFixture();
     await arriveVerified(f);
-    // BEFORE CHECK_IN: no active session → bounded 404.
+    // A missing explicit session target is a bounded 404.
     await assert.rejects(async () => startWorkHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: randomUUID(),
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId), (error: unknown) =>
       statusCode(error) === 404
@@ -433,11 +437,11 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
     }, f.leadUserId);
     const key = `k-${randomUUID()}`;
     const first = await startWorkHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: checkin.session.id,
       idempotencyKey: key,
     }, f.leadUserId);
     const replay = await startWorkHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: checkin.session.id,
       idempotencyKey: key,
     }, f.leadUserId);
     assert.equal(replay.replayed, true);
@@ -446,7 +450,7 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
     // Same action, NEW key against IN_PROGRESS → bounded 409
     // illegal transition (never a second START_WORK).
     await assert.rejects(async () => startWorkHandymanWorkSession({
-      executionScopeId: f.scope.id,
+      sessionId: checkin.session.id,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId), (error: unknown) =>
       statusCode(error) === 409

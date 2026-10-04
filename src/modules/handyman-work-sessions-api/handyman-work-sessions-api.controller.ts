@@ -166,8 +166,8 @@ function toCustomerCareWorkSessionsPayload(
   };
 }
 
-/** Shared thin mutation pipeline: parse → service → serialize. */
-async function runMutation(
+/** Thin CHECK_IN pipeline: scope creates a session; it is not a transition. */
+async function runScopeMutation(
   req: Request,
   res: Response,
   next: NextFunction,
@@ -194,12 +194,38 @@ async function runMutation(
   }
 }
 
+/** Existing-session transitions always carry the target sessionId. */
+async function runSessionMutation(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  command: (
+    input: { sessionId: string; idempotencyKey: string },
+    actorUserId: string,
+  ) => Promise<HandymanWorkSessionWorkClockResult>,
+): Promise<void> {
+  try {
+    const sessionId = parseWorkSessionIdParam(p(req.params.sessionId));
+    const { idempotencyKey } = parseWorkSessionMutationBody(req.body);
+    sendSuccess(
+      res,
+      toCommandPayload(await command(
+        { sessionId, idempotencyKey },
+        actor(req),
+      )),
+      200,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
 export function postHandymanWorkSessionCheckInHandler(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  return runMutation(req, res, next, checkInHandymanWorkSession);
+  return runScopeMutation(req, res, next, checkInHandymanWorkSession);
 }
 
 export function postHandymanWorkSessionStartWorkHandler(
@@ -207,7 +233,7 @@ export function postHandymanWorkSessionStartWorkHandler(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  return runMutation(req, res, next, startWorkHandymanWorkSession);
+  return runSessionMutation(req, res, next, startWorkHandymanWorkSession);
 }
 
 export function postHandymanWorkSessionPauseHandler(
@@ -215,7 +241,7 @@ export function postHandymanWorkSessionPauseHandler(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  return runMutation(req, res, next, pauseHandymanWorkSession);
+  return runSessionMutation(req, res, next, pauseHandymanWorkSession);
 }
 
 export function postHandymanWorkSessionMaterialRunHandler(
@@ -223,7 +249,7 @@ export function postHandymanWorkSessionMaterialRunHandler(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  return runMutation(req, res, next, materialRunHandymanWorkSession);
+  return runSessionMutation(req, res, next, materialRunHandymanWorkSession);
 }
 
 export function postHandymanWorkSessionResumeHandler(
@@ -231,7 +257,7 @@ export function postHandymanWorkSessionResumeHandler(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  return runMutation(req, res, next, resumeHandymanWorkSession);
+  return runSessionMutation(req, res, next, resumeHandymanWorkSession);
 }
 
 export function postHandymanWorkSessionCompleteHandler(
@@ -239,7 +265,7 @@ export function postHandymanWorkSessionCompleteHandler(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  return runMutation(req, res, next, completeHandymanWorkSession);
+  return runSessionMutation(req, res, next, completeHandymanWorkSession);
 }
 
 export function postHandymanWorkSessionCheckOutHandler(
@@ -247,7 +273,7 @@ export function postHandymanWorkSessionCheckOutHandler(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  return runMutation(req, res, next, checkOutHandymanWorkSession);
+  return runSessionMutation(req, res, next, checkOutHandymanWorkSession);
 }
 
 /** GET active session + helper presence snapshot for the scope. */
