@@ -7,6 +7,8 @@ import {
 } from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
+import { handymanWorkCrewRepository }
+  from '../handyman-providers';
 import {
   handymanScopeAssignmentRepository,
   resolveHandymanAssignmentLead,
@@ -33,10 +35,11 @@ import type {
  * CR-HM-08 PART 02 — CHECK_IN + START_WORK commands ONLY (FROZEN
  * governance `CR-HM-08_START_GOVERNANCE.md` §3/§4/§5/§7/§11).
  * Composition of existing authorities ONLY: CR-HM-06 AUTHORIZED
- * scope gate, CR-HM-07 immutable VERIFIED arrival result (read-only
- * prerequisite — arrival is NEVER mutated here),
- * `resolveHandymanAssignmentLead` for CURRENT Lead authority, CR-HM-04
- * ACTIVE crew membership for the server-derived helper snapshot.
+ * scope gate, CR-HM-07 immutable arrival result (read-only prerequisite
+ * — arrival is NEVER mutated here), BE10's fresh binding to the same
+ * current assignment and Lead, `resolveHandymanAssignmentLead` for
+ * CURRENT Lead authority, and CR-HM-04 ACTIVE crew membership for the
+ * server-derived helper snapshot.
  *
  * CHECK_IN accepts ONLY executionScopeId + idempotencyKey; commands
  * for an existing session accept ONLY sessionId + idempotencyKey. The
@@ -49,6 +52,9 @@ import type {
  * NOT here: PAUSE / RESUME / MATERIAL_RUN / COMPLETE / CHECK_OUT
  * (PART 03+), billing, HTTP/OpenAPI, FM.
  */
+
+/** Frozen CHECK_IN arrival freshness window: 15 minutes from evaluatedAt. */
+export const HANDYMAN_CHECK_IN_ARRIVAL_FRESHNESS_SECONDS = 900;
 
 export type HandymanWorkSessionCheckInInput = {
   executionScopeId: string;
@@ -105,22 +111,67 @@ function ensureKey(value: string): string {
   return raw;
 }
 
-/**
- * Reads the immutable CR-HM-07 contract ONLY: does a VERIFIED
- * arrival result exist for THIS execution scope? NO mutation, NO
- * re-evaluation, NO caller-supplied result id.
- */
-async function findVerifiedArrivalResultId(
-  executor: Pick<PoolClient, 'query'> = getPool(),
+/** Reads the newest terminal arrival result for the exact scope. */
+async function findLatestArrivalGateResult(
+  executor: Pick<PoolClient, 'query'>,
   executionScopeId: string,
-): Promise<string | null> {
-  const result = await executor.query(
-    `SELECT id FROM handyman_arrival_verification_results
-      WHERE execution_scope_id = $1 AND status = 'VERIFIED'
-      ORDER BY created_at DESC LIMIT 1`,
+): Promise<{
+  clientId: string;
+  executionScopeId: string;
+  assignmentId: string;
+  actorUserId: string;
+  status: string;
+  evaluatedAt: Date;
+} | null> {
+  const result = await executor.query<{
+    client_id: string;
+    execution_scope_id: string;
+    assignment_id: string;
+    actor_user_id: string;
+    status: string;
+    evaluated_at: Date;
+  }>(
+    `SELECT client_id, execution_scope_id, assignment_id, actor_user_id,
+            status, evaluated_at
+       FROM handyman_arrival_verification_results
+      WHERE execution_scope_id = $1
+      ORDER BY evaluated_at DESC, created_at DESC, id DESC
+      LIMIT 1`,
     [executionScopeId],
   );
-  return result.rows[0]?.id ?? null;
+  const row = result.rows[0];
+  return row
+    ? {
+        clientId: row.client_id,
+        executionScopeId: row.execution_scope_id,
+        assignmentId: row.assignment_id,
+        actorUserId: row.actor_user_id,
+        status: row.status,
+        evaluatedAt: row.evaluated_at,
+      }
+    : null;
+}
+
+/**
+ * CHECK_IN consumes only a fresh VERIFIED snapshot of the current
+ * assignment + current Lead; any later terminal result supersedes it.
+ */
+async function hasFreshCurrentLeadArrival(
+  tx: Pick<PoolClient, 'query'>,
+  scope: { id: string; clientId: string },
+  resolution: Awaited<ReturnType<typeof resolveHandymanAssignmentLead>>,
+): Promise<boolean> {
+  if (!resolution) return false;
+  const result = await findLatestArrivalGateResult(tx, scope.id);
+  if (!result) return false;
+  const ageMs = Date.now() - result.evaluatedAt.getTime();
+  return result.status === 'VERIFIED'
+    && result.clientId === scope.clientId
+    && result.executionScopeId === scope.id
+    && result.assignmentId === resolution.assignmentId
+    && result.actorUserId === resolution.leadUserId
+    && ageMs >= 0
+    && ageMs <= HANDYMAN_CHECK_IN_ARRIVAL_FRESHNESS_SECONDS * 1000;
 }
 
 /**
@@ -216,13 +267,13 @@ async function lockWorkSession(
 }
 
 /**
- * CHECK_IN (governance §3/§5/§7): AUTHORIZED scope + immutable
- * CR-HM-07 VERIFIED arrival result + CURRENT authoritative Crew Lead
+ * CHECK_IN (BE10, governance §3/§5/§7): AUTHORIZED scope + the latest
+ * fresh VERIFIED arrival for the locked current assignment and Lead
  * → create ONE CHECKED_IN session, append the CHECK_IN event, and
  * snapshot CURRENT helper crew membership — atomically, server-clock
  * timestamps only. The same scope/key CHECK_IN retry resolves against
- * event history before active-session checks, including after closure;
- * a distinct key conflicts with any currently active session.
+ * event history before arrival/session preconditions, including after
+ * closure; a distinct key conflicts with any currently active session.
  */
 export async function checkInHandymanWorkSession(
   input: HandymanWorkSessionCheckInInput,
@@ -233,10 +284,7 @@ export async function checkInHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  const { resolution } = await authorityPreamble(
-    scopeUuid,
-    actorUuid,
-  );
+  await authorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     // Serialize check-in attempts even when the scope has no active
@@ -253,9 +301,36 @@ export async function checkInHandymanWorkSession(
       .findScopeById(tx, scopeUuid);
     if (!scope) throw handymanExecutionScopeNotFoundError();
 
+    // Assignment changes serialize on the scope row; Lead designation
+    // serializes on the crew row. Pin both snapshots before replay or a
+    // new CHECK_IN, then re-resolve the Lead against those locked rows.
+    const activeAssignment = await handymanScopeAssignmentRepository
+      .findActiveAssignmentByScope(tx, scopeUuid);
+    if (!activeAssignment || activeAssignment.clientId !== scope.clientId) {
+      throw handymanWorkSessionNotAuthorizedError();
+    }
+    const lockedCrew = await handymanWorkCrewRepository.lockCrewById(
+      tx,
+      activeAssignment.handymanCrewId,
+    );
+    if (!lockedCrew || lockedCrew.status !== 'ACTIVE') {
+      throw handymanWorkSessionNotAuthorizedError();
+    }
+    const { resolution: currentResolution } = await authorityPreamble(
+      scopeUuid,
+      actorUuid,
+    );
+    if (
+      currentResolution.assignmentId !== activeAssignment.id
+      || currentResolution.crewId !== activeAssignment.handymanCrewId
+      || currentResolution.leadUserId !== actorUuid
+    ) {
+      throw handymanWorkSessionNotAuthorizedError();
+    }
+
     // CHECK_IN has no pre-existing sessionId. Its stable replay key is
     // therefore resolved across this scope's complete event history,
-    // before any new-session preconditions or active-session lookup.
+    // before new arrival/session preconditions or active-session lookup.
     const replayEvent = await handymanWorkSessionRepository
       .findWorkSessionCheckInEventByIdempotency(tx, scopeUuid, key);
     if (replayEvent) {
@@ -278,7 +353,11 @@ export async function checkInHandymanWorkSession(
     if (scope.status !== 'AUTHORIZED') {
       throw handymanWorkSessionScopeNotEligibleError();
     }
-    if (!(await findVerifiedArrivalResultId(tx, scopeUuid))) {
+    if (!(await hasFreshCurrentLeadArrival(
+      tx,
+      { id: scopeUuid, clientId: scope.clientId },
+      currentResolution,
+    ))) {
       throw handymanWorkSessionArrivalRequiredError(scopeUuid);
     }
 
@@ -292,9 +371,9 @@ export async function checkInHandymanWorkSession(
       .createWorkSession(tx, {
         clientId: scope.clientId,
         executionScopeId: scopeUuid,
-        assignmentId: resolution.assignmentId,
-        leadWorkerId: resolution.leadWorkerContextId,
-        leadUserId: resolution.leadUserId,
+        assignmentId: currentResolution.assignmentId,
+        leadWorkerId: currentResolution.leadWorkerContextId,
+        leadUserId: currentResolution.leadUserId,
       });
     const event = await handymanWorkSessionRepository
       .appendWorkSessionEvent(tx, {
@@ -309,8 +388,8 @@ export async function checkInHandymanWorkSession(
     // the Lead; presence evidence only, NEVER billable manpower.
     const helpers = await listCurrentHelperRows(
       tx,
-      resolution.crewId,
-      resolution.leadWorkerContextId,
+      currentResolution.crewId,
+      currentResolution.leadWorkerContextId,
     );
     const helperPresence = [] as
       HandymanWorkSessionHelperPresenceRecord[];

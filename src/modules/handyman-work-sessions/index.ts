@@ -1,7 +1,6 @@
 /**
- * CR-HM-08 PART 01 — work-session persistence foundation barrel.
- * Repository + bounded types/errors ONLY: no commands, no transition
- * decisions, no arrival gate, no HTTP/OpenAPI.
+ * Backend-only work-session persistence and command surface, including
+ * CHECK_IN arrival binding. No HTTP/OpenAPI authority is exposed here.
  */
 export {
   HANDYMAN_WORK_SESSION_EVENT_TYPES,
@@ -32,6 +31,7 @@ export {
 export { handymanWorkSessionRepository }
   from './handyman-work-session.repository';
 export {
+  HANDYMAN_CHECK_IN_ARRIVAL_FRESHNESS_SECONDS,
   checkInHandymanWorkSession,
   checkOutHandymanWorkSession,
   completeHandymanWorkSession,

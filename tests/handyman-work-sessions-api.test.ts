@@ -714,6 +714,13 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
       '/handyman/execution-scopes/{executionScopeId}/work-sessions';
     const checkInPath = doc.paths[`${scopeBase}/check-in`];
     assert.ok(checkInPath?.post, 'OpenAPI CHECK_IN missing');
+    const checkInDescription = checkInPath.post.description as string;
+    assert.ok(checkInDescription.includes('900-second window'));
+    assert.ok(checkInDescription.includes('assignmentId'));
+    assert.ok(checkInDescription.includes('actorUserId'));
+    assert.ok(checkInDescription.includes(
+      'HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED'));
+    assert.ok(checkInDescription.includes('BE09 same-scope idempotencyKey'));
     assert.equal(checkInPath.post.parameters[0].$ref,
       '#/components/parameters/ExecutionScopeIdPath');
     const mutationRequestRef = checkInPath.post.requestBody

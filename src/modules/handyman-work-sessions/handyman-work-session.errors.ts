@@ -52,8 +52,8 @@ export function handymanWorkSessionScopeNotEligibleError(): AppError {
 }
 
 /**
- * CHECK_IN gate (governance §3): an immutable CR-HM-07 VERIFIED
- * arrival result must exist for the SAME execution scope.
+ * CHECK_IN gate: the latest immutable CR-HM-07 result must be fresh,
+ * VERIFIED, and bound to the exact scope, current assignment and Lead.
  */
 export function handymanWorkSessionArrivalRequiredError(
   executionScopeId: string,
@@ -61,7 +61,8 @@ export function handymanWorkSessionArrivalRequiredError(
   return new AppError({
     code: ERROR_CODES.HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED,
     message:
-      'Arrival verification (VERIFIED) is required before field work check-in.',
+      'A fresh VERIFIED arrival for the current assignment and Lead '
+      + 'is required before field work check-in.',
     statusCode: 409,
     details: [`executionScopeId=${executionScopeId}`],
   });

@@ -14,11 +14,16 @@ import { handymanDisciplineRepository }
   from '../src/modules/handyman-disciplines';
 import { saveHandymanBuildingGeospatialPolicy }
   from '../src/modules/handyman-geospatial-policies';
-import { addHandymanCrewMember }
-  from '../src/modules/handyman-providers';
-import { assignHandymanExecutionScopeCrew }
-  from '../src/modules/handyman-scope-assignments';
 import {
+  addHandymanCrewMember,
+  designateHandymanCrewLead,
+} from '../src/modules/handyman-providers';
+import {
+  assignHandymanExecutionScopeCrew,
+  reassignHandymanExecutionScopeCrew,
+} from '../src/modules/handyman-scope-assignments';
+import {
+  HANDYMAN_CHECK_IN_ARRIVAL_FRESHNESS_SECONDS,
   checkInHandymanWorkSession,
   startWorkHandymanWorkSession,
 } from '../src/modules/handyman-work-sessions';
@@ -35,16 +40,16 @@ import {
   baseFixture,
   crewFixture,
   initHandymanFixtures,
+  locationChain,
+  scopeFixture,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
- * CR-HM-08 PART 02 — CHECK_IN + START_WORK commands ONLY (governance
- * §3/§4/§5/§7/§11): ARRIVAL_VERIFIED gate, CURRENT Lead authority,
- * atomic session+event+server-derived helper snapshot, idempotent
- * replay, bounded illegal-transition behavior. Six focused cases.
- * ZERO PAUSE/RESUME/MATERIAL_RUN/COMPLETE/CHECK_OUT, billing,
- * HTTP/OpenAPI, FM.
+ * CR-HM-08 PART 02 command tests + CR-HM-18 BE10 arrival binding:
+ * current assignment/Lead, fresh immutable result, atomic session/event/
+ * helper snapshot, BE09 replay, and bounded transition behavior.
+ * Eleven focused service cases; no unrelated lifecycle or downstream work.
  */
 
 let database: DatabaseConfig | null = null;
@@ -207,27 +212,71 @@ async function authorityFixture(opts: { withHelper?: boolean } = {}) {
  */
 async function arriveVerified(
   f: Awaited<ReturnType<typeof authorityFixture>>,
+  leadUserId = f.leadUserId,
+  existingQrOpaqueCode?: string,
 ) {
   const chain = f.chain;
   await saveHandymanBuildingGeospatialPolicy(
     policyInput(f.realm.building.id), adminUserId);
-  const reg = await createHandymanArrivalLocationIdentifier({
-    buildingId: f.realm.building.id,
-    floorId: chain.floor.id,
-    areaId: chain.area.id,
-    roomId: chain.room.id,
-    spaceId: chain.space.id,
-  }, adminUserId);
+  const reg = existingQrOpaqueCode
+    ? { value: existingQrOpaqueCode }
+    : await createHandymanArrivalLocationIdentifier({
+      buildingId: f.realm.building.id,
+      floorId: chain.floor.id,
+      areaId: chain.area.id,
+      roomId: chain.room.id,
+      spaceId: chain.space.id,
+    }, adminUserId);
   const created = await createHandymanArrivalChallenge(
-    { executionScopeId: f.scope.id }, f.leadUserId);
+    { executionScopeId: f.scope.id }, leadUserId);
   const result = await evaluateHandymanArrivalVerification({
     executionScopeId: f.scope.id,
     challengeToken: created.token,
     qrOpaqueCode: reg.value,
     deviceLocation: goodDevice(),
-  }, f.leadUserId);
+  }, leadUserId);
   assert.equal(result.status, 'VERIFIED');
-  return result;
+  return { result, qrOpaqueCode: reg.value };
+}
+
+/** Seeds an immutable stale terminal row for the exact current binding. */
+async function seedStaleVerifiedArrival(
+  f: Awaited<ReturnType<typeof authorityFixture>>,
+) {
+  const created = await createHandymanArrivalChallenge(
+    { executionScopeId: f.scope.id }, f.leadUserId);
+  const consumed = await q(
+    `UPDATE handyman_arrival_challenges
+        SET status = 'CONSUMED', consumed_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND status = 'PENDING'
+      RETURNING id`,
+    [created.challenge.id],
+  );
+  assert.equal(consumed.rows.length, 1);
+  const staleAgeMs =
+    HANDYMAN_CHECK_IN_ARRIVAL_FRESHNESS_SECONDS * 1000 + 1000;
+  const inserted = await q(
+    `INSERT INTO handyman_arrival_verification_results (
+       id, client_id, execution_scope_id, assignment_id, actor_user_id,
+       challenge_id, expected_building_id, qr_signal, geofence_signal,
+       distance_meters, status, primary_reason, evaluated_at
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, 'MATCH', 'INSIDE', 0,
+       'VERIFIED', 'ALL_POSITIVE_EVIDENCE',
+       NOW() - ($8::double precision * INTERVAL '1 millisecond')
+     ) RETURNING id`,
+    [
+      randomUUID(),
+      f.realm.client.id,
+      f.scope.id,
+      f.assignmentId,
+      f.leadUserId,
+      created.challenge.id,
+      f.realm.building.id,
+      staleAgeMs,
+    ],
+  );
+  assert.equal(inserted.rows.length, 1);
 }
 
 describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
@@ -302,10 +351,13 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
     }, randomUUID()), (error: unknown) => statusCode(error) === 403);
   });
 
-  it('3: CHECK_IN creates session+event+server-derived helper snapshot atomically', async (t) => {
+  it('3: same-assignment VERIFIED arrival permits atomic CHECK_IN', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await authorityFixture();
-    await arriveVerified(f);
+    const arrival = await arriveVerified(f);
+    assert.equal(arrival.result.executionScopeId, f.scope.id);
+    assert.equal(arrival.result.assignmentId, f.assignmentId);
+    assert.equal(arrival.result.actorUserId, f.leadUserId);
     const result = await checkInHandymanWorkSession({
       executionScopeId: f.scope.id,
       idempotencyKey: `k-${randomUUID()}`,
@@ -340,11 +392,11 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
     assert.equal(events.rows.length, 1);
     assert.equal(events.rows[0].event_type, 'CHECK_IN');
     // Verified arrival contract remains UNTOUCHED (read-only gate).
-    const arrival = await q(
+    const arrivalRows = await q(
       `SELECT status FROM handyman_arrival_verification_results
         WHERE execution_scope_id = $1`,
       [f.scope.id]);
-    assert.equal(arrival.rows[0].status, 'VERIFIED');
+    assert.equal(arrivalRows.rows[0].status, 'VERIFIED');
   });
 
   it('4: CHECK_IN replay returns the same session/event; new key conflicts', async (t) => {
@@ -461,5 +513,163 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
         WHERE session_id = $1 AND event_type = 'START_WORK'`,
       [checkin.session.id]);
     assert.equal(events.rows[0].n, 1);
+  });
+
+  it('7: reassignment requires arrival verification for the new assignment', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const previousArrival = await arriveVerified(f);
+    const replacementCrew = await crewFixture(f.realm);
+    const replacement = await reassignHandymanExecutionScopeCrew({
+      executionScopeId: f.scope.id,
+      providerContextId: replacementCrew.providerContext.id,
+      crewId: replacementCrew.crew.id,
+    }, adminUserId);
+    assert.notEqual(replacement.id, f.assignmentId);
+
+    await assert.rejects(async () => checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, replacementCrew.leadUser.id), (error: unknown) =>
+      statusCode(error) === 409
+      && (error as { code?: string }).code
+        === 'HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED');
+
+    const freshArrival = await arriveVerified(
+      f, replacementCrew.leadUser.id, previousArrival.qrOpaqueCode);
+    assert.equal(freshArrival.result.assignmentId, replacement.id);
+    assert.equal(freshArrival.result.actorUserId, replacementCrew.leadUser.id);
+    const checkin = await checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, replacementCrew.leadUser.id);
+    assert.equal(checkin.session.assignmentId, replacement.id);
+    assert.equal(checkin.session.leadUserId, replacementCrew.leadUser.id);
+  });
+
+  it('8: current Lead change requires a new Lead-bound arrival result', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const previousArrival = await arriveVerified(f);
+    assert.ok(f.helper);
+    await buildingAssignmentService.createAssignment(f.helper!.userId, {
+      buildingId: f.realm.building.id,
+    });
+    await designateHandymanCrewLead({
+      handymanCrewId: f.crew.crew.id,
+      handymanWorkerContextId: f.helper!.workerContextId,
+    }, adminUserId);
+
+    await assert.rejects(async () => checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.helper!.userId), (error: unknown) =>
+      statusCode(error) === 409
+      && (error as { code?: string }).code
+        === 'HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED');
+
+    const freshArrival = await arriveVerified(
+      f, f.helper!.userId, previousArrival.qrOpaqueCode);
+    assert.equal(freshArrival.result.assignmentId, f.assignmentId);
+    assert.equal(freshArrival.result.actorUserId, f.helper!.userId);
+    const checkin = await checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.helper!.userId);
+    assert.equal(checkin.session.assignmentId, f.assignmentId);
+    assert.equal(checkin.session.leadUserId, f.helper!.userId);
+  });
+
+  it('9: stale VERIFIED arrival is rejected at the frozen freshness boundary', async (t) => {
+    if (!requireDatabase(t)) return;
+    assert.equal(HANDYMAN_CHECK_IN_ARRIVAL_FRESHNESS_SECONDS, 900);
+    const f = await authorityFixture();
+    // The immutable row is seeded with the exact current scope,
+    // assignment and Lead, but evaluated 901 seconds ago.
+    await seedStaleVerifiedArrival(f);
+    await assert.rejects(async () => checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId), (error: unknown) =>
+      statusCode(error) === 409
+      && (error as { code?: string }).code
+        === 'HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED');
+    const sessions = await q(
+      `SELECT count(*)::int AS n FROM handyman_work_sessions
+        WHERE execution_scope_id = $1`,
+      [f.scope.id]);
+    assert.equal(sessions.rows[0].n, 0);
+  });
+
+  it('10: another scope in the same Client cannot reuse the arrival result', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    await arriveVerified(f);
+    const otherChain = await locationChain(f.realm, {
+      spaceName: 'Other scope space',
+    });
+    const other = await scopeFixture(
+      f.realm, otherChain, 'Other scope');
+    await assignHandymanExecutionScopeCrew({
+      executionScopeId: other.scope.id,
+      providerContextId: f.crew.providerContext.id,
+      crewId: f.crew.crew.id,
+    }, adminUserId);
+
+    await assert.rejects(async () => checkInHandymanWorkSession({
+      executionScopeId: other.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId), (error: unknown) =>
+      statusCode(error) === 409
+      && (error as { code?: string }).code
+        === 'HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED');
+  });
+
+  it('11: BE09 replay survives a later non-VERIFIED result before the new gate', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const arrival = await arriveVerified(f);
+    const key = `k-${randomUUID()}`;
+    const first = await checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: key,
+    }, f.leadUserId);
+
+    const challenge = await createHandymanArrivalChallenge(
+      { executionScopeId: f.scope.id }, f.leadUserId);
+    const laterFailure = await evaluateHandymanArrivalVerification({
+      executionScopeId: f.scope.id,
+      challengeToken: challenge.token,
+      qrOpaqueCode: arrival.qrOpaqueCode,
+      deviceLocation: {
+        latitude: REF.latitude,
+        longitude: REF.longitude + 0.02,
+        accuracyMeters: 10,
+        capturedAt: new Date().toISOString(),
+      },
+    }, f.leadUserId);
+    assert.equal(laterFailure.status, 'FAILED');
+
+    const replay = await checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: key,
+    }, f.leadUserId);
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.session.id, first.session.id);
+    assert.equal(replay.event.id, first.event.id);
+
+    // The latest FAILED result does block a genuinely new check-in.
+    await assert.rejects(async () => checkInHandymanWorkSession({
+      executionScopeId: f.scope.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId), (error: unknown) =>
+      statusCode(error) === 409
+      && (error as { code?: string }).code
+        === 'HANDYMAN_WORK_SESSION_ARRIVAL_REQUIRED');
+    const sessions = await q(
+      `SELECT count(*)::int AS n FROM handyman_work_sessions
+        WHERE execution_scope_id = $1`,
+      [f.scope.id]);
+    assert.equal(sessions.rows[0].n, 1);
   });
 });
