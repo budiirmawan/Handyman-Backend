@@ -7,6 +7,10 @@ Artifact type: authoritative cross-repository CR coding roadmap
 DB tables, events, or runtime enums are defined here — those belong
 to each implementation CR).
 
+Additive amendment index: HANDYMAN ROADMAP AMENDMENT 01 — Persona &
+Frontend is registered in the appendix below. It preserves the frozen
+v1.0 base definitions and CR-HM-01..22 numbering.
+
 Derived exclusively from:
 
 - `docs/handyman/CR-HM-00_BACKEND_CAPABILITY_MAP.md`
@@ -511,3 +515,28 @@ Roadmap Version: 1.0
 Future changes — top-level CR addition/removal, renumbering,
 scope repurposing, or dependency-direction change — require an
 explicit roadmap change CR.
+
+---
+
+## Additive Amendment Register — Amendment 01 (Persona & Frontend)
+
+**Status: FROZEN — additive overlay to the frozen v1.0 base.** This
+register is the explicit roadmap change for Amendment 01. The v1.0
+CR-HM-01..22 definitions, order, and validation record above remain
+the frozen base and are not renumbered or rewritten here. The frozen
+34-row CR-HM-00 ownership matrix is unchanged. Full persona, surface,
+authority, mirror, and communication boundaries are recorded in
+`docs/handyman/HANDYMAN_ROADMAP_AMENDMENT_01_PERSONA_FRONTEND.md`.
+
+| Registration | Name | Primary Repository / Authority | Depends On | Produces Contract For | Authority / Boundary |
+|---|---|---|---|---|---|
+| CR-HM-17-A01 | Customer Care Browser Visual Mirror | Handyman-Frontend; Handyman-Backend remains business/auth authority | CR-HM-17 | CR-HM-22 | Production Customer Care journey and browser mirror update together per UX PART; mirror is non-authoritative and does not alter the BM Super App → Handyman-Frontend path. |
+| CR-HM-23 | Operations Portal Authority & Integration | Handyman-Backend authority + Handyman-Operations consumer | CR-HM-04, CR-HM-18 | CR-HM-24, CR-HM-25 | Explicit Persona → Surface → Role → Capability → Backend chain; Admin and Dispatcher remain distinct; Backend is final authorization authority. |
+| CR-HM-24 | Admin/Dispatcher Operations Frontend | Handyman-Operations | CR-HM-23; applicable published CR-HM-01..16/18 contracts | CR-HM-22, CR-HM-25 | Presents explicitly granted Admin/Dispatcher capabilities in one portal; UI and mirror do not own business or assignment authority. |
+| CR-HM-25 | Job Conversation & Operational Communication | Handyman-Backend authority; Handyman-Frontend, Handyman-Operations, and Mob-Handyman consumers | CR-HM-04, CR-HM-06, CR-HM-16, CR-HM-23 | CR-HM-17, CR-HM-18, CR-HM-24 | Job/scope conversation is distinct from Notification/System Event; Backend is authoritative and each client is presentation only. |
+
+CR-HM-17-A01 is subordinate to CR-HM-17 and is not a new top-level
+number. CR-HM-23, CR-HM-24, and CR-HM-25 are additive top-level
+registrations after CR-HM-22. This appendix does not redefine any
+base dependency, surface implementation, endpoint, schema, or runtime
+behavior.
