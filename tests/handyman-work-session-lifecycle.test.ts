@@ -367,7 +367,7 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
       ['CHECK_IN', 'CHECK_OUT']);
     // Projection: presence elapsed, actual work EXACTLY zero.
     const projection = await getHandymanWorkSessionTimeProjection(
-      f.scope.id, f.leadUserId);
+      checkin.session.id, f.leadUserId);
     assert.equal(projection.sessionClosed, true);
     assert.equal(projection.actualWorkSeconds, 0);
     assert.ok(projection.presenceSeconds >= 0);
@@ -391,7 +391,7 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
       idempotencyKey: `k-${randomUUID()}` }, f.leadUserId);
     await sleep(SLEEP_MS); // working
     const open = await getHandymanWorkSessionTimeProjection(
-      f.scope.id, f.leadUserId);
+      f.checkin.session.id, f.leadUserId);
     assert.equal(open.sessionClosed, false);
     assert.ok(open.presenceSeconds > open.actualWorkSeconds,
       `presence ${open.presenceSeconds} must exceed work `
@@ -407,9 +407,9 @@ describe('CR-HM-08 PART 04 — complete / check-out / projections', () => {
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const closedA = await getHandymanWorkSessionTimeProjection(
-      f.scope.id, f.leadUserId);
+      f.checkin.session.id, f.leadUserId);
     const closedB = await getHandymanWorkSessionTimeProjection(
-      f.scope.id, f.leadUserId);
+      f.checkin.session.id, f.leadUserId);
     assert.equal(closedA.sessionClosed, true);
     assert.equal(closedA.presenceSeconds, closedB.presenceSeconds);
     assert.equal(closedA.actualWorkSeconds, closedB.actualWorkSeconds);

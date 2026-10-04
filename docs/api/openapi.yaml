@@ -5061,7 +5061,7 @@ paths:
       tags: [Handyman Work Sessions]
       operationId: getHandymanWorkSessionTimeProjection
       summary: Read the server-side presence/actual-work time projection
-      description: "CR-HM-08 PART 05 — internal READ-ONLY projection over the append-only event stream (the only authority): presenceTime = CHECK_IN -> CHECK_OUT (open tail projects against server-now; nothing is fabricated or persisted); actualWorkTime = the SUM of IN_PROGRESS intervals ONLY (PAUSED and MATERIAL_RUN excluded). NO billable time, rate, or charge exists. Same Lead authority."
+      description: "CR-HM-08 PART 05 — internal READ-ONLY projection for the exact sessionId in the path, computed from that session's append-only event stream (the only authority): presenceTime = CHECK_IN -> CHECK_OUT (open tail projects against server-now; nothing is fabricated or persisted); actualWorkTime = the SUM of IN_PROGRESS intervals ONLY (PAUSED and MATERIAL_RUN excluded). NO billable time, rate, or charge exists. Same current-Lead and Client-access authority, resolved using the requested session's scope."
       parameters:
         - name: sessionId
           in: path
@@ -5069,11 +5069,17 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Server-side time projection
+          description: Server-side time projection for the requested session ID
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanWorkSessionTimeProjection'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanWorkSessionTimeProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -78474,7 +78480,10 @@ components:
             $ref: '#/components/schemas/HandymanWorkSessionHelperPresence'
     HandymanWorkSessionTimeProjection:
       type: object
-      description: "Server-side READ-ONLY projection: presenceSeconds (CHECK_IN -> CHECK_OUT or server-now) vs actualWorkSeconds (IN_PROGRESS intervals ONLY). NO billable/rate/charge projection can ever exist."
+      description: "Server-side READ-ONLY projection for exactly one requested session: presenceSeconds (CHECK_IN -> CHECK_OUT or server-now) vs actualWorkSeconds (IN_PROGRESS intervals ONLY). NO billable/rate/charge projection can ever exist."
+      required:
+        [sessionId, executionScopeId, status, presenceSeconds,
+         actualWorkSeconds, sessionClosed, projectedAt]
       properties:
         sessionId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
@@ -78484,6 +78493,7 @@ components:
         presenceSeconds: { type: number, minimum: 0 }
         actualWorkSeconds: { type: number, minimum: 0 }
         sessionClosed: { type: boolean }
+        projectedAt: { type: string, format: date-time }
     HandymanKeyedRequest:
       type: object
       required: [idempotencyKey]

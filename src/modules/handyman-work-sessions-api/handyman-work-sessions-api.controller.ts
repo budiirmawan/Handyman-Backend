@@ -8,7 +8,6 @@ import {
   getActiveHandymanWorkSession,
   getHandymanWorkSessionsCustomerCareView,
   getHandymanWorkSessionTimeProjection,
-  handymanWorkSessionNotFoundError,
   materialRunHandymanWorkSession,
   pauseHandymanWorkSession,
   resumeHandymanWorkSession,
@@ -23,8 +22,6 @@ import type {
   HandymanWorkSessionTimeProjection,
   HandymanWorkSessionWorkClockResult,
 } from '../handyman-work-sessions';
-import { handymanWorkSessionRepository }
-  from '../handyman-work-sessions';
 import {
   parseWorkSessionIdParam,
   parseWorkSessionMutationBody,
@@ -316,14 +313,11 @@ export async function getHandymanWorkSessionTimeProjectionHandler(
       p(req.params.sessionId),
     );
     const actorUserId = actor(req);
-    const session = await handymanWorkSessionRepository
-      .findWorkSessionById(undefined, sessionId);
-    if (!session) throw handymanWorkSessionNotFoundError();
     sendSuccess(
       res,
       toProjectionPayload(
         await getHandymanWorkSessionTimeProjection(
-          session.executionScopeId,
+          sessionId,
           actorUserId,
         ),
       ),

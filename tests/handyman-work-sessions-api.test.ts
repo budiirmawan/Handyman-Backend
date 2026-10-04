@@ -7,6 +7,7 @@ import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { credentialService } from '../src/modules/auth';
+import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { createHandymanArrivalChallenge }
   from '../src/modules/handyman-arrival-challenges';
 import { createHandymanArrivalLocationIdentifier }
@@ -42,7 +43,7 @@ import { api } from './helpers/http';
  * time-projection read. Actor/client context from the authenticated
  * request ONLY; forbidden authority-shaped inputs are structurally
  * ignored; bounded error mapping (400/401/403/404/409); exact
- * OpenAPI parity. Six focused cases.
+ * OpenAPI parity. Nine focused cases.
  */
 
 const SLEEP_MS = 40;
@@ -218,6 +219,7 @@ async function authorityFixture() {
     ...f,
     crew,
     helperContext,
+    helperUser,
     token,
     leadUserId: crew.leadUser.id,
     assignmentId: assignment.id,
@@ -459,7 +461,105 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
     assert.equal(unknown.status, 404);
   });
 
-  it('6: OpenAPI parity + forbidden caller fields absent/ignored', async (t) => {
+  it('6: time projection returns the requested older and current sessions', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const first = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    const olderSessionId = first.body.data.session.id as string;
+    const checkedOut = await mutate(f.token, f.scope.id, 'check-out', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(checkedOut.status, 200, JSON.stringify(checkedOut.body));
+
+    const second = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    const currentSessionId = second.body.data.session.id as string;
+    assert.notEqual(currentSessionId, olderSessionId);
+
+    const older = await api()
+      .get(`${V1}/handyman/work-sessions/${olderSessionId}/time-projection`)
+      .set('Authorization', `Bearer ${f.token}`);
+    assert.equal(older.status, 200, JSON.stringify(older.body));
+    assert.equal(older.body.data.sessionId, olderSessionId);
+    assert.equal(older.body.data.status, 'CHECKED_OUT');
+    assert.equal(older.body.data.sessionClosed, true);
+
+    const current = await api()
+      .get(`${V1}/handyman/work-sessions/${currentSessionId}/time-projection`)
+      .set('Authorization', `Bearer ${f.token}`);
+    assert.equal(current.status, 200, JSON.stringify(current.body));
+    assert.equal(current.body.data.sessionId, currentSessionId);
+    assert.equal(current.body.data.status, 'CHECKED_IN');
+    assert.equal(current.body.data.sessionClosed, false);
+  });
+
+  it('7: denies a session projection from another scope/Client', async (t) => {
+    if (!requireDatabase(t)) return;
+    const local = await authorityFixture();
+    const foreign = await authorityFixture();
+    const foreignCheckIn = await mutate(
+      foreign.token,
+      foreign.scope.id,
+      'check-in',
+      { idempotencyKey: `k-${randomUUID()}` },
+    );
+    assert.equal(foreignCheckIn.status, 200,
+      JSON.stringify(foreignCheckIn.body));
+    const foreignSessionId = foreignCheckIn.body.data.session.id as string;
+    const denied = await api()
+      .get(`${V1}/handyman/work-sessions/${foreignSessionId}/time-projection`)
+      .set('Authorization', `Bearer ${local.token}`);
+    assert.equal(denied.status, 403);
+  });
+
+  it('8: time projection enforces current Lead and Client access', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    const checkedIn = await mutate(f.token, f.scope.id, 'check-in', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    assert.equal(checkedIn.status, 200, JSON.stringify(checkedIn.body));
+    const sessionId = checkedIn.body.data.session.id as string;
+    const path = `${V1}/handyman/work-sessions/${sessionId}/time-projection`;
+
+    // A non-Lead with Client access must still fail the current-Lead check.
+    await buildingAssignmentService.createAssignment(f.helperUser.id, {
+      buildingId: f.realm.building.id,
+    });
+    const helperPassword = `HelperPass-${randomUUID().slice(0, 8)}`;
+    await credentialService.createInitialCredential({
+      userId: f.helperUser.id,
+      password: helperPassword,
+    });
+    const helperLogin = await api().post(`${V1}/auth/login`).send({
+      email: f.helperUser.email,
+      password: helperPassword,
+    });
+    assert.equal(helperLogin.status, 200, JSON.stringify(helperLogin.body));
+    const helperRead = await api().get(path).set(
+      'Authorization',
+      `Bearer ${helperLogin.body.data.sessionToken as string}`,
+    );
+    assert.equal(helperRead.status, 403);
+
+    const leadRead = await api().get(path)
+      .set('Authorization', `Bearer ${f.token}`);
+    assert.equal(leadRead.status, 200, JSON.stringify(leadRead.body));
+    await buildingAssignmentService.deactivateAssignment(
+      f.leadUserId,
+      f.realm.building.id,
+    );
+    const noClientAccess = await api().get(path)
+      .set('Authorization', `Bearer ${f.token}`);
+    assert.equal(noClientAccess.status, 403);
+  });
+
+  it('9: OpenAPI parity + forbidden caller fields absent/ignored', async (t) => {
     assert.ok(requireDatabase(t));
     const doc = YAML.parse(readFileSync(
       'docs/api/openapi.yaml', 'utf8'));
@@ -480,9 +580,34 @@ describe('CR-HM-08 PART 05 — work session HTTP surface', () => {
         '#/components/schemas/HandymanWorkSessionMutationRequest');
     }
     assert.ok(doc.paths[`${scopeBase}/active`].get);
-    assert.ok(
-      doc.paths['/handyman/work-sessions/{sessionId}/time-projection']
-        .get);
+    const projectionOperation = doc.paths[
+      '/handyman/work-sessions/{sessionId}/time-projection'
+    ].get;
+    const projectionResponse = projectionOperation.responses['200']
+      .content['application/json'].schema;
+    assert.equal(
+      projectionResponse.allOf[0].$ref,
+      '#/components/schemas/SuccessEnvelope',
+    );
+    assert.equal(
+      projectionResponse.allOf[1].properties.data.$ref,
+      '#/components/schemas/HandymanWorkSessionTimeProjection',
+    );
+    const projectionSchema = doc.components.schemas
+      .HandymanWorkSessionTimeProjection;
+    assert.deepEqual(projectionSchema.required, [
+      'sessionId',
+      'executionScopeId',
+      'status',
+      'presenceSeconds',
+      'actualWorkSeconds',
+      'sessionClosed',
+      'projectedAt',
+    ]);
+    assert.deepEqual(projectionSchema.properties.projectedAt, {
+      type: 'string',
+      format: 'date-time',
+    });
     // Mutation request: EXACTLY the idempotency key, nothing else.
     const req = doc.components.schemas
       .HandymanWorkSessionMutationRequest;

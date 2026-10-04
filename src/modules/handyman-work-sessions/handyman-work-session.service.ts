@@ -645,8 +645,9 @@ export async function checkOutHandymanWorkSession(
 }
 
 /**
- * Internal READ-ONLY time projection over the append-only event
- * stream (governance §6/§11 — the stream is the ONLY authority):
+ * Internal READ-ONLY time projection for one exact sessionId over the
+ * append-only event stream (governance §6/§11 — the stream is the ONLY
+ * authority). The session's persisted scope supplies authorization:
  *
  *   presenceTime    — CHECK_IN event → CHECK_OUT event; for an open
  *                     session the tail projects against server-now
@@ -724,36 +725,34 @@ function computeSessionTimeFromEvents(
 }
 
 export async function getHandymanWorkSessionTimeProjection(
-  executionScopeId: string,
+  sessionId: string,
   actorUserId: string,
 ): Promise<HandymanWorkSessionTimeProjection> {
-  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const sessionUuid = ensureUuid(sessionId, 'sessionId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await authorityPreamble(scopeUuid, actorUuid);
+  const session = await handymanWorkSessionRepository
+    .findWorkSessionById(undefined, sessionUuid);
+  if (!session) throw handymanWorkSessionNotFoundError();
 
-  const latest = await getPool().query(
-    `SELECT id, status, client_id FROM handyman_work_sessions
-      WHERE execution_scope_id = $1
-      ORDER BY created_at DESC LIMIT 1`,
-    [scopeUuid],
-  );
-  const sessionRow = latest.rows[0];
-  if (!sessionRow) throw handymanWorkSessionNotFoundError();
+  // Authorization is resolved from this exact session's persisted scope;
+  // never substitute another/latest session from the same scope.
+  await authorityPreamble(session.executionScopeId, actorUuid);
 
-  // Consistent read of the event stream under the SERVER clock.
+  // Consistent read of the requested session's event stream under the
+  // SERVER clock.
   const nowRow = await getPool().query(
     `SELECT NOW() AS server_now`);
   const serverNow: Date = nowRow.rows[0].server_now;
 
   const events = await handymanWorkSessionRepository
-    .listWorkSessionEventsBySession(undefined, sessionRow.id);
+    .listWorkSessionEventsBySession(undefined, session.id);
   const { presenceSeconds, actualWorkSeconds, sessionClosed } =
     computeSessionTimeFromEvents(events, serverNow);
 
   return {
-    sessionId: sessionRow.id,
-    executionScopeId: scopeUuid,
-    status: sessionRow.status,
+    sessionId: session.id,
+    executionScopeId: session.executionScopeId,
+    status: session.status,
     presenceSeconds,
     actualWorkSeconds,
     sessionClosed,
