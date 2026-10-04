@@ -37,10 +37,14 @@ import { arrivalResultConflictError }
 import {
   findHandymanArrivalResultByChallengeId,
   insertHandymanArrivalVerificationResult,
+  listHandymanArrivalResultsByExecutionScope,
 } from './handyman-arrival-result.repository';
 import type {
   HandymanArrivalResultGeofenceSignal,
   HandymanArrivalResultStatus,
+  HandymanArrivalVerificationResultRecord,
+  HandymanCustomerCareArrivalResultItem,
+  HandymanCustomerCareArrivalVerificationProjection,
   PublicHandymanArrivalVerificationResult,
 } from './handyman-arrival-result.types';
 
@@ -400,6 +404,64 @@ export async function evaluateHandymanArrivalVerification(
   });
 }
 
+function toCustomerCareArrivalResultItem(
+  record: HandymanArrivalVerificationResultRecord,
+): HandymanCustomerCareArrivalResultItem {
+  return {
+    id: record.id,
+    executionScopeId: record.executionScopeId,
+    assignmentId: record.assignmentId,
+    challengeId: record.challengeId,
+    expectedLocation: {
+      buildingId: record.expectedBuildingId,
+      floorId: record.expectedFloorId,
+      areaId: record.expectedAreaId,
+      roomId: record.expectedRoomId,
+      spaceId: record.expectedSpaceId,
+    },
+    status: record.status,
+    primaryReason: record.primaryReason,
+    qrSignal: record.qrSignal,
+    geofenceSignal: record.geofenceSignal,
+    distanceMeters: record.distanceMeters,
+    evaluatedAt: record.evaluatedAt.toISOString(),
+    createdAt: record.createdAt.toISOString(),
+  };
+}
+
+/**
+ * CR-HM-17 GAP PART 03 — bounded Customer Care arrival verification read
+ * projection for an execution scope. Enforces `canAccessClient` via
+ * `resolveHandymanExpectedArrivalLocation`; returns scope-keyed status and
+ * expected location facts with zero challenge token or token hash exposure.
+ */
+export async function getHandymanArrivalVerificationByScope(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanCustomerCareArrivalVerificationProjection> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  ensureUuid(actorUserId, 'actorUserId');
+
+  const expectedLocation = await resolveHandymanExpectedArrivalLocation(
+    scopeUuid,
+    actorUserId,
+  );
+  const records = await listHandymanArrivalResultsByExecutionScope(
+    undefined,
+    scopeUuid,
+  );
+  const results = records.map(toCustomerCareArrivalResultItem);
+
+  return {
+    executionScopeId: scopeUuid,
+    expectedLocation,
+    arrivalVerified: results.some((r) => r.status === 'VERIFIED'),
+    latestResult: results.length > 0 ? results[results.length - 1] : null,
+    results,
+  };
+}
+
 export const handymanArrivalResultService = {
   evaluateHandymanArrivalVerification,
+  getHandymanArrivalVerificationByScope,
 };

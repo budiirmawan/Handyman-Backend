@@ -26,3 +26,5 @@ export function handymanServiceRequestScopeMismatchError(): AppError {
     statusCode: 400,
   });
 }
+
+export { handymanServiceRequestNotFoundError } from './handyman-request-triage.errors';

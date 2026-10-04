@@ -107,10 +107,31 @@ async function updateStatus(
   return result.rows[0] ? map(result.rows[0]) : null;
 }
 
+async function listActiveByClient(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  clientId: string,
+  providerContextId?: string,
+): Promise<HandymanProviderContextRecord[]> {
+  const conditions = [`client_id = $1`, `status = 'ACTIVE'`];
+  const values: unknown[] = [clientId];
+  if (providerContextId !== undefined) {
+    conditions.push(`id = $2`);
+    values.push(providerContextId);
+  }
+  const result = await executor.query<Row>(
+    `${CONTEXT_SELECT}
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at ASC, id ASC`,
+    values,
+  );
+  return result.rows.map(map);
+}
+
 export const handymanProviderContextRepository = {
   insertContext,
   findById,
   findByVendor,
   lockById,
   updateStatus,
+  listActiveByClient,
 };

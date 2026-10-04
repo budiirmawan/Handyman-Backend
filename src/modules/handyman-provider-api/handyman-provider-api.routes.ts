@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
+  getHandymanProviderAvailabilityHandler,
   getHandymanProviderContextByVendorHandler,
   getHandymanWorkerContextHandler,
   getHandymanWorkCrewHandler,
@@ -50,6 +51,12 @@ export function createHandymanProviderApiRouter(): Router {
   const read = requirePermission('tenant_company.read');
   const manage = requirePermission('tenant_company.manage');
 
+  router.get(
+    '/handyman/provider-availability',
+    auth,
+    read,
+    getHandymanProviderAvailabilityHandler,
+  );
   router.post(
     '/handyman/provider-contexts',
     auth,

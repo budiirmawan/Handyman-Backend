@@ -1,3 +1,5 @@
+import type { HandymanCareActorType } from '../handyman-channel-attributions';
+
 /**
  * CR-HM-02 PART 03 — Handyman request intake types (frozen D3).
  *
@@ -72,6 +74,63 @@ export type PublicHandymanServiceRequest = Omit<
 > & {
   createdAt: string;
   updatedAt: string;
+};
+
+/**
+ * CR-HM-17 GAP PART 01 — Backend-resolved attribution / care-actor
+ * provenance composed from the immutable `handyman_channel_attributions`
+ * row bound to the request.
+ */
+export type HandymanRequestAttributionProvenance = {
+  id: string;
+  originChannel: string;
+  originReference: string | null;
+  createdByUserId: string | null;
+  actorType: HandymanCareActorType | null;
+  careActorId: string | null;
+  actorReference: string | null;
+  createdAt: string;
+};
+
+/**
+ * Database projection record for Customer Care request reads.
+ * Includes governed request/status, Backend-resolved attribution /
+ * care-actor provenance, and execution-scope pointer where present.
+ */
+export type HandymanCustomerCareServiceRequestRecord =
+  HandymanServiceRequestRecord & {
+    actorType: HandymanCareActorType | null;
+    careActorId: string | null;
+    actorReference: string | null;
+    attributionCreatedAt: Date;
+    executionScopeId: string | null;
+  };
+
+/**
+ * Safe public Customer Care read projection (list + detail).
+ * Includes only governed request/status, Backend-resolved
+ * attribution/care-actor provenance, and execution-scope pointer
+ * where present. No local status inference; no FM/SaaS fallback.
+ */
+export type PublicHandymanCustomerCareServiceRequest =
+  PublicHandymanServiceRequest & {
+    actorType: HandymanCareActorType | null;
+    careActorId: string | null;
+    actorReference: string | null;
+    attribution: HandymanRequestAttributionProvenance;
+    executionScopeId: string | null;
+  };
+
+/**
+ * Client-scoped filter input for `listHandymanServiceRequests`.
+ */
+export type HandymanServiceRequestListFilters = {
+  clientId: string;
+  tenantCompanyId?: string;
+  buildingId?: string;
+  spaceId?: string;
+  channelAttributionId?: string;
+  status?: HandymanServiceRequestStatus;
 };
 
 /**

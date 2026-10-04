@@ -146,6 +146,22 @@ async function supersedeAssignment(
   return result.rows[0] ? map(result.rows[0]) : null;
 }
 
+async function listActiveAssignmentsByCrew(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  clientId: string,
+  crewId: string,
+): Promise<HandymanExecutionScopeAssignmentRecord[]> {
+  const result = await executor.query(
+    `${ASSIGNMENT_SELECT}
+      WHERE client_id = $1
+        AND handyman_crew_id = $2
+        AND status = 'ACTIVE'
+      ORDER BY assigned_at ASC, id ASC`,
+    [clientId, crewId],
+  );
+  return result.rows.map(map);
+}
+
 export const handymanScopeAssignmentRepository = {
   lockScopeById,
   findScopeById,
@@ -153,4 +169,5 @@ export const handymanScopeAssignmentRepository = {
   findActiveAssignmentByScope,
   lockActiveAssignmentByScope,
   supersedeAssignment,
+  listActiveAssignmentsByCrew,
 };

@@ -182,7 +182,26 @@ export async function findHandymanArrivalResultByChallengeId(
   return result.rowCount === 0 ? null : map(result.rows[0]);
 }
 
+/**
+ * CR-HM-17 GAP PART 03 — lists all immutable terminal arrival verification
+ * results recorded for an execution scope in chronological order.
+ */
+export async function listHandymanArrivalResultsByExecutionScope(
+  executor: QueryExecutor = getPool(),
+  executionScopeId: string,
+): Promise<HandymanArrivalVerificationResultRecord[]> {
+  const result = await executor.query(
+    `SELECT ${COLUMNS}
+       FROM handyman_arrival_verification_results
+      WHERE execution_scope_id = $1
+      ORDER BY evaluated_at ASC, created_at ASC, id ASC`,
+    [executionScopeId],
+  );
+  return result.rows.map(map);
+}
+
 export const handymanArrivalResultRepository = {
   insertHandymanArrivalVerificationResult,
   findHandymanArrivalResultByChallengeId,
+  listHandymanArrivalResultsByExecutionScope,
 };

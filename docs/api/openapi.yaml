@@ -2804,6 +2804,67 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   /handyman/requests:
+    get:
+      operationId: listHandymanServiceRequests
+      summary: List Customer Care Handyman requests for a Client scope
+      description: >
+        CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request list read
+        projection. Requires `tenant_company.read` and accessible-Client
+        scope (`canAccessClient`). Returns only governed request/status,
+        Backend-resolved attribution/care-actor provenance from the immutable
+        `handyman_channel_attributions` row, and the execution-scope pointer
+        (`executionScopeId`) where present. No lifecycle commands, no local
+        status inference, and no FM/SaaS fallback exist here.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: channelAttributionId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
+      responses:
+        "200":
+          description: Bounded Customer Care Handyman request list projection.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanCustomerCareServiceRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
     post:
       operationId: createHandymanServiceRequest
       summary: Create a Handyman request from the attribution handle
@@ -2853,6 +2914,49 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+
+  /handyman/requests/{handymanRequestId}:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanServiceRequestDetail
+      summary: Get one Customer Care Handyman request detail projection
+      description: >
+        CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request detail read
+        projection. Requires `tenant_company.read` and accessible-Client
+        scope (`canAccessClient`). Returns only governed request/status,
+        Backend-resolved attribution/care-actor provenance from the immutable
+        `handyman_channel_attributions` row, and the execution-scope pointer
+        (`executionScopeId`) where present. No lifecycle commands, no local
+        status inference, and no FM/SaaS fallback exist here.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Bounded Customer Care Handyman request detail projection.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanCustomerCareServiceRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /handyman/requests/{handymanRequestId}/intake-evidence:
     parameters:
@@ -3231,6 +3335,60 @@ paths:
                     properties:
                       data:
                         { $ref: "#/components/schemas/HandymanReferralRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/provider-availability:
+    get:
+      operationId: listHandymanProviderAvailability
+      summary: List assignable ACTIVE Handyman provider contexts, crews, Leads, and occupancy facts
+      description: >
+        CR-HM-17 GAP PART 02 (B4) — bounded Customer Care provider availability
+        read projection over existing CR-HM-04 (`handyman_provider_contexts`,
+        `handyman_worker_contexts`, `handyman_work_crews`,
+        `handyman_crew_memberships`, `handyman_crew_leads`,
+        `workforce_profiles`), CR-HM-04A
+        (`handyman_execution_scope_assignments`), and CR-HM-08
+        (`handyman_work_sessions`) authorities. Requires `tenant_company.read`
+        and accessible-Client scope (`canAccessClient`). Returns only ACTIVE
+        provider contexts, assignable ACTIVE crews with a valid current
+        login-capable Lead, and active assignment/session occupancy facts.
+        Does not create availability or lifecycle authority; no assignment
+        commands; no FM/SaaS fallback.
+      tags: [Handyman Provider Crew]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: executionScopeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: providerContextId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Bounded Handyman provider availability projection.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanProviderAvailabilityItem"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -4459,6 +4617,29 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
 
   /handyman/execution-scopes/{executionScopeId}/arrival-verification:
+    get:
+      tags: [Handyman Arrival Verification]
+      operationId: getHandymanArrivalVerificationByScope
+      summary: Read Customer Care arrival verification projection for an Execution Scope
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for arrival verification on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns scope-keyed status, expected location facts, and terminal arrival verification results with zero challenge token or token hash exposure."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Scope-keyed arrival verification status and location projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerCareArrivalVerificationProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
     post:
       tags: [Handyman Arrival Verification]
       operationId: verifyHandymanArrival
@@ -4484,6 +4665,30 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/work-sessions:
+    get:
+      tags: [Handyman Work Sessions]
+      operationId: listHandymanWorkSessionsByScope
+      summary: Read Customer Care work sessions projection for an Execution Scope
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for work sessions on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns active + CHECKED_OUT sessions, events, helper presence snapshots, and server-derived presenceSeconds + actualWorkSeconds."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Active + CHECKED_OUT work sessions, events, helper presence, and time projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerCareWorkSessionsProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /handyman/execution-scopes/{executionScopeId}/work-sessions/check-in:
     post:
       tags: [Handyman Work Sessions]
@@ -4703,6 +4908,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HandymanWorkSessionTimeProjection'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/material-lines:
+    get:
+      tags: [Handyman Material Execution]
+      operationId: listHandymanMaterialLinesByScope
+      summary: Read Customer Care material execution lines projection for an Execution Scope
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for material execution lines on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns all governed material execution statuses, quantities, events, and totalFinalUsedQty with zero money columns."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Material execution lines, events, and settled quantity projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerCareMaterialLinesProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -4943,8 +5172,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: listHandymanEvidenceRecordsByScope
-      summary: Per-scope evidence listing (Lead-gated read model, PART 03)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: records with file counts and FINALIZE flag. NO client/actor identity leakage."
+      summary: Customer Care per-scope evidence listing
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Records with file counts and finalized facts; storage keys are never returned. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -4953,7 +5182,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanEvidenceScopeView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanEvidenceScopeView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5014,8 +5248,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: getHandymanEvidenceRecordDetail
-      summary: Evidence record detail — file references + append-only event chain (PART 03)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: record + tamper-evident file references (SHA-256 digests) + the immutable CREATE/FILE_ADD/FINALIZE event chain. storageKey is part of the file ADD response surface ONLY and is echoed for the caller's own key; reads do not re-issue it... (file references carry digests)."
+      summary: Customer Care evidence record detail
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Record, safe file metadata/digests and append-only evidence events; storage keys are never returned. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/EvidenceRecordIdPath'
       responses:
@@ -5024,7 +5258,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanEvidenceDetailView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanEvidenceDetailView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5058,8 +5297,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: listHandymanQcRunsByScope
-      summary: Per-scope QC run listing with items (PART 04)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: runs (including terminal) with their current item outcomes. Additive history — closed runs remain listed."
+      summary: Customer Care per-scope QC run listing
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative QC runs and current statuses; no QC command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -5068,7 +5307,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQcScopeView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanQcScopeView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5129,8 +5373,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: getHandymanQcRunDetail
-      summary: QC run detail — items + append-only event chain (PART 04)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: run + current item outcomes + the immutable OPEN/ITEM_SET/FINISH event chain."
+      summary: Customer Care QC run detail
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative run, item outcomes and append-only QC event chain; no QC command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/QcRunIdPath'
       responses:
@@ -5139,7 +5383,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQcDetailView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanQcDetailView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5173,8 +5422,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: listHandymanDefectsByScope
-      summary: Per-scope defect listing with current statuses (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY projection over ONE execution scope: defects with their current ladder status (OPENED/RECTIFYING/RECTIFIED/VERIFIED)."
+      summary: Customer Care per-scope defect listing
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative defect records and current statuses; no defect command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -5183,7 +5432,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanDefectScopeView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanDefectScopeView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5296,8 +5550,8 @@ paths:
     get:
       tags: [Handyman Evidence QC]
       operationId: getHandymanDefectDetail
-      summary: Defect detail — current status + append-only event chain (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated READ-ONLY detail: defect head + the immutable OPEN_DEFECT/START_RECTIFICATION/RECORD_RECTIFICATION/REQUEST_REINSPECTION/PASS_REINSPECTION event chain."
+      summary: Customer Care defect detail
+      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative defect head and append-only rectification/reinspection event chain; no defect command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       responses:
@@ -5306,7 +5560,819 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanDefectDetailView'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanDefectDetailView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/bast:
+    get:
+      tags: [Handyman BAST]
+      operationId: getHandymanExecutionScopeBast
+      summary: Read execution-scope Handyman BAST and acceptance contract (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — authenticated Customer Care READ-ONLY projection (`tenant_company.read` + `canAccessClient`) over CR-HM-11 BAST authority for one execution scope: active/latest BAST document, published acceptance read contract (`customerAccepted`, `warrantyStartEligible`), append-only event chain, and sign-off evidence rows."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Execution-scope BAST read projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastExecutionScopeView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/bast/{bastId}:
+    get:
+      tags: [Handyman BAST]
+      operationId: getHandymanBastById
+      summary: Read Handyman BAST detail by ID (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — authenticated Customer Care READ-ONLY detail (`tenant_company.read` + `canAccessClient`) over CR-HM-11 BAST authority: BAST document, published acceptance read contract, append-only event chain, and sign-off evidence rows."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      responses:
+        '200':
+          description: BAST detail read projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastDetailView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/bast/{bastId}/accept:
+    post:
+      tags: [Handyman BAST]
+      operationId: acceptHandymanBast
+      summary: Customer ACCEPT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — governed customer acceptance sign-off (`tenant_company.manage` + `canAccessClient`) over `acceptHandymanBast`. Legal only from `ISSUED`; requires a non-empty `signatureDigest` and `idempotencyKey`. Worker/provider preparation, issuance, and voiding commands are not exposed."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastAcceptRequest'
+      responses:
+        '200':
+          description: Accepted BAST + recorded ACCEPT event + sign-off evidence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastSignOffCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/bast/{bastId}/reject:
+    post:
+      tags: [Handyman BAST]
+      operationId: rejectHandymanBast
+      summary: Customer REJECT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — governed customer rejection sign-off (`tenant_company.manage` + `canAccessClient`) over `rejectHandymanBast`. Legal only from `ISSUED`; requires `idempotencyKey` and optional `rejectReason` / `signatureDigest` / `evidenceRecordId`."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastRejectRequest'
+      responses:
+        '200':
+          description: Rejected BAST + recorded REJECT event + sign-off evidence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastSignOffCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/bast/{bastId}/sign-off:
+    post:
+      tags: [Handyman BAST]
+      operationId: signOffHandymanBast
+      summary: Governed customer ACCEPT/REJECT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
+      description: "CR-HM-17 GAP PART 04 — governed customer sign-off (`tenant_company.manage` + `canAccessClient`) over `acceptHandymanBast` / `rejectHandymanBast` (`decision: ACCEPT | REJECT`). Worker/provider commands (`PREPARE`, `ISSUE`, `VOID`) are rejected."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastSignOffRequest'
+      responses:
+        '200':
+          description: Updated BAST + recorded sign-off event + sign-off evidence
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastSignOffCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/customer-ledger:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: getHandymanExecutionScopeCustomerLedger
+      summary: Read execution-scope customer transaction ledger (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanLedgerTransactionAt`: separated `LABOR` and `MATERIAL` charge lines, provider-neutral customer payments, allocations, forward-only corrections, and authoritative gross/net totals."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Execution-scope customer transaction ledger read contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerLedgerTransactionRead'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/customer-ledger:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: getHandymanClientCustomerLedger
+      summary: Read client-scoped customer transaction ledger basis (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanLedgerClientBasisAt`: windowed per-transaction net basis and aggregate totals for one client."
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
+      responses:
+        '200':
+          description: Client-scoped customer transaction ledger basis read contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerLedgerClientBasisRead'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: listHandymanExecutionScopeCustomerPayments
+      summary: List customer payments for an execution scope (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `listHandymanCustomerPayments`."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Execution-scope customer payment list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentsListView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Handyman Customer Ledger]
+      operationId: recordHandymanCustomerPayment
+      summary: Record a customer payment claim (`PENDING`) on an execution scope (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `recordHandymanCustomerPayment`. Records a provider-neutral payment claim (`PENDING`) in the transaction's own currency."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanCustomerPaymentRecordRequest'
+      responses:
+        '200':
+          description: Recorded customer payment fact (`PENDING`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/confirm:
+    post:
+      tags: [Handyman Customer Ledger]
+      operationId: confirmHandymanCustomerPayment
+      summary: Confirm a `PENDING` customer payment (`CONFIRMED`) (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `confirmHandymanCustomerPayment`."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/CustomerPaymentIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanCustomerPaymentConfirmRequest'
+      responses:
+        '200':
+          description: Confirmed customer payment fact + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/reject:
+    post:
+      tags: [Handyman Customer Ledger]
+      operationId: rejectHandymanCustomerPayment
+      summary: Reject a `PENDING` customer payment (`REJECTED`) (CR-HM-13 / CR-HM-17 GAP PART 05)
+      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `rejectHandymanCustomerPayment`."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/CustomerPaymentIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanCustomerPaymentRejectRequest'
+      responses:
+        '200':
+          description: Rejected customer payment fact + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerPaymentCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/service-warranty:
+    get:
+      tags: [Handyman Service Warranty]
+      operationId: getHandymanExecutionScopeServiceWarranty
+      summary: Read execution-scope service warranty contract (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanServiceWarrantyContractByExecutionScopeId`: BAST-anchored `WORKMANSHIP` + `MATERIAL` service warranty, claims, free reworks, and separated chargeable additional works."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Published read-only Handyman service warranty contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyContract'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/service-warranties/{warrantyId}:
+    get:
+      tags: [Handyman Service Warranty]
+      operationId: getHandymanServiceWarrantyById
+      summary: Read service warranty contract by warranty id (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanServiceWarrantyContractByWarrantyId`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyIdPath'
+      responses:
+        '200':
+          description: Published read-only Handyman service warranty contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyContract'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/service-warranties/{warrantyId}/claims:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: openHandymanServiceWarrantyClaim
+      summary: Open a `CLAIM_DRAFT` on an `ACTIVE` service warranty (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `openHandymanServiceWarrantyClaim`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyClaimOpenRequest'
+      responses:
+        '200':
+          description: Opened warranty claim (`CLAIM_DRAFT`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyClaimCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/service-warranty-claims/{claimId}:
+    get:
+      tags: [Handyman Service Warranty]
+      operationId: getHandymanServiceWarrantyClaimById
+      summary: Read service warranty contract by claim id (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanServiceWarrantyClaimContract`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyClaimIdPath'
+      responses:
+        '200':
+          description: Published read-only Handyman service warranty contract anchored at `claimId`
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyContract'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/service-warranty-claims/{claimId}/submit:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: submitHandymanServiceWarrantyClaim
+      summary: Submit a `CLAIM_DRAFT` (`CLAIM_SUBMITTED`) with defect evidence (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `submitHandymanServiceWarrantyClaim`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyClaimIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyClaimSubmitRequest'
+      responses:
+        '200':
+          description: Submitted warranty claim (`CLAIM_SUBMITTED`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyClaimCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/service-warranty-claims/{claimId}/approve:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: approveHandymanServiceWarrantyClaim
+      summary: Approve a `CLAIM_SUBMITTED` (`CLAIM_APPROVED`) for free warranty rework (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `approveHandymanServiceWarrantyClaim`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyClaimIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyClaimDecisionRequest'
+      responses:
+        '200':
+          description: Approved warranty claim (`CLAIM_APPROVED`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyClaimCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/service-warranty-claims/{claimId}/reject:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: rejectHandymanServiceWarrantyClaim
+      summary: Reject a `CLAIM_SUBMITTED` (`CLAIM_REJECTED`) opening the chargeable path (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `rejectHandymanServiceWarrantyClaim`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyClaimIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyClaimDecisionRequest'
+      responses:
+        '200':
+          description: Rejected warranty claim (`CLAIM_REJECTED`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyClaimCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/service-warranty-claims/{claimId}/withdraw:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: withdrawHandymanServiceWarrantyClaim
+      summary: Withdraw a `CLAIM_SUBMITTED` (`CLAIM_WITHDRAWN`) (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `withdrawHandymanServiceWarrantyClaim`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyClaimIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyKeyedRequest'
+      responses:
+        '200':
+          description: Withdrawn warranty claim (`CLAIM_WITHDRAWN`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyClaimCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/service-warranty-reworks/{reworkId}:
+    get:
+      tags: [Handyman Service Warranty]
+      operationId: getHandymanServiceWarrantyReworkById
+      summary: Read service warranty contract by free rework id (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanServiceWarrantyReworkContract`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyReworkIdPath'
+      responses:
+        '200':
+          description: Published read-only Handyman service warranty contract anchored at `reworkId`
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyContract'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/service-warranty-reworks/{reworkId}/authorize:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: authorizeHandymanServiceWarrantyRework
+      summary: Authorize a `REWORK_DRAFT` free warranty rework (`REWORK_AUTHORIZED`) (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `authorizeHandymanServiceWarrantyRework`."
+      parameters:
+        - $ref: '#/components/parameters/ServiceWarrantyReworkIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyKeyedRequest'
+      responses:
+        '200':
+          description: Authorized free warranty rework (`REWORK_AUTHORIZED`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyReworkCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/chargeable-additional-works/{workId}:
+    get:
+      tags: [Handyman Service Warranty]
+      operationId: getHandymanChargeableAdditionalWorkById
+      summary: Read service warranty contract by chargeable additional work id (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanChargeableAdditionalWorkContract`."
+      parameters:
+        - $ref: '#/components/parameters/ChargeableAdditionalWorkIdPath'
+      responses:
+        '200':
+          description: Published read-only Handyman service warranty contract anchored at `chargeableAdditionalWorkId`
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanServiceWarrantyContract'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/chargeable-additional-works/{workId}/accept:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: acceptHandymanChargeableAdditionalWork
+      summary: Accept a `CHARGEABLE_PROPOSED` chargeable additional work (`CHARGEABLE_AUTHORIZED`) (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `acceptHandymanChargeableAdditionalWork`."
+      parameters:
+        - $ref: '#/components/parameters/ChargeableAdditionalWorkIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyKeyedRequest'
+      responses:
+        '200':
+          description: Accepted chargeable additional work (`CHARGEABLE_AUTHORIZED`) + `PAYMENT_TRIGGER` fact + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanChargeableAdditionalWorkCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/chargeable-additional-works/{workId}/reject:
+    post:
+      tags: [Handyman Service Warranty]
+      operationId: rejectHandymanChargeableAdditionalWork
+      summary: Reject a `CHARGEABLE_PROPOSED` chargeable additional work (`CHARGEABLE_REJECTED`) (CR-HM-15 / CR-HM-17 GAP PART 06)
+      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `rejectHandymanChargeableAdditionalWork`."
+      parameters:
+        - $ref: '#/components/parameters/ChargeableAdditionalWorkIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanServiceWarrantyKeyedRequest'
+      responses:
+        '200':
+          description: Rejected chargeable additional work (`CHARGEABLE_REJECTED`) + append-only event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanChargeableAdditionalWorkCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/sla/subjects/{subjectType}/{subjectId}:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanSubjectSla
+      summary: Read Handyman subject SLA clocks & milestone coordinates (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `appliedSlaService.getBySubject` and `HANDYMAN_SLA_SUBJECT_MILESTONES`. Rejects non-Handyman SLA subject types."
+      parameters:
+        - $ref: '#/components/parameters/HandymanSlaSubjectTypePath'
+        - $ref: '#/components/parameters/HandymanSlaSubjectIdPath'
+      responses:
+        '200':
+          description: Handyman subject SLA snapshot and milestone coordinates
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanSubjectSlaReadView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/provider-performance:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanProviderPerformance
+      summary: Read derived Handyman provider performance snapshot (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `deriveHandymanProviderPerformance`: response/resolution attainment, 9-milestone adherence, and sequenced domain operational truth."
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Derived Handyman provider performance read contract
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanProviderPerformanceSnapshot'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /handyman/requests/{id}/status-visibility:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanRequestStatusVisibility
+      summary: Read Handyman request stage/status facts and 9-milestone SLA visibility (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — bounded read-only Customer Care projection (`tenant_company.read` + `canAccessClient`) composing authoritative CR-HM-02..15 stage statuses with the 9 frozen Handyman SLA milestones across the request lineage."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Authoritative stage statuses and 9-milestone SLA visibility for the request
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanStatusVisibilityReadView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{id}/status-visibility:
+    get:
+      tags: [Handyman SLA & Status Visibility]
+      operationId: getHandymanExecutionScopeStatusVisibility
+      summary: Read Handyman execution-scope stage/status facts and 9-milestone SLA visibility (CR-HM-16 / CR-HM-17 GAP PART 07)
+      description: "CR-HM-17 GAP PART 07 — bounded read-only Customer Care projection (`tenant_company.read` + `canAccessClient`) composing authoritative CR-HM-02..15 stage statuses with the 9 frozen Handyman SLA milestones across the execution-scope lineage."
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Authoritative stage statuses and 9-milestone SLA visibility for the execution scope
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanStatusVisibilityReadView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -71244,6 +72310,47 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    BastIdPath:
+      name: bastId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CustomerPaymentIdPath:
+      name: paymentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ServiceWarrantyIdPath:
+      name: warrantyId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ServiceWarrantyClaimIdPath:
+      name: claimId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ServiceWarrantyReworkIdPath:
+      name: reworkId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ChargeableAdditionalWorkIdPath:
+      name: workId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    HandymanSlaSubjectTypePath:
+      name: subjectType
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/HandymanSlaSubjectType'
+    HandymanSlaSubjectIdPath:
+      name: subjectId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
@@ -74588,8 +75695,7 @@ components:
           type: boolean
           const: true
         data:
-          type: object
-          description: Response payload. Concrete shape is per-endpoint.
+          description: Response payload (object, array, or null as declared by the endpoint schema).
         meta:
           type: object
           description: Pagination/context metadata (see PaginationMeta).
@@ -77046,6 +78152,103 @@ components:
           enum: [INSIDE, OUTSIDE, LOW_ACCURACY, UNAVAILABLE, null]
         distanceMeters: { type: number, nullable: true }
         evaluatedAt: { type: string, format: date-time }
+    HandymanCustomerCareExpectedLocation:
+      type: object
+      description: "Immutable CR-HM-06 Execution Scope expected location snapshot."
+      required: [buildingId, floorId, areaId, roomId, spaceId]
+      properties:
+        buildingId: { type: string, format: uuid }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+    HandymanCustomerCareArrivalResultItem:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — bounded Customer Care terminal arrival verification result item (no challenge token or token hash)."
+      required: [id, executionScopeId, assignmentId, challengeId, expectedLocation, status, primaryReason, qrSignal, geofenceSignal, distanceMeters, evaluatedAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        challengeId: { type: string, format: uuid }
+        expectedLocation:
+          $ref: '#/components/schemas/HandymanCustomerCareExpectedLocation'
+        status:
+          type: string
+          enum: [VERIFIED, FAILED, MANUAL_REVIEW_REQUIRED, EXPIRED]
+        primaryReason:
+          type: string
+          enum: [ALL_POSITIVE_EVIDENCE, QR_MISMATCH, GEOFENCE_OUTSIDE, ACTOR_ASSIGNMENT_INVALID, QR_UNKNOWN, QR_INACTIVE, NO_GEOSPATIAL_POLICY, LOW_ACCURACY, GEOFENCE_UNAVAILABLE, CHALLENGE_EXPIRED]
+        qrSignal:
+          type: string
+          enum: [MATCH, MISMATCH, UNKNOWN, INACTIVE]
+        geofenceSignal:
+          type: string
+          nullable: true
+          enum: [INSIDE, OUTSIDE, LOW_ACCURACY, UNAVAILABLE, null]
+        distanceMeters: { type: number, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    HandymanCustomerCareArrivalVerificationProjection:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — scope-keyed Customer Care arrival verification read projection."
+      required: [executionScopeId, expectedLocation, arrivalVerified, latestResult, results]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        expectedLocation:
+          $ref: '#/components/schemas/HandymanCustomerCareExpectedLocation'
+        arrivalVerified: { type: boolean }
+        latestResult:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCustomerCareArrivalResultItem'
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanCustomerCareArrivalResultItem'
+    HandymanCustomerCareWorkSessionItem:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care work session item (active + CHECKED_OUT) with events, helper presence snapshots, and server-derived presenceSeconds + actualWorkSeconds."
+      required: [id, executionScopeId, status, checkedInAt, startedWorkAt, completedAt, checkedOutAt, events, helperPresence, presenceSeconds, actualWorkSeconds, sessionClosed, projectedAt]
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [CHECKED_IN, IN_PROGRESS, PAUSED, MATERIAL_RUN, COMPLETED, CHECKED_OUT]
+        checkedInAt: { type: string, format: date-time }
+        startedWorkAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        checkedOutAt: { type: string, format: date-time, nullable: true }
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanWorkSessionEventRecord'
+        helperPresence:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanWorkSessionHelperPresence'
+        presenceSeconds: { type: number, minimum: 0 }
+        actualWorkSeconds: { type: number, minimum: 0 }
+        sessionClosed: { type: boolean }
+        projectedAt: { type: string, format: date-time }
+    HandymanCustomerCareWorkSessionsProjection:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care work sessions read projection for an Execution Scope."
+      required: [executionScopeId, activeSession, sessions, presenceSeconds, actualWorkSeconds, projectedAt]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        activeSession:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCustomerCareWorkSessionItem'
+          nullable: true
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanCustomerCareWorkSessionItem'
+        presenceSeconds: { type: number, minimum: 0 }
+        actualWorkSeconds: { type: number, minimum: 0 }
+        projectedAt: { type: string, format: date-time }
     HandymanWorkSessionMutationRequest:
       type: object
       required: [idempotencyKey]
@@ -77300,6 +78503,20 @@ components:
                 $ref: '#/components/schemas/HandymanEvidenceRecord'
               fileCount: { type: integer, minimum: 0 }
               finalized: { type: boolean }
+    HandymanEvidenceFileReadView:
+      type: object
+      description: "Read-only evidence file reference (storageKey omitted on reads)."
+      properties:
+        id: { type: string, format: uuid }
+        recordId: { type: string, format: uuid }
+        mediaKind:
+          type: string
+          enum: [PHOTO, DOCUMENT, VIDEO]
+        contentType: { type: string, minLength: 1 }
+        byteSize: { type: integer, minimum: 1 }
+        sha256Digest: { type: string, minLength: 64, maxLength: 64 }
+        captureTime: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
     HandymanEvidenceDetailView:
       type: object
       properties:
@@ -77308,7 +78525,7 @@ components:
         files:
           type: array
           items:
-            $ref: '#/components/schemas/HandymanEvidenceFile'
+            $ref: '#/components/schemas/HandymanEvidenceFileReadView'
         events:
           type: array
           items:
@@ -77389,6 +78606,1556 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HandymanDefectEvent'
+    HandymanBastStatus:
+      type: string
+      enum: [DRAFT, ISSUED, ACCEPTED, REJECTED, VOID]
+    HandymanBastEventType:
+      type: string
+      enum: [PREPARE, ISSUE, VOID, ACCEPT, REJECT]
+    HandymanBastDecision:
+      type: string
+      enum: [ACCEPT, REJECT]
+    HandymanBastDocument:
+      type: object
+      required:
+        - id
+        - executionScopeId
+        - status
+        - issuedAt
+        - acceptedAt
+        - rejectedAt
+        - voidedAt
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanBastStatus' }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        voidedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanBastAcceptanceReadContract:
+      type: object
+      required:
+        - bastId
+        - executionScopeId
+        - status
+        - customerAccepted
+        - warrantyStartEligible
+        - issuedAt
+        - acceptedAt
+        - rejectedAt
+        - voidedAt
+      properties:
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanBastStatus' }
+        customerAccepted: { type: boolean }
+        warrantyStartEligible: { type: boolean }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        voidedAt: { type: string, format: date-time, nullable: true }
+    HandymanBastEvent:
+      type: object
+      required:
+        - id
+        - bastId
+        - executionScopeId
+        - eventType
+        - idempotencyKey
+        - actorUserId
+        - occurredAt
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        eventType: { $ref: '#/components/schemas/HandymanBastEventType' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        actorUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    HandymanBastSignOff:
+      type: object
+      required:
+        - id
+        - bastId
+        - eventId
+        - executionScopeId
+        - decision
+        - signatureDigest
+        - evidenceRecordId
+        - rejectReason
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        bastId: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        decision: { $ref: '#/components/schemas/HandymanBastDecision' }
+        signatureDigest: { type: string }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+        rejectReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanBastExecutionScopeView:
+      type: object
+      required: [executionScopeId, bast, acceptance, events, signOffs]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        bast:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastDocument'
+          nullable: true
+        acceptance:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastAcceptanceReadContract'
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastEvent'
+        signOffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastSignOff'
+    HandymanBastDetailView:
+      type: object
+      required: [bast, acceptance, events, signOffs]
+      properties:
+        bast:
+          $ref: '#/components/schemas/HandymanBastDocument'
+        acceptance:
+          $ref: '#/components/schemas/HandymanBastAcceptanceReadContract'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastEvent'
+        signOffs:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanBastSignOff'
+    HandymanBastAcceptRequest:
+      type: object
+      required: [idempotencyKey, signatureDigest]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        signatureDigest: { type: string, minLength: 1, maxLength: 512 }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+    HandymanBastRejectRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        signatureDigest: { type: string, maxLength: 512 }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+        rejectReason: { type: string, maxLength: 2000, nullable: true }
+    HandymanBastSignOffRequest:
+      type: object
+      required: [decision, idempotencyKey]
+      properties:
+        decision: { $ref: '#/components/schemas/HandymanBastDecision' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        signatureDigest: { type: string, maxLength: 512 }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+        rejectReason: { type: string, maxLength: 2000, nullable: true }
+    HandymanBastSignOffCommandResult:
+      type: object
+      required: [bast, acceptance, event, signOff, replayed]
+      properties:
+        bast:
+          $ref: '#/components/schemas/HandymanBastDocument'
+        acceptance:
+          $ref: '#/components/schemas/HandymanBastAcceptanceReadContract'
+        event:
+          $ref: '#/components/schemas/HandymanBastEvent'
+        signOff:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastSignOff'
+          nullable: true
+        replayed: { type: boolean }
+    HandymanCustomerLedgerLineKind:
+      type: string
+      enum: [LABOR, MATERIAL]
+    HandymanCustomerLedgerAuthorityDenial:
+      type: string
+      enum: [NO_POSTED_CHARGE_FACTS, PROVISIONAL_PAYMENTS_PENDING]
+    HandymanCustomerLedgerAuthority:
+      type: object
+      required: [authoritativeForEntitlement, deniedBy]
+      properties:
+        authoritativeForEntitlement: { type: boolean }
+        deniedBy:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthorityDenial' }
+    HandymanCustomerLedgerClientAuthority:
+      type: object
+      required: [authoritativeForEntitlement, deniedBy, nonAuthoritativeTransactionIds]
+      properties:
+        authoritativeForEntitlement: { type: boolean }
+        deniedBy:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthorityDenial' }
+        nonAuthoritativeTransactionIds:
+          type: array
+          items: { type: string, format: uuid }
+    HandymanCustomerLedgerChargeLine:
+      type: object
+      required:
+        - chargeLineId
+        - quotationLineId
+        - lineKind
+        - compositionKind
+        - basisFactKind
+        - currency
+        - amount
+        - adjusted
+        - netAmount
+        - allocated
+        - reversedAllocations
+        - applied
+        - outstanding
+      properties:
+        chargeLineId: { type: string, format: uuid }
+        quotationLineId: { type: string, format: uuid }
+        lineKind: { $ref: '#/components/schemas/HandymanCustomerLedgerLineKind' }
+        compositionKind: { type: string, nullable: true }
+        basisFactKind: { type: string, nullable: true }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        adjusted: { type: string }
+        netAmount: { type: string }
+        allocated: { type: string }
+        reversedAllocations: { type: string }
+        applied: { type: string }
+        outstanding: { type: string }
+    HandymanCustomerLedgerPaymentRead:
+      type: object
+      required:
+        - paymentId
+        - status
+        - channel
+        - currency
+        - amount
+        - receivedAt
+        - allocated
+        - reversedAllocations
+        - applied
+        - refunded
+        - reversedPayment
+        - netReceived
+        - authoritativeForEntitlement
+      properties:
+        paymentId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanCustomerPaymentStatus' }
+        channel: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        receivedAt: { type: string, format: date-time }
+        allocated: { type: string }
+        reversedAllocations: { type: string }
+        applied: { type: string }
+        refunded: { type: string }
+        reversedPayment: { type: string }
+        netReceived: { type: string }
+        authoritativeForEntitlement: { type: boolean }
+    HandymanCustomerLedgerAllocation:
+      type: object
+      required:
+        - allocationId
+        - paymentId
+        - chargeLineId
+        - lineKind
+        - currency
+        - amount
+        - occurredAt
+        - reversed
+      properties:
+        allocationId: { type: string, format: uuid }
+        paymentId: { type: string, format: uuid }
+        chargeLineId: { type: string, format: uuid }
+        lineKind: { $ref: '#/components/schemas/HandymanCustomerLedgerLineKind' }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        occurredAt: { type: string, format: date-time }
+        reversed: { type: boolean }
+    HandymanCustomerLedgerCorrection:
+      type: object
+      required:
+        - correctionId
+        - correctionKind
+        - sourceKind
+        - sourcePaymentId
+        - sourceAllocationId
+        - sourceChargeLineId
+        - currency
+        - amount
+        - reason
+        - correctedByUserId
+        - occurredAt
+      properties:
+        correctionId: { type: string, format: uuid }
+        correctionKind: { type: string, enum: [REFUND, REVERSAL, ADJUSTMENT] }
+        sourceKind: { type: string, enum: [PAYMENT, ALLOCATION, CHARGE_LINE, TRANSACTION] }
+        sourcePaymentId: { type: string, format: uuid, nullable: true }
+        sourceAllocationId: { type: string, format: uuid, nullable: true }
+        sourceChargeLineId: { type: string, format: uuid, nullable: true }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        amount: { type: string }
+        reason: { type: string }
+        correctedByUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+    HandymanCustomerLedgerCorrectionCounts:
+      type: object
+      required: [refunds, reversals, adjustments]
+      properties:
+        refunds: { type: integer, minimum: 0 }
+        reversals: { type: integer, minimum: 0 }
+        adjustments: { type: integer, minimum: 0 }
+    HandymanCustomerLedgerTotals:
+      type: object
+      required:
+        - chargedGross
+        - laborGross
+        - materialGross
+        - laborAdjusted
+        - materialAdjusted
+        - adjustedTransactionScope
+        - adjusted
+        - chargedNet
+        - laborNet
+        - materialNet
+        - allocated
+        - reversedAllocations
+        - applied
+        - receivedGross
+        - receivedReversed
+        - receivedNet
+        - refunded
+        - netReceived
+        - outstanding
+        - corrections
+      properties:
+        chargedGross: { type: string }
+        laborGross: { type: string }
+        materialGross: { type: string }
+        laborAdjusted: { type: string }
+        materialAdjusted: { type: string }
+        adjustedTransactionScope: { type: string }
+        adjusted: { type: string }
+        chargedNet: { type: string }
+        laborNet: { type: string }
+        materialNet: { type: string }
+        allocated: { type: string }
+        reversedAllocations: { type: string }
+        applied: { type: string }
+        receivedGross: { type: string }
+        receivedReversed: { type: string }
+        receivedNet: { type: string }
+        refunded: { type: string }
+        netReceived: { type: string }
+        outstanding: { type: string }
+        corrections: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrectionCounts' }
+    HandymanCustomerLedgerTransactionRead:
+      type: object
+      required:
+        - contractVersion
+        - readOnly
+        - transaction
+        - chargeLines
+        - payments
+        - allocations
+        - corrections
+        - totals
+        - authority
+      properties:
+        contractVersion: { type: string, enum: [CR-HM-13-PART-06] }
+        readOnly: { type: boolean, enum: [true] }
+        transaction:
+          type: object
+          required:
+            - transactionId
+            - clientId
+            - executionScopeId
+            - quotationVersionId
+            - currency
+            - createdAt
+          properties:
+            transactionId: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            quotationVersionId: { type: string, format: uuid }
+            currency: { type: string, minLength: 3, maxLength: 3 }
+            createdAt: { type: string, format: date-time }
+        chargeLines:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerChargeLine' }
+        payments:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerPaymentRead' }
+        allocations:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerAllocation' }
+        corrections:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrection' }
+        totals: { $ref: '#/components/schemas/HandymanCustomerLedgerTotals' }
+        authority: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthority' }
+    HandymanCustomerLedgerClientBasisEntry:
+      type: object
+      required:
+        - transactionId
+        - executionScopeId
+        - currency
+        - openedAt
+        - chargedNet
+        - laborNet
+        - materialNet
+        - adjusted
+        - applied
+        - receivedNet
+        - refunded
+        - reversedAllocations
+        - receivedReversed
+        - netReceived
+        - outstanding
+        - corrections
+        - authority
+      properties:
+        transactionId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        openedAt: { type: string, format: date-time }
+        chargedNet: { type: string }
+        laborNet: { type: string }
+        materialNet: { type: string }
+        adjusted: { type: string }
+        applied: { type: string }
+        receivedNet: { type: string }
+        refunded: { type: string }
+        reversedAllocations: { type: string }
+        receivedReversed: { type: string }
+        netReceived: { type: string }
+        outstanding: { type: string }
+        corrections: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrectionCounts' }
+        authority: { $ref: '#/components/schemas/HandymanCustomerLedgerAuthority' }
+    HandymanCustomerLedgerClientBasisRead:
+      type: object
+      required:
+        - contractVersion
+        - readOnly
+        - clientId
+        - from
+        - to
+        - limit
+        - transactions
+        - totals
+        - authority
+      properties:
+        contractVersion: { type: string, enum: [CR-HM-13-PART-06] }
+        readOnly: { type: boolean, enum: [true] }
+        clientId: { type: string, format: uuid }
+        from: { type: string, format: date-time, nullable: true }
+        to: { type: string, format: date-time, nullable: true }
+        limit: { type: integer, minimum: 1, maximum: 500 }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerLedgerClientBasisEntry' }
+        totals:
+          type: object
+          required:
+            - transactionCount
+            - chargedNet
+            - laborNet
+            - materialNet
+            - adjusted
+            - applied
+            - receivedNet
+            - refunded
+            - reversedAllocations
+            - receivedReversed
+            - netReceived
+            - outstanding
+            - corrections
+          properties:
+            transactionCount: { type: integer, minimum: 0 }
+            chargedNet: { type: string }
+            laborNet: { type: string }
+            materialNet: { type: string }
+            adjusted: { type: string }
+            applied: { type: string }
+            receivedNet: { type: string }
+            refunded: { type: string }
+            reversedAllocations: { type: string }
+            receivedReversed: { type: string }
+            netReceived: { type: string }
+            outstanding: { type: string }
+            corrections: { $ref: '#/components/schemas/HandymanCustomerLedgerCorrectionCounts' }
+        authority: { $ref: '#/components/schemas/HandymanCustomerLedgerClientAuthority' }
+    HandymanCustomerPaymentChannel:
+      type: string
+      enum: [CASH, BANK_TRANSFER, VIRTUAL_ACCOUNT, QRIS, CARD, OTHER]
+    HandymanCustomerPaymentStatus:
+      type: string
+      enum: [PENDING, CONFIRMED, REJECTED]
+    HandymanCustomerPaymentEventType:
+      type: string
+      enum: [RECORD_PAYMENT, CONFIRM_PAYMENT, REJECT_PAYMENT]
+    HandymanCustomerPaymentRecord:
+      type: object
+      required:
+        - id
+        - clientId
+        - transactionId
+        - status
+        - amount
+        - currency
+        - channel
+        - providerName
+        - providerReference
+        - externalReference
+        - receivedAt
+        - recordedByUserId
+        - decidedAt
+        - decidedByUserId
+        - rejectionReason
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        transactionId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanCustomerPaymentStatus' }
+        amount: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        channel: { $ref: '#/components/schemas/HandymanCustomerPaymentChannel' }
+        providerName: { type: string, maxLength: 200, nullable: true }
+        providerReference: { type: string, maxLength: 200, nullable: true }
+        externalReference: { type: string, maxLength: 200, nullable: true }
+        receivedAt: { type: string, format: date-time }
+        recordedByUserId: { type: string, format: uuid }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        decidedByUserId: { type: string, format: uuid, nullable: true }
+        rejectionReason: { type: string, maxLength: 200, nullable: true }
+        createdAt: { type: string, format: date-time }
+    HandymanCustomerPaymentEventRecord:
+      type: object
+      required:
+        - id
+        - clientId
+        - paymentId
+        - transactionId
+        - eventType
+        - idempotencyKey
+        - actorUserId
+        - occurredAt
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        paymentId: { type: string, format: uuid }
+        transactionId: { type: string, format: uuid }
+        eventType: { $ref: '#/components/schemas/HandymanCustomerPaymentEventType' }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        actorUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    HandymanCustomerPaymentsListView:
+      type: object
+      required: [executionScopeId, payments]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        payments:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCustomerPaymentRecord' }
+    HandymanCustomerPaymentRecordRequest:
+      type: object
+      required: [amount, channel, idempotencyKey]
+      properties:
+        amount: { type: string }
+        channel: { $ref: '#/components/schemas/HandymanCustomerPaymentChannel' }
+        providerName: { type: string, maxLength: 200, nullable: true }
+        providerReference: { type: string, maxLength: 200, nullable: true }
+        externalReference: { type: string, maxLength: 200, nullable: true }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanCustomerPaymentConfirmRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanCustomerPaymentRejectRequest:
+      type: object
+      required: [idempotencyKey, reason]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        reason: { type: string, minLength: 1, maxLength: 200 }
+    HandymanCustomerPaymentCommandResult:
+      type: object
+      required: [payment, event, replayed]
+      properties:
+        payment: { $ref: '#/components/schemas/HandymanCustomerPaymentRecord' }
+        event: { $ref: '#/components/schemas/HandymanCustomerPaymentEventRecord' }
+        replayed: { type: boolean }
+    HandymanServiceWarrantyStatus:
+      type: string
+      enum:
+        - INELIGIBLE
+        - ACTIVE
+        - CLAIM_OPEN
+        - CLAIM_APPROVED
+        - CLAIM_REJECTED
+        - REWORK_IN_PROGRESS
+        - REWORK_COMPLETE
+        - EXPIRED
+    HandymanServiceWarrantyCoverageType:
+      type: string
+      enum: [WORKMANSHIP, MATERIAL]
+    HandymanServiceWarrantyClaimStatus:
+      type: string
+      enum: [CLAIM_DRAFT, CLAIM_SUBMITTED, CLAIM_APPROVED, CLAIM_REJECTED, CLAIM_WITHDRAWN]
+    HandymanServiceWarrantyReworkStatus:
+      type: string
+      enum: [REWORK_DRAFT, REWORK_AUTHORIZED, REWORK_IN_PROGRESS, REWORK_COMPLETE, REWORK_VERIFIED]
+    HandymanChargeableAdditionalWorkStatus:
+      type: string
+      enum: [CHARGEABLE_PROPOSED, CHARGEABLE_AUTHORIZED, CHARGEABLE_REJECTED]
+    HandymanServiceWarrantyContract:
+      type: object
+      required:
+        - contractVersion
+        - contractSource
+        - readOnly
+        - warranty
+        - claims
+        - reworks
+        - chargeableAdditionalWorks
+        - anchors
+        - history
+        - lifecycle
+        - readiness
+      properties:
+        contractVersion:
+          type: string
+          enum: ['1']
+        contractSource:
+          type: string
+          enum: [HANDYMAN_SERVICE_WARRANTY]
+        readOnly:
+          type: boolean
+          enum: [true]
+        warranty:
+          type: object
+          required:
+            - id
+            - clientId
+            - executionScopeId
+            - bastId
+            - status
+            - startsAt
+            - bastAcceptedAt
+            - expiredAt
+            - coverages
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/HandymanServiceWarrantyStatus' }
+            startsAt: { type: string, format: date-time }
+            bastAcceptedAt: { type: string, format: date-time }
+            expiredAt: { type: string, format: date-time, nullable: true }
+            coverages:
+              type: array
+              items:
+                type: object
+                required: [coverageType, coverageSince]
+                properties:
+                  coverageType: { $ref: '#/components/schemas/HandymanServiceWarrantyCoverageType' }
+                  coverageSince: { type: string, format: date-time }
+        claims:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - status
+              - evidenceRecordId
+              - claimNote
+              - submittedAt
+              - decidedAt
+              - decisionNote
+              - withdrawnAt
+              - createdAt
+              - reworkId
+              - chargeableAdditionalWorkId
+            properties:
+              id: { type: string, format: uuid }
+              status: { $ref: '#/components/schemas/HandymanServiceWarrantyClaimStatus' }
+              evidenceRecordId: { type: string, format: uuid, nullable: true }
+              claimNote: { type: string, maxLength: 500, nullable: true }
+              submittedAt: { type: string, format: date-time, nullable: true }
+              decidedAt: { type: string, format: date-time, nullable: true }
+              decisionNote: { type: string, maxLength: 500, nullable: true }
+              withdrawnAt: { type: string, format: date-time, nullable: true }
+              createdAt: { type: string, format: date-time }
+              reworkId: { type: string, format: uuid, nullable: true }
+              chargeableAdditionalWorkId: { type: string, format: uuid, nullable: true }
+        reworks:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - claimId
+              - status
+              - scopeNote
+              - proposedAt
+              - authorizedAt
+              - startedAt
+              - completedAt
+              - verifiedAt
+              - verificationEvidenceRecordId
+              - verificationQcRunId
+            properties:
+              id: { type: string, format: uuid }
+              claimId: { type: string, format: uuid }
+              status: { $ref: '#/components/schemas/HandymanServiceWarrantyReworkStatus' }
+              scopeNote: { type: string, maxLength: 500, nullable: true }
+              proposedAt: { type: string, format: date-time }
+              authorizedAt: { type: string, format: date-time, nullable: true }
+              startedAt: { type: string, format: date-time, nullable: true }
+              completedAt: { type: string, format: date-time, nullable: true }
+              verifiedAt: { type: string, format: date-time, nullable: true }
+              verificationEvidenceRecordId: { type: string, format: uuid, nullable: true }
+              verificationQcRunId: { type: string, format: uuid, nullable: true }
+        chargeableAdditionalWorks:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - claimId
+              - status
+              - scopeNote
+              - proposedAt
+              - decidedAt
+              - paymentTriggerEmittedAt
+            properties:
+              id: { type: string, format: uuid }
+              claimId: { type: string, format: uuid }
+              status: { $ref: '#/components/schemas/HandymanChargeableAdditionalWorkStatus' }
+              scopeNote: { type: string, maxLength: 500, nullable: true }
+              proposedAt: { type: string, format: date-time }
+              decidedAt: { type: string, format: date-time, nullable: true }
+              paymentTriggerEmittedAt: { type: string, format: date-time, nullable: true }
+        anchors:
+          type: object
+          required:
+            - clientId
+            - executionScopeId
+            - bastId
+            - warrantyId
+            - claimId
+            - reworkId
+            - chargeableAdditionalWorkId
+          properties:
+            clientId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            claimId: { type: string, format: uuid, nullable: true }
+            reworkId: { type: string, format: uuid, nullable: true }
+            chargeableAdditionalWorkId: { type: string, format: uuid, nullable: true }
+        history:
+          type: object
+          required:
+            - bastAcceptedAt
+            - warrantyStartsAt
+            - warrantyExpiredAt
+            - claimSubmittedAt
+            - claimDecidedAt
+            - reworkCompletedAt
+            - reworkVerifiedAt
+            - chargeableDecidedAt
+            - paymentTriggerEmittedAt
+          properties:
+            bastAcceptedAt: { type: string, format: date-time }
+            warrantyStartsAt: { type: string, format: date-time }
+            warrantyExpiredAt: { type: string, format: date-time, nullable: true }
+            claimSubmittedAt: { type: string, format: date-time, nullable: true }
+            claimDecidedAt: { type: string, format: date-time, nullable: true }
+            reworkCompletedAt: { type: string, format: date-time, nullable: true }
+            reworkVerifiedAt: { type: string, format: date-time, nullable: true }
+            chargeableDecidedAt: { type: string, format: date-time, nullable: true }
+            paymentTriggerEmittedAt: { type: string, format: date-time, nullable: true }
+        lifecycle:
+          type: object
+          required:
+            - warrantyStatus
+            - claimStatus
+            - reworkStatus
+            - chargeableAdditionalWorkStatus
+          properties:
+            warrantyStatus: { $ref: '#/components/schemas/HandymanServiceWarrantyStatus' }
+            claimStatus:
+              allOf:
+                - $ref: '#/components/schemas/HandymanServiceWarrantyClaimStatus'
+              nullable: true
+            reworkStatus:
+              allOf:
+                - $ref: '#/components/schemas/HandymanServiceWarrantyReworkStatus'
+              nullable: true
+            chargeableAdditionalWorkStatus:
+              allOf:
+                - $ref: '#/components/schemas/HandymanChargeableAdditionalWorkStatus'
+              nullable: true
+        readiness:
+          type: object
+          required:
+            - warrantyStarted
+            - warrantyExpired
+            - freeReworkAvailable
+            - freeReworkAwaitingCustomerDecision
+            - freeReworkClosed
+            - chargeablePathAvailable
+            - chargeableAdditionalWorkAwaitingCustomerDecision
+            - chargeableAdditionalWorkAuthorized
+            - paymentTriggerEmitted
+          properties:
+            warrantyStarted: { type: boolean }
+            warrantyExpired: { type: boolean }
+            freeReworkAvailable: { type: boolean }
+            freeReworkAwaitingCustomerDecision: { type: boolean }
+            freeReworkClosed: { type: boolean }
+            chargeablePathAvailable: { type: boolean }
+            chargeableAdditionalWorkAwaitingCustomerDecision: { type: boolean }
+            chargeableAdditionalWorkAuthorized: { type: boolean }
+            paymentTriggerEmitted: { type: boolean }
+    HandymanServiceWarrantyClaimOpenRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        claimNote: { type: string, maxLength: 500, nullable: true }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+    HandymanServiceWarrantyClaimSubmitRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        evidenceRecordId: { type: string, format: uuid, nullable: true }
+    HandymanServiceWarrantyClaimDecisionRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        decisionNote: { type: string, maxLength: 500, nullable: true }
+    HandymanServiceWarrantyKeyedRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanServiceWarrantyClaimCommandResult:
+      type: object
+      required: [claim, event, warrantyStatus, replayed]
+      properties:
+        claim:
+          type: object
+          required:
+            - id
+            - clientId
+            - executionScopeId
+            - bastId
+            - warrantyId
+            - status
+            - claimNote
+            - evidenceRecordId
+            - openedByUserId
+            - submittedAt
+            - claimantUserId
+            - decidedAt
+            - decidedByUserId
+            - decisionNote
+            - withdrawnAt
+            - createdAt
+            - updatedAt
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/HandymanServiceWarrantyClaimStatus' }
+            claimNote: { type: string, maxLength: 500 }
+            evidenceRecordId: { type: string, format: uuid, nullable: true }
+            openedByUserId: { type: string, format: uuid }
+            submittedAt: { type: string, format: date-time, nullable: true }
+            claimantUserId: { type: string, format: uuid, nullable: true }
+            decidedAt: { type: string, format: date-time, nullable: true }
+            decidedByUserId: { type: string, format: uuid, nullable: true }
+            decisionNote: { type: string, maxLength: 500, nullable: true }
+            withdrawnAt: { type: string, format: date-time, nullable: true }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+        event:
+          type: object
+          required:
+            - id
+            - clientId
+            - claimId
+            - warrantyId
+            - executionScopeId
+            - bastId
+            - eventType
+            - idempotencyKey
+            - actorUserId
+            - occurredAt
+            - createdAt
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            claimId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            eventType:
+              type: string
+              enum: [OPEN, SUBMIT, APPROVE, REJECT, WITHDRAW]
+            idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+            actorUserId: { type: string, format: uuid }
+            occurredAt: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+        warrantyStatus: { $ref: '#/components/schemas/HandymanServiceWarrantyStatus' }
+        replayed: { type: boolean }
+    HandymanServiceWarrantyReworkCommandResult:
+      type: object
+      required: [rework, event, warrantyStatus, claimStatus, replayed]
+      properties:
+        rework:
+          type: object
+          required:
+            - id
+            - clientId
+            - executionScopeId
+            - bastId
+            - warrantyId
+            - claimId
+            - status
+            - scopeNote
+            - proposedAt
+            - proposedByUserId
+            - authorizedAt
+            - authorizedByUserId
+            - startedAt
+            - completedAt
+            - completionNote
+            - verifiedAt
+            - verifiedByUserId
+            - verificationEvidenceRecordId
+            - verificationQcRunId
+            - createdAt
+            - updatedAt
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            claimId: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/HandymanServiceWarrantyReworkStatus' }
+            scopeNote: { type: string, maxLength: 500 }
+            proposedAt: { type: string, format: date-time }
+            proposedByUserId: { type: string, format: uuid }
+            authorizedAt: { type: string, format: date-time, nullable: true }
+            authorizedByUserId: { type: string, format: uuid, nullable: true }
+            startedAt: { type: string, format: date-time, nullable: true }
+            completedAt: { type: string, format: date-time, nullable: true }
+            completionNote: { type: string, maxLength: 500, nullable: true }
+            verifiedAt: { type: string, format: date-time, nullable: true }
+            verifiedByUserId: { type: string, format: uuid, nullable: true }
+            verificationEvidenceRecordId: { type: string, format: uuid, nullable: true }
+            verificationQcRunId: { type: string, format: uuid, nullable: true }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+        event:
+          type: object
+          required:
+            - id
+            - clientId
+            - reworkId
+            - claimId
+            - warrantyId
+            - executionScopeId
+            - bastId
+            - eventType
+            - idempotencyKey
+            - actorUserId
+            - occurredAt
+            - createdAt
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            reworkId: { type: string, format: uuid }
+            claimId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            eventType:
+              type: string
+              enum: [PROPOSE, ACCEPT, START, COMPLETE, VERIFY]
+            idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+            actorUserId: { type: string, format: uuid }
+            occurredAt: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+        warrantyStatus: { $ref: '#/components/schemas/HandymanServiceWarrantyStatus' }
+        claimStatus: { $ref: '#/components/schemas/HandymanServiceWarrantyClaimStatus' }
+        replayed: { type: boolean }
+    HandymanChargeableAdditionalWorkCommandResult:
+      type: object
+      required: [work, event, paymentTrigger, warrantyStatus, claimStatus, replayed]
+      properties:
+        work:
+          type: object
+          required:
+            - id
+            - clientId
+            - executionScopeId
+            - bastId
+            - warrantyId
+            - claimId
+            - status
+            - scopeNote
+            - proposedAt
+            - proposedByUserId
+            - decidedAt
+            - decidedByUserId
+            - paymentTriggerEmittedAt
+            - createdAt
+            - updatedAt
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            claimId: { type: string, format: uuid }
+            status: { $ref: '#/components/schemas/HandymanChargeableAdditionalWorkStatus' }
+            scopeNote: { type: string, maxLength: 500 }
+            proposedAt: { type: string, format: date-time }
+            proposedByUserId: { type: string, format: uuid }
+            decidedAt: { type: string, format: date-time, nullable: true }
+            decidedByUserId: { type: string, format: uuid, nullable: true }
+            paymentTriggerEmittedAt: { type: string, format: date-time, nullable: true }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+        event:
+          type: object
+          required:
+            - id
+            - clientId
+            - workId
+            - claimId
+            - warrantyId
+            - executionScopeId
+            - bastId
+            - eventType
+            - idempotencyKey
+            - actorUserId
+            - occurredAt
+            - createdAt
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            workId: { type: string, format: uuid }
+            claimId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            eventType:
+              type: string
+              enum: [PROPOSE, ACCEPT, REJECT, PAYMENT_TRIGGER]
+            idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+            actorUserId: { type: string, format: uuid }
+            occurredAt: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+        paymentTrigger:
+          type: object
+          nullable: true
+          required:
+            - id
+            - clientId
+            - workId
+            - claimId
+            - warrantyId
+            - executionScopeId
+            - bastId
+            - eventType
+            - idempotencyKey
+            - actorUserId
+            - occurredAt
+            - createdAt
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            workId: { type: string, format: uuid }
+            claimId: { type: string, format: uuid }
+            warrantyId: { type: string, format: uuid }
+            executionScopeId: { type: string, format: uuid }
+            bastId: { type: string, format: uuid }
+            eventType:
+              type: string
+              enum: [PAYMENT_TRIGGER]
+            idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+            actorUserId: { type: string, format: uuid }
+            occurredAt: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+        warrantyStatus: { type: string }
+        claimStatus: { type: string }
+        replayed: { type: boolean }
+    HandymanSlaSubjectType:
+      type: string
+      enum:
+        - HANDYMAN_SERVICE_REQUEST
+        - HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT
+        - HANDYMAN_EXECUTION_SCOPE
+        - HANDYMAN_DEFECT_RECORD
+        - HANDYMAN_SERVICE_WARRANTY_CLAIM
+    HandymanSlaMilestoneName:
+      type: string
+      enum:
+        - REQUEST_ACKNOWLEDGEMENT
+        - QUOTATION_TURNAROUND
+        - PROVIDER_ACCEPT_DECLINE
+        - WORKER_ASSIGNMENT
+        - ARRIVAL
+        - WORK_COMPLETION
+        - DEFECT_CLOSURE
+        - WARRANTY_RESPONSE
+        - WARRANTY_REWORK
+    HandymanSlaClockProjection:
+      type: object
+      required:
+        - id
+        - appliedSlaId
+        - clockType
+        - milestone
+        - targetMinutes
+        - startedAt
+        - status
+        - satisfiedAt
+        - terminatedAt
+        - breachedAt
+        - isPaused
+        - totalPausedMilliseconds
+        - effectiveElapsedMilliseconds
+        - pauseIntervals
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        appliedSlaId: { type: string, format: uuid }
+        clockType:
+          type: string
+          enum: [RESPONSE, RESOLUTION]
+        milestone:
+          allOf:
+            - $ref: '#/components/schemas/HandymanSlaMilestoneName'
+          nullable: true
+        targetMinutes: { type: integer, minimum: 1 }
+        startedAt: { type: string, format: date-time }
+        status:
+          type: string
+          enum: [RUNNING, SATISFIED, TERMINATED]
+        satisfiedAt: { type: string, format: date-time, nullable: true }
+        terminatedAt: { type: string, format: date-time, nullable: true }
+        breachedAt: { type: string, format: date-time, nullable: true }
+        isPaused: { type: boolean }
+        totalPausedMilliseconds: { type: integer, minimum: 0 }
+        effectiveElapsedMilliseconds: { type: integer, minimum: 0 }
+        pauseIntervals:
+          type: array
+          items:
+            type: object
+            required:
+              - id
+              - slaClockId
+              - pausedAt
+              - resumedAt
+              - pauseSource
+              - pauseActorUserId
+              - resumeActorUserId
+              - createdAt
+              - updatedAt
+            properties:
+              id: { type: string, format: uuid }
+              slaClockId: { type: string, format: uuid }
+              pausedAt: { type: string, format: date-time }
+              resumedAt: { type: string, format: date-time, nullable: true }
+              pauseSource: { type: string }
+              pauseActorUserId: { type: string, format: uuid, nullable: true }
+              resumeActorUserId: { type: string, format: uuid, nullable: true }
+              createdAt: { type: string, format: date-time }
+              updatedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanSubjectSlaMilestoneView:
+      type: object
+      required: [milestone, subjectType, clockType, clock]
+      properties:
+        milestone: { $ref: '#/components/schemas/HandymanSlaMilestoneName' }
+        subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+        clockType:
+          type: string
+          enum: [RESPONSE, RESOLUTION]
+        clock:
+          allOf:
+            - $ref: '#/components/schemas/HandymanSlaClockProjection'
+          nullable: true
+    HandymanSubjectSlaReadView:
+      type: object
+      required:
+        - subjectType
+        - subjectId
+        - clientId
+        - buildingId
+        - appliedSla
+        - milestones
+      properties:
+        subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+        subjectId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid, nullable: true }
+        appliedSla:
+          type: object
+          nullable: true
+          required:
+            - id
+            - slaDefinitionId
+            - subjectId
+            - subjectType
+            - clientId
+            - buildingId
+            - definitionCode
+            - definitionWorkType
+            - definitionPriority
+            - subjectWorkType
+            - subjectPriority
+            - responseTargetMinutes
+            - resolutionTargetMinutes
+            - definitionEffectiveFrom
+            - definitionEffectiveTo
+            - appliedAt
+            - createdAt
+            - clocks
+          properties:
+            id: { type: string, format: uuid }
+            slaDefinitionId: { type: string, format: uuid }
+            subjectId: { type: string, format: uuid }
+            subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+            clientId: { type: string, format: uuid }
+            buildingId: { type: string, format: uuid }
+            definitionCode: { type: string }
+            definitionWorkType: { type: string, nullable: true }
+            definitionPriority: { type: string, nullable: true }
+            subjectWorkType: { type: string, nullable: true }
+            subjectPriority: { type: string, nullable: true }
+            responseTargetMinutes: { type: integer, nullable: true }
+            resolutionTargetMinutes: { type: integer, nullable: true }
+            definitionEffectiveFrom: { type: string, format: date-time }
+            definitionEffectiveTo: { type: string, format: date-time, nullable: true }
+            appliedAt: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+            clocks:
+              type: array
+              items: { $ref: '#/components/schemas/HandymanSlaClockProjection' }
+        milestones:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanSubjectSlaMilestoneView' }
+    HandymanProviderPerformanceSnapshot:
+      type: object
+      required:
+        - scope
+        - derivedAt
+        - inputs
+        - responseResolutionAttainment
+        - milestoneAdherence
+        - operationalTruth
+      properties:
+        scope:
+          type: object
+          required: [clientId, buildingId, from, to]
+          properties:
+            clientId: { type: string, format: uuid }
+            buildingId: { type: string, format: uuid, nullable: true }
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        derivedAt: { type: string, format: date-time }
+        inputs:
+          type: object
+          required: [slaClocks, operationalEvents]
+          properties:
+            slaClocks: { type: integer, minimum: 0 }
+            operationalEvents: { type: integer, minimum: 0 }
+        responseResolutionAttainment:
+          type: array
+          items:
+            type: object
+            required:
+              - clockType
+              - clocks
+              - satisfied
+              - satisfiedWithinTarget
+              - breached
+              - terminated
+              - running
+              - attainmentPercent
+            properties:
+              clockType:
+                type: string
+                enum: [RESPONSE, RESOLUTION]
+              clocks: { type: integer, minimum: 0 }
+              satisfied: { type: integer, minimum: 0 }
+              satisfiedWithinTarget: { type: integer, minimum: 0 }
+              breached: { type: integer, minimum: 0 }
+              terminated: { type: integer, minimum: 0 }
+              running: { type: integer, minimum: 0 }
+              attainmentPercent: { type: number, nullable: true }
+        milestoneAdherence:
+          type: array
+          items:
+            type: object
+            required:
+              - milestone
+              - subjectType
+              - clockType
+              - clocks
+              - satisfied
+              - satisfiedWithinTarget
+              - breached
+              - terminated
+              - running
+              - attainmentPercent
+            properties:
+              milestone: { $ref: '#/components/schemas/HandymanSlaMilestoneName' }
+              subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+              clockType:
+                type: string
+                enum: [RESPONSE, RESOLUTION]
+              clocks: { type: integer, minimum: 0 }
+              satisfied: { type: integer, minimum: 0 }
+              satisfiedWithinTarget: { type: integer, minimum: 0 }
+              breached: { type: integer, minimum: 0 }
+              terminated: { type: integer, minimum: 0 }
+              running: { type: integer, minimum: 0 }
+              attainmentPercent: { type: number, nullable: true }
+        operationalTruth:
+          type: array
+          items:
+            type: object
+            required:
+              - eventType
+              - occurrences
+              - firstOccurredAt
+              - lastOccurredAt
+            properties:
+              eventType: { type: string }
+              occurrences: { type: integer, minimum: 1 }
+              firstOccurredAt: { type: string, format: date-time }
+              lastOccurredAt: { type: string, format: date-time }
+    HandymanLineageSlaMilestoneView:
+      type: object
+      required:
+        - milestone
+        - subjectType
+        - clockType
+        - subjectId
+        - appliedSlaId
+        - definitionCode
+        - clock
+      properties:
+        milestone: { $ref: '#/components/schemas/HandymanSlaMilestoneName' }
+        subjectType: { $ref: '#/components/schemas/HandymanSlaSubjectType' }
+        clockType:
+          type: string
+          enum: [RESPONSE, RESOLUTION]
+        subjectId: { type: string, format: uuid, nullable: true }
+        appliedSlaId: { type: string, format: uuid, nullable: true }
+        definitionCode: { type: string, nullable: true }
+        clock:
+          allOf:
+            - $ref: '#/components/schemas/HandymanSlaClockProjection'
+          nullable: true
+    HandymanStatusVisibilityReadView:
+      type: object
+      required:
+        - anchorType
+        - clientId
+        - buildingId
+        - handymanRequestId
+        - executionScopeId
+        - stages
+        - slaMilestones
+      properties:
+        anchorType:
+          type: string
+          enum: [HANDYMAN_SERVICE_REQUEST, HANDYMAN_EXECUTION_SCOPE]
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid, nullable: true }
+        stages:
+          type: object
+          required:
+            - request
+            - readiness
+            - quotation
+            - executionScope
+            - assignment
+            - arrival
+            - workSession
+            - materialExecution
+            - qc
+            - defects
+            - bast
+            - customerLedger
+            - serviceWarranty
+          properties:
+            request:
+              type: object
+              required: [requestId, status, triageOutcome, diagnosisStatus, referralType]
+              properties:
+                requestId: { type: string, format: uuid }
+                status: { type: string }
+                triageOutcome: { type: string, nullable: true }
+                diagnosisStatus: { type: string, nullable: true }
+                referralType: { type: string, nullable: true }
+            readiness:
+              type: object
+              required:
+                - schedulingReadinessId
+                - schedulingStatus
+                - unitAccessReadinessId
+                - unitAccessStatus
+                - permitReadinessId
+                - permitStatus
+              properties:
+                schedulingReadinessId: { type: string, format: uuid, nullable: true }
+                schedulingStatus: { type: string, nullable: true }
+                unitAccessReadinessId: { type: string, format: uuid, nullable: true }
+                unitAccessStatus: { type: string, nullable: true }
+                permitReadinessId: { type: string, format: uuid, nullable: true }
+                permitStatus: { type: string, nullable: true }
+            quotation:
+              type: object
+              required:
+                - quotationId
+                - latestVersionId
+                - latestVersionNumber
+                - latestVersionStatus
+                - approvedVersionId
+              properties:
+                quotationId: { type: string, format: uuid, nullable: true }
+                latestVersionId: { type: string, format: uuid, nullable: true }
+                latestVersionNumber: { type: integer, nullable: true }
+                latestVersionStatus: { type: string, nullable: true }
+                approvedVersionId: { type: string, format: uuid, nullable: true }
+            executionScope:
+              type: object
+              required: [executionScopeId, status]
+              properties:
+                executionScopeId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+            assignment:
+              type: object
+              required: [assignmentId, status, providerContextId, crewId]
+              properties:
+                assignmentId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                providerContextId: { type: string, format: uuid, nullable: true }
+                crewId: { type: string, format: uuid, nullable: true }
+            arrival:
+              type: object
+              required: [arrivalVerificationResultId, status, primaryReason]
+              properties:
+                arrivalVerificationResultId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                primaryReason: { type: string, nullable: true }
+            workSession:
+              type: object
+              required: [workSessionId, status, sessionCount]
+              properties:
+                workSessionId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                sessionCount: { type: integer, minimum: 0 }
+            materialExecution:
+              type: object
+              required: [lineCount, latestStatus, settledLineCount]
+              properties:
+                lineCount: { type: integer, minimum: 0 }
+                latestStatus: { type: string, nullable: true }
+                settledLineCount: { type: integer, minimum: 0 }
+            qc:
+              type: object
+              required: [latestQcRunId, latestStatus, evidenceRecordCount]
+              properties:
+                latestQcRunId: { type: string, format: uuid, nullable: true }
+                latestStatus: { type: string, nullable: true }
+                evidenceRecordCount: { type: integer, minimum: 0 }
+            defects:
+              type: object
+              required: [defectCount, openDefectCount, latestDefectId, latestStatus]
+              properties:
+                defectCount: { type: integer, minimum: 0 }
+                openDefectCount: { type: integer, minimum: 0 }
+                latestDefectId: { type: string, format: uuid, nullable: true }
+                latestStatus: { type: string, nullable: true }
+            bast:
+              type: object
+              required: [bastId, status, customerAccepted, warrantyStartEligible]
+              properties:
+                bastId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                customerAccepted: { type: boolean }
+                warrantyStartEligible: { type: boolean }
+            customerLedger:
+              type: object
+              required:
+                - transactionId
+                - currency
+                - chargeLineCount
+                - confirmedPaymentCount
+                - pendingPaymentCount
+              properties:
+                transactionId: { type: string, format: uuid, nullable: true }
+                currency: { type: string, nullable: true }
+                chargeLineCount: { type: integer, minimum: 0 }
+                confirmedPaymentCount: { type: integer, minimum: 0 }
+                pendingPaymentCount: { type: integer, minimum: 0 }
+            serviceWarranty:
+              type: object
+              required:
+                - warrantyId
+                - warrantyStatus
+                - latestClaimId
+                - latestClaimStatus
+                - latestReworkId
+                - latestReworkStatus
+                - latestChargeableAdditionalWorkId
+                - latestChargeableAdditionalWorkStatus
+              properties:
+                warrantyId: { type: string, format: uuid, nullable: true }
+                warrantyStatus: { type: string, nullable: true }
+                latestClaimId: { type: string, format: uuid, nullable: true }
+                latestClaimStatus: { type: string, nullable: true }
+                latestReworkId: { type: string, format: uuid, nullable: true }
+                latestReworkStatus: { type: string, nullable: true }
+                latestChargeableAdditionalWorkId: { type: string, format: uuid, nullable: true }
+                latestChargeableAdditionalWorkStatus: { type: string, nullable: true }
+        slaMilestones:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanLineageSlaMilestoneView' }
     HandymanMaterialExecutionEstimateRequest:
       type: object
       required: [quotationVersionId, quotationLineId, estimatedQty, idempotencyKey]
@@ -77469,6 +80236,48 @@ components:
             $ref: '#/components/schemas/HandymanMaterialExecutionLineRecord'
         totalFinalUsedQty: { type: number }
         projectedAt: { type: string, format: date-time }
+    HandymanCustomerCareMaterialLineItem:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care material execution line read item across all governed statuses, with recorded events and settled finalUsedQty (zero money columns)."
+      required: [id, executionScopeId, quotationVersionId, quotationLineId, sourceItemId, status, acquisitionMode, estimatedQty, approvedQty, issuedQty, purchasedQty, usedQty, returnedQty, finalUsedQty, supplierReference, createdAt, updatedAt, events]
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        quotationLineId: { type: string, format: uuid }
+        sourceItemId: { type: string, format: uuid, nullable: true }
+        status:
+          type: string
+          enum: [ESTIMATED, APPROVED, ISSUED, PURCHASED, USED, FINAL_CHARGE_READY]
+        acquisitionMode:
+          type: string
+          enum: [ISSUED, PURCHASED]
+          nullable: true
+        estimatedQty: { type: number, minimum: 0 }
+        approvedQty: { type: number, minimum: 0 }
+        issuedQty: { type: number, minimum: 0 }
+        purchasedQty: { type: number, minimum: 0 }
+        usedQty: { type: number, minimum: 0 }
+        returnedQty: { type: number, minimum: 0 }
+        finalUsedQty: { type: number, minimum: 0, nullable: true }
+        supplierReference: { type: string, maxLength: 200, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanMaterialExecutionEventRecord'
+    HandymanCustomerCareMaterialLinesProjection:
+      type: object
+      description: "CR-HM-17 GAP PART 03 — Customer Care material execution lines read projection for an Execution Scope."
+      required: [executionScopeId, lines, totalFinalUsedQty]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanCustomerCareMaterialLineItem'
+        totalFinalUsedQty: { type: number, minimum: 0 }
     HandymanScopeAssignmentRecord:
       type: object
       description: Append-only crew assignment fact (status projection moves ACTIVE -> SUPERSEDED only). NO Lead snapshot - lead authority stays in CR-HM-04.
@@ -77762,6 +80571,104 @@ components:
           items: { $ref: "#/components/schemas/HandymanCrewMembershipRecord" }
         currentLead:
           { $ref: "#/components/schemas/HandymanCrewLeadRecord", nullable: true }
+    HandymanAssignableCrewLeadProjection:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — validated current login-capable Lead
+        projection for an assignable ACTIVE crew (CR-HM-04 F4 + CR-HM-04A
+        eligibility invariant: ACTIVE membership, ACTIVE worker context in
+        same provider/Client, and non-null `workforce_profiles.userId`).
+      required:
+        [id, leadSeq, membershipId, workerContextId, workforceProfileId,
+         userId, designatedByUserId, designatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        leadSeq:
+          type: string
+          pattern: '^[0-9]+$'
+          description: PostgreSQL BIGSERIAL sequence serialized as a decimal string (no precision loss).
+        membershipId: { $ref: "#/components/schemas/Uuid" }
+        workerContextId: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        userId: { $ref: "#/components/schemas/Uuid" }
+        designatedByUserId: { $ref: "#/components/schemas/Uuid" }
+        designatedAt: { type: string, format: date-time }
+    HandymanCrewOccupancyProjection:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — active assignment (CR-HM-04A ACTIVE
+        assignments) and active work-session (CR-HM-08 non-CHECKED_OUT
+        sessions) occupancy facts for an assignable ACTIVE crew.
+      required:
+        [activeAssignmentCount, activeAssignmentIds, activeExecutionScopeIds,
+         activeWorkSessionCount, activeWorkSessionIds, hasActiveAssignment,
+         hasActiveWorkSession]
+      properties:
+        activeAssignmentCount: { type: integer, minimum: 0 }
+        activeAssignmentIds:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid" }
+        activeExecutionScopeIds:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid" }
+        activeWorkSessionCount: { type: integer, minimum: 0 }
+        activeWorkSessionIds:
+          type: array
+          items: { $ref: "#/components/schemas/Uuid" }
+        hasActiveAssignment: { type: boolean }
+        hasActiveWorkSession: { type: boolean }
+    HandymanAssignableCrewAvailability:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — assignable ACTIVE Handyman work crew
+        with its valid current login-capable Lead and active
+        assignment/session occupancy facts.
+      required:
+        [id, clientId, handymanProviderContextId, code, name, status,
+         createdByUserId, createdAt, updatedAt, lead, occupancy,
+         activeAssignmentCount, activeWorkSessionCount,
+         hasActiveAssignment, hasActiveWorkSession]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanProviderContextId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [ACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lead:
+          $ref: "#/components/schemas/HandymanAssignableCrewLeadProjection"
+        occupancy:
+          $ref: "#/components/schemas/HandymanCrewOccupancyProjection"
+        activeAssignmentCount: { type: integer, minimum: 0 }
+        activeWorkSessionCount: { type: integer, minimum: 0 }
+        hasActiveAssignment: { type: boolean }
+        hasActiveWorkSession: { type: boolean }
+    HandymanProviderAvailabilityItem:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 02 (B4) — ACTIVE Handyman provider context with
+        its assignable ACTIVE crews, valid current login-capable Leads, and
+        active assignment/session occupancy facts.
+      required:
+        [id, clientId, vendorId, status, createdByUserId, createdAt,
+         updatedAt, providerContext, crews]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        vendorId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE] }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        providerContext:
+          $ref: "#/components/schemas/HandymanProviderContextRecord"
+        crews:
+          type: array
+          items:
+            $ref: "#/components/schemas/HandymanAssignableCrewAvailability"
     HandymanTriageRecord:
       type: object
       description: >-
@@ -77879,6 +80786,75 @@ components:
         createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+
+    HandymanRequestAttributionProvenance:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 01 (B3) — Backend-resolved attribution and
+        care-actor provenance composed from the immutable
+        `handyman_channel_attributions` row bound to the request.
+      required:
+        [id, originChannel, originReference, createdByUserId,
+         actorType, careActorId, actorReference, createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        originChannel:
+          type: string
+          enum: [BM_SUPER_APP]
+        originReference: { type: string, nullable: true }
+        createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        actorType:
+          type: string
+          enum: [CUSTOMER_CARE]
+          nullable: true
+        careActorId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        actorReference: { type: string, maxLength: 128, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    HandymanCustomerCareServiceRequest:
+      type: object
+      description: >-
+        CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request read
+        projection (list + detail). Includes only governed request/status,
+        Backend-resolved attribution/care-actor provenance, and
+        execution-scope pointer where present. No local status inference;
+        no FM/SaaS fallback.
+      required:
+        [id, clientId, channelAttributionId, tenantCompanyId, tenantPicId,
+         buildingId, spaceId, serviceCatalogId, serviceVariantId,
+         originChannel, originReference, description, status,
+         createdByUserId, createdAt, updatedAt, actorType, careActorId,
+         actorReference, attribution, executionScopeId]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        tenantCompanyId: { $ref: "#/components/schemas/Uuid" }
+        tenantPicId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        spaceId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        serviceVariantId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        originChannel:
+          type: string
+          enum: [BM_SUPER_APP]
+        originReference: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        actorType:
+          type: string
+          enum: [CUSTOMER_CARE]
+          nullable: true
+        careActorId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        actorReference: { type: string, maxLength: 128, nullable: true }
+        attribution:
+          $ref: "#/components/schemas/HandymanRequestAttributionProvenance"
+        executionScopeId:
+          $ref: "#/components/schemas/Uuid"
+          nullable: true
 
     HandymanIntakeEvidenceKind:
       type: string

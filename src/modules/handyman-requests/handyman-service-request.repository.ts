@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
+  HandymanCustomerCareServiceRequestRecord,
+  HandymanServiceRequestListFilters,
   HandymanServiceRequestRecord,
   NewHandymanServiceRequest,
 } from './handyman-service-request.types';
@@ -30,6 +32,46 @@ const REQUEST_SELECT = `
   created_by_user_id AS "createdByUserId",
   created_at AS "createdAt",
   updated_at AS "updatedAt"
+`;
+
+/**
+ * CR-HM-17 GAP PART 01 — Customer Care request read projection SELECT.
+ * Joins the immutable `handyman_channel_attributions` row for Backend-resolved
+ * attribution/care-actor provenance and left-joins `handyman_execution_scopes`
+ * for the execution-scope pointer where present.
+ */
+const CUSTOMER_CARE_PROJECTION_SELECT = `
+  r.id,
+  r.client_id AS "clientId",
+  r.channel_attribution_id AS "channelAttributionId",
+  r.tenant_company_id AS "tenantCompanyId",
+  r.tenant_pic_id AS "tenantPicId",
+  r.building_id AS "buildingId",
+  r.space_id AS "spaceId",
+  r.service_catalog_id AS "serviceCatalogId",
+  r.service_variant_id AS "serviceVariantId",
+  ca.origin_channel AS "originChannel",
+  ca.origin_reference AS "originReference",
+  r.description,
+  r.status,
+  ca.created_by_user_id AS "createdByUserId",
+  r.created_at AS "createdAt",
+  r.updated_at AS "updatedAt",
+  ca.actor_type AS "actorType",
+  ca.care_actor_id AS "careActorId",
+  ca.actor_reference AS "actorReference",
+  ca.created_at AS "attributionCreatedAt",
+  es.id AS "executionScopeId"
+`;
+
+const CUSTOMER_CARE_PROJECTION_FROM = `
+  FROM handyman_service_requests r
+  JOIN handyman_channel_attributions ca
+    ON ca.id = r.channel_attribution_id
+   AND ca.client_id = r.client_id
+  LEFT JOIN handyman_execution_scopes es
+    ON es.handyman_request_id = r.id
+   AND es.client_id = r.client_id
 `;
 
 async function insertRequest(
@@ -125,10 +167,66 @@ async function updateStatus(
   return result.rows[0] ?? null;
 }
 
+async function findCustomerCareProjectionById(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  id: string,
+): Promise<HandymanCustomerCareServiceRequestRecord | null> {
+  const result =
+    await executor.query<HandymanCustomerCareServiceRequestRecord>(
+      `SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
+         ${CUSTOMER_CARE_PROJECTION_FROM}
+        WHERE r.id = $1`,
+      [id],
+    );
+  return result.rows[0] ?? null;
+}
+
+async function listCustomerCareProjectionsScoped(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  filters: HandymanServiceRequestListFilters,
+): Promise<HandymanCustomerCareServiceRequestRecord[]> {
+  const conditions: string[] = ['r.client_id = $1'];
+  const values: unknown[] = [filters.clientId];
+  let idx = 2;
+
+  if (filters.tenantCompanyId !== undefined) {
+    conditions.push(`r.tenant_company_id = $${idx++}`);
+    values.push(filters.tenantCompanyId);
+  }
+  if (filters.buildingId !== undefined) {
+    conditions.push(`r.building_id = $${idx++}`);
+    values.push(filters.buildingId);
+  }
+  if (filters.spaceId !== undefined) {
+    conditions.push(`r.space_id = $${idx++}`);
+    values.push(filters.spaceId);
+  }
+  if (filters.channelAttributionId !== undefined) {
+    conditions.push(`r.channel_attribution_id = $${idx++}`);
+    values.push(filters.channelAttributionId);
+  }
+  if (filters.status !== undefined) {
+    conditions.push(`r.status = $${idx++}`);
+    values.push(filters.status);
+  }
+
+  const result =
+    await executor.query<HandymanCustomerCareServiceRequestRecord>(
+      `SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
+         ${CUSTOMER_CARE_PROJECTION_FROM}
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY r.created_at ASC, r.id ASC`,
+      values,
+    );
+  return result.rows;
+}
+
 export const handymanServiceRequestRepository = {
   insertRequest,
   findById,
   findByChannelAttribution,
   lockById,
   updateStatus,
+  findCustomerCareProjectionById,
+  listCustomerCareProjectionsScoped,
 };

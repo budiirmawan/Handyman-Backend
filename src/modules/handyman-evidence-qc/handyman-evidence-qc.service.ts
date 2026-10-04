@@ -1163,3 +1163,135 @@ export async function getHandymanDefectDetail(
     .listDefectEvents(undefined, defectUuid);
   return { defect, events };
 }
+
+/* ---- Customer Care read-only projections ------------------------- */
+
+export type HandymanEvidenceFileReadProjection =
+  Omit<HandymanEvidenceFileRecord, 'storageKey'>;
+
+export type HandymanEvidenceCustomerCareDetailView = {
+  record: HandymanEvidenceRecordRecord;
+  files: HandymanEvidenceFileReadProjection[];
+  events: HandymanEvidenceEventRecord[];
+  finalized: boolean;
+};
+
+async function customerCareScopeReadPreamble(
+  executionScopeId: string,
+  actorUserId: string,
+) {
+  const scope = await handymanExecutionScopeRepository
+    .findScopeById(undefined, executionScopeId);
+  if (!scope) {
+    throw handymanExecutionScopeNotFoundError();
+  }
+  const allowed = await contextAccessService
+    .canAccessClient(actorUserId, scope.clientId);
+  if (!allowed) {
+    throw buildingAccessDeniedError();
+  }
+  return scope;
+}
+
+export async function listHandymanEvidenceRecordsCustomerCareView(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanEvidenceRecordView[]> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  await customerCareScopeReadPreamble(scopeUuid, actorUuid);
+  const records = await handymanEvidenceQcRepository
+    .listEvidenceRecordsByScope(undefined, scopeUuid);
+  const views = [] as HandymanEvidenceRecordView[];
+  for (const record of records) {
+    const files = await handymanEvidenceQcRepository
+      .listEvidenceFilesByRecord(undefined, record.id);
+    const finalized = Boolean(await handymanEvidenceQcRepository
+      .findEvidenceFinalizeEventByRecord(undefined, record.id));
+    views.push({ record, fileCount: files.length, finalized });
+  }
+  return views;
+}
+
+export async function getHandymanEvidenceRecordCustomerCareDetail(
+  evidenceRecordId: string,
+  actorUserId: string,
+): Promise<HandymanEvidenceCustomerCareDetailView> {
+  const recordUuid = ensureUuid(evidenceRecordId, 'evidenceRecordId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const record = await handymanEvidenceQcRepository
+    .findEvidenceRecordById(undefined, recordUuid);
+  if (!record) throw handymanEvidenceRecordNotFoundError();
+  await customerCareScopeReadPreamble(record.executionScopeId, actorUuid);
+  const rawFiles = await handymanEvidenceQcRepository
+    .listEvidenceFilesByRecord(undefined, recordUuid);
+  const files: HandymanEvidenceFileReadProjection[] = rawFiles.map(
+    ({ storageKey: _storageKey, ...rest }) => rest,
+  );
+  const events = await handymanEvidenceQcRepository
+    .listEvidenceEventsByRecord(undefined, recordUuid);
+  const finalized = events.some((event) =>
+    event.eventType === 'FINALIZE');
+  return { record, files, events, finalized };
+}
+
+export async function listHandymanQcRunsCustomerCareView(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanQcRunView[]> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  await customerCareScopeReadPreamble(scopeUuid, actorUuid);
+  const runs = await handymanEvidenceQcRepository
+    .listQcRunsByScope(undefined, scopeUuid);
+  const views = [] as HandymanQcRunView[];
+  for (const run of runs) {
+    const items = await handymanEvidenceQcRepository
+      .listQcRunItems(undefined, run.id);
+    views.push({ run, items });
+  }
+  return views;
+}
+
+export async function getHandymanQcRunCustomerCareDetail(
+  qcRunId: string,
+  actorUserId: string,
+): Promise<HandymanQcRunDetailView> {
+  const runUuid = ensureUuid(qcRunId, 'qcRunId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const run = await handymanEvidenceQcRepository
+    .findQcRunById(undefined, runUuid);
+  if (!run) throw handymanQcRunNotFoundError();
+  await customerCareScopeReadPreamble(run.executionScopeId, actorUuid);
+  const items = await handymanEvidenceQcRepository
+    .listQcRunItems(undefined, runUuid);
+  const events = await handymanEvidenceQcRepository
+    .listQcRunEvents(undefined, runUuid);
+  return { run, items, events };
+}
+
+export async function listHandymanDefectsCustomerCareView(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanDefectRecordRecord[]> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  await customerCareScopeReadPreamble(scopeUuid, actorUuid);
+  return handymanEvidenceQcRepository
+    .listDefectsByScope(undefined, scopeUuid);
+}
+
+export async function getHandymanDefectCustomerCareDetail(
+  defectId: string,
+  actorUserId: string,
+): Promise<HandymanDefectDetailView> {
+  const defectUuid = ensureUuid(defectId, 'defectId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const defect = await handymanEvidenceQcRepository
+    .findDefectById(undefined, defectUuid);
+  if (!defect) throw handymanDefectNotFoundError();
+  await customerCareScopeReadPreamble(defect.executionScopeId, actorUuid);
+  const events = await handymanEvidenceQcRepository
+    .listDefectEvents(undefined, defectUuid);
+  return { defect, events };
+}

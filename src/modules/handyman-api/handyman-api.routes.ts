@@ -4,20 +4,25 @@ import { requirePermission } from '../auth/rbac.middleware';
 import {
   createHandymanServiceRequestHandler,
   describeHandymanMaterialProfileHandler,
+  getHandymanServiceRequestDetailHandler,
   listHandymanCatalogueServicesHandler,
   listHandymanIntakeEvidenceHandler,
   listHandymanMaterialProfilesHandler,
+  listHandymanServiceRequestsHandler,
   uploadHandymanIntakeEvidenceHandler,
 } from './handyman-api.controller';
 
 /**
- * CR-HM-02 PART 05A — customer-facing Handyman surface
- * (frozen CR-HM-02 governance, D1–D4).
+ * CR-HM-02 PART 05A + CR-HM-17 GAP PART 01 — customer-facing & Customer Care
+ * Handyman surface (frozen CR-HM-02 governance, D1–D4; CR-HM-17 GAP PART 01
+ * B3 request reads).
  *
  *   GET  /handyman/catalogue/services                          read-only catalogue
  *   GET  /handyman/catalogue/material-profiles                 read-only catalogue
  *   GET  /handyman/catalogue/material-profiles/:profileId      profile + composed reference price
  *   POST /handyman/requests                                    attribution-bound intake
+ *   GET  /handyman/requests                                    bounded Customer Care request list
+ *   GET  /handyman/requests/:handymanRequestId                 bounded Customer Care request detail
  *   GET  /handyman/requests/:handymanRequestId/intake-evidence bounded list
  *   POST /handyman/requests/:handymanRequestId/intake-evidence bounded PHOTO/VIDEO upload
  *
@@ -57,11 +62,23 @@ export function createHandymanApiRouter(): Router {
     read,
     describeHandymanMaterialProfileHandler,
   );
+  router.get(
+    '/handyman/requests',
+    auth,
+    read,
+    listHandymanServiceRequestsHandler,
+  );
   router.post(
     '/handyman/requests',
     auth,
     manage,
     createHandymanServiceRequestHandler,
+  );
+  router.get(
+    '/handyman/requests/:handymanRequestId',
+    auth,
+    read,
+    getHandymanServiceRequestDetailHandler,
   );
   router.get(
     '/handyman/requests/:handymanRequestId/intake-evidence',

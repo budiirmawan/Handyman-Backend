@@ -40,6 +40,8 @@ export {
   returnHandymanMaterialExecutionLine,
   settleHandymanMaterialExecutionLine,
   getHandymanMaterialFinalChargeReadyProjection,
+  getHandymanMaterialLinesCustomerCareView,
+  listHandymanMaterialLinesByScope,
 } from './handyman-material-execution.service';
 export type {
   EstimateHandymanMaterialLineInput,
@@ -47,6 +49,8 @@ export type {
   AcquireHandymanMaterialLineInput,
   UsageHandymanMaterialLineInput,
   SettleHandymanMaterialLineInput,
+  HandymanCustomerCareMaterialLineItem,
+  HandymanCustomerCareMaterialLinesProjection,
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialFinalChargeReadyProjection,
 } from './handyman-material-execution.types';

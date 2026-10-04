@@ -92,3 +92,17 @@ export type {
   PublicHandymanCrewMembership,
   PublicHandymanWorkCrew,
 } from './handyman-work-crew.types';
+/**
+ * CR-HM-17 GAP PART 02 (B4) — Handyman Provider Availability read projection.
+ */
+export {
+  handymanProviderAvailabilityService,
+  listHandymanProviderAvailability,
+} from './handyman-provider-availability.service';
+export type {
+  HandymanAssignableCrewLeadProjection,
+  HandymanCrewOccupancyProjection,
+  ListHandymanProviderAvailabilityInput,
+  PublicHandymanAssignableCrewAvailability,
+  PublicHandymanProviderAvailabilityItem,
+} from './handyman-provider-availability.types';

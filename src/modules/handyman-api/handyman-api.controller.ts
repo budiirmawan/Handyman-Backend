@@ -18,6 +18,7 @@ import {
   parseHandymanMaterialProfileIdParam,
   parseHandymanMaterialProfileListQuery,
   parseHandymanRequestIdParam,
+  parseHandymanServiceRequestListQuery,
 } from './handyman-api.validation';
 
 /**
@@ -171,6 +172,50 @@ export async function createHandymanServiceRequestHandler(
     const request = await handymanServiceRequestService
       .createHandymanServiceRequest(input, req.auth.userId);
     sendSuccess(res, request, 201);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /handyman/requests — CR-HM-17 GAP PART 01 bounded Customer Care
+ * request list read projection (governed request/status, Backend-resolved
+ * attribution/care-actor provenance, and execution-scope pointer where
+ * present).
+ */
+export async function listHandymanServiceRequestsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const filters = parseHandymanServiceRequestListQuery(req.query);
+    const requests = await handymanServiceRequestService
+      .listHandymanServiceRequests(filters, req.auth.userId);
+    sendSuccess(res, requests);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /handyman/requests/:handymanRequestId — CR-HM-17 GAP PART 01 bounded
+ * Customer Care request detail read projection (governed request/status,
+ * Backend-resolved attribution/care-actor provenance, and execution-scope
+ * pointer where present).
+ */
+export async function getHandymanServiceRequestDetailHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const handymanRequestId = parseHandymanRequestIdParam(
+      p(req.params.handymanRequestId),
+    );
+    const request = await handymanServiceRequestService
+      .getHandymanServiceRequestDetail(handymanRequestId, req.auth.userId);
+    sendSuccess(res, request);
   } catch (error) {
     next(error);
   }

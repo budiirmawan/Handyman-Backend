@@ -35,13 +35,17 @@ export {
   checkOutHandymanWorkSession,
   completeHandymanWorkSession,
   getActiveHandymanWorkSession,
+  getHandymanWorkSessionsCustomerCareView,
   getHandymanWorkSessionTimeProjection,
+  listHandymanWorkSessionsByScope,
   materialRunHandymanWorkSession,
   pauseHandymanWorkSession,
   resumeHandymanWorkSession,
   startWorkHandymanWorkSession,
 } from './handyman-work-session.service';
 export type {
+  HandymanCustomerCareWorkSessionItem,
+  HandymanCustomerCareWorkSessionsProjection,
   HandymanWorkSessionCheckInInput,
   HandymanWorkSessionCheckInResult,
   HandymanWorkSessionStartWorkInput,

@@ -5,7 +5,9 @@
 export { handymanServiceRequestRepository } from './handyman-service-request.repository';
 export {
   createHandymanServiceRequest,
+  getHandymanServiceRequestDetail,
   handymanServiceRequestService,
+  listHandymanServiceRequests,
 } from './handyman-service-request.service';
 export {
   handymanServiceRequestAlreadyExistsError,
@@ -17,9 +19,13 @@ export {
 } from './handyman-service-request.types';
 export type {
   CreateHandymanServiceRequestInput,
+  HandymanCustomerCareServiceRequestRecord,
+  HandymanRequestAttributionProvenance,
+  HandymanServiceRequestListFilters,
   HandymanServiceRequestRecord,
   HandymanServiceRequestStatus,
   NewHandymanServiceRequest,
+  PublicHandymanCustomerCareServiceRequest,
   PublicHandymanServiceRequest,
 } from './handyman-service-request.types';
 /**

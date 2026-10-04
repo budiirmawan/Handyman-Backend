@@ -3,6 +3,7 @@ import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
 import {
   evaluateHandymanArrivalVerification,
+  getHandymanArrivalVerificationByScope,
 } from '../handyman-arrival-results';
 import type { PublicHandymanArrivalVerificationResult }
   from '../handyman-arrival-results';
@@ -78,6 +79,28 @@ export async function postHandymanArrivalVerificationHandler(
         { executionScopeId, ...input },
         actor(req),
       )),
+      200,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getHandymanArrivalVerificationHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseArrivalScopeParam(
+      p(req.params.executionScopeId),
+    );
+    sendSuccess(
+      res,
+      await getHandymanArrivalVerificationByScope(
+        executionScopeId,
+        actor(req),
+      ),
       200,
     );
   } catch (error) {

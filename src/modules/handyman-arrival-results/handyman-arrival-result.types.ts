@@ -112,3 +112,46 @@ export type NewHandymanArrivalVerificationResult = Omit<
 /** Public projection (identical — row contains nothing secret). */
 export type PublicHandymanArrivalVerificationResult =
   HandymanArrivalVerificationResultRecord;
+
+/**
+ * CR-HM-17 GAP PART 03 — Customer Care expected location snapshot
+ * (immutable CR-HM-06 Execution Scope location snapshot).
+ */
+export type HandymanCustomerCareExpectedLocation = {
+  buildingId: string;
+  floorId: string | null;
+  areaId: string | null;
+  roomId: string | null;
+  spaceId: string | null;
+};
+
+/**
+ * CR-HM-17 GAP PART 03 — bounded Customer Care arrival verification result
+ * item (no challenge token or token hash).
+ */
+export type HandymanCustomerCareArrivalResultItem = {
+  id: string;
+  executionScopeId: string;
+  assignmentId: string;
+  challengeId: string;
+  expectedLocation: HandymanCustomerCareExpectedLocation;
+  status: HandymanArrivalResultStatus;
+  primaryReason: string;
+  qrSignal: string;
+  geofenceSignal: HandymanArrivalResultGeofenceSignal | null;
+  distanceMeters: number | null;
+  evaluatedAt: string;
+  createdAt: string;
+};
+
+/**
+ * CR-HM-17 GAP PART 03 — scope-keyed Customer Care arrival verification
+ * read projection.
+ */
+export type HandymanCustomerCareArrivalVerificationProjection = {
+  executionScopeId: string;
+  expectedLocation: HandymanCustomerCareExpectedLocation;
+  arrivalVerified: boolean;
+  latestResult: HandymanCustomerCareArrivalResultItem | null;
+  results: HandymanCustomerCareArrivalResultItem[];
+};
