@@ -22,7 +22,8 @@ import type { Migration } from './types';
  *   3. ALL quantity columns >= 0;
  *      used_qty <= issued_qty + purchased_qty - returned_qty;
  *      returned_qty <= issued_qty + purchased_qty - used_qty
- *      (RETURNED reduces final usage; it is NEVER a status);
+ *      (RETURNED reduces held unused stock, not consumed usage; it is
+ *       NEVER a status; settled final-used is derived from used_qty);
  *   4. acquisition mode is mutually exclusive once quantities exist:
  *      issued_qty > 0 requires ISSUED, purchased_qty > 0 requires
  *      PURCHASED — a line NEVER carries both (governance D4);

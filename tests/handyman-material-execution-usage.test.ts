@@ -32,10 +32,11 @@ import { ensureTestDatabase } from './helpers/postgres';
  * CR-HM-09 PART 05 — USE / RETURN / FINAL_CHARGE_READY ONLY
  * (governance D2/D5): frozen usage-basis invariants
  * (used <= issued+purchased-returned; returned <= issued+purchased-
- * used), returned reduces the final usage figure, SETTLE closes the
+ * used), RETURN records unused stock and leaves final-used=usedQty,
+ * SETTLE closes the
  * line (post-settled adjustments bounded 409), FINAL_CHARGE_READY
  * read projection is EXECUTION TRUTH ONLY (no amounts). Lead-only
- * authority, idempotent replay. Six focused cases. ZERO API/OpenAPI,
+ * authority, idempotent replay. Eight focused cases. ZERO API/OpenAPI,
  * ZERO pricing/billing/FM.
  */
 
@@ -244,7 +245,7 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       }, f.leadUserId));
   });
 
-  it('2: RETURN reduces the final usage basis (partials legal)', async (t) => {
+  it('2: RETURN records unused stock without reducing final-used (partials legal)', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await lineAt('PURCHASED', { snapshots: 6 });
     await useHandymanMaterialExecutionLine({
@@ -260,8 +261,8 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       quantity: 1.5,
       idempotencyKey: key,
     }, f.leadUserId);
-    // RETURN is NOT a sticky status: the line stays USED with the
-    // returned remainder carrying the final usage reduction.
+    // RETURN is NOT a sticky status: it records unused holdings and
+    // leaves the consumed quantity unchanged.
     assert.equal(returned.line.status, 'USED');
     assert.equal(returned.line.returnedQty, 1.5);
     assert.equal(returned.line.usedQty, 4);
@@ -274,14 +275,14 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       idempotencyKey: key,
     }, f.leadUserId);
     assert.equal(replay.replayed, true);
-    // Cap: returned <= issued+purchased-used (+ previously returned):
-    // 6 - 4 - 1.5 = 0.5 remains returnable.
+    // Cap: 6 - 4 - 1.5 = 0.5 remains returnable; precision stays at
+    // the persisted three-decimal scale.
     await assertDomainReject(
       'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED',
       () => returnHandymanMaterialExecutionLine({
         executionScopeId: f.scope.id,
         lineId: f.line.id,
-        quantity: 0.5001,
+        quantity: 0.501,
         idempotencyKey: `k-${randomUUID()}`,
       }, f.leadUserId));
     // Legal boundary hit: remaining 0.5 can be returned.
@@ -303,10 +304,12 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
         quantity: 0.001,
         idempotencyKey: `k-${randomUUID()}`,
       }, f.leadUserId));
-    // Final usage basis here is used(4) - returned(2) = 2.
+    // Returns remove unused holdings; the settled final-used basis is
+    // the amount actually consumed, independent of returnedQty.
     const head = await handymanMaterialExecutionRepository
       .findMaterialExecutionLineById(undefined, f.line.id);
-    assert.equal(head!.usedQty - head!.returnedQty, 2);
+    assert.equal(head!.usedQty, 4);
+    assert.equal(head!.returnedQty, 2);
   });
 
   it('3: RETURN and USE are refused before acquisition and after settle', async (t) => {
@@ -578,8 +581,9 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
     // absent (never fabricated as handoff).
     assert.deepEqual(projection.lines.map((line) => line.id).sort(),
       [a.line.id, b.id].sort());
-    // Aggregated final usage = (3-0) + (4-1) = 6 exactly; c excluded.
-    assert.equal(projection.totalFinalUsedQty, 6);
+    // Both settled lines share one UOM: 3 + 4 consumed; c excluded.
+    assert.equal(projection.totalsByUom.length, 1);
+    assert.equal(projection.totalsByUom[0].totalFinalUsedQty, 7);
     // The projection is quantity truth only: record fields carry no
     // financial columns (structural type-level safety verified at
     // the source scan below, rows here bounded by the PART-01/02
@@ -604,7 +608,43 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
     void c;
   });
 
-  it('6: zero pricing/billing/FM surface in PART 05', async (t) => {
+  it('6: command services reject scale/range violations before database access', async () => {
+    const scopeId = randomUUID();
+    const actorId = randomUUID();
+    await assertDomainReject(
+      'HANDYMAN_MATERIAL_EXECUTION_ESTIMATE_INVALID',
+      () => estimateHandymanMaterialExecutionLine({
+        executionScopeId: scopeId,
+        quotationVersionId: randomUUID(),
+        quotationLineId: randomUUID(),
+        estimatedQty: 1.2345,
+        idempotencyKey: `k-${randomUUID()}`,
+      }, actorId));
+    for (const quantity of [0.0001, 100_000_000_000]) {
+      await assertDomainReject(
+        'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED',
+        () => issueHandymanMaterialExecutionLine({
+          executionScopeId: scopeId,
+          lineId: randomUUID(),
+          quantity,
+          idempotencyKey: `k-${randomUUID()}`,
+        }, actorId));
+    }
+  });
+
+  it('7: a three-decimal delta persists exactly', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await lineAt('ISSUED', { snapshots: 2 });
+    const validScale = await useHandymanMaterialExecutionLine({
+      executionScopeId: f.scope.id,
+      lineId: f.line.id,
+      quantity: 0.125,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
+    assert.equal(validScale.line.usedQty, 0.125);
+  });
+
+  it('8: zero pricing/billing/FM surface in PART 05', async (t) => {
     if (!requireDatabase(t)) return;
     // PART-05 service only adds the usage/settle/projection trio —
     // NO API layer, NO commercial computation, NO FM chaining.

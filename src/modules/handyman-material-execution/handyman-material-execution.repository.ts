@@ -7,7 +7,9 @@ import type {
   HandymanMaterialExecutionEventType,
   HandymanMaterialExecutionLineHead,
   HandymanMaterialExecutionLineRecord,
+  HandymanMaterialExecutionProgressRow,
   HandymanMaterialExecutionStatus,
+  HandymanMaterialExecutionUom,
   NewHandymanMaterialExecutionEvent,
   NewHandymanMaterialExecutionLine,
 } from './handyman-material-execution.types';
@@ -153,6 +155,51 @@ async function listMaterialExecutionLinesByScope(
 }
 
 /**
+ * Lead progress read with authoritative UOM from the immutable linked
+ * quotation line (not from sourceItemId/catalogue metadata). The client
+ * join prevents a malformed cross-client unit link from being serialized.
+ */
+async function listMaterialExecutionProgressRowsByScope(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+): Promise<HandymanMaterialExecutionProgressRow[]> {
+  const result = await executor.query(
+    `SELECT line.id, line.client_id, line.execution_scope_id,
+            line.quotation_version_id, line.quotation_line_id,
+            line.source_item_id, line.status, line.acquisition_mode,
+            line.estimated_qty, line.approved_qty, line.issued_qty,
+            line.purchased_qty, line.used_qty, line.returned_qty,
+            line.supplier_reference, line.created_at, line.updated_at,
+            quote_line.description AS material_description,
+            unit.id AS uom_id, unit.code AS uom_code,
+            unit.name AS uom_name, unit.symbol AS uom_symbol,
+            unit.category AS uom_category
+       FROM handyman_material_execution_lines AS line
+       JOIN handyman_quotation_lines AS quote_line
+         ON quote_line.id = line.quotation_line_id
+        AND quote_line.quotation_version_id = line.quotation_version_id
+        AND quote_line.line_type = 'MATERIAL'
+       JOIN units_of_measure AS unit
+         ON unit.id = quote_line.uom_id
+        AND unit.client_id = line.client_id
+      WHERE line.execution_scope_id = $1
+      ORDER BY line.created_at, line.id`,
+    [executionScopeId],
+  );
+  return result.rows.map((row) => ({
+    line: mapLine(row),
+    materialDescription: row.material_description,
+    uom: {
+      id: row.uom_id,
+      code: row.uom_code,
+      name: row.uom_name,
+      symbol: row.uom_symbol,
+      category: row.uom_category,
+    } as HandymanMaterialExecutionUom,
+  }));
+}
+
+/**
  * One-link-per-quotation-line lookup: at most ONE execution line may
  * realize a given quotation line (the link is an authority anchor,
  * never a duplicate target).
@@ -280,6 +327,7 @@ export const handymanMaterialExecutionRepository = {
   findMaterialExecutionLineByIdForUpdate,
   findMaterialExecutionLineByQuotationLine,
   listMaterialExecutionLinesByScope,
+  listMaterialExecutionProgressRowsByScope,
   updateMaterialExecutionLineHead,
   appendMaterialExecutionEvent,
   findMaterialExecutionEventByIdempotency,

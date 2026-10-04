@@ -589,8 +589,9 @@ describe('CR-HM-12 PART 05 — published read contract', () => {
       f.scope.clientId, f.scope.id, asOf, f.leadUserId,
     );
     assert.equal(composed.executionScopeId, f.scope.id);
-    assert.equal(composed.composition.totalFinalUsedQty, 2);
-    assert.equal(composed.composition.basis.basisAmount, '50.00');
+    assert.equal(composed.composition.totalsByUom.length, 1);
+    assert.equal(composed.composition.totalsByUom[0].totalFinalUsedQty, 3);
+    assert.equal(composed.composition.basis.basisAmount, '75.00');
     assert.equal(composed.composition.agreementVersionId, f.versionId);
     assert.equal(composed.binding.agreementVersionId, f.versionId);
     assert.equal(composed.isFinalCharge, false);

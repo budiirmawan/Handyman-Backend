@@ -148,17 +148,75 @@ export type HandymanMaterialExecutionCommandResult = {
   replayed: boolean;
 };
 
+/** Stable UOM identity/display metadata resolved from the linked quote line. */
+export type HandymanMaterialExecutionUom = {
+  id: string;
+  code: string;
+  name: string;
+  symbol: string;
+  category: string;
+};
+
+/** Repository-only enriched record for field-safe material projections. */
+export type HandymanMaterialExecutionProgressRow = {
+  line: HandymanMaterialExecutionLineRecord;
+  materialDescription: string;
+  uom: HandymanMaterialExecutionUom;
+};
+
 /**
- * FINAL_CHARGE_READY projection over one execution scope
- * (governance PART 05 read model): EXECUTION TRUTH ONLY — a list of
- * all settled lines with their frozen quantities and ONE aggregated
- * usage figure (sum of used - returned). This is the ONLY handoff
- * artifact to CR-HM-12/13 pricing/ledger authority.
+ * Lead-safe material progress line. This intentionally excludes client,
+ * supplier-reference, timestamp, event-history, and all commercial fields.
+ * finalUsedQty is null until the line is settled; on settled lines it is the
+ * explicitly consumed usedQty (RETURN records unused holdings only).
+ */
+export type HandymanMaterialExecutionProgressLine = {
+  id: string;
+  executionScopeId: string;
+  material: {
+    description: string;
+    sourceItemId: string | null;
+  };
+  uom: HandymanMaterialExecutionUom;
+  status: HandymanMaterialExecutionStatus;
+  acquisitionMode: HandymanMaterialAcquisitionMode | null;
+  estimatedQty: number;
+  approvedQty: number;
+  issuedQty: number;
+  purchasedQty: number;
+  usedQty: number;
+  returnedQty: number;
+  finalUsedQty: number | null;
+};
+
+/** UOM-safe total of settled final-used quantities. */
+export type HandymanMaterialFinalUsedTotalByUom = {
+  uom: HandymanMaterialExecutionUom;
+  totalFinalUsedQty: number;
+};
+
+/** Lead-safe in-flight and settled material state for one assigned scope. */
+export type HandymanMaterialProgressProjection = {
+  executionScopeId: string;
+  lines: HandymanMaterialExecutionProgressLine[];
+};
+
+/**
+ * Internal settled-line handoff record. quotationLineId is retained for the
+ * downstream snapshot join, but Lead HTTP serializers deliberately omit it.
+ */
+export type HandymanMaterialFinalChargeReadyLine =
+  HandymanMaterialExecutionProgressLine & { quotationLineId: string };
+
+/**
+ * FINAL_CHARGE_READY projection over one execution scope. It contains only
+ * settled lines and groups final-used totals by their authoritative UOM;
+ * unlike units are never collapsed into one scalar.
  */
 export type HandymanMaterialFinalChargeReadyProjection = {
   executionScopeId: string;
-  lines: HandymanMaterialExecutionLineRecord[];
-  totalFinalUsedQty: number;
+  lines: HandymanMaterialFinalChargeReadyLine[];
+  totalsByUom: HandymanMaterialFinalUsedTotalByUom[];
 };
 
 /**

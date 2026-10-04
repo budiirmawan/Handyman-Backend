@@ -3,6 +3,7 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   getMaterialLinesHandler,
+  getProgressHandler,
   getProjectionHandler,
   postApproveHandler,
   postEstimateHandler,
@@ -24,6 +25,7 @@ import {
  *   POST   /handyman/execution-scopes/:executionScopeId/material-lines/:lineId/return
  *   POST   /handyman/execution-scopes/:executionScopeId/material-lines/:lineId/settle
  *   GET    /handyman/execution-scopes/:executionScopeId/material-lines/final-charge-ready
+ *   GET    /handyman/execution-scopes/:executionScopeId/material-lines/progress
  *
  * Authentication ONLY: any authenticated local session — Crew Leads
  * hold NO RBAC permissions; authority/locking/idempotency are
@@ -42,6 +44,7 @@ export function createHandymanMaterialExecutionApiRouter(): Router {
   router.get(base, auth, read, getMaterialLinesHandler);
   router.post(`${base}/estimate`, auth, postEstimateHandler);
   router.get(`${base}/final-charge-ready`, auth, getProjectionHandler);
+  router.get(`${base}/progress`, auth, getProgressHandler);
   router.post(`${base}/:lineId/approve`, auth, postApproveHandler);
   router.post(`${base}/:lineId/issue`, auth, postIssueHandler);
   router.post(`${base}/:lineId/purchase`, auth, postPurchaseHandler);

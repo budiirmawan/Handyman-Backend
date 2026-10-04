@@ -6,6 +6,7 @@ import {
   estimateHandymanMaterialExecutionLine,
   getHandymanMaterialFinalChargeReadyProjection,
   getHandymanMaterialLinesCustomerCareView,
+  getHandymanMaterialProgressProjection,
   issueHandymanMaterialExecutionLine,
   purchaseHandymanMaterialExecutionLine,
   returnHandymanMaterialExecutionLine,
@@ -18,7 +19,9 @@ import type {
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialExecutionEventRecord,
   HandymanMaterialExecutionLineRecord,
+  HandymanMaterialExecutionProgressLine,
   HandymanMaterialFinalChargeReadyProjection,
+  HandymanMaterialProgressProjection,
 } from '../handyman-material-execution';
 import {
   parseEstimateBody,
@@ -86,13 +89,56 @@ function toCommandPayload(result: HandymanMaterialExecutionCommandResult) {
   };
 }
 
+function toProgressLinePayload(line: HandymanMaterialExecutionProgressLine) {
+  return {
+    id: line.id,
+    executionScopeId: line.executionScopeId,
+    material: {
+      description: line.material.description,
+      sourceItemId: line.material.sourceItemId,
+    },
+    uom: {
+      id: line.uom.id,
+      code: line.uom.code,
+      name: line.uom.name,
+      symbol: line.uom.symbol,
+      category: line.uom.category,
+    },
+    status: line.status,
+    acquisitionMode: line.acquisitionMode,
+    estimatedQty: line.estimatedQty,
+    approvedQty: line.approvedQty,
+    issuedQty: line.issuedQty,
+    purchasedQty: line.purchasedQty,
+    usedQty: line.usedQty,
+    returnedQty: line.returnedQty,
+    finalUsedQty: line.finalUsedQty,
+  };
+}
+
+function toProgressPayload(projection: HandymanMaterialProgressProjection) {
+  return {
+    executionScopeId: projection.executionScopeId,
+    lines: projection.lines.map(toProgressLinePayload),
+  };
+}
+
 function toProjectionPayload(
   projection: HandymanMaterialFinalChargeReadyProjection,
 ) {
   return {
     executionScopeId: projection.executionScopeId,
-    lines: projection.lines.map(toLinePayload),
-    totalFinalUsedQty: projection.totalFinalUsedQty,
+    lines: projection.lines.map(toProgressLinePayload),
+    totalsByUom: projection.totalsByUom.map((total) => ({
+      uom: {
+        id: total.uom.id,
+        code: total.uom.code,
+        name: total.uom.name,
+        symbol: total.uom.symbol,
+        category: total.uom.category,
+      },
+      totalFinalUsedQty: total.totalFinalUsedQty,
+    })),
   };
 }
 
@@ -290,6 +336,30 @@ export async function getProjectionHandler(
       res,
       toProjectionPayload(
         await getHandymanMaterialFinalChargeReadyProjection(
+          executionScopeId,
+          actor(req),
+        ),
+      ),
+      200,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** GET the current Lead's field-safe material progress for one scope. */
+export async function getProgressHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseMaterialScopeParam(
+      p(req.params.executionScopeId));
+    sendSuccess(
+      res,
+      toProgressPayload(
+        await getHandymanMaterialProgressProjection(
           executionScopeId,
           actor(req),
         ),

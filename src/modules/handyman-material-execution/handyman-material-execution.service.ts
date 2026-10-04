@@ -34,9 +34,14 @@ import type {
   HandymanMaterialAcquisitionMode,
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialExecutionEventType,
+  HandymanMaterialExecutionProgressLine,
+  HandymanMaterialExecutionProgressProjection,
+  HandymanMaterialExecutionProgressRow,
+  HandymanMaterialFinalChargeReadyLine,
+  HandymanMaterialFinalChargeReadyProjection,
+  HandymanMaterialFinalUsedTotalByUom,
   SettleHandymanMaterialLineInput,
   UsageHandymanMaterialLineInput,
-  HandymanMaterialFinalChargeReadyProjection,
 } from './handyman-material-execution.types';
 
 /**
@@ -66,6 +71,23 @@ function ensureKey(value: string): string {
   return value;
 }
 
+const MAX_NUMERIC_14_3_EXCLUSIVE = 100_000_000_000;
+const MATERIAL_QUANTITY_SCALE = 3;
+
+/** Decimal places in the shortest decimal representation of a JSON number. */
+function decimalScale(value: number): number {
+  const [mantissa, exponentText] = value.toString().toLowerCase().split('e');
+  const exponent = exponentText === undefined ? 0 : Number(exponentText);
+  const fractionalDigits = mantissa.split('.')[1]?.length ?? 0;
+  return Math.max(0, fractionalDigits - exponent);
+}
+
+/** NUMERIC(14,3): at most 11 integer digits and 3 fractional digits. */
+function isPersistableQuantity(value: number): boolean {
+  return Math.abs(value) < MAX_NUMERIC_14_3_EXCLUSIVE
+    && decimalScale(value) <= MATERIAL_QUANTITY_SCALE;
+}
+
 function ensureEstimatedQuantity(value: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw handymanMaterialExecutionEstimateInvalidError('not-a-number');
@@ -73,6 +95,10 @@ function ensureEstimatedQuantity(value: number): number {
   if (value <= 0) {
     throw handymanMaterialExecutionEstimateInvalidError(
       'not-positive');
+  }
+  if (!isPersistableQuantity(value)) {
+    throw handymanMaterialExecutionEstimateInvalidError(
+      'numeric-14-3-precision-or-range');
   }
   return value;
 }
@@ -310,6 +336,10 @@ function ensureDeltaQuantity(value: number): number {
     throw handymanMaterialExecutionQuantityExceededError(
       'not-positive');
   }
+  if (!isPersistableQuantity(value)) {
+    throw handymanMaterialExecutionQuantityExceededError(
+      'numeric-14-3-precision-or-range');
+  }
   return value;
 }
 
@@ -421,10 +451,11 @@ export async function purchaseHandymanMaterialExecutionLine(
 }
 
 /* ---- PART 05 — USE / RETURN adjustments + FINAL_CHARGE_READY ----
- * Governance D2/D5: the final usage basis is ONLY
- * finalUsedQty = usedQty - returnedQty. USE/RETURN are bounded
- * quantity adjustments (partials legal) on the factual axes; RETURN
- * is never a sticky status. SETTLE (FINAL_CHARGE_READY) closes the
+ * USE records consumed quantity; RETURN records held-but-unused
+ * quantity. A return therefore never reduces final-used: on settled
+ * lines, finalUsedQty = usedQty. USE/RETURN remain bounded quantity
+ * adjustments (partials legal) on their factual axes; RETURN is never
+ * a sticky status. SETTLE (FINAL_CHARGE_READY) closes the
  * line: after that, ANY further USE/RETURN/ISSUE/PURCHASE is a
  * bounded 409 MATERIAL_LINE_SETTLED — corrections live downstream in
  * CR-HM-13 reversal/adjustment, NEVER by history rewrite here.
@@ -528,8 +559,8 @@ export async function useHandymanMaterialExecutionLine(
 /**
  * RETURN: hand back `quantity` of the held-not-used remainder.
  * Partial returns are legal; the status is NOT sticky (RETURNED is
- * not a status). The returned quantity reduces the final usage
- * basis: finalUsedQty = usedQty - returnedQty.
+ * not a status). Returned stock was not consumed, so RETURN does not
+ * change final-used; settled finalUsedQty remains usedQty.
  */
 export async function returnHandymanMaterialExecutionLine(
   input: UsageHandymanMaterialLineInput,
@@ -600,28 +631,98 @@ export async function settleHandymanMaterialExecutionLine(
   });
 }
 
+function toProgressLine(
+  row: HandymanMaterialExecutionProgressRow,
+): HandymanMaterialExecutionProgressLine {
+  const { line } = row;
+  const isSettled = line.status === 'FINAL_CHARGE_READY';
+  return {
+    id: line.id,
+    executionScopeId: line.executionScopeId,
+    material: {
+      description: row.materialDescription,
+      sourceItemId: line.sourceItemId,
+    },
+    uom: row.uom,
+    status: line.status,
+    acquisitionMode: line.acquisitionMode,
+    estimatedQty: line.estimatedQty,
+    approvedQty: line.approvedQty,
+    issuedQty: line.issuedQty,
+    purchasedQty: line.purchasedQty,
+    usedQty: line.usedQty,
+    returnedQty: line.returnedQty,
+    finalUsedQty: isSettled ? line.usedQty : null,
+  };
+}
+
+async function listAuthorizedProgressRows(
+  scopeUuid: string,
+  actorUuid: string,
+): Promise<HandymanMaterialExecutionProgressRow[]> {
+  await authorityPreamble(scopeUuid, actorUuid);
+  return handymanMaterialExecutionRepository
+    .listMaterialExecutionProgressRowsByScope(undefined, scopeUuid);
+}
+
 /**
- * FINAL_CHARGE_READY usage-basis read projection over ONE execution
- * scope (READ-ONLY, server-side): the exact settled lines and ONE
- * aggregated final-used figure. This module NEVER computes amounts;
- * the projection hands nothing but quantities to CR-HM-12/13.
+ * Lead-only material progress over the assigned execution scope.
+ * Returns current line heads and quote-linked identity/UOM only; it does
+ * not expose events, Customer Care history, or commercial data.
+ */
+export async function getHandymanMaterialProgressProjection(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanMaterialProgressProjection> {
+  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const rows = await listAuthorizedProgressRows(scopeUuid, actorUuid);
+  return {
+    executionScopeId: scopeUuid,
+    lines: rows.map(toProgressLine),
+  };
+}
+
+function aggregateFinalUsedByUom(
+  lines: readonly HandymanMaterialExecutionProgressLine[],
+): HandymanMaterialFinalUsedTotalByUom[] {
+  const totals = new Map<string, HandymanMaterialFinalUsedTotalByUom>();
+  for (const line of lines) {
+    const finalUsedQty = line.finalUsedQty ?? 0;
+    const current = totals.get(line.uom.id);
+    totals.set(line.uom.id, {
+      uom: line.uom,
+      totalFinalUsedQty: Number(
+        ((current?.totalFinalUsedQty ?? 0) + finalUsedQty).toFixed(3),
+      ),
+    });
+  }
+  return [...totals.values()].sort((a, b) => a.uom.id.localeCompare(b.uom.id));
+}
+
+/**
+ * FINAL_CHARGE_READY quantity handoff over one execution scope. Settled
+ * line quantities and the aggregate are grouped by the authoritative
+ * quotation-line UOM; a RETURN only records unused stock and cannot reduce
+ * final-used quantity. This module computes no commercial amounts.
  */
 export async function getHandymanMaterialFinalChargeReadyProjection(
   executionScopeId: string,
   actorUserId: string,
 ): Promise<HandymanMaterialFinalChargeReadyProjection> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
-  await authorityPreamble(scopeUuid, ensureUuid(actorUserId,
-    'actorUserId'));
-  const lines = (await handymanMaterialExecutionRepository
-    .listMaterialExecutionLinesByScope(undefined, scopeUuid))
+  const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const rows = await listAuthorizedProgressRows(scopeUuid, actorUuid);
+  const lines: HandymanMaterialFinalChargeReadyLine[] = rows
+    .map((row) => ({
+      ...toProgressLine(row),
+      quotationLineId: row.line.quotationLineId,
+    }))
     .filter((line) => line.status === 'FINAL_CHARGE_READY');
-  const totalFinalUsedQty = lines.reduce(
-    (sum, line) => sum + (line.usedQty - line.returnedQty), 0);
   return {
     executionScopeId: scopeUuid,
     lines,
-    totalFinalUsedQty,
+    totalsByUom: aggregateFinalUsedByUom(lines),
   };
 }
 

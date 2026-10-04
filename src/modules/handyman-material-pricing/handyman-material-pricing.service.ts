@@ -10,6 +10,8 @@ import {
 } from '../handyman-commercial-agreements';
 import { getHandymanMaterialFinalChargeReadyProjection }
   from '../handyman-material-execution';
+import type { HandymanMaterialFinalUsedTotalByUom }
+  from '../handyman-material-execution';
 import {
   handymanExecutionScopeRepository,
   listHandymanQuotationVersionLines,
@@ -64,7 +66,7 @@ export type HandymanMaterialPricingBasisForScope = {
   agreementVersionId: string;
   mode: HandymanMaterialPricingBasisRecord['mode'];
   basis: HandymanMaterialPricingBasisEvaluation;
-  totalFinalUsedQty: number;
+  totalsByUom: HandymanMaterialFinalUsedTotalByUom[];
 };
 
 function ensureUuid(value: string, field: string): string {
@@ -258,7 +260,7 @@ export async function computeHandymanMaterialPricingBasisForScope(
       finalQuotedUnitAmount: snapshot.finalQuotedUnitAmount.toFixed(2),
       currency: snapshot.currency,
       approvedQty: settled.approvedQty,
-      finalUsedQty: settled.usedQty - settled.returnedQty,
+      finalUsedQty: settled.finalUsedQty ?? settled.usedQty,
     });
   }
 
@@ -273,7 +275,7 @@ export async function computeHandymanMaterialPricingBasisForScope(
         lines: [],
         basisAmount: '0.00',
       },
-      totalFinalUsedQty: projection.totalFinalUsedQty,
+      totalsByUom: projection.totalsByUom,
     };
   }
 
@@ -286,6 +288,6 @@ export async function computeHandymanMaterialPricingBasisForScope(
     agreementVersionId: basis.agreementVersionId,
     mode: basis.mode,
     basis: evaluation,
-    totalFinalUsedQty: projection.totalFinalUsedQty,
+    totalsByUom: projection.totalsByUom,
   };
 }

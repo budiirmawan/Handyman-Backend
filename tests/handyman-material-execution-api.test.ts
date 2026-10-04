@@ -21,12 +21,11 @@ import { ensureTestDatabase } from './helpers/postgres';
 import { api } from './helpers/http';
 
 /**
- * CR-HM-09 PART 06 — material-execution HTTP/OpenAPI surface (THIN
- * shell over the PART 03–05 services): 7 commands + FINAL_CHARGE_READY
- * projection. Actor/client context from the authenticated request
- * ONLY; authority-shaped inputs are structurally IGNORED; bounded
- * error mapping (400/401/403/404/409); exact OpenAPI parity. Six
- * focused cases. ZERO pricing/billing/payment/FM routes or fields.
+ * CR-HM-18 BE12 — field-safe Lead progress, UOM and quantity precision
+ * over the existing material-execution HTTP surface. The Customer Care
+ * history route remains separate and unchanged. Actor/client context comes
+ * from the authenticated request ONLY; bounded auth/error and OpenAPI parity.
+ * ZERO price/amount/charge/payment/FM fields in Lead reads.
  */
 
 const V1 = '/api/v1';
@@ -115,7 +114,8 @@ async function leadFixture(quotationQty = 6) {
     crewId: crew.crew.id,
   }, adminUserId);
   const uomRow = await q(
-    `SELECT id FROM units_of_measure WHERE client_id = $1 LIMIT 1`,
+    `SELECT id, code, name, symbol, category
+       FROM units_of_measure WHERE client_id = $1 LIMIT 1`,
     [f.scope.clientId]);
   const materialLineId = randomUUID();
   await q(
@@ -144,6 +144,13 @@ async function leadFixture(quotationQty = 6) {
     token,
     leadUserId: crew.leadUser.id,
     quotationLineId: materialLineId,
+    uom: {
+      id: uomRow.rows[0].id as string,
+      code: uomRow.rows[0].code as string,
+      name: uomRow.rows[0].name as string,
+      symbol: uomRow.rows[0].symbol as string,
+      category: uomRow.rows[0].category as string,
+    },
   };
 }
 
@@ -165,6 +172,9 @@ const authed = (token: string) =>
 const postWith = (token: string) =>
   async (url: string, body: Record<string, unknown>) =>
     authed(token)('post', url).send(body);
+
+const progressViaHttp = (token: string, scopeId: string) =>
+  authed(token)('get', `${matBase(scopeId)}/progress`).send({});
 
 async function estimateViaHttp(args: {
   token: string;
@@ -260,7 +270,53 @@ async function lineAt(
   return { ...f, lineId, line, makeKey: key };
 }
 
-describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
+async function addSettledLineWithDifferentUom(f: {
+  scope: { id: string; clientId: string; approvedQuotationVersionId: string };
+  token: string;
+}, quantities: { issuedQty: number; usedQty: number; returnedQty: number }) {
+  const uomId = randomUUID();
+  const quoteLineId = randomUUID();
+  await q(
+    `INSERT INTO units_of_measure
+       (id, client_id, code, name, symbol, category)
+     VALUES ($1::uuid, $2::uuid, $3, 'Kilogram', 'kg', 'MASS')`,
+    [uomId, f.scope.clientId, `KG_${randomUUID().slice(0, 8)}`],
+  );
+  await q(
+    `INSERT INTO handyman_quotation_lines (
+       id, quotation_version_id, line_type, description, quantity,
+       uom_id, final_quoted_unit_amount, line_total, currency,
+       source_item_id, created_by_user_id
+     ) VALUES ($1::uuid, $2::uuid, 'MATERIAL', 'Repair compound', 6,
+               $3::uuid, 30, 180, 'IDR', NULL, $4::uuid)`,
+    [quoteLineId, f.scope.approvedQuotationVersionId, uomId, adminUserId],
+  );
+  const key = () => `k-${randomUUID()}`;
+  const estimate = await estimateViaHttp({
+    token: f.token,
+    scopeId: f.scope.id,
+    quotationVersionId: f.scope.approvedQuotationVersionId,
+    quotationLineId: quoteLineId,
+    estimatedQty: 6,
+    idempotencyKey: key(),
+  });
+  assert.equal(estimate.status, 200, JSON.stringify(estimate.body));
+  const lineId = (estimate.body.data as { line: { id: string } }).line.id;
+  for (const [action, body] of [
+    ['approve', { idempotencyKey: key() }],
+    ['issue', { quantity: quantities.issuedQty, idempotencyKey: key() }],
+    ['use', { quantity: quantities.usedQty, idempotencyKey: key() }],
+    ['return', { quantity: quantities.returnedQty, idempotencyKey: key() }],
+    ['settle', { idempotencyKey: key() }],
+  ] as const) {
+    const result = await lineViaHttp(
+      f.token, f.scope.id, lineId, action, body);
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  }
+  return { lineId, uomId };
+}
+
+describe('CR-HM-18 BE12 — material quantity and Lead read', () => {
   it('1: full ESTIMATE->APPROVE->ISSUE->USE->RETURN->SETTLE ladder with replay', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await leadFixture();
@@ -377,19 +433,25 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     assert.equal((settleReplay.body.data as {
       event: { id: string };
     }).event.id, settledData.event.id);
-    // Projection: ONE settled line; finalUsed = used(2.5) - ret(1)
-    // = 1.5 exactly.
+    // Settled final-used is actual consumption; returning unused stock
+    // does not net it down. The scope total is grouped by authoritative UOM.
     const projection = await authed(f.token)(
       'get', `${matBase(f.scope.id)}/final-charge-ready`).send({});
     assert.equal(projection.status, 200, JSON.stringify(projection.body));
     const projData = projection.body.data as {
       executionScopeId: string;
-      lines: { id: string; status: string }[];
-      totalFinalUsedQty: number;
+      lines: { id: string; status: string; finalUsedQty: number;
+        uom: { id: string } }[];
+      totalsByUom: { uom: { id: string }; totalFinalUsedQty: number }[];
     };
     assert.equal(projData.executionScopeId, f.scope.id);
     assert.deepEqual(projData.lines.map((l) => l.id), [lineId]);
-    assert.equal(projData.totalFinalUsedQty, 1.5);
+    assert.equal(projData.lines[0].finalUsedQty, 2.5);
+    assert.equal(projData.lines[0].uom.id, f.uom.id);
+    assert.deepEqual(projData.totalsByUom, [{
+      uom: f.uom,
+      totalFinalUsedQty: 2.5,
+    }]);
   });
 
   it('2: authority — unauthenticated 401, non-Lead 403, body can never steer actor', async (t) => {
@@ -412,6 +474,7 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
       ['post', `${matBase(f.scope.id)}/${randomUUID()}/use`,
         { quantity: 1, idempotencyKey: key() }],
       ['get', `${matBase(f.scope.id)}/final-charge-ready`, {}],
+      ['get', `${matBase(f.scope.id)}/progress`, {}],
     ] as const) {
       const res = await (api() as {
         [key: string]: (u: string) => {
@@ -433,6 +496,8 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     const outsiderProjection = await authed(outsider)(
       'get', `${matBase(f.scope.id)}/final-charge-ready`).send({});
     assert.equal(outsiderProjection.status, 403);
+    const outsiderProgress = await progressViaHttp(outsider, f.scope.id);
+    assert.equal(outsiderProgress.status, 403);
     // Authority-shaped keys are structurally IGNORED: spoofing
     // actorUserId/clientId/status/absolute quantities does nothing —
     // the service rejects with the SAME domain error as without them.
@@ -498,6 +563,28 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
       });
     assert.equal(garbageQty.status, 400);
     assert.equal(metErr(garbageQty), 'VALIDATION_ERROR');
+    // NUMERIC(14,3): reject excess decimal scale and the first
+    // out-of-range integer magnitude before any database write.
+    const excessEstimateScale = await estimateViaHttp({
+      token: f.token,
+      scopeId: f.scope.id,
+      quotationVersionId: f.scope.approvedQuotationVersionId,
+      quotationLineId: f.quotationLineId,
+      estimatedQty: 1.2345,
+      idempotencyKey: key(),
+    });
+    assert.equal(excessEstimateScale.status, 400);
+    assert.equal(metErr(excessEstimateScale),
+      'HANDYMAN_MATERIAL_EXECUTION_ESTIMATE_INVALID');
+    for (const quantity of [1.2345, 100_000_000_000]) {
+      const unpersistable = await lineViaHttp(
+        f.token, f.scope.id, randomUUID(), 'issue', {
+          quantity, idempotencyKey: key(),
+        });
+      assert.equal(unpersistable.status, 400);
+      assert.equal(metErr(unpersistable),
+        'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED');
+    }
     // Overlong key / reference = 400.
     const longKey = await postWith(f.token)(
       `${matBase(f.scope.id)}/estimate`, {
@@ -589,23 +676,91 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
       'HANDYMAN_MATERIAL_EXECUTION_ILLEGAL_TRANSITION');
   });
 
-  it('5: projection shape is execution truth only (no financial keys)', async (t) => {
+  it('5: Lead progress read returns quote-linked identity, UOM, and field-safe quantities', async (t) => {
     if (!requireDatabase(t)) return;
-    const f = await lineAt('SETTLED', { issueQty: 4, useQty: 2.5,
-      returnQty: 0.5 });
+    const f = await lineAt('ISSUED', {
+      issueQty: 4.125,
+      useQty: 1.25,
+      returnQty: 0.5,
+    });
+    const response = await progressViaHttp(f.token, f.scope.id);
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const data = response.body.data as {
+      executionScopeId: string;
+      lines: {
+        id: string;
+        executionScopeId: string;
+        material: { description: string; sourceItemId: string | null };
+        uom: { id: string; code: string; name: string;
+          symbol: string; category: string };
+        status: string;
+        acquisitionMode: string | null;
+        estimatedQty: number;
+        approvedQty: number;
+        issuedQty: number;
+        purchasedQty: number;
+        usedQty: number;
+        returnedQty: number;
+        finalUsedQty: number | null;
+      }[];
+    };
+    assert.equal(data.executionScopeId, f.scope.id);
+    assert.equal(data.lines.length, 1);
+    assert.deepEqual(data.lines[0], {
+      id: f.lineId,
+      executionScopeId: f.scope.id,
+      material: { description: 'Sealant cartridge', sourceItemId: null },
+      uom: f.uom,
+      status: 'USED',
+      acquisitionMode: 'ISSUED',
+      estimatedQty: 6,
+      approvedQty: 6,
+      issuedQty: 4.125,
+      purchasedQty: 0,
+      usedQty: 1.25,
+      returnedQty: 0.5,
+      finalUsedQty: null,
+    });
+    const json = JSON.stringify(response.body);
+    for (const forbidden of ['events', 'supplierReference', 'clientId',
+      'quotationLineId', 'unitAmount', 'price', 'charge']) {
+      assert.equal(json.includes(forbidden), false, `zero ${forbidden}`);
+    }
+  });
+
+  it('6: final-used is non-negative and settled totals group by UOM', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await lineAt('SETTLED', { issueQty: 4, useQty: 0.5,
+      returnQty: 3 });
+    const secondLine = await addSettledLineWithDifferentUom(f, {
+      issuedQty: 4,
+      usedQty: 1.25,
+      returnedQty: 0.5,
+    });
     const projection = await authed(f.token)(
       'get', `${matBase(f.scope.id)}/final-charge-ready`).send({});
     assert.equal(projection.status, 200, JSON.stringify(projection.body));
     const data = projection.body.data as {
       executionScopeId: string;
-      lines: { id: string; status: string;
-        usedQty: number; returnedQty: number }[];
-      totalFinalUsedQty: number;
+      lines: { id: string; status: string; finalUsedQty: number;
+        usedQty: number; returnedQty: number; uom: { id: string } }[];
+      totalsByUom: { uom: { id: string }; totalFinalUsedQty: number }[];
     };
-    // Exact settled line only, final basis = 2.5 - 0.5 = 2.0.
-    assert.deepEqual(data.lines.map((l) => l.id), [f.lineId]);
-    assert.equal(data.lines[0].status, 'FINAL_CHARGE_READY');
-    assert.equal(data.totalFinalUsedQty, 2);
+    assert.deepEqual(data.lines.map((l) => l.id).sort(),
+      [f.lineId, secondLine.lineId].sort());
+    const lineById = new Map(data.lines.map((line) => [line.id, line]));
+    assert.equal(lineById.get(f.lineId)?.status, 'FINAL_CHARGE_READY');
+    assert.equal(lineById.get(f.lineId)?.finalUsedQty, 0.5);
+    assert.equal(lineById.get(f.lineId)?.returnedQty, 3);
+    assert.equal(lineById.get(secondLine.lineId)?.finalUsedQty, 1.25);
+    assert.equal(data.totalsByUom.length, 2);
+    assert.deepEqual(
+      Object.fromEntries(data.totalsByUom.map((total) => [
+        total.uom.id, total.totalFinalUsedQty,
+      ])),
+      { [f.uom.id]: 0.5, [secondLine.uomId]: 1.25 },
+    );
+    assert.equal('totalFinalUsedQty' in (projection.body.data as object), false);
     // NO financial identifier anywhere in the payload tree.
     const json = JSON.stringify(projection.body);
     for (const token of ['unitPrice', 'unitAmount', 'lineTotal',
@@ -627,22 +782,24 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     assert.equal(secondProjection.status, 200);
     const secondData = secondProjection.body.data as {
       lines: unknown[];
-      totalFinalUsedQty: number;
+      totalsByUom: unknown[];
     };
     assert.deepEqual(secondData.lines, []);
-    assert.equal(secondData.totalFinalUsedQty, 0);
+    assert.deepEqual(secondData.totalsByUom, []);
   });
 
-  it('6: OpenAPI parity — every route exists, no forbidden surface', async (t) => {
-    if (!requireDatabase(t)) return;
+  it('7: OpenAPI parity — every route exists, no forbidden surface', async () => {
     const doc = YAML.parse(readFileSync('docs/api/openapi.yaml',
       'utf8')) as {
       paths: Record<string, Record<string, unknown>>;
+      components: { schemas: Record<string, unknown> };
     };
     const paths = Object.keys(doc.paths);
     const expectedRoutes = [
+      '/handyman/execution-scopes/{executionScopeId}/material-lines',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/estimate',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/final-charge-ready',
+      '/handyman/execution-scopes/{executionScopeId}/material-lines/progress',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/approve',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/issue',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/purchase',
@@ -653,45 +810,86 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     for (const route of expectedRoutes) {
       assert.ok(paths.includes(route), `missing ${route}`);
     }
-    // Nothing else mentions material-lines in the contract.
+    // The base path is the pre-existing Customer Care history route;
+    // BE12 adds a separate Lead progress route without reusing it.
     assert.equal(
       paths.filter((p) => p.includes('material-lines')).length,
       expectedRoutes.length);
-    // HTTP reality check: all 8 routes are actually MOUNTED (no 404
-    // for a real scope route handler).
-    const f = await leadFixture();
-    const key = () => `k-${randomUUID()}`;
-    const est = await estimateViaHttp({
-      token: f.token,
-      scopeId: f.scope.id,
-      quotationVersionId: f.scope.approvedQuotationVersionId,
-      quotationLineId: f.quotationLineId,
-      idempotencyKey: key(),
-    });
-    assert.notEqual(est.status, 404);
-    const lineId = (est.body.data as { line: { id: string } }).line.id;
-    for (const action of ['approve', 'issue', 'use', 'return',
-      'settle'] as const) {
-      const res = await lineViaHttp(
-        f.token, f.scope.id, lineId, action,
-        action === 'issue' || action === 'use' || action === 'return'
-          ? { quantity: 1, idempotencyKey: key() }
-          : { idempotencyKey: key() });
-      assert.notEqual(res.status, 404,
-        `route ${action} must exist (got 404)`);
+    const progressOperation = (doc.paths[
+      '/handyman/execution-scopes/{executionScopeId}/material-lines/progress'
+    ] as { get: { responses: Record<string, unknown> } }).get;
+    const progress200 = progressOperation.responses['200'] as {
+      content: { 'application/json': { schema: {
+        allOf: [{ $ref: string }, { properties: {
+          data: { $ref: string };
+        } }];
+      } } };
+    };
+    assert.equal(progress200.content['application/json'].schema.allOf[0].$ref,
+      '#/components/schemas/SuccessEnvelope');
+    assert.equal(progress200.content['application/json'].schema.allOf[1]
+      .properties.data.$ref,
+    '#/components/schemas/HandymanMaterialProgressProjection');
+    const finalOperation = (doc.paths[
+      '/handyman/execution-scopes/{executionScopeId}/material-lines/final-charge-ready'
+    ] as { get: { responses: Record<string, unknown> } }).get;
+    const final200 = finalOperation.responses['200'] as {
+      content: { 'application/json': { schema: {
+        allOf: [{ $ref: string }, { properties: {
+          data: { $ref: string };
+        } }];
+      } } };
+    };
+    assert.equal(final200.content['application/json'].schema.allOf[0].$ref,
+      '#/components/schemas/SuccessEnvelope');
+    assert.equal(final200.content['application/json'].schema.allOf[1]
+      .properties.data.$ref,
+    '#/components/schemas/HandymanMaterialFinalChargeReadyProjection');
+    for (const schema of ['HandymanMaterialExecutionUom',
+      'HandymanMaterialExecutionProgressLine',
+      'HandymanMaterialProgressProjection',
+      'HandymanMaterialFinalUsedTotalByUom',
+      'HandymanMaterialFinalChargeReadyProjection']) {
+      assert.ok(doc.components.schemas[schema], `missing schema ${schema}`);
     }
-    for (const action of ['purchase'] as const) {
-      // New line can never exist now (line already ISSUED), still
-      // verifies route MOUNTED (any non-404 domain outcome).
-      const res = await lineViaHttp(
-        f.token, f.scope.id, lineId, action, {
-          quantity: 1, idempotencyKey: key(),
-        });
-      assert.notEqual(res.status, 404);
+    // HTTP reality check when PostgreSQL is available.
+    if (database && pool) {
+      const f = await leadFixture();
+      const key = () => `k-${randomUUID()}`;
+      const est = await estimateViaHttp({
+        token: f.token,
+        scopeId: f.scope.id,
+        quotationVersionId: f.scope.approvedQuotationVersionId,
+        quotationLineId: f.quotationLineId,
+        idempotencyKey: key(),
+      });
+      assert.notEqual(est.status, 404);
+      const lineId = (est.body.data as { line: { id: string } }).line.id;
+      for (const action of ['approve', 'issue', 'use', 'return',
+        'settle'] as const) {
+        const res = await lineViaHttp(
+          f.token, f.scope.id, lineId, action,
+          action === 'issue' || action === 'use' || action === 'return'
+            ? { quantity: 1, idempotencyKey: key() }
+            : { idempotencyKey: key() });
+        assert.notEqual(res.status, 404,
+          `route ${action} must exist (got 404)`);
+      }
+      for (const action of ['purchase'] as const) {
+        // New line can never exist now (line already ISSUED), still
+        // verifies route MOUNTED (any non-404 domain outcome).
+        const res = await lineViaHttp(
+          f.token, f.scope.id, lineId, action, {
+            quantity: 1, idempotencyKey: key(),
+          });
+        assert.notEqual(res.status, 404);
+      }
+      const proj = await authed(f.token)(
+        'get', `${matBase(f.scope.id)}/final-charge-ready`).send({});
+      assert.notEqual(proj.status, 404);
+      const progress = await progressViaHttp(f.token, f.scope.id);
+      assert.notEqual(progress.status, 404);
     }
-    const proj = await authed(f.token)(
-      'get', `${matBase(f.scope.id)}/final-charge-ready`).send({});
-    assert.notEqual(proj.status, 404);
     // FORBIDDEN sweep: NO pricing/billing/payment/FM field may ever
     // be VALIDATED, PARSED, or SERIALIZED at the HTTP boundary —
     // comment-stripped scan over the WHOLE API layer code surface
@@ -718,8 +916,8 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
           `zero ${token} in ${file}`);
       }
     }
-    // The ONLY serialized fields beyond the bounded line projection
-    // plus event are exactly: replayed + projection totals.
+    // Lead responses serialize only the existing bounded command result,
+    // field-safe progress lines, and per-UOM settled totals.
     const controllerSrc = fsModule.readFileSync(
       `${apiDir}/handyman-material-execution-api.controller.ts`, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
