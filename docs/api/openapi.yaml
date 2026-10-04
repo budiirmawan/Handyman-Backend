@@ -417,6 +417,11 @@ tags:
       movement linkage, UOM snapshot (PART 04) and operational unit/total
       cost snapshot (PART 05 — no valuation/GL/accounting).
 
+  - name: Handyman Lead Reads
+    description: >-
+      CR-HM-18 BE03 — field-safe assigned-scope reads for the dynamically
+      resolved current Lead. No unassigned browse, claim, customer/Care
+      provenance, commercial, or private authorization data is exposed.
   - name: Service Requests
     description: >
       BE-17C Service Request lines on a Purchase Request — the service-side
@@ -4545,6 +4550,113 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+
+  /handyman/lead/assigned-scopes:
+    get:
+      tags: [Handyman Lead Reads]
+      operationId: listHandymanLeadAssignedScopes
+      summary: List scopes currently assigned to the authenticated Lead
+      description: >-
+        Returns only current ACTIVE CR-HM-04 assignments whose dynamically
+        resolved current Lead userId equals the authenticated session user and
+        whose scope Client passes canAccessClient. No caller-selected Client,
+        provider, crew, worker, Lead, request, status, or building filter is
+        accepted. This is not an unassigned browse or claim queue. The preferred
+        window is a customer preference, not a confirmed appointment. The route
+        does not require or infer tenant_company.read and returns no commercial,
+        customer, or Care-provenance fields.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number over the caller's current assigned scopes.
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          description: Maximum number of current assigned scopes to return.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Current scopes assigned to the authenticated Lead; empty when none are assigned.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data, meta]
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanLeadAssignedScopeCard"
+                      meta:
+                        $ref: "#/components/schemas/HandymanLeadPaginationMeta"
+        '400': { $ref: "#/components/responses/BadRequest" }
+        '401': { $ref: "#/components/responses/Unauthorized" }
+        '403': { $ref: "#/components/responses/Forbidden" }
+        '500':
+          description: Unexpected server error.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /handyman/lead/assigned-scopes/{executionScopeId}:
+    get:
+      tags: [Handyman Lead Reads]
+      operationId: getHandymanLeadAssignedScope
+      summary: Read field-safe detail for one currently assigned scope
+      description: >-
+        Rechecks the current ACTIVE assignment and dynamically resolved current
+        Lead on every request, then verifies canAccessClient for the
+        server-resolved scope Client. A missing or not-currently-assigned scope
+        returns the same bounded 404; Client-access failure is 403. The response
+        contains only field-safe approved work items and current scheduling,
+        unit-access, and Handyman permit readiness; free-text authorization,
+        customer/Care identity, commercial data, and private evidence are
+        excluded. Scheduling readiness is a preferred window, not a confirmed
+        appointment. This route does not require or infer tenant_company.read.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: executionScopeId
+          in: path
+          required: true
+          description: Existing CR-HM-06 Execution Scope identifier.
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        '200':
+          description: Field-safe detail for a scope currently assigned to this Lead.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanLeadAssignedScopeDetail"
+        '400': { $ref: "#/components/responses/BadRequest" }
+        '401': { $ref: "#/components/responses/Unauthorized" }
+        '403': { $ref: "#/components/responses/Forbidden" }
+        '404': { $ref: "#/components/responses/NotFound" }
+        '500':
+          description: Unexpected server error.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
   /handyman/execution-scopes/{executionScopeId}/assignment:
     post:
@@ -80311,6 +80423,129 @@ components:
         supersedesAssignmentId: { type: string, format: uuid, nullable: true }
         leadWorkerContextId: { type: string, format: uuid, nullable: true }
         leadUserId: { type: string, format: uuid, nullable: true }
+    HandymanLeadPaginationMeta:
+      type: object
+      description: Counts only scopes currently visible to the authenticated Lead.
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+        totalPages:
+          type: integer
+          minimum: 0
+          description: Zero when total is zero.
+    HandymanLeadFieldLocation:
+      type: object
+      description: Display-only location labels for the assigned scope; no tenant/customer identity.
+      required: [buildingLabel]
+      properties:
+        buildingLabel: { type: string, minLength: 1, maxLength: 160 }
+        floorLabel: { type: string, maxLength: 160, nullable: true }
+        areaLabel: { type: string, maxLength: 160, nullable: true }
+        roomLabel: { type: string, maxLength: 160, nullable: true }
+        spaceLabel: { type: string, maxLength: 160, nullable: true }
+    HandymanLeadPreferredWindow:
+      type: object
+      description: Customer preference only; never a confirmed or scheduled execution slot.
+      required: [preferredWindowStart, preferredWindowEnd, timezone]
+      properties:
+        preferredWindowStart: { type: string, format: date-time }
+        preferredWindowEnd: { type: string, format: date-time }
+        timezone:
+          type: string
+          description: Building-derived IANA timezone.
+    HandymanLeadAssignedScopeCard:
+      type: object
+      description: Minimal card for one current Backend-recorded assignment to this Lead.
+      required:
+        [executionScopeId, assignmentId, assignmentStatus, scopeStatus,
+         assignedAt, serviceLabel, location, preferredWindow]
+      properties:
+        executionScopeId: { $ref: "#/components/schemas/Uuid" }
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        assignmentStatus: { type: string, enum: [ACTIVE] }
+        scopeStatus: { type: string, enum: [AUTHORIZED] }
+        assignedAt: { type: string, format: date-time }
+        serviceLabel: { type: string, minLength: 1, maxLength: 200 }
+        location: { $ref: "#/components/schemas/HandymanLeadFieldLocation" }
+        preferredWindow:
+          allOf:
+            - $ref: "#/components/schemas/HandymanLeadPreferredWindow"
+          nullable: true
+    HandymanLeadWorkItem:
+      type: object
+      description: Approved field-work instruction sanitized for field use; no quote/cost fields.
+      required: [lineType, description, quantity, unitLabel]
+      properties:
+        lineType: { type: string, enum: [LABOR, MATERIAL] }
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Field-safe approved work description excluding personal/customer details.
+        quantity: { type: number, exclusiveMinimum: 0 }
+        unitLabel: { type: string, minLength: 1, maxLength: 80 }
+    HandymanLeadSchedulingReadiness:
+      type: object
+      description: Current ACTIVE preferred-window fact, not a scheduled appointment.
+      required: [status, preferredWindowStart, preferredWindowEnd, timezone]
+      properties:
+        status: { type: string, enum: [ACTIVE] }
+        preferredWindowStart: { type: string, format: date-time }
+        preferredWindowEnd: { type: string, format: date-time }
+        timezone: { type: string }
+    HandymanLeadUnitAccessReadiness:
+      type: object
+      description: Current ACTIVE Handyman unit-access window; not arrival or presence proof.
+      required: [status, accessWindowStart, accessWindowEnd]
+      properties:
+        status: { type: string, enum: [ACTIVE] }
+        accessWindowStart: { type: string, format: date-time }
+        accessWindowEnd: { type: string, format: date-time }
+    HandymanLeadPermitReadiness:
+      type: object
+      description: Current ACTIVE Handyman permit-readiness fact; not FM Permit-to-Work.
+      required: [permitType, status, validFrom, validUntil]
+      properties:
+        permitType: { type: string, enum: [UNIT, BUILDING_COMMON_AREA] }
+        status: { type: string, enum: [ACTIVE] }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time }
+    HandymanLeadCurrentReadiness:
+      type: object
+      description: Current readiness only; no history rows or free-text notes.
+      required: [scheduling, unitAccess, permitReadiness]
+      properties:
+        scheduling:
+          allOf:
+            - $ref: "#/components/schemas/HandymanLeadSchedulingReadiness"
+          nullable: true
+        unitAccess:
+          allOf:
+            - $ref: "#/components/schemas/HandymanLeadUnitAccessReadiness"
+          nullable: true
+        permitReadiness:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanLeadPermitReadiness" }
+    HandymanLeadAssignedScopeDetail:
+      type: object
+      description: Exact current assigned scope with field-safe work/readiness only; no customer identity, commercial amounts, or private evidence.
+      required:
+        [executionScopeId, assignmentId, assignmentStatus, scopeStatus,
+         assignedAt, serviceLabel, location, workItems, readiness]
+      properties:
+        executionScopeId: { $ref: "#/components/schemas/Uuid" }
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        assignmentStatus: { type: string, enum: [ACTIVE] }
+        scopeStatus: { type: string, enum: [AUTHORIZED] }
+        assignedAt: { type: string, format: date-time }
+        serviceLabel: { type: string, minLength: 1, maxLength: 200 }
+        location: { $ref: "#/components/schemas/HandymanLeadFieldLocation" }
+        workItems:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanLeadWorkItem" }
+        readiness: { $ref: "#/components/schemas/HandymanLeadCurrentReadiness" }
     HandymanQuotationRecord:
       type: object
       description: Handyman-owned quotation root bound to exactly one Handyman service request; client/request lineage is server-derived.

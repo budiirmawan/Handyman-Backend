@@ -54,6 +54,8 @@ import { createHandymanServiceWarrantyApiRouter }
 import { createHandymanSlaStatusApiRouter }
   from '../modules/handyman-sla-status-api';
 import { createHandymanScopeAssignmentsApiRouter } from '../modules/handyman-scope-assignments-api';
+import { createHandymanLeadAssignedScopesApiRouter }
+  from '../modules/handyman-lead-assigned-scopes-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -816,6 +818,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanReadinessApiRouter());
   router.use(createHandymanQuotationsApiRouter()); // CR-HM-06 PART 07A — quotation surface
   router.use(createHandymanScopeAssignmentsApiRouter()); // CR-HM-04 activation PART C — assignment surface
+  router.use(createHandymanLeadAssignedScopesApiRouter()); // CR-HM-18 BE03 — current Lead assigned-scope reads only
   router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification
   router.use(createHandymanWorkSessionsApiRouter()); // CR-HM-08 PART 05 — work session field-execution surface
   router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface
