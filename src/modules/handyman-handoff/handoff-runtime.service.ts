@@ -163,7 +163,8 @@ export async function acceptHandoffAssertion(
     if (integration && secret === null) {
       logger.warn('Handoff integration has no configured credential scope', {
         operation: 'handoff.integration.unconfigured',
-        integrationCode: integration.integrationCode,
+        resourceType: 'HANDOFF_INTEGRATION',
+        resourceId: integration.integrationCode,
       });
     }
     throw handoffAssertionInvalidError();
