@@ -1,10 +1,16 @@
+import type { PoolClient } from 'pg';
+import { withTransaction } from '../../database';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError, contextAccessService } from '../context-access';
 import {
   handymanChannelAttributionNotFoundError,
   handymanChannelAttributionRepository,
+  type HandymanChannelAttributionRecord,
 } from '../handyman-channel-attributions';
+import { bindCareHandoffExchangeInTransaction } from '../handyman-handoff/handoff-binding.service';
+import { isCurrentCareRepresentation } from '../handyman-handoff/care-representation.service';
+import { handoffExchangeInvalidError } from '../handyman-handoff/handoff-runtime.errors';
 import { handymanServiceVariantNotActiveError } from '../handyman-catalog';
 import { handymanServiceVariantNotFoundError } from '../handyman-catalog';
 import { handymanServiceVariantRepository } from '../handyman-catalog';
@@ -123,36 +129,26 @@ function assertUuid(value: string | undefined, field: string): void {
   }
 }
 
-export async function createHandymanServiceRequest(
-  input: CreateHandymanServiceRequestInput,
-  actorUserId: string,
+type AttributionSnapshot = Pick<HandymanChannelAttributionRecord,
+  'id' | 'clientId' | 'tenantCompanyId' | 'tenantPicId' | 'buildingId' |
+  'spaceId' | 'originChannel' | 'originReference' | 'createdByUserId'>;
+
+/** Shared catalogue, one-request-per-attribution and immutable snapshot rules.
+ * The caller MUST authorize acting identity before entering this function. */
+async function createFromAuthorizedAttribution(
+  input: Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'>,
+  attribution: AttributionSnapshot,
+  client?: PoolClient,
 ): Promise<PublicHandymanServiceRequest> {
-  assertUuid(input.channelAttributionId, 'channelAttributionId');
   assertUuid(input.serviceCatalogId, 'serviceCatalogId');
   if (input.serviceVariantId !== undefined) {
     assertUuid(input.serviceVariantId, 'serviceVariantId');
   }
-
-  // 1) Authoritative provenance handle: attribution must exist and the
-  //    actor must be able to access its derived Client.
-  const attribution = await handymanChannelAttributionRepository.findById(
-    input.channelAttributionId,
-  );
-  if (!attribution) throw handymanChannelAttributionNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      attribution.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
-
   // 2) Selected service: must exist, be ACTIVE (reference-master idiom),
   //    and belong to the attribution's Client — cross-client services are
   //    rejected.
   const service = await serviceCatalogRepository.findById(
-    undefined,
+    client,
     input.serviceCatalogId,
   );
   if (!service) throw serviceCatalogNotFoundError();
@@ -166,7 +162,7 @@ export async function createHandymanServiceRequest(
   let variantId: string | null = null;
   if (input.serviceVariantId !== undefined) {
     const variant = await handymanServiceVariantRepository.findById(
-      undefined,
+      client,
       input.serviceVariantId,
     );
     if (!variant) throw handymanServiceVariantNotFoundError();
@@ -184,7 +180,7 @@ export async function createHandymanServiceRequest(
 
   // 4) One request per immutable attribution.
   const existing = await handymanServiceRequestRepository
-    .findByChannelAttribution(undefined, attribution.id);
+    .findByChannelAttribution(client, attribution.id);
   if (existing) throw handymanServiceRequestAlreadyExistsError();
 
   // 5) Optional free description (bounded like sibling catalog text).
@@ -207,7 +203,7 @@ export async function createHandymanServiceRequest(
   // 6) Immutable attribution-derived context snapshot (never mutated).
   try {
     const record = await handymanServiceRequestRepository.insertRequest(
-      undefined,
+      client,
       {
         clientId: attribution.clientId,
         channelAttributionId: attribution.id,
@@ -231,12 +227,57 @@ export async function createHandymanServiceRequest(
     throw error;
   }
 }
+/** Existing local-User create path is unchanged in authority and input. */
+export async function createHandymanServiceRequest(
+  input: CreateHandymanServiceRequestInput,
+  actorUserId: string,
+): Promise<PublicHandymanServiceRequest> {
+  assertUuid(input.channelAttributionId, 'channelAttributionId');
+  assertUuid(input.serviceCatalogId, 'serviceCatalogId');
+  if (input.serviceVariantId !== undefined) {
+    assertUuid(input.serviceVariantId, 'serviceVariantId');
+  }
+  const attribution = await handymanChannelAttributionRepository.findById(
+    input.channelAttributionId,
+  );
+  if (!attribution) throw handymanChannelAttributionNotFoundError();
+  if (!(await contextAccessService.canAccessClient(actorUserId, attribution.clientId))) {
+    throw buildingAccessDeniedError();
+  }
+  return createFromAuthorizedAttribution(input, attribution);
+}
 
 /**
- * CR-HM-17 GAP PART 01 — bounded Customer Care request list read projection.
- * Includes only governed request/status, Backend-resolved attribution /
- * care-actor provenance, and execution-scope pointer where present.
- * Enforces `contextAccessService.canAccessClient(actorUserId, filters.clientId)`.
+ * PART 04: atomic care-only exchange -> immutable attribution -> request.
+ * The opaque, signed-handoff-issued, single-use exchange token is the sole
+ * acting credential. A public attribution ID or PIC-linked User is not one.
+ * The existing binding/occupancy/property checks run before attribution and
+ * again before request insertion; any failure rolls back all three writes.
+ */
+export async function createCareHandymanServiceRequest(
+  input: { exchangeToken: string } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'>,
+): Promise<PublicHandymanServiceRequest> {
+  if (typeof input?.exchangeToken !== 'string' || input.exchangeToken.length === 0) {
+    throw handoffExchangeInvalidError();
+  }
+  return withTransaction(async (client) => {
+    const { attribution, exchange } = await bindCareHandoffExchangeInTransaction(
+      input.exchangeToken, client,
+    );
+    if (attribution.actorType !== 'CUSTOMER_CARE' ||
+        !attribution.careActorId || attribution.createdByUserId !== null ||
+        attribution.careActorId !== exchange.careActorId ||
+        !(await isCurrentCareRepresentation(exchange, client))) {
+      throw handoffExchangeInvalidError();
+    }
+    return createFromAuthorizedAttribution(input, attribution, client);
+  });
+}
+
+/**
+ * Bounded request list: retain the existing Client + tenant_company.read wall,
+ * then apply the C6 represented-customer/occupancy or explicitly assigned
+ * PLATFORM_ADMIN historical-read wall to every row in the repository query.
  */
 export async function listHandymanServiceRequests(
   filters: HandymanServiceRequestListFilters,
@@ -277,40 +318,36 @@ export async function listHandymanServiceRequests(
     await handymanServiceRequestRepository.listCustomerCareProjectionsScoped(
       undefined,
       filters,
+      actorUserId,
     );
   return records.map(toCustomerCarePublic);
 }
 
-/**
- * CR-HM-17 GAP PART 01 — bounded Customer Care request detail read projection.
- * Includes only governed request/status, Backend-resolved attribution /
- * care-actor provenance, and execution-scope pointer where present.
- * Enforces `contextAccessService.canAccessClient(actorUserId, record.clientId)`.
- */
+/** C6 detail read: check existence/Client as before, then perform the
+ * authorized projection in one SQL statement with the occupancy/role wall. */
 export async function getHandymanServiceRequestDetail(
   handymanRequestId: string,
   actorUserId: string,
 ): Promise<PublicHandymanCustomerCareServiceRequest> {
   assertUuid(handymanRequestId, 'handymanRequestId');
 
-  const record =
-    await handymanServiceRequestRepository.findCustomerCareProjectionById(
-      undefined,
-      handymanRequestId,
-    );
-  if (!record) throw handymanServiceRequestNotFoundError();
-
-  if (
-    !(await contextAccessService.canAccessClient(actorUserId, record.clientId))
-  ) {
+  const request = await handymanServiceRequestRepository.findById(
+    undefined, handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
     throw buildingAccessDeniedError();
   }
-
+  const record = await handymanServiceRequestRepository.findCustomerCareProjectionById(
+    undefined, handymanRequestId, actorUserId,
+  );
+  if (!record) throw buildingAccessDeniedError();
   return toCustomerCarePublic(record);
 }
 
 export const handymanServiceRequestService = {
   createHandymanServiceRequest,
+  createCareHandymanServiceRequest,
   listHandymanServiceRequests,
   getHandymanServiceRequestDetail,
 };

@@ -2810,7 +2810,13 @@ paths:
       description: >
         CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request list read
         projection. Requires `tenant_company.read` and accessible-Client
-        scope (`canAccessClient`). Returns only governed request/status,
+        scope (`canAccessClient`). Each request additionally requires an
+        assigned Building and an ACTIVE PIC link to its represented tenant,
+        with effective tenant-building and exact-unit occupancy (or effective
+        building occupancy when no unit was selected). Only an ACTIVE
+        PLATFORM_ADMIN role with assigned Building scope may read historical
+        requests after turnover. Building/Client access alone is insufficient.
+        Returns only governed request/status,
         Backend-resolved attribution/care-actor provenance from the immutable
         `handyman_channel_attributions` row, and the execution-scope pointer
         (`executionScopeId`) where present. No lifecycle commands, no local
@@ -2915,6 +2921,49 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /handyman/requests/care:
+    post:
+      operationId: createCareHandymanServiceRequest
+      summary: Create a Customer Care Handyman request from a single-use BM exchange
+      description: >
+        CR-HM-CUSTOMER-CONTEXT-01 PART 04. Alternative to binding the same
+        exchange through /handoff/channel-attributions: atomically consume a
+        signed-handoff-issued, single-use care exchange, bind its immutable
+        channel attribution, and create one INTAKE request. The exchange is
+        the acting credential; a bare channelAttributionId, represented PIC,
+        local User, asserted property or customer identifier is never care
+        authority. An ACTIVE care-actor property grant and the original
+        effective tenant-building/unit relationship identities must still
+        hold at creation. The existing bearer-User POST /handyman/requests
+        remains separate and unchanged. Neither path issues a BM User session.
+      tags: [Handyman Requests]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCareHandymanServiceRequest"
+      responses:
+        "201":
+          description: Customer Care Handyman request created in INTAKE state.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanServiceRequest"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /handyman/requests/{handymanRequestId}:
     parameters:
       - name: handymanRequestId
@@ -2927,7 +2976,13 @@ paths:
       description: >
         CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request detail read
         projection. Requires `tenant_company.read` and accessible-Client
-        scope (`canAccessClient`). Returns only governed request/status,
+        scope (`canAccessClient`). Each request additionally requires an
+        assigned Building and an ACTIVE PIC link to its represented tenant,
+        with effective tenant-building and exact-unit occupancy (or effective
+        building occupancy when no unit was selected). Only an ACTIVE
+        PLATFORM_ADMIN role with assigned Building scope may read historical
+        requests after turnover. Building/Client access alone is insufficient.
+        Returns only governed request/status,
         Backend-resolved attribution/care-actor provenance from the immutable
         `handyman_channel_attributions` row, and the execution-scope pointer
         (`executionScopeId`) where present. No lifecycle commands, no local
@@ -77834,6 +77889,23 @@ components:
       required: [channelAttributionId, serviceCatalogId]
       properties:
         channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        serviceVariantId: { $ref: "#/components/schemas/Uuid" }
+        description: { type: string, minLength: 1, maxLength: 1000 }
+
+    CreateCareHandymanServiceRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        Care-only intake from an attested, single-use BM handoff exchange.
+        No channelAttributionId or caller-provided actor/customer/location.
+      required: [exchangeToken, serviceCatalogId]
+      properties:
+        exchangeToken:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Opaque single-use handoff exchange token, never a User session.
         serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
         serviceVariantId: { $ref: "#/components/schemas/Uuid" }
         description: { type: string, minLength: 1, maxLength: 1000 }
