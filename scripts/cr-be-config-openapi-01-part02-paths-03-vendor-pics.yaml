@@ -1,0 +1,150 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 03 — BE-06C VENDOR PIC
+  # (`src/modules/vendor-pics`).
+  #
+  # A PIC is contact data belonging to one Vendor. Creating one never creates
+  # or modifies a User, Credential, Role, Permission or Workforce Profile.
+  # ---------------------------------------------------------------------------
+
+  /vendors/{vendorId}/pics:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+
+    post:
+      operationId: createVendorPic
+      summary: Create a PIC for a Vendor
+      description: >-
+        BE-06C. Creates one contact person for the Vendor taken from the route.
+        Requires `vendor.manage`. Validation order: unknown Vendor 404
+        `VENDOR_NOT_FOUND`, INACTIVE Vendor 400 `VENDOR_INACTIVE` (an inactive
+        Vendor receives no new PICs), then primary/status consistency — a PIC
+        created as primary must be ACTIVE, else 400 `VENDOR_PIC_INACTIVE`.
+        `name` is required (≤160); optional `position` (≤128), `email` (≤255,
+        must look like an address) and `phone` (≤32) are stored as supplied.
+        `isPrimary` defaults to `false`; when it is `true` the Vendor's current
+        primary is demoted in the same transaction, so at most one ACTIVE
+        primary exists per Vendor. `status` defaults to `ACTIVE`. Responds 201
+        with the created PIC.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVendorPicRequest" }
+      responses:
+        "201":
+          description: The created Vendor PIC.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorPic" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    get:
+      operationId: listVendorPics
+      summary: List the PICs of a Vendor
+      description: >-
+        BE-06C read of the Vendor's contact roster, ordered primary first, then
+        `name` ascending, then creation time ascending, as a plain array.
+        Requires `vendor.read`. An unknown Vendor is 404 `VENDOR_NOT_FOUND`
+        rather than an empty list. Unpaginated, no filters.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The PICs recorded for the requested Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/VendorPic" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendor-pics/{id}:
+    parameters:
+      - $ref: "#/components/parameters/VendorPicIdPath"
+
+    get:
+      operationId: getVendorPic
+      summary: Get a Vendor PIC
+      description: >-
+        BE-06C single-read addressed by the PIC id. Requires `vendor.read`. The
+        id must be a UUID (400 `VALIDATION_ERROR`, detail field `vendorPicId`);
+        an unknown id is 404 `VENDOR_PIC_NOT_FOUND`.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The requested Vendor PIC.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorPic" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateVendorPic
+      summary: Update a Vendor PIC
+      description: >-
+        BE-06C partial update of contact fields, the primary flag and status.
+        Requires `vendor.manage`. `vendorId` is immutable — naming it is 400
+        `VALIDATION_ERROR` with the immutable-field detail. Mutable: `name`
+        (≤160), `position` (≤128), `email` (≤255), `phone` (≤32) — an explicit
+        `null` clears an optional field — `isPrimary` and `status`. Primary
+        consistency: `isPrimary: true` promotes this PIC and demotes the
+        current primary in one transaction (the PIC must be, or become, ACTIVE
+        — otherwise 400 `VENDOR_PIC_INACTIVE`); `isPrimary: false` simply
+        demotes it, since a Vendor may have no primary; deactivating the
+        current primary demotes it automatically unless the same request
+        already demoted it, so an INACTIVE PIC is never the primary contact. An
+        unknown PIC is 404 `VENDOR_PIC_NOT_FOUND`. Responds 200 with the
+        updated PIC.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateVendorPicRequest" }
+      responses:
+        "200":
+          description: The updated Vendor PIC.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorPic" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

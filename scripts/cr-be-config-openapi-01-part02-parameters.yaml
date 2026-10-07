@@ -1,0 +1,93 @@
+    # ------------------------------------------------------------------
+    # CR-BE-CONFIG-OPENAPI-01 PART 02 — remaining configuration masters.
+    #
+    # Only the path parameters that are NOT already present in
+    # `components.parameters` are declared here; semantically identical
+    # existing parameters are reused by reference instead of duplicated
+    # (`ClientIdPath`, `VendorIdPath`, `BuildingIdPath`,
+    # `WorkforceIdPathParam`, `UomIdPath`).
+    # ------------------------------------------------------------------
+    VendorIdPathParam:
+      name: id
+      in: path
+      description: Vendor id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    VendorCategoryIdPath:
+      name: id
+      in: path
+      description: Vendor Category id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    VendorPicIdPath:
+      name: id
+      in: path
+      description: Vendor PIC id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    VendorCapabilityIdPath:
+      name: id
+      in: path
+      description: Vendor Capability id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    VendorComplianceDocumentIdPath:
+      name: id
+      in: path
+      description: Vendor Compliance Document id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    VendorLicenseIdPath:
+      name: id
+      in: path
+      description: Vendor License / Certification record id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    AssetCategoryIdPath:
+      name: categoryId
+      in: path
+      description: Asset Category id that scopes the Asset Type collection.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    AssetCategoryIdParam:
+      name: id
+      in: path
+      description: Asset Category id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    AssetTypeIdPath:
+      name: id
+      in: path
+      description: Asset Type id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    UtilityTypeConfigurationIdPath:
+      name: id
+      in: path
+      description: Utility type configuration id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    FormTemplateIdPathParam:
+      name: templateId
+      in: path
+      description: Form Template id that scopes the version collection.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    FormTemplateVersionIdPath:
+      name: id
+      in: path
+      description: Form Template Version id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    FindingClassificationIdPath:
+      name: id
+      in: path
+      description: Finding classification id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    FindingSeverityIdPath:
+      name: id
+      in: path
+      description: Finding severity id.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }

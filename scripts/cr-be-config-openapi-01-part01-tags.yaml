@@ -1,0 +1,52 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — Organization & Workforce admin contract.
+  #
+  # Contract exposure of the ALREADY REGISTERED BE-03A / BE-03B / BE-03C /
+  # BE-03D1 / BE-03D2 / BE-03D3 / BE-03E / BE-03F / BE-03G / BE-03H runtime
+  # routes only (plus the BE-02E-shared Shift router's Building gate).
+  #
+  # Publish-only: no endpoint, route, service, database, permission semantics
+  # or approval workflow is added or changed here. Every permission named below
+  # is an existing catalogue code registered by CR-BE-CONFIG-PERM-01
+  # (organization / department / position / team / shift / skill read+manage,
+  # workforce.manage) or the pre-existing `workforce.read`.
+  # ---------------------------------------------------------------------------
+
+  - name: Organization
+    description: >-
+      BE-03A Organization master — the top-level workforce/business-structure
+      unit of one Client. Reads require `organization.read`, writes require
+      `organization.manage`. An Organization is not a Property, Building,
+      Subscription, Role or Permission, and it never grants access by itself.
+  - name: Department
+    description: >-
+      BE-03A Department master — an organizational unit of exactly one
+      Organization, and the parent container for Team. Reads require
+      `department.read`, writes require `department.manage`.
+  - name: Position
+    description: >-
+      BE-03B Position — an organizational / job-function label of one
+      Organization, optionally linked to one of that Organization's
+      Departments. Reads require `position.read`, writes require
+      `position.manage`. A Position is a label only: creating one never alters
+      BE-01 Role or Permission state.
+  - name: Team
+    description: >-
+      BE-03B Team — an operational grouping of exactly one Department. Reads
+      require `team.read`, writes require `team.manage`. A Team is not a Role,
+      not a Permission and not workforce membership (that is BE-03C /
+      BE-03G).
+  - name: Shift
+    description: >-
+      BE-03E Shift — a named wall-clock working window of one Building, e.g.
+      MORNING 07:00–15:00. Reads require `shift.read`, writes require
+      `shift.manage`, and both Building-nested routes additionally require an
+      ACTIVE BE-02F Building assignment (`BUILDING_ACCESS_DENIED` otherwise).
+      A Shift is a definition only: it carries no attendance, payroll,
+      overtime, leave, timesheet or scheduling behaviour.
+  - name: Skill
+    description: >-
+      BE-03D1 Skill catalog — the Client-scoped competency master. Reads
+      require `skill.read`, writes require `skill.manage`. A Skill describes a
+      capability the Client recognises and never records who holds it; the
+      profile ↔ skill assignment is BE-03D2 under the Workforce tag.

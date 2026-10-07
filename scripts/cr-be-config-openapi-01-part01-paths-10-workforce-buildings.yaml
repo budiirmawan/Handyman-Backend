@@ -1,0 +1,188 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 10 — BE-03G WORKFORCE BUILDING
+  # ASSIGNMENT (`src/modules/workforce-building-assignments`).
+  #
+  # Reuses the BE-03C workforce codes rather than introducing new ones: reads
+  # require `workforce.read`, writes require `workforce.manage`. This is an
+  # OPERATIONAL placement — where somebody works. It is deliberately NOT the
+  # BE-02F `User → Building Access Assignment`, which governs which data a
+  # system User may read: the two live in separate tables, are written by
+  # separate slices, and neither is derived from the other.
+  # ---------------------------------------------------------------------------
+
+  /workforce/{workforceId}/buildings:
+    post:
+      operationId: assignWorkforceBuilding
+      summary: Assign a Building to a Workforce Profile
+      description: >-
+        BE-03G. Places an existing Workforce Profile at an existing Building.
+        Requires `workforce.manage`. The profile always comes from the route and
+        is never read from the body. Resolution order: unknown profile 404
+        `WORKFORCE_PROFILE_NOT_FOUND`, unknown Building 404
+        `BUILDING_NOT_FOUND`, Building whose Property chain does not resolve 404
+        `PROPERTY_NOT_FOUND`, an INACTIVE profile or INACTIVE Building 400
+        `WORKFORCE_PROFILE_INACTIVE` / `WORKFORCE_BUILDING_INACTIVE`, a Building
+        in another Client 400 `WORKFORCE_BUILDING_CLIENT_MISMATCH` (reported as
+        400 rather than 404 so the other Client's estate is never observable),
+        and a repeat ACTIVE placement 409
+        `WORKFORCE_BUILDING_ALREADY_ASSIGNED`. A profile may hold several
+        Buildings at once. `status` defaults to `ACTIVE`; `effectiveFrom` /
+        `effectiveUntil` are optional, and an explicit `null` clears a bound.
+        This placement grants the member's User login no Building access, and
+        no Building access grants a placement. Responds 201 with the created
+        assignment.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignWorkforceBuildingRequest"
+      responses:
+        "201":
+          description: The created Workforce Building assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceBuildingAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listWorkforceBuildings
+      summary: List a Workforce Profile's Building placements
+      description: >-
+        BE-03G. Returns every Building placement held by the profile taken from
+        the route, ordered by creation time ascending, as a plain array.
+        Requires `workforce.read`. The profile is resolved through its
+        Organization, so an unknown id is 404 `WORKFORCE_PROFILE_NOT_FOUND`
+        rather than a misleading empty list. These rows are operational
+        placements, never an access list: they do not grant, and are not
+        derived from, the BE-02F User-to-Building access assignments.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      responses:
+        "200":
+          description: The Building placements held by the requested profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceBuildingAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/workforce:
+    get:
+      operationId: listBuildingWorkforce
+      summary: List the Workforce placed at a Building
+      description: >-
+        BE-03G. Returns every Workforce Building placement recorded for the
+        Building taken from the route, ordered by creation time ascending.
+        Requires `workforce.read` AND an ACTIVE BE-02F Building assignment for
+        that `buildingId` (403 `BUILDING_ACCESS_DENIED` otherwise), matching the
+        BE-03E Shift precedent: reading a Building's roster is reading that
+        Building's data, so the caller's own BE-02F access still applies. Note
+        the direction — access is required to read, never granted by these rows.
+        The Building is resolved first, so an unknown id is 404
+        `BUILDING_NOT_FOUND` rather than an empty list. This is the workforce
+        roster of the Building, NOT its access list.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: The Workforce placements recorded for the requested Building.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceBuildingAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/buildings/{buildingId}:
+    patch:
+      operationId: updateWorkforceBuildingAssignment
+      summary: Update a Workforce Building placement
+      description: >-
+        BE-03G partial update, addressed by the (workforce, building) pair.
+        Requires `workforce.manage`. Mutable: `effectiveFrom`, `effectiveUntil`,
+        `status`. At least one of them must be provided — an empty object is 400
+        `VALIDATION_ERROR` with the detail naming all three. Deactivation is
+        `{"status": "INACTIVE"}` on this same endpoint; the row is retained so
+        the placement history stays auditable, and a deactivated placement can
+        be reactivated by a later PATCH. An explicit `null` clears a bound, and
+        a partial update is re-checked against the stored record so
+        `effectiveUntil` can never end up before `effectiveFrom`. Unknown pair →
+        404 `WORKFORCE_BUILDING_ASSIGNMENT_NOT_FOUND`; unknown profile → 404
+        `WORKFORCE_PROFILE_NOT_FOUND`; unknown Building → 404
+        `BUILDING_NOT_FOUND`; Client mismatch → 400
+        `WORKFORCE_BUILDING_CLIENT_MISMATCH`; inactive Building or profile → 400
+        `WORKFORCE_BUILDING_INACTIVE` / `WORKFORCE_PROFILE_INACTIVE`; a
+        reactivation that collides with an existing ACTIVE placement → 409
+        `WORKFORCE_BUILDING_ALREADY_ASSIGNED`. Building access is not asserted
+        on this write path — only the route's `workforce.manage` permission is.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - $ref: "#/components/parameters/BuildingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkforceBuildingAssignmentRequest"
+      responses:
+        "200":
+          description: The updated Workforce Building assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceBuildingAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

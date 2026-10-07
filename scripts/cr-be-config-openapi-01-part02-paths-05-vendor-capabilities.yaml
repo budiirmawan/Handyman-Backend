@@ -1,0 +1,160 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 05 — BE-06E VENDOR CAPABILITY
+  # (`src/modules/vendor-capabilities`).
+  #
+  # Catalog record only. `vendorBuildingRelationshipId` optionally scopes a
+  # capability to an existing BE-06D relationship (referencing it, never
+  # duplicating it); NULL means vendor-wide.
+  # ---------------------------------------------------------------------------
+
+  /vendors/{vendorId}/capabilities:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+
+    post:
+      operationId: createVendorCapability
+      summary: Create a capability for a Vendor
+      description: >-
+        BE-06E. Records what a Vendor is qualified or intended to provide.
+        Requires `vendor.manage`. Validation order: unknown Vendor 404
+        `VENDOR_NOT_FOUND`, INACTIVE Vendor when the new capability would be
+        ACTIVE 400 `VENDOR_INACTIVE`, then the optional Building-scope rules,
+        then duplicate code 409 `VENDOR_CAPABILITY_CODE_ALREADY_EXISTS`.
+        `code` is trimmed and upper-cased and must be 2–64 characters of
+        `[A-Z][A-Z0-9_-]*`, unique per Vendor; `name` is required (≤160);
+        optional `description` is at most 512 characters. Optional
+        `vendorBuildingRelationshipId` scopes the capability to one existing
+        BE-06D relationship of the same Vendor — an unknown relationship is 404
+        `VENDOR_BUILDING_RELATIONSHIP_NOT_FOUND`, a relationship of another
+        Vendor 400 `VENDOR_CAPABILITY_RELATIONSHIP_MISMATCH`, an INACTIVE one
+        400 `VENDOR_CAPABILITY_RELATIONSHIP_INACTIVE`. Optional
+        `serviceCatalogId` attaches the governed Service Catalog identity of
+        the Vendor's Client — unknown 404 `VENDOR_CAPABILITY_CATALOG_NOT_FOUND`,
+        foreign Client 400 `VENDOR_CAPABILITY_CATALOG_CLIENT_MISMATCH`,
+        INACTIVE 400 `VENDOR_CAPABILITY_CATALOG_INACTIVE`. `status` defaults to
+        `ACTIVE`. Responds 201 with the created capability.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVendorCapabilityRequest" }
+      responses:
+        "201":
+          description: The created Vendor capability.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorCapability" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listVendorCapabilities
+      summary: List the capabilities of a Vendor
+      description: >-
+        BE-06E read, ordered by `code` ascending, as a plain array. Requires
+        `vendor.read`. An unknown Vendor is 404 `VENDOR_NOT_FOUND` rather than
+        an empty list. Unpaginated, no filters.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The capabilities recorded for the requested Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/VendorCapability" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendor-capabilities/{id}:
+    parameters:
+      - $ref: "#/components/parameters/VendorCapabilityIdPath"
+
+    get:
+      operationId: getVendorCapability
+      summary: Get a Vendor capability
+      description: >-
+        BE-06E single-read addressed by the capability id. Requires
+        `vendor.read`. The id must be a UUID (400 `VALIDATION_ERROR`); an
+        unknown id is 404 `VENDOR_CAPABILITY_NOT_FOUND`.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The requested Vendor capability.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorCapability" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateVendorCapability
+      summary: Update a Vendor capability
+      description: >-
+        BE-06E partial update. Requires `vendor.manage`. `vendorId` and `code`
+        are immutable — naming either is 400 `VALIDATION_ERROR` with the
+        immutable-field detail, because a capability never migrates between
+        Vendors and its code is the stable identifier. Mutable: `name` (≤160),
+        `description` (≤512, explicit `null` clears it),
+        `vendorBuildingRelationshipId` (re-scopes the capability; explicit
+        `null` returns it to vendor-wide, a new value is re-checked with the
+        same 404/400 outcomes as on create), `serviceCatalogId` (governed link;
+        explicit `null` clears it, a new value must belong to the Vendor's
+        Client and be ACTIVE) and `status`. Re-activating a capability while
+        its Vendor is INACTIVE is 400 `VENDOR_INACTIVE`. Deactivation is
+        `{"status": "INACTIVE"}`; the row is retained so the catalog history
+        stays auditable. An unknown capability is 404
+        `VENDOR_CAPABILITY_NOT_FOUND`. Responds 200 with the updated
+        capability.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateVendorCapabilityRequest" }
+      responses:
+        "200":
+          description: The updated Vendor capability.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/VendorCapability" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

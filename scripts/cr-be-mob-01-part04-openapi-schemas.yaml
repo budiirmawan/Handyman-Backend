@@ -1,0 +1,126 @@
+    # ------------------------------------------------------------------
+    # CR-BE-MOB-01 PART 04 — Work Order material context reference schemas
+    # (BE-16A Item master, BE-16B Warehouse master, BE-16H Asset ↔ spare
+    # part binding). Shapes mirror the implemented public DTOs. The usage,
+    # stock, approved-quantity and verification schemas already exist and
+    # are NOT redefined here.
+    # ------------------------------------------------------------------
+    InventoryItemStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+      description: INACTIVE items are preserved for history, never deleted.
+    InventoryItemType:
+      type: string
+      enum: [SPARE_PART, MATERIAL, CONSUMABLE]
+      description: >-
+        Classification data only — the backend branches no behaviour on it.
+    InventoryItem:
+      type: object
+      description: >-
+        BE-16A Inventory Item master, owned by exactly one Client (`code` is
+        unique per Client). `uomId` references the shared BE-07 UOM foundation
+        and is the UOM snapshotted onto a Work Order material usage. Carries no
+        stock, price or procurement state.
+      required:
+        [id, clientId, code, name, itemType, category, uomId, description,
+         status, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        itemType: { $ref: "#/components/schemas/InventoryItemType" }
+        category: { type: string, nullable: true }
+        uomId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/InventoryItemStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        uom:
+          type: object
+          nullable: true
+          description: Resolved BE-07 UOM context when available.
+          required: [id, code, name, symbol]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            symbol: { type: string }
+
+    InventoryWarehouseStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    InventoryWarehouse:
+      type: object
+      description: >-
+        BE-16B Warehouse / store, operated within exactly one Building
+        (`code` unique per Building). `clientId` is derived through
+        Building → Property → Client and is never accepted from the caller.
+        Stock lives on the published stock-balance / stock-movement surface.
+      required:
+        [id, clientId, buildingId, functionalLocationId, code, name,
+         description, status, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/InventoryWarehouseStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        functionalLocation:
+          type: object
+          nullable: true
+          description: Resolved BE-04 Functional Location when bound.
+          required: [id, code, name, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+
+    AssetSparePartStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    AssetSparePart:
+      type: object
+      description: >-
+        BE-16H many-to-many binding between a BE-05 Asset and a SPARE_PART
+        Inventory Item. `requiredQuantity` is a planning reference per asset —
+        it is NOT an approved quantity (that is `MaterialRequest.approvedQuantity`)
+        and NOT an issued quantity (that is `WorkOrderMaterialUsage.quantity`).
+      required:
+        [id, clientId, buildingId, assetId, itemId, requiredQuantity, status,
+         notes, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        assetId: { $ref: "#/components/schemas/Uuid" }
+        itemId: { $ref: "#/components/schemas/Uuid" }
+        requiredQuantity: { type: number }
+        status: { $ref: "#/components/schemas/AssetSparePartStatus" }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        asset:
+          type: object
+          nullable: true
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            assetCode: { type: string }
+            assetName: { type: string }
+            buildingId: { $ref: "#/components/schemas/Uuid" }
+            status: { type: string }
+        item:
+          type: object
+          nullable: true
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            itemType: { type: string }
+            uomId: { type: string, format: uuid, nullable: true }

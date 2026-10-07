@@ -1,0 +1,542 @@
+    # ------------------------------------------------------------------
+    # CR-BE-MOB-01 PART 01 — Housekeeping operational schemas (BE-11).
+    # ------------------------------------------------------------------
+    DailyCleaningStatus:
+      type: string
+      enum: [OPEN, ASSIGNED, IN_PROGRESS, COMPLETED, CANCELLED]
+      description: BE-07 generated-task status projected as daily cleaning.
+    DailyCleaning:
+      type: object
+      description: >-
+        BE-11C operational view of a BE-07 generated task. `id` equals
+        `taskId` and is the authoritative id for start/complete/cancel.
+      required:
+        [id, taskId, clientId, buildingId, cleaningAreaId, scheduleBindingId,
+         scheduleDefinitionId, operationalDate, occurrenceAt, status,
+         startedAt, completedAt, completedByUserId, completionNotes,
+         cleaningArea, schedule, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        taskId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        scheduleBindingId: { $ref: "#/components/schemas/Uuid" }
+        scheduleDefinitionId: { $ref: "#/components/schemas/Uuid" }
+        operationalDate: { type: string, format: date }
+        occurrenceAt: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/DailyCleaningStatus" }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        completedByUserId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        completionNotes: { type: string, nullable: true }
+        cleaningArea:
+          type: object
+          required: [id, code, name, cleaningAreaType, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            cleaningAreaType: { type: string }
+            status: { type: string }
+            floorId: { type: string, format: uuid, nullable: true }
+            areaId: { type: string, format: uuid, nullable: true }
+            roomId: { type: string, format: uuid, nullable: true }
+            spaceId: { type: string, format: uuid, nullable: true }
+            functionalLocationId: { type: string, format: uuid, nullable: true }
+        schedule:
+          type: object
+          required: [id, code, name, targetType, targetId, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            targetType: { type: string }
+            targetId: { $ref: "#/components/schemas/Uuid" }
+            status: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CleaningAssignmentStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    CleaningAssignment:
+      type: object
+      required:
+        [id, taskId, assigneeType, workforceProfileId, teamId,
+         assignedByUserId, assignedAt, status, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        taskId: { $ref: "#/components/schemas/Uuid" }
+        assigneeType: { type: string, enum: [WORKFORCE, TEAM] }
+        workforceProfileId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        teamId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        assignedByUserId: { $ref: "#/components/schemas/Uuid" }
+        assignedAt: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/CleaningAssignmentStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        assignee:
+          type: object
+          nullable: true
+          properties:
+            type: { type: string, enum: [WORKFORCE, TEAM] }
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+    CreateCleaningAssignmentRequest:
+      type: object
+      required: [assigneeType]
+      properties:
+        assigneeType: { type: string, enum: [WORKFORCE, TEAM] }
+        workforceProfileId:
+          type: string
+          format: uuid
+          description: Required when assigneeType is WORKFORCE.
+        teamId:
+          type: string
+          format: uuid
+          description: Required when assigneeType is TEAM.
+
+    HousekeepingBindingStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    ToiletInspectionBinding:
+      type: object
+      required:
+        [id, clientId, buildingId, cleaningAreaId, checklistTemplateId,
+         roomId, functionalLocationId, description, status, createdByUserId,
+         createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        roomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        functionalLocationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        cleaningArea:
+          type: object
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            cleaningAreaType: { type: string }
+            status: { type: string }
+        checklistTemplate:
+          type: object
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+        room:
+          type: object
+          nullable: true
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+        functionalLocation:
+          type: object
+          nullable: true
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+    CreateToiletInspectionBindingRequest:
+      type: object
+      required: [cleaningAreaId, checklistTemplateId]
+      properties:
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        roomId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        description: { type: string, maxLength: 512, nullable: true }
+        status: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+    UpdateToiletInspectionBindingRequest:
+      type: object
+      properties:
+        roomId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        description: { type: string, maxLength: 512, nullable: true }
+        status: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+    ToiletInspectionExecution:
+      type: object
+      required: [id, checklistTemplateId, toiletInspectionBindingId, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        toiletInspectionBindingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ToiletInspectionExecutionContext:
+      type: object
+      required: [execution, toiletInspectionBinding]
+      properties:
+        execution: { $ref: "#/components/schemas/ToiletInspectionExecution" }
+        toiletInspectionBinding: { $ref: "#/components/schemas/ToiletInspectionBinding" }
+
+    PublicAreaInspectionBinding:
+      type: object
+      required:
+        [id, clientId, buildingId, cleaningAreaId, checklistTemplateId,
+         floorId, areaId, roomId, functionalLocationId, description, status,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        floorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        areaId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        roomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        functionalLocationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        cleaningArea:
+          type: object
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            cleaningAreaType: { type: string }
+            status: { type: string }
+        checklistTemplate:
+          type: object
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+    CreatePublicAreaInspectionBindingRequest:
+      type: object
+      required: [cleaningAreaId, checklistTemplateId]
+      properties:
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+    UpdatePublicAreaInspectionBindingRequest:
+      type: object
+      properties:
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+    PublicAreaInspectionExecution:
+      type: object
+      required: [id, checklistTemplateId, publicAreaInspectionBindingId, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        publicAreaInspectionBindingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PublicAreaInspectionExecutionContext:
+      type: object
+      required: [execution, publicAreaInspectionBinding]
+      properties:
+        execution: { $ref: "#/components/schemas/PublicAreaInspectionExecution" }
+        publicAreaInspectionBinding: { $ref: "#/components/schemas/PublicAreaInspectionBinding" }
+
+    SupervisorInspectionTargetType:
+      type: string
+      enum: [DAILY_CLEANING, TOILET_INSPECTION, PUBLIC_AREA_INSPECTION]
+    SupervisorInspectionStatus:
+      type: string
+      enum: [PENDING, COMPLETED]
+    SupervisorInspectionDecision:
+      type: string
+      enum: [APPROVED, REJECTED, REWORK_REQUIRED]
+    SupervisorInspection:
+      type: object
+      required:
+        [id, clientId, buildingId, cleaningAreaId, targetType, targetId,
+         reviewId, supervisorUserId, decision, status, notes, inspectedAt,
+         createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        targetType: { $ref: "#/components/schemas/SupervisorInspectionTargetType" }
+        targetId: { $ref: "#/components/schemas/Uuid" }
+        reviewId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        supervisorUserId: { $ref: "#/components/schemas/Uuid" }
+        decision:
+          allOf: [{ $ref: "#/components/schemas/SupervisorInspectionDecision" }]
+          nullable: true
+        status: { $ref: "#/components/schemas/SupervisorInspectionStatus" }
+        notes: { type: string, nullable: true }
+        inspectedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        cleaningArea:
+          type: object
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            cleaningAreaType: { type: string }
+            status: { type: string }
+        targetSummary:
+          type: object
+          nullable: true
+          properties:
+            status: { type: string }
+            description: { type: string }
+    CreateSupervisorInspectionRequest:
+      type: object
+      required: [targetType, targetId]
+      properties:
+        targetType: { $ref: "#/components/schemas/SupervisorInspectionTargetType" }
+        targetId: { $ref: "#/components/schemas/Uuid" }
+        notes: { type: string, maxLength: 1000, nullable: true }
+    SubmitSupervisorInspectionDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision: { $ref: "#/components/schemas/SupervisorInspectionDecision" }
+        notes: { type: string, maxLength: 1000, nullable: true }
+
+    QualityAuditSourceType:
+      type: string
+      enum: [DAILY_CLEANING, TOILET_INSPECTION, PUBLIC_AREA_INSPECTION, SUPERVISOR_INSPECTION, CLEANING_AREA]
+    QualityAuditStatus:
+      type: string
+      enum: [DRAFT, COMPLETED]
+    QualityAuditResult:
+      type: string
+      enum: [PASS, FAIL, REWORK_REQUIRED]
+    QualityAudit:
+      type: object
+      required:
+        [id, clientId, buildingId, cleaningAreaId, sourceType, sourceId,
+         auditorUserId, score, result, status, notes, auditedAt, createdAt,
+         updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        cleaningAreaId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        sourceType: { $ref: "#/components/schemas/QualityAuditSourceType" }
+        sourceId: { $ref: "#/components/schemas/Uuid" }
+        auditorUserId: { $ref: "#/components/schemas/Uuid" }
+        score: { type: number, nullable: true }
+        result:
+          allOf: [{ $ref: "#/components/schemas/QualityAuditResult" }]
+          nullable: true
+        status: { $ref: "#/components/schemas/QualityAuditStatus" }
+        notes: { type: string, nullable: true }
+        auditedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        cleaningArea:
+          type: object
+          nullable: true
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+    CreateQualityAuditRequest:
+      type: object
+      required: [sourceType, sourceId]
+      properties:
+        sourceType: { $ref: "#/components/schemas/QualityAuditSourceType" }
+        sourceId: { $ref: "#/components/schemas/Uuid" }
+        score: { type: number, minimum: 0, maximum: 100, nullable: true }
+        result: { $ref: "#/components/schemas/QualityAuditResult" }
+        notes: { type: string, maxLength: 1000, nullable: true }
+    UpdateQualityAuditRequest:
+      type: object
+      properties:
+        score: { type: number, minimum: 0, maximum: 100, nullable: true }
+        result: { $ref: "#/components/schemas/QualityAuditResult" }
+        notes: { type: string, maxLength: 1000, nullable: true }
+    CompleteQualityAuditRequest:
+      type: object
+      required: [result]
+      properties:
+        result: { $ref: "#/components/schemas/QualityAuditResult" }
+        score: { type: number, minimum: 0, maximum: 100, nullable: true }
+        notes: { type: string, maxLength: 1000, nullable: true }
+
+    HousekeepingFindingSourceType:
+      type: string
+      enum: [DAILY_CLEANING, TOILET_INSPECTION, PUBLIC_AREA_INSPECTION, SUPERVISOR_INSPECTION]
+    HousekeepingFinding:
+      type: object
+      description: >-
+        BE-11H binding. `id` is the HK link id; `findingId` is the BE-09
+        Finding used for rework/verification.
+      required:
+        [id, clientId, buildingId, findingId, cleaningAreaId, sourceType,
+         sourceId, floorId, areaId, roomId, functionalLocationId, notes,
+         createdAt, updatedAt, finding]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        findingId: { $ref: "#/components/schemas/Uuid" }
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        sourceType: { $ref: "#/components/schemas/HousekeepingFindingSourceType" }
+        sourceId: { $ref: "#/components/schemas/Uuid" }
+        floorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        areaId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        roomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        functionalLocationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        finding:
+          type: object
+          required: [id, findingNumber, title, status, reportedByUserId, reportedAt]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            findingNumber: { type: string }
+            title: { type: string }
+            description: { type: string, nullable: true }
+            status: { type: string }
+            state: { type: string }
+            reportedByUserId: { $ref: "#/components/schemas/Uuid" }
+            reportedAt: { type: string, format: date-time }
+        cleaningArea:
+          type: object
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            cleaningAreaType: { type: string }
+            status: { type: string }
+        availableActions:
+          type: array
+          items: { type: string }
+          description: BE-09 backend-authoritative actions for the linked finding.
+    CreateHousekeepingFindingRequest:
+      type: object
+      required: [buildingId, cleaningAreaId, sourceType, sourceId, title]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        cleaningAreaId: { $ref: "#/components/schemas/Uuid" }
+        sourceType: { $ref: "#/components/schemas/HousekeepingFindingSourceType" }
+        sourceId: { $ref: "#/components/schemas/Uuid" }
+        title: { type: string, maxLength: 160 }
+        description: { type: string, maxLength: 1000, nullable: true }
+        findingNumber: { type: string, maxLength: 64 }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        notes: { type: string, maxLength: 1000, nullable: true }
+
+    HousekeepingEvidenceSourceType:
+      type: string
+      enum: [daily-cleaning, toilet-inspections, public-area-inspections, supervisor-inspections, findings]
+    HousekeepingEvidenceRequirement:
+      type: object
+      required:
+        [id, clientId, targetType, targetId, evidenceType, required,
+         minimumCount, maximumCount, description, status, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        targetType: { type: string }
+        targetId: { $ref: "#/components/schemas/Uuid" }
+        evidenceType: { type: string, enum: [PHOTO, DOCUMENT, SIGNATURE] }
+        required: { type: boolean }
+        minimumCount: { type: integer }
+        maximumCount: { type: integer, nullable: true }
+        description: { type: string, nullable: true }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HousekeepingEvidenceSubmission:
+      type: object
+      required:
+        [id, clientId, evidenceRequirementId, executionType, executionId,
+         evidenceType, fileReference, originalFileName, mimeType, fileSize,
+         capturedAt, submittedByUserId, status, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        evidenceRequirementId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        executionType: { type: string }
+        executionId: { $ref: "#/components/schemas/Uuid" }
+        evidenceType: { type: string, enum: [PHOTO, DOCUMENT, SIGNATURE] }
+        fileReference: { type: string }
+        originalFileName: { type: string }
+        mimeType: { type: string }
+        fileSize: { type: integer }
+        capturedAt: { type: string, format: date-time, nullable: true }
+        submittedByUserId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SubmitHousekeepingEvidenceRequest:
+      type: object
+      required: [evidenceType, fileReference, originalFileName, mimeType, fileSize]
+      properties:
+        evidenceType: { type: string, enum: [PHOTO, DOCUMENT, SIGNATURE] }
+        evidenceRequirementId: { type: string, format: uuid, nullable: true }
+        fileReference: { type: string, maxLength: 512 }
+        originalFileName: { type: string, maxLength: 256 }
+        mimeType: { type: string, maxLength: 128 }
+        fileSize: { type: integer, minimum: 0, maximum: 52428800 }
+        capturedAt: { type: string, format: date-time }

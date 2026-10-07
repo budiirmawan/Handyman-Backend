@@ -1,0 +1,186 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 06 — BE-06F VENDOR WORKFORCE
+  # BINDING (`src/modules/vendor-workforce`).
+  #
+  # A binding is vendor-context data only: the person master remains
+  # `workforce_profiles` (BE-03C/BE-03H) and no second person master is
+  # created. The Workforce-side read reuses the pre-existing `workforce.read`.
+  # ---------------------------------------------------------------------------
+
+  /vendors/{vendorId}/workforce:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+
+    post:
+      operationId: createVendorWorkforceBinding
+      summary: Bind an external Workforce Profile to a Vendor
+      description: >-
+        BE-06F. Binds the EXTERNAL Workforce Profile named in the body to the
+        route's Vendor. Requires `vendor.manage`. Validation order: unknown
+        Vendor 404 `VENDOR_NOT_FOUND`, unknown Workforce Profile 404
+        `WORKFORCE_PROFILE_NOT_FOUND`, cross-Client pair 400
+        `VENDOR_WORKFORCE_CLIENT_MISMATCH`, non-EXTERNAL profile 400
+        `WORKFORCE_NOT_EXTERNAL` (only external personnel can hold a vendor
+        binding), INACTIVE Vendor 400 `VENDOR_INACTIVE` and INACTIVE profile 400
+        `WORKFORCE_PROFILE_INACTIVE` — both only when the resulting binding
+        would be ACTIVE, so historical rows stay editable — then duplicate
+        ACTIVE binding 409 `VENDOR_WORKFORCE_ALREADY_BOUND` (at most one ACTIVE
+        binding per vendor/profile pair) and a taken personnel code 409
+        `VENDOR_PERSONNEL_CODE_ALREADY_EXISTS` (the code stays reserved per
+        Vendor across active and historical rows; both duplicate checks run in
+        that order, and their partial unique indexes are the race-condition
+        backstop). `workforceProfileId` is required and must be a UUID;
+        `vendorPersonnelCode` is required, 1–64 characters starting with an
+        alphanumeric and continuing in `[A-Za-z0-9._/-]`;
+        `effectiveFrom` / `effectiveUntil` are optional (an `effectiveUntil`
+        before `effectiveFrom` is 400 `VALIDATION_ERROR`); `status` defaults to
+        `ACTIVE`. Nothing in this path reads or writes a User, Credential,
+        Role, Permission, Building access, Shift, Skill or Supervisor. Responds
+        201 with the created binding.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVendorWorkforceBindingRequest"
+      responses:
+        "201":
+          description: The created Vendor Workforce Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorWorkforceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listVendorWorkforce
+      summary: List the Workforce bindings of a Vendor
+      description: >-
+        BE-06F read, ordered by creation time ascending and including
+        deactivated history, as a plain array. Requires `vendor.read`. An
+        unknown Vendor is 404 `VENDOR_NOT_FOUND` rather than an empty list.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.read
+      responses:
+        "200":
+          description: The Workforce bindings held by the requested Vendor.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/VendorWorkforceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/vendor-bindings:
+    parameters:
+      - $ref: "#/components/parameters/WorkforceIdPathParam"
+
+    get:
+      operationId: listWorkforceVendorBindings
+      summary: List the Vendor bindings of a Workforce Profile
+      description: >-
+        BE-06F read from the Workforce Profile side, as a plain array. Unlike
+        the rest of this section this route reuses the pre-existing
+        `workforce.read` permission rather than `vendor.read`, because the
+        resource being addressed is the Workforce Profile. The profile is
+        resolved first (through its Organization → Client chain), so an unknown
+        profile is 404 `WORKFORCE_PROFILE_NOT_FOUND` rather than an empty list.
+        This read never creates or changes workforce state and carries no
+        Building gate.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      responses:
+        "200":
+          description: The Vendor bindings recorded for the requested Workforce Profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/VendorWorkforceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /vendors/{vendorId}/workforce/{workforceId}:
+    parameters:
+      - $ref: "#/components/parameters/VendorIdPath"
+      - $ref: "#/components/parameters/WorkforceIdPathParam"
+
+    patch:
+      operationId: updateVendorWorkforceBinding
+      summary: Update a Vendor Workforce Binding
+      description: >-
+        BE-06F partial update addressed by the (vendor, workforce) pair rather
+        than a binding id. Requires `vendor.manage`. `vendorId` and
+        `workforceProfileId` are immutable — naming either is 400
+        `VALIDATION_ERROR` with the immutable-field detail. Mutable:
+        `vendorPersonnelCode` (same 1–64 character rule; a code already
+        reserved for this Vendor is 409 `VENDOR_PERSONNEL_CODE_ALREADY_EXISTS`),
+        `effectiveFrom`, `effectiveUntil` (explicit `null` clears a bound; the
+        merged result is re-checked so `effectiveUntil` can never end up before
+        `effectiveFrom`) and `status`. Deactivation is
+        `{"status": "INACTIVE"}` on this same endpoint; the row is retained so
+        the binding history stays auditable. Re-activating a pair that already
+        has another live binding is 409 `VENDOR_WORKFORCE_ALREADY_BOUND`, and
+        the INACTIVE Vendor / INACTIVE profile guards apply to an ACTIVE
+        result. Resolution order on the pair: unknown Vendor 404
+        `VENDOR_NOT_FOUND`, unknown profile 404 `WORKFORCE_PROFILE_NOT_FOUND`,
+        cross-Client pair 400 `VENDOR_WORKFORCE_CLIENT_MISMATCH`, no row 404
+        `VENDOR_WORKFORCE_BINDING_NOT_FOUND`. Responds 200 with the updated
+        binding.
+      tags: [Vendor Master]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: vendor.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVendorWorkforceBindingRequest"
+      responses:
+        "200":
+          description: The updated Vendor Workforce Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/VendorWorkforceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

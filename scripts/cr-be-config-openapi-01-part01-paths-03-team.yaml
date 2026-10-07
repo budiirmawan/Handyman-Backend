@@ -1,0 +1,140 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 03 — BE-03B TEAM
+  # (`src/modules/teams`).
+  # ---------------------------------------------------------------------------
+
+  /departments/{departmentId}/teams:
+    post:
+      operationId: createTeam
+      summary: Create a Team under a Department
+      description: >-
+        BE-03B. Creates one Team inside the Department taken from the route.
+        Requires `team.manage`. The Department is always the path segment and
+        is never read from the body; it must exist (404 `DEPARTMENT_NOT_FOUND`)
+        and be ACTIVE for an ACTIVE Team (400 `DEPARTMENT_INACTIVE`). `code` is
+        trimmed and upper-cased, must be 2–64 characters of `[A-Z][A-Z0-9_]*`,
+        and is unique per Department — a duplicate is 409
+        `TEAM_CODE_ALREADY_EXISTS`. `status` defaults to `ACTIVE`. Responds 201
+        with the created Team.
+      tags: [Team]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: team.manage
+      parameters:
+        - $ref: "#/components/parameters/DepartmentIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTeamRequest" }
+      responses:
+        "201":
+          description: The created Team.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listDepartmentTeams
+      summary: List the Teams of a Department
+      description: >-
+        BE-03B. Returns every Team of the Department taken from the route,
+        ordered by `code` ascending, as a plain array — no page or limit
+        parameter exists on this route and `meta` is always `{}`. Requires
+        `team.read`. There is no Organization-wide or global Team list: every
+        Team list is scoped by the Department route parameter, and an unknown
+        Department simply yields an empty array rather than a 404.
+      tags: [Team]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: team.read
+      parameters:
+        - $ref: "#/components/parameters/DepartmentIdPathParam"
+      responses:
+        "200":
+          description: The Teams of the requested Department.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /teams/{id}:
+    get:
+      operationId: getTeam
+      summary: Get one Team
+      description: >-
+        BE-03B. Returns the single Team addressed by its own id. Requires
+        `team.read`. An unknown id is 404 `TEAM_NOT_FOUND`.
+      tags: [Team]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: team.read
+      parameters:
+        - $ref: "#/components/parameters/TeamIdPath"
+      responses:
+        "200":
+          description: The requested Team.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateTeam
+      summary: Update a Team
+      description: >-
+        BE-03B partial update. Requires `team.manage`. Only `name`,
+        `description` and `status` are updatable: `departmentId` and `code` are
+        immutable identity and are not accepted here, so a Team can never be
+        moved between Departments. There is no minimum-property rule — an empty
+        object returns the unchanged Team. An explicit `null` for `description`
+        is treated as "absent". An unknown id is 404 `TEAM_NOT_FOUND`.
+      tags: [Team]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: team.manage
+      parameters:
+        - $ref: "#/components/parameters/TeamIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateTeamRequest" }
+      responses:
+        "200":
+          description: The updated Team.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

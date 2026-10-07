@@ -1,0 +1,1 @@
+export * from './utility-ocr-candidate.errors';export{utilityOcrCandidateRepository}from'./utility-ocr-candidate.repository';export{utilityOcrCandidateService}from'./utility-ocr-candidate.service';export*from'./utility-ocr-candidate.types';export*from'./utility-ocr-candidate.validation';export{createUtilityOcrCandidateRouter}from'./utility-ocr-candidate.routes';

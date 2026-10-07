@@ -1,0 +1,187 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 08 — BE-03D2 / BE-03D3 WORKFORCE
+  # SKILL ASSIGNMENT (`src/modules/workforce-skills`).
+  #
+  # Reuses the BE-03D1 Skill codes rather than introducing new ones: reads
+  # require `skill.read`, writes require `skill.manage`. Deactivation is
+  # `{"status": "INACTIVE"}` on PATCH, not a DELETE, so competency history
+  # survives.
+  # ---------------------------------------------------------------------------
+
+  /workforce/{workforceId}/skills:
+    post:
+      operationId: assignWorkforceSkill
+      summary: Assign a Skill to a Workforce Profile
+      description: >-
+        BE-03D2. Connects an existing Workforce Profile to an existing Skill.
+        Requires `skill.manage`. The profile always comes from the route and is
+        never read from the body; the profile is resolved through its
+        Organization to obtain the Client (unknown profile → 404
+        `WORKFORCE_PROFILE_NOT_FOUND`), the Skill must exist (404
+        `SKILL_NOT_FOUND`) and be ACTIVE for an ACTIVE assignment (400
+        `SKILL_INACTIVE`), and both sides must resolve to the same Client (400
+        `WORKFORCE_SKILL_CLIENT_MISMATCH`, reported as 400 rather than 404 so
+        the other Client's data is never observable). A profile may hold at
+        most one ACTIVE assignment per Skill: a repeat is 409
+        `WORKFORCE_SKILL_ALREADY_ASSIGNED`. `proficiencyLevel` defaults to
+        `BASIC`, `status` to `ACTIVE`, and `validFrom` / `validUntil` are both
+        optional — an assignment with no window is simply undated. An explicit
+        `null` on either date clears that bound. When both are supplied,
+        `validUntil` must be the same as or after `validFrom`. The assignment
+        is a competency record only: it implies no Position, Role, Permission,
+        Team, Shift or Building Assignment. Responds 201 with the created
+        assignment.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignWorkforceSkillRequest"
+      responses:
+        "201":
+          description: The created Workforce Skill assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceSkillAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listWorkforceSkills
+      summary: List a Workforce Profile's Skill assignments
+      description: >-
+        BE-03D2. Returns the full competency history of the profile taken from
+        the route — deactivated and out-of-window rows included — ordered by
+        creation time ascending. Requires `skill.read`. Distinct from
+        `listEffectiveWorkforceSkills`, which returns only what is genuinely in
+        force right now. The profile is resolved through its Organization, so
+        an unknown id is 404 `WORKFORCE_PROFILE_NOT_FOUND` rather than a
+        misleading empty list. Each row carries `skillId` as an identifier
+        only: the Skill's code, name and category are not expanded here.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      responses:
+        "200":
+          description: The Skill assignments held by the requested profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceSkillAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/skills/effective:
+    get:
+      operationId: listEffectiveWorkforceSkills
+      summary: Resolve the Skills genuinely in force for a Workforce Profile
+      description: >-
+        BE-03D3. Returns the Skills genuinely in force for the profile at the
+        current instant: the assignment is ACTIVE, the Skill itself is ACTIVE,
+        and "now" falls inside the assignment's validity window (a missing
+        bound is simply unbounded). Requires `skill.read`. Each row flattens
+        the Skill catalog entry and the assignment into one read model so
+        consumers never have to re-join the two sides themselves. The literal
+        `effective` segment is registered before the `:skillId` routes, so it
+        can never be captured as a Skill id. The profile is resolved through
+        its Organization, so an unknown id is 404
+        `WORKFORCE_PROFILE_NOT_FOUND`. There is no `asOf` parameter: the
+        resolver always evaluates against the current instant, and there is no
+        client-supplied time.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      responses:
+        "200":
+          description: The effective Skills of the requested profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/EffectiveWorkforceSkill"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/skills/{skillId}:
+    patch:
+      operationId: updateWorkforceSkillAssignment
+      summary: Update a Workforce Skill assignment
+      description: >-
+        BE-03D2 partial update, addressed by the (workforce, skill) pair.
+        Requires `skill.manage`. Mutable: `proficiencyLevel`, `validFrom`,
+        `validUntil`, `status`. At least one of them must be provided — an
+        empty object is 400 `VALIDATION_ERROR` with the detail naming all four.
+        Deactivation is `{"status": "INACTIVE"}` on this same endpoint; the row
+        is retained so the competency history stays auditable, and a
+        deactivated assignment can be reactivated by a later PATCH. An explicit
+        `null` on a date clears that bound, and a partial update is re-checked
+        against the stored record so `validUntil` can never end up before
+        `validFrom`. The profile is resolved through its Organization (unknown
+        profile → 404 `WORKFORCE_PROFILE_NOT_FOUND`), the Skill must exist (404
+        `SKILL_NOT_FOUND`), both sides must share a Client (400
+        `WORKFORCE_SKILL_CLIENT_MISMATCH`), and the pair must already be
+        assigned (404 `WORKFORCE_SKILL_ASSIGNMENT_NOT_FOUND`, which also covers
+        a Skill that exists but was never assigned to this profile).
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - $ref: "#/components/parameters/WorkforceSkillIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkforceSkillAssignmentRequest"
+      responses:
+        "200":
+          description: The updated Workforce Skill assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceSkillAssignment"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

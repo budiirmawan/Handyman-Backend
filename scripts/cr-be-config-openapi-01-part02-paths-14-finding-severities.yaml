@@ -1,0 +1,158 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 14 — FINDING SEVERITY
+  # (`src/modules/finding-severities`).
+  #
+  # Configuration/reference data only, carrying a numeric `rank` (lower rank
+  # means more severe, as returned by the list ordering). The finding instance
+  # lifecycle is not documented here. Client isolation is enforced in the
+  # controller through `contextAccessService.canAccessClient` (derived from
+  # explicit BE-02G Building assignments), so these operations carry no
+  # `x-building-scoped` marker.
+  # ---------------------------------------------------------------------------
+
+  /clients/{clientId}/finding-severities:
+    post:
+      operationId: createFindingSeverity
+      summary: Create a finding severity for a Client
+      description: >-
+        Creates one finding severity owned by the Client taken from the route.
+        Requires `finding.manage`. Resolution order: unknown Client 404
+        `CLIENT_NOT_FOUND`, INACTIVE Client 400 `CLIENT_INACTIVE`, duplicate
+        code 409 `FINDING_SEVERITY_CODE_ALREADY_EXISTS` (the unique index is
+        the race-condition backstop). `code` is required, trimmed and
+        upper-cased and must be 2–64 characters of `[A-Z][A-Z0-9_-]*`, unique
+        per Client; `name` is required (≤160); `rank` is required and must be a
+        positive integer (400 `VALIDATION_ERROR` with the detail "Severity rank
+        must be a positive integer." otherwise) — ranks are data, and the
+        runtime enforces no uniqueness or contiguity on them; optional
+        `description` is at most 512 characters; `status` defaults to `ACTIVE`.
+        Responds 201 with the created severity.
+      tags: [Finding Severity]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.manage
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFindingSeverityRequest" }
+      responses:
+        "201":
+          description: The created finding severity.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FindingSeverity" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listFindingSeverities
+      summary: List the finding severities of a Client
+      description: >-
+        Read of the Client's finding severity master, ordered by `rank` and then
+        `code`, as a plain array. Requires `finding.read`. The Client id must be
+        a UUID (400 `VALIDATION_ERROR`) and the caller must have access to that
+        Client (403 `BUILDING_ACCESS_DENIED` otherwise); an unknown Client is
+        404 `CLIENT_NOT_FOUND` rather than an empty list. Unpaginated, no
+        filters.
+      tags: [Finding Severity]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      responses:
+        "200":
+          description: The finding severities recorded for the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/FindingSeverity" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /finding-severities/{id}:
+    parameters:
+      - $ref: "#/components/parameters/FindingSeverityIdPath"
+
+    get:
+      operationId: getFindingSeverity
+      summary: Get a finding severity
+      description: >-
+        Single-read addressed by the severity id. Requires `finding.read`. The
+        id must be a UUID (400 `VALIDATION_ERROR`, detail field
+        `findingSeverityId`); an unknown id is 404 `FINDING_SEVERITY_NOT_FOUND`.
+        The record is read first and its ownership checked second, so a severity
+        of another Client is 403 `BUILDING_ACCESS_DENIED` rather than 404.
+      tags: [Finding Severity]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.read
+      responses:
+        "200":
+          description: The requested finding severity.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FindingSeverity" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateFindingSeverity
+      summary: Update a finding severity
+      description: >-
+        Partial update. Requires `finding.manage` and access to the owning
+        Client (403 `BUILDING_ACCESS_DENIED` otherwise). Only `name` (≤160),
+        `rank` (positive integer, same rule as on create), `description` (≤512,
+        explicit `null` clears it) and `status` are read: `code` and `clientId`
+        cannot be changed through this endpoint, and supplying them has no
+        effect rather than raising an error. Deactivation is
+        `{"status": "INACTIVE"}` on this same endpoint; an INACTIVE severity can
+        no longer be assigned, and existing records are not rewritten. An
+        unknown id is 404 `FINDING_SEVERITY_NOT_FOUND`. Responds 200 with the
+        updated severity.
+      tags: [Finding Severity]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateFindingSeverityRequest" }
+      responses:
+        "200":
+          description: The updated finding severity.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FindingSeverity" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

@@ -1,0 +1,160 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 13 — FINDING CLASSIFICATION
+  # (`src/modules/finding-classifications`).
+  #
+  # Configuration/reference data only. The finding instance lifecycle
+  # (finding, rework, corrective action, verification) is a different
+  # authority and is not documented here. Client isolation is enforced in the
+  # controller through `contextAccessService.canAccessClient` (derived from
+  # explicit BE-02G Building assignments), so these operations carry no
+  # `x-building-scoped` marker.
+  # ---------------------------------------------------------------------------
+
+  /clients/{clientId}/finding-classifications:
+    post:
+      operationId: createFindingClassification
+      summary: Create a finding classification for a Client
+      description: >-
+        Creates one finding classification owned by the Client taken from the
+        route. Requires `finding.manage`. Resolution order: unknown Client 404
+        `CLIENT_NOT_FOUND`, INACTIVE Client 400 `CLIENT_INACTIVE`, duplicate
+        code 409 `FINDING_CLASSIFICATION_CODE_ALREADY_EXISTS` (the unique
+        index is the race-condition backstop). `code` is required, trimmed and
+        upper-cased and must be 2–64 characters of `[A-Z][A-Z0-9_-]*`, unique
+        per Client; `name` is required (≤160); optional `description` is at
+        most 512 characters; `status` defaults to `ACTIVE`. Responds 201 with
+        the created classification.
+      tags: [Finding Classification]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.manage
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFindingClassificationRequest"
+      responses:
+        "201":
+          description: The created finding classification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FindingClassification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listFindingClassifications
+      summary: List the finding classifications of a Client
+      description: >-
+        Read of the Client's finding classification master, ordered by `code`,
+        as a plain array. Requires `finding.read`. The Client id must be a UUID
+        (400 `VALIDATION_ERROR`) and the caller must have access to that Client
+        (403 `BUILDING_ACCESS_DENIED` otherwise); an unknown Client is 404
+        `CLIENT_NOT_FOUND` rather than an empty list. Unpaginated, no filters.
+      tags: [Finding Classification]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      responses:
+        "200":
+          description: The finding classifications recorded for the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/FindingClassification"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /finding-classifications/{id}:
+    parameters:
+      - $ref: "#/components/parameters/FindingClassificationIdPath"
+
+    get:
+      operationId: getFindingClassification
+      summary: Get a finding classification
+      description: >-
+        Single-read addressed by the classification id. Requires `finding.read`.
+        The id must be a UUID (400 `VALIDATION_ERROR`, detail field
+        `findingClassificationId`); an unknown id is 404
+        `FINDING_CLASSIFICATION_NOT_FOUND`. The record is read first and its
+        ownership checked second, so a classification of another Client is 403
+        `BUILDING_ACCESS_DENIED` rather than 404 — the cross-Client state is
+        never described as "missing".
+      tags: [Finding Classification]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.read
+      responses:
+        "200":
+          description: The requested finding classification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FindingClassification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateFindingClassification
+      summary: Update a finding classification
+      description: >-
+        Partial update. Requires `finding.manage` and access to the owning
+        Client (403 `BUILDING_ACCESS_DENIED` otherwise). Only `name` (≤160),
+        `description` (≤512, explicit `null` clears it) and `status` are read:
+        `code` and `clientId` cannot be changed through this endpoint, and
+        supplying them has no effect rather than raising an error — the code
+        stays the stable identifier and reference data never migrates between
+        Clients. Deactivation is `{"status": "INACTIVE"}` on this same
+        endpoint; an INACTIVE classification can no longer be assigned, and no
+        existing record is rewritten. An unknown id is 404
+        `FINDING_CLASSIFICATION_NOT_FOUND`. Responds 200 with the updated
+        classification.
+      tags: [Finding Classification]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: finding.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFindingClassificationRequest"
+      responses:
+        "200":
+          description: The updated finding classification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FindingClassification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

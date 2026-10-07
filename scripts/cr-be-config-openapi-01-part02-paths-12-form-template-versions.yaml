@@ -1,0 +1,194 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 12 — FORM TEMPLATE VERSION
+  # (`src/modules/form-template-versions`).
+  #
+  # A version row belongs to exactly one Form Template (BE-08 form
+  # administration remains the authority for templates, sections and fields).
+  # Only the DRAFT → PUBLISHED → RETIRED lifecycle registered in runtime is
+  # documented: there is no approval chain, no draft-editing endpoint and no
+  # other transition. These routes carry no Building gate.
+  # ---------------------------------------------------------------------------
+
+  /form-templates/{templateId}/versions:
+    parameters:
+      - $ref: "#/components/parameters/FormTemplateIdPathParam"
+
+    post:
+      operationId: createFormTemplateVersion
+      summary: Create a DRAFT version of a Form Template
+      description: >-
+        Creates one DRAFT version row for the Form Template taken from the
+        route. Requires `form_template.manage`. The template must exist —
+        otherwise 404 `FORM_TEMPLATE_NOT_FOUND`. `versionNumber` is required
+        and must be an integer ≥ 1 (400 `VALIDATION_ERROR` otherwise, with no
+        detail list); a number already used for this template is 409
+        `BAD_REQUEST` with the message "Version number already exists for this
+        template." — the database unique constraint on
+        (template, version number) is the actual authority, and the runtime
+        maps the `23505` violation to that 409. The new row starts in `DRAFT`
+        with `publishedAt` null. No section or field snapshot is taken at this
+        point; publishing is what snapshots. Responds 201 with the created
+        version.
+      tags: [Form Template Version]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: form_template.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFormTemplateVersionRequest" }
+      responses:
+        "201":
+          description: The created Form Template Version.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FormTemplateVersion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listFormTemplateVersions
+      summary: List the versions of a Form Template
+      description: >-
+        Lists every version of the Form Template taken from the route, ordered
+        by `versionNumber` ascending, as a plain array. Requires
+        `form_template.read`. The template is resolved first, so an unknown
+        template is 404 `FORM_TEMPLATE_NOT_FOUND` rather than an empty list.
+        Unpaginated, no filters, no status filter.
+      tags: [Form Template Version]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: form_template.read
+      responses:
+        "200":
+          description: The versions recorded for the requested Form Template.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/FormTemplateVersion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /form-template-versions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/FormTemplateVersionIdPath"
+
+    get:
+      operationId: getFormTemplateVersion
+      summary: Get a Form Template Version
+      description: >-
+        Single-version read addressed by the version id. Requires
+        `form_template.read`. An unknown id is 404 with the shared
+        `NOT_FOUND` code and the message "Form template version not found." No
+        section or field snapshot content is returned by this route — only the
+        version row itself.
+      tags: [Form Template Version]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: form_template.read
+      responses:
+        "200":
+          description: The requested Form Template Version.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FormTemplateVersion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /form-template-versions/{id}/publish:
+    parameters:
+      - $ref: "#/components/parameters/FormTemplateVersionIdPath"
+
+    post:
+      operationId: publishFormTemplateVersion
+      summary: Publish a DRAFT Form Template Version
+      description: >-
+        Publishes the version addressed by the route. Requires
+        `form_template.manage` and takes no request body. Only the registered
+        DRAFT → PUBLISHED transition is accepted: publishing a version that is
+        not in `DRAFT` is 400 `BAD_REQUEST` with the message "Invalid version
+        lifecycle transition." — there is no approval chain and no way to
+        re-publish a retired version. Publishing snapshots the template's
+        current sections (ordered by `displayOrder`) and their fields (ordered
+        by `displayOrder`) into the version section/field tables, so the
+        published contract stops following later edits to the source template.
+        `publishedAt` is stamped with the transaction time, and the stored row
+        constraint requires a published row to carry a non-null `publishedAt`.
+        An unknown version id is 404 with the shared `NOT_FOUND` code. Responds
+        200 with the published version.
+      tags: [Form Template Version]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: form_template.manage
+      responses:
+        "200":
+          description: The published Form Template Version.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FormTemplateVersion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /form-template-versions/{id}/retire:
+    parameters:
+      - $ref: "#/components/parameters/FormTemplateVersionIdPath"
+
+    post:
+      operationId: retireFormTemplateVersion
+      summary: Retire a PUBLISHED Form Template Version
+      description: >-
+        Retires the version addressed by the route. Requires
+        `form_template.manage` and takes no request body. Only the registered
+        PUBLISHED → RETIRED transition is accepted: retiring a version that is
+        not `PUBLISHED` (including a DRAFT or an already-retired row) is 400
+        `BAD_REQUEST` with the message "Invalid version lifecycle transition."
+        Retiring preserves the existing `publishedAt` — only `status` and
+        `updatedAt` change — so a retired version remains the historical record
+        of what was published. No snapshot is taken or re-taken here, and there
+        is no scheduled or automatic retirement. An unknown version id is 404
+        with the shared `NOT_FOUND` code. Responds 200 with the retired version.
+      tags: [Form Template Version]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: form_template.manage
+      responses:
+        "200":
+          description: The retired Form Template Version.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FormTemplateVersion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

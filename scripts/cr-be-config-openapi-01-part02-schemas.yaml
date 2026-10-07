@@ -1,0 +1,1435 @@
+    # ------------------------------------------------------------------
+    # CR-BE-CONFIG-OPENAPI-01 PART 02 — remaining configuration master
+    # schemas. Mirrors the public DTOs in src/modules/**/*.types.ts exactly;
+    # no speculative field is introduced. Existing shared schemas are reused
+    # by reference (`Uuid`, `SuccessEnvelope`, `ErrorEnvelope`, `UtilityType`).
+    # ------------------------------------------------------------------
+
+    # --- BE-06A Vendor -------------------------------------------------
+
+    VendorStatus:
+      type: string
+      description: Lifecycle status of a BE-06A Vendor.
+      enum: [ACTIVE, INACTIVE]
+    Vendor:
+      type: object
+      description: >-
+        BE-06A Vendor as returned by the API. Public shape of `PublicVendor` —
+        the database timestamps are not part of the contract.
+      required:
+        - id
+        - clientId
+        - vendorCode
+        - vendorName
+        - legalName
+        - registrationNumber
+        - taxNumber
+        - email
+        - phone
+        - address
+        - vendorCategoryId
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client. Immutable after creation.
+        vendorCode:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Client, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*). Immutable after
+            creation.
+        vendorName:
+          type: string
+          description: Display name, at most 160 characters.
+        legalName:
+          type: string
+          nullable: true
+          description: Optional registered legal name, at most 255 characters.
+        registrationNumber:
+          type: string
+          nullable: true
+          description: Optional company registration number, at most 64 characters.
+        taxNumber:
+          type: string
+          nullable: true
+          description: Optional tax number, at most 64 characters.
+        email:
+          type: string
+          nullable: true
+          description: Optional contact e-mail address, at most 255 characters.
+        phone:
+          type: string
+          nullable: true
+          description: Optional contact phone number, at most 32 characters.
+        address:
+          type: string
+          nullable: true
+          description: Optional postal address, at most 512 characters.
+        vendorCategoryId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional BE-06B Vendor Category classification; `null` means
+            unclassified.
+        status: { $ref: "#/components/schemas/VendorStatus" }
+    CreateVendorRequest:
+      type: object
+      required: [vendorCode, vendorName]
+      properties:
+        vendorCode:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*, unique per Client.
+        vendorName:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        legalName:
+          type: string
+          description: Optional legal name, at most 255 characters.
+        registrationNumber:
+          type: string
+          description: Optional registration number, at most 64 characters.
+        taxNumber:
+          type: string
+          description: Optional tax number, at most 64 characters.
+        email:
+          type: string
+          description: >-
+            Optional e-mail address, at most 255 characters; when supplied it
+            must match a simple `local@domain.tld` shape.
+        phone:
+          type: string
+          description: >-
+            Optional phone number, at most 32 characters; when supplied it must
+            match `+?[0-9()\-\s.]{5,}`.
+        address:
+          type: string
+          description: Optional postal address, at most 512 characters.
+        status: { $ref: "#/components/schemas/VendorStatus" }
+    UpdateVendorRequest:
+      type: object
+      description: >-
+        Partial update. `clientId` and `vendorCode` are rejected with 400
+        `VALIDATION_ERROR`; an empty object is valid and returns the unchanged
+        Vendor.
+      properties:
+        vendorName:
+          type: string
+          description: New display name, at most 160 characters.
+        legalName:
+          type: string
+          nullable: true
+          description: >-
+            New legal name, at most 255 characters. An explicit `null` clears
+            the stored value.
+        registrationNumber:
+          type: string
+          nullable: true
+          description: New registration number, at most 64 characters; `null` clears.
+        taxNumber:
+          type: string
+          nullable: true
+          description: New tax number, at most 64 characters; `null` clears.
+        email:
+          type: string
+          nullable: true
+          description: New e-mail address, at most 255 characters; `null` clears.
+        phone:
+          type: string
+          nullable: true
+          description: New phone number, at most 32 characters; `null` clears.
+        address:
+          type: string
+          nullable: true
+          description: New postal address, at most 512 characters; `null` clears.
+        vendorCategoryId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            BE-06B classification; explicit `null` clears it. A set value must
+            resolve to an ACTIVE Vendor Category of the same Client.
+        status: { $ref: "#/components/schemas/VendorStatus" }
+
+    # --- BE-06B Vendor Category ----------------------------------------
+
+    VendorCategoryStatus:
+      type: string
+      description: Lifecycle status of a BE-06B Vendor Category.
+      enum: [ACTIVE, INACTIVE]
+    VendorCategory:
+      type: object
+      description: BE-06B Vendor Category as returned by the API.
+      required: [id, clientId, code, name, description, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client. Immutable after creation.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Client, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*). Immutable after
+            creation.
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/VendorCategoryStatus" }
+    CreateVendorCategoryRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*, unique per Client.
+        name:
+          type: string
+          description: Required display name, at most 160 characters.
+        description:
+          type: string
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/VendorCategoryStatus" }
+    UpdateVendorCategoryRequest:
+      type: object
+      description: >-
+        Partial update. `clientId` and `code` are rejected with 400
+        `VALIDATION_ERROR`; an empty object is valid and returns the unchanged
+        Category.
+      properties:
+        name:
+          type: string
+          description: New display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters; an explicit
+            `null` clears the stored value.
+        status: { $ref: "#/components/schemas/VendorCategoryStatus" }
+
+    # --- BE-06C Vendor PIC ----------------------------------------------
+
+    VendorPicStatus:
+      type: string
+      description: Lifecycle status of a BE-06C Vendor PIC.
+      enum: [ACTIVE, INACTIVE]
+    VendorPic:
+      type: object
+      description: >-
+        BE-06C Vendor PIC (contact person) as returned by the API. Contact data
+        only — never an identity.
+      required: [id, vendorId, name, position, email, phone, isPrimary, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        vendorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Vendor. Immutable after creation.
+        name:
+          type: string
+          description: Contact name, at most 160 characters.
+        position:
+          type: string
+          nullable: true
+          description: Optional job title, at most 128 characters.
+        email:
+          type: string
+          nullable: true
+          description: Optional e-mail address, at most 255 characters.
+        phone:
+          type: string
+          nullable: true
+          description: Optional phone number, at most 32 characters.
+        isPrimary:
+          type: boolean
+          description: >-
+            Whether this is the Vendor's primary contact. At most one ACTIVE
+            primary exists per Vendor.
+        status: { $ref: "#/components/schemas/VendorPicStatus" }
+    CreateVendorPicRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Required contact name, at most 160 characters.
+        position:
+          type: string
+          description: Optional job title, at most 128 characters.
+        email:
+          type: string
+          description: >-
+            Optional e-mail address, at most 255 characters; validated against a
+            simple `local@domain.tld` shape when supplied.
+        phone:
+          type: string
+          description: >-
+            Optional phone number, at most 32 characters; validated against
+            `+?[0-9()\-\s.]{5,}` when supplied.
+        isPrimary:
+          type: boolean
+          description: >-
+            Defaults to `false`. `true` promotes this PIC and demotes the
+            Vendor's current primary; the PIC must be ACTIVE.
+        status: { $ref: "#/components/schemas/VendorPicStatus" }
+    UpdateVendorPicRequest:
+      type: object
+      description: >-
+        Partial update. `vendorId` is rejected with 400 `VALIDATION_ERROR`; an
+        empty object is valid and returns the unchanged PIC.
+      properties:
+        name:
+          type: string
+          description: New contact name, at most 160 characters.
+        position:
+          type: string
+          nullable: true
+          description: New job title, at most 128 characters; `null` clears it.
+        email:
+          type: string
+          nullable: true
+          description: New e-mail address, at most 255 characters; `null` clears it.
+        phone:
+          type: string
+          nullable: true
+          description: New phone number, at most 32 characters; `null` clears it.
+        isPrimary:
+          type: boolean
+          description: >-
+            `true` promotes this PIC (demoting the current primary); `false`
+            demotes it. The PIC must be, or become, ACTIVE to stay primary.
+        status: { $ref: "#/components/schemas/VendorPicStatus" }
+
+    # --- BE-06D Vendor Building Relationship -----------------------------
+
+    VendorBuildingRelationshipStatus:
+      type: string
+      description: Lifecycle status of a BE-06D Vendor ↔ Building relationship.
+      enum: [ACTIVE, INACTIVE]
+    VendorBuildingRelationship:
+      type: object
+      description: >-
+        BE-06D Vendor ↔ Building master-data relationship as returned by the
+        API. It grants no data access and starts no workflow.
+      required:
+        - id
+        - vendorId
+        - buildingId
+        - effectiveFrom
+        - effectiveUntil
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        vendorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Related Vendor.
+        buildingId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Related Building.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional start of the relationship window.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional end of the relationship window; never before
+            `effectiveFrom`.
+        status: { $ref: "#/components/schemas/VendorBuildingRelationshipStatus" }
+    AssignVendorBuildingRequest:
+      type: object
+      required: [buildingId]
+      properties:
+        buildingId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            Required. Building to relate to the route's Vendor; must belong to
+            the same Client and be ACTIVE.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional window start; omitted or `null` stores no bound.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional window end; must not precede `effectiveFrom`.
+        status: { $ref: "#/components/schemas/VendorBuildingRelationshipStatus" }
+    UpdateVendorBuildingRelationshipRequest:
+      type: object
+      description: >-
+        Partial update addressed by the (vendor, building) pair. `vendorId` and
+        `buildingId` are not read; an empty object is valid.
+      properties:
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window start, or explicit `null` to clear the bound.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            New window end, or explicit `null` to clear the bound; the merged
+            result is re-checked against `effectiveFrom`.
+        status: { $ref: "#/components/schemas/VendorBuildingRelationshipStatus" }
+
+    # --- BE-06E Vendor Capability ---------------------------------------
+
+    VendorCapabilityStatus:
+      type: string
+      description: Lifecycle status of a BE-06E Vendor capability.
+      enum: [ACTIVE, INACTIVE]
+    VendorCapability:
+      type: object
+      description: >-
+        BE-06E Vendor capability / service scope as returned by the API. A
+        catalog record only.
+      required:
+        - id
+        - vendorId
+        - code
+        - name
+        - description
+        - vendorBuildingRelationshipId
+        - serviceCatalogId
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        vendorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Vendor. Immutable after creation.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Vendor, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*). Immutable after
+            creation.
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        vendorBuildingRelationshipId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional BE-06D relationship this capability is scoped to; `null`
+            means the capability applies vendor-wide.
+        serviceCatalogId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional governed Service Catalog identity link; `null` means
+            code-only (legacy capabilities).
+        status: { $ref: "#/components/schemas/VendorCapabilityStatus" }
+    CreateVendorCapabilityRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*, unique per Vendor.
+        name:
+          type: string
+          description: Required display name, at most 160 characters.
+        description:
+          type: string
+          description: Optional free-text description, at most 512 characters.
+        vendorBuildingRelationshipId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional BE-06D relationship of the same Vendor; omitted or `null`
+            keeps the capability vendor-wide.
+        serviceCatalogId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional governed Service Catalog entry of the Vendor's Client.
+        status: { $ref: "#/components/schemas/VendorCapabilityStatus" }
+    UpdateVendorCapabilityRequest:
+      type: object
+      description: >-
+        Partial update. `vendorId` and `code` are rejected with 400
+        `VALIDATION_ERROR`; an empty object is valid and returns the unchanged
+        capability.
+      properties:
+        name:
+          type: string
+          description: New display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters; an explicit
+            `null` clears the stored value.
+        vendorBuildingRelationshipId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Re-scopes the capability to another BE-06D relationship of the same
+            Vendor; explicit `null` returns it to vendor-wide.
+        serviceCatalogId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Changes the governed Service Catalog link; explicit `null` clears
+            it.
+        status: { $ref: "#/components/schemas/VendorCapabilityStatus" }
+
+    # --- BE-06F Vendor Workforce Binding ---------------------------------
+
+    VendorWorkforceBindingStatus:
+      type: string
+      description: Lifecycle status of a BE-06F Vendor Workforce Binding.
+      enum: [ACTIVE, INACTIVE]
+    VendorWorkforceBinding:
+      type: object
+      description: >-
+        BE-06F binding of an EXTERNAL Workforce Profile to a Vendor. The person
+        master remains `workforce_profiles`.
+      required:
+        - id
+        - vendorId
+        - workforceProfileId
+        - vendorPersonnelCode
+        - effectiveFrom
+        - effectiveUntil
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        vendorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Vendor.
+        workforceProfileId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Bound EXTERNAL Workforce Profile.
+        vendorPersonnelCode:
+          type: string
+          description: >-
+            Vendor-side personnel code, 1–64 characters starting with an
+            alphanumeric and continuing in [A-Za-z0-9._/-]; reserved per Vendor
+            across active and historical bindings.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional start of the binding window.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional end of the binding window; never before `effectiveFrom`.
+        status: { $ref: "#/components/schemas/VendorWorkforceBindingStatus" }
+    CreateVendorWorkforceBindingRequest:
+      type: object
+      required: [workforceProfileId, vendorPersonnelCode]
+      properties:
+        workforceProfileId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            Required. EXTERNAL Workforce Profile of the same Client as the
+            route's Vendor.
+        vendorPersonnelCode:
+          type: string
+          description: >-
+            Required. 1–64 characters starting with an alphanumeric and
+            continuing in [A-Za-z0-9._/-].
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional window start.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional window end; must not precede `effectiveFrom`.
+        status: { $ref: "#/components/schemas/VendorWorkforceBindingStatus" }
+    UpdateVendorWorkforceBindingRequest:
+      type: object
+      description: >-
+        Partial update addressed by the (vendor, workforce) pair. `vendorId` and
+        `workforceProfileId` are rejected with 400 `VALIDATION_ERROR`; an empty
+        object is valid.
+      properties:
+        vendorPersonnelCode:
+          type: string
+          description: >-
+            New personnel code, same 1–64 character rule as on create; must
+            still be unused for this Vendor.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window start, or explicit `null` to clear the bound.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            New window end, or explicit `null` to clear the bound; the merged
+            result is re-checked against `effectiveFrom`.
+        status: { $ref: "#/components/schemas/VendorWorkforceBindingStatus" }
+
+    # --- BE-06G Vendor Compliance Document -------------------------------
+
+    VendorComplianceDocumentStatus:
+      type: string
+      description: |-
+        Lifecycle status of a BE-06G Vendor Compliance Document:
+        ACTIVE (currently standing, expiry in the future at write time),
+        EXPIRED (expiry has passed), INACTIVE (withdrawn/superseded history).
+      enum: [ACTIVE, EXPIRED, INACTIVE]
+    VendorComplianceDocument:
+      type: object
+      description: >-
+        BE-06G compliance metadata plus an opaque file pointer as returned by
+        the API. Never a binary.
+      required:
+        - id
+        - vendorId
+        - documentType
+        - documentNumber
+        - documentName
+        - issueDate
+        - expiryDate
+        - status
+        - fileReference
+        - notes
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        vendorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Vendor. Immutable after creation.
+        documentType:
+          type: string
+          description: >-
+            Document type, always returned upper-cased (2–64 characters of
+            [A-Z][A-Z0-9_-]*).
+        documentNumber:
+          type: string
+          description: Document number, at most 128 characters.
+        documentName:
+          type: string
+          description: Document name, at most 255 characters.
+        issueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional issue date.
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional expiry date; never before `issueDate`, and kept consistent
+            with `status` at write time.
+        status: { $ref: "#/components/schemas/VendorComplianceDocumentStatus" }
+        fileReference:
+          type: string
+          nullable: true
+          description: >-
+            Opaque pointer to externally stored content, at most 512
+            characters. Never a binary and never fetched by this API.
+        notes:
+          type: string
+          nullable: true
+          description: Optional free-text notes, at most 1024 characters.
+    CreateVendorComplianceDocumentRequest:
+      type: object
+      required: [documentType, documentNumber, documentName]
+      properties:
+        documentType:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*.
+        documentNumber:
+          type: string
+          description: Required document number, at most 128 characters.
+        documentName:
+          type: string
+          description: Required document name, at most 255 characters.
+        issueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional issue date; must not be after `expiryDate`.
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional expiry date. Required in the past when `status` is
+            `EXPIRED`.
+        status: { $ref: "#/components/schemas/VendorComplianceDocumentStatus" }
+        fileReference:
+          type: string
+          description: Optional opaque file pointer, at most 512 characters.
+        notes:
+          type: string
+          description: Optional free-text notes, at most 1024 characters.
+    UpdateVendorComplianceDocumentRequest:
+      type: object
+      description: >-
+        Partial update. `vendorId` is rejected with 400 `VALIDATION_ERROR`; an
+        empty object is valid and returns the unchanged document.
+      properties:
+        documentType:
+          type: string
+          description: New document type, same 2–64 character rule as on create.
+        documentNumber:
+          type: string
+          description: New document number, at most 128 characters.
+        documentName:
+          type: string
+          description: New document name, at most 255 characters.
+        issueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: New issue date, or explicit `null` to clear it.
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: New expiry date, or explicit `null` to clear it.
+        status: { $ref: "#/components/schemas/VendorComplianceDocumentStatus" }
+        fileReference:
+          type: string
+          nullable: true
+          description: New file pointer, at most 512 characters; `null` clears it.
+        notes:
+          type: string
+          nullable: true
+          description: New notes, at most 1024 characters; `null` clears them.
+
+    # --- BE-06H Vendor License / Certification ---------------------------
+
+    VendorLicenseRecordType:
+      type: string
+      description: >-
+        Record kind of a BE-06H row. Data, not a behavioural fork: the same
+        table carries both.
+      enum: [LICENSE, CERTIFICATION]
+    VendorLicenseStatus:
+      type: string
+      description: >-
+        Stored lifecycle status of a BE-06H record: ACTIVE (standing at write
+        time), EXPIRED (expiry passed), INACTIVE (withdrawn/superseded
+        history).
+      enum: [ACTIVE, EXPIRED, INACTIVE]
+    VendorLicenseExpiryStatus:
+      type: string
+      description: >-
+        Read-time resolved validity at the evaluation instant: `VALID`,
+        `EXPIRED`, or `NOT_APPLICABLE` when the record carries no expiry date.
+        Computed by the service — no automatic renewal or scheduler exists.
+      enum: [VALID, EXPIRED, NOT_APPLICABLE]
+    VendorLicenseCertification:
+      type: object
+      description: >-
+        BE-06H license / certification record as returned by the API, including
+        the service-resolved `expiryStatus`.
+      required:
+        - id
+        - vendorId
+        - recordType
+        - name
+        - number
+        - issuingAuthority
+        - issueDate
+        - expiryDate
+        - status
+        - expiryStatus
+        - documentReference
+        - notes
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        vendorId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Vendor. Immutable after creation.
+        recordType: { $ref: "#/components/schemas/VendorLicenseRecordType" }
+        name:
+          type: string
+          description: License / certification name, at most 255 characters.
+        number:
+          type: string
+          description: License / certification number, at most 128 characters.
+        issuingAuthority:
+          type: string
+          nullable: true
+          description: Optional issuing authority, at most 255 characters.
+        issueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional issue date.
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional expiry date; never before `issueDate`.
+        status: { $ref: "#/components/schemas/VendorLicenseStatus" }
+        expiryStatus: { $ref: "#/components/schemas/VendorLicenseExpiryStatus" }
+        documentReference:
+          type: string
+          nullable: true
+          description: >-
+            Optional pointer at an existing BE-06G Vendor Compliance Document
+            of the same Vendor. Document storage is reused, never duplicated.
+        notes:
+          type: string
+          nullable: true
+          description: Optional free-text notes, at most 1024 characters.
+    CreateVendorLicenseRequest:
+      type: object
+      required: [recordType, name, number]
+      properties:
+        recordType: { $ref: "#/components/schemas/VendorLicenseRecordType" }
+        name:
+          type: string
+          description: Required name, at most 255 characters.
+        number:
+          type: string
+          description: Required number, at most 128 characters.
+        issuingAuthority:
+          type: string
+          description: Optional issuing authority, at most 255 characters.
+        issueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional issue date; must not be after `expiryDate`.
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional expiry date. Required in the past when `status` is
+            `EXPIRED`.
+        status: { $ref: "#/components/schemas/VendorLicenseStatus" }
+        documentReference:
+          type: string
+          nullable: true
+          description: >-
+            Optional BE-06G document of the same Vendor (404/400 guarded when
+            it is unknown or belongs to another Vendor).
+        notes:
+          type: string
+          description: Optional free-text notes, at most 1024 characters.
+    UpdateVendorLicenseRequest:
+      type: object
+      description: >-
+        Partial update. `vendorId` and `recordType` are rejected with 400
+        `VALIDATION_ERROR`; an empty object is valid and returns the unchanged
+        record.
+      properties:
+        name:
+          type: string
+          description: New name, at most 255 characters.
+        number:
+          type: string
+          description: New number, at most 128 characters.
+        issuingAuthority:
+          type: string
+          nullable: true
+          description: New issuing authority, at most 255 characters; `null` clears it.
+        issueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: New issue date, or explicit `null` to clear it.
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: New expiry date, or explicit `null` to clear it.
+        status: { $ref: "#/components/schemas/VendorLicenseStatus" }
+        documentReference:
+          type: string
+          nullable: true
+          description: >-
+            New BE-06G document pointer, or explicit `null` to clear it.
+        notes:
+          type: string
+          nullable: true
+          description: New notes, at most 1024 characters; `null` clears them.
+
+    # --- BE-05B Asset Category / Asset Type ------------------------------
+
+    AssetCategoryStatus:
+      type: string
+      description: Lifecycle status of a BE-05B Asset Category.
+      enum: [ACTIVE, INACTIVE]
+    AssetCategory:
+      type: object
+      description: BE-05B Asset Category as returned by the API.
+      required: [id, clientId, code, name, description, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Client, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*).
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/AssetCategoryStatus" }
+    CreateAssetCategoryRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*, unique per Client.
+        name:
+          type: string
+          description: Required display name, at most 160 characters.
+        description:
+          type: string
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/AssetCategoryStatus" }
+    UpdateAssetCategoryRequest:
+      type: object
+      description: >-
+        Partial update. `clientId` and `code` are not read; an empty object is
+        valid and returns the unchanged Category.
+      properties:
+        name:
+          type: string
+          description: New display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters; an explicit
+            `null` clears the stored value.
+        status: { $ref: "#/components/schemas/AssetCategoryStatus" }
+    AssetTypeStatus:
+      type: string
+      description: Lifecycle status of a BE-05B Asset Type.
+      enum: [ACTIVE, INACTIVE]
+    AssetType:
+      type: object
+      description: >-
+        BE-05B Asset Type as returned by the API. Carries no `clientId`:
+        ownership is derived Type → Category → Client.
+      required: [id, assetCategoryId, code, name, description, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        assetCategoryId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Asset Category.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Category, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*).
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/AssetTypeStatus" }
+    CreateAssetTypeRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*, unique per Category.
+        name:
+          type: string
+          description: Required display name, at most 160 characters.
+        description:
+          type: string
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/AssetTypeStatus" }
+    UpdateAssetTypeRequest:
+      type: object
+      description: >-
+        Partial update. `assetCategoryId` and `code` are not read; an empty
+        object is valid and returns the unchanged Type.
+      properties:
+        name:
+          type: string
+          description: New display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters; an explicit
+            `null` clears the stored value.
+        status: { $ref: "#/components/schemas/AssetTypeStatus" }
+
+    # --- BE-18B Utility Type Configuration -------------------------------
+
+    UtilityTypeConfigurationStatus:
+      type: string
+      description: Lifecycle status of a BE-18B utility type configuration.
+      enum: [ACTIVE, INACTIVE]
+    UtilityTypeConfigurationUom:
+      type: object
+      description: >-
+        One allowed BE-07 Unit of Measure mapped onto a utility type
+        configuration, enriched with its UOM context.
+      required:
+        - id
+        - utilityTypeConfigurationId
+        - uomId
+        - isDefault
+        - status
+        - createdAt
+        - updatedAt
+        - uom
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        utilityTypeConfigurationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning utility type configuration.
+        uomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Referenced BE-07 Unit of Measure.
+        isDefault:
+          type: boolean
+          description: >-
+            Whether this mapping is the configuration's default unit. At most
+            one default exists, and an INACTIVE mapping can never be it.
+        status: { $ref: "#/components/schemas/UtilityTypeConfigurationStatus" }
+        createdAt:
+          type: string
+          format: date-time
+          description: Mapping creation timestamp.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Mapping last-update timestamp.
+        uom:
+          type: object
+          nullable: true
+          description: >-
+            Resolved BE-07 UOM context; `null` when the referenced row is no
+            longer present.
+          required: [id, code, name, symbol, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code:
+              type: string
+              description: UOM code.
+            name:
+              type: string
+              description: UOM display name.
+            symbol:
+              type: string
+              description: UOM symbol.
+            status:
+              type: string
+              description: UOM lifecycle status as stored by BE-07.
+    UtilityTypeConfiguration:
+      type: object
+      description: >-
+        BE-18B utility type configuration as returned by the API, including its
+        allowed UOMs.
+      required:
+        - id
+        - clientId
+        - utilityType
+        - name
+        - description
+        - decimalPrecision
+        - status
+        - createdAt
+        - updatedAt
+        - allowedUoms
+        - defaultUomId
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client.
+        utilityType: { $ref: "#/components/schemas/UtilityType" }
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        decimalPrecision:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 6
+          description: Optional reading precision, an integer between 0 and 6.
+        status: { $ref: "#/components/schemas/UtilityTypeConfigurationStatus" }
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last-update timestamp.
+        allowedUoms:
+          type: array
+          description: >-
+            Allowed BE-07 Units of Measure, default first and then by creation
+            time ascending.
+          items: { $ref: "#/components/schemas/UtilityTypeConfigurationUom" }
+        defaultUomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Convenience pointer to the ACTIVE default mapping, when one is
+            configured.
+    CreateUtilityTypeConfigurationRequest:
+      type: object
+      required: [utilityType, name]
+      properties:
+        utilityType: { $ref: "#/components/schemas/UtilityType" }
+        name:
+          type: string
+          description: Required display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        decimalPrecision:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 6
+          description: >-
+            Optional reading precision, an integer between 0 and 6 (400
+            `VALIDATION_ERROR` otherwise).
+        status: { $ref: "#/components/schemas/UtilityTypeConfigurationStatus" }
+        uomIds:
+          type: array
+          description: >-
+            Optional initial allowed-UOM mappings. Every id is validated up
+            front (existence, same Client, ACTIVE), so a rejected mapping never
+            leaves a half-configured utility type behind.
+          items: { $ref: "#/components/schemas/Uuid" }
+        defaultUomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional default mapping. Must be one of the supplied `uomIds`, and
+            supplying it requires `uomIds` (400 `VALIDATION_ERROR` otherwise).
+    UpdateUtilityTypeConfigurationRequest:
+      type: object
+      description: >-
+        Partial update. `utilityType` is rejected with 400 `VALIDATION_ERROR`;
+        an empty object is valid and returns the unchanged configuration.
+      properties:
+        name:
+          type: string
+          description: New display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters; an explicit
+            `null` clears the stored value.
+        decimalPrecision:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 6
+          description: New reading precision, or explicit `null` to clear it.
+        status: { $ref: "#/components/schemas/UtilityTypeConfigurationStatus" }
+    UpdateUtilityTypeConfigurationStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: "#/components/schemas/UtilityTypeConfigurationStatus" }
+    AddUtilityTypeUomRequest:
+      type: object
+      required: [uomId]
+      properties:
+        uomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            Required. BE-07 Unit of Measure to allow for this utility type; must
+            exist, belong to the same Client and be ACTIVE.
+        isDefault:
+          type: boolean
+          description: >-
+            Defaults to `false`. `true` promotes the new mapping and demotes the
+            configuration's current default.
+    UpdateUtilityTypeUomRequest:
+      type: object
+      description: >-
+        Partial update of one allowed-UOM mapping. At least one of `isDefault`
+        or `status` is required — an empty object is 400 `VALIDATION_ERROR`.
+      properties:
+        isDefault:
+          type: boolean
+          description: >-
+            `true` promotes this mapping to default (demoting the current
+            default); `false` clears the flag.
+        status: { $ref: "#/components/schemas/UtilityTypeConfigurationStatus" }
+
+    # --- Form Template Version -------------------------------------------
+
+    FormTemplateVersionStatus:
+      type: string
+      description: >-
+        Lifecycle status of a Form Template Version. Only the registered
+        DRAFT → PUBLISHED → RETIRED transitions exist.
+      enum: [DRAFT, PUBLISHED, RETIRED]
+    FormTemplateVersion:
+      type: object
+      description: >-
+        Form Template Version row as returned by the API. It belongs to exactly
+        one Form Template; section/field snapshot content is not returned by
+        these routes.
+      required:
+        - id
+        - formTemplateId
+        - versionNumber
+        - status
+        - publishedAt
+        - createdAt
+        - updatedAt
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        formTemplateId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Form Template.
+        versionNumber:
+          type: integer
+          minimum: 1
+          description: Version number, unique per Form Template.
+        status: { $ref: "#/components/schemas/FormTemplateVersionStatus" }
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Publication timestamp; `null` for a DRAFT version, and preserved
+            when the version is retired.
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last-update timestamp.
+    CreateFormTemplateVersionRequest:
+      type: object
+      required: [versionNumber]
+      properties:
+        versionNumber:
+          type: integer
+          minimum: 1
+          description: >-
+            Required integer ≥ 1. Must not already exist for the template —
+            duplicates are 409 `BAD_REQUEST` with the message "Version number
+            already exists for this template."
+
+    # --- Finding Classification / Severity --------------------------------
+
+    FindingClassificationStatus:
+      type: string
+      description: Lifecycle status of a finding classification master row.
+      enum: [ACTIVE, INACTIVE]
+    FindingClassification:
+      type: object
+      description: >-
+        Finding classification master row as returned by the API. Configuration
+        data only — the finding instance lifecycle is a different authority.
+      required:
+        - id
+        - clientId
+        - code
+        - name
+        - description
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Client, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*).
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/FindingClassificationStatus" }
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last-update timestamp.
+    CreateFindingClassificationRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*, unique per Client.
+        name:
+          type: string
+          description: Required display name, at most 160 characters.
+        description:
+          type: string
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/FindingClassificationStatus" }
+    UpdateFindingClassificationRequest:
+      type: object
+      description: >-
+        Partial update. `code` and `clientId` are not read; an empty object is
+        valid and returns the unchanged classification.
+      properties:
+        name:
+          type: string
+          description: New display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters; an explicit
+            `null` clears the stored value.
+        status: { $ref: "#/components/schemas/FindingClassificationStatus" }
+    FindingSeverityStatus:
+      type: string
+      description: Lifecycle status of a finding severity master row.
+      enum: [ACTIVE, INACTIVE]
+    FindingSeverity:
+      type: object
+      description: >-
+        Finding severity master row as returned by the API. Configuration data
+        only — the finding instance lifecycle is a different authority.
+      required:
+        - id
+        - clientId
+        - code
+        - name
+        - rank
+        - description
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Client, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*).
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        rank:
+          type: integer
+          minimum: 1
+          description: >-
+            Positive integer severity rank. Lower ranks are listed first; the
+            runtime enforces no uniqueness or contiguity.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/FindingSeverityStatus" }
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last-update timestamp.
+    CreateFindingSeverityRequest:
+      type: object
+      required: [code, name, rank]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*, unique per Client.
+        name:
+          type: string
+          description: Required display name, at most 160 characters.
+        rank:
+          type: integer
+          minimum: 1
+          description: Required positive integer rank.
+        description:
+          type: string
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/FindingSeverityStatus" }
+    UpdateFindingSeverityRequest:
+      type: object
+      description: >-
+        Partial update. `code` and `clientId` are not read; an empty object is
+        valid and returns the unchanged severity.
+      properties:
+        name:
+          type: string
+          description: New display name, at most 160 characters.
+        rank:
+          type: integer
+          minimum: 1
+          description: New positive integer rank.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters; an explicit
+            `null` clears the stored value.
+        status: { $ref: "#/components/schemas/FindingSeverityStatus" }

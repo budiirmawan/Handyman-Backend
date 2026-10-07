@@ -1,0 +1,972 @@
+    # ------------------------------------------------------------------
+    # CR-BE-CONFIG-OPENAPI-01 PART 01 — Organization & Workforce admin
+    # schemas. Mirrors the public DTOs in src/modules/**/*.types.ts exactly;
+    # no speculative field is introduced.
+    # ------------------------------------------------------------------
+    OrganizationStatus:
+      type: string
+      description: Lifecycle status of a BE-03A Organization.
+      enum: [ACTIVE, INACTIVE]
+    DepartmentStatus:
+      type: string
+      description: Lifecycle status of a BE-03A Department.
+      enum: [ACTIVE, INACTIVE]
+    TeamStatus:
+      type: string
+      description: Lifecycle status of a BE-03B Team.
+      enum: [ACTIVE, INACTIVE]
+    PositionStatus:
+      type: string
+      description: Lifecycle status of a BE-03B Position.
+      enum: [ACTIVE, INACTIVE]
+    ShiftStatus:
+      type: string
+      description: Lifecycle status of a BE-03E Shift.
+      enum: [ACTIVE, INACTIVE]
+    SkillStatus:
+      type: string
+      description: Lifecycle status of a BE-03D1 Skill.
+      enum: [ACTIVE, INACTIVE]
+    SkillCategory:
+      type: string
+      description: Closed BE-03D1 competency category. Defaults to TECHNICAL on create.
+      enum: [TECHNICAL, OPERATIONAL, SAFETY, SPECIALIST]
+    WorkforceProfileStatus:
+      type: string
+      description: Lifecycle status of a BE-03C Workforce Profile.
+      enum: [ACTIVE, INACTIVE]
+    WorkforceType:
+      type: string
+      description: >-
+        BE-03C employment type. Defaults to INTERNAL on create. Only an
+        EXTERNAL profile may hold a BE-03H external affiliation.
+      enum: [INTERNAL, OUTSOURCED, CONTRACT, EXTERNAL]
+    WorkforceSkillStatus:
+      type: string
+      description: Lifecycle status of a BE-03D2 Workforce Skill assignment.
+      enum: [ACTIVE, INACTIVE]
+    ProficiencyLevel:
+      type: string
+      description: Closed BE-03D2 proficiency scale. Defaults to BASIC on create.
+      enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+    WorkforceShiftStatus:
+      type: string
+      description: Lifecycle status of a BE-03E Workforce Shift assignment.
+      enum: [ACTIVE, INACTIVE]
+    WorkforceBuildingAssignmentStatus:
+      type: string
+      description: Lifecycle status of a BE-03G Workforce Building assignment.
+      enum: [ACTIVE, INACTIVE]
+    WorkforceReportingLineStatus:
+      type: string
+      description: Lifecycle status of a BE-03F Workforce Reporting Line.
+      enum: [ACTIVE, INACTIVE]
+    ExternalWorkforceLinkStatus:
+      type: string
+      description: Lifecycle status of a BE-03H External Workforce Link.
+      enum: [ACTIVE, INACTIVE]
+
+    Organization:
+      type: object
+      description: >-
+        BE-03A Organization as returned by the API. Public shape of
+        `PublicOrganization` — the database timestamps are not part of the
+        contract.
+      required: [id, clientId, code, name, description, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client. Immutable after creation.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Client, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_]*). Immutable after
+            creation.
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/OrganizationStatus" }
+
+    Department:
+      type: object
+      description: BE-03A Department as returned by the API.
+      required: [id, organizationId, code, name, description, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        organizationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Organization. Immutable after creation.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Organization, always
+            returned upper-cased (2–64 characters of [A-Z][A-Z0-9_]*).
+            Immutable after creation.
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/DepartmentStatus" }
+
+    Team:
+      type: object
+      description: BE-03B Team as returned by the API.
+      required: [id, departmentId, code, name, description, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        departmentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Department. Immutable after creation.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Department, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_]*). Immutable after
+            creation.
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/TeamStatus" }
+
+    Position:
+      type: object
+      description: >-
+        BE-03B Position as returned by the API. A Position is an organizational
+        label only and carries no Role or Permission.
+      required: [id, organizationId, departmentId, code, name, description, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        organizationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Organization. Immutable after creation.
+        departmentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional owning Department inside the same Organization. `null`
+            means an Organization-level Position.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Organization, always
+            returned upper-cased (2–64 characters of [A-Z][A-Z0-9_]*).
+            Immutable after creation.
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/PositionStatus" }
+
+    Shift:
+      type: object
+      description: >-
+        BE-03E Shift as returned by the API. A definition only — no attendance,
+        payroll, overtime, leave, timesheet or scheduling behaviour.
+      required: [id, clientId, buildingId, code, name, startTime, endTime, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client, cross-checked against the Building's Property chain.
+        buildingId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Building this Shift is operated at. Immutable after creation.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Building, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*).
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        startTime:
+          type: string
+          description: >-
+            Wall-clock start time, always returned as `HH:MM:SS`. No date and
+            no zone — the Building supplies the timezone.
+          example: "07:00:00"
+        endTime:
+          type: string
+          description: >-
+            Wall-clock end time, always returned as `HH:MM:SS`. An `endTime`
+            earlier than `startTime` is a legitimate overnight shift.
+          example: "15:00:00"
+        status: { $ref: "#/components/schemas/ShiftStatus" }
+
+    Skill:
+      type: object
+      description: >-
+        BE-03D1 Skill as returned by the API. Describes a capability the Client
+        recognises; never records who holds it.
+      required: [id, clientId, code, name, description, category, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client. Immutable after creation.
+        code:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Client, always returned
+            upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*).
+        name:
+          type: string
+          description: Display name, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        category: { $ref: "#/components/schemas/SkillCategory" }
+        status: { $ref: "#/components/schemas/SkillStatus" }
+
+    WorkforceProfile:
+      type: object
+      description: >-
+        BE-03C Workforce Profile as returned by the API. Operational personnel
+        identity, NOT a User account: `userId` may be `null`, and linking a
+        User never creates credentials and never grants Role, Permission or
+        Building access. Nested Organization / Department / Team / Position
+        objects are not expanded here.
+      required:
+        - id
+        - organizationId
+        - departmentId
+        - teamId
+        - positionId
+        - userId
+        - employeeCode
+        - fullName
+        - workforceType
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        organizationId: { $ref: "#/components/schemas/Uuid" }
+        departmentId: { $ref: "#/components/schemas/Uuid" }
+        teamId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: Optional Team inside the Department. `null` means unassigned.
+        positionId: { $ref: "#/components/schemas/Uuid" }
+        userId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional BE-01 User link for digital identity. `null` means the
+            profile exists with no login at all.
+        employeeCode:
+          type: string
+          description: >-
+            Machine-readable identifier, unique per Organization, always
+            returned upper-cased (2–64 characters of [A-Z][A-Z0-9_-]*).
+            Immutable after creation.
+        fullName:
+          type: string
+          description: Display name, at most 160 characters.
+        workforceType: { $ref: "#/components/schemas/WorkforceType" }
+        status: { $ref: "#/components/schemas/WorkforceProfileStatus" }
+
+    WorkforceSkillAssignment:
+      type: object
+      description: >-
+        BE-03D2 Workforce Skill assignment as returned by the API. A competency
+        record only: it implies no Position, Role, Permission, Team, Shift or
+        Building Assignment.
+      required:
+        - id
+        - workforceProfileId
+        - skillId
+        - proficiencyLevel
+        - validFrom
+        - validUntil
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        skillId: { $ref: "#/components/schemas/Uuid" }
+        proficiencyLevel: { $ref: "#/components/schemas/ProficiencyLevel" }
+        validFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional start of the validity window. `null` is unbounded.
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional end of the validity window. `null` is unbounded.
+        status: { $ref: "#/components/schemas/WorkforceSkillStatus" }
+
+    EffectiveWorkforceSkill:
+      type: object
+      description: >-
+        BE-03D3 effective Skill: a Skill genuinely in force for a Workforce
+        Profile right now (assignment ACTIVE, Skill ACTIVE, current instant
+        inside the validity window). Flattens the Skill catalog entry and the
+        assignment into one read model.
+      required:
+        - skillId
+        - code
+        - name
+        - category
+        - proficiencyLevel
+        - validFrom
+        - validUntil
+      properties:
+        skillId: { $ref: "#/components/schemas/Uuid" }
+        code:
+          type: string
+          description: Skill code from the BE-03D1 catalog.
+        name:
+          type: string
+          description: Skill name from the BE-03D1 catalog.
+        category: { $ref: "#/components/schemas/SkillCategory" }
+        proficiencyLevel: { $ref: "#/components/schemas/ProficiencyLevel" }
+        validFrom:
+          type: string
+          format: date-time
+          nullable: true
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+
+    WorkforceShiftAssignment:
+      type: object
+      description: >-
+        BE-03E Workforce Shift assignment as returned by the API. A rostering
+        record only; it carries no attendance, payroll, overtime, leave,
+        timesheet or automatic scheduling behaviour.
+      required:
+        - id
+        - workforceProfileId
+        - shiftId
+        - securityPostId
+        - effectiveFrom
+        - effectiveUntil
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        shiftId: { $ref: "#/components/schemas/Uuid" }
+        securityPostId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional Security Post bound to the roster row. Read-only on this
+            contract: no HTTP route accepts or clears it, so it is never a
+            request field.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+        status: { $ref: "#/components/schemas/WorkforceShiftStatus" }
+
+    WorkforceBuildingAssignment:
+      type: object
+      description: >-
+        BE-03G Workforce Building assignment as returned by the API. This is an
+        operational placement — where somebody works — and is deliberately NOT
+        the BE-02F User-to-Building access assignment.
+      required:
+        - id
+        - workforceProfileId
+        - buildingId
+        - effectiveFrom
+        - effectiveUntil
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+        status: { $ref: "#/components/schemas/WorkforceBuildingAssignmentStatus" }
+
+    WorkforceReportingLine:
+      type: object
+      description: >-
+        BE-03F Workforce Reporting Line as returned by the API. A reporting line
+        grants nothing: it never implies or changes a Role, Permission,
+        Position, Team, Shift, Skill or Building Assignment.
+      required:
+        - id
+        - workforceProfileId
+        - supervisorWorkforceProfileId
+        - effectiveFrom
+        - effectiveUntil
+        - status
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        supervisorWorkforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+        status: { $ref: "#/components/schemas/WorkforceReportingLineStatus" }
+
+    ExternalWorkforceLink:
+      type: object
+      description: >-
+        BE-03H External Workforce Link as returned by the API. Records which
+        External Organization supplies a person, under which of the vendor's own
+        personnel codes.
+      required:
+        - id
+        - workforceProfileId
+        - externalOrganizationId
+        - externalPersonnelCode
+        - status
+        - effectiveFrom
+        - effectiveUntil
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        externalOrganizationId: { $ref: "#/components/schemas/Uuid" }
+        externalPersonnelCode:
+          type: string
+          description: >-
+            The vendor's own personnel code, always returned trimmed and
+            upper-cased (1–64 characters of [A-Za-z0-9._/-]).
+        status: { $ref: "#/components/schemas/ExternalWorkforceLinkStatus" }
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateOrganizationRequest:
+      type: object
+      required: [clientId, code, name]
+      properties:
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Client. Required.
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_]*.
+        name:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            Optional free-text description, at most 512 characters. Omitted or
+            blank stores `null`.
+        status: { $ref: "#/components/schemas/OrganizationStatus" }
+
+    UpdateOrganizationRequest:
+      type: object
+      description: >-
+        Partial update. `clientId` and `code` are not accepted — an empty object
+        is valid and returns the unchanged Organization.
+      properties:
+        name:
+          type: string
+          description: New display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters. An explicit
+            `null` or blank is treated as "absent" — this route cannot clear the
+            stored description.
+        status: { $ref: "#/components/schemas/OrganizationStatus" }
+
+    CreateDepartmentRequest:
+      type: object
+      required: [organizationId, code, name]
+      properties:
+        organizationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Owning Organization. Required.
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_]*.
+        name:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/DepartmentStatus" }
+
+    UpdateDepartmentRequest:
+      type: object
+      description: >-
+        Partial update. `organizationId` and `code` are not accepted — a
+        Department can never be moved between Organizations. An empty object is
+        valid and returns the unchanged Department.
+      properties:
+        name:
+          type: string
+          description: New display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters. An explicit
+            `null` or blank is treated as "absent".
+        status: { $ref: "#/components/schemas/DepartmentStatus" }
+
+    CreateTeamRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_]*.
+        name:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/TeamStatus" }
+
+    UpdateTeamRequest:
+      type: object
+      description: >-
+        Partial update. `departmentId` and `code` are not accepted — a Team can
+        never be moved between Departments. An empty object is valid and returns
+        the unchanged Team.
+      properties:
+        name:
+          type: string
+          description: New display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters. An explicit
+            `null` or blank is treated as "absent".
+        status: { $ref: "#/components/schemas/TeamStatus" }
+
+    CreatePositionRequest:
+      type: object
+      required: [code, name]
+      properties:
+        departmentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional Department inside the Organization named in the path.
+            Omitted or `null` creates an Organization-level Position.
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_]*.
+        name:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        status: { $ref: "#/components/schemas/PositionStatus" }
+
+    UpdatePositionRequest:
+      type: object
+      description: >-
+        Partial update. `organizationId`, `code` and `departmentId` are not
+        accepted. An empty object is valid and returns the unchanged Position.
+      properties:
+        name:
+          type: string
+          description: New display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: >-
+            New free-text description, at most 512 characters. An explicit
+            `null` or blank is treated as "absent".
+        status: { $ref: "#/components/schemas/PositionStatus" }
+
+    CreateShiftRequest:
+      type: object
+      required: [clientId, code, name, startTime, endTime]
+      properties:
+        clientId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            Required owning Client. Cross-checked against the Building taken
+            from the path.
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*.
+        name:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        startTime:
+          type: string
+          description: >-
+            Required wall-clock time, `HH:MM` or `HH:MM:SS`, 24-hour, no date
+            and no zone. Stored and returned as `HH:MM:SS`.
+          pattern: "^([01]\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?$"
+          example: "07:00"
+        endTime:
+          type: string
+          description: >-
+            Required wall-clock time, same format as `startTime`. Must differ
+            from `startTime`; an earlier value is a legitimate overnight shift.
+          pattern: "^([01]\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?$"
+          example: "15:00"
+        status: { $ref: "#/components/schemas/ShiftStatus" }
+
+    CreateSkillRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*.
+        name:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        description:
+          type: string
+          nullable: true
+          description: Optional free-text description, at most 512 characters.
+        category:
+          allOf: [{ $ref: "#/components/schemas/SkillCategory" }]
+          description: Optional competency category. Defaults to TECHNICAL.
+        status: { $ref: "#/components/schemas/SkillStatus" }
+
+    CreateWorkforceProfileRequest:
+      type: object
+      required: [departmentId, positionId, employeeCode, fullName]
+      properties:
+        departmentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            Required Department inside the Organization taken from the path.
+        teamId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional Team inside that Department. `null` means unassigned.
+        positionId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            Required Position of that Organization. A department-scoped Position
+            must match `departmentId`.
+        userId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            Optional BE-01 User link. `null` means the profile exists without a
+            login. Linking never creates credentials and never grants
+            Role/Permission.
+        employeeCode:
+          type: string
+          description: >-
+            Required. Trimmed and upper-cased before validation, then required
+            to be 2–64 characters of [A-Z][A-Z0-9_-]*.
+        fullName:
+          type: string
+          description: Required display name, trimmed, at most 160 characters.
+        workforceType:
+          allOf: [{ $ref: "#/components/schemas/WorkforceType" }]
+          description: Optional employment type. Defaults to INTERNAL.
+        status: { $ref: "#/components/schemas/WorkforceProfileStatus" }
+
+    UpdateWorkforceProfileRequest:
+      type: object
+      description: >-
+        Partial update. `organizationId` and `employeeCode` are not accepted —
+        a profile can never be moved to another Organization or re-coded. An
+        empty object is valid and returns the unchanged profile.
+      properties:
+        departmentId: { $ref: "#/components/schemas/Uuid" }
+        positionId: { $ref: "#/components/schemas/Uuid" }
+        teamId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: New Team, or explicit `null` to clear the reference.
+        userId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: >-
+            New User link, or explicit `null` to unlink. Linking never creates
+            credentials and never mutates BE-01 RBAC.
+        fullName:
+          type: string
+          description: New display name, trimmed, at most 160 characters.
+        workforceType: { $ref: "#/components/schemas/WorkforceType" }
+        status: { $ref: "#/components/schemas/WorkforceProfileStatus" }
+
+    AssignWorkforceSkillRequest:
+      type: object
+      required: [skillId]
+      properties:
+        skillId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Required Skill from the same Client's BE-03D1 catalog.
+        proficiencyLevel:
+          allOf: [{ $ref: "#/components/schemas/ProficiencyLevel" }]
+          description: Optional proficiency. Defaults to BASIC.
+        validFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 start of the validity window. An explicit `null`
+            leaves the bound unset.
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 end of the validity window, the same as or after
+            `validFrom` when both are supplied.
+        status: { $ref: "#/components/schemas/WorkforceSkillStatus" }
+
+    UpdateWorkforceSkillAssignmentRequest:
+      type: object
+      minProperties: 1
+      description: >-
+        Partial update. At least one property is required — an empty object is
+        400 `VALIDATION_ERROR`.
+      properties:
+        proficiencyLevel: { $ref: "#/components/schemas/ProficiencyLevel" }
+        validFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window start, or explicit `null` to clear the bound.
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window end, or explicit `null` to clear the bound.
+        status: { $ref: "#/components/schemas/WorkforceSkillStatus" }
+
+    AssignWorkforceShiftRequest:
+      type: object
+      required: [shiftId]
+      properties:
+        shiftId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Required Shift of the same Client as the Workforce Profile.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 start of the validity window. An explicit `null`
+            leaves the bound unset.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 end of the validity window, the same as or after
+            `effectiveFrom` when both are supplied.
+        status: { $ref: "#/components/schemas/WorkforceShiftStatus" }
+
+    UpdateWorkforceShiftAssignmentRequest:
+      type: object
+      minProperties: 1
+      description: >-
+        Partial update. At least one property is required — an empty object is
+        400 `VALIDATION_ERROR`. `securityPostId` is not accepted on any route.
+      properties:
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window start, or explicit `null` to clear the bound.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window end, or explicit `null` to clear the bound.
+        status: { $ref: "#/components/schemas/WorkforceShiftStatus" }
+
+    AssignWorkforceBuildingRequest:
+      type: object
+      required: [buildingId]
+      properties:
+        buildingId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Required Building. Operational placement, never an access grant.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 start of the validity window. An explicit `null`
+            leaves the bound unset.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 end of the validity window, the same as or after
+            `effectiveFrom` when both are supplied.
+        status: { $ref: "#/components/schemas/WorkforceBuildingAssignmentStatus" }
+
+    UpdateWorkforceBuildingAssignmentRequest:
+      type: object
+      minProperties: 1
+      description: >-
+        Partial update. At least one property is required — an empty object is
+        400 `VALIDATION_ERROR`.
+      properties:
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window start, or explicit `null` to clear the bound.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window end, or explicit `null` to clear the bound.
+        status: { $ref: "#/components/schemas/WorkforceBuildingAssignmentStatus" }
+
+    AssignSupervisorRequest:
+      type: object
+      required: [supervisorWorkforceProfileId]
+      properties:
+        supervisorWorkforceProfileId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: >-
+            Required Supervisor Workforce Profile of the same Client as the
+            supervised profile, and never the profile itself.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 start of the validity window. An explicit `null`
+            leaves the bound unset.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 end of the validity window, the same as or after
+            `effectiveFrom` when both are supplied.
+        status: { $ref: "#/components/schemas/WorkforceReportingLineStatus" }
+
+    UpdateWorkforceReportingLineRequest:
+      type: object
+      minProperties: 1
+      description: >-
+        Partial update of the profile's current reporting line. At least one
+        property is required — an empty object is 400 `VALIDATION_ERROR`.
+      properties:
+        supervisorWorkforceProfileId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: New Supervisor, re-pointing the current reporting line.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window start, or explicit `null` to clear the bound.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window end, or explicit `null` to clear the bound.
+        status: { $ref: "#/components/schemas/WorkforceReportingLineStatus" }
+
+    CreateExternalWorkforceLinkRequest:
+      type: object
+      required: [externalOrganizationId, externalPersonnelCode]
+      properties:
+        externalOrganizationId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Required External Organization of the same Client.
+        externalPersonnelCode:
+          type: string
+          description: >-
+            Required. 1–64 characters of [A-Za-z0-9._/-] starting with an
+            alphanumeric, trimmed and upper-cased before persistence.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 start of the validity window. An explicit `null`
+            leaves the bound unset.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Optional ISO-8601 end of the validity window, the same as or after
+            `effectiveFrom` when both are supplied.
+        status: { $ref: "#/components/schemas/ExternalWorkforceLinkStatus" }
+
+    UpdateExternalWorkforceLinkRequest:
+      type: object
+      minProperties: 1
+      description: >-
+        Partial update. At least one property is required — an empty object is
+        400 `VALIDATION_ERROR`.
+      properties:
+        externalPersonnelCode:
+          type: string
+          description: >-
+            New vendor personnel code, 1–64 characters of [A-Za-z0-9._/-]
+            starting with an alphanumeric.
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window start, or explicit `null` to clear the bound.
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: New window end, or explicit `null` to clear the bound.
+        status: { $ref: "#/components/schemas/ExternalWorkforceLinkStatus" }

@@ -1,0 +1,333 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 11 — BE-18B UTILITY TYPE
+  # CONFIGURATION (`src/modules/utility-type-configurations`).
+  #
+  # The utility types themselves are reused verbatim from BE-18A
+  # (`ELECTRICITY` / `WATER` / `GAS`), and the allowed Units of Measure are
+  # BE-07 rows. Configuration is opt-in: BE-18A's Meter Master keeps its own
+  # BE-07 UOM validation whenever a Client has not configured a utility type.
+  # Client isolation is enforced in the service through
+  # `contextAccessService.canAccessClient` (derived from explicit BE-02G
+  # Building assignments), matching the BE-18A client-scoped routes — it is a
+  # service-level guard, not the `requireBuildingAccess` middleware, so these
+  # operations carry no `x-building-scoped` marker.
+  # ---------------------------------------------------------------------------
+
+  /clients/{clientId}/utility-type-configurations:
+    post:
+      operationId: createUtilityTypeConfiguration
+      summary: Create a utility type configuration for a Client
+      description: >-
+        BE-18B. Configures one of the BE-18A utility types for the Client taken
+        from the route. Requires `utility_meter.manage` AND access to the
+        Client derived from the caller's Building assignments — without it the
+        request is 403 `BUILDING_ACCESS_DENIED`. Resolution order: unknown
+        Client 404 `CLIENT_NOT_FOUND`, INACTIVE Client 400 `CLIENT_INACTIVE`,
+        then the utility type is already configured for this Client 409
+        `UTILITY_TYPE_CONFIGURATION_ALREADY_EXISTS` (one configuration per
+        Client + utility type, with the unique index as the race-condition
+        backstop). `utilityType` is required (`ELECTRICITY` / `WATER` / `GAS`)
+        and `name` is required (≤160); optional `description` (≤512),
+        `decimalPrecision` (integer 0–6, or `null`) and `status` (default
+        `ACTIVE`). Optional `uomIds` pre-populates the allowed BE-07 UOM
+        mappings: every id is validated up front so a rejected mapping never
+        leaves a half-configured utility type behind — unknown 404
+        `UTILITY_METER_UOM_NOT_FOUND`, foreign Client 400
+        `UTILITY_METER_UOM_CLIENT_MISMATCH`, INACTIVE 400
+        `UTILITY_METER_UOM_INACTIVE`. Optional `defaultUomId` must be one of
+        the supplied `uomIds` (400 `VALIDATION_ERROR` otherwise, and it
+        requires `uomIds` to be supplied). Responds 201 with the configuration,
+        including its `allowedUoms` and resolved `defaultUomId`.
+      tags: [Utility Type Configuration]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: utility_meter.manage
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUtilityTypeConfigurationRequest"
+      responses:
+        "201":
+          description: The created utility type configuration, with its allowed UOMs.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UtilityTypeConfiguration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listUtilityTypeConfigurations
+      summary: List the utility type configurations of a Client
+      description: >-
+        BE-18B read, ordered by `utilityType` ascending, as a plain array of
+        configurations with their allowed UOMs. Requires `utility_meter.read`
+        and Client access (else 403 `BUILDING_ACCESS_DENIED`). Optional filters:
+        `utilityType` (`ELECTRICITY` / `WATER` / `GAS`) and `status` (`ACTIVE` /
+        `INACTIVE`); any other value is 400 `VALIDATION_ERROR` naming the
+        accepted values. An unknown Client is 404 `CLIENT_NOT_FOUND` rather
+        than an empty list.
+      tags: [Utility Type Configuration]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: utility_meter.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+        - name: utilityType
+          in: query
+          required: false
+          description: >-
+            Optional filter on the configured utility type. Must be one of
+            `ELECTRICITY`, `WATER`, `GAS` — any other value is 400
+            `VALIDATION_ERROR`.
+          schema: { $ref: "#/components/schemas/UtilityType" }
+        - name: status
+          in: query
+          required: false
+          description: >-
+            Optional filter on the configuration lifecycle status. Must be
+            `ACTIVE` or `INACTIVE` — any other value is 400
+            `VALIDATION_ERROR`.
+          schema:
+            $ref: "#/components/schemas/UtilityTypeConfigurationStatus"
+      responses:
+        "200":
+          description: The utility type configurations recorded for the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/UtilityTypeConfiguration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /utility/type-configurations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/UtilityTypeConfigurationIdPath"
+
+    get:
+      operationId: getUtilityTypeConfiguration
+      summary: Get a utility type configuration
+      description: >-
+        BE-18B single-read addressed by the configuration id, including its
+        allowed UOMs in the documented order (default first, then creation
+        time). Requires `utility_meter.read` and access to the owning Client
+        (else 403 `BUILDING_ACCESS_DENIED`). The id must be a UUID (400
+        `VALIDATION_ERROR`); an unknown id is 404
+        `UTILITY_TYPE_CONFIGURATION_NOT_FOUND`. No meter, reading, tariff or
+        billing state is read or returned by this route.
+      tags: [Utility Type Configuration]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: utility_meter.read
+      responses:
+        "200":
+          description: The requested utility type configuration.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UtilityTypeConfiguration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateUtilityTypeConfiguration
+      summary: Update a utility type configuration
+      description: >-
+        BE-18B partial update. Requires `utility_meter.manage` and access to the
+        owning Client (else 403 `BUILDING_ACCESS_DENIED`). Mutable: `name`
+        (≤160), `description` (≤512, explicit `null` clears it),
+        `decimalPrecision` (integer 0–6, or `null`) and `status`. The utility
+        type itself is immutable — supplying `utilityType` is 400
+        `VALIDATION_ERROR` with the detail telling the caller to create a
+        separate configuration for another utility type — and the Client is
+        taken from the stored record, never from the body. An unknown
+        configuration is 404 `UTILITY_TYPE_CONFIGURATION_NOT_FOUND`. Responds
+        200 with the updated configuration.
+      tags: [Utility Type Configuration]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: utility_meter.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUtilityTypeConfigurationRequest"
+      responses:
+        "200":
+          description: The updated utility type configuration.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UtilityTypeConfiguration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /utility/type-configurations/{id}/status:
+    parameters:
+      - $ref: "#/components/parameters/UtilityTypeConfigurationIdPath"
+
+    patch:
+      operationId: updateUtilityTypeConfigurationStatus
+      summary: Activate or deactivate a utility type configuration
+      description: >-
+        BE-18B status-only lifecycle endpoint, provided alongside the general
+        PATCH rather than as a separate engine. Requires `utility_meter.manage`
+        and access to the owning Client (else 403 `BUILDING_ACCESS_DENIED`).
+        The body is `{"status": "ACTIVE" | "INACTIVE"}` and is required — any
+        other value is 400 `VALIDATION_ERROR` naming the accepted values, and a
+        non-object body is rejected the same way. An INACTIVE configuration can
+        no longer be used by a meter (BE-18A), while existing meter rows are
+        left untouched. An unknown configuration is 404
+        `UTILITY_TYPE_CONFIGURATION_NOT_FOUND`. Responds 200 with the updated
+        configuration.
+      tags: [Utility Type Configuration]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: utility_meter.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUtilityTypeConfigurationStatusRequest"
+      responses:
+        "200":
+          description: The updated utility type configuration.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UtilityTypeConfiguration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /utility/type-configurations/{id}/uoms:
+    parameters:
+      - $ref: "#/components/parameters/UtilityTypeConfigurationIdPath"
+
+    post:
+      operationId: addUtilityTypeUom
+      summary: Allow a Unit of Measure for a utility type
+      description: >-
+        BE-18B. Maps one existing BE-07 Unit of Measure onto the configuration
+        as an allowed unit. Requires `utility_meter.manage` and access to the
+        owning Client (else 403 `BUILDING_ACCESS_DENIED`). `uomId` is required
+        and must be a UUID; the UOM must exist (404
+        `UTILITY_METER_UOM_NOT_FOUND`), belong to the configuration's Client
+        (400 `UTILITY_METER_UOM_CLIENT_MISMATCH`) and be ACTIVE (400
+        `UTILITY_METER_UOM_INACTIVE`). An already-mapped UOM is 409
+        `UTILITY_TYPE_UOM_ALREADY_MAPPED` (the unique index is the
+        race-condition backstop). Optional `isDefault` defaults to `false`;
+        promoting a mapping to default demotes the configuration's current
+        default in the same transaction, so at most one default exists.
+        Responds 201 with the whole updated configuration, so the caller never
+        has to re-read the mapping list.
+      tags: [Utility Type Configuration]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: utility_meter.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddUtilityTypeUomRequest" }
+      responses:
+        "201":
+          description: The updated utility type configuration, including the new mapping.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UtilityTypeConfiguration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /utility/type-configurations/{id}/uoms/{uomId}:
+    parameters:
+      - $ref: "#/components/parameters/UtilityTypeConfigurationIdPath"
+      - $ref: "#/components/parameters/UomIdPath"
+
+    patch:
+      operationId: updateUtilityTypeUom
+      summary: Update an allowed Unit of Measure mapping
+      description: >-
+        BE-18B. Changes the default flag and/or the status of one existing
+        allowed-UOM mapping, addressed by (configuration id, UOM id). Requires
+        `utility_meter.manage` and access to the owning Client (else 403
+        `BUILDING_ACCESS_DENIED`). The body must supply at least one of
+        `isDefault` (boolean) or `status` (`ACTIVE` / `INACTIVE`) — an empty
+        object is 400 `VALIDATION_ERROR` with the detail saying so. Setting
+        `isDefault: true` on an ACTIVE mapping demotes the configuration's
+        current default in the same transaction, so at most one default exists;
+        an INACTIVE mapping can never remain the default, so deactivating the
+        default clears the flag as well. An unknown configuration is 404
+        `UTILITY_TYPE_CONFIGURATION_NOT_FOUND`; a UOM that is not mapped to it
+        is 404 `UTILITY_TYPE_UOM_MAPPING_NOT_FOUND`. Responds 200 with the whole
+        updated configuration.
+      tags: [Utility Type Configuration]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: utility_meter.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateUtilityTypeUomRequest" }
+      responses:
+        "200":
+          description: The updated utility type configuration, including the changed mapping.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UtilityTypeConfiguration"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

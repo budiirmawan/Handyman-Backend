@@ -1,0 +1,113 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 05 — BE-03D1 SKILL CATALOG
+  # (`src/modules/skills`). The profile ↔ skill assignment side is BE-03D2 and
+  # is documented under SECTION 08 below.
+  # ---------------------------------------------------------------------------
+
+  /clients/{clientId}/skills:
+    post:
+      operationId: createSkill
+      summary: Create a Skill in a Client's catalog
+      description: >-
+        BE-03D1. Creates one Skill inside the Client taken from the route.
+        Requires `skill.manage`. The Client is always the path segment and is
+        never read from the body, so a Skill can never be planted into another
+        Client's catalog. Resolution order is deliberate: unknown Client is 404
+        `CLIENT_NOT_FOUND`, a non-ACTIVE Client is 400 `CLIENT_INACTIVE`, and
+        both precede any uniqueness work so a foreign Client's catalog is never
+        probeable. `code` is trimmed and upper-cased, must be 2–64 characters
+        of `[A-Z][A-Z0-9_-]*`, and is unique per Client — a duplicate is 409
+        `SKILL_CODE_ALREADY_EXISTS`. `category` defaults to `TECHNICAL` and
+        `status` defaults to `ACTIVE`. Responds 201 with the created Skill.
+      tags: [Skill]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.manage
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSkillRequest" }
+      responses:
+        "201":
+          description: The created Skill.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Skill" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listClientSkills
+      summary: List a Client's Skill catalog
+      description: >-
+        BE-03D1. Returns the Skill catalog of the Client taken from the route,
+        ordered by `code` ascending, as a plain array — no page or limit
+        parameter exists on this route and `meta` is always `{}`. Requires
+        `skill.read`. The Client is resolved first, so an unknown Client is 404
+        `CLIENT_NOT_FOUND` rather than a misleading empty list, and the query
+        itself is scoped to `client_id` so one Client's catalog is never
+        reachable through another Client's route. There is no global or
+        Organization-level Skill list.
+      tags: [Skill]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.read
+      parameters:
+        - $ref: "#/components/parameters/ClientIdPath"
+      responses:
+        "200":
+          description: The Skill catalog of the requested Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Skill" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /skills/{id}:
+    get:
+      operationId: getSkill
+      summary: Get one Skill
+      description: >-
+        BE-03D1. Returns the single Skill addressed by its own id. Requires
+        `skill.read`. An unknown id is 404 `SKILL_NOT_FOUND`. There is no
+        update or delete route for a Skill: the catalog is currently
+        create-and-read only, and deactivation is a database-state concern, not
+        an exposed operation.
+      tags: [Skill]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.read
+      parameters:
+        - $ref: "#/components/parameters/SkillIdPath"
+      responses:
+        "200":
+          description: The requested Skill.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Skill" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

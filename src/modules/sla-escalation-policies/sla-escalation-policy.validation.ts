@@ -1,0 +1,49 @@
+import { AppError } from '../../shared/errors';
+import { isValidUuid } from '../clients';
+import { parseRecipientRule } from '../recipient-resolution';
+import { isWorkOrderPriority, WORK_ORDER_PRIORITIES } from '../work-orders';
+import { SLA_ESCALATION_CLOCK_TYPES, SLA_ESCALATION_DERIVED_TARGET_KINDS, SLA_ESCALATION_OPERATIONAL_TYPES, SLA_ESCALATION_STATUSES, type CreateSlaEscalationLevelInput, type CreateSlaEscalationPolicyInput, type SlaEscalationClockType, type SlaEscalationDerivedTarget, type SlaEscalationDerivedTargetKind, type SlaEscalationOperationalType, type SlaEscalationPolicyFilters, type SlaEscalationRecipientRule, type SlaEscalationStatus, type UpdateSlaEscalationLevelInput, type UpdateSlaEscalationPolicyInput } from './sla-escalation-policy.types';
+type R=Record<string,unknown>; const obj=(v:unknown):v is R=>typeof v==='object'&&v!==null&&!Array.isArray(v);
+const fail:(field:string,message:string)=>never=(field,message)=>{throw AppError.validation('Request validation failed.',[{field,message}])};
+export function parseUuid(v:string,field:string){const n=v.trim().toLowerCase();if(!isValidUuid(n))fail(field,`${field} must be a valid UUID.`);return n}
+const text=(v:unknown,f:string,max=200)=>{if(typeof v!=='string')fail(f,`${f} is required.`);const n=(v as string).trim();if(!n)fail(f,`${f} is required.`);if(n.length>max)fail(f,`${f} must be at most ${max} characters.`);return n};
+const date=(v:unknown,f:string,required=false)=>{if(v===undefined&&!required)return undefined;if(typeof v!=='string'||Number.isNaN(Date.parse(v)))fail(f,`${f} must be a valid ISO-8601 date-time.`);return new Date(v as string).toISOString()};
+const ROLE_CODE=/^[A-Za-z][A-Za-z0-9_]*$/,PERMISSION_CODE=/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
+/** Derived targets are stored vocabulary only — PART 01 never resolves them (see governance §5.3). */
+function derivedTarget(v:unknown,i:number):SlaEscalationDerivedTarget{const f=`recipientRule.derived[${i}]`;if(!obj(v))fail(f,`${f} must be an object.`);if(!(SLA_ESCALATION_DERIVED_TARGET_KINDS as readonly string[]).includes(String(v.kind)))fail(`${f}.kind`,`kind must be one of: ${SLA_ESCALATION_DERIVED_TARGET_KINDS.join(', ')}.`);const kind=v.kind as SlaEscalationDerivedTargetKind;
+if(kind==='BUILDING_ROLE'){const c=text(v.roleCode,`${f}.roleCode`,100);if(!ROLE_CODE.test(c))fail(`${f}.roleCode`,'roleCode has an invalid format.');return{kind,roleCode:c.toUpperCase()}}
+if(kind==='BUILDING_PERMISSION'){const c=text(v.permissionCode,`${f}.permissionCode`,100).toLowerCase();if(!PERMISSION_CODE.test(c))fail(`${f}.permissionCode`,'permissionCode has an invalid format.');return{kind,permissionCode:c}}
+for(const k of ['roleCode','permissionCode'])if(v[k]!==undefined)fail(`${f}.${k}`,`${k} is not allowed for ${kind}.`);return{kind}}
+/** Reuses the BE-26C rule authority for static specs/scope; adds the derived extension without touching BE-26C. */
+export function parseSlaEscalationRecipientRule(v:unknown):SlaEscalationRecipientRule{if(!obj(v))fail('recipientRule','recipientRule must be an object.');
+for(const k of Object.keys(v))if(!['specs','derived','scope'].includes(k))fail(`recipientRule.${k}`,`${k} is not allowed.`);
+const rawSpecs=v.specs===undefined?[]:v.specs;if(!Array.isArray(rawSpecs))fail('recipientRule.specs','recipientRule.specs must be an array.');
+const rawDerived=v.derived===undefined?[]:v.derived;if(!Array.isArray(rawDerived))fail('recipientRule.derived','recipientRule.derived must be an array.');
+if((rawSpecs as unknown[]).length===0&&(rawDerived as unknown[]).length===0)fail('recipientRule','recipientRule must declare at least one static spec or derived target.');
+const base=(rawSpecs as unknown[]).length>0?parseRecipientRule({specs:rawSpecs,...(v.scope!==undefined?{scope:v.scope}:{})}):{specs:[],...(v.scope!==undefined?{scope:scopeOnly(v.scope)}:{})};
+const derived=(rawDerived as unknown[]).map(derivedTarget);const seen=new Set<string>();for(const d of derived){const k=`${d.kind}:${d.roleCode??d.permissionCode??''}`;if(seen.has(k))fail('recipientRule.derived','Duplicate derived target.');seen.add(k)}
+return{specs:base.specs,...(derived.length>0?{derived}:{}),...(base.scope?{scope:base.scope}:{})}}
+/** Scope validation for a derived-only rule (BE-26C validates scope only alongside specs). */
+function scopeOnly(v:unknown){if(!obj(v))fail('recipientRule.scope','recipientRule.scope must be an object.');for(const k of Object.keys(v))if(!['clientId','buildingIds'].includes(k))fail(`recipientRule.scope.${k}`,`${k} is not allowed.`);const out:{clientId?:string;buildingIds?:string[]}={};if(v.clientId!==undefined)out.clientId=parseUuid(String(v.clientId),'recipientRule.scope.clientId');if(v.buildingIds!==undefined){if(!Array.isArray(v.buildingIds)||v.buildingIds.length===0)fail('recipientRule.scope.buildingIds','buildingIds must be a non-empty array of UUIDs.');out.buildingIds=(v.buildingIds as unknown[]).map((b)=>parseUuid(String(b),'recipientRule.scope.buildingIds'))}return out}
+function policyCommon(b:R,update=false):any{const allowed=update?['name','description','clockType','workType','priority','status','effectiveFrom','effectiveTo']:['buildingId','code','name','description','operationalType','clockType','workType','priority','status','effectiveFrom','effectiveTo'];for(const k of Object.keys(b))if(!allowed.includes(k))fail(k,`${k} is not allowed.`);const out:any={};
+if(!update||b.name!==undefined)out.name=text(b.name,'name');
+if(b.description!==undefined)out.description=b.description===null?null:text(b.description,'description',1000);
+if(!update){if(b.buildingId!==undefined)out.buildingId=parseUuid(String(b.buildingId),'buildingId');out.code=text(b.code,'code',100).toUpperCase();if(!/^[A-Z][A-Z0-9_.-]*$/.test(out.code))fail('code','code has an invalid format.');if(!SLA_ESCALATION_OPERATIONAL_TYPES.includes(b.operationalType as SlaEscalationOperationalType))fail('operationalType',`operationalType must be one of: ${SLA_ESCALATION_OPERATIONAL_TYPES.join(', ')}.`);out.operationalType=b.operationalType;}
+if(!update||b.clockType!==undefined){if(!SLA_ESCALATION_CLOCK_TYPES.includes(b.clockType as SlaEscalationClockType))fail('clockType',`clockType must be one of: ${SLA_ESCALATION_CLOCK_TYPES.join(', ')}.`);out.clockType=b.clockType;}
+if(b.workType!==undefined)out.workType=b.workType===null?null:text(b.workType,'workType',100).toUpperCase();
+if(b.priority!==undefined){if(b.priority===null)out.priority=null;else{if(!isWorkOrderPriority(b.priority))fail('priority',`priority must be one of: ${WORK_ORDER_PRIORITIES.join(', ')}.`);out.priority=b.priority}}
+if(b.status!==undefined){if(!SLA_ESCALATION_STATUSES.includes(b.status as SlaEscalationStatus))fail('status',`status must be one of: ${SLA_ESCALATION_STATUSES.join(', ')}.`);out.status=b.status;}
+const from=date(b.effectiveFrom,'effectiveFrom',!update),to=date(b.effectiveTo,'effectiveTo');if(from)out.effectiveFrom=from;if(to)out.effectiveTo=to;
+if(!update&&to&&new Date(to)<=new Date(from!))fail('effectiveTo','effectiveTo must be later than effectiveFrom.');if(update&&Object.keys(out).length===0)fail('body','At least one field is required.');return out}
+export function parseCreatePolicyBody(v:unknown):Omit<CreateSlaEscalationPolicyInput,'clientId'>{if(!obj(v))fail('body','Request body must be a JSON object.');return policyCommon(v as R)}
+export function parseUpdatePolicyBody(v:unknown):UpdateSlaEscalationPolicyInput{if(!obj(v))fail('body','Request body must be a JSON object.');return policyCommon(v as R,true)}
+export function parsePolicyFilters(q:R):SlaEscalationPolicyFilters{const out:SlaEscalationPolicyFilters={};if(q.buildingId!==undefined)out.buildingId=parseUuid(String(q.buildingId),'buildingId');if(q.status!==undefined){const s=String(q.status).toUpperCase();if(!SLA_ESCALATION_STATUSES.includes(s as SlaEscalationStatus))fail('status','Invalid status.');out.status=s as SlaEscalationStatus}if(q.clockType!==undefined){const c=String(q.clockType).toUpperCase();if(!SLA_ESCALATION_CLOCK_TYPES.includes(c as SlaEscalationClockType))fail('clockType','Invalid clockType.');out.clockType=c as SlaEscalationClockType}if(q.priority!==undefined){const p=String(q.priority).toUpperCase();if(!isWorkOrderPriority(p))fail('priority','Invalid priority.');out.priority=p as import('../work-orders').WorkOrderPriority}return out}
+function levelCommon(b:R,update=false):any{const allowed=['level','offsetMinutes','templateKey','recipientRule','status'];for(const k of Object.keys(b))if(!allowed.includes(k))fail(k,`${k} is not allowed.`);const out:any={};
+if(!update||b.level!==undefined){if(!Number.isInteger(b.level)||(b.level as number)<1)fail('level','level must be an integer greater than or equal to 1.');out.level=b.level}
+if(b.offsetMinutes!==undefined){if(!Number.isInteger(b.offsetMinutes)||(b.offsetMinutes as number)<0)fail('offsetMinutes','offsetMinutes must be an integer greater than or equal to 0.');out.offsetMinutes=b.offsetMinutes}
+if(!update||b.templateKey!==undefined)out.templateKey=text(b.templateKey,'templateKey',150);
+if(!update||b.recipientRule!==undefined)out.recipientRule=parseSlaEscalationRecipientRule(b.recipientRule);
+if(b.status!==undefined){if(!SLA_ESCALATION_STATUSES.includes(b.status as SlaEscalationStatus))fail('status',`status must be one of: ${SLA_ESCALATION_STATUSES.join(', ')}.`);out.status=b.status}
+if(update&&Object.keys(out).length===0)fail('body','At least one field is required.');return out}
+export function parseCreateLevelBody(v:unknown):Omit<CreateSlaEscalationLevelInput,'policyId'>{if(!obj(v))fail('body','Request body must be a JSON object.');return levelCommon(v as R)}
+export function parseUpdateLevelBody(v:unknown):UpdateSlaEscalationLevelInput{if(!obj(v))fail('body','Request body must be a JSON object.');return levelCommon(v as R,true)}

@@ -1,0 +1,829 @@
+    # ------------------------------------------------------------------
+    # CR-BE-MOB-01 PART 02 — Security operational schemas
+    # (BE-12A/B/C/D/E/F/H + BE-21A/B). Shapes mirror the implemented
+    # public DTOs; no new field, status, or workflow is introduced.
+    # ------------------------------------------------------------------
+    SecurityPostStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    SecurityPostType:
+      type: string
+      enum:
+        [GENERAL, LOBBY, GATE, PERIMETER, PARKING, CONTROL_ROOM, PATROL,
+         STANDBY, OTHER]
+    SecurityPost:
+      type: object
+      description: >-
+        BE-12A Security Post — operational duty/post context anchored to the
+        BE-04 structure. `clientId` is derived through Building → Property →
+        Client.
+      required:
+        [id, clientId, buildingId, floorId, areaId, roomId, spaceId,
+         functionalLocationId, code, name, description, postType, status,
+         createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        postType: { $ref: "#/components/schemas/SecurityPostType" }
+        status: { $ref: "#/components/schemas/SecurityPostStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateSecurityPostRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        postType: { $ref: "#/components/schemas/SecurityPostType" }
+        status: { $ref: "#/components/schemas/SecurityPostStatus" }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+    UpdateSecurityPostRequest:
+      type: object
+      description: "`code`, `clientId` and `buildingId` are immutable."
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true }
+        postType: { $ref: "#/components/schemas/SecurityPostType" }
+        status: { $ref: "#/components/schemas/SecurityPostStatus" }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+
+    PatrolRouteStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    PatrolRoute:
+      type: object
+      description: >-
+        BE-12B Patrol Route — an ordered patrol definition for one Building.
+        Carries no schedule, task or execution semantics.
+      required:
+        [id, clientId, buildingId, startSecurityPostId, code, name,
+         description, status, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/PatrolRouteStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreatePatrolRouteRequest:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/PatrolRouteStatus" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+    UpdatePatrolRouteRequest:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/PatrolRouteStatus" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+
+    PatrolRoutePointStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    PatrolRoutePoint:
+      type: object
+      description: >-
+        BE-12B Patrol Route Point — the Security checkpoint. It is a
+        sequenced reference to an existing BE-04 location, not a separate
+        checkpoint master and not a QR identifier.
+      required:
+        [id, clientId, buildingId, patrolRouteId, floorId, areaId, roomId,
+         spaceId, functionalLocationId, sequence, notes, status, createdAt,
+         updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        sequence: { type: integer, minimum: 1 }
+        notes: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/PatrolRoutePointStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreatePatrolRoutePointRequest:
+      type: object
+      required: [sequence]
+      properties:
+        sequence: { type: integer, minimum: 1 }
+        notes: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/PatrolRoutePointStatus" }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+    UpdatePatrolRoutePointRequest:
+      type: object
+      properties:
+        sequence: { type: integer, minimum: 1 }
+        notes: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/PatrolRoutePointStatus" }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+
+    PatrolScheduleBindingStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    PatrolScheduleBinding:
+      type: object
+      description: >-
+        BE-12C binding between a Patrol Route and a shared BE-07 Schedule
+        Definition. Recurrence and task generation stay in BE-07; the
+        resolved `schedule` block is read-through context, never a copy.
+      required:
+        [id, clientId, buildingId, patrolRouteId, scheduleDefinitionId,
+         startSecurityPostId, description, status, createdByUserId,
+         createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+        scheduleDefinitionId: { $ref: "#/components/schemas/Uuid" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        status:
+          $ref: "#/components/schemas/PatrolScheduleBindingStatus"
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        patrolRoute:
+          type: object
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+        schedule:
+          type: object
+          description: Resolved BE-07 Schedule Definition + recurrence.
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            targetType: { type: string }
+            targetId: { $ref: "#/components/schemas/Uuid" }
+            startAt: { type: string, format: date-time }
+            endAt: { type: string, format: date-time, nullable: true }
+            timezone: { type: string }
+            status: { type: string }
+            recurrence:
+              type: object
+              nullable: true
+              properties:
+                id: { $ref: "#/components/schemas/Uuid" }
+                frequency: { type: string }
+                interval: { type: integer }
+                daysOfWeek:
+                  type: array
+                  nullable: true
+                  items: { type: integer }
+                dayOfMonth: { type: integer, nullable: true }
+                startDate: { type: string, format: date }
+                endDate: { type: string, format: date, nullable: true }
+                status: { type: string }
+    CreatePatrolScheduleBindingRequest:
+      type: object
+      description: >-
+        Either bind an existing BE-07 Schedule Definition
+        (`scheduleDefinitionId`) or supply the inline schedule fields so the
+        BE-07 schedule is created by the shared service. `patrolRouteId` is
+        taken from the path.
+      properties:
+        scheduleDefinitionId: { type: string, format: uuid }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        status:
+          $ref: "#/components/schemas/PatrolScheduleBindingStatus"
+        code: { type: string }
+        name: { type: string }
+        targetType: { type: string }
+        targetId: { type: string, format: uuid }
+        startAt: { type: string, format: date-time }
+        endAt: { type: string, format: date-time, nullable: true }
+        timezone: { type: string }
+    UpdatePatrolScheduleBindingRequest:
+      type: object
+      properties:
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        description: { type: string, nullable: true }
+        status:
+          $ref: "#/components/schemas/PatrolScheduleBindingStatus"
+
+    PatrolExecutionStatus:
+      type: string
+      enum: [OPEN, ASSIGNED, IN_PROGRESS, COMPLETED, CANCELLED]
+      description: >-
+        The shared BE-07 generated-task status, re-exported. Security does
+        not own a second patrol lifecycle.
+    PatrolExecution:
+      type: object
+      description: >-
+        BE-12D operational view of a BE-07 generated task bound to a Patrol
+        Route. `id` equals `taskId`; assignment uses the published BE-07
+        task-assignment operations on that id.
+      required:
+        [id, taskId, clientId, buildingId, patrolRouteId, scheduleBindingId,
+         scheduleDefinitionId, startSecurityPostId, operationalDate,
+         occurrenceAt, status, startedAt, completedAt, completedByUserId,
+         completionNotes, patrolRoute, startSecurityPost, schedule,
+         pointProgress, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        taskId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+        scheduleBindingId: { $ref: "#/components/schemas/Uuid" }
+        scheduleDefinitionId: { $ref: "#/components/schemas/Uuid" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        operationalDate: { type: string, format: date }
+        occurrenceAt: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/PatrolExecutionStatus" }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        completedByUserId: { type: string, format: uuid, nullable: true }
+        completionNotes: { type: string, nullable: true }
+        patrolRoute:
+          type: object
+          required: [id, code, name, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+        startSecurityPost:
+          type: object
+          required: [id, code, name]
+          properties:
+            id: { type: string, format: uuid, nullable: true }
+            code: { type: string, nullable: true }
+            name: { type: string, nullable: true }
+        schedule:
+          type: object
+          required: [id, code, name, targetType, targetId, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            targetType: { type: string }
+            targetId: { $ref: "#/components/schemas/Uuid" }
+            status: { type: string }
+        pointProgress:
+          type: object
+          description: >-
+            Backend-derived checkpoint progress over the route's ACTIVE
+            points. The client must not recompute it.
+          required: [totalPoints, visitedPoints, pendingPoints, nextSequence]
+          properties:
+            totalPoints: { type: integer }
+            visitedPoints: { type: integer }
+            pendingPoints: { type: integer }
+            nextSequence: { type: integer, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PatrolPointVisit:
+      type: object
+      description: BE-12D checkpoint confirmation (`patrol_point_visits`).
+      required:
+        [id, clientId, buildingId, taskId, patrolRouteId, patrolRoutePointId,
+         sequence, visitedAt, visitedByUserId, notes, status, createdAt,
+         updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        taskId: { $ref: "#/components/schemas/Uuid" }
+        patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+        patrolRoutePointId: { $ref: "#/components/schemas/Uuid" }
+        sequence: { type: integer }
+        visitedAt: { type: string, format: date-time }
+        visitedByUserId: { $ref: "#/components/schemas/Uuid" }
+        notes: { type: string, nullable: true }
+        status: { type: string, enum: [VISITED, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RecordPatrolPointVisitRequest:
+      type: object
+      description: >-
+        The checkpoint is identified by the `pointId` path parameter; the
+        body carries optional field notes only.
+      properties:
+        notes: { type: string, nullable: true, maxLength: 512 }
+    UpdatePatrolPointVisitRequest:
+      type: object
+      properties:
+        notes: { type: string, nullable: true, maxLength: 512 }
+    CompletePatrolExecutionRequest:
+      type: object
+      properties:
+        completionNotes: { type: string, nullable: true, maxLength: 512 }
+
+    PatrolChecklistBindingStatus:
+      type: string
+      enum: [ACTIVE, INACTIVE]
+    PatrolChecklistBinding:
+      type: object
+      description: >-
+        BE-12E join row between a BE-07 Checklist Template and a Patrol
+        Route (+ optional start post) in one Building.
+      required:
+        [id, clientId, buildingId, patrolRouteId, startSecurityPostId,
+         checklistTemplateId, status, createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        status:
+          $ref: "#/components/schemas/PatrolChecklistBindingStatus"
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreatePatrolChecklistBindingRequest:
+      type: object
+      required: [buildingId, patrolRouteId, checklistTemplateId]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        status:
+          $ref: "#/components/schemas/PatrolChecklistBindingStatus"
+    UpdatePatrolChecklistBindingRequest:
+      type: object
+      properties:
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        status:
+          $ref: "#/components/schemas/PatrolChecklistBindingStatus"
+    PatrolChecklistExecution:
+      type: object
+      description: >-
+        The shared BE-07 checklist execution started from a patrol binding.
+        Responses, completion, cancellation, evidence and verification use
+        the published BE-07 checklist / evidence / verification operations
+        on this `id`.
+      required:
+        [id, checklistTemplateId, patrolChecklistBindingId, status,
+         startedAt, completedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+        patrolChecklistBindingId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PatrolChecklistExecutionContext:
+      type: object
+      description: >-
+        BE-12E projection of the authoritative Building / Template / Route /
+        start post for a patrol checklist execution. Derived from the
+        binding — never stored a second time.
+      required: [execution, building, template, patrolRoute, startSecurityPost]
+      properties:
+        execution:
+          $ref: "#/components/schemas/PatrolChecklistExecution"
+        building:
+          type: object
+          required: [id, code, name]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+        template:
+          type: object
+          required: [id, code, name, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+        patrolRoute:
+          type: object
+          required: [id, code, name, status]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            status: { type: string }
+        startSecurityPost:
+          type: object
+          required: [id, code, name]
+          properties:
+            id: { type: string, format: uuid, nullable: true }
+            code: { type: string, nullable: true }
+            name: { type: string, nullable: true }
+
+    SecurityDailyActivitySummary:
+      type: object
+      required:
+        [scheduledPatrols, inProgressPatrols, completedPatrols,
+         cancelledPatrols, openChecklists, completedChecklists, openFindings]
+      properties:
+        scheduledPatrols: { type: integer }
+        inProgressPatrols: { type: integer }
+        completedPatrols: { type: integer }
+        cancelledPatrols: { type: integer }
+        openChecklists: { type: integer }
+        completedChecklists: { type: integer }
+        openFindings: { type: integer }
+    SecurityDailyActivity:
+      type: object
+      description: >-
+        BE-12F read model composing BE-12A/B/C/D/E + BE-07 + BE-09 for one
+        Building and operational date. It stores nothing.
+      required:
+        [buildingId, operationalDate, shift, securityPost, summary, patrols,
+         checklists, findings]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        operationalDate: { type: string, format: date }
+        shift:
+          type: object
+          nullable: true
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            startTime: { type: string }
+            endTime: { type: string }
+            status: { type: string, enum: [ACTIVE, INACTIVE] }
+        securityPost:
+          type: object
+          nullable: true
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            code: { type: string }
+            name: { type: string }
+            postType: { type: string }
+            status: { type: string, enum: [ACTIVE, INACTIVE] }
+        summary:
+          $ref: "#/components/schemas/SecurityDailyActivitySummary"
+        patrols:
+          type: array
+          items:
+            type: object
+            description: >-
+              `id` is the BE-07 generated-task id (the Patrol Execution id).
+            properties:
+              id: { $ref: "#/components/schemas/Uuid" }
+              patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+              patrolRoute:
+                type: object
+                properties:
+                  id: { $ref: "#/components/schemas/Uuid" }
+                  code: { type: string }
+                  name: { type: string }
+                  status: { type: string, enum: [ACTIVE, INACTIVE] }
+                  startSecurityPostId:
+                    { type: string, format: uuid, nullable: true }
+              startSecurityPostId:
+                { type: string, format: uuid, nullable: true }
+              startSecurityPost:
+                type: object
+                nullable: true
+                properties:
+                  id: { $ref: "#/components/schemas/Uuid" }
+                  code: { type: string }
+                  name: { type: string }
+                  postType: { type: string }
+                  status: { type: string, enum: [ACTIVE, INACTIVE] }
+              status:
+                $ref: "#/components/schemas/PatrolExecutionStatus"
+              operationalDate: { type: string, format: date }
+              occurrenceAt: { type: string, format: date-time }
+              startedAt: { type: string, format: date-time, nullable: true }
+              completedAt: { type: string, format: date-time, nullable: true }
+        checklists:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { $ref: "#/components/schemas/Uuid" }
+              checklistTemplateId: { $ref: "#/components/schemas/Uuid" }
+              checklistTemplateCode: { type: string }
+              checklistTemplateName: { type: string }
+              patrolChecklistBindingId: { $ref: "#/components/schemas/Uuid" }
+              patrolRouteId: { $ref: "#/components/schemas/Uuid" }
+              status:
+                type: string
+                enum: [DRAFT, IN_PROGRESS, COMPLETED, CANCELLED]
+              startedAt: { type: string, format: date-time, nullable: true }
+              completedAt: { type: string, format: date-time, nullable: true }
+              operationalDate: { type: string, format: date }
+              createdAt: { type: string, format: date-time }
+        findings:
+          type: array
+          items:
+            type: object
+            description: >-
+              BE-09 finding projection; `availableActions` is sourced from
+              BE-09 and is backend-authoritative.
+            properties:
+              id: { $ref: "#/components/schemas/Uuid" }
+              findingNumber: { type: string }
+              title: { type: string }
+              status: { $ref: "#/components/schemas/FindingStatus" }
+              classificationId:
+                { type: string, format: uuid, nullable: true }
+              severityId: { type: string, format: uuid, nullable: true }
+              createdAt: { type: string, format: date-time }
+              reportedByUserId: { $ref: "#/components/schemas/Uuid" }
+              availableActions:
+                type: array
+                items: { type: string }
+
+    SecurityFindingSourceType:
+      type: string
+      enum:
+        [PATROL_EXECUTION, PATROL_CHECKLIST, SECURITY_DAILY_ACTIVITY,
+         SHIFT_HANDOVER, SECURITY_POST]
+      description: >-
+        The Security operational sources. Intentionally separate from BE-09's
+        own `FindingSourceType` (WORK_ORDER / CHECKLIST_EXECUTION /
+        FORM_INSTANCE).
+    SecurityFinding:
+      type: object
+      description: >-
+        BE-12H Security context link for an authoritative BE-09 Finding.
+        `id` is the link id; every workflow operation uses `findingId`.
+      required:
+        [id, clientId, buildingId, findingId, startSecurityPostId,
+         patrolRouteId, sourceType, sourceId, createdAt, finding,
+         availableActions]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        findingId: { $ref: "#/components/schemas/Uuid" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        patrolRouteId: { type: string, format: uuid, nullable: true }
+        sourceType:
+          $ref: "#/components/schemas/SecurityFindingSourceType"
+        sourceId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        finding: { $ref: "#/components/schemas/Finding" }
+        availableActions:
+          type: array
+          items: { type: string }
+          description: >-
+            BE-09 backend-authoritative actions for the linked finding —
+            never re-derived by Security or by the client.
+    CreateSecurityFindingRequest:
+      type: object
+      description: >-
+        Creates the BE-09 Finding and the Security link in one call.
+        `clientId` and the reporter are derived by the backend.
+      required: [buildingId, sourceType, sourceId, title]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        sourceType:
+          $ref: "#/components/schemas/SecurityFindingSourceType"
+        sourceId: { $ref: "#/components/schemas/Uuid" }
+        startSecurityPostId: { type: string, format: uuid, nullable: true }
+        patrolRouteId: { type: string, format: uuid, nullable: true }
+        title: { type: string, maxLength: 160 }
+        description: { type: string, nullable: true }
+        classificationId: { type: string, format: uuid }
+        severityId: { type: string, format: uuid }
+        assigneeType:
+          type: string
+          enum: [WORKFORCE, TEAM, VENDOR, VENDOR_WORKFORCE]
+        workforceProfileId: { type: string, format: uuid }
+        teamId: { type: string, format: uuid }
+        vendorId: { type: string, format: uuid }
+
+    IncidentType:
+      type: string
+      enum: [OPERATIONAL, ASSET_FAILURE, FINDING_ESCALATION]
+    IncidentSeverity:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+    IncidentPriority:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+    IncidentStatus:
+      type: string
+      enum: [REPORTED, CANCELLED, CLOSED]
+      description: >-
+        The BE-21A record lifecycle. `CLOSED` (BE-21K) is the verified
+        resolution; `CANCELLED` is withdrawal. Both are terminal and
+        mutually exclusive.
+    IncidentLocationType:
+      type: string
+      enum: [FLOOR, AREA, ROOM, SPACE, FUNCTIONAL_LOCATION]
+      description: >-
+        An OPTIONAL refinement below the Building; omitting it means
+        Building level.
+    Incident:
+      type: object
+      description: >-
+        BE-21A shared Incident foundation. `clientId` is derived from the
+        Building and `reportedByUserId` is the authenticated actor.
+      required:
+        [id, clientId, buildingId, incidentNumber, incidentType, title,
+         description, severity, priority, status, locationType, locationId,
+         floorId, areaId, roomId, spaceId, functionalLocationId,
+         reportedByUserId, reportedAt, cancelledAt, cancelledByUserId,
+         closedAt, closedByUserId, closureNotes, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        incidentNumber: { type: string }
+        incidentType: { $ref: "#/components/schemas/IncidentType" }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { $ref: "#/components/schemas/IncidentSeverity" }
+        priority: { $ref: "#/components/schemas/IncidentPriority" }
+        status: { $ref: "#/components/schemas/IncidentStatus" }
+        locationType:
+          allOf: [{ $ref: "#/components/schemas/IncidentLocationType" }]
+          nullable: true
+        locationId: { type: string, format: uuid, nullable: true }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        reportedByUserId: { $ref: "#/components/schemas/Uuid" }
+        reportedAt: { type: string, format: date-time }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancelledByUserId: { type: string, format: uuid, nullable: true }
+        closedAt: { type: string, format: date-time, nullable: true }
+        closedByUserId: { type: string, format: uuid, nullable: true }
+        closureNotes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateIncidentRequest:
+      type: object
+      required: [buildingId, incidentNumber, incidentType, title]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        incidentNumber: { type: string }
+        incidentType: { $ref: "#/components/schemas/IncidentType" }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { $ref: "#/components/schemas/IncidentSeverity" }
+        priority: { $ref: "#/components/schemas/IncidentPriority" }
+        locationType:
+          allOf: [{ $ref: "#/components/schemas/IncidentLocationType" }]
+          nullable: true
+        locationId: { type: string, format: uuid, nullable: true }
+        reportedAt: { type: string, format: date-time }
+    UpdateIncidentRequest:
+      type: object
+      description: >-
+        Only descriptive metadata is mutable — type, context, number and
+        reporter are the identity of the incident.
+      properties:
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { $ref: "#/components/schemas/IncidentSeverity" }
+        priority: { $ref: "#/components/schemas/IncidentPriority" }
+
+    OperationalIncidentCategory:
+      type: string
+      enum:
+        [UTILITY_FAILURE, ELECTRICAL, PLUMBING, HVAC, LIFT_ESCALATOR,
+         FIRE_SAFETY, WATER_LEAK, STRUCTURAL, ENVIRONMENTAL, HOUSEKEEPING,
+         SECURITY, SAFETY, ACCESS, OTHER]
+    OperationalIncidentStatus:
+      type: string
+      enum: [OPEN, IN_PROGRESS, RESOLVED]
+      description: >-
+        BE-21B operational handling progression — distinct from the BE-21A
+        record lifecycle. `RESOLVED` means handling finished, NOT verified
+        or closed.
+    OperationalIncidentAction:
+      type: string
+      enum: [START_PROGRESS, RESOLVE, REOPEN, UPDATE_DETAILS]
+    OperationalIncident:
+      type: object
+      description: >-
+        BE-21B specialization of the BE-21A foundation
+        (`incidentType = OPERATIONAL`). `id` is the shared Incident id.
+      required:
+        [id, operationalIncidentId, clientId, buildingId, incidentNumber,
+         incidentType, title, description, severity, priority,
+         incidentStatus, operationalStatus, operationalCategory, occurredAt,
+         statusChangedAt, notes, locationType, locationId, floorId, areaId,
+         roomId, spaceId, functionalLocationId, reportedByUserId, reportedAt,
+         createdByUserId, createdAt, updatedAt, availableActions]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        operationalIncidentId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        incidentNumber: { type: string }
+        incidentType: { type: string, enum: [OPERATIONAL] }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { $ref: "#/components/schemas/IncidentSeverity" }
+        priority: { $ref: "#/components/schemas/IncidentPriority" }
+        incidentStatus: { $ref: "#/components/schemas/IncidentStatus" }
+        operationalStatus:
+          $ref: "#/components/schemas/OperationalIncidentStatus"
+        operationalCategory:
+          $ref: "#/components/schemas/OperationalIncidentCategory"
+        occurredAt: { type: string, format: date-time }
+        statusChangedAt: { type: string, format: date-time }
+        notes: { type: string, nullable: true }
+        locationType:
+          allOf: [{ $ref: "#/components/schemas/IncidentLocationType" }]
+          nullable: true
+        locationId: { type: string, format: uuid, nullable: true }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        functionalLocationId: { type: string, format: uuid, nullable: true }
+        reportedByUserId: { $ref: "#/components/schemas/Uuid" }
+        reportedAt: { type: string, format: date-time }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        availableActions:
+          type: array
+          description: >-
+            Backend-resolved per request from state × permission ×
+            foundation lifecycle. The client must not recompute them.
+          items:
+            $ref: "#/components/schemas/OperationalIncidentAction"
+    CreateOperationalIncidentRequest:
+      type: object
+      description: >-
+        `incidentType` is absent by design (always OPERATIONAL); `clientId`
+        is derived from the Building.
+      required: [buildingId, incidentNumber, title, operationalCategory, occurredAt]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        incidentNumber: { type: string }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { $ref: "#/components/schemas/IncidentSeverity" }
+        priority: { $ref: "#/components/schemas/IncidentPriority" }
+        locationType:
+          allOf: [{ $ref: "#/components/schemas/IncidentLocationType" }]
+          nullable: true
+        locationId: { type: string, format: uuid, nullable: true }
+        operationalCategory:
+          $ref: "#/components/schemas/OperationalIncidentCategory"
+        occurredAt: { type: string, format: date-time }
+        notes: { type: string, nullable: true }
+        reportedByUserId: { type: string, format: uuid }
+    UpdateOperationalIncidentRequest:
+      type: object
+      description: >-
+        Foundation metadata and operational fields are applied atomically.
+        `operationalStatus` must follow the closed BE-21B transition table.
+      properties:
+        title: { type: string }
+        description: { type: string, nullable: true }
+        severity: { $ref: "#/components/schemas/IncidentSeverity" }
+        priority: { $ref: "#/components/schemas/IncidentPriority" }
+        operationalCategory:
+          $ref: "#/components/schemas/OperationalIncidentCategory"
+        occurredAt: { type: string, format: date-time }
+        notes: { type: string, nullable: true }
+        operationalStatus:
+          $ref: "#/components/schemas/OperationalIncidentStatus"

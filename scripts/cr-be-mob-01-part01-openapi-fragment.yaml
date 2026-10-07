@@ -1,0 +1,1068 @@
+  # --------------------------------------------------------------------
+  # CR-BE-MOB-01 PART 01 — Housekeeping operational contract.
+  # Existing BE-11 routes published for mobile. Execution writes stay on
+  # BE-07 task/checklist endpoints; rework stays on BE-09 findings.
+  # --------------------------------------------------------------------
+  /buildings/{buildingId}/housekeeping/daily-cleaning:
+    get:
+      operationId: listBuildingDailyCleaning
+      summary: List daily cleaning tasks for a Building
+      description: >-
+        BE-11C read view of BE-07 generated tasks bound to a Cleaning Area.
+        Requires `daily_cleaning.read` and BE-02G Building access.
+        Execution writes are `startTask` / `completeTask` / `cancelTask`
+        using `taskId` (same as `id`). Mobile relevance: cleaning work list.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: Operational date YYYY-MM-DD.
+        - name: cleaningAreaId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DailyCleaningStatus" }
+      responses:
+        "200":
+          description: Daily cleaning list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DailyCleaning" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /housekeeping/daily-cleaning/{id}:
+    get:
+      operationId: getDailyCleaning
+      summary: Get a daily cleaning task by id
+      description: >-
+        Authoritative daily-cleaning read. `id` is the BE-07 generated task
+        id (`taskId`). Requires `daily_cleaning.read` and Building access
+        on the task's Building.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DailyCleaningIdPath"
+      responses:
+        "200":
+          description: Daily cleaning record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/DailyCleaning" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/cleaning-areas/{id}/daily-cleaning:
+    get:
+      operationId: listCleaningAreaDailyCleaning
+      summary: List daily cleaning tasks for a Cleaning Area
+      description: >-
+        Requires `daily_cleaning.read` and Building access on the area's
+        Building. Path `{id}` is the Cleaning Area id.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/CleaningAreaIdPath"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DailyCleaningStatus" }
+      responses:
+        "200":
+          description: Daily cleaning list for the area.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DailyCleaning" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/daily-cleaning/{id}/assignments:
+    get:
+      operationId: listDailyCleaningAssignments
+      summary: List assignments for a daily cleaning task
+      description: >-
+        BE-11D reuse of BE-07 task assignment. Requires
+        `cleaning_assignment.read` and Building access. Path `{id}` is the
+        daily-cleaning / task id.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DailyCleaningIdPath"
+      responses:
+        "200":
+          description: Assignment list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/CleaningAssignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: assignDailyCleaning
+      summary: Assign a daily cleaning task
+      description: >-
+        MUTATION — binds WORKFORCE or TEAM via BE-07 task assignment.
+        Requires `cleaning_assignment.manage` and Building access.
+        Terminal tasks (COMPLETED/CANCELLED) are rejected. Replaces any
+        ACTIVE assignment.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DailyCleaningIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCleaningAssignmentRequest" }
+      responses:
+        "201":
+          description: Assignment created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/CleaningAssignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/housekeeping/daily-cleaning:
+    get:
+      operationId: listWorkforceDailyCleaning
+      summary: List daily cleaning assigned to a workforce profile
+      description: >-
+        Requires `cleaning_assignment.read`. Optional date/status filters.
+        Mobile relevance: my-cleaning feed keyed to workforceProfileId
+        from `GET /auth/me`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DailyCleaningStatus" }
+      responses:
+        "200":
+          description: Assigned daily cleaning list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DailyCleaning" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /teams/{teamId}/housekeeping/daily-cleaning:
+    get:
+      operationId: listTeamDailyCleaning
+      summary: List daily cleaning assigned to a Team
+      description: Requires `cleaning_assignment.read`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TeamIdPathParam"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DailyCleaningStatus" }
+      responses:
+        "200":
+          description: Team daily cleaning list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DailyCleaning" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/toilet-inspection-bindings:
+    get:
+      operationId: listToiletInspectionBindings
+      summary: List toilet inspection bindings
+      description: >-
+        BE-11E binding of a Cleaning Area to a BE-07 checklist template.
+        Requires `toilet_inspection.read`. Pass `buildingId` for scoped
+        mobile lists (Building access asserted).
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: cleaningAreaId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+      responses:
+        "200":
+          description: Binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ToiletInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createToiletInspectionBinding
+      summary: Create a toilet inspection binding
+      description: >-
+        Requires `toilet_inspection.manage` and Building access on the
+        cleaning area. Does not execute an inspection.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateToiletInspectionBindingRequest" }
+      responses:
+        "201":
+          description: Binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ToiletInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /housekeeping/toilet-inspection-bindings/{id}:
+    get:
+      operationId: getToiletInspectionBinding
+      summary: Get a toilet inspection binding
+      description: Requires `toilet_inspection.read` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ToiletInspectionBindingIdPath"
+      responses:
+        "200":
+          description: Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ToiletInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateToiletInspectionBinding
+      summary: Update a toilet inspection binding
+      description: Requires `toilet_inspection.manage` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ToiletInspectionBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateToiletInspectionBindingRequest" }
+      responses:
+        "200":
+          description: Binding updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ToiletInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/toilet-inspection-bindings/{id}/start:
+    post:
+      operationId: startToiletInspectionExecution
+      summary: Start a toilet inspection checklist execution
+      description: >-
+        Creates a BE-07 checklist execution for the binding. Complete/cancel
+        and responses stay on published checklist endpoints using the
+        returned execution `id`. Requires `toilet_inspection.manage`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ToiletInspectionBindingIdPath"
+      responses:
+        "201":
+          description: Execution started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ToiletInspectionExecutionContext" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/toilet-inspection-executions/{id}:
+    get:
+      operationId: getToiletInspectionExecution
+      summary: Get toilet inspection execution context
+      description: >-
+        Path `{id}` is the BE-07 checklist execution id. Requires
+        `toilet_inspection.read`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ToiletInspectionExecutionIdPath"
+      responses:
+        "200":
+          description: Execution plus binding context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ToiletInspectionExecutionContext" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/public-area-inspection-bindings:
+    get:
+      operationId: listPublicAreaInspectionBindings
+      summary: List public-area inspection bindings
+      description: Requires `public_area_inspection.read`. Pass `buildingId` for scoped mobile lists.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: cleaningAreaId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HousekeepingBindingStatus" }
+      responses:
+        "200":
+          description: Binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PublicAreaInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createPublicAreaInspectionBinding
+      summary: Create a public-area inspection binding
+      description: Requires `public_area_inspection.manage` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePublicAreaInspectionBindingRequest" }
+      responses:
+        "201":
+          description: Binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PublicAreaInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /housekeeping/public-area-inspection-bindings/{id}:
+    get:
+      operationId: getPublicAreaInspectionBinding
+      summary: Get a public-area inspection binding
+      description: Requires `public_area_inspection.read` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PublicAreaInspectionBindingIdPath"
+      responses:
+        "200":
+          description: Binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PublicAreaInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updatePublicAreaInspectionBinding
+      summary: Update a public-area inspection binding
+      description: Requires `public_area_inspection.manage` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PublicAreaInspectionBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdatePublicAreaInspectionBindingRequest" }
+      responses:
+        "200":
+          description: Binding updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PublicAreaInspectionBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/public-area-inspection-bindings/{id}/start:
+    post:
+      operationId: startPublicAreaInspectionExecution
+      summary: Start a public-area inspection checklist execution
+      description: >-
+        Creates a BE-07 checklist execution. Complete/responses stay on
+        published checklist endpoints. Requires `public_area_inspection.manage`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PublicAreaInspectionBindingIdPath"
+      responses:
+        "201":
+          description: Execution started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PublicAreaInspectionExecutionContext" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/public-area-inspection-executions/{id}:
+    get:
+      operationId: getPublicAreaInspectionExecution
+      summary: Get public-area inspection execution context
+      description: Path `{id}` is the BE-07 checklist execution id. Requires `public_area_inspection.read`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PublicAreaInspectionExecutionIdPath"
+      responses:
+        "200":
+          description: Execution plus binding context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PublicAreaInspectionExecutionContext" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/supervisor-inspections:
+    get:
+      operationId: listSupervisorInspections
+      summary: List supervisor inspections
+      description: >-
+        BE-11G verification records over daily cleaning / toilet / public-area
+        executions, using the BE-07 review primitive. Requires
+        `supervisor_inspection.read`. Pass `buildingId` for scoped lists.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: cleaningAreaId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: targetType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/SupervisorInspectionTargetType" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/SupervisorInspectionStatus" }
+      responses:
+        "200":
+          description: Supervisor inspection list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/SupervisorInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createSupervisorInspection
+      summary: Open a supervisor inspection
+      description: >-
+        Requires `supervisor_inspection.manage`. `supervisorUserId` is the
+        authenticated user. Decision is submitted separately.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSupervisorInspectionRequest" }
+      responses:
+        "201":
+          description: Inspection opened.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SupervisorInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /housekeeping/supervisor-inspections/{id}:
+    get:
+      operationId: getSupervisorInspection
+      summary: Get a supervisor inspection
+      description: Requires `supervisor_inspection.read` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/SupervisorInspectionIdPath"
+      responses:
+        "200":
+          description: Supervisor inspection.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SupervisorInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/supervisor-inspections/{id}/decision:
+    post:
+      operationId: submitSupervisorInspectionDecision
+      summary: Submit a supervisor inspection decision
+      description: >-
+        MUTATION — APPROVED / REJECTED / REWORK_REQUIRED via BE-07 review.
+        Requires `supervisor_inspection.manage`. There is no reinspection
+        engine; FAIL/REWORK is followed by a new checklist start plus BE-09
+        finding rework when a finding exists.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/SupervisorInspectionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitSupervisorInspectionDecisionRequest" }
+      responses:
+        "200":
+          description: Decision recorded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SupervisorInspection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/quality-audits:
+    get:
+      operationId: listQualityAudits
+      summary: List quality audits
+      description: >-
+        BE-11K PASS / FAIL / REWORK_REQUIRED scoring layer. Requires
+        `quality_audit.read`. Pass `buildingId` for scoped mobile lists.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: cleaningAreaId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: sourceType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/QualityAuditSourceType" }
+        - name: result
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/QualityAuditResult" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/QualityAuditStatus" }
+      responses:
+        "200":
+          description: Quality audit list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/QualityAudit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createQualityAudit
+      summary: Create a quality audit
+      description: Requires `quality_audit.manage`. `auditorUserId` is the authenticated user.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateQualityAuditRequest" }
+      responses:
+        "201":
+          description: Audit created (DRAFT).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/QualityAudit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /housekeeping/quality-audits/{id}:
+    get:
+      operationId: getQualityAudit
+      summary: Get a quality audit
+      description: Requires `quality_audit.read` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/QualityAuditIdPath"
+      responses:
+        "200":
+          description: Quality audit.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/QualityAudit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateQualityAudit
+      summary: Update a draft quality audit
+      description: Requires `quality_audit.manage`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/QualityAuditIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateQualityAuditRequest" }
+      responses:
+        "200":
+          description: Audit updated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/QualityAudit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/quality-audits/{id}/complete:
+    post:
+      operationId: completeQualityAudit
+      summary: Complete a quality audit
+      description: >-
+        Records PASS / FAIL / REWORK_REQUIRED. Requires `quality_audit.manage`.
+        Not a reinspection engine.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/QualityAuditIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompleteQualityAuditRequest" }
+      responses:
+        "200":
+          description: Audit completed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/QualityAudit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/findings:
+    get:
+      operationId: listHousekeepingFindings
+      summary: List housekeeping finding bindings
+      description: >-
+        BE-11H links HK sources to a BE-09 Finding. Lifecycle/rework stay on
+        published finding operations using `findingId`. Requires
+        `housekeeping_finding.read`. Pass `buildingId` for scoped lists.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: cleaningAreaId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: sourceType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HousekeepingFindingSourceType" }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+          description: Finding status filter (BE-09 status).
+      responses:
+        "200":
+          description: Housekeeping finding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HousekeepingFinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createHousekeepingFinding
+      summary: Create a housekeeping finding (BE-09 Finding + HK link)
+      description: >-
+        Requires `housekeeping_finding.manage` and Building access.
+        Creates an authoritative BE-09 Finding and the HK source binding.
+        Rework uses `requestFindingRework` / `resubmitFinding` on `findingId`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateHousekeepingFindingRequest" }
+      responses:
+        "201":
+          description: Housekeeping finding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HousekeepingFinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /housekeeping/findings/{id}:
+    get:
+      operationId: getHousekeepingFinding
+      summary: Get a housekeeping finding binding
+      description: >-
+        Path `{id}` is the HK link id, not the BE-09 finding id. The payload
+        includes `findingId` and `availableActions` from BE-09. Requires
+        `housekeeping_finding.read`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/HousekeepingFindingIdPath"
+      responses:
+        "200":
+          description: Housekeeping finding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HousekeepingFinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/{sourceType}/{sourceId}/evidence-requirements:
+    get:
+      operationId: listHousekeepingEvidenceRequirements
+      summary: List evidence requirements for a housekeeping source
+      description: >-
+        BE-11I binding over BE-07 evidence requirements. Requires
+        `housekeeping_evidence.read` and Building access on the source.
+        `sourceType` is a kebab path segment (daily-cleaning, toilet-inspections,
+        public-area-inspections, supervisor-inspections, findings).
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/HousekeepingEvidenceSourceTypePath"
+        - $ref: "#/components/parameters/HousekeepingEvidenceSourceIdPath"
+      responses:
+        "200":
+          description: Requirement list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HousekeepingEvidenceRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /housekeeping/{sourceType}/{sourceId}/evidence:
+    get:
+      operationId: listHousekeepingEvidence
+      summary: List evidence submissions for a housekeeping source
+      description: Requires `housekeeping_evidence.read` and Building access.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/HousekeepingEvidenceSourceTypePath"
+        - $ref: "#/components/parameters/HousekeepingEvidenceSourceIdPath"
+      responses:
+        "200":
+          description: Submission list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HousekeepingEvidenceSubmission" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: submitHousekeepingEvidence
+      summary: Submit evidence metadata for a housekeeping source
+      description: >-
+        BE-07 evidence metadata (bytes stay on `uploadEvidenceFile` /
+        `uploadMobileEvidence`). Requires `housekeeping_evidence.manage`.
+      tags: [Housekeeping]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/HousekeepingEvidenceSourceTypePath"
+        - $ref: "#/components/parameters/HousekeepingEvidenceSourceIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitHousekeepingEvidenceRequest" }
+      responses:
+        "201":
+          description: Evidence submitted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HousekeepingEvidenceSubmission" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

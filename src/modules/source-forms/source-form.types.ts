@@ -1,0 +1,11 @@
+export const SOURCE_FORM_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
+export const SOURCE_FORM_TYPES = ['INTERNAL', 'VENDOR', 'EXTERNAL_REFERENCE'] as const;
+export type SourceFormStatus = (typeof SOURCE_FORM_STATUSES)[number];
+export type SourceFormType = (typeof SOURCE_FORM_TYPES)[number];
+export const isSourceFormStatus = (v: unknown): v is SourceFormStatus => typeof v === 'string' && (SOURCE_FORM_STATUSES as readonly string[]).includes(v);
+export const isSourceFormType = (v: unknown): v is SourceFormType => typeof v === 'string' && (SOURCE_FORM_TYPES as readonly string[]).includes(v);
+export type SourceFormRecord = { id:string; clientId:string; code:string; name:string; sourceType:SourceFormType; sourceReference:string|null; description:string|null; status:SourceFormStatus; createdAt:Date; updatedAt:Date };
+export type PublicSourceForm = Omit<SourceFormRecord, 'createdAt'|'updatedAt'>;
+export type CreateSourceFormInput = { clientId:string; code:string; name:string; sourceType:SourceFormType; sourceReference?:string; description?:string; status?:SourceFormStatus };
+export type NewSourceForm = Required<Omit<CreateSourceFormInput, 'sourceReference'|'description'>> & { sourceReference:string|null; description:string|null };
+export type UpdateSourceFormInput = { name?:string; sourceType?:SourceFormType; sourceReference?:string|null; description?:string|null; status?:SourceFormStatus };

@@ -1,0 +1,227 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 12 — BE-03H EXTERNAL / VENDOR
+  # WORKFORCE AFFILIATION (`src/modules/external-workforce`).
+  #
+  # Reuses the BE-03C workforce codes rather than introducing new ones: reads
+  # require `workforce.read`, writes require `workforce.manage`. The link
+  # records which external organization supplies a person, under which of the
+  # vendor's own personnel codes. There is no Vendor workflow here: the
+  # External Organization reference (migration 0032) is created outside BE-03H
+  # and these routes only record and read the affiliation between an EXTERNAL
+  # Workforce Profile and that reference. Deactivation is
+  # `{"status": "INACTIVE"}` on PATCH, not a DELETE, so the affiliation history
+  # survives.
+  # ---------------------------------------------------------------------------
+
+  /workforce/{workforceId}/external-affiliations:
+    post:
+      operationId: createExternalWorkforceLink
+      summary: Affiliate a Workforce Profile with an External Organization
+      description: >-
+        BE-03H. Requires `workforce.manage`. The Workforce Profile always comes
+        from the route and is never read from the body. Only a profile of type
+        `EXTERNAL` may hold an affiliation: `INTERNAL`, `OUTSOURCED` and
+        `CONTRACT` profiles are rejected with 400 `WORKFORCE_NOT_EXTERNAL`.
+        Resolution order: unknown profile 404 `WORKFORCE_PROFILE_NOT_FOUND`,
+        unknown External Organization 404 `EXTERNAL_ORGANIZATION_NOT_FOUND`,
+        cross-Client pair 400 `EXTERNAL_WORKFORCE_CLIENT_MISMATCH` (reported as
+        400 rather than 404 so the other Client's data is never observable),
+        INACTIVE External Organization or INACTIVE profile 400
+        `EXTERNAL_ORGANIZATION_INACTIVE` / `WORKFORCE_PROFILE_INACTIVE`,
+        already-ACTIVE affiliation for the pair 409
+        `EXTERNAL_WORKFORCE_ALREADY_AFFILIATED`, and a personnel code already
+        reserved within that External Organization 409
+        `EXTERNAL_PERSONNEL_CODE_ALREADY_EXISTS` (codes stay reserved while any
+        row, active or historical, references them). `externalPersonnelCode`
+        comes from the vendor's own systems: 1–64 characters of
+        `[A-Za-z0-9._/-]`, normalised to trimmed uppercase before persistence.
+        A profile may hold at most one ACTIVE affiliation per External
+        Organization. `status` defaults to `ACTIVE`; `effectiveFrom` /
+        `effectiveUntil` are optional and an explicit `null` clears a bound.
+        Creating an affiliation never creates credentials and never grants Role,
+        Permission or Building access. Responds 201 with the created link.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExternalWorkforceLinkRequest"
+      responses:
+        "201":
+          description: The created External Workforce Link.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ExternalWorkforceLink"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listWorkforceExternalAffiliations
+      summary: List a Workforce Profile's external affiliations
+      description: >-
+        BE-03H. Returns every affiliation held by the Workforce Profile taken
+        from the route, deactivated history included, ordered by creation time
+        ascending, as a plain array — no page or limit parameter exists on this
+        route and `meta` is always `{}`. Requires `workforce.read`. The profile
+        is resolved first, so an unknown id is 404
+        `WORKFORCE_PROFILE_NOT_FOUND` rather than a misleading empty list.
+        `externalOrganizationId` is an identifier only and is not expanded into
+        the External Organization reference.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      responses:
+        "200":
+          description: The external affiliations held by the requested profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ExternalWorkforceLink"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/external-affiliations/{externalOrganizationId}:
+    get:
+      operationId: getExternalWorkforceLink
+      summary: Get the affiliation for a (workforce, external organization) pair
+      description: >-
+        BE-03H. Returns the single affiliation row for the pair taken from the
+        route. Requires `workforce.read`. The profile is resolved first (404
+        `WORKFORCE_PROFILE_NOT_FOUND`), then the External Organization (404
+        `EXTERNAL_ORGANIZATION_NOT_FOUND`), and a pair with no row at all is 404
+        `EXTERNAL_WORKFORCE_LINK_NOT_FOUND`. The lookup is by pair, not by a
+        link id: no route exposes the link's own id as a path parameter.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - $ref: "#/components/parameters/ExternalOrganizationIdPath"
+      responses:
+        "200":
+          description: The affiliation for the requested pair.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ExternalWorkforceLink"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateExternalWorkforceLink
+      summary: Update an external workforce affiliation
+      description: >-
+        BE-03H partial update, addressed by the (workforce, external
+        organization) pair. Requires `workforce.manage`. Mutable:
+        `externalPersonnelCode`, `effectiveFrom`, `effectiveUntil`, `status`. At
+        least one of them must be provided — an empty object is 400
+        `VALIDATION_ERROR` with the detail naming all four. Deactivation is
+        `{"status": "INACTIVE"}` on this same endpoint; the row is retained so
+        the affiliation history stays auditable. An explicit `null` clears a
+        bound, and a partial update is re-checked against the stored record so
+        `effectiveUntil` can never end up before `effectiveFrom`. The same 404 /
+        client-mismatch / inactive / not-EXTERNAL outcomes apply as on create,
+        a missing pair is 404 `EXTERNAL_WORKFORCE_LINK_NOT_FOUND`, a personnel
+        code already reserved in that External Organization is 409
+        `EXTERNAL_PERSONNEL_CODE_ALREADY_EXISTS`, and a reactivation that would
+        collide with an existing ACTIVE affiliation is 409
+        `EXTERNAL_WORKFORCE_ALREADY_AFFILIATED`. The External Organization
+        reference itself is never created, renamed or deactivated here.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - $ref: "#/components/parameters/ExternalOrganizationIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateExternalWorkforceLinkRequest"
+      responses:
+        "200":
+          description: The updated External Workforce Link.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ExternalWorkforceLink"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /external-organizations/{externalOrganizationId}/workforce:
+    get:
+      operationId: listExternalOrganizationWorkforce
+      summary: List the workforce affiliated with an External Organization
+      description: >-
+        BE-03H. Returns the vendor's external personnel roster: every
+        affiliation whose External Organization is the route's
+        `externalOrganizationId`, ordered by creation time ascending, as a plain
+        array. Requires `workforce.read`. The External Organization reference is
+        resolved first, so an unknown id is 404
+        `EXTERNAL_ORGANIZATION_NOT_FOUND` rather than an empty list. This is a
+        read of stored affiliations only: no vendor, contract, compliance or
+        procurement state is consulted or returned.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce.read
+      parameters:
+        - $ref: "#/components/parameters/ExternalOrganizationIdPath"
+      responses:
+        "200":
+          description: The affiliations recorded for the requested External Organization.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ExternalWorkforceLink"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }

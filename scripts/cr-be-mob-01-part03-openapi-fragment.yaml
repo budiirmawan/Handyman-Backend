@@ -1,0 +1,1876 @@
+  # --------------------------------------------------------------------
+  # CR-BE-MOB-01 PART 03 — Engineering field / reading contract.
+  #
+  # Existing BE-10 routes published for mobile. Nothing new is introduced:
+  # every binding is a join row over an existing authority. Executions are
+  # BE-07 checklist executions / form instances, PM & corrective execution
+  # is the published BE-08 Work Order action set, evidence is the published
+  # BE-07 evidence API on the returned execution id, and finding workflow
+  # stays on BE-09 keyed by findingId.
+  # --------------------------------------------------------------------
+
+  /assets/{assetId}/inspection-bindings:
+    post:
+      operationId: createInspectionBinding
+      summary: Bind a BE-07 Checklist Template to an Asset (equipment inspection)
+      description: >-
+        BE-10B. The equipment-inspection binding is a join row between a BE-05
+        Asset and a BE-07 Checklist Template, optionally refined by a BE-04
+        Functional Location. It is not an inspection engine and duplicates no
+        Asset / Checklist / Evidence / Verification data. `clientId` and
+        `buildingId` are derived from the Asset. Requires
+        `inspection_binding.manage` and BE-02G Building access on the Asset's
+        Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inspection_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInspectionBindingRequest"
+      responses:
+        "201":
+          description: Inspection binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InspectionBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listAssetInspectionBindings
+      summary: List the equipment-inspection bindings of an Asset
+      description: >-
+        BE-10B read. Requires `inspection_binding.read` and Building access on
+        the Asset's Building. Mobile relevance: which inspection checklists
+        apply to the scanned/selected equipment.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inspection_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      responses:
+        "200":
+          description: Inspection binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/InspectionBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/inspection-bindings:
+    get:
+      operationId: listBuildingInspectionBindings
+      summary: List equipment-inspection bindings in a Building
+      description: >-
+        BE-10B read. Requires `inspection_binding.read` and BE-02G Building
+        access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inspection_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: Inspection binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/InspectionBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/inspection-bindings/{id}:
+    get:
+      operationId: getInspectionBinding
+      summary: Get an equipment-inspection binding by id
+      description: >-
+        BE-10B read. Requires `inspection_binding.read`; Building access is
+        asserted through the binding's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inspection_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/InspectionBindingIdPath"
+      responses:
+        "200":
+          description: Inspection binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InspectionBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateInspectionBinding
+      summary: Update an equipment-inspection binding
+      description: >-
+        BE-10B. Only the Functional Location refinement and the binding status
+        are mutable; the Asset and Checklist Template are the identity of the
+        binding. Requires `inspection_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inspection_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/InspectionBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateInspectionBindingRequest"
+      responses:
+        "200":
+          description: Updated inspection binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InspectionBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /engineering/inspection-bindings/{id}/start:
+    post:
+      operationId: startInspectionExecution
+      summary: Start the BE-07 checklist execution for an inspection binding
+      description: >-
+        BE-10B. Creates the shared BE-07 checklist execution for the binding
+        and returns it. No request body. Everything after this — saving
+        responses, completing or cancelling, attaching evidence and supervisor
+        verification — uses the published BE-07 checklist, evidence
+        (`executionType: CHECKLIST_EXECUTION`) and verification operations on
+        the returned execution `id`. Requires `inspection_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inspection_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/InspectionBindingIdPath"
+      responses:
+        "201":
+          description: Shared BE-07 checklist execution started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InspectionExecution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/inspection-executions/{id}:
+    get:
+      operationId: getInspectionExecutionContext
+      summary: Resolve the Engineering context of an inspection execution
+      description: >-
+        BE-10B read. Projects the authoritative Asset / Building / Functional
+        Location for a BE-07 checklist execution started from an inspection
+        binding. The execution state itself stays with BE-07. Requires
+        `inspection_binding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: inspection_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/InspectionExecutionIdPath"
+      responses:
+        "200":
+          description: Inspection execution context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/InspectionExecutionContext"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /assets/{assetId}/meter-reading-bindings:
+    post:
+      operationId: createMeterReadingBinding
+      summary: Bind a numeric BE-07 Form Field + UOM to an Asset (meter reading)
+      description: >-
+        BE-10C. The technical meter-reading definition for a piece of
+        equipment: a join row between a BE-05 Asset, a numeric BE-07 Form
+        Field, a BE-07 UOM and an optional BE-04 Functional Location, with an
+        optional binding-level tightening of the field's measurement range.
+        Readings are written into BE-07's own `form_responses` through a shared
+        Form Instance — there is no second measurement store. NOTE: this is the
+        *engineering/technical* meter authority; BE-18 utility meters are a
+        separate billing-oriented authority and are not published here.
+        Requires `meter_reading_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMeterReadingBindingRequest"
+      responses:
+        "201":
+          description: Meter reading binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MeterReadingBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listAssetMeterReadingBindings
+      summary: List the meter-reading bindings of an Asset
+      description: >-
+        BE-10C read. Requires `meter_reading_binding.read` and Building access
+        on the Asset's Building. Mobile relevance: which readings a technician
+        must take on this equipment, with the authoritative UOM and range.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      responses:
+        "200":
+          description: Meter reading binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/MeterReadingBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/meter-reading-bindings:
+    get:
+      operationId: listBuildingMeterReadingBindings
+      summary: List meter-reading bindings in a Building
+      description: >-
+        BE-10C read. Requires `meter_reading_binding.read` and BE-02G Building
+        access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: Meter reading binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/MeterReadingBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/meter-reading-bindings/{id}:
+    get:
+      operationId: getMeterReadingBinding
+      summary: Get a meter-reading binding by id
+      description: >-
+        BE-10C read. Requires `meter_reading_binding.read`; Building access is
+        asserted through the binding's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MeterReadingBindingIdPath"
+      responses:
+        "200":
+          description: Meter reading binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MeterReadingBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateMeterReadingBinding
+      summary: Update a meter-reading binding
+      description: >-
+        BE-10C. UOM, location refinement, measurement range and status are
+        mutable; the Asset and Form Field are the identity of the binding. The
+        range must stay inside the BE-07 field's configured range. Requires
+        `meter_reading_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MeterReadingBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMeterReadingBindingRequest"
+      responses:
+        "200":
+          description: Updated meter reading binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MeterReadingBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /engineering/meter-reading-bindings/{id}/start:
+    post:
+      operationId: startMeterReadingExecution
+      summary: Start the BE-07 form instance for a meter-reading binding
+      description: >-
+        BE-10C. Creates the shared BE-07 form instance that will carry the
+        reading. No request body. Requires `meter_reading_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MeterReadingBindingIdPath"
+      responses:
+        "201":
+          description: Shared BE-07 form instance started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MeterReadingExecution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/meter-reading-executions/{id}/reading:
+    put:
+      operationId: submitMeterReading
+      summary: Submit the technical reading value for a reading execution
+      description: >-
+        BE-10C. Idempotent upsert of the reading into BE-07's `form_responses`
+        row for the execution's numeric field. The value is validated against
+        the effective measurement range (binding range tightened over the BE-07
+        field range) and stored with the binding's UOM. This is the only
+        reading write — there is no second measurement engine and no
+        per-reading review workflow (review a completed reading through the
+        published BE-07 review / mobile verification operations on the form
+        instance). Requires `meter_reading_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MeterReadingExecutionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitMeterReadingRequest"
+      responses:
+        "200":
+          description: Submitted reading.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/MeterReading" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/meter-reading-executions/{id}:
+    get:
+      operationId: getMeterReadingContext
+      summary: Resolve the context and current value of a reading execution
+      description: >-
+        BE-10C read. Projects the authoritative Asset / Building / Functional
+        Location / UOM, the effective measurement range and the current stored
+        value. Derived from the binding and the BE-07 stores. Requires
+        `meter_reading_binding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: meter_reading_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MeterReadingExecutionIdPath"
+      responses:
+        "200":
+          description: Meter reading context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MeterReadingContext"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /assets/{assetId}/log-sheet-bindings:
+    post:
+      operationId: createLogSheetBinding
+      summary: Bind a BE-07 Form Template to an Asset (equipment log sheet)
+      description: >-
+        BE-10D. The equipment log-sheet definition: a join row between a BE-05
+        Asset, a BE-07 Form Template, an optional published Template Version
+        snapshot and an optional BE-04 Functional Location. Log-sheet rows are
+        BE-07 Form Instances; responses live in `form_responses`. Requires
+        `log_sheet_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLogSheetBindingRequest"
+      responses:
+        "201":
+          description: Log sheet binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/LogSheetBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listAssetLogSheetBindings
+      summary: List the log-sheet bindings of an Asset
+      description: >-
+        BE-10D read. Requires `log_sheet_binding.read` and Building access on
+        the Asset's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      responses:
+        "200":
+          description: Log sheet binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/LogSheetBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/log-sheet-bindings:
+    get:
+      operationId: listBuildingLogSheetBindings
+      summary: List log-sheet bindings in a Building
+      description: >-
+        BE-10D read. Requires `log_sheet_binding.read` and BE-02G Building
+        access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: Log sheet binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/LogSheetBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/log-sheet-bindings/{id}:
+    get:
+      operationId: getLogSheetBinding
+      summary: Get a log-sheet binding by id
+      description: >-
+        BE-10D read. Requires `log_sheet_binding.read`; Building access is
+        asserted through the binding's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/LogSheetBindingIdPath"
+      responses:
+        "200":
+          description: Log sheet binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/LogSheetBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateLogSheetBinding
+      summary: Update a log-sheet binding
+      description: >-
+        BE-10D. Template version pin, location refinement and status are
+        mutable; the Asset and Form Template are the identity of the binding.
+        Requires `log_sheet_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/LogSheetBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLogSheetBindingRequest"
+      responses:
+        "200":
+          description: Updated log sheet binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/LogSheetBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /engineering/log-sheet-bindings/{id}/start:
+    post:
+      operationId: startLogSheetExecution
+      summary: Start a BE-07 form instance for a log-sheet binding
+      description: >-
+        BE-10D. Creates one shared BE-07 form instance (a log-sheet row). No
+        request body. Responses are written through the published BE-07 form
+        operations. Requires `log_sheet_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/LogSheetBindingIdPath"
+      responses:
+        "201":
+          description: Shared BE-07 form instance started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/LogSheetExecution" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/log-sheet-bindings/{id}/executions:
+    get:
+      operationId: listLogSheetExecutions
+      summary: List the log-sheet rows (form instances) of a binding
+      description: >-
+        BE-10D read, newest first. Requires `log_sheet_binding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/LogSheetBindingIdPath"
+      responses:
+        "200":
+          description: Log sheet execution list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/LogSheetExecution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /engineering/log-sheet-executions/{id}:
+    get:
+      operationId: getLogSheetExecutionContext
+      summary: Resolve the Engineering context of a log-sheet row
+      description: >-
+        BE-10D read. Projects the authoritative Asset / Building / Functional
+        Location plus the BE-07 template and version the row is tied to.
+        Requires `log_sheet_binding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: log_sheet_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/LogSheetExecutionIdPath"
+      responses:
+        "200":
+          description: Log sheet execution context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/LogSheetExecutionContext"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /engineering/checklist-bindings:
+    post:
+      operationId: createEngineeringChecklistBinding
+      summary: Bind a BE-07 Checklist Template to an Engineering context
+      description: >-
+        BE-10E. A join row between a BE-07 Checklist Template and a Building
+        plus an optional BE-05 Asset and/or BE-04 Functional Location target
+        inside that Building. Executions stay BE-07 checklist executions.
+        Requires `engineering_checklist_binding.manage` and Building access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_checklist_binding.manage
+      x-building-scoped: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEngineeringChecklistBindingRequest"
+      responses:
+        "201":
+          description: Engineering checklist binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listEngineeringChecklistBindings
+      summary: List Engineering checklist bindings
+      description: >-
+        BE-10E read, constrained to the caller's accessible Buildings.
+        Requires `engineering_checklist_binding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_checklist_binding.read
+      x-building-scoped: true
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: assetId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Engineering checklist binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/EngineeringChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/checklist-bindings/{id}:
+    get:
+      operationId: getEngineeringChecklistBinding
+      summary: Get an Engineering checklist binding by id
+      description: >-
+        BE-10E read. Requires `engineering_checklist_binding.read` and Building
+        access on the binding's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_checklist_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringChecklistBindingIdPath"
+      responses:
+        "200":
+          description: Engineering checklist binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateEngineeringChecklistBinding
+      summary: Update an Engineering checklist binding
+      description: >-
+        BE-10E. Asset / Functional Location targets and status are mutable; the
+        Building and Checklist Template are the identity of the binding.
+        Requires `engineering_checklist_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_checklist_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringChecklistBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEngineeringChecklistBindingRequest"
+      responses:
+        "200":
+          description: Updated Engineering checklist binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringChecklistBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /engineering/checklist-bindings/{id}/start:
+    post:
+      operationId: startEngineeringChecklistExecution
+      summary: Start the BE-07 checklist execution for an Engineering binding
+      description: >-
+        BE-10E. Creates the shared BE-07 checklist execution for the binding
+        and returns it. No request body. Responses, completion, evidence and
+        verification stay on the published BE-07 operations. Requires
+        `engineering_checklist_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_checklist_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringChecklistBindingIdPath"
+      responses:
+        "201":
+          description: Shared BE-07 checklist execution started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringChecklistExecution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/checklist-executions/{id}:
+    get:
+      operationId: getEngineeringChecklistExecutionContext
+      summary: Resolve the Engineering context of a checklist execution
+      description: >-
+        BE-10E read. Projects the authoritative Building / Template plus the
+        bound Asset / Functional Location targets. Requires
+        `engineering_checklist_binding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_checklist_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringChecklistExecutionIdPath"
+      responses:
+        "200":
+          description: Engineering checklist execution context.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringChecklistExecutionContext"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /assets/{assetId}/breakdowns:
+    post:
+      operationId: createBreakdown
+      summary: Report an equipment breakdown on an Asset
+      description: >-
+        BE-10F. Records the breakdown/corrective event against a BE-05 Asset.
+        It is the entry point of corrective maintenance; the corrective work
+        itself is a BE-08 Work Order linked through
+        `linkBreakdownCorrectiveWorkOrder`, and that Work Order's lifecycle,
+        assignment and verification remain BE-08's. Requires
+        `breakdown.manage` and Building access on the Asset's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: breakdown.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateBreakdownRequest" }
+      responses:
+        "201":
+          description: Breakdown recorded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/BreakdownBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listAssetBreakdowns
+      summary: List the breakdowns of an Asset
+      description: >-
+        BE-10F read. Each row projects the current BE-08 status of its linked
+        corrective Work Order (never stored). Requires `breakdown.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: breakdown.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      responses:
+        "200":
+          description: Breakdown list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BreakdownBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/breakdowns:
+    get:
+      operationId: listBuildingBreakdowns
+      summary: List breakdowns in a Building
+      description: >-
+        BE-10F read. Requires `breakdown.read` and BE-02G Building access.
+        Mobile relevance: the corrective-maintenance backlog for the site.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: breakdown.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: Breakdown list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BreakdownBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/breakdowns/{id}:
+    get:
+      operationId: getBreakdown
+      summary: Get a breakdown by id
+      description: >-
+        BE-10F read. Requires `breakdown.read`; Building access is asserted
+        through the breakdown's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: breakdown.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BreakdownIdPath"
+      responses:
+        "200":
+          description: Breakdown.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/BreakdownBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: closeBreakdown
+      summary: Close a breakdown
+      description: >-
+        BE-10F. `status: CLOSED` is the only accepted transition — the
+        breakdown record has no other lifecycle, and closing it does not close
+        the corrective Work Order (that stays a BE-08 decision). Requires
+        `breakdown.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: breakdown.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BreakdownIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloseBreakdownRequest" }
+      responses:
+        "200":
+          description: Closed breakdown.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/BreakdownBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/breakdowns/{id}/work-order:
+    post:
+      operationId: linkBreakdownCorrectiveWorkOrder
+      summary: Link or create the corrective Work Order for a breakdown
+      description: >-
+        BE-10F. Either links an existing BE-08 Work Order (`workOrderId`) or
+        asks the shared BE-08 service to create one (`title`). The corrective
+        execution itself — acknowledge / start / hold / resume / note /
+        complete, assignment, evidence and verification — is the already
+        published BE-08 Work Order surface. This endpoint only records the
+        link. Requires `breakdown.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: breakdown.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BreakdownIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkCorrectiveWorkOrderRequest"
+      responses:
+        "201":
+          description: Breakdown with its linked corrective Work Order.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/BreakdownBinding" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /assets/{assetId}/maintenance-bindings:
+    post:
+      operationId: createMaintenanceBinding
+      summary: Create a planned-maintenance binding for an Asset
+      description: >-
+        BE-10G. The PM context for a BE-05 Asset (`maintenanceType`:
+        PREVENTIVE / PREDICTIVE / CONDITION_BASED / CALIBRATION). The binding
+        does not execute work: it references a shared BE-07 Schedule
+        Definition, the BE-07 generated Tasks and an optional BE-08 Work
+        Order. Scheduling, task generation, checklist, evidence, assignment,
+        finding and verification all remain owned by BE-07 / BE-08 / BE-09.
+        Requires `maintenance_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMaintenanceBindingRequest"
+      responses:
+        "201":
+          description: Maintenance binding created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listAssetMaintenanceBindings
+      summary: List the maintenance bindings of an Asset
+      description: >-
+        BE-10G read. Each row projects the linked BE-07 schedule, the newest
+        BE-07 generated tasks and the BE-08 Work Order status (never stored).
+        Requires `maintenance_binding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/AssetIdPath"
+      responses:
+        "200":
+          description: Maintenance binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/maintenance-bindings:
+    get:
+      operationId: listBuildingMaintenanceBindings
+      summary: List maintenance bindings in a Building
+      description: >-
+        BE-10G read. Requires `maintenance_binding.read` and BE-02G Building
+        access. Mobile relevance: PM context for the site's equipment.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      responses:
+        "200":
+          description: Maintenance binding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/maintenance-bindings/{id}:
+    get:
+      operationId: getMaintenanceBinding
+      summary: Get a maintenance binding by id
+      description: >-
+        BE-10G read. Requires `maintenance_binding.read`; Building access is
+        asserted through the binding's Building.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceBindingIdPath"
+      responses:
+        "200":
+          description: Maintenance binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateMaintenanceBinding
+      summary: Update a maintenance binding
+      description: >-
+        BE-10G. Descriptive fields, maintenance type, location refinement and
+        status are mutable; the Asset is the identity of the binding.
+        Requires `maintenance_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMaintenanceBindingRequest"
+      responses:
+        "200":
+          description: Updated maintenance binding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /engineering/maintenance-bindings/{id}/schedule:
+    post:
+      operationId: linkMaintenanceSchedule
+      summary: Link (or create) the BE-07 Schedule of a maintenance binding
+      description: >-
+        BE-10G. Either links an existing `scheduleDefinitionId` or asks the
+        shared BE-07 scheduler to create one. Recurrence and task generation
+        are BE-07's — this endpoint never re-implements them. Requires
+        `maintenance_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkMaintenanceScheduleRequest"
+      responses:
+        "200":
+          description: Maintenance binding with its linked schedule.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/maintenance-bindings/{id}/task:
+    post:
+      operationId: linkMaintenanceTask
+      summary: Link a BE-07 generated Task to a maintenance binding
+      description: >-
+        BE-10G. Records that an existing BE-07 generated task belongs to this
+        PM binding. Execution of that task is the published BE-07 task surface
+        (`startTask` / `completeTask` / `cancelTask`, assignment via
+        `assignTask`); the id in this request is the authoritative `taskId`.
+        Requires `maintenance_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkMaintenanceTaskRequest"
+      responses:
+        "200":
+          description: Maintenance binding with its linked tasks.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/maintenance-bindings/{id}/work-order:
+    post:
+      operationId: linkMaintenanceWorkOrder
+      summary: Link (or create) the BE-08 Work Order of a maintenance binding
+      description: >-
+        BE-10G. Either links an existing `workOrderId` or asks the shared BE-08
+        service to create one. PM field execution is then the published BE-08
+        action set on that Work Order — this binding adds no second execution
+        path. Requires `maintenance_binding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: maintenance_binding.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/MaintenanceBindingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkMaintenanceWorkOrderRequest"
+      responses:
+        "200":
+          description: Maintenance binding with its linked Work Order.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MaintenanceBinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/findings:
+    post:
+      operationId: createEngineeringFinding
+      summary: Report an Engineering finding (or link an existing BE-09 Finding)
+      description: >-
+        BE-10H. Records the Engineering context (Asset / Functional Location /
+        `operationType` / source execution) for an authoritative BE-09 Finding.
+        Supply `findingId` to link an existing Finding, or the create fields to
+        have the shared BE-09 service create one. Classification, severity,
+        assignment, state transitions, review, rework, closure and
+        `availableActions` all remain on the published BE-09 operations, keyed
+        by `findingId` (NOT by this link's `id`). Requires
+        `engineering_finding.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_finding.manage
+      x-building-scoped: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEngineeringFindingRequest"
+      responses:
+        "201":
+          description: Engineering finding link + authoritative BE-09 Finding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringFinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listEngineeringFindings
+      summary: List Engineering findings
+      description: >-
+        BE-10H read, constrained to the caller's accessible Buildings. Each row
+        embeds the authoritative BE-09 Finding and its per-caller
+        `availableActions`. Requires `engineering_finding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_finding.read
+      x-building-scoped: true
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: assetId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: sourceType
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/FindingSourceType" }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/FindingStatus" }
+      responses:
+        "200":
+          description: Engineering finding list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/EngineeringFinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/findings/{id}:
+    get:
+      operationId: getEngineeringFinding
+      summary: Get an Engineering finding link by id
+      description: >-
+        BE-10H read. `{id}` is the Engineering link id; use the embedded
+        `findingId` for every BE-09 workflow operation. Requires
+        `engineering_finding.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_finding.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringFindingIdPath"
+      responses:
+        "200":
+          description: Engineering finding.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringFinding"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/daily-operations:
+    get:
+      operationId: getEngineeringDailyOperations
+      summary: Daily Engineering operations read model for a Building
+      description: >-
+        BE-10A. A consolidated per-Building, per-operational-date (+ optional
+        Shift) view of BE-07 generated Tasks, BE-08 Work Orders and BE-09
+        Findings. Every row references its authoritative source id and carries
+        the source domain's own status, untranslated; `availableActions` is
+        present for FINDING rows only, because Tasks and Work Orders expose no
+        authoritative available-actions service. Nothing is copied into a new
+        master table. `date` is REQUIRED. Requires `engineering.read` and
+        BE-02G Building access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          description: Operational date YYYY-MM-DD (required).
+        - name: shiftId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Daily Engineering operations.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringDailyOperations"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/overview:
+    get:
+      operationId: getEngineeringOverview
+      summary: Engineering supervisor overview for a Building
+      description: >-
+        BE-10K. A concise supervisor read model composed from the BE-10A daily
+        operations, BE-09 finding counts, BE-08 active Work Orders and the
+        BE-10J handover dataset. Derived at read time — no analytics engine and
+        no duplicated operational data. `date` defaults to today. Requires
+        `engineering_overview.read` and BE-02G Building access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: engineering_overview.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: shiftId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Engineering overview.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringOverview"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/engineering/shift-handovers:
+    post:
+      operationId: createEngineeringShiftHandover
+      summary: Create an Engineering shift handover
+      description: >-
+        BE-10J. Links an outgoing and an incoming BE-03 Shift for one Building
+        and date, with a DRAFT → READY → ACKNOWLEDGED lifecycle. The
+        operational `dataset` is resolved live from the authoritative
+        Engineering records at read time and is never copied into the handover
+        row. Requires `shift_handover.manage` and BE-02G Building access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift_handover.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEngineeringShiftHandoverRequest"
+      responses:
+        "201":
+          description: Shift handover created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringShiftHandover"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listEngineeringShiftHandovers
+      summary: List Engineering shift handovers for a Building
+      description: >-
+        BE-10J read, optionally filtered by handover date. Requires
+        `shift_handover.read` and BE-02G Building access.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift_handover.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Shift handover list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/EngineeringShiftHandover"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /engineering/shift-handovers/{id}:
+    get:
+      operationId: getEngineeringShiftHandover
+      summary: Get an Engineering shift handover by id
+      description: >-
+        BE-10J read, including the live authoritative handover dataset.
+        Requires `shift_handover.read`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift_handover.read
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringShiftHandoverIdPath"
+      responses:
+        "200":
+          description: Shift handover.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringShiftHandover"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateEngineeringShiftHandover
+      summary: Update the summary of a shift handover
+      description: >-
+        BE-10J. Only the free-text `summary` is mutable, and only while the
+        handover is still DRAFT. Requires `shift_handover.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift_handover.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringShiftHandoverIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEngineeringShiftHandoverRequest"
+      responses:
+        "200":
+          description: Updated shift handover.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringShiftHandover"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/shift-handovers/{id}/ready:
+    post:
+      operationId: markEngineeringShiftHandoverReady
+      summary: Mark a shift handover READY
+      description: >-
+        BE-10J lifecycle transition DRAFT → READY. Requires
+        `shift_handover.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift_handover.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringShiftHandoverIdPath"
+      responses:
+        "200":
+          description: Shift handover marked READY.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringShiftHandover"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /engineering/shift-handovers/{id}/acknowledge:
+    post:
+      operationId: acknowledgeEngineeringShiftHandover
+      summary: Acknowledge a shift handover
+      description: >-
+        BE-10J lifecycle transition READY → ACKNOWLEDGED, recording the
+        acknowledging user. This is the supervisor-facing acceptance of the
+        outgoing shift's open work. Requires `shift_handover.manage`.
+      tags: [Engineering]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: shift_handover.manage
+      x-building-scoped: true
+      parameters:
+        - $ref: "#/components/parameters/EngineeringShiftHandoverIdPath"
+      responses:
+        "200":
+          description: Shift handover acknowledged.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/EngineeringShiftHandover"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }

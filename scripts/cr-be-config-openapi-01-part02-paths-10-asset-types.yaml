@@ -1,0 +1,149 @@
+  # ---------------------------------------------------------------------------
+  # CR-BE-CONFIG-OPENAPI-01 PART 02 — SECTION 10 — BE-05B ASSET TYPE / CLASS
+  # (`src/modules/asset-types`).
+  #
+  # An Asset Type always belongs to exactly one Asset Category. Client
+  # ownership is derived Type → Category → Client: the Type carries no
+  # `clientId` of its own, and the collection route is therefore Category-scoped
+  # rather than Client-scoped.
+  # ---------------------------------------------------------------------------
+
+  /asset-categories/{categoryId}/types:
+    parameters:
+      - $ref: "#/components/parameters/AssetCategoryIdPath"
+
+    post:
+      operationId: createAssetType
+      summary: Create an Asset Type under a Category
+      description: >-
+        BE-05B. Creates one Asset Type beneath the Category taken from the
+        route. Requires `asset_type.manage`. Resolution order: unknown Category
+        404 `ASSET_CATEGORY_NOT_FOUND`, INACTIVE Category 400
+        `ASSET_CATEGORY_INACTIVE` (an inactive Category receives no new Types),
+        duplicate code 409 `ASSET_TYPE_CODE_ALREADY_EXISTS` (unique per
+        Category, with the unique index as the race-condition backstop).
+        `code` is trimmed and upper-cased and must be 2–64 characters of
+        `[A-Z][A-Z0-9_-]*`; `name` is required (≤160); optional `description`
+        is at most 512 characters; `status` defaults to `ACTIVE`. Type codes
+        are data, never behaviour. Responds 201 with the created Type.
+      tags: [Asset Type]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_type.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAssetTypeRequest" }
+      responses:
+        "201":
+          description: The created Asset Type.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AssetType" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+    get:
+      operationId: listCategoryAssetTypes
+      summary: List the Asset Types of a Category
+      description: >-
+        BE-05B read, ordered by `code` ascending, as a plain array. Requires
+        `asset_type.read`. The Category is resolved first, so an unknown
+        Category is 404 `ASSET_CATEGORY_NOT_FOUND` rather than an empty list.
+        Unpaginated, no filters.
+      tags: [Asset Type]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_type.read
+      responses:
+        "200":
+          description: The Asset Types recorded for the requested Category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AssetType" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /asset-types/{id}:
+    parameters:
+      - $ref: "#/components/parameters/AssetTypeIdPath"
+
+    get:
+      operationId: getAssetType
+      summary: Get an Asset Type
+      description: >-
+        BE-05B single-read addressed by the Type id. Requires `asset_type.read`.
+        The id must be a UUID (400 `VALIDATION_ERROR`, detail field
+        `assetTypeId`); an unknown id is 404 `ASSET_TYPE_NOT_FOUND`.
+      tags: [Asset Type]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_type.read
+      responses:
+        "200":
+          description: The requested Asset Type.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AssetType" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateAssetType
+      summary: Update an Asset Type
+      description: >-
+        BE-05B partial update. Requires `asset_type.manage`. Only `name`
+        (≤160), `description` (≤512, explicit `null` clears it) and `status`
+        are read: `assetCategoryId` and `code` cannot be changed through this
+        endpoint — a Type never moves to another Category and its code stays
+        the stable identifier — and supplying them has no effect rather than
+        raising an error. Deactivation is `{"status": "INACTIVE"}` on this same
+        endpoint (the service-level status helper is not separately exposed),
+        and an INACTIVE Type can no longer be assigned to an Asset. Types are
+        never deleted. An unknown Type is 404 `ASSET_TYPE_NOT_FOUND`. Responds
+        200 with the updated Type.
+      tags: [Asset Type]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: asset_type.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateAssetTypeRequest" }
+      responses:
+        "200":
+          description: The updated Asset Type.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/AssetType" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
