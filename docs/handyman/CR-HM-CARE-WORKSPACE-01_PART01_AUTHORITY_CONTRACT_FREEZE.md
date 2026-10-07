@@ -91,6 +91,14 @@ No cross-actor session administration or refresh endpoint is introduced.
 
 ## 3. DISCOVERY — current effective context only
 
+**PART 04B supersession (2026-10-08):** The later UNIT/SPACE DISCOVERY request
+supersedes only this section's occupied-space-only restriction and the spaces
+route's tenantCompanyId filter. `GET /handyman/care/properties/:propertyId/spaces`
+now projects the active physical hierarchy, with optional buildingId and bounded
+q, without tenant/occupancy joins or inference. Active physical units may be
+listed without occupancy. This grants no represented-customer, private-history,
+or create authority; tenant discovery and all other boundaries remain unchanged.
+
 Discovery derives the actor from the session. Property reads intersect ACTIVE
 grants with ACTIVE actor/integration/capability/property/Client authority;
 building results additionally require ACTIVE buildings. Derive property and

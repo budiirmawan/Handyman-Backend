@@ -2688,6 +2688,91 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/properties/{propertyId}/spaces:
+    get:
+      operationId: listCareWorkspaceSpaces
+      summary: Discover active physical units in a granted care workspace property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 04B. Physical unit selection only: id is the
+        existing canonical spaces.id (spaceId), not a new Unit master identity.
+        Requires a live care workspace credential and ACTIVE property grant,
+        actor, integration and CUSTOMER_CARE capability. Traverse the existing
+        ACTIVE Space to Room to Area to Floor to Building to Property to Client
+        hierarchy. All ancestor relationships and parent IDs are derived
+        server-side, never supplied as authority. Optional buildingId narrows
+        to an ACTIVE building inside the granted property. Foreign, missing
+        or inactive selected scope returns uniform 404; an authorized empty
+        collection returns 200 with items [].
+        PART 04B supersedes the earlier occupied-space-only discovery restriction:
+        units need no tenant or occupancy relationship to be listed. No tenant,
+        occupancy, PIC or private-history inference or authority follows from
+        a unit selection. No occupancy data is queried or returned.
+        q is a trimmed, nonblank, case-insensitive literal substring of space
+        code or name, at most 100 characters, not regex or SQL wildcards.
+        Only buildingId, q, limit and cursor are accepted; tenantCompanyId,
+        clientId, careActorId, occupancy/status filters and body fields are rejected.
+        The minimized projection contains only id, code, name, roomId, buildingId.
+        Deterministic ID-ascending keyset pagination defaults to 25, maximum 100.
+        Integrity-protected cursors bind actor/integration/session, property,
+        endpoint, buildingId, trimmed search, limit, ordering and absolute session
+        expiry. They are not credentials: every page revalidates session,
+        grant and hierarchy in the projection statement before pagination.
+        Revoked/expired sessions return 401; inaccessible selected scope returns
+        404; malformed or mismatched cursors return 400. No historical snapshot,
+        total counts or stale fallback. Cache-Control is no-store. Storage or
+        server-held integration signing configuration failure fails closed.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Selection only, never authority; must be currently granted and active.
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 100 }
+          description: Trimmed nonblank literal name/code search; null bytes are rejected.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Optional narrowing selection inside the active granted property, never authority.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized page; empty when no current matching items remain.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceSpacePage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing, ungranted, revoked or inactive property/Client context; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
   /handyman/care/session:
     post:
       operationId: admitCareWorkspace
@@ -74780,6 +74865,36 @@ components:
                     $ref: "#/components/schemas/ClientFxPolicy"
 
   schemas:
+    CareWorkspaceSpace:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, roomId, buildingId]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Existing canonical spaces.id (spaceId); no separate Unit identity.
+        code: { type: string }
+        name: { type: string }
+        roomId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+    CareWorkspaceSpacePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceSpace' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque session/scope/filter-bound keyset handle, null at end of current results.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Database statement timestamp for current authority, hierarchy and projection.
     CareWorkspaceTenant:
       type: object
       additionalProperties: false

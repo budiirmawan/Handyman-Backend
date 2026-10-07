@@ -3,16 +3,17 @@ import { AppError, ERROR_CODES } from '../../shared/errors';
 import { readHandoffIntegrationSecret } from '../handyman-handoff/handoff-runtime.config';
 import { handoffRuntimeRepository } from '../handyman-handoff/handoff-runtime.repository';
 import { resolveCareWorkspacePrincipal, workspaceUnauthorized } from './care-workspace.service';
+import { careWorkspaceSpacesRepository } from './care-workspace-spaces.repository';
 import { careWorkspaceTenantsRepository } from './care-workspace-tenants.repository';
 import { careWorkspaceScopeRepository } from './care-workspace-scope.repository';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const invalid = () => AppError.validation('Invalid care workspace scope query.');
 
-function parseQuery(query: unknown, tenants: boolean) {
+function parseQuery(query: unknown, searchable: boolean) {
   if (!query || typeof query !== 'object' || Array.isArray(query)) throw invalid();
   const q = query as Record<string, unknown>;
-  if (Object.keys(q).some(k => !(tenants ? ['limit', 'cursor', 'q', 'buildingId'] : ['limit', 'cursor']).includes(k))) throw invalid();
+  if (Object.keys(q).some(k => !(searchable ? ['limit', 'cursor', 'q', 'buildingId'] : ['limit', 'cursor']).includes(k))) throw invalid();
   const limit = q.limit === undefined ? 25 :
     typeof q.limit === 'string' && /^[1-9]\d{0,2}$/.test(q.limit) ? Number(q.limit) : NaN;
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw invalid();
@@ -32,10 +33,11 @@ function mac(payload: string, secret: string): string {
   return createHmac('sha256', secret).update('HANDYMAN_CARE_SCOPE_CURSOR_V1\0' + payload).digest('base64url');
 }
 
-async function listWorkspaceCollection(token: string, query: unknown, propertyInput: unknown, body: unknown, tenants: boolean) {
+async function listWorkspaceCollection(token: string, query: unknown, propertyInput: unknown, body: unknown, collection: 'scope' | 'tenants' | 'spaces') {
   const principal = await resolveCareWorkspacePrincipal(token);
-  const { limit, cursor, search, buildingId } = parseQuery(query, tenants);
-  if (tenants && propertyInput === undefined) throw invalid();
+  const searchable = collection !== 'scope';
+  const { limit, cursor, search, buildingId } = parseQuery(query, searchable);
+  if (searchable && propertyInput === undefined) throw invalid();
   if (body !== undefined && (body === null || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length)) throw invalid();
   if (propertyInput !== undefined && (typeof propertyInput !== 'string' || !UUID.test(propertyInput))) throw invalid();
   const propertyId = typeof propertyInput === 'string' ? propertyInput.toLowerCase() : null;
@@ -44,8 +46,8 @@ async function listWorkspaceCollection(token: string, query: unknown, propertyIn
   const secret = readHandoffIntegrationSecret(integration.integrationCode);
   if (!secret) throw AppError.internal('Workspace pagination is unavailable.');
   const binding = JSON.stringify({ v: 1, sessionId: principal.sessionId, careActorId: principal.careActorId,
-    integrationId: principal.integrationId, route: tenants ? 'tenant-companies' : propertyId ? 'buildings' : 'properties', propertyId,
-    ...(tenants ? { q: search, buildingId } : {}),
+    integrationId: principal.integrationId, route: collection === 'spaces' ? 'spaces' : collection === 'tenants' ? 'tenant-companies' : propertyId ? 'buildings' : 'properties', propertyId,
+    ...(searchable ? { q: search, buildingId } : {}),
     limit, order: 'id:asc', expiresAt: principal.expiresAt });
   let afterId: string | null = null;
   if (cursor !== undefined) {
@@ -60,7 +62,9 @@ async function listWorkspaceCollection(token: string, query: unknown, propertyIn
       afterId = decoded.afterId;
     } catch { throw invalid(); }
   }
-  const result = tenants
+  const result = collection === 'spaces'
+    ? await careWorkspaceSpacesRepository.readSpaces(principal, propertyId!, afterId, limit, search, buildingId)
+    : collection === 'tenants'
     ? await careWorkspaceTenantsRepository.readTenants(principal, propertyId!, afterId, limit, search, buildingId)
     : await careWorkspaceScopeRepository.readScope(principal, propertyId, afterId, limit);
   if (!result.authenticated) throw workspaceUnauthorized();
@@ -77,9 +81,13 @@ async function listWorkspaceCollection(token: string, query: unknown, propertyIn
 
 /** Existing property/building reads retain their closed query/cursor contracts. */
 export function listCareWorkspaceScope(token: string, query: unknown, propertyInput?: unknown, body?: unknown) {
-  return listWorkspaceCollection(token, query, propertyInput, body, false);
+  return listWorkspaceCollection(token, query, propertyInput, body, 'scope');
 }
 
 export function listCareWorkspaceTenants(token: string, query: unknown, propertyInput: unknown, body?: unknown) {
-  return listWorkspaceCollection(token, query, propertyInput, body, true);
+  return listWorkspaceCollection(token, query, propertyInput, body, 'tenants');
+}
+
+export function listCareWorkspaceSpaces(token: string, query: unknown, propertyInput: unknown, body?: unknown) {
+  return listWorkspaceCollection(token, query, propertyInput, body, 'spaces');
 }
