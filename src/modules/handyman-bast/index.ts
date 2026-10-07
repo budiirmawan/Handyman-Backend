@@ -53,7 +53,7 @@ export {
 } from './handyman-bast.read-contract';
 export type {
   HandymanBastAcceptanceReadContract,
-  HandymanBastNotBastAcceptance,
+  HandymanNotBastAcceptance,
   HandymanBastArtifactReference,
   HandymanBastApprovedSignOffBinding,
 } from './handyman-bast.read-contract';
