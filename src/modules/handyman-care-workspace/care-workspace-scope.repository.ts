@@ -10,19 +10,9 @@ export type ScopeResult = {
   items: (WorkspaceProperty | WorkspaceBuilding)[];
 };
 
-/** One statement snapshot: revalidate session + actor + integration alongside
- * grant/hierarchy filtering, before keyset pagination. No cached grant claims,
- * local User assignments, parallel master, or caller-supplied Client authority.
- * A property need not have buildings; its building collection may be empty. */
-async function readScope(
-  principal: CareWorkspacePrincipal,
-  propertyId: string | null,
-  afterId: string | null,
-  limit: number,
-): Promise<ScopeResult> {
-  const building = propertyId !== null;
-  const result = await getPool().query<ScopeResult>(`
-    WITH authority AS (
+/** Shared read-time authority projection over existing session/grant/masters.
+ * Parameters $1..$4 are server-resolved session/actor/integration and selected property. */
+export const WORKSPACE_GRANTED_SCOPE_CTE = `    WITH authority AS (
       SELECT a.id AS actor_id
       FROM handyman_care_workspace_sessions s
       JOIN handyman_handoff_care_actors a ON a.id = s.care_actor_id
@@ -37,7 +27,21 @@ async function readScope(
       JOIN properties p ON p.id = g.property_id AND p.status = 'ACTIVE'
       JOIN clients c ON c.id = p.client_id AND c.status = 'ACTIVE'
       WHERE ($4::uuid IS NULL OR p.id = $4)
-    ), page AS (
+    )`;
+
+/** One statement snapshot: revalidate session + actor + integration alongside
+ * grant/hierarchy filtering, before keyset pagination. No cached grant claims,
+ * local User assignments, parallel master, or caller-supplied Client authority.
+ * A property need not have buildings; its building collection may be empty. */
+async function readScope(
+  principal: CareWorkspacePrincipal,
+  propertyId: string | null,
+  afterId: string | null,
+  limit: number,
+): Promise<ScopeResult> {
+  const building = propertyId !== null;
+  const result = await getPool().query<ScopeResult>(`
+    ${WORKSPACE_GRANTED_SCOPE_CTE}, page AS (
       ${building
         ? `SELECT b.id, b.property_id AS "propertyId", b.code, b.name
            FROM granted p JOIN buildings b ON b.property_id = p.id AND b.status = 'ACTIVE'

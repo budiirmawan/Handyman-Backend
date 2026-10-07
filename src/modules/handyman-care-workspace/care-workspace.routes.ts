@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { listCareWorkspaceScope } from './care-workspace-scope.service';
+import { listCareWorkspaceScope, listCareWorkspaceTenants } from './care-workspace-scope.service';
 import { getAppConfig } from '../../config';
 import { sendSuccess } from '../../shared/api-response';
 import { AppError } from '../../shared/errors';
@@ -46,6 +46,14 @@ export function createCareWorkspaceRouter(): Router {
       if (!match) throw workspaceUnauthorized();
       const result = await listCareWorkspaceScope(match[1], req.query, req.params.propertyId, req.body);
       sendSuccess(res, result);
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/properties/:propertyId/tenant-companies', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      sendSuccess(res, await listCareWorkspaceTenants(match[1], req.query, req.params.propertyId, req.body));
     } catch (error) { next(error); }
   });
   return router;

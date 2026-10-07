@@ -2604,6 +2604,90 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/properties/{propertyId}/tenant-companies:
+    get:
+      operationId: listCareWorkspaceTenants
+      summary: Discover current tenants in a granted care workspace property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 04A. Customer selection only, never private
+        tenant history, request access, PICs, or an occupancy projection.
+        Requires a live care workspace credential and current ACTIVE property
+        grant, actor, integration and CUSTOMER_CARE capability. Property and Client
+        must be ACTIVE; relationships are derived server-side. Only ACTIVE tenant
+        companies belonging to that Client with an ACTIVE, currently effective
+        tenant-building context in an ACTIVE building of the selected property
+        are eligible. Null effective bounds are unbounded; from/until boundaries
+        are inclusive at the server database statement time. No space relationship
+        is required. Multiple matching buildings return one tenant, not duplicates.
+        Historical-only, inactive, future-only and unrelated tenant contexts are
+        excluded before search and pagination; no private contacts or legal data.
+        q is a trimmed case-insensitive literal substring of tenantCode or
+        tenantName (not regex or SQL wildcards). Optional buildingId narrows to an
+        ACTIVE building inside the selected property; foreign, missing or inactive
+        selected buildings return uniform 404. Only q, buildingId, limit and cursor
+        are accepted; caller-supplied Client/actor, status, offset and body fields
+        are rejected. No Client-wide fallback or tenant existence enumeration.
+        Deterministic ID-ascending keyset pagination defaults to 25, maximum 100.
+        Integrity-protected cursors bind session, actor, integration, endpoint,
+        property, trimmed q, buildingId, limit, ordering and absolute session
+        expiry. Every page revalidates current session, grants and effective
+        context; no historical snapshot or continuing rights are conferred.
+        Empty authorized searches return 200 with items []; expired/revoked
+        sessions return 401, revoked/inaccessible selected scope returns 404,
+        and invalid or mismatched cursors return 400. Storage/signing failures
+        fail closed. Cache-Control is no-store; no total counts are returned.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Selection only, never authority; must be currently granted and active.
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 100 }
+          description: Trimmed nonblank literal name/code search; null bytes are rejected.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Optional narrowing selection inside the active granted property, never authority.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized page; empty when no current matching items remain.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceTenantPage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing, ungranted, revoked or inactive property/Client context; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
   /handyman/care/session:
     post:
       operationId: admitCareWorkspace
@@ -74696,6 +74780,31 @@ components:
                     $ref: "#/components/schemas/ClientFxPolicy"
 
   schemas:
+    CareWorkspaceTenant:
+      type: object
+      additionalProperties: false
+      required: [id, tenantCode, tenantName]
+      properties:
+        id: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+    CareWorkspaceTenantPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceTenant' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque session/scope/search-bound keyset handle, null at end of current results.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Database statement timestamp for authorization, effective context and projection.
     CareWorkspaceProperty:
       type: object
       additionalProperties: false
