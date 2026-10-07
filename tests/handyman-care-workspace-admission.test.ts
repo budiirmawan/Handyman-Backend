@@ -278,13 +278,13 @@ describe('Care workspace admission', () => {
     assert.ok(Number(response?.headers['retry-after']) > 0);
   });
 
-  it('documents only admission/logout, with distinct workspace security and closed assertion schema', () => {
+  it('preserves admission/logout security and the closed assertion schema', () => {
     const spec = parseYaml(readFileSync('docs/api/openapi.yaml', 'utf8'));
     const route = spec.paths['/handyman/care/session'];
     assert.ok(route.post && route.delete);
     assert.deepEqual(route.post.security, [{ handoffAssertionSignature: [] }]);
     assert.deepEqual(route.delete.security, [{ careWorkspaceSession: [] }]);
     assert.equal(spec.components.schemas.CareWorkspaceAssertion.additionalProperties, false);
-    assert.deepEqual(Object.keys(spec.paths).filter(p => p.startsWith('/handyman/care/')), ['/handyman/care/session']);
+    assert.deepEqual(Object.keys(route).sort(), ['delete', 'post']);
   });
 });
