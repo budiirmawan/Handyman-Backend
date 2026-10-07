@@ -103,11 +103,11 @@ async function fixture(clientId?: string) {
   await buildingAssignmentService.createAssignment(linkedUser.id, { buildingId: building.id });
   const pic = await tenantPicService.createTenantPic({ tenantCompanyId: company.id, picName: 'PIC', userId: linkedUser.id }, adminId);
   const occupancy = await tenantSpaceService.assignSpaceToTenant({ tenantCompanyId: company.id, buildingId: building.id, spaceId: space.id }, adminId);
-  await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: company.id, buildingId: building.id }, adminId);
+  const buildingContext = await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: company.id, buildingId: building.id }, adminId);
   const service = await serviceCatalogService.createServiceCatalogEntry({
     clientId: client.id, code: `HM_${suffix()}`, name: 'Handyman Service', category: 'HANDYMAN',
   }, adminId);
-  return { client, property, building, space, company, pic, linkedUser, occupancy, service };
+  return { client, property, building, space, company, pic, linkedUser, occupancy, buildingContext, service };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 async function integration() {
@@ -154,11 +154,15 @@ describe('PART 04 — Customer Care request creation authority', () => {
     if (!ready(t)) return;
     const f = await fixture();
     const i = await integration();
-    await grant(f, i);
+    const propertyGrant = await grant(f, i);
     const variant = await handymanServiceVariantService.createHandymanServiceVariant({
       serviceCatalogId: f.service.id, code: `V_${suffix()}`, name: 'Repair',
     }, adminId);
-    const exchange = await accept(assertion(f, i));
+    const claim = assertion(f, i);
+    const exchange = await accept(claim);
+    assert.equal(propertyGrant.propertyId, f.property.id);
+    assert.equal(exchange.context.tenantBuildingContextId, f.buildingContext.id);
+    assert.equal(exchange.context.tenantSpaceRelationshipId, f.occupancy.id);
     const before = await counts();
     const rejected = await care(exchange.exchangeToken, f.service.id, { tenantCompanyId: randomUUID() });
     assert.equal(rejected.status, 400);
@@ -178,10 +182,18 @@ describe('PART 04 — Customer Care request creation authority', () => {
     assert.equal(request.createdByUserId, null);
     const attr = await db().query('SELECT * FROM handyman_channel_attributions WHERE id = $1', [request.channelAttributionId]);
     assert.equal(attr.rows.length, 1);
+    assert.equal(attr.rows[0].actor_type, 'CUSTOMER_CARE');
     assert.equal(attr.rows[0].care_actor_id, i.actor.id);
+    assert.equal(attr.rows[0].actor_reference, i.actor.actorReference);
     assert.equal(attr.rows[0].created_by_user_id, null);
+    assert.equal(attr.rows[0].client_id, f.client.id);
     assert.equal(attr.rows[0].tenant_company_id, f.company.id);
+    assert.equal(attr.rows[0].tenant_pic_id, f.pic.id);
+    assert.equal(attr.rows[0].building_id, f.building.id);
     assert.equal(attr.rows[0].space_id, f.space.id);
+    assert.equal(attr.rows[0].origin_channel, 'BM_SUPER_APP');
+    assert.equal(attr.rows[0].origin_reference, `bm-handoff:${i.code}:${claim.assertionId}`);
+    assert.equal(request.originReference, attr.rows[0].origin_reference);
     assert.equal((await counts()).sessions, before.sessions);
     assert.equal((await counts()).requests, before.requests + 1);
     assert.equal((await counts()).attributions, before.attributions + 1);
@@ -191,6 +203,71 @@ describe('PART 04 — Customer Care request creation authority', () => {
     const localRetry = await api().post('/api/v1/handyman/requests').set('Authorization', `Bearer ${adminToken}`)
       .send({ channelAttributionId: request.channelAttributionId, serviceCatalogId: f.service.id });
     assert.equal(localRetry.status, 409);
+  });
+
+  it('matches the strict care DTO: no caller actor, customer, property, unit, occupancy or channel overrides', async (t) => {
+    if (!ready(t)) return;
+    const f = await fixture();
+    const i = await integration();
+    await grant(f, i);
+    const exchange = await accept(assertion(f, i));
+    const before = await counts();
+    const disallowed: Record<string, unknown> = {
+      channelAttributionId: randomUUID(),
+      actorType: 'CUSTOMER_CARE', careActorId: i.actor.id,
+      createdByUserId: f.linkedUser.id, tenantCompanyId: f.company.id,
+      tenantPicId: f.pic.id, propertyId: f.property.id,
+      buildingId: f.building.id, spaceId: f.space.id,
+      tenantBuildingContextId: f.buildingContext.id,
+      tenantSpaceRelationshipId: f.occupancy.id,
+      originChannel: 'BM_SUPER_APP', originReference: 'caller-controlled',
+      status: 'INTAKE',
+    };
+    for (const [field, value] of Object.entries(disallowed)) {
+      const response = await care(exchange.exchangeToken, f.service.id, { [field]: value });
+      assert.equal(response.status, 400, `${field}: ${JSON.stringify(response.body)}`);
+    }
+    assert.equal((await care('x'.repeat(513), f.service.id)).status, 400);
+    assert.equal((await care(exchange.exchangeToken, 'not-a-uuid')).status, 400);
+    assert.equal((await care(exchange.exchangeToken, f.service.id, { description: 'x'.repeat(1001) })).status, 400);
+    assert.deepEqual(await counts(), before);
+    assert.equal((await db().query('SELECT status FROM handyman_handoff_exchanges WHERE id=$1', [exchange.exchangeId])).rows[0].status, 'ACTIVE');
+    assert.equal((await care(exchange.exchangeToken, f.service.id)).status, 201);
+  });
+
+  it('accepts care for a represented building without a selected unit, without inventing occupancy', async (t) => {
+    if (!ready(t)) return;
+    const f = await fixture();
+    const i = await integration();
+    await grant(f, i);
+    const { spaceId: _spaceId, ...buildingOnly } = assertion(f, i);
+    const exchange = await accept(buildingOnly);
+    assert.equal(exchange.context.tenantBuildingContextId, f.buildingContext.id);
+    assert.equal(exchange.context.tenantSpaceRelationshipId, null);
+    const response = await care(exchange.exchangeToken, f.service.id);
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    assert.equal(response.body.data.buildingId, f.building.id);
+    assert.equal(response.body.data.spaceId, null);
+    assert.equal(response.body.data.tenantCompanyId, f.company.id);
+    assert.equal(response.body.data.createdByUserId, null);
+    const attr = await db().query('SELECT space_id, care_actor_id FROM handyman_channel_attributions WHERE id=$1', [response.body.data.channelAttributionId]);
+    assert.deepEqual(attr.rows[0], { space_id: null, care_actor_id: i.actor.id });
+  });
+
+  it('rejects building-context turnover after acceptance even if the same customer returns', async (t) => {
+    if (!ready(t)) return;
+    const f = await fixture();
+    const i = await integration();
+    await grant(f, i);
+    const exchange = await accept(assertion(f, i));
+    await db().query("UPDATE tenant_building_contexts SET status='INACTIVE' WHERE id=$1", [f.buildingContext.id]);
+    const before = await counts();
+    assert.equal((await care(exchange.exchangeToken, f.service.id)).status, 401);
+    const replacement = await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: f.company.id, buildingId: f.building.id }, adminId);
+    assert.notEqual(replacement.id, f.buildingContext.id);
+    assert.equal((await care(exchange.exchangeToken, f.service.id)).status, 401);
+    assert.deepEqual(await counts(), before);
+    assert.equal((await db().query('SELECT status FROM handyman_handoff_exchanges WHERE id=$1', [exchange.exchangeId])).rows[0].status, 'ACTIVE');
   });
 
   it('denies missing/revoked grant and different property, including revocation after acceptance', async (t) => {
@@ -280,17 +357,42 @@ describe('PART 04 — Customer Care request creation authority', () => {
     assert.equal((await counts()).attributions, before.attributions + 1);
   });
 
-  it('documents only the narrow care create contract', () => {
+  it('documents the runtime care DTO, nullable actor-less response, and separate local-User contract', () => {
     const spec = parseYaml(readFileSync(new URL('../docs/api/openapi.yaml', import.meta.url), 'utf8')) as {
-      paths: Record<string, Record<string, { security: unknown; operationId: string }>>;
-      components: { schemas: Record<string, { required: string[]; additionalProperties?: boolean; properties: Record<string, unknown> }> };
+      paths: Record<string, { post: {
+        security: unknown;
+        operationId: string;
+        requestBody: { content: Record<string, { schema: { $ref: string } }> };
+        responses: Record<string, { content: Record<string, { schema: {
+          allOf: Array<{ properties?: { data: { $ref: string } } }>;
+        } }> }>;
+      } }>;
+      components: { schemas: Record<string, {
+        required: string[];
+        additionalProperties?: boolean;
+        properties: Record<string, { $ref?: string; nullable?: boolean; minLength?: number; maxLength?: number }>;
+      }> };
     };
     const operation = spec.paths['/handyman/requests/care'].post;
     assert.equal(operation.operationId, 'createCareHandymanServiceRequest');
     assert.deepEqual(operation.security, []);
+    assert.equal(operation.requestBody.content['application/json'].schema.$ref, '#/components/schemas/CreateCareHandymanServiceRequest');
+    assert.equal(operation.responses['201'].content['application/json'].schema.allOf[1].properties?.data.$ref, '#/components/schemas/HandymanServiceRequest');
     const dto = spec.components.schemas.CreateCareHandymanServiceRequest;
     assert.deepEqual(dto.required, ['exchangeToken', 'serviceCatalogId']);
     assert.equal(dto.additionalProperties, false);
     assert.deepEqual(Object.keys(dto.properties), ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description']);
+    assert.equal(dto.properties.exchangeToken.minLength, 1);
+    assert.equal(dto.properties.exchangeToken.maxLength, 512);
+    assert.equal(dto.properties.serviceCatalogId.$ref, '#/components/schemas/Uuid');
+    assert.equal(dto.properties.description.maxLength, 1000);
+    const response = spec.components.schemas.HandymanServiceRequest;
+    assert.ok(response.required.includes('channelAttributionId'));
+    assert.ok(response.required.includes('createdByUserId'));
+    assert.equal(response.properties.createdByUserId.nullable, true);
+    assert.equal(response.properties.spaceId.nullable, true);
+    const local = spec.paths['/handyman/requests'].post;
+    assert.deepEqual(local.security, [{ bearerAuth: [] }]);
+    assert.equal(local.requestBody.content['application/json'].schema.$ref, '#/components/schemas/CreateHandymanServiceRequest');
   });
 });
