@@ -2810,7 +2810,13 @@ paths:
       description: >
         CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request list read
         projection. Requires `tenant_company.read` and accessible-Client
-        scope (`canAccessClient`). Returns only governed request/status,
+        scope (`canAccessClient`). Each request additionally requires an
+        assigned Building and an ACTIVE PIC link to its represented tenant,
+        with effective tenant-building and exact-unit occupancy (or effective
+        building occupancy when no unit was selected). Only an ACTIVE
+        PLATFORM_ADMIN role with assigned Building scope may read historical
+        requests after turnover. Building/Client access alone is insufficient.
+        Returns only governed request/status,
         Backend-resolved attribution/care-actor provenance from the immutable
         `handyman_channel_attributions` row, and the execution-scope pointer
         (`executionScopeId`) where present. No lifecycle commands, no local
@@ -2970,7 +2976,13 @@ paths:
       description: >
         CR-HM-17 GAP PART 01 (B3) — bounded Customer Care request detail read
         projection. Requires `tenant_company.read` and accessible-Client
-        scope (`canAccessClient`). Returns only governed request/status,
+        scope (`canAccessClient`). Each request additionally requires an
+        assigned Building and an ACTIVE PIC link to its represented tenant,
+        with effective tenant-building and exact-unit occupancy (or effective
+        building occupancy when no unit was selected). Only an ACTIVE
+        PLATFORM_ADMIN role with assigned Building scope may read historical
+        requests after turnover. Building/Client access alone is insufficient.
+        Returns only governed request/status,
         Backend-resolved attribution/care-actor provenance from the immutable
         `handyman_channel_attributions` row, and the execution-scope pointer
         (`executionScopeId`) where present. No lifecycle commands, no local

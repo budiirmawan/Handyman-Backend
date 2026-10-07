@@ -275,10 +275,9 @@ export async function createCareHandymanServiceRequest(
 }
 
 /**
- * CR-HM-17 GAP PART 01 — bounded Customer Care request list read projection.
- * Includes only governed request/status, Backend-resolved attribution /
- * care-actor provenance, and execution-scope pointer where present.
- * Enforces `contextAccessService.canAccessClient(actorUserId, filters.clientId)`.
+ * Bounded request list: retain the existing Client + tenant_company.read wall,
+ * then apply the C6 represented-customer/occupancy or explicitly assigned
+ * PLATFORM_ADMIN historical-read wall to every row in the repository query.
  */
 export async function listHandymanServiceRequests(
   filters: HandymanServiceRequestListFilters,
@@ -319,35 +318,30 @@ export async function listHandymanServiceRequests(
     await handymanServiceRequestRepository.listCustomerCareProjectionsScoped(
       undefined,
       filters,
+      actorUserId,
     );
   return records.map(toCustomerCarePublic);
 }
 
-/**
- * CR-HM-17 GAP PART 01 — bounded Customer Care request detail read projection.
- * Includes only governed request/status, Backend-resolved attribution /
- * care-actor provenance, and execution-scope pointer where present.
- * Enforces `contextAccessService.canAccessClient(actorUserId, record.clientId)`.
- */
+/** C6 detail read: check existence/Client as before, then perform the
+ * authorized projection in one SQL statement with the occupancy/role wall. */
 export async function getHandymanServiceRequestDetail(
   handymanRequestId: string,
   actorUserId: string,
 ): Promise<PublicHandymanCustomerCareServiceRequest> {
   assertUuid(handymanRequestId, 'handymanRequestId');
 
-  const record =
-    await handymanServiceRequestRepository.findCustomerCareProjectionById(
-      undefined,
-      handymanRequestId,
-    );
-  if (!record) throw handymanServiceRequestNotFoundError();
-
-  if (
-    !(await contextAccessService.canAccessClient(actorUserId, record.clientId))
-  ) {
+  const request = await handymanServiceRequestRepository.findById(
+    undefined, handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
     throw buildingAccessDeniedError();
   }
-
+  const record = await handymanServiceRequestRepository.findCustomerCareProjectionById(
+    undefined, handymanRequestId, actorUserId,
+  );
+  if (!record) throw buildingAccessDeniedError();
   return toCustomerCarePublic(record);
 }
 

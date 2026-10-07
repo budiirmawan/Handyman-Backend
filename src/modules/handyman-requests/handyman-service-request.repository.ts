@@ -167,16 +167,81 @@ async function updateStatus(
   return result.rows[0] ?? null;
 }
 
+/**
+ * C6 read wall, applied in SQL to both list and detail so filtering and the
+ * returned projection observe the same database statement. A Building/Client
+ * assignment alone is NOT customer authority. A linked ACTIVE PIC may read
+ * only its represented tenant's requests while the tenant still has effective
+ * building + (when selected) exact unit occupancy. Building-only requests
+ * require effective occupancy somewhere in the represented building.
+ *
+ * The existing PLATFORM_ADMIN role is the explicit operational exception:
+ * it may read historical requests, but only in its assigned Building and
+ * with the route's tenant_company.read permission. No new role/permission.
+ */
+function customerRequestReadScope(actorParam: number): string {
+  const actor = `$${actorParam}`;
+  return `EXISTS (
+    SELECT 1 FROM user_building_assignments uba
+      JOIN buildings b ON b.id = uba.building_id AND b.status = 'ACTIVE'
+      JOIN properties p ON p.id = b.property_id AND p.status = 'ACTIVE'
+      JOIN clients c ON c.id = p.client_id AND c.status = 'ACTIVE'
+      JOIN users u ON u.id = uba.user_id AND u.status = 'ACTIVE'
+    WHERE uba.user_id = ${actor} AND uba.status = 'ACTIVE'
+      AND b.id = r.building_id AND c.id = r.client_id
+      AND (
+        EXISTS (
+          SELECT 1 FROM user_role_assignments ura
+            JOIN roles role ON role.id = ura.role_id
+          WHERE ura.user_id = ${actor} AND ura.status = 'ACTIVE'
+            AND role.code = 'PLATFORM_ADMIN' AND role.status = 'ACTIVE'
+        )
+        OR (
+          EXISTS (
+            SELECT 1 FROM tenant_pics pic
+              JOIN tenant_companies tc ON tc.id = pic.tenant_company_id
+            WHERE pic.user_id = ${actor} AND pic.status = 'ACTIVE'
+              AND tc.id = r.tenant_company_id AND tc.client_id = r.client_id
+              AND tc.status = 'ACTIVE'
+          )
+          AND EXISTS (
+            SELECT 1 FROM tenant_building_contexts tbc
+            WHERE tbc.tenant_company_id = r.tenant_company_id
+              AND tbc.building_id = r.building_id AND tbc.status = 'ACTIVE'
+              AND (tbc.effective_from IS NULL OR tbc.effective_from <= statement_timestamp())
+              AND (tbc.effective_until IS NULL OR tbc.effective_until >= statement_timestamp())
+          )
+          AND EXISTS (
+            SELECT 1 FROM tenant_space_relationships tsr
+            WHERE tsr.tenant_company_id = r.tenant_company_id
+              AND tsr.building_id = r.building_id AND tsr.status = 'ACTIVE'
+              AND (tsr.effective_from IS NULL OR tsr.effective_from <= statement_timestamp())
+              AND (tsr.effective_until IS NULL OR tsr.effective_until >= statement_timestamp())
+              AND (r.space_id IS NULL OR tsr.space_id = r.space_id)
+          )
+          AND (r.space_id IS NULL OR EXISTS (
+            SELECT 1 FROM spaces s
+              JOIN rooms room ON room.id = s.room_id
+              JOIN areas a ON a.id = room.area_id
+              JOIN floors f ON f.id = a.floor_id
+            WHERE s.id = r.space_id AND f.building_id = r.building_id
+          ))
+        )
+      )
+  )`;
+}
+
 async function findCustomerCareProjectionById(
   executor: Pick<PoolClient, 'query'> = getPool(),
   id: string,
+  actorUserId: string,
 ): Promise<HandymanCustomerCareServiceRequestRecord | null> {
   const result =
     await executor.query<HandymanCustomerCareServiceRequestRecord>(
       `SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
          ${CUSTOMER_CARE_PROJECTION_FROM}
-        WHERE r.id = $1`,
-      [id],
+        WHERE r.id = $1 AND ${customerRequestReadScope(2)}`,
+      [id, actorUserId],
     );
   return result.rows[0] ?? null;
 }
@@ -184,6 +249,7 @@ async function findCustomerCareProjectionById(
 async function listCustomerCareProjectionsScoped(
   executor: Pick<PoolClient, 'query'> = getPool(),
   filters: HandymanServiceRequestListFilters,
+  actorUserId: string,
 ): Promise<HandymanCustomerCareServiceRequestRecord[]> {
   const conditions: string[] = ['r.client_id = $1'];
   const values: unknown[] = [filters.clientId];
@@ -209,6 +275,8 @@ async function listCustomerCareProjectionsScoped(
     conditions.push(`r.status = $${idx++}`);
     values.push(filters.status);
   }
+  conditions.push(customerRequestReadScope(idx));
+  values.push(actorUserId);
 
   const result =
     await executor.query<HandymanCustomerCareServiceRequestRecord>(
