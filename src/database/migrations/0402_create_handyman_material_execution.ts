@@ -271,4 +271,26 @@ export const migration0402CreateHandymanMaterialExecution: Migration = {
         EXECUTE FUNCTION handyman_material_exec_event_block_mutation();
     `);
   },
+  async down(client: PoolClient): Promise<void> {
+    await client.query(`
+      DROP TRIGGER IF EXISTS handyman_material_exec_event_no_write
+        ON handyman_material_execution_events;
+      DROP TRIGGER IF EXISTS handyman_material_exec_line_identity_guard
+        ON handyman_material_execution_lines;
+      DROP TRIGGER IF EXISTS handyman_material_exec_event_child_check
+        ON handyman_material_execution_events;
+      DROP TRIGGER IF EXISTS handyman_material_exec_line_client_check
+        ON handyman_material_execution_lines;
+      DROP FUNCTION IF EXISTS
+        handyman_material_exec_event_block_mutation;
+      DROP FUNCTION IF EXISTS
+        handyman_material_exec_line_block_identity_mutation;
+      DROP FUNCTION IF EXISTS
+        handyman_material_exec_child_consistency;
+      DROP FUNCTION IF EXISTS
+        handyman_material_exec_client_consistency;
+      DROP TABLE IF EXISTS handyman_material_execution_events;
+      DROP TABLE IF EXISTS handyman_material_execution_lines;
+    `);
+  },
 };

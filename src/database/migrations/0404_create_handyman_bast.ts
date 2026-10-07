@@ -172,4 +172,22 @@ export const migration0404CreateHandymanBast: Migration = {
         EXECUTE FUNCTION handyman_bast_event_no_write();
     `);
   },
+  async down(client: PoolClient): Promise<void> {
+    await client.query(`
+      DROP TRIGGER IF EXISTS handyman_bast_events_no_write
+        ON handyman_bast_events;
+      DROP TRIGGER IF EXISTS handyman_bast_identity_guard
+        ON handyman_bast_documents;
+      DROP TRIGGER IF EXISTS handyman_bast_events_parent_check
+        ON handyman_bast_events;
+      DROP TRIGGER IF EXISTS handyman_bast_client_check
+        ON handyman_bast_documents;
+      DROP FUNCTION IF EXISTS handyman_bast_event_no_write;
+      DROP FUNCTION IF EXISTS handyman_bast_head_identity_guard;
+      DROP FUNCTION IF EXISTS handyman_bast_event_consistency;
+      DROP FUNCTION IF EXISTS handyman_bast_client_consistency;
+      DROP TABLE IF EXISTS handyman_bast_events;
+      DROP TABLE IF EXISTS handyman_bast_documents;
+    `);
+  },
 };
