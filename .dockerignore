@@ -1,0 +1,38 @@
+# HANDYMAN DEPLOY D01 — Docker build context exclusions.
+#
+# Everything not listed as required by the Dockerfile is kept out of the build
+# context so the image cannot inherit local state, secrets, or developer
+# artifacts. The Dockerfile copies only:
+#   package.json, package-lock.json, tsconfig.json, src/,
+#   docker/production-migrate.sh
+
+# --- Version control ---------------------------------------------------------
+.git
+.gitattributes
+.github
+
+# --- Dependencies and build output (both rebuilt inside the image) -----------
+node_modules
+dist
+coverage
+*.tsbuildinfo
+.nyc_output
+
+# --- Local runtime data and secrets ------------------------------------------
+# .data holds the local evidence store (EVIDENCE_STORAGE_DIR); .env files hold
+# local credentials. Neither may ever enter a build context or image layer.
+.data
+.env
+.env.*
+
+# --- Tests, docs, and repository tooling (not needed at runtime) -------------
+tests
+docs
+scripts
+*.md
+.editorconfig
+.vscode
+.idea
+.DS_Store
+Dockerfile
+.dockerignore
