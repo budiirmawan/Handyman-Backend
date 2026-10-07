@@ -125,7 +125,7 @@ export function evaluateHandymanMaterialPricingBasis(
 
   return {
     mode: basisMode,
-    currency: currency as string,
+    currency,
     lines: evaluated,
     basisAmount: (totalCents / 100).toFixed(2),
   };

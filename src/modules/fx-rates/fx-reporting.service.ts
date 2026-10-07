@@ -333,7 +333,7 @@ export const fxReportingService = {
 
     // ---- 4. Completeness: all or nothing ---------------------------------
     const convertedTotal: FxConvertedTotal | null =
-      unconvertible.length === 0 && convertedTotalDecimal !== null
+      unconvertible.length === 0 && convertedTotalDecimal !== null && reportingCurrencyCode !== null
         ? {
             amount: toDecimalString(convertedTotalDecimal),
             currencyCode: reportingCurrencyCode,

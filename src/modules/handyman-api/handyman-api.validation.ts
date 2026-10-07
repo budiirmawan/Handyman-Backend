@@ -10,6 +10,10 @@ import {
   type HandymanServiceRequestListFilters,
   type HandymanServiceRequestStatus,
 } from '../handyman-requests';
+import {
+  isPriceCatalogCurrency,
+  type PriceCatalogCurrency,
+} from '../price-catalog-entries/price-catalog-entry.types';
 
 /**
  * CR-HM-02 PART 05A — request/DTO parsing for the customer-facing Handyman
@@ -98,7 +102,7 @@ export function parseHandymanMaterialProfileListQuery(
 
 export type HandymanMaterialProfileDescribeQuery = {
   buildingId: string;
-  currency: string;
+  currency: PriceCatalogCurrency;
   asOf?: string;
 };
 
@@ -113,11 +117,19 @@ export function parseHandymanMaterialProfileDescribeQuery(
   const source = isRecord(query) ? query : {};
   const details: Detail[] = [];
   const buildingId = readId(source.buildingId, 'buildingId', true, details);
-  let currency: string | undefined;
+  let currency: PriceCatalogCurrency | undefined;
   if (typeof source.currency !== 'string' || !source.currency.trim()) {
     details.push({ field: 'currency', message: 'currency is required.' });
   } else {
-    currency = source.currency.trim().toUpperCase();
+    const candidate = source.currency.trim().toUpperCase();
+    if (!isPriceCatalogCurrency(candidate)) {
+      details.push({
+        field: 'currency',
+        message: 'currency is not a governed price currency.',
+      });
+    } else {
+      currency = candidate;
+    }
   }
   let asOf: string | undefined;
   if (source.asOf !== undefined && source.asOf !== null && source.asOf !== '') {

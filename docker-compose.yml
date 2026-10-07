@@ -1,0 +1,68 @@
+# Handyman Backend — local / production-like stack.
+#
+# Services: backend (built from ./Dockerfile) + PostgreSQL 16 with a named
+# persistent data volume. No secrets are stored here: DB_PASSWORD is REQUIRED
+# from the caller's environment (compose fails fast when it is missing).
+#
+# Start:            DB_PASSWORD=<secret> docker compose up -d --build
+# One-shot migrate (explicit; NEVER auto-run on backend startup):
+#                   DB_PASSWORD=<secret> docker compose up -d db
+#                   DB_PASSWORD=<secret> docker compose run --rm backend node dist/database/cli.js migrate
+# Migrate status:   DB_PASSWORD=<secret> docker compose run --rm backend node dist/database/cli.js status
+# Inspect DB:       docker compose exec db psql -U "${DB_USER:-postgres}" "${DB_NAME:-asentra}"
+# Tear down:        docker compose down   (volumes are kept; add -v to drop them)
+#
+# No seed/demo data, no MinIO/S3, no reverse proxy — backend + postgres only.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${DB_NAME:-asentra}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    volumes:
+      - handyman-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  backend:
+    build: .
+    image: handyman-backend:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: ${PORT:-3000}
+      DB_HOST: db
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-asentra}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_SSL: ${DB_SSL:-false}
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - handyman-evidence:/app/.data/evidence
+    healthcheck:
+      # Existing unauthenticated endpoint: 200 when the pool connects, 5xx
+      # otherwise. Node 22 global fetch — no curl in the slim image.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:'+(process.env.PORT||'3000')+'/api/v1/health/database').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  handyman-postgres-data:
+  handyman-evidence:

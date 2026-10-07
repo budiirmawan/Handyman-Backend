@@ -1,5 +1,6 @@
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { ConfigError } from '../../../config';
 import { AppError, ERROR_CODES } from '../../../shared/errors';
 import {
   isManagedStorageKey,
@@ -66,4 +67,31 @@ export function createLocalEvidenceStorage(baseDir: string): EvidenceStorage {
       await unlink(target).catch(() => undefined);
     },
   };
+}
+
+/**
+ * D03 — boot-time readiness probe for the local driver.
+ *
+ * Additive only: the `EvidenceStorage` interface and the factory above are
+ * unchanged. Resolves `baseDir`, creates it (recursive), then proves
+ * writability by writing and removing a probe file. Resolves with the
+ * absolute root path. Throws `ConfigError` (fail fast) when the directory
+ * cannot be created or written — e.g. a missing persistent-volume mount or
+ * wrong directory ownership in the container.
+ */
+export async function verifyLocalEvidenceStorageRoot(baseDir: string): Promise<string> {
+  const root = resolve(baseDir);
+  const probe = join(root, `.write-probe-${process.pid}`);
+  try {
+    await mkdir(root, { recursive: true });
+    await writeFile(probe, 'ok');
+    await unlink(probe);
+  } catch (error) {
+    await unlink(probe).catch(() => undefined);
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(
+      `Invalid configuration: EVIDENCE_STORAGE_DIR is not writable (${root}): ${detail}`,
+    );
+  }
+  return root;
 }

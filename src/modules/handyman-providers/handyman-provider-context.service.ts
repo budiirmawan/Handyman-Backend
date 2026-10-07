@@ -86,7 +86,11 @@ export async function createHandymanProviderContext(
 
       const record = await handymanProviderContextRepository.insertContext(
         tx,
-        { clientId: vendor.clientId, vendorId: vendor.id },
+        {
+          clientId: vendor.clientId,
+          vendorId: vendor.id,
+          createdByUserId: actorUserId,
+        },
         actorUserId,
       );
 

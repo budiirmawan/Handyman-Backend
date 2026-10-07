@@ -1,0 +1,17 @@
+# Keep the build context (and the image) free of everything the production
+# runtime does not need. The Dockerfile copies explicitly (package files,
+# tsconfig, src/), so this list only shrinks context transfer.
+node_modules/
+dist/
+.git/
+.gitignore
+tests/
+docs/
+.data/
+coverage/
+.nyc_output/
+.env
+.env.*
+*.log
+npm-debug.log*
+README*.md

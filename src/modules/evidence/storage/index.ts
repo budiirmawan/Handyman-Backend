@@ -1,5 +1,5 @@
 import { getAppConfig } from '../../../config';
-import { createLocalEvidenceStorage } from './local-evidence-storage';
+import { createLocalEvidenceStorage, verifyLocalEvidenceStorageRoot } from './local-evidence-storage';
 import type { EvidenceStorage } from './evidence-storage.types';
 
 export type { EvidenceStorage, StoredEvidenceFile } from './evidence-storage.types';
@@ -12,6 +12,7 @@ export {
   isReportArchiveStorageKey,
   reportArchiveStorageKey,
 } from './evidence-storage.types';
+export { verifyLocalEvidenceStorageRoot } from './local-evidence-storage';
 
 /**
  * Creates the configured evidence storage backend (single storage boundary).
@@ -23,6 +24,25 @@ export function createEvidenceStorage(): EvidenceStorage {
   switch (config.driver) {
     case 'local':
       return createLocalEvidenceStorage(config.dir);
+    default:
+      throw new Error(`Unsupported evidence storage driver: ${config.driver}`);
+  }
+}
+
+/**
+ * D03 — fail-fast boot gate for the configured storage backend.
+ *
+ * Mirrors the driver selection of `createEvidenceStorage()` (additive; the
+ * factory and the `EvidenceStorage` interface are unchanged). Resolves with
+ * the absolute storage root when the backend is ready; throws `ConfigError`
+ * when the configured directory cannot be created or written, so the server
+ * refuses to boot instead of failing evidence operations mid-request.
+ */
+export async function verifyEvidenceStorageReady(): Promise<string> {
+  const config = getAppConfig().storage;
+  switch (config.driver) {
+    case 'local':
+      return verifyLocalEvidenceStorageRoot(config.dir);
     default:
       throw new Error(`Unsupported evidence storage driver: ${config.driver}`);
   }
