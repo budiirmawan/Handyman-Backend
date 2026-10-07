@@ -2773,6 +2773,104 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/properties/{propertyId}/occupancies:
+    get:
+      operationId: listCareWorkspaceOccupancies
+      summary: Project current effective tenant building and unit occupancy
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 04C. Informational read-time composition of
+        existing tenant_building_contexts and tenant_space_relationships. No new
+        occupancy master, persistence, credential or permission is created.
+        Requires live workspace authentication and an ACTIVE care-property grant,
+        actor/integration/capability, Property and Client. At least tenantCompanyId
+        or spaceId is required; buildingId is an optional conjunctive selector.
+        Client/actor authority inputs, PIC, q/search, status and body fields are
+        rejected. Tenant and Building must be ACTIVE and belong to the derived
+        Client/property. Both relationships must be ACTIVE and effective at the
+        same database statement time, with inclusive bounds and null unbounded.
+        With no spaceId, return BUILDING contexts plus any valid SPACE contexts.
+        BUILDING representation does not require any space relationship; spaceId,
+        tenantSpaceRelationshipId and its effective windows remain null, never
+        fabricated. With spaceId, return only its exact current SPACE occupancy
+        for the selected tenant/building (when supplied), never a building fallback.
+        SPACE rows additionally require the full ACTIVE Space-Room-Area-Floor-
+        Building-Property-Client hierarchy and exact tenant/building agreement
+        between both relationships and the physical space chain. No former,
+        future-only, inactive or foreign context is exposed. Invalid selected
+        representation, including no current exact occupancy, returns uniform 404.
+        Canonical context and relationship IDs, each relationship's original
+        effective windows and evaluatedAt are projections, not authorization
+        tokens. No PIC contacts, private history, lease or ownership claims.
+        Pagination defaults to 25, maximum 100. Stable order is kind (BUILDING
+        before SPACE) then the canonical relationship UUID ascending: building
+        context ID for BUILDING, tenant-space relationship ID for SPACE. No
+        synthesized occupancy ID is public. Cursors bind session/actor/integration,
+        endpoint/property, all selectors, limit, ordering and session expiry.
+        A signed current-result revision marker additionally rejects continuation
+        with 404 if turnover, effective windows or eligible contexts change.
+        Restart discovery rather than silently switching represented customers.
+        This is not a stored historical snapshot: every page reauthorizes current
+        records, grants and session before pagination. Revoked/expired sessions
+        return 401, invalid/mismatched cursors return 400, inaccessible scope or
+        changed occupancy continuation returns 404. Storage/signing failure fails
+        closed. Response Cache-Control is no-store; no totals are exposed.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Selection only, never authority; must be currently granted and active.
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Represented tenant selection; tenantCompanyId or spaceId is required.
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Exact current unit occupancy selector; no building-only fallback when present.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Optional narrowing selection inside the active granted property, never authority.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Current effective context page. No matching selected representation returns 404; a page past the end of an unchanged valid selection may be empty.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceOccupancyPage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for inaccessible scope, invalid current representation, or changed occupancy continuation; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
   /handyman/care/session:
     post:
       operationId: admitCareWorkspace
@@ -74865,6 +74963,42 @@ components:
                     $ref: "#/components/schemas/ClientFxPolicy"
 
   schemas:
+    CareWorkspaceOccupancy:
+      type: object
+      additionalProperties: false
+      description: Informational composition only; no occupancy master or acting credential.
+      required: [kind, clientId, propertyId, tenantCompanyId, buildingId, spaceId, tenantBuildingContextId, tenantSpaceRelationshipId, tenantBuildingEffectiveFrom, tenantBuildingEffectiveUntil, tenantSpaceEffectiveFrom, tenantSpaceEffectiveUntil, evaluatedAt]
+      properties:
+        kind: { type: string, enum: [BUILDING, SPACE] }
+        clientId: { type: string, format: uuid }
+        propertyId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: string, format: uuid, nullable: true }
+        tenantBuildingContextId: { type: string, format: uuid }
+        tenantSpaceRelationshipId: { type: string, format: uuid, nullable: true }
+        tenantBuildingEffectiveFrom: { type: string, format: date-time, nullable: true }
+        tenantBuildingEffectiveUntil: { type: string, format: date-time, nullable: true }
+        tenantSpaceEffectiveFrom: { type: string, format: date-time, nullable: true }
+        tenantSpaceEffectiveUntil: { type: string, format: date-time, nullable: true }
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Same database statement time used for authority and effectiveness, also returned on the page.
+    CareWorkspaceOccupancyPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceOccupancy' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Signed selection/revision-bound continuation handle, not a credential; null at end.
+        evaluatedAt: { type: string, format: date-time }
     CareWorkspaceSpace:
       type: object
       additionalProperties: false

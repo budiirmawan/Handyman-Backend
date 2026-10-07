@@ -317,8 +317,8 @@ describe('Care workspace physical unit discovery', () => {
     finally { process.env[envKey] = SECRET; }
   });
 
-  it('does not enable occupancy/PIC/catalogue/request routes, mutation or create exchange substitution', async () => {
-    for (const segment of ['occupancies', `tenant-companies/${randomUUID()}/pics`, 'catalogue/services']) {
+  it('does not enable PIC/catalogue/request routes, mutation or create exchange substitution', async () => {
+    for (const segment of [`tenant-companies/${randomUUID()}/pics`, 'catalogue/services']) {
       assert.equal((await get(`${path}/${props[0]}/${segment}`)).status, 404);
     }
     assert.equal((await api().post(spacePath()).set('Authorization', `Bearer ${token}`).send({})).status, 404);

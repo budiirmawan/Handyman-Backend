@@ -313,7 +313,7 @@ describe('Care workspace property scope reads', () => {
     assert.equal((await get('/api/v1/properties', userToken)).status, 200);
     assert.equal((await get('/api/v1/properties')).status, 401);
     await assert.rejects(consumeHandoffExchange(token));
-    for (const url of [`${path}/${props[0]}/occupancies`, `${path}/${props[0]}/tenant-companies/${randomUUID()}/pics`, `${path}/${props[0]}/catalogue/services`]) {
+    for (const url of [`${path}/${props[0]}/tenant-companies/${randomUUID()}/pics`, `${path}/${props[0]}/catalogue/services`]) {
       assert.equal((await get(url)).status, 404);
     }
     assert.equal((await api().post(path).set('Authorization', `Bearer ${token}`).send({})).status, 404);
@@ -322,7 +322,7 @@ describe('Care workspace property scope reads', () => {
   it('documents just the admitted care route families and bounded minimal projections', () => {
     const spec = parseYaml(readFileSync('docs/api/openapi.yaml', 'utf8'));
     assert.deepEqual(Object.keys(spec.paths).filter(p => p.startsWith('/handyman/care/')).sort(),
-      ['/handyman/care/session', '/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings', '/handyman/care/properties/{propertyId}/tenant-companies', '/handyman/care/properties/{propertyId}/spaces'].sort());
+      ['/handyman/care/session', '/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings', '/handyman/care/properties/{propertyId}/tenant-companies', '/handyman/care/properties/{propertyId}/spaces', '/handyman/care/properties/{propertyId}/occupancies'].sort());
     for (const p of ['/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings']) {
       assert.deepEqual(Object.keys(spec.paths[p]), ['get']);
       assert.deepEqual(spec.paths[p].get.security, [{ careWorkspaceSession: [] }]);
