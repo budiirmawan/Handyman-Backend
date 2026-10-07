@@ -70,8 +70,12 @@ async function resolveActiveForBuilding(
   careActorId: string,
   buildingId: string,
   clientId: string,
+  tx?: Pick<PoolClient, 'query'>,
 ): Promise<CarePropertyGrantRecord | null> {
-  const result = await getPool().query<CarePropertyGrantRecord>(
+  // A request-create transaction holds shared locks on the grant and its
+  // active hierarchy until commit; revocation/deactivation cannot race past
+  // the final authorization check. Standalone handoff admission just reads.
+  const result = await (tx ?? getPool()).query<CarePropertyGrantRecord>(
     `SELECT ${SELECT} FROM handyman_care_property_grants g
       JOIN handyman_handoff_care_actors a ON a.id = g.care_actor_id
       JOIN handyman_handoff_integrations i ON i.id = a.integration_id
@@ -81,7 +85,8 @@ async function resolveActiveForBuilding(
       WHERE g.care_actor_id = $1 AND b.id = $2 AND c.id = $3
         AND g.status = 'ACTIVE' AND a.status = 'ACTIVE'
         AND i.status = 'ACTIVE' AND i.actor_capability = 'CUSTOMER_CARE'
-        AND p.status = 'ACTIVE' AND b.status = 'ACTIVE' AND c.status = 'ACTIVE'`,
+        AND p.status = 'ACTIVE' AND b.status = 'ACTIVE' AND c.status = 'ACTIVE'
+      ${tx ? 'FOR SHARE OF g, a, i, p, b, c' : ''}`,
     [careActorId, buildingId, clientId],
   );
   return result.rows[0] ?? null;

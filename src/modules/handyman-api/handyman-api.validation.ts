@@ -146,6 +146,53 @@ export function parseHandymanMaterialProfileDescribeQuery(
   return { buildingId, currency, ...(asOf !== undefined ? { asOf } : {}) };
 }
 
+export type CreateCareHandymanServiceRequestInput = {
+  exchangeToken: string;
+  serviceCatalogId: string;
+  serviceVariantId?: string;
+  description?: string;
+};
+
+/** Care-only intake uses an opaque single-use exchange credential, never an
+ * attribution ID, caller-declared actor, tenant, property or unit. */
+export function parseCreateCareHandymanServiceRequestBody(
+  body: unknown,
+): CreateCareHandymanServiceRequestInput {
+  if (!isRecord(body)) {
+    fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
+  }
+  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description'];
+  const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    fail([{ field: 'body', message: 'Unexpected care request context field.' }]);
+  }
+  const details: Detail[] = [];
+  const serviceCatalogId = readId(body.serviceCatalogId, 'serviceCatalogId', true, details);
+  const serviceVariantId = readId(body.serviceVariantId, 'serviceVariantId', false, details);
+  const exchangeToken = typeof body.exchangeToken === 'string' &&
+    body.exchangeToken.length > 0 && body.exchangeToken.length <= 512
+    ? body.exchangeToken : undefined;
+  if (!exchangeToken) {
+    details.push({ field: 'exchangeToken', message: 'A single-use exchange token is required.' });
+  }
+  let description: string | undefined;
+  if (body.description !== undefined) {
+    if (typeof body.description !== 'string' ||
+        body.description.trim().length < 1 || body.description.trim().length > 1000) {
+      details.push({ field: 'description', message: 'description must be 1-1000 characters.' });
+    } else {
+      description = body.description.trim();
+    }
+  }
+  if (!exchangeToken || !serviceCatalogId || details.length) fail(details);
+  return {
+    exchangeToken,
+    serviceCatalogId,
+    ...(serviceVariantId ? { serviceVariantId } : {}),
+    ...(description ? { description } : {}),
+  };
+}
+
 export function parseHandymanRequestIdParam(raw: string): string {
   const details: Detail[] = [];
   const id = readId(raw, 'handymanRequestId', true, details);

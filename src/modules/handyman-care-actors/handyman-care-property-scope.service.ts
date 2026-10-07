@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { buildingAccessDeniedError, contextAccessService } from '../context-access';
@@ -153,13 +154,13 @@ export async function resolveActiveCareActorPropertyScope(input: {
   careActorId: string;
   buildingId: string;
   clientId: string;
-}): Promise<CarePropertyGrant | null> {
+}, tx?: Pick<PoolClient, 'query'>): Promise<CarePropertyGrant | null> {
   if (!input || typeof input.careActorId !== 'string' ||
       typeof input.buildingId !== 'string' || typeof input.clientId !== 'string') {
     return null;
   }
   const row = await repository.resolveActiveForBuilding(
-    input.careActorId, input.buildingId, input.clientId,
+    input.careActorId, input.buildingId, input.clientId, tx,
   );
   return row ? publicGrant(row) : null;
 }
