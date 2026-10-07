@@ -4,6 +4,7 @@ import {
   resolveCareActorClaim,
 } from '../handyman-care-actors/handyman-care-actor.resolver';
 import { resolveHandoffContext } from './handoff-context.service';
+import { hasCarePropertyScope } from './care-representation.service';
 import {
   handoffAssertionInvalidError,
   handoffAssertionReplayedError,
@@ -218,6 +219,16 @@ export async function acceptHandoffAssertion(
       : {}),
     ...(assertion.spaceId !== undefined ? { spaceId: assertion.spaceId } : {}),
   });
+
+  // CR-HM-CUSTOMER-CONTEXT-01 PART 03 — only an attested care actor needs
+  // an explicit ACTIVE grant to the property derived from this building.
+  // Neither the actor claim nor a same-Client building creates this grant.
+  // Fail with the same non-enumerating 401 as other attestation denials;
+  // never downgrade actor-bearing traffic to the legacy path.
+  if (actorProvenance &&
+      !(await hasCarePropertyScope(actorProvenance.careActorId, resolved))) {
+    throw handoffAssertionInvalidError();
+  }
 
   // 5) Short-lived one-time exchange (D2) — token hash-only at rest; TTL,
   //    opacity, single-use and replay semantics are unchanged by PART 09. The

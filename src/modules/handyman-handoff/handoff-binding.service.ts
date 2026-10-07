@@ -4,6 +4,7 @@ import {
   createChannelAttribution,
   type PublicHandymanChannelAttribution,
 } from '../handyman-channel-attributions';
+import { isCurrentCareRepresentation } from './care-representation.service';
 import { hashHandoffExchangeToken } from './handoff-runtime.crypto';
 import { handoffExchangeInvalidError } from './handoff-runtime.errors';
 import { handoffRuntimeRepository } from './handoff-runtime.repository';
@@ -81,6 +82,17 @@ export async function bindHandoffExchangeToChannelAttribution(
       client,
     );
     if (!consumed) throw handoffExchangeInvalidError();
+
+    // PART 03: attested care authority is checked again at binding (grant
+    // might have been revoked since acceptance). The existing exchange
+    // snapshots the effective tenant-building and tenant-space relationship
+    // IDs: reject turnover/replacement, rather than silently binding a new
+    // occupant under an old assertion. A failure rolls back consumption.
+    // No new check is imposed on the no-actor legacy path.
+    if (consumed.actorType !== null &&
+        !(await isCurrentCareRepresentation(consumed))) {
+      throw handoffExchangeInvalidError();
+    }
 
     // 3) Provenance from the trusted chain the exchange originated from.
     //    Both rows are required by FK integrity; absence is a server defect,
