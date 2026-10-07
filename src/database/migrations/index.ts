@@ -1,3 +1,4 @@
+import { migration0430BindCareCreateExchangePurpose } from './0430_bind_care_create_exchange_purpose';
 import { migration0429CreateHandymanCareWorkspaceSessions } from './0429_create_handyman_care_workspace_sessions';
 import { migration0001InitialFoundation } from './0001_initial_foundation';
 import { migration0002CreateUsers } from './0002_create_users';
@@ -892,4 +893,5 @@ export const migrations: readonly Migration[] = [
   migration0427HandymanAttributionActorProvenance,
   migration0428CreateHandymanCarePropertyGrants,
   migration0429CreateHandymanCareWorkspaceSessions,
+  migration0430BindCareCreateExchangePurpose,
 ];

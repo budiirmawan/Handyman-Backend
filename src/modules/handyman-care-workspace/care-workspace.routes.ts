@@ -1,3 +1,4 @@
+import { issueCareCreateExchange } from './care-create-exchange.service';
 import { readCareWorkspaceCatalogue } from './care-workspace-catalogue.service';
 import { Router } from 'express';
 import { listCareWorkspaceScope, listCareWorkspaceTenants, listCareWorkspaceSpaces, listCareWorkspaceOccupancies } from './care-workspace-scope.service';
@@ -89,5 +90,13 @@ export function createCareWorkspaceRouter(): Router {
       } catch (error) { next(error); }
     });
   }
+  router.post('/handyman/care/properties/:propertyId/create-exchanges', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      sendSuccess(res, await issueCareCreateExchange(match[1], req.params.propertyId, req.body, req.query), 201);
+    } catch (error) { next(error); }
+  });
   return router;
 }

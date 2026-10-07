@@ -270,6 +270,7 @@ export async function consumeHandoffExchange(
   if (
     !record ||
     record.status !== 'ACTIVE' ||
+    record.purpose === 'CARE_CREATE' ||
     record.expiresAt.getTime() <= Date.now()
   ) {
     throw handoffExchangeInvalidError();

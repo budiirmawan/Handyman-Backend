@@ -3014,6 +3014,75 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/properties/{propertyId}/create-exchanges:
+    post:
+      operationId: issueCareCreateExchange
+      summary: Issue a fresh create-only represented-context exchange
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05B. Requires a live workspace session,
+        active actor/integration/capability, and active grant for the selected
+        Property. Validates active Client/tenant/building and physical hierarchy
+        using existing masters and resolves current effective occupancy using
+        existing handoff authority. Body IDs are selections, never authority.
+        An omitted spaceId selects effective building-only context; no space
+        relationship is fabricated. A selected space requires the exact current
+        tenant-space relationship in that building. No query parameters, PIC,
+        actor, Client, channel, expiry or other authority overrides are accepted.
+        Each call issues a fresh opaque single-use token stored hash-only in the
+        existing handoff exchange store, with an atomic server issuance receipt.
+        Lifetime is at most 120 seconds, further bounded by configured handoff
+        exchange TTL and remaining workspace lifetime. The token is create-only
+        for the existing POST /handyman/requests/care; it cannot be consumed by
+        generic exchange consumption, standalone attribution binding or bearer
+        routes. That POST and its payload remain unchanged. Consumption checks
+        current grant, the same occupancy identities, original property, live
+        workspace and active hierarchy; failure rolls back consumption. Server
+        derives CUSTOMER_CARE provenance and BM_SUPER_APP channel; no local
+        User/PIC impersonation, request reads or financial authority is added.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CareCreateExchangeSelection' }
+      responses:
+        '201':
+          description: Fresh represented-context exchange; issuance creates no request or attribution.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCreateExchangeIssued' }
+        '400':
+          description: Invalid UUID, malformed selection or unsupported body/query fields.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, wrong-kind, expired or revoked credential, inactive actor/integration or capability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; missing/inactive/ungranted scope, mismatched hierarchy or non-current occupancy, without existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure failure; no partial receipt/exchange is persisted.
   /handyman/care/properties/{propertyId}/occupancies:
     get:
       operationId: listCareWorkspaceOccupancies
@@ -75299,6 +75368,39 @@ components:
           items: { $ref: '#/components/schemas/CareCatalogueProfile' }
         nextCursor: { type: string, nullable: true }
         evaluatedAt: { type: string, format: date-time }
+    CareCreateExchangeSelection:
+      type: object
+      additionalProperties: false
+      required: [tenantCompanyId, buildingId]
+      properties:
+        tenantCompanyId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId:
+          type: string
+          format: uuid
+          description: Optional exact occupied space; omit for building-only representation. Null is not accepted.
+    CareCreateExchangeIssued:
+      type: object
+      additionalProperties: false
+      required: [exchangeToken, expiresAt, context]
+      properties:
+        exchangeToken:
+          type: string
+          description: Raw create-only secret returned once; only its SHA-256 hash is persisted. Submit as exchangeToken to POST /handyman/requests/care, not as a bearer credential.
+        expiresAt: { type: string, format: date-time }
+        context:
+          allOf:
+            - $ref: '#/components/schemas/HandoffContextSnapshot'
+            - type: object
+              required: [propertyId, originChannel]
+              properties:
+                propertyId: { type: string, format: uuid }
+                originChannel: { type: string, enum: [BM_SUPER_APP] }
+                actorType: { type: string, enum: [CUSTOMER_CARE], nullable: false }
+                careActorId: { type: string, format: uuid, nullable: false }
+                actorReference: { type: string, nullable: false }
+                tenantPicId: { type: string, nullable: true, enum: [null] }
+                resolvedUserId: { type: string, nullable: true, enum: [null] }
     CareWorkspaceOccupancy:
       type: object
       additionalProperties: false
