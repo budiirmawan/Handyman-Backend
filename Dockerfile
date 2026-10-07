@@ -98,15 +98,15 @@ ENV NODE_ENV=production \
 
 # Entrypoint (own file name: the base image already ships its own docker-entrypoint.sh).
 # Normalise line endings (a Windows checkout may have CRLF) and make it executable.
-# Local evidence storage writes to ./.data/evidence (cwd /app): pre-create it owned by
-# the runtime user so a non-root process can write there; mount a volume at
-# /app/.data/evidence to persist files. Everything else under /app stays root-owned and
-# therefore read-only for the runtime user.
+# Local evidence storage writes to ./.data/evidence (cwd /app). That ONE directory is the
+# only writable runtime location: it is created here and chowned (non-recursively) to the
+# runtime user. /app/.data and everything else under /app stay root-owned, i.e. read-only
+# for the non-root process. Mount a volume at /app/.data/evidence to persist files.
 COPY docker/entrypoint.sh /usr/local/bin/handyman-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/handyman-entrypoint.sh \
     && chmod 0755 /usr/local/bin/handyman-entrypoint.sh \
     && mkdir -p /app/.data/evidence \
-    && chown -R 1000:1000 /app/.data
+    && chown 1000:1000 /app/.data/evidence
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
