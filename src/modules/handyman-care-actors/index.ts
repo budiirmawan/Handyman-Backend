@@ -1,5 +1,12 @@
 export { handymanCareActorRepository } from './handyman-care-actor.repository';
 export {
+  handymanCarePropertyScopeService,
+  grantCareActorProperty,
+  revokeCareActorProperty,
+  resolveActiveCareActorPropertyScope,
+  type CarePropertyGrant,
+} from './handyman-care-property-scope.service';
+export {
   handymanCareActorResolver,
   parseHandoffCareActorClaim,
   resolveCareActorClaim,
