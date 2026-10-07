@@ -7,8 +7,14 @@ export type ManagementFinancialSummaryQuery = {
   scope: ManagementReadScopeFilters;
 };
 
-export type ManagementCountAmount = { count: number; amount: number };
+export type ManagementCountAmount = { count: number; amount: number | null };
 
+/**
+ * BE-19I legacy scalars are nullable per the single-currency rule: an amount
+ * is null when it is not attributable to exactly one currency
+ * (multi-currency or unknown rows present). Client roll-ups propagate null
+ * rather than summing unattributable money — counts stay additive.
+ */
 export type ManagementFinancialSummaryBlock = {
   tenantCharges: ManagementCountAmount & { cancelledCount: number };
   utilityBills: ManagementCountAmount & { cancelledCount: number };
@@ -17,10 +23,10 @@ export type ManagementFinancialSummaryBlock = {
     cancelledCount: number;
   };
   payments: {
-    paidAmount: number;
-    unpaidAmount: number;
-    overdueAmount: number;
-    outstandingAmount: number;
+    paidAmount: number | null;
+    unpaidAmount: number | null;
+    overdueAmount: number | null;
+    outstandingAmount: number | null;
     unpaidCount: number;
     partiallyPaidCount: number;
     paidCount: number;
@@ -40,13 +46,13 @@ export type ManagementFinancialSummaryBlock = {
     draftCount: number;
     cancelledCount: number;
   };
-  outstandingBalance: { invoiceCount: number; amount: number };
+  outstandingBalance: { invoiceCount: number; amount: number | null };
   incomeVsOperationalCost: {
-    billedIncome: number;
-    receivedIncome: number;
-    operationalCost: number;
-    netBilled: number;
-    netReceived: number;
+    billedIncome: number | null;
+    receivedIncome: number | null;
+    operationalCost: number | null;
+    netBilled: number | null;
+    netReceived: number | null;
   };
 };
 
