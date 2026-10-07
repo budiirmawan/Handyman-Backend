@@ -2480,6 +2480,98 @@ tags:
 security: []
 
 paths:
+  /handyman/care/session:
+    post:
+      operationId: admitCareWorkspace
+      summary: Admit an attested BM Customer Care actor to a bounded workspace session
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 02. Purpose-specific HMAC-SHA256 admission
+        over canonical stable JSON (recursively sorted object keys), using the
+        existing per-integration HANDYMAN_HANDOFF_SECRET_<NORMALIZED_CODE> secret.
+        The purpose and all actor fields are signed. Requires an ACTIVE integration
+        with CUSTOMER_CARE capability and an ACTIVE registered actor in that integration.
+        No tenant, property, building, space, User or PIC context is accepted.
+        Assertion lifetime is at most five minutes; future-issued, expired,
+        malformed, incorrectly signed or replayed assertions fail uniformly with
+        HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED (401). Assertion IDs are single-use
+        per integration in a separate purpose-specific replay store, including
+        concurrent retries and retries after logout. No clock-skew allowance.
+        Returns an opaque credential once; only its SHA-256 hash is stored.
+        The workspace session has a fixed 15-minute absolute lifetime, no refresh
+        and no sliding renewal. It is not a User/PIC session or create exchange.
+        Actor/integration deactivation or capability loss permanently revokes
+        issued sessions; reactivation requires fresh admission. Authentication
+        revalidates current identity on every use and fails closed on storage failure.
+        Admission attempts use the existing socket-IP login throttle in a separate
+        namespace (per-process; deployments must also enforce ingress limits).
+        Responses use Cache-Control no-store. No discovery, catalogue, request
+        read, or request-create authority is provided by this endpoint.
+      security:
+        - handoffAssertionSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CareWorkspaceAssertion' }
+      responses:
+        '201':
+          description: Workspace credential issued once; no local User session created.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceAdmission' }
+        '400':
+          description: Invalid JSON or unexpected query parameters; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; no identity enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: AUTH_RATE_LIMITED; too many admission attempts.
+          headers:
+            Retry-After:
+              schema: { type: integer, minimum: 1 }
+        '500':
+          description: Authority/storage unavailable; no credential issued and no stale fallback.
+    delete:
+      operationId: revokeCareWorkspaceSession
+      summary: Revoke the presented care workspace credential
+      tags: [Handoff]
+      description: >-
+        Requires a distinct care workspace credential, not a local bearer User
+        session or represented-context exchange. Accepts no query/context fields.
+        Logout is idempotent for an unexpired revoked token whose actor and
+        integration remain active and capable; all other uses of a revoked
+        credential are denied. Unknown, expired, wrong-kind, or invalid-identity
+        credentials return uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED (401).
+        No cross-actor administration, refresh, renewal, or User logout occurs.
+        Responses use Cache-Control no-store.
+      security:
+        - careWorkspaceSession: []
+      responses:
+        '204':
+          description: Presented session revoked (including repeated logout).
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+        '400':
+          description: Unexpected query or context body fields.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Storage failure; no successful revocation claimed.
   /handoff/assertions:
     post:
       operationId: acceptHandoffAssertion
@@ -72033,6 +72125,15 @@ paths:
 
 components:
   securitySchemes:
+    careWorkspaceSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque care workspace credential
+      description: >-
+        Distinct actor/integration-bound credential from POST /handyman/care/session.
+        Maximum 15-minute absolute lifetime; revocable, reusable, no refresh.
+        Never a local User/PIC session, RBAC grant, or represented-context create
+        exchange. The raw token must never be logged or placed in URLs.
     bearerAuth:
       type: http
       scheme: bearer
@@ -74459,6 +74560,42 @@ components:
                     $ref: "#/components/schemas/ClientFxPolicy"
 
   schemas:
+    CareWorkspaceAssertion:
+      type: object
+      additionalProperties: false
+      required: [purpose, integrationCode, assertionId, issuedAt, expiresAt, actor]
+      properties:
+        purpose: { type: string, enum: [HANDYMAN_CARE_WORKSPACE] }
+        integrationCode: { type: string, minLength: 1, maxLength: 128 }
+        assertionId: { type: string, minLength: 1, maxLength: 128 }
+        issuedAt:
+          type: string
+          format: date-time
+          description: UTC ISO-8601 timestamp ending in Z; not in the future.
+        expiresAt:
+          type: string
+          format: date-time
+          description: After issuedAt, at most five minutes later, and strictly after current server time.
+        actor:
+          type: object
+          additionalProperties: false
+          required: [type, actorReference]
+          properties:
+            type: { type: string, enum: [CUSTOMER_CARE] }
+            actorReference: { type: string, minLength: 1, maxLength: 128 }
+    CareWorkspaceAdmission:
+      type: object
+      additionalProperties: false
+      required: [workspaceToken, expiresAt]
+      properties:
+        workspaceToken:
+          type: string
+          pattern: '^hcw_[A-Za-z0-9_-]{43}$'
+          description: Returned once; 256-bit random opaque token stored hash-only.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Fixed absolute expiry, 15 minutes from issuance; never extended on use.
     # ------------------------------------------------------------------
     # CR-BE-UTL-01 PART 13 — Utility domain
     # ------------------------------------------------------------------
