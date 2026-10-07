@@ -1,0 +1,57 @@
+# Docker build-context hygiene for the production image.
+#
+# Goals:
+#   1. Never send secrets or local state to the Docker daemon.
+#   2. Keep host-built artifacts out (node_modules, dist): they are rebuilt in the image.
+#   3. Keep the context small: tests, docs and OpenAPI tooling are not needed to build or
+#      run the service.
+# The Dockerfile COPYs explicit paths only, so this file is defence in depth.
+# NOTE: a pattern without a leading "**/" matches at the context root only.
+
+# --- VCS / editor / OS noise -------------------------------------------------
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+**/.DS_Store
+**/Thumbs.db
+**/*.swp
+
+# --- Dependencies and build output (rebuilt inside the image) ----------------
+**/node_modules
+dist
+coverage
+.nyc_output
+**/*.tsbuildinfo
+
+# --- Secrets and local environment: must never reach the image ---------------
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/.npmrc
+**/.netrc
+secrets
+
+# --- Local runtime data (e.g. evidence uploads) ------------------------------
+.data
+
+# --- Logs --------------------------------------------------------------------
+**/*.log
+**/npm-debug.log*
+
+# --- Not needed to build or run the service ----------------------------------
+tests
+docs
+scripts
+*.md
+
+# --- Container tooling (not part of the runtime filesystem) ------------------
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+compose*.yml
