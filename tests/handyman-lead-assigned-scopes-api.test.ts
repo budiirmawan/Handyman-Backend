@@ -664,22 +664,42 @@ describe('CR-HM-18 BE03 — Lead assigned-scope reads', () => {
     assert.equal(noAccessibleClient.body.meta.total, 0);
   });
 
-  it('publishes exactly the two frozen GET operations in OpenAPI', () => {
+  it('publishes the current Lead GET operations and material progress DTO in OpenAPI', () => {
     const document = YAML.parse(readFileSync('docs/api/openapi.yaml', 'utf8'));
     const list = document.paths['/handyman/lead/assigned-scopes'];
     const detail = document.paths[
       '/handyman/lead/assigned-scopes/{executionScopeId}'
     ];
+    const materialProgress = document.paths[
+      '/handyman/lead/assigned-scopes/{executionScopeId}/material-progress'
+    ];
     assert.deepEqual(Object.keys(list), ['get']);
     assert.deepEqual(Object.keys(detail), ['get']);
+    assert.deepEqual(Object.keys(materialProgress), ['get']);
     assert.equal(list.get.operationId, 'listHandymanLeadAssignedScopes');
     assert.equal(detail.get.operationId, 'getHandymanLeadAssignedScope');
+    assert.equal(materialProgress.get.operationId,
+      'getHandymanLeadMaterialProgress');
     assert.deepEqual(
       list.get.parameters.map((parameter: { name: string }) => parameter.name),
       ['page', 'pageSize'],
     );
     assert.equal(list.get.security[0].bearerAuth.length, 0);
     assert.equal(detail.get.security[0].bearerAuth.length, 0);
+    assert.equal(materialProgress.get.security[0].bearerAuth.length, 0);
+    assert.equal(
+      materialProgress.get.responses['200'].content['application/json']
+        .schema.allOf[1].properties.data.$ref,
+      '#/components/schemas/HandymanLeadMaterialProgress',
+    );
+    const progressSchema = document.components.schemas
+      .HandymanLeadMaterialProgress;
+    assert.deepEqual(progressSchema.required,
+      ['executionScopeId', 'lines', 'finalUsedByUom']);
+    const lineSchema = document.components.schemas
+      .HandymanLeadMaterialProgressLine;
+    assert.ok(lineSchema.required.includes('uom'));
+    assert.ok(lineSchema.required.includes('finalUsedQty'));
   });
 
   it('publishes the frozen authenticated arrival-challenge operation in OpenAPI', () => {

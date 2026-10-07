@@ -410,6 +410,7 @@ describe('CR-HM-09 PART 03 — estimate + link + approve commands', () => {
       .readdirSync('src/modules/handyman-material-execution').sort();
     assert.deepEqual(files, [
       'handyman-material-execution.errors.ts',
+      'handyman-material-execution.quantity.ts',
       'handyman-material-execution.repository.ts',
       'handyman-material-execution.service.ts',
       'handyman-material-execution.types.ts',

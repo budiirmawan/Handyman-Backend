@@ -5,9 +5,8 @@
  *
  * Laws (frozen here):
  *  - the basis quantity per settled line is chosen by the mode:
- *    SETTLED_USAGE -> finalUsedQty (usedQty - returnedQty, the
- *    CR-HM-09 settled basis — returns are already netted, RETURN is
- *    not a sticky status); APPROVED_QTY -> approvedQty;
+ *    SETTLED_USAGE -> finalUsedQty (actual usedQty; returned unused
+ *    stock does not reverse consumption); APPROVED_QTY -> approvedQty;
  *  - quantity law inherited from CR-HM-09: 0 <= finalUsedQty <=
  *    approvedQty, both finite and non-negative — a violation is a
  *    bounded input failure, never a reinterpretation of execution

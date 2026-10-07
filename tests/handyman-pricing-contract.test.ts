@@ -254,7 +254,7 @@ async function authorFullVersion(
 
 /** Full lawful CR-HM-09 chain (PART 03 pattern): AUTHORIZED scope
  * + Crew Lead + one MATERIAL snapshot line, lifecycle driven to
- * FINAL_CHARGE_READY with used 3 - returned 1 => finalUsed 2. */
+ * FINAL_CHARGE_READY with used 3 and 1 unused unit returned => finalUsed 3. */
 async function settledScopeFixture() {
   const f = await baseFixture();
   const crew = await crewFixture(f.realm);
@@ -589,8 +589,9 @@ describe('CR-HM-12 PART 05 — published read contract', () => {
       f.scope.clientId, f.scope.id, asOf, f.leadUserId,
     );
     assert.equal(composed.executionScopeId, f.scope.id);
-    assert.equal(composed.composition.totalFinalUsedQty, 2);
-    assert.equal(composed.composition.basis.basisAmount, '50.00');
+    assert.equal(composed.composition.finalUsedByUom.length, 1);
+    assert.equal(composed.composition.finalUsedByUom[0].quantity, 3);
+    assert.equal(composed.composition.basis.basisAmount, '75.00');
     assert.equal(composed.composition.agreementVersionId, f.versionId);
     assert.equal(composed.binding.agreementVersionId, f.versionId);
     assert.equal(composed.isFinalCharge, false);

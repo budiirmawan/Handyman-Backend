@@ -4712,6 +4712,51 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
+  /handyman/lead/assigned-scopes/{executionScopeId}/material-progress:
+    get:
+      tags: [Handyman Lead Reads]
+      operationId: getHandymanLeadMaterialProgress
+      summary: Read field-safe material progress for one currently assigned scope
+      description: >-
+        Rechecks the current ACTIVE assignment and current Lead, then verifies
+        canAccessClient for the server-resolved scope Client. A missing or
+        not-currently-assigned scope returns the same bounded 404. No
+        tenant_company.read permission is required. Returns execution-line
+        identity and quantities only; the approved MATERIAL quotation line's
+        UOM is authoritative (inventory-item UOM is not used). finalUsedQty is
+        null until settlement, then equals actual usedQty; returned unused
+        stock does not reverse consumption. Aggregates are grouped by UOM.
+        No prices, amounts, charges, event history, or Customer Care data are
+        returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: executionScopeId
+          in: path
+          required: true
+          description: Existing Execution Scope currently assigned to this Lead.
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        '200':
+          description: Current material line quantities for the assigned scope.
+          headers:
+            X-Request-ID: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanLeadMaterialProgress"
+        '400': { $ref: "#/components/responses/BadRequest" }
+        '401': { $ref: "#/components/responses/Unauthorized" }
+        '403': { $ref: "#/components/responses/Forbidden" }
+        '404': { $ref: "#/components/responses/NotFound" }
+        '500': { $ref: "#/components/responses/InternalServerError" }
+
   /handyman/execution-scopes/{executionScopeId}/assignment:
     post:
       tags: [Handyman Scope Assignments]
@@ -5131,7 +5176,7 @@ paths:
       tags: [Handyman Material Execution]
       operationId: listHandymanMaterialLinesByScope
       summary: Read Customer Care material execution lines projection for an Execution Scope
-      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for material execution lines on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns all governed material execution statuses, quantities, events, and totalFinalUsedQty with zero money columns."
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for material execution lines on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns all governed material execution statuses, quantities, events, and settled final-used quantities grouped by UOM; unlike units are never summed."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -5181,16 +5226,28 @@ paths:
       tags: [Handyman Material Execution]
       operationId: getHandymanMaterialFinalChargeReadyProjection
       summary: Read the scope-level FINAL_CHARGE_READY quantity projection (PART 05)
-      description: "CR-HM-09 PART 06 — authenticated READ-ONLY projection over ONE execution scope (PART 05 service authority): the exact SETTLED lines (status FINAL_CHARGE_READY only; lines still in flight are absent) and ONE aggregated quantity figure totalFinalUsedQty = SUM(usedQty - returnedQty). EXECUTION TRUTH ONLY — quantity and reference data; NO amount/currency/rate/price/charge/billing/payment field can exist (CR-HM-12/13 own pricing/ledger). Same Lead authority; unknown scope = 404."
+      description: >-
+        Authenticated Lead read of settled FINAL_CHARGE_READY lines only.
+        finalUsedQty is actual usedQty; returned unused stock does not reduce
+        consumption. Line UOM is read from its immutable approved MATERIAL
+        quotation line. finalUsedByUom groups quantities by that UOM and never
+        sums unlike units. No price, amount, charge, or event history is
+        returned.
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
         '200':
-          description: Settled lines + aggregated final-used quantity
+          description: Settled lines with UOM-safe final-used quantities.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanMaterialFinalChargeReadyProjection'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanMaterialFinalChargeReadyProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -5308,7 +5365,7 @@ paths:
       tags: [Handyman Material Execution]
       operationId: returnHandymanMaterialExecutionLine
       summary: Return held-not-used quantity (PART 05)
-      description: "CR-HM-09 PART 06 — authenticated RETURN command. `quantity` is a DELTA on the RETURNED axis (RETURN is NOT a sticky status — the line persists on its previous state), HARD-capped by returnedQty <= issuedQty + purchasedQty - usedQty (bounded 400). Returns REDUCE the final usage basis (finalUsedQty = usedQty - returnedQty). Refused after settle = bounded 409."
+      description: "CR-HM-09 PART 06 — authenticated RETURN command. `quantity` is a DELTA on the RETURNED axis (RETURN is NOT a sticky status — the line persists on its previous state), HARD-capped by returnedQty <= issuedQty + purchasedQty - usedQty (bounded 400). Returned unused stock reduces held quantity available for later use; it does not reverse consumed usedQty. Settled finalUsedQty equals usedQty and is non-negative. Refused after settle = bounded 409."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
         - $ref: '#/components/parameters/MaterialLineIdPath'
@@ -80387,7 +80444,12 @@ components:
       properties:
         quotationVersionId: { type: string, format: uuid }
         quotationLineId: { type: string, format: uuid }
-        estimatedQty: { type: number, exclusiveMinimum: 0 }
+        estimatedQty:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 99999999999.999
+          multipleOf: 0.001
+          description: Exact positive quantity; no rounding beyond NUMERIC(14,3).
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
     HandymanMaterialExecutionKeyedRequest:
       type: object
@@ -80400,7 +80462,12 @@ components:
       required: [quantity, idempotencyKey]
       description: "Bounded mutator input for ISSUE/PURCHASE/USE/RETURN. `quantity` is the DELTA added to the targeted axis (never the absolute quantity); supplierReference is honoured ONLY on PURCHASE (reference-only snapshot, max 200 chars — no FM/PO/GR chain). Every authority-shaped key (actorUserId/clientId/status/timestamps/mode/absolute-quantity) is structurally ignored."
       properties:
-        quantity: { type: number, exclusiveMinimum: 0 }
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 99999999999.999
+          multipleOf: 0.001
+          description: Positive delta within NUMERIC(14,3); over-scale values are rejected, not rounded.
         supplierReference: { type: string, minLength: 1, maxLength: 200, nullable: true }
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
     HandymanMaterialExecutionLineRecord:
@@ -80419,12 +80486,12 @@ components:
           type: string
           enum: [ISSUED, PURCHASED]
           nullable: true
-        estimatedQty: { type: number, minimum: 0 }
-        approvedQty: { type: number, minimum: 0 }
-        issuedQty: { type: number, minimum: 0 }
-        purchasedQty: { type: number, minimum: 0 }
-        usedQty: { type: number, minimum: 0 }
-        returnedQty: { type: number, minimum: 0 }
+        estimatedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        approvedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        issuedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        purchasedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        usedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        returnedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
         supplierReference: { type: string, maxLength: 200, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -80449,17 +80516,96 @@ components:
         event:
           $ref: '#/components/schemas/HandymanMaterialExecutionEventRecord'
         replayed: { type: boolean }
-    HandymanMaterialFinalChargeReadyProjection:
+    HandymanMaterialUom:
       type: object
-      description: "Scope-level FINAL_CHARGE_READY projection (PART 05, READ-ONLY): the exact SETTLED lines + ONE aggregated usage figure totalFinalUsedQty = SUM(usedQty - returnedQty). EXECUTION TRUTH ONLY — the sole quantity handoff to CR-HM-12/13 pricing/ledger; NO financial field can exist here."
+      additionalProperties: false
+      required: [id, code, name, symbol]
+      description: UOM from the linked immutable approved MATERIAL quotation line; an inventory item's UOM is not authoritative for execution quantities.
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, minLength: 1, maxLength: 80 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        symbol: { type: string, minLength: 1, maxLength: 40 }
+    HandymanMaterialIdentity:
+      type: object
+      additionalProperties: false
+      required: [quotationLineId, sourceItemId, itemCode, itemName]
+      description: Immutable MATERIAL quotation-line identity plus optional Client-scoped inventory-master labels; no quotation free-text is exposed.
+      properties:
+        quotationLineId: { type: string, format: uuid }
+        sourceItemId: { type: string, format: uuid, nullable: true }
+        itemCode: { type: string, maxLength: 80, nullable: true }
+        itemName: { type: string, maxLength: 120, nullable: true }
+    HandymanLeadMaterialProgressLine:
+      type: object
+      additionalProperties: false
+      required: [id, executionScopeId, quotationLineId, materialIdentity, uom, status, acquisitionMode, estimatedQty, approvedQty, issuedQty, purchasedQty, usedQty, returnedQty, finalUsedQty]
+      description: Field-safe material execution state. Quantities use NUMERIC(14,3) scale and bound. finalUsedQty is null until settled and then equals actual usedQty; unused returned stock does not reverse consumption.
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        quotationLineId: { type: string, format: uuid }
+        materialIdentity: { $ref: '#/components/schemas/HandymanMaterialIdentity' }
+        uom: { $ref: '#/components/schemas/HandymanMaterialUom' }
+        status:
+          type: string
+          enum: [ESTIMATED, APPROVED, ISSUED, PURCHASED, USED, FINAL_CHARGE_READY]
+        acquisitionMode:
+          type: string
+          enum: [ISSUED, PURCHASED]
+          nullable: true
+        estimatedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        approvedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        issuedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        purchasedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        usedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        returnedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        finalUsedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001, nullable: true }
+    HandymanMaterialFinalChargeReadyLine:
+      allOf:
+        - $ref: '#/components/schemas/HandymanLeadMaterialProgressLine'
+        - type: object
+          properties:
+            finalUsedQty:
+              type: number
+              minimum: 0
+              maximum: 99999999999.999
+              multipleOf: 0.001
+              nullable: false
+    HandymanMaterialFinalUsedByUom:
+      type: object
+      additionalProperties: false
+      required: [uom, quantity]
+      description: A settled final-used aggregate for exactly one UOM; only FINAL_CHARGE_READY lines contribute and unlike units are never summed.
+      properties:
+        uom: { $ref: '#/components/schemas/HandymanMaterialUom' }
+        quantity: { type: number, minimum: 0, multipleOf: 0.001 }
+    HandymanLeadMaterialProgress:
+      type: object
+      additionalProperties: false
+      required: [executionScopeId, lines, finalUsedByUom]
+      description: Current Lead-assigned material progress with no event history or commercial data.
       properties:
         executionScopeId: { type: string, format: uuid }
         lines:
           type: array
-          items:
-            $ref: '#/components/schemas/HandymanMaterialExecutionLineRecord'
-        totalFinalUsedQty: { type: number }
-        projectedAt: { type: string, format: date-time }
+          items: { $ref: '#/components/schemas/HandymanLeadMaterialProgressLine' }
+        finalUsedByUom:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanMaterialFinalUsedByUom' }
+    HandymanMaterialFinalChargeReadyProjection:
+      type: object
+      additionalProperties: false
+      required: [executionScopeId, lines, finalUsedByUom]
+      description: Settled execution lines only with non-negative final-used quantities grouped by their authoritative UOM; no cross-UOM total, price, amount, charge, or event history.
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanMaterialFinalChargeReadyLine' }
+        finalUsedByUom:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanMaterialFinalUsedByUom' }
     HandymanCustomerCareMaterialLineItem:
       type: object
       description: "CR-HM-17 GAP PART 03 — Customer Care material execution line read item across all governed statuses, with recorded events and settled finalUsedQty (zero money columns)."
@@ -80477,13 +80623,13 @@ components:
           type: string
           enum: [ISSUED, PURCHASED]
           nullable: true
-        estimatedQty: { type: number, minimum: 0 }
-        approvedQty: { type: number, minimum: 0 }
-        issuedQty: { type: number, minimum: 0 }
-        purchasedQty: { type: number, minimum: 0 }
-        usedQty: { type: number, minimum: 0 }
-        returnedQty: { type: number, minimum: 0 }
-        finalUsedQty: { type: number, minimum: 0, nullable: true }
+        estimatedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        approvedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        issuedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        purchasedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        usedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        returnedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001 }
+        finalUsedQty: { type: number, minimum: 0, maximum: 99999999999.999, multipleOf: 0.001, nullable: true }
         supplierReference: { type: string, maxLength: 200, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -80493,15 +80639,18 @@ components:
             $ref: '#/components/schemas/HandymanMaterialExecutionEventRecord'
     HandymanCustomerCareMaterialLinesProjection:
       type: object
-      description: "CR-HM-17 GAP PART 03 — Customer Care material execution lines read projection for an Execution Scope."
-      required: [executionScopeId, lines, totalFinalUsedQty]
+      description: "CR-HM-17 GAP PART 03 — Customer Care material execution lines read projection for an Execution Scope; settled quantity aggregates are separated by UOM."
+      required: [executionScopeId, lines, finalUsedByUom]
       properties:
         executionScopeId: { type: string, format: uuid }
         lines:
           type: array
           items:
             $ref: '#/components/schemas/HandymanCustomerCareMaterialLineItem'
-        totalFinalUsedQty: { type: number, minimum: 0 }
+        finalUsedByUom:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanMaterialFinalUsedByUom'
     HandymanScopeAssignmentRecord:
       type: object
       description: Append-only crew assignment fact (status projection moves ACTIVE -> SUPERSEDED only). NO Lead snapshot - lead authority stays in CR-HM-04.

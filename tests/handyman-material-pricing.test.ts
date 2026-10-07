@@ -157,7 +157,7 @@ function lineInput(over: Record<string, unknown> = {}) {
  * Full lawful chain for composition tests: AUTHORIZED scope + Crew
  * Lead + one MATERIAL snapshot line (unit 25.00, qty 4) and the
  * material lifecycle driven to FINAL_CHARGE_READY with
- * used 3 - returned 1 => finalUsed 2.
+ * used 3 and 1 unused unit returned => finalUsed 3.
  */
 async function settledScopeFixture(agreementClient = true) {
   const f = await baseFixture();
@@ -698,12 +698,13 @@ describe('CR-HM-12 PART 03 material pricing basis', () => {
         `composition must never write ${name}`);
     }
 
-    // 25.00 x finalUsed(3 - 1 = 2) = 50.00 — the settled basis.
-    assert.equal(result.basis.basisAmount, '50.00');
+    // Returned quantity is unused stock; 25.00 x used(3) = 75.00.
+    assert.equal(result.basis.basisAmount, '75.00');
     assert.equal(result.basis.mode, 'SETTLED_USAGE');
     assert.equal(result.basis.lines.length, 1);
-    assert.equal(result.basis.lines[0].appliedQty, 2);
-    assert.equal(result.totalFinalUsedQty, 2);
+    assert.equal(result.basis.lines[0].appliedQty, 3);
+    assert.equal(result.finalUsedByUom.length, 1);
+    assert.equal(result.finalUsedByUom[0].quantity, 3);
     assert.equal(result.agreementVersionId, versionId);
     assert.equal(result.basis.currency, 'IDR');
 
@@ -733,7 +734,7 @@ describe('CR-HM-12 PART 03 material pricing basis', () => {
     const past = await computeHandymanMaterialPricingBasisForScope(
       f.scope.id, new Date(f2 - 1).toISOString(), f.leadUserId,
     );
-    assert.equal(past.basis.basisAmount, '50.00');
+    assert.equal(past.basis.basisAmount, '75.00');
 
     // Non-Lead actor: CR-HM-09 authority wall stays in force — the
     // composition NEVER bypasses read authority.

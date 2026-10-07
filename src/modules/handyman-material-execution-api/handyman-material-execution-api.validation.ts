@@ -1,5 +1,8 @@
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
+import {
+  isHandymanMaterialQuantityRepresentable,
+} from '../handyman-material-execution';
 import type {
   EstimateHandymanMaterialLineInput,
 } from '../handyman-material-execution';
@@ -11,10 +14,10 @@ import type {
  * authority-shaped field — actorUserId / quotation authority beyond
  * the bounded arguments / timestamps / status / mode — is
  * structurally IGNORED (never spread, never forwarded). Quantity
- * numbers are finite positive numbers checked at this boundary as
- * FINITE only (exact legal bounds are the PART 03–05 services'
- * authority). ZERO pricing/billing/payment fields can exist on any
- * request shape.
+ * numbers must be positive and exactly representable at the
+ * NUMERIC(14,3) scale before any authority lookup; lifecycle/cumulative
+ * quantity bounds remain in the PART 03–05 services. ZERO commercial
+ * fields can exist on any request shape.
  */
 
 const first = (v: string | string[] | undefined) =>
@@ -54,9 +57,12 @@ function key(value: unknown, field = 'idempotencyKey'): string {
 
 function quantity(value: unknown, field: string): number {
   const n = typeof value === 'number' ? value : Number.NaN;
-  if (!Number.isFinite(n)) {
+  if (!isHandymanMaterialQuantityRepresentable(n) || n <= 0) {
     fail('Request validation failed.', [
-      { field, message: `${field} must be a finite number.` },
+      {
+        field,
+        message: `${field} must be positive, use at most three decimal places, and fit NUMERIC(14,3).`,
+      },
     ]);
   }
   return n;

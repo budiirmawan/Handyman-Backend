@@ -2,6 +2,8 @@ import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { createHandymanArrivalChallenge }
   from '../handyman-arrival-challenges';
+import { getHandymanMaterialProgressProjection }
+  from '../handyman-material-execution';
 import {
   getHandymanLeadAssignedScope,
   listHandymanLeadAssignedScopes,
@@ -68,6 +70,26 @@ export async function getHandymanLeadAssignedScopeHandler(
       executionScopeId,
     );
     sendSuccess(res, detail);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** Read current material quantities for a scope assigned to this Lead. */
+export async function getHandymanLeadMaterialProgressHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseHandymanLeadExecutionScopeId(
+      req.params.executionScopeId,
+    );
+    const progress = await getHandymanMaterialProgressProjection(
+      executionScopeId,
+      req.auth.userId,
+    );
+    sendSuccess(res, progress);
   } catch (error) {
     next(error);
   }

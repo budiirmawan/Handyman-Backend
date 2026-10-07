@@ -148,17 +148,81 @@ export type HandymanMaterialExecutionCommandResult = {
   replayed: boolean;
 };
 
+/** Authoritative unit-of-measure identity from the immutable quote line. */
+export type HandymanMaterialUom = {
+  id: string;
+  code: string;
+  name: string;
+  symbol: string;
+};
+
 /**
- * FINAL_CHARGE_READY projection over one execution scope
- * (governance PART 05 read model): EXECUTION TRUTH ONLY — a list of
- * all settled lines with their frozen quantities and ONE aggregated
- * usage figure (sum of used - returned). This is the ONLY handoff
- * artifact to CR-HM-12/13 pricing/ledger authority.
+ * Field-safe material identity. The quote-line reference exists even when no
+ * inventory item was attached; item labels come only from the Client-scoped
+ * inventory master, never from free-text quotation descriptions.
  */
+export type HandymanMaterialIdentity = {
+  quotationLineId: string;
+  sourceItemId: string | null;
+  itemCode: string | null;
+  itemName: string | null;
+};
+
+/** Internal joined row for Lead-safe quantity reads; contains no history. */
+export type HandymanMaterialExecutionProgressRecord = {
+  line: HandymanMaterialExecutionLineRecord;
+  materialIdentity: HandymanMaterialIdentity;
+  uom: HandymanMaterialUom;
+};
+
+/** Field-safe material line projection shared by Lead progress/handoff reads. */
+export type HandymanMaterialExecutionProgressLine = {
+  id: string;
+  executionScopeId: string;
+  quotationLineId: string;
+  materialIdentity: HandymanMaterialIdentity;
+  uom: HandymanMaterialUom;
+  status: HandymanMaterialExecutionStatus;
+  acquisitionMode: HandymanMaterialAcquisitionMode | null;
+  estimatedQty: number;
+  approvedQty: number;
+  issuedQty: number;
+  purchasedQty: number;
+  usedQty: number;
+  returnedQty: number;
+  /** Null until settlement; settled final-used is actual used consumption. */
+  finalUsedQty: number | null;
+};
+
+export type HandymanMaterialFinalChargeReadyLine = Omit<
+  HandymanMaterialExecutionProgressLine,
+  'finalUsedQty'
+> & { finalUsedQty: number };
+
+/** A safe aggregate is always grouped by one authoritative UOM identity. */
+export type HandymanMaterialFinalUsedByUom = {
+  uom: HandymanMaterialUom;
+  quantity: number;
+};
+
+/**
+ * Lead-safe progress read across every execution status. A returned quantity
+ * is unused stock removed from the held balance; it does not reverse actual
+ * use. finalUsedQty is therefore usedQty after settlement and cannot be
+ * negative. Settled final-used aggregates include only FINAL_CHARGE_READY
+ * lines and are partitioned by the approved quote line's UOM.
+ */
+export type HandymanMaterialProgressProjection = {
+  executionScopeId: string;
+  lines: HandymanMaterialExecutionProgressLine[];
+  finalUsedByUom: HandymanMaterialFinalUsedByUom[];
+};
+
+/** Settled usage handoff; no aggregate ever combines unlike UOMs. */
 export type HandymanMaterialFinalChargeReadyProjection = {
   executionScopeId: string;
-  lines: HandymanMaterialExecutionLineRecord[];
-  totalFinalUsedQty: number;
+  lines: HandymanMaterialFinalChargeReadyLine[];
+  finalUsedByUom: HandymanMaterialFinalUsedByUom[];
 };
 
 /**
@@ -174,12 +238,13 @@ export type HandymanCustomerCareMaterialLineItem = {
 
 /**
  * CR-HM-17 GAP PART 03 — Customer Care material execution read projection
- * for an execution scope.
+ * for an execution scope. This remains separate from the Lead read and may
+ * include its existing event history; quantity totals are UOM-grouped.
  */
 export type HandymanCustomerCareMaterialLinesProjection = {
   executionScopeId: string;
   lines: HandymanCustomerCareMaterialLineItem[];
-  totalFinalUsedQty: number;
+  finalUsedByUom: HandymanMaterialFinalUsedByUom[];
 };
 
 /** Head mutation payload (primitive only — no lifecycle decisions). */

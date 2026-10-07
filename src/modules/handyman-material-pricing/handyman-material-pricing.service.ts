@@ -10,6 +10,8 @@ import {
 } from '../handyman-commercial-agreements';
 import { getHandymanMaterialFinalChargeReadyProjection }
   from '../handyman-material-execution';
+import type { HandymanMaterialFinalUsedByUom }
+  from '../handyman-material-execution';
 import {
   handymanExecutionScopeRepository,
   listHandymanQuotationVersionLines,
@@ -64,7 +66,7 @@ export type HandymanMaterialPricingBasisForScope = {
   agreementVersionId: string;
   mode: HandymanMaterialPricingBasisRecord['mode'];
   basis: HandymanMaterialPricingBasisEvaluation;
-  totalFinalUsedQty: number;
+  finalUsedByUom: HandymanMaterialFinalUsedByUom[];
 };
 
 function ensureUuid(value: string, field: string): string {
@@ -246,19 +248,20 @@ export async function computeHandymanMaterialPricingBasisForScope(
 
   const inputs: HandymanMaterialPricingLineInput[] = [];
   for (const settled of projection.lines) {
-    const snapshot = materialByLine.get(settled.quotationLineId);
+    const quotationLineId = settled.materialIdentity.quotationLineId;
+    const snapshot = materialByLine.get(quotationLineId);
     if (!snapshot) {
       throw handymanMaterialPricingCompositionError(
         'snapshot_link_missing',
       );
     }
     inputs.push({
-      quotationLineId: settled.quotationLineId,
+      quotationLineId,
       materialExecutionLineId: settled.id,
       finalQuotedUnitAmount: snapshot.finalQuotedUnitAmount.toFixed(2),
       currency: snapshot.currency,
       approvedQty: settled.approvedQty,
-      finalUsedQty: settled.usedQty - settled.returnedQty,
+      finalUsedQty: settled.finalUsedQty,
     });
   }
 
@@ -273,7 +276,7 @@ export async function computeHandymanMaterialPricingBasisForScope(
         lines: [],
         basisAmount: '0.00',
       },
-      totalFinalUsedQty: projection.totalFinalUsedQty,
+      finalUsedByUom: projection.finalUsedByUom,
     };
   }
 
@@ -286,6 +289,6 @@ export async function computeHandymanMaterialPricingBasisForScope(
     agreementVersionId: basis.agreementVersionId,
     mode: basis.mode,
     basis: evaluation,
-    totalFinalUsedQty: projection.totalFinalUsedQty,
+    finalUsedByUom: projection.finalUsedByUom,
   };
 }

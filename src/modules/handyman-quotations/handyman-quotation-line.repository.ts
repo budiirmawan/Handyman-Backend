@@ -109,6 +109,26 @@ async function listLines(
   return result.rows.map(mapLine);
 }
 
+/**
+ * Verify that an immutable quotation quantity can be copied exactly into a
+ * Handyman material execution NUMERIC(14,3) column. Keep this check in SQL so
+ * no Number conversion can hide non-zero digits beyond the stored scale.
+ */
+async function hasExecutionQuantityPrecision(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  quotationLineId: string,
+): Promise<boolean> {
+  const result = await executor.query<{ representable: boolean }>(
+    `SELECT quantity > 0
+         AND quantity <= 99999999999.999::numeric
+         AND quantity = trunc(quantity, 3) AS representable
+       FROM handyman_quotation_lines
+      WHERE id = $1`,
+    [quotationLineId],
+  );
+  return result.rows[0]?.representable ?? false;
+}
+
 /** The version currency, if any line exists (one-currency rule). */
 async function findVersionCurrency(
   executor: Pick<PoolClient, 'query'> = getPool(),
@@ -179,6 +199,7 @@ async function itemBelongsToClient(
 export const handymanQuotationLineRepository = {
   insertLine,
   listLines,
+  hasExecutionQuantityPrecision,
   findVersionCurrency,
   sumLines,
   uomBelongsToClient,

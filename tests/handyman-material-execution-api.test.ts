@@ -7,6 +7,7 @@ import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { credentialService } from '../src/modules/auth';
+import { permissionService } from '../src/modules/permissions';
 import { handymanDisciplineRepository }
   from '../src/modules/handyman-disciplines';
 import { assignHandymanExecutionScopeCrew }
@@ -25,7 +26,7 @@ import { api } from './helpers/http';
  * shell over the PART 03–05 services): 7 commands + FINAL_CHARGE_READY
  * projection. Actor/client context from the authenticated request
  * ONLY; authority-shaped inputs are structurally IGNORED; bounded
- * error mapping (400/401/403/404/409); exact OpenAPI parity. Six
+ * error mapping (400/401/403/404/409); exact OpenAPI parity. Seven
  * focused cases. ZERO pricing/billing/payment/FM routes or fields.
  */
 
@@ -377,19 +378,20 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     assert.equal((settleReplay.body.data as {
       event: { id: string };
     }).event.id, settledData.event.id);
-    // Projection: ONE settled line; finalUsed = used(2.5) - ret(1)
-    // = 1.5 exactly.
+    // Projection: returned unused stock does not reverse actual use.
     const projection = await authed(f.token)(
       'get', `${matBase(f.scope.id)}/final-charge-ready`).send({});
     assert.equal(projection.status, 200, JSON.stringify(projection.body));
     const projData = projection.body.data as {
       executionScopeId: string;
-      lines: { id: string; status: string }[];
-      totalFinalUsedQty: number;
+      lines: { id: string; status: string; finalUsedQty: number }[];
+      finalUsedByUom: { uom: { id: string }; quantity: number }[];
     };
     assert.equal(projData.executionScopeId, f.scope.id);
     assert.deepEqual(projData.lines.map((l) => l.id), [lineId]);
-    assert.equal(projData.totalFinalUsedQty, 1.5);
+    assert.equal(projData.lines[0].finalUsedQty, 2.5);
+    assert.equal(projData.finalUsedByUom.length, 1);
+    assert.equal(projData.finalUsedByUom[0].quantity, 2.5);
   });
 
   it('2: authority — unauthenticated 401, non-Lead 403, body can never steer actor', async (t) => {
@@ -498,6 +500,38 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
       });
     assert.equal(garbageQty.status, 400);
     assert.equal(metErr(garbageQty), 'VALIDATION_ERROR');
+    for (const quantity of [1.2345, 0.0001, 100_000_000_000]) {
+      const imprecise = await lineViaHttp(
+        f.token, f.scope.id, randomUUID(), 'use', {
+          quantity, idempotencyKey: key(),
+        });
+      assert.equal(imprecise.status, 400);
+      assert.equal(metErr(imprecise), 'VALIDATION_ERROR');
+    }
+    const estimatePrecision = await estimateViaHttp({
+      token: f.token,
+      scopeId: f.scope.id,
+      quotationVersionId: f.scope.approvedQuotationVersionId,
+      quotationLineId: f.quotationLineId,
+      estimatedQty: 1.2345,
+      idempotencyKey: key(),
+    });
+    assert.equal(estimatePrecision.status, 400);
+    assert.equal(metErr(estimatePrecision), 'VALIDATION_ERROR');
+    // The approved quotation's quantity must also fit the execution
+    // NUMERIC(14,3) column exactly; it may not be silently rounded.
+    const overScaleSnapshot = await leadFixture(6.1234);
+    const rejectedSnapshot = await estimateViaHttp({
+      token: overScaleSnapshot.token,
+      scopeId: overScaleSnapshot.scope.id,
+      quotationVersionId: overScaleSnapshot.scope.approvedQuotationVersionId,
+      quotationLineId: overScaleSnapshot.quotationLineId,
+      estimatedQty: 1,
+      idempotencyKey: key(),
+    });
+    assert.equal(rejectedSnapshot.status, 400);
+    assert.equal(metErr(rejectedSnapshot),
+      'HANDYMAN_MATERIAL_EXECUTION_ESTIMATE_INVALID');
     // Overlong key / reference = 400.
     const longKey = await postWith(f.token)(
       `${matBase(f.scope.id)}/estimate`, {
@@ -598,14 +632,16 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     assert.equal(projection.status, 200, JSON.stringify(projection.body));
     const data = projection.body.data as {
       executionScopeId: string;
-      lines: { id: string; status: string;
-        usedQty: number; returnedQty: number }[];
-      totalFinalUsedQty: number;
+      lines: { id: string; status: string; usedQty: number;
+        returnedQty: number; finalUsedQty: number }[];
+      finalUsedByUom: { uom: { id: string }; quantity: number }[];
     };
-    // Exact settled line only, final basis = 2.5 - 0.5 = 2.0.
+    // Exact settled line only; final-used is actual consumption (2.5).
     assert.deepEqual(data.lines.map((l) => l.id), [f.lineId]);
     assert.equal(data.lines[0].status, 'FINAL_CHARGE_READY');
-    assert.equal(data.totalFinalUsedQty, 2);
+    assert.equal(data.lines[0].finalUsedQty, 2.5);
+    assert.equal(data.finalUsedByUom.length, 1);
+    assert.equal(data.finalUsedByUom[0].quantity, 2.5);
     // NO financial identifier anywhere in the payload tree.
     const json = JSON.stringify(projection.body);
     for (const token of ['unitPrice', 'unitAmount', 'lineTotal',
@@ -627,17 +663,249 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     assert.equal(secondProjection.status, 200);
     const secondData = secondProjection.body.data as {
       lines: unknown[];
-      totalFinalUsedQty: number;
+      finalUsedByUom: unknown[];
     };
     assert.deepEqual(secondData.lines, []);
-    assert.equal(secondData.totalFinalUsedQty, 0);
+    assert.deepEqual(secondData.finalUsedByUom, []);
   });
 
-  it('6: OpenAPI parity — every route exists, no forbidden surface', async (t) => {
+  it('6: Lead material progress is assigned-only, field-safe, UOM-safe, and history-free', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await leadFixture();
+    const originalUomResult = await q(
+      `SELECT uom_id AS id FROM handyman_quotation_lines WHERE id = $1`,
+      [f.quotationLineId]);
+    const originalUomId = originalUomResult.rows[0].id as string;
+    const secondUomId = randomUUID();
+    await q(
+      `INSERT INTO units_of_measure
+         (id, client_id, code, name, symbol, category)
+       VALUES ($1::uuid, $2::uuid, $3, 'Kilogram', 'kg', 'MASS')`,
+      [secondUomId, f.scope.clientId,
+        `KG_${randomUUID().replaceAll('-', '').slice(0, 8)}`]);
+
+    const itemId = randomUUID();
+    const itemCode = `MAT_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const itemName = 'Silicone sealant';
+    await q(
+      `INSERT INTO inventory_items
+         (id, client_id, code, name, item_type, uom_id)
+       VALUES ($1::uuid, $2::uuid, $3, $4, 'MATERIAL', $5::uuid)`,
+      [itemId, f.scope.clientId, itemCode, itemName, originalUomId]);
+
+    const insertQuoteLine = async (
+      description: string,
+      quantity: number,
+      uomId: string,
+      sourceItemId: string | null = null,
+    ) => {
+      const id = randomUUID();
+      await q(
+        `INSERT INTO handyman_quotation_lines (
+           id, quotation_version_id, line_type, description, quantity,
+           uom_id, final_quoted_unit_amount, line_total, currency,
+           source_item_id, created_by_user_id
+         ) VALUES ($1::uuid, $2::uuid, 'MATERIAL', $3, $4::numeric,
+                   $5::uuid, 25, ROUND($4::numeric * 25, 2), 'IDR',
+                   $6::uuid, $7::uuid)`,
+        [id, f.scope.approvedQuotationVersionId, description, quantity,
+          uomId, sourceItemId, adminUserId]);
+      return id;
+    };
+    const quoteLine2 = await insertQuoteLine(
+      'PRIVATE QUOTATION NOTE - MUST NOT LEAK', 6, secondUomId, itemId);
+    const quoteLine3 = await insertQuoteLine(
+      'PRIVATE SECOND LINE NOTE', 4, originalUomId);
+    const quoteLine4 = await insertQuoteLine(
+      'PRIVATE UNSETTLED NOTE', 4, originalUomId);
+
+    const driveToSettled = async (args: {
+      quotationLineId: string;
+      approvedQty: number;
+      issueQty: number;
+      useQty: number;
+      returnQty: number;
+    }) => {
+      const estimate = await estimateViaHttp({
+        token: f.token,
+        scopeId: f.scope.id,
+        quotationVersionId: f.scope.approvedQuotationVersionId,
+        quotationLineId: args.quotationLineId,
+        estimatedQty: args.approvedQty,
+        idempotencyKey: `k-${randomUUID()}`,
+      });
+      assert.equal(estimate.status, 200, JSON.stringify(estimate.body));
+      const lineId = (estimate.body.data as { line: { id: string } }).line.id;
+      const approve = await lineViaHttp(
+        f.token, f.scope.id, lineId, 'approve', {
+          idempotencyKey: `k-${randomUUID()}`,
+        });
+      assert.equal(approve.status, 200, JSON.stringify(approve.body));
+      const issue = await lineViaHttp(
+        f.token, f.scope.id, lineId, 'issue', {
+          quantity: args.issueQty,
+          idempotencyKey: `k-${randomUUID()}`,
+        });
+      assert.equal(issue.status, 200, JSON.stringify(issue.body));
+      if (args.useQty > 0) {
+        const use = await lineViaHttp(
+          f.token, f.scope.id, lineId, 'use', {
+            quantity: args.useQty,
+            idempotencyKey: `k-${randomUUID()}`,
+          });
+        assert.equal(use.status, 200, JSON.stringify(use.body));
+      }
+      if (args.returnQty > 0) {
+        const returned = await lineViaHttp(
+          f.token, f.scope.id, lineId, 'return', {
+            quantity: args.returnQty,
+            idempotencyKey: `k-${randomUUID()}`,
+          });
+        assert.equal(returned.status, 200, JSON.stringify(returned.body));
+      }
+      const settled = await lineViaHttp(
+        f.token, f.scope.id, lineId, 'settle', {
+          idempotencyKey: `k-${randomUUID()}`,
+        });
+      assert.equal(settled.status, 200, JSON.stringify(settled.body));
+      return lineId;
+    };
+
+    const line1 = await driveToSettled({
+      quotationLineId: f.quotationLineId,
+      approvedQty: 6,
+      issueQty: 5,
+      useQty: 1,
+      returnQty: 3,
+    });
+    const line2 = await driveToSettled({
+      quotationLineId: quoteLine2,
+      approvedQty: 6,
+      issueQty: 6,
+      useQty: 2.5,
+      returnQty: 0.5,
+    });
+    const line3 = await driveToSettled({
+      quotationLineId: quoteLine3,
+      approvedQty: 4,
+      issueQty: 4,
+      useQty: 0.5,
+      returnQty: 0,
+    });
+    const pendingEstimate = await estimateViaHttp({
+      token: f.token,
+      scopeId: f.scope.id,
+      quotationVersionId: f.scope.approvedQuotationVersionId,
+      quotationLineId: quoteLine4,
+      estimatedQty: 3,
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+    const pendingLineId = (pendingEstimate.body.data as {
+      line: { id: string };
+    }).line.id;
+    await lineViaHttp(f.token, f.scope.id, pendingLineId, 'approve', {
+      idempotencyKey: `k-${randomUUID()}`,
+    });
+
+    const progressPath = `${V1}/handyman/lead/assigned-scopes/`
+      + `${f.scope.id}/material-progress`;
+    const missingAuth = await api().get(progressPath).send({});
+    assert.equal(missingAuth.status, 401);
+    const outsider = await createPlainSession();
+    const notAssigned = await api().get(progressPath)
+      .set('Authorization', `Bearer ${outsider}`).send({});
+    assert.equal(notAssigned.status, 404);
+
+    const leadPermissions = await permissionService.resolvePermissionsForUser(
+      f.leadUserId,
+    );
+    assert.equal(leadPermissions.includes('tenant_company.read'), false);
+    const response = await authed(f.token)('get', progressPath).send({});
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const data = response.body.data as {
+      executionScopeId: string;
+      lines: Array<{
+        id: string;
+        quotationLineId: string;
+        materialIdentity: {
+          quotationLineId: string;
+          sourceItemId: string | null;
+          itemCode: string | null;
+          itemName: string | null;
+        };
+        uom: { id: string; code: string; name: string; symbol: string };
+        status: string;
+        acquisitionMode: string | null;
+        estimatedQty: number;
+        approvedQty: number;
+        issuedQty: number;
+        purchasedQty: number;
+        usedQty: number;
+        returnedQty: number;
+        finalUsedQty: number | null;
+      }>;
+      finalUsedByUom: Array<{
+        uom: { id: string; code: string; name: string; symbol: string };
+        quantity: number;
+      }>;
+    };
+    assert.equal(data.executionScopeId, f.scope.id);
+    assert.equal(data.lines.length, 4);
+    const settled1 = data.lines.find((line) => line.id === line1)!;
+    const settled2 = data.lines.find((line) => line.id === line2)!;
+    const settled3 = data.lines.find((line) => line.id === line3)!;
+    const pending = data.lines.find((line) => line.id === pendingLineId)!;
+    assert.deepEqual(
+      [settled1.estimatedQty, settled1.approvedQty, settled1.issuedQty,
+        settled1.purchasedQty, settled1.usedQty, settled1.returnedQty,
+        settled1.finalUsedQty],
+      [6, 6, 5, 0, 1, 3, 1],
+    );
+    assert.equal(settled1.status, 'FINAL_CHARGE_READY');
+    assert.equal(settled2.materialIdentity.quotationLineId, quoteLine2);
+    assert.equal(settled2.materialIdentity.sourceItemId, itemId);
+    assert.equal(settled2.materialIdentity.itemCode, itemCode);
+    assert.equal(settled2.materialIdentity.itemName, itemName);
+    // The approved quotation line is authoritative; inventory item's UOM
+    // is deliberately different and must not label this quantity.
+    assert.equal(settled2.uom.id, secondUomId);
+    assert.equal(settled2.usedQty, 2.5);
+    assert.equal(settled2.returnedQty, 0.5);
+    assert.equal(settled2.finalUsedQty, 2.5);
+    assert.equal(settled3.uom.id, settled1.uom.id);
+    assert.equal(settled3.finalUsedQty, 0.5);
+    assert.equal(pending.status, 'APPROVED');
+    assert.equal(pending.finalUsedQty, null);
+    assert.deepEqual(
+      data.finalUsedByUom.map((aggregate) => aggregate.quantity).sort(),
+      [1.5, 2.5],
+    );
+    assert.notEqual(data.finalUsedByUom[0].uom.id,
+      data.finalUsedByUom[1].uom.id);
+    const lineKeys = [
+      'acquisitionMode', 'approvedQty', 'estimatedQty', 'executionScopeId',
+      'finalUsedQty', 'id', 'issuedQty', 'materialIdentity', 'purchasedQty',
+      'quotationLineId', 'returnedQty', 'status', 'uom', 'usedQty',
+    ];
+    assert.deepEqual(Object.keys(settled2).sort(), lineKeys.sort());
+    const serialized = JSON.stringify(response.body);
+    for (const forbidden of [
+      'PRIVATE QUOTATION NOTE', 'PRIVATE SECOND LINE NOTE',
+      'PRIVATE UNSETTLED NOTE', 'events', 'supplierReference',
+      'idempotencyKey', 'actorUserId', 'clientId', 'unitPrice',
+      'currency', 'lineTotal', 'finalQuotedUnitAmount',
+    ]) {
+      assert.equal(serialized.includes(forbidden), false,
+        `Lead progress must omit ${forbidden}`);
+    }
+  });
+
+  it('7: OpenAPI parity — every route exists, no forbidden surface', async (t) => {
     if (!requireDatabase(t)) return;
     const doc = YAML.parse(readFileSync('docs/api/openapi.yaml',
       'utf8')) as {
-      paths: Record<string, Record<string, unknown>>;
+      paths: Record<string, Record<string, any>>;
+      components: { schemas: Record<string, any> };
     };
     const paths = Object.keys(doc.paths);
     const expectedRoutes = [
@@ -653,11 +921,34 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     for (const route of expectedRoutes) {
       assert.ok(paths.includes(route), `missing ${route}`);
     }
-    // Nothing else mentions material-lines in the contract.
-    assert.equal(
-      paths.filter((p) => p.includes('material-lines')).length,
-      expectedRoutes.length);
-    // HTTP reality check: all 8 routes are actually MOUNTED (no 404
+    // The eight Lead material command/handoff routes and the separate
+    // Customer Care material-lines read are the complete material surface.
+    assert.deepEqual(
+      paths.filter((p) => p.includes('material-lines')).sort(),
+      [...expectedRoutes,
+        '/handyman/execution-scopes/{executionScopeId}/material-lines']
+        .sort());
+    const leadProgressPath =
+      '/handyman/lead/assigned-scopes/{executionScopeId}/material-progress';
+    assert.ok(paths.includes(leadProgressPath));
+    const leadProgressOperation = doc.paths[leadProgressPath].get;
+    assert.equal(leadProgressOperation.operationId,
+      'getHandymanLeadMaterialProgress');
+    assert.equal(leadProgressOperation.responses['200']
+      .content['application/json'].schema.allOf[1]
+      .properties.data.$ref,
+    '#/components/schemas/HandymanLeadMaterialProgress');
+    const leadProgressSchema = doc.components.schemas
+      .HandymanLeadMaterialProgress;
+    assert.deepEqual(leadProgressSchema.required,
+      ['executionScopeId', 'lines', 'finalUsedByUom']);
+    const settledSchema = doc.components.schemas
+      .HandymanMaterialFinalChargeReadyProjection;
+    assert.deepEqual(settledSchema.required,
+      ['executionScopeId', 'lines', 'finalUsedByUom']);
+    assert.equal('totalFinalUsedQty' in settledSchema.properties, false);
+    assert.equal('projectedAt' in settledSchema.properties, false);
+    // HTTP reality check: all 8 material command/read routes are actually MOUNTED (no 404
     // for a real scope route handler).
     const f = await leadFixture();
     const key = () => `k-${randomUUID()}`;
@@ -724,7 +1015,7 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
       `${apiDir}/handyman-material-execution-api.controller.ts`, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '');
-    assert.ok(controllerSrc.includes('totalFinalUsedQty'));
+    assert.ok(controllerSrc.includes('finalUsedByUom'));
     assert.ok(controllerSrc.includes('sendSuccess'));
     // Exactly one router registration entry.
     const routesIndex = readFileSync('src/routes/index.ts', 'utf8');

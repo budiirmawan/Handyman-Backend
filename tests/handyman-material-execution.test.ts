@@ -307,7 +307,7 @@ describe('CR-HM-09 PART 01 — material execution persistence', () => {
     });
     await assertPgError('23514', () =>
       setHead(lineC.id, { returnedQty: 4 }));
-    // Legal boundary: returned reduces final usage exactly.
+    // Legal boundary: returned unused quantity reduces held stock.
     await setHead(lineC.id, { returnedQty: 3 });
     assert.ok(true);
   });
@@ -605,6 +605,7 @@ describe('CR-HM-09 PART 01 — material execution persistence', () => {
       readdirSync('src/modules/handyman-material-execution').sort(),
       [
         'handyman-material-execution.errors.ts',
+        'handyman-material-execution.quantity.ts',
         'handyman-material-execution.repository.ts',
         'handyman-material-execution.service.ts',
         'handyman-material-execution.types.ts',

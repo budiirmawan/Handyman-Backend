@@ -29,14 +29,11 @@ import {
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
- * CR-HM-09 PART 05 — USE / RETURN / FINAL_CHARGE_READY ONLY
- * (governance D2/D5): frozen usage-basis invariants
- * (used <= issued+purchased-returned; returned <= issued+purchased-
- * used), returned reduces the final usage figure, SETTLE closes the
- * line (post-settled adjustments bounded 409), FINAL_CHARGE_READY
- * read projection is EXECUTION TRUTH ONLY (no amounts). Lead-only
- * authority, idempotent replay. Six focused cases. ZERO API/OpenAPI,
- * ZERO pricing/billing/FM.
+ * CR-HM-09 PART 05 quantity semantics: USE records consumption; RETURN
+ * removes unused holding without reversing consumption; SETTLE closes the
+ * line. Final-used is settled usedQty and is non-negative. Lead-only
+ * authority, idempotent replay, NUMERIC(14,3) input precision, and UOM-safe
+ * aggregates are covered by focused cases. ZERO API/OpenAPI/FM behavior.
  */
 
 let database: DatabaseConfig | null = null;
@@ -244,7 +241,7 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       }, f.leadUserId));
   });
 
-  it('2: RETURN reduces the final usage basis (partials legal)', async (t) => {
+  it('2: RETURN reduces held stock, not actual used quantity', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await lineAt('PURCHASED', { snapshots: 6 });
     await useHandymanMaterialExecutionLine({
@@ -260,8 +257,8 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       quantity: 1.5,
       idempotencyKey: key,
     }, f.leadUserId);
-    // RETURN is NOT a sticky status: the line stays USED with the
-    // returned remainder carrying the final usage reduction.
+    // RETURN is NOT a sticky status: it removes unused stock from
+    // the held balance while the line stays USED.
     assert.equal(returned.line.status, 'USED');
     assert.equal(returned.line.returnedQty, 1.5);
     assert.equal(returned.line.usedQty, 4);
@@ -303,13 +300,73 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
         quantity: 0.001,
         idempotencyKey: `k-${randomUUID()}`,
       }, f.leadUserId));
-    // Final usage basis here is used(4) - returned(2) = 2.
+    // Returned stock was unused: actual consumption remains 4.
     const head = await handymanMaterialExecutionRepository
       .findMaterialExecutionLineById(undefined, f.line.id);
-    assert.equal(head!.usedQty - head!.returnedQty, 2);
+    assert.equal(head!.usedQty, 4);
+    assert.equal(head!.returnedQty, 2);
+    await settleHandymanMaterialExecutionLine({
+      executionScopeId: f.scope.id,
+      lineId: f.line.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
+    const projection = await getHandymanMaterialFinalChargeReadyProjection(
+      f.scope.id, f.leadUserId);
+    assert.equal(projection.lines[0].finalUsedQty, 4);
   });
 
-  it('3: RETURN and USE are refused before acquisition and after settle', async (t) => {
+  it('3: unused returns larger than used quantity still yield non-negative final-used', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await lineAt('ISSUED', { snapshots: 10, issuedQty: 10 });
+    await useHandymanMaterialExecutionLine({
+      executionScopeId: f.scope.id,
+      lineId: f.line.id,
+      quantity: 1,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
+    await returnHandymanMaterialExecutionLine({
+      executionScopeId: f.scope.id,
+      lineId: f.line.id,
+      quantity: 3,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
+    await settleHandymanMaterialExecutionLine({
+      executionScopeId: f.scope.id,
+      lineId: f.line.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
+
+    const projection = await getHandymanMaterialFinalChargeReadyProjection(
+      f.scope.id, f.leadUserId);
+    assert.equal(projection.lines[0].usedQty, 1);
+    assert.equal(projection.lines[0].returnedQty, 3);
+    assert.equal(projection.lines[0].finalUsedQty, 1);
+    assert.ok(projection.lines[0].finalUsedQty >= 0);
+    assert.equal(projection.finalUsedByUom.length, 1);
+    assert.equal(projection.finalUsedByUom[0].quantity, 1);
+  });
+
+  it('4: quantity deltas must fit NUMERIC(14,3) before persistence', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await lineAt('ISSUED', { snapshots: 4, issuedQty: 4 });
+    for (const quantity of [0.0001, 1.2345, 100_000_000_000]) {
+      await assertDomainReject(
+        'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED',
+        () => useHandymanMaterialExecutionLine({
+          executionScopeId: f.scope.id,
+          lineId: f.line.id,
+          quantity,
+          idempotencyKey: `k-${randomUUID()}`,
+        }, f.leadUserId),
+      );
+    }
+    const head = await handymanMaterialExecutionRepository
+      .findMaterialExecutionLineById(undefined, f.line.id);
+    assert.equal(head!.usedQty, 0);
+    assert.equal(head!.status, 'ISSUED');
+  });
+
+  it('5: RETURN and USE are refused before acquisition and after settle', async (t) => {
     if (!requireDatabase(t)) return;
     // Not-yet-acquired (APPROVED-only) line: USE/RETURN bounded 409.
     const f = await lineAt('ISSUED', { snapshots: 2, issuedQty: 1 });
@@ -422,7 +479,7 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       }, f2.leadUserId));
   });
 
-  it('4: SETTLE transitions + idempotent; authority Lead-only', async (t) => {
+  it('6: SETTLE transitions + idempotent; authority Lead-only', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await lineAt('ISSUED', { snapshots: 3 });
     await useHandymanMaterialExecutionLine({
@@ -474,7 +531,7 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
       }, f.leadUserId));
   });
 
-  it('5: FINAL_CHARGE_READY projection is execution truth only', async (t) => {
+  it('7: FINAL_CHARGE_READY projection is execution truth only', async (t) => {
     if (!requireDatabase(t)) return;
     // Two settled lines (mixed ISSUED + PURCHASED) + one unsettled.
     const a = await lineAt('ISSUED', { snapshots: 4, issuedQty: 4 });
@@ -488,9 +545,13 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
     const b = await (async () => {
       // Second line on the SAME scope requires a second MATERIAL
       // quote line on the same approved version.
-      const uomRow = await q(
-        `SELECT id FROM units_of_measure WHERE client_id = $1 LIMIT 1`,
-        [a.scope.clientId]);
+      const secondUomId = randomUUID();
+      await q(
+        `INSERT INTO units_of_measure
+           (id, client_id, code, name, symbol, category)
+         VALUES ($1::uuid, $2::uuid, $3, 'Kilogram', 'kg', 'MASS')`,
+        [secondUomId, a.scope.clientId,
+          `KG_${randomUUID().replaceAll('-', '').slice(0, 8)}`]);
       const materialLineId = randomUUID();
       await q(
         `INSERT INTO handyman_quotation_lines (
@@ -500,7 +561,7 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
          ) VALUES ($1::uuid, $2::uuid, 'MATERIAL', 'Epoxy kit', 5,
                    $3::uuid, 25, 125, 'IDR', NULL, $4::uuid)`,
         [materialLineId, a.scope.approvedQuotationVersionId,
-          uomRow.rows[0].id, adminUserId]);
+          secondUomId, adminUserId]);
       const estimated = await estimateHandymanMaterialExecutionLine({
         executionScopeId: a.scope.id,
         quotationVersionId: a.scope.approvedQuotationVersionId,
@@ -578,8 +639,19 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
     // absent (never fabricated as handoff).
     assert.deepEqual(projection.lines.map((line) => line.id).sort(),
       [a.line.id, b.id].sort());
-    // Aggregated final usage = (3-0) + (4-1) = 6 exactly; c excluded.
-    assert.equal(projection.totalFinalUsedQty, 6);
+    // Different UOMs remain separate: 3 metres and 4 kilograms; c excluded.
+    assert.deepEqual(
+      projection.finalUsedByUom.map((item) => item.quantity).sort(),
+      [3, 4],
+    );
+    assert.notEqual(
+      projection.finalUsedByUom[0].uom.id,
+      projection.finalUsedByUom[1].uom.id,
+    );
+    assert.equal(
+      projection.lines.find((line) => line.id === b.id)?.finalUsedQty,
+      4,
+    );
     // The projection is quantity truth only: record fields carry no
     // financial columns (structural type-level safety verified at
     // the source scan below, rows here bounded by the PART-01/02
@@ -604,7 +676,7 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
     void c;
   });
 
-  it('6: zero pricing/billing/FM surface in PART 05', async (t) => {
+  it('8: zero pricing/billing/FM surface in PART 05', async (t) => {
     if (!requireDatabase(t)) return;
     // PART-05 service only adds the usage/settle/projection trio —
     // NO API layer, NO commercial computation, NO FM chaining.
@@ -631,11 +703,12 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
     assert.ok(
       modules.includes('handyman-material-execution-api'),
       'PART 06 -api module exists as sole HTTP surface');
-    // Module file set is exactly the PART-partitioned 5 files.
+    // Domain module includes the quantity helper and no HTTP layer.
     const files = (await import('node:fs'))
       .readdirSync('src/modules/handyman-material-execution').sort();
     assert.deepEqual(files, [
       'handyman-material-execution.errors.ts',
+      'handyman-material-execution.quantity.ts',
       'handyman-material-execution.repository.ts',
       'handyman-material-execution.service.ts',
       'handyman-material-execution.types.ts',

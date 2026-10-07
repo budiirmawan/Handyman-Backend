@@ -15,6 +15,12 @@ export type {
   HandymanMaterialExecutionLineRecord,
   HandymanMaterialExecutionLineHead,
   HandymanMaterialExecutionEventRecord,
+  HandymanMaterialExecutionProgressRecord,
+  HandymanMaterialExecutionProgressLine,
+  HandymanMaterialFinalChargeReadyLine,
+  HandymanMaterialFinalUsedByUom,
+  HandymanMaterialIdentity,
+  HandymanMaterialUom,
   NewHandymanMaterialExecutionLine,
   NewHandymanMaterialExecutionEvent,
 } from './handyman-material-execution.types';
@@ -39,6 +45,7 @@ export {
   useHandymanMaterialExecutionLine,
   returnHandymanMaterialExecutionLine,
   settleHandymanMaterialExecutionLine,
+  getHandymanMaterialProgressProjection,
   getHandymanMaterialFinalChargeReadyProjection,
   getHandymanMaterialLinesCustomerCareView,
   listHandymanMaterialLinesByScope,
@@ -53,7 +60,16 @@ export type {
   HandymanCustomerCareMaterialLinesProjection,
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialFinalChargeReadyProjection,
+  HandymanMaterialProgressProjection,
 } from './handyman-material-execution.types';
+
+export {
+  HANDYMAN_MATERIAL_QUANTITY_MAX,
+  HANDYMAN_MATERIAL_QUANTITY_SCALE,
+  handymanMaterialQuantityFromUnits,
+  handymanMaterialQuantityUnits,
+  isHandymanMaterialQuantityRepresentable,
+} from './handyman-material-execution.quantity';
 
 export { handymanMaterialExecutionRepository }
   from './handyman-material-execution.repository';

@@ -508,7 +508,7 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
     assert.ok(data.actualWorkSeconds >= closedSession.actualWorkSeconds);
   });
 
-  it('3: GET /handyman/execution-scopes/:id/material-lines returns all governed statuses, quantities/events, totalFinalUsedQty, and zero money columns', async (t) => {
+  it('3: GET /handyman/execution-scopes/:id/material-lines returns statuses/events and UOM-grouped final-used only', async (t) => {
     if (!requireDatabase(t)) return;
 
     const f = await baseFixture();
@@ -692,7 +692,7 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
       crew.leadUser.id,
     );
 
-    // 6. FINAL_CHARGE_READY (issued 9, used 7, returned 2 => finalUsedQty = 5)
+    // 6. FINAL_CHARGE_READY (issued 9, used 7, returned 2 unused => finalUsedQty = 7)
     const lSettled = await estimateHandymanMaterialExecutionLine(
       {
         executionScopeId: f.scope.id,
@@ -755,7 +755,8 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
     const data = res.body.data;
     assert.equal(data.executionScopeId, f.scope.id);
     assert.equal(data.lines.length, 6);
-    assert.equal(data.totalFinalUsedQty, 5);
+    assert.equal(data.finalUsedByUom.length, 1);
+    assert.equal(data.finalUsedByUom[0].quantity, 7);
 
     const statuses = data.lines.map((l: { status: string }) => l.status).sort();
     assert.deepEqual(
@@ -779,7 +780,7 @@ describe('CR-HM-17 GAP PART 03 — Customer Care field reads (arrival, work sess
     assert.equal(settledItem.issuedQty, 9);
     assert.equal(settledItem.usedQty, 7);
     assert.equal(settledItem.returnedQty, 2);
-    assert.equal(settledItem.finalUsedQty, 5);
+    assert.equal(settledItem.finalUsedQty, 7);
     assert.deepEqual(
       settledItem.events.map((e: { eventType: string }) => e.eventType),
       ['ESTIMATE', 'APPROVE', 'ISSUE', 'USE', 'RETURN', 'FINAL_CHARGE_READY'],

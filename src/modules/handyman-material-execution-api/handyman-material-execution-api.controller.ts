@@ -18,6 +18,8 @@ import type {
   HandymanMaterialExecutionCommandResult,
   HandymanMaterialExecutionEventRecord,
   HandymanMaterialExecutionLineRecord,
+  HandymanMaterialExecutionProgressLine,
+  HandymanMaterialFinalChargeReadyLine,
   HandymanMaterialFinalChargeReadyProjection,
 } from '../handyman-material-execution';
 import {
@@ -86,13 +88,37 @@ function toCommandPayload(result: HandymanMaterialExecutionCommandResult) {
   };
 }
 
+function toProgressLinePayload(
+  line: HandymanMaterialExecutionProgressLine | HandymanMaterialFinalChargeReadyLine,
+) {
+  return {
+    id: line.id,
+    executionScopeId: line.executionScopeId,
+    quotationLineId: line.quotationLineId,
+    materialIdentity: line.materialIdentity,
+    uom: line.uom,
+    status: line.status,
+    acquisitionMode: line.acquisitionMode,
+    estimatedQty: line.estimatedQty,
+    approvedQty: line.approvedQty,
+    issuedQty: line.issuedQty,
+    purchasedQty: line.purchasedQty,
+    usedQty: line.usedQty,
+    returnedQty: line.returnedQty,
+    finalUsedQty: line.finalUsedQty,
+  };
+}
+
 function toProjectionPayload(
   projection: HandymanMaterialFinalChargeReadyProjection,
 ) {
   return {
     executionScopeId: projection.executionScopeId,
-    lines: projection.lines.map(toLinePayload),
-    totalFinalUsedQty: projection.totalFinalUsedQty,
+    lines: projection.lines.map(toProgressLinePayload),
+    finalUsedByUom: projection.finalUsedByUom.map((aggregate) => ({
+      uom: aggregate.uom,
+      quantity: aggregate.quantity,
+    })),
   };
 }
 
@@ -112,7 +138,10 @@ function toCustomerCareLinesPayload(
   return {
     executionScopeId: projection.executionScopeId,
     lines: projection.lines.map(toCustomerCareLineItemPayload),
-    totalFinalUsedQty: projection.totalFinalUsedQty,
+    finalUsedByUom: projection.finalUsedByUom.map((aggregate) => ({
+      uom: aggregate.uom,
+      quantity: aggregate.quantity,
+    })),
   };
 }
 
