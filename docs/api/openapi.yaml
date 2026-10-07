@@ -2480,6 +2480,247 @@ tags:
 security: []
 
 paths:
+  /handyman/care/properties/{propertyId}/catalogue/services:
+    get:
+      operationId: careCatalogueServices
+      summary: Read active services and variants for a granted property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05A. Care workspace credential only, never
+        a local User/PIC or create-exchange credential. Requires an ACTIVE
+        actor/integration/capability, unexpired unrevoked session, ACTIVE property
+        grant, Property and Client. Client is derived from the property, not
+        supplied by the caller. Existing catalogue masters are Client-scoped;
+        property scope bounds access, not a new property-specific catalogue or
+        pricing rule. Current customer selection eligibility is ACTIVE service
+        and, when selected, its ACTIVE same-Client variant; no additional
+        customer-selectability flag or property entitlement is invented.
+        No administrative actor IDs, audit timestamps or credential data are
+        returned. No catalogue mutation, request-read/create, payment, invoice,
+        tax or financial behavior is exposed. Cache-Control is no-store.
+        Page items are services with their ACTIVE child variants ordered by ID.
+        Services with no active variants remain selectable without a variant.
+        q is a trimmed literal case-insensitive service code/name substring,
+        1-100 characters when supplied; no regex/SQL wildcard interpretation.
+        Optional buildingId must be ACTIVE inside this granted property and
+        does not invent building-specific catalogue ownership. No service or
+        variant price is synthesized; material reference pricing uses the
+        separately described profile route.
+        Deterministic service/profile ID-ascending keyset pages default to 25,
+        maximum 100 parent items. Service variant arrays preserve all applicable
+        child choices. Cursors are integrity protected and bound to session,
+        actor/integration, property, endpoint, filters/search, limit, order and
+        expiry. Every page revalidates grants, session and active references.
+        No total counts; authorized empty lists return 200 with items [].
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Mandatory granted property selection, never caller Client authority.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 100 }
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized minimized catalogue read.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCatalogueServicePage' }
+        '400':
+          description: Invalid selector, unknown query/body field, bounds, currency or cursor; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, expired, revoked, inactive or wrong-kind credential.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; absent/inaccessible/inactive property or selected catalogue context, revoked grant or invalid active profile references.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority, storage or signing configuration failure; no stale scope or guessed price fallback.
+  /handyman/care/properties/{propertyId}/catalogue/material-profiles:
+    get:
+      operationId: careCatalogueProfiles
+      summary: Read active common material profiles for a granted property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05A. Care workspace credential only, never
+        a local User/PIC or create-exchange credential. Requires an ACTIVE
+        actor/integration/capability, unexpired unrevoked session, ACTIVE property
+        grant, Property and Client. Client is derived from the property, not
+        supplied by the caller. Existing catalogue masters are Client-scoped;
+        property scope bounds access, not a new property-specific catalogue or
+        pricing rule. Current customer selection eligibility is ACTIVE service
+        and, when selected, its ACTIVE same-Client variant; no additional
+        customer-selectability flag or property entitlement is invented.
+        No administrative actor IDs, audit timestamps or credential data are
+        returned. No catalogue mutation, request-read/create, payment, invoice,
+        tax or financial behavior is exposed. Cache-Control is no-store.
+        Requires ACTIVE profile, parent service, optional parent variant, and
+        same-Client inventory item. Optional serviceCatalogId/serviceVariantId
+        are narrowing selectors; a variant filter selects variant-level profiles
+        exactly and must belong to any selected service. No q search is offered
+        because the existing profile authority does not support it. This list
+        does not compute reference prices.
+        Deterministic service/profile ID-ascending keyset pages default to 25,
+        maximum 100 parent items. Service variant arrays preserve all applicable
+        child choices. Cursors are integrity protected and bound to session,
+        actor/integration, property, endpoint, filters/search, limit, order and
+        expiry. Every page revalidates grants, session and active references.
+        No total counts; authorized empty lists return 200 with items [].
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Mandatory granted property selection, never caller Client authority.
+        - name: serviceCatalogId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: serviceVariantId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized minimized catalogue read.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCatalogueProfilePage' }
+        '400':
+          description: Invalid selector, unknown query/body field, bounds, currency or cursor; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, expired, revoked, inactive or wrong-kind credential.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; absent/inaccessible/inactive property or selected catalogue context, revoked grant or invalid active profile references.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority, storage or signing configuration failure; no stale scope or guessed price fallback.
+  /handyman/care/properties/{propertyId}/catalogue/material-profiles/{profileId}:
+    get:
+      operationId: careCatalogueDetail
+      summary: Describe an applicable material profile with an optional reference price
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05A. Care workspace credential only, never
+        a local User/PIC or create-exchange credential. Requires an ACTIVE
+        actor/integration/capability, unexpired unrevoked session, ACTIVE property
+        grant, Property and Client. Client is derived from the property, not
+        supplied by the caller. Existing catalogue masters are Client-scoped;
+        property scope bounds access, not a new property-specific catalogue or
+        pricing rule. Current customer selection eligibility is ACTIVE service
+        and, when selected, its ACTIVE same-Client variant; no additional
+        customer-selectability flag or property entitlement is invented.
+        No administrative actor IDs, audit timestamps or credential data are
+        returned. No catalogue mutation, request-read/create, payment, invoice,
+        tax or financial behavior is exposed. Cache-Control is no-store.
+        Requires ACTIVE profile, parent service, optional parent variant and
+        same-Client inventory item. Optional serviceVariantId must belong to the
+        profile service; a variant-bound profile must match exactly, while a
+        service-level profile may be described in that service's variant context.
+        Reference price is null without both buildingId and currency, or without
+        an authoritative item UOM or an applicable price. currency requires
+        buildingId and must use existing governed currency vocabulary; no default
+        currency, UOM conversion, FX, price fallback or vendor input is guessed.
+        buildingId must be ACTIVE inside this exact property, not merely the
+        same Client. Price selection reuses the existing material price resolver
+        at server evaluatedAt, including precedence, half-open effective windows,
+        exact UOM/currency and ambiguity rejection. Existing ambiguity audit is
+        preserved with null local actorUserId, never PIC/User impersonation.
+        Scope, session and active profile/UOM references are revalidated after
+        price lookup before response. Reference Price is not Quotation or Final
+        Charge and is never persisted here. No caller asOf or price override.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Mandatory granted property selection, never caller Client authority.
+        - name: profileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: serviceVariantId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: currency
+          in: query
+          required: false
+          schema: { type: string, enum: [IDR, USD, SGD, MYR, AUD, EUR, GBP, JPY, CNY] }
+          description: Explicit exact-match reference-price currency; requires buildingId.
+      responses:
+        '200':
+          description: Authorized minimized catalogue read.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCatalogueProfileDetail' }
+        '400':
+          description: Invalid selector, unknown query/body field, bounds, currency or cursor; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, expired, revoked, inactive or wrong-kind credential.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; absent/inaccessible/inactive property or selected catalogue context, revoked grant or invalid active profile references.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority, storage or signing configuration failure; no stale scope or guessed price fallback.
   /handyman/care/properties:
     get:
       operationId: listCareWorkspacePropertys
@@ -74963,6 +75204,101 @@ components:
                     $ref: "#/components/schemas/ClientFxPolicy"
 
   schemas:
+    CareCatalogueVariant:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, description]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+    CareCatalogueService:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, description, category, variants]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        category: { type: string }
+        variants:
+          type: array
+          items: { $ref: '#/components/schemas/CareCatalogueVariant' }
+    CareCatalogueProfile:
+      type: object
+      additionalProperties: false
+      required: [id, serviceCatalogId, serviceVariantId, inventoryItemId, specification, compatibility, typicalQuantity, commonality, customerMaterialOption, item]
+      properties:
+        id: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid, nullable: true }
+        inventoryItemId: { type: string, format: uuid }
+        specification: { type: string, nullable: true }
+        compatibility: { type: string, nullable: true }
+        typicalQuantity: { type: number, nullable: true }
+        commonality: { type: string, enum: [COMMON, OCCASIONAL, RARE] }
+        customerMaterialOption: { type: string, enum: [PROVIDER_SUPPLIED, CUSTOMER_SUPPLIED, CUSTOMER_CHOICE] }
+        item:
+          type: object
+          additionalProperties: false
+          required: [id, code, name, uomId]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            uomId: { type: string, format: uuid, nullable: true }
+    CareCatalogueProfileDetail:
+      type: object
+      additionalProperties: false
+      required: [id, serviceCatalogId, serviceVariantId, inventoryItemId, specification, compatibility, typicalQuantity, commonality, customerMaterialOption, item, referencePrice, evaluatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid, nullable: true }
+        inventoryItemId: { type: string, format: uuid }
+        specification: { type: string, nullable: true }
+        compatibility: { type: string, nullable: true }
+        typicalQuantity: { type: number, nullable: true }
+        commonality: { type: string, enum: [COMMON, OCCASIONAL, RARE] }
+        customerMaterialOption: { type: string, enum: [PROVIDER_SUPPLIED, CUSTOMER_SUPPLIED, CUSTOMER_CHOICE] }
+        item:
+          type: object
+          additionalProperties: false
+          required: [id, code, name, uomId]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            uomId: { type: string, format: uuid, nullable: true }
+        referencePrice:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/HandymanMaterialReferencePrice'
+        evaluatedAt: { type: string, format: date-time }
+    CareCatalogueServicePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareCatalogueService' }
+        nextCursor: { type: string, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
+    CareCatalogueProfilePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareCatalogueProfile' }
+        nextCursor: { type: string, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
     CareWorkspaceOccupancy:
       type: object
       additionalProperties: false

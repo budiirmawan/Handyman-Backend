@@ -383,7 +383,7 @@ describe('Care effective occupancy projection', () => {
     await assert.rejects(consumeHandoffExchange(response.body.data.nextCursor));
     await assert.rejects(consumeHandoffExchange(response.body.data.items[0].tenantBuildingContextId));
     assert.equal((await api().post(occupancyPath()).set('Authorization', `Bearer ${token}`).send(unitQuery())).status, 404);
-    for (const segment of [`tenant-companies/${tenantId}/pics`, 'catalogue/services']) assert.equal((await get(`${path}/${props[0]}/${segment}`)).status, 404);
+    for (const segment of [`tenant-companies/${tenantId}/pics`]) assert.equal((await get(`${path}/${props[0]}/${segment}`)).status, 404);
   });
 
   it('documents only read composition and nullable building-only space fields', () => {

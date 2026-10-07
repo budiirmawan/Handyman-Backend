@@ -1,3 +1,4 @@
+import { readCareWorkspaceCatalogue } from './care-workspace-catalogue.service';
 import { Router } from 'express';
 import { listCareWorkspaceScope, listCareWorkspaceTenants, listCareWorkspaceSpaces, listCareWorkspaceOccupancies } from './care-workspace-scope.service';
 import { getAppConfig } from '../../config';
@@ -72,5 +73,21 @@ export function createCareWorkspaceRouter(): Router {
       sendSuccess(res, await listCareWorkspaceOccupancies(match[1], req.query, req.params.propertyId, req.body));
     } catch (error) { next(error); }
   });
+  for (const [path, kind] of [
+    ['/handyman/care/properties/:propertyId/catalogue/services', 'services'],
+    ['/handyman/care/properties/:propertyId/catalogue/material-profiles', 'profiles'],
+    ['/handyman/care/properties/:propertyId/catalogue/material-profiles/:profileId', 'profiles'],
+  ] as const) {
+    router.get(path, async (req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try {
+        const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+        if (!match) throw workspaceUnauthorized();
+        const profileId = 'profileId' in req.params ? req.params.profileId : undefined;
+        sendSuccess(res, await readCareWorkspaceCatalogue(match[1], req.params.propertyId,
+          kind, req.query, profileId, req.body));
+      } catch (error) { next(error); }
+    });
+  }
   return router;
 }

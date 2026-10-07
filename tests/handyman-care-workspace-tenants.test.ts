@@ -335,7 +335,7 @@ describe('Care property-scoped tenant discovery', () => {
     try { await assert.rejects(listCareWorkspaceTenants(token, {}, props[0]), /tenant projection outage/); }
     finally { careWorkspaceTenantsRepository.readTenants = original; }
     await assert.rejects(consumeHandoffExchange(token));
-    for (const suffix of ['catalogue/services', `tenant-companies/${randomUUID()}/pics`]) {
+    for (const suffix of [`tenant-companies/${randomUUID()}/pics`]) {
       assert.equal((await get(`${path}/${props[0]}/${suffix}`)).status, 404);
     }
     assert.equal((await api().post(tenantPath()).set('Authorization', `Bearer ${token}`).send({})).status, 404);

@@ -71,7 +71,18 @@ export async function lookupPriceCatalogEntry(
   if (!building) throw priceCatalogBuildingNotFoundError();
   await contextAccessService.assertBuildingAccess(actorUserId, input.buildingId);
 
-  const clientId = building.clientId;
+  return resolveAuthorizedPriceCatalogEntry(input, building.clientId, actorUserId);
+}
+
+/** Internal shared resolver, NOT a transport or authorization bypass. Callers
+ * must prove current access to the Building and derive Client server-side first.
+ * The care adapter has no local User; ambiguity audit records use null, never
+ * a represented customer's User. Existing bearer entry keeps its access check. */
+export async function resolveAuthorizedPriceCatalogEntry(
+  input: PriceCatalogLookupInput,
+  clientId: string,
+  actorUserId: string | null,
+): Promise<PriceCatalogLookupResult> {
   const vendorId = input.vendorId ?? null;
   const asOf = new Date(input.asOf);
   const sourceMode = input.sourceMode;
