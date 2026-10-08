@@ -87,7 +87,12 @@ RBAC gate for all of the above: `modules/auth/rbac.middleware.ts:14-48` (`requir
 | Property/building lineage at intake | `handyman-channel-attributions/handyman-channel-attribution.service.ts:225-240` (building's Property must belong to the tenant's Client; active tenant-building context) and `:255-266` (space must have an active tenant relationship in that building → `HANDYMAN_CHANNEL_ATTRIBUTION_SPACE_MISMATCH`) | the **only** place where a building/space is bound to a Request | Runs at attribution creation, before the chain. Covered by test case 3 (sibling-building space is rejected). |
 | Execution-scope location | `handyman-execution-scope.service.ts:90-92` | floor's building == request building | Defence-in-depth; not reachable through the public intake path because attribution already enforces it. |
 
-### 3.1 Open finding — same-Client, different-property actor is NOT blocked downstream
+### 3.1 P0 SECURITY GAP — same-Client cross-building quotation authorization (confirmed)
+
+**Severity: P0.** Confirmed at runtime for quotation creation. Other chain steps are confirmed in
+source only (see 3.2). Scope of impact: intra-Client. A user of Client A is blocked from Client B
+(tests 2 and 3 pass), but a user of Client A who is assigned to building B2 can act on Client A's
+requests and Execution Scopes in building B1, where they hold no building assignment.
 
 Because the chain guards are Client-scoped, an actor who holds `tenant_company.manage` and an
 ACTIVE assignment to **any** building of the same Client can create the quotation for a Request in a
@@ -105,8 +110,85 @@ PROBE_QUOTATION_STATUS 201 ok      # same-Client actor, assigned only to sibling
 (The probe's intake call returned 409 `HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS` only because the
 attribution already had a Request; that line is not evidence either way.)
 
-Decision needed from the owner: keep Client-scoped downstream authority (document it as intended) or
-add building/property guards to quotation, decision, and assignment (new CR).
+### 3.2 Reproduction
+
+Preconditions (one Client `C`, two Properties/Buildings):
+- Property `P1` / Building `B1`: a Request `R1` exists (intake → triage DIAGNOSIS → diagnosis).
+- Property `P2` / Building `B2`: same Client `C`.
+- User `U` holds `tenant_company.manage`; `U` has an ACTIVE `user_building_assignments` row for `B2` only.
+
+Steps (HTTP, Bearer = `U`):
+1. `POST /api/v1/handyman/requests/{R1}/quotation`
+
+| Observed | Expected under building-level realm | Control (same user, no assignment in `C`) |
+| --- | --- | --- |
+| **201** — quotation v1 DRAFT created for `R1` in `B1` | 403 `BUILDING_ACCESS_DENIED` | 403 `BUILDING_ACCESS_DENIED` (test case 2, PASS) |
+
+The control shows that the only grant in this path is the same-Client assignment in `B2`.
+Runtime probe: copy of the chain test file with one appended case (`PROBE_QUOTATION_STATUS 201 ok`),
+run once, then deleted; not committed. Per the PART scope, no regression test that asserts the
+vulnerable behavior was added, and no authorization semantics were changed.
+
+### 3.3 Source-line evidence (HEAD `2cca96e` src = `152ee5d` src)
+
+Root grant (Client-level only):
+- `src/modules/context-access/context-access.service.ts:60-65` — `canAccessClient` returns true if any
+  ACTIVE building context of the user has `client.id === clientId`. No building comparison.
+
+Building/property primitives that exist but are NOT called by the chain:
+- `context-access.service.ts:27-30` `canAccessBuilding`; `:41-47` `assertBuildingAccess`; `:51-56` `canAccessProperty`.
+- Within Handyman modules, building/property guards appear only at `handyman-care-actors/handyman-care-property-scope.service.ts:56`
+  and `handyman-sla-status-api/handyman-sla-status-api.service.ts:485`. None are in the chain.
+
+Chain call sites that use the Client-level check (all runtime-reachable by a same-Client user):
+
+| Step | File:line |
+| --- | --- |
+| Intake | `handyman-requests/handyman-service-request.service.ts:244` (create), `:312` (list), `:338` (detail) |
+| Triage | `handyman-requests/handyman-request-triage.service.ts:129` (write), `:225` (read) |
+| Diagnosis | `handyman-requests/handyman-request-diagnosis.service.ts:120` (write), `:260` (read) |
+| Quotation create / read / revise | `handyman-quotations/handyman-quotation.service.ts:105`, `:187`, `:240` |
+| Issue / expire / supersede (`requireAccessibleQuotation`) | `handyman-quotations/handyman-quotation-lifecycle.service.ts:76`, `:301` |
+| Decision (write) / decision read | `handyman-quotations/handyman-quotation-decision.service.ts:166`, `:336` |
+| Scope read | `handyman-quotations/handyman-execution-scope.service.ts:170` (via `canAccessClient(actorUserId, scope.clientId)`) |
+| Assignment create / reassign / read / resolver (`assertRealm`) | `handyman-scope-assignments/handyman-scope-assignment.service.ts:71` |
+
+Route guards in the chain are authentication + permission only, with no building check:
+- `handyman-quotations-api/handyman-quotations-api.routes.ts:71-76` (quotation create, `manage`).
+- `handyman-scope-assignments-api/handyman-scope-assignments-api.routes.ts:31` (assignment create, `manage`).
+
+Building is available and well defined on the chain objects, so a building check is feasible:
+- Request building: `handyman-service-request.service.ts` `insertRequest` copies `attribution.buildingId`.
+- Scope building: `handyman-execution-scope.service.ts:69-100` derives `buildingId` and checks floor/building consistency (`:90-92`).
+
+Comparison: 248 non-Handyman module files call `assertBuildingAccess(`. The Handyman chain does not.
+
+### 3.4 Other steps (source-inferred, NOT runtime-confirmed)
+
+The same Client-level check governs decision (`decision.service.ts:166`), issue (`lifecycle.service.ts:76`),
+triage, diagnosis, intake, and assignment (`scope-assignment.service.ts:71`). A same-Client sibling-building user
+would reach those writes by the same grant. Only quotation creation was probed at runtime. The CR below must
+include a negative test for each step.
+
+### 3.5 Proposed separate backend CR (not implemented in this PART)
+
+**Proposed:** `CR-HM-SEC-01 — Handyman chain building-scoped authorization` (separate CR, separate branch and PR).
+
+Scope:
+1. Add a chain helper that checks the building of the target object: Request building for intake/triage/diagnosis/quotation/decision/issue; Execution Scope building for scope read and assignment. Use the existing `contextAccessService.assertBuildingAccess`. Keep the Client check as well (both must pass).
+2. Apply it to every write and read listed in 3.3, including `expire`, `supersede`, `reassign`, and assignment read.
+3. Decide platform-admin and historical-read semantics. The care workspace already has a property-scope pattern (`handyman-care-property-scope.service.ts`); reuse it if it fits.
+4. Tests: extend the chain suite with a sibling-building negative for every mutation and read, and a same-building positive. Review existing fixtures that use users with building assignments outside the request building.
+5. No schema migration expected.
+6. Acceptance: the 3.2 reproduction returns 403 `BUILDING_ACCESS_DENIED`; the affected suite is green; the pre-existing failure in §5.3 is either fixed in the same CR or tracked separately.
+
+Owner decision required before implementation: confirm the business rule (Client-wide access for multi-building staff,
+or building-scoped access per request). Option A (building-scoped, recommended by this report) changes behavior for any user
+who currently relies on Client-wide access.
+
+### 3.6 Non-goals of PART 00D-2B
+
+No production authorization change. No fix to `canAccessClient`. No new permission. No schema change. No PR and no merge.
 
 ## 4. Tests added
 
@@ -183,5 +265,27 @@ case to the current surface or scope it to the PART C paths.
 1. PASS here means: passed against a local **PostgreSQL 18.4** (embedded binaries), not Docker and not the
    compose target `postgres:16`. Re-run against the compose engine before relying on it for a release gate.
 2. The local database is an ephemeral sandbox cluster in `/tmp`; it is not persisted or shared.
-3. Test 10 failure in 5.3 and the property-isolation gap in 3.1 are open items, not fixed.
+3. The test 10 failure in 5.3 is open (pre-existing, not fixed). The P0 same-Client cross-building gap in 3.1 is open and is NOT fixed in this PART; it is referred to the separate CR-HM-SEC-01 proposal in 3.5.
 4. Production code was not modified. Test-helper and fixture code is local to the new test file.
+
+## 8. Close-out summary (PART 00D-2B)
+
+| Item | Result |
+| --- | --- |
+| Focused integration tests (`tests/handyman-request-to-assignment-chain.test.ts`) | **6 PASS, 0 FAIL, 0 skipped** (last run on the same src as HEAD) |
+| Strict typecheck of the new test file (temporary config outside the repo, `tests/` is excluded by `tsconfig.json`) | `tsc exit=0`, **0 errors** |
+| Affected regression set (14 files, run one at a time) | 13 files fully green; `handyman-scope-assignments-api.test.ts` 9/10 (pre-existing, §5.3). Run completed; no test process left active |
+| Broad / full suite | **Not run** (out of scope) |
+| Temporary probe files | **None remain** (probe copy and its appended case were deleted; `tests/` contains no probe or `zz-` files) |
+| `git diff --check` | Clean (see the commit step) |
+| Production authorization change | **None** |
+| P0 security gap (§3.1) | **Open.** Confirmed for quotation creation at runtime; other steps source-inferred (§3.4). Referred to proposed CR-HM-SEC-01 (§3.5) |
+| Branch / PR / merge | Work stays on `arena/ed9f4841-handyman-backend`. No PR, no merge, no branch change |
+
+### Remaining gaps (not closed by this PART)
+
+1. **P0** same-Client cross-building authorization on the Request → Quotation → Issue → Decision → Assignment chain (§3.1–3.5). Only quotation creation is runtime-confirmed.
+2. Runtime confirmation is missing for issue, decision, triage, diagnosis, intake, and assignment in the same-Client cross-building case. These need a negative test in CR-HM-SEC-01.
+3. Pre-existing failing case: `handyman-scope-assignments-api.test.ts` test 10 (stale OpenAPI/runtime path-set assertion, §5.3).
+4. Local PostgreSQL 18.4 was used, not the compose target PostgreSQL 16, and not Docker (§1, §7).
+5. The gap probe is not committed as a regression test. A committed negative test should land with the CR-HM-SEC-01 fix, not before, so the suite does not lock in the vulnerable behavior.
