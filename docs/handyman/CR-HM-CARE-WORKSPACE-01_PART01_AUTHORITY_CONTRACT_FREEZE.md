@@ -89,6 +89,65 @@ returns 204. Repeating logout with the same unexpired, otherwise valid revoked
 token returns 204 without restoring authority; all non-logout uses return 401.
 No cross-actor session administration or refresh endpoint is introduced.
 
+### 2.1 HOST RELAY — A03 addendum (2026-10-08)
+
+**Documentation only.** This subsection records the transport contract the
+already-implemented admission endpoint has always implied. It adds no route,
+schema, credential, migration, runtime behavior, or authority, and it alters
+nothing in sections 1–8.
+
+The BM Super App is a browser application and cannot sign an admission
+assertion. The trusted flow is therefore a host relay, not a browser call:
+
+1. **The assertion hop is server-to-server only.** `POST /handyman/care/session`
+   and its signed `CareWorkspaceAssertion` exist exclusively for a BM server
+   caller. A browser, WebView, or other user agent never constructs, holds,
+   transmits, or receives the assertion, and no browser-reachable surface may
+   accept one.
+2. **The HMAC secret never leaves the server tier.**
+   `HANDYMAN_HANDOFF_SECRET_<NORMALIZED_INTEGRATION_CODE>` is read only from
+   server environment configuration and used only as an HMAC key. It must never
+   be embedded in, bundled with, sent to, or derivable by browser code — not in
+   source, build output, configuration payloads, error text, or logs.
+3. **The only browser-visible value is the opaque `workspaceToken`.** The 201
+   body carries `workspaceToken` and `expiresAt` and nothing else. The
+   assertion, the signature header, the secret, the care actor ID, and the
+   token's SHA-256 hash are never part of a browser payload.
+4. **Relay only over an authenticated BM channel.** The BM server hands the
+   token to its own already-authenticated operator context through BM's own
+   transport. The relay is BM's responsibility and BM's trust boundary; the
+   Handyman backend neither brokers it nor vouches for it, and exposes no
+   relay, bootstrap, or token-forwarding endpoint.
+5. **Never in a URL, query string, or log.** The token travels only in the
+   `Authorization: Bearer` request header on the care routes. It must not
+   appear in URLs, query parameters, fragments, path segments, referrers,
+   browser history, request/response logs, cursors, or error details. Care
+   responses are `Cache-Control: no-store`.
+6. **Any care-route 401 is the host's re-admission signal.** The uniform
+   `HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED` response does not distinguish expiry,
+   revocation, deactivation, capability loss, or wrong credential kind, and it
+   is never an invitation to retry the same token. On 401 the browser returns
+   control to the BM host, which repeats the server-side signed admission and
+   relays a fresh token.
+7. **No refresh token, renewal, or sliding expiry.** Session lifetime is the
+   fixed 15-minute absolute bound of section 2. There is deliberately no
+   refresh credential, renewal endpoint, or silent re-issue; expiry is resolved
+   only by a fresh signed host admission.
+8. **The browser origin must be explicitly allowed.** Care routes are called
+   cross-origin by the Super App, so the BM origin must be listed in
+   `CORS_ORIGINS`. In production an unset `CORS_ORIGINS` resolves to an empty
+   allow-list, and a request carrying an `Origin` that the allow-list does not
+   contain receives no `Access-Control-Allow-Origin` and is blocked by the
+   browser. Allow the specific BM origin; do not widen it to a wildcard. The
+   bearer-only model is what CORS already permits here — `Authorization` is an
+   allowed header and credentials mode is disabled, so no cookie or credentialed
+   CORS configuration is required or permitted.
+
+The relay changes nothing about authority. The workspace principal, property
+grants, occupancy, representation, and the create exchange remain exactly as
+frozen above; a relayed token carries no authority the server does not
+re-derive on every call.
+
 ## 3. DISCOVERY — current effective context only
 
 **PART 04B supersession (2026-10-08):** The later UNIT/SPACE DISCOVERY request

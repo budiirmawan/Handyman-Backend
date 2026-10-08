@@ -3374,6 +3374,20 @@ paths:
         namespace (per-process; deployments must also enforce ingress limits).
         Responses use Cache-Control no-store. No discovery, catalogue, request
         read, or request-create authority is provided by this endpoint.
+        HOST RELAY CONTRACT (CR-HM-CARE-WORKSPACE-01 A03, documentation only):
+        this endpoint and its signed assertion are BM-server to Handyman only. A
+        browser, WebView, or other user agent never constructs, holds, transmits,
+        or receives the assertion. The per-integration HMAC secret must never
+        reach, be embedded in, or be derivable by browser code. The sole
+        browser-visible value is the opaque workspaceToken, which the BM server
+        relays to its own authenticated operator over BM's own channel and which
+        travels only in the Authorization Bearer request header - never in a URL,
+        query parameter, fragment, path segment, referrer, cursor, or log. A 401
+        on any care route is the host's signal to perform a fresh signed admission
+        and relay a new token; there is no refresh token, renewal endpoint, or
+        sliding expiry. Browser callers are cross-origin, so the BM origin must be
+        listed in CORS_ORIGINS - in production an unset CORS_ORIGINS resolves to
+        an empty allow-list and the browser blocks the response.
       security:
         - handoffAssertionSignature: []
       requestBody:
@@ -3421,7 +3435,10 @@ paths:
         credential are denied. Unknown, expired, wrong-kind, or invalid-identity
         credentials return uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED (401).
         No cross-actor administration, refresh, renewal, or User logout occurs.
-        Responses use Cache-Control no-store.
+        Responses use Cache-Control no-store. A 401 here is the BM host's signal
+        to perform a fresh signed admission and relay a new token; this endpoint
+        never renews a credential, and the presented token must never appear in a
+        URL, query parameter, or log.
       security:
         - careWorkspaceSession: []
       responses:
@@ -73001,6 +73018,13 @@ components:
         Maximum 15-minute absolute lifetime; revocable, reusable, no refresh.
         Never a local User/PIC session, RBAC grant, or represented-context create
         exchange. The raw token must never be logged or placed in URLs.
+        This opaque token is the only workspace value a browser may hold: the BM
+        server obtains it server-side and relays it to its own authenticated
+        operator over BM's own channel. Carry it only in this Authorization
+        header - never in a URL, query parameter, fragment, referrer, cursor, or
+        log. There is no refresh token or renewal, so any 401 on a care route
+        requires the BM host to perform a fresh signed admission and relay a new
+        token.
     bearerAuth:
       type: http
       scheme: bearer
@@ -73018,7 +73042,9 @@ components:
         Verified timing-safe. The integration secret exists only in server
         environment configuration and is never stored, exposed, or returned.
         This is server-to-server authentication: a Bearer user session is not
-        a substitute and is not consulted.
+        a substitute and is not consulted. The signing secret must never reach,
+        be embedded in, or be derivable by browser code; only the BM server may
+        produce this header.
     vendorRfqSession:
       type: http
       scheme: bearer
