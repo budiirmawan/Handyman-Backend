@@ -1,11 +1,7 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  assertBuildingScopedResourceAccess,
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import {
   handymanProviderContextRepository,
@@ -63,15 +59,6 @@ function toPublic(
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
-}
-
-async function assertRealm(
-  actorUserId: string,
-  clientId: string,
-): Promise<void> {
-  if (!(await contextAccessService.canAccessClient(actorUserId, clientId))) {
-    throw buildingAccessDeniedError();
-  }
 }
 
 /** Locked scope-row precondition (target boundary). */
@@ -348,7 +335,14 @@ export async function getHandymanExecutionScopeAssignment(
     executionScopeId,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  await assertRealm(actorUserId, scope.clientId);
+  // CR-HM-SEC-01 PART 03B — read authorization: the scope row carries
+  // the authoritative server-derived building_id; per BE-02G the read
+  // requires the actor's explicit ACTIVE assignment to that exact
+  // Building (no same-Client shortcut; no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const current = await handymanScopeAssignmentRepository
     .findActiveAssignmentByScope(undefined, executionScopeId);
   return current ? toPublic(current) : null;
@@ -373,7 +367,14 @@ export async function resolveHandymanAssignmentLead(
     executionScopeId,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  await assertRealm(actorUserId, scope.clientId);
+  // CR-HM-SEC-01 PART 03B — read authorization: the scope row carries
+  // the authoritative server-derived building_id; per BE-02G the read
+  // requires the actor's explicit ACTIVE assignment to that exact
+  // Building (no same-Client shortcut; no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const current = await handymanScopeAssignmentRepository
     .findActiveAssignmentByScope(undefined, executionScopeId);
   if (!current) return null;

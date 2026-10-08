@@ -30,7 +30,9 @@ import {
 } from '../src/modules/handyman-quotations';
 import {
   assignHandymanExecutionScopeCrew,
+  getHandymanExecutionScopeAssignment,
   reassignHandymanExecutionScopeCrew,
+  resolveHandymanAssignmentLead,
 } from '../src/modules/handyman-scope-assignments';
 import { organizationService } from '../src/modules/organizations';
 import { positionService } from '../src/modules/positions';
@@ -57,37 +59,42 @@ import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
- * CR-HM-SEC-01 PART 03A (ULTRA-LIGHT) — focused tests for the
- * execution-scope ASSIGNMENT WRITE authorization boundary.
+ * CR-HM-SEC-01 PART 03A + 03B (ULTRA-LIGHT) — focused tests for the
+ * execution-scope ASSIGNMENT authorization boundary: WRITE (03A:
+ * `assignHandymanExecutionScopeCrew`, `reassignHandymanExecutionScopeCrew`)
+ * and READ (03B: `getHandymanExecutionScopeAssignment`,
+ * `resolveHandymanAssignmentLead`).
  *
  * Authority (established in PART 01, reused unchanged): BE-02G — a
  * scoped resource requires the actor's explicit ACTIVE
  * `user_building_assignment` to its exact Building; no same-Client
  * shortcut; no client-wide privilege exists in any role/scope contract.
  * The execution scope row carries the authoritative server-derived
- * `building_id` location snapshot (migration 0395), so both write
- * operations (`assignHandymanExecutionScopeCrew`,
- * `reassignHandymanExecutionScopeCrew`) now enforce the reusable guard
- * on `executionScope.buildingId` instead of the client-level
+ * `building_id` location snapshot (migration 0395), so every assignment
+ * operation now enforces the reusable guard on
+ * `executionScope.buildingId` instead of the client-level
  * `canAccessClient` wall.
  *
- * Two focused cases:
+ * Four focused cases:
  *   1. authorized building (explicit ACTIVE assignment to the scope's
  *      building) → assign allowed (one ACTIVE row + audit event) and
  *      reassign allowed (atomic supersede + new ACTIVE);
  *   2. same-client SIBLING building (assignment only to a sibling
  *      building of the same client) → assign AND reassign denied with
  *      403 BUILDING_ACCESS_DENIED and ZERO mutation (no assignment rows,
- *      no audit events).
+ *      no audit events);
+ *   3. authorized building → assignment read returns the ACTIVE row and
+ *      the Lead resolution returns the authoritative field actor;
+ *   4. same-client SIBLING building → assignment read AND Lead
+ *      resolution denied 403 (no existence/content leak) even though an
+ *      ACTIVE assignment exists.
  *
- * Preserved: route permission (`tenant_company.manage`), scope
- * AUTHORIZED-state gate, one-ACTIVE conflict control, atomic
- * supersession, and 403/no-existence-leak semantics.
+ * Preserved: route permission (`tenant_company.manage` /
+ * `tenant_company.read`), scope AUTHORIZED-state gate, one-ACTIVE
+ * conflict control, atomic supersession, and 403/no-existence-leak
+ * semantics. No write-path behavior changed in 03B.
  *
  * Residual gaps (brief — NOT in this PART's scope):
- *   - The assignment READ helpers (`getHandymanExecutionScopeAssignment`,
- *     `resolveHandymanAssignmentLead`) still use the client-level
- *     `canAccessClient` wall (read authorization, later PART).
  *   - The wider handyman surface (arrival/BAST/catalog/ledger/SLA/care)
  *     remains on the client-level wall (see PART 02 report §5).
  *   - Request intake create + referral remain on the client-level wall
@@ -290,7 +297,7 @@ async function crewFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
     },
     adminUserId,
   );
-  return { vendor, providerContext, workerContext, crew: bundle.crew };
+  return { vendor, providerContext, leadUser: linkedUser, workerContext, crew: bundle.crew };
 }
 
 /** AUTHORIZED execution scope (building = A1) via the full CR-HM-02→06 chain. */
@@ -526,5 +533,67 @@ describe('CR-HM-SEC-01 PART 03A — execution-scope assignment write guard', () 
     assert.equal(await assignmentRows(scope.id), 0);
     assert.equal(await activeAssignmentRows(scope.id), 0);
     assert.equal(await assignmentEventRows(scope.id), 0);
+  });
+
+  it('3: authorized building — assignment read + Lead resolution allowed', async (t) => {
+    if (!requireDatabase(t)) return;
+    const realm = await realmFixture();
+    const { scope } = await scopeFixture(realm);
+    const crew = await crewFixture(realm);
+    const same = await createScopedActor([realm.buildingA1.id]);
+    const assigned = await assignHandymanExecutionScopeCrew(
+      {
+        executionScopeId: scope.id,
+        providerContextId: crew.providerContext.id,
+        crewId: crew.crew.id,
+      },
+      same.userId,
+    );
+
+    // Assignment read: the ACTIVE row is returned.
+    const read = await getHandymanExecutionScopeAssignment(
+      scope.id,
+      same.userId,
+    );
+    assert.ok(read);
+    assert.equal(read?.id, assigned.id);
+    assert.equal(read?.status, 'ACTIVE');
+    assert.equal(read?.executionScopeId, scope.id);
+
+    // Lead resolution: the authoritative field actor resolves.
+    const lead = await resolveHandymanAssignmentLead(scope.id, same.userId);
+    assert.ok(lead);
+    assert.equal(lead?.assignmentId, assigned.id);
+    assert.equal(lead?.crewId, crew.crew.id);
+    assert.equal(lead?.leadWorkerContextId, crew.workerContext.id);
+    assert.equal(lead?.leadUserId, crew.leadUser.id);
+  });
+
+  it('4: same-client sibling building — assignment read + Lead resolution denied 403 (no leak)', async (t) => {
+    if (!requireDatabase(t)) return;
+    const realm = await realmFixture();
+    const { scope } = await scopeFixture(realm);
+    const crew = await crewFixture(realm);
+    // An ACTIVE assignment EXISTS (created by the authorized actor), so
+    // the sibling denial proves the guard — not an empty projection.
+    const same = await createScopedActor([realm.buildingA1.id]);
+    await assignHandymanExecutionScopeCrew(
+      {
+        executionScopeId: scope.id,
+        providerContextId: crew.providerContext.id,
+        crewId: crew.crew.id,
+      },
+      same.userId,
+    );
+    const sibling = await createScopedActor([realm.buildingA2.id]);
+
+    await assertBuildingDenied(
+      getHandymanExecutionScopeAssignment(scope.id, sibling.userId),
+    );
+    await assertBuildingDenied(
+      resolveHandymanAssignmentLead(scope.id, sibling.userId),
+    );
+    // Reads never mutate: the ACTIVE assignment is untouched.
+    assert.equal(await activeAssignmentRows(scope.id), 1);
   });
 });
