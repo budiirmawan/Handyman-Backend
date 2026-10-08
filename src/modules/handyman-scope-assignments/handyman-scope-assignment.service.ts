@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import {
+  assertBuildingScopedResourceAccess,
   buildingAccessDeniedError,
   contextAccessService,
 } from '../context-access';
@@ -77,7 +78,7 @@ async function assertRealm(
 async function requireAssignableScope(
   tx: PoolClient,
   executionScopeId: string,
-): Promise<{ id: string; clientId: string; status: string }> {
+): Promise<{ id: string; clientId: string; status: string; buildingId: string }> {
   const scope = await handymanScopeAssignmentRepository.lockScopeById(
     tx,
     executionScopeId,
@@ -224,7 +225,14 @@ export async function assignHandymanExecutionScopeCrew(
 
   return withTransaction(async (tx) => {
     const scope = await requireAssignableScope(tx, executionScopeId);
-    await assertRealm(actorUserId, scope.clientId);
+    // CR-HM-SEC-01 PART 03A — write authorization: the scope row carries
+    // the authoritative server-derived building_id; per BE-02G the write
+    // requires the actor's explicit ACTIVE assignment to that exact
+    // Building (no same-Client shortcut).
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     const existing =
       await handymanScopeAssignmentRepository.lockActiveAssignmentByScope(
         tx,
@@ -280,7 +288,14 @@ export async function reassignHandymanExecutionScopeCrew(
 
   return withTransaction(async (tx) => {
     const scope = await requireAssignableScope(tx, executionScopeId);
-    await assertRealm(actorUserId, scope.clientId);
+    // CR-HM-SEC-01 PART 03A — write authorization: the scope row carries
+    // the authoritative server-derived building_id; per BE-02G the write
+    // requires the actor's explicit ACTIVE assignment to that exact
+    // Building (no same-Client shortcut).
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     const current =
       await handymanScopeAssignmentRepository.lockActiveAssignmentByScope(
         tx,
