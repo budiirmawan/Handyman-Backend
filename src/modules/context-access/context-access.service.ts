@@ -83,9 +83,65 @@ export async function getAccessibleClientIds(userId: string): Promise<string[]> 
   return [...clientIds];
 }
 
+/**
+ * A resource that carries BOTH a clientId and a buildingId is a
+ * building-scoped resource (e.g. `handyman_service_requests.building_id
+ * UUID NOT NULL`). Authority over such a resource is the actor's explicit
+ * ACTIVE assignment to the resource's exact Building, resolving under the
+ * resource's Client.
+ */
+export type BuildingScopedResourceRef = {
+  clientId: string;
+  buildingId: string;
+};
+
+/**
+ * BE-02G — Building-scoped resource guard (predicate form).
+ *
+ * A single Building assignment under a Client is NOT client-wide privilege
+ * ("No same-Client shortcut"): `canAccessClient` only proves the Client is
+ * reachable through some accessible Building and is reserved for legacy
+ * Client-scoped-only tables (no building_id column). No existing role/scope
+ * contract grants any local User client-wide data access — roles carry
+ * RBAC capabilities only, there is no user↔client assignment, and even the
+ * PLATFORM_ADMIN operational exception stays inside its assigned Buildings —
+ * so this guard admits exactly the explicit per-Building assignment and
+ * invents no client-wide bypass.
+ */
+export async function canAccessBuildingScopedResource(
+  userId: string,
+  resource: BuildingScopedResourceRef,
+): Promise<boolean> {
+  const contexts = await resolveBuildingsForUser(userId);
+  return contexts.some(
+    (context) =>
+      context.building.id === resource.buildingId &&
+      context.client?.id === resource.clientId,
+  );
+}
+
+/**
+ * BE-02G — Building-scoped resource guard (assertion form).
+ *
+ * Throws `BUILDING_ACCESS_DENIED` (403) unless the User holds an explicit
+ * ACTIVE assignment to the resource's exact Building under the resource's
+ * Client. A valid but inaccessible Building is denied exactly like an
+ * unknown one, so no existence is leaked.
+ */
+export async function assertBuildingScopedResourceAccess(
+  userId: string,
+  resource: BuildingScopedResourceRef,
+): Promise<void> {
+  if (!(await canAccessBuildingScopedResource(userId, resource))) {
+    throw buildingAccessDeniedError();
+  }
+}
+
 export const contextAccessService = {
   assertBuildingAccess,
+  assertBuildingScopedResourceAccess,
   canAccessBuilding,
+  canAccessBuildingScopedResource,
   canAccessClient,
   canAccessProperty,
   getAccessibleBuildingIds,
