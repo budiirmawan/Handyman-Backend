@@ -2480,6 +2480,965 @@ tags:
 security: []
 
 paths:
+  /handyman/care/properties/{propertyId}/catalogue/services:
+    get:
+      operationId: careCatalogueServices
+      summary: Read active services and variants for a granted property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05A. Care workspace credential only, never
+        a local User/PIC or create-exchange credential. Requires an ACTIVE
+        actor/integration/capability, unexpired unrevoked session, ACTIVE property
+        grant, Property and Client. Client is derived from the property, not
+        supplied by the caller. Existing catalogue masters are Client-scoped;
+        property scope bounds access, not a new property-specific catalogue or
+        pricing rule. Current customer selection eligibility is ACTIVE service
+        and, when selected, its ACTIVE same-Client variant; no additional
+        customer-selectability flag or property entitlement is invented.
+        No administrative actor IDs, audit timestamps or credential data are
+        returned. No catalogue mutation, request-read/create, payment, invoice,
+        tax or financial behavior is exposed. Cache-Control is no-store.
+        Page items are services with their ACTIVE child variants ordered by ID.
+        Services with no active variants remain selectable without a variant.
+        q is a trimmed literal case-insensitive service code/name substring,
+        1-100 characters when supplied; no regex/SQL wildcard interpretation.
+        Optional buildingId must be ACTIVE inside this granted property and
+        does not invent building-specific catalogue ownership. No service or
+        variant price is synthesized; material reference pricing uses the
+        separately described profile route.
+        Deterministic service/profile ID-ascending keyset pages default to 25,
+        maximum 100 parent items. Service variant arrays preserve all applicable
+        child choices. Cursors are integrity protected and bound to session,
+        actor/integration, property, endpoint, filters/search, limit, order and
+        expiry. Every page revalidates grants, session and active references.
+        No total counts; authorized empty lists return 200 with items [].
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Mandatory granted property selection, never caller Client authority.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 100 }
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized minimized catalogue read.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCatalogueServicePage' }
+        '400':
+          description: Invalid selector, unknown query/body field, bounds, currency or cursor; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, expired, revoked, inactive or wrong-kind credential.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; absent/inaccessible/inactive property or selected catalogue context, revoked grant or invalid active profile references.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority, storage or signing configuration failure; no stale scope or guessed price fallback.
+  /handyman/care/properties/{propertyId}/catalogue/material-profiles:
+    get:
+      operationId: careCatalogueProfiles
+      summary: Read active common material profiles for a granted property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05A. Care workspace credential only, never
+        a local User/PIC or create-exchange credential. Requires an ACTIVE
+        actor/integration/capability, unexpired unrevoked session, ACTIVE property
+        grant, Property and Client. Client is derived from the property, not
+        supplied by the caller. Existing catalogue masters are Client-scoped;
+        property scope bounds access, not a new property-specific catalogue or
+        pricing rule. Current customer selection eligibility is ACTIVE service
+        and, when selected, its ACTIVE same-Client variant; no additional
+        customer-selectability flag or property entitlement is invented.
+        No administrative actor IDs, audit timestamps or credential data are
+        returned. No catalogue mutation, request-read/create, payment, invoice,
+        tax or financial behavior is exposed. Cache-Control is no-store.
+        Requires ACTIVE profile, parent service, optional parent variant, and
+        same-Client inventory item. Optional serviceCatalogId/serviceVariantId
+        are narrowing selectors; a variant filter selects variant-level profiles
+        exactly and must belong to any selected service. No q search is offered
+        because the existing profile authority does not support it. This list
+        does not compute reference prices.
+        Deterministic service/profile ID-ascending keyset pages default to 25,
+        maximum 100 parent items. Service variant arrays preserve all applicable
+        child choices. Cursors are integrity protected and bound to session,
+        actor/integration, property, endpoint, filters/search, limit, order and
+        expiry. Every page revalidates grants, session and active references.
+        No total counts; authorized empty lists return 200 with items [].
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Mandatory granted property selection, never caller Client authority.
+        - name: serviceCatalogId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: serviceVariantId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized minimized catalogue read.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCatalogueProfilePage' }
+        '400':
+          description: Invalid selector, unknown query/body field, bounds, currency or cursor; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, expired, revoked, inactive or wrong-kind credential.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; absent/inaccessible/inactive property or selected catalogue context, revoked grant or invalid active profile references.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority, storage or signing configuration failure; no stale scope or guessed price fallback.
+  /handyman/care/properties/{propertyId}/catalogue/material-profiles/{profileId}:
+    get:
+      operationId: careCatalogueDetail
+      summary: Describe an applicable material profile with an optional reference price
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05A. Care workspace credential only, never
+        a local User/PIC or create-exchange credential. Requires an ACTIVE
+        actor/integration/capability, unexpired unrevoked session, ACTIVE property
+        grant, Property and Client. Client is derived from the property, not
+        supplied by the caller. Existing catalogue masters are Client-scoped;
+        property scope bounds access, not a new property-specific catalogue or
+        pricing rule. Current customer selection eligibility is ACTIVE service
+        and, when selected, its ACTIVE same-Client variant; no additional
+        customer-selectability flag or property entitlement is invented.
+        No administrative actor IDs, audit timestamps or credential data are
+        returned. No catalogue mutation, request-read/create, payment, invoice,
+        tax or financial behavior is exposed. Cache-Control is no-store.
+        Requires ACTIVE profile, parent service, optional parent variant and
+        same-Client inventory item. Optional serviceVariantId must belong to the
+        profile service; a variant-bound profile must match exactly, while a
+        service-level profile may be described in that service's variant context.
+        Reference price is null without both buildingId and currency, or without
+        an authoritative item UOM or an applicable price. currency requires
+        buildingId and must use existing governed currency vocabulary; no default
+        currency, UOM conversion, FX, price fallback or vendor input is guessed.
+        buildingId must be ACTIVE inside this exact property, not merely the
+        same Client. Price selection reuses the existing material price resolver
+        at server evaluatedAt, including precedence, half-open effective windows,
+        exact UOM/currency and ambiguity rejection. Existing ambiguity audit is
+        preserved with null local actorUserId, never PIC/User impersonation.
+        Scope, session and active profile/UOM references are revalidated after
+        price lookup before response. Reference Price is not Quotation or Final
+        Charge and is never persisted here. No caller asOf or price override.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Mandatory granted property selection, never caller Client authority.
+        - name: profileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: serviceVariantId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: currency
+          in: query
+          required: false
+          schema: { type: string, enum: [IDR, USD, SGD, MYR, AUD, EUR, GBP, JPY, CNY] }
+          description: Explicit exact-match reference-price currency; requires buildingId.
+      responses:
+        '200':
+          description: Authorized minimized catalogue read.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCatalogueProfileDetail' }
+        '400':
+          description: Invalid selector, unknown query/body field, bounds, currency or cursor; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, expired, revoked, inactive or wrong-kind credential.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; absent/inaccessible/inactive property or selected catalogue context, revoked grant or invalid active profile references.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority, storage or signing configuration failure; no stale scope or guessed price fallback.
+  /handyman/care/properties:
+    get:
+      operationId: listCareWorkspacePropertys
+      summary: List current granted care workspace properties
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 03. Requires a live care workspace credential,
+        not a local User/PIC bearer or create exchange. Revalidates session,
+        actor, integration and CUSTOMER_CARE capability with the projection.
+        Uses only ACTIVE care-property grants, ACTIVE properties and ACTIVE
+        Clients; building items additionally require ACTIVE buildings. Client
+        and property relationships are derived from existing masters server-side.
+        A property need not contain active buildings. No tenant/customer,
+        occupancy, catalogue, request-history or grant-administration authority.
+        Only limit and cursor query parameters are accepted; careActorId,
+        clientId, offset, search and request body context fields are rejected.
+        Results are current reads ordered by canonical ID ascending, not a
+        stable historical snapshot. Authorization filtering precedes pagination.
+        Cursors are opaque server-integrity-protected keyset handles bound to
+        session, actor, integration, endpoint, property, limit, ordering and
+        session expiry. They contain no credential or token hash and cannot
+        extend authority. Reauthorize every page; tampered/mismatched cursors
+        return 400. Expired/revoked sessions return 401. No total counts or
+        administrative grant history. Cache-Control is no-store.
+        Cursor signing reuses the server-held integration secret; unavailable
+        signing configuration or storage fails closed, without stale fallback.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized page; empty when no current matching items remain.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspacePropertyPage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/properties/{propertyId}/buildings:
+    get:
+      operationId: listCareWorkspaceBuildings
+      summary: List active buildings in a granted care workspace property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 03. Requires a live care workspace credential,
+        not a local User/PIC bearer or create exchange. Revalidates session,
+        actor, integration and CUSTOMER_CARE capability with the projection.
+        Uses only ACTIVE care-property grants, ACTIVE properties and ACTIVE
+        Clients; building items additionally require ACTIVE buildings. Client
+        and property relationships are derived from existing masters server-side.
+        A property need not contain active buildings. No tenant/customer,
+        occupancy, catalogue, request-history or grant-administration authority.
+        Only limit and cursor query parameters are accepted; careActorId,
+        clientId, offset, search and request body context fields are rejected.
+        Results are current reads ordered by canonical ID ascending, not a
+        stable historical snapshot. Authorization filtering precedes pagination.
+        Cursors are opaque server-integrity-protected keyset handles bound to
+        session, actor, integration, endpoint, property, limit, ordering and
+        session expiry. They contain no credential or token hash and cannot
+        extend authority. Reauthorize every page; tampered/mismatched cursors
+        return 400. Expired/revoked sessions return 401. No total counts or
+        administrative grant history. Cache-Control is no-store.
+        Cursor signing reuses the server-held integration secret; unavailable
+        signing configuration or storage fails closed, without stale fallback.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Selection only, never authority; must be currently granted and active.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized page; empty when no current matching items remain.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceBuildingPage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing, ungranted, revoked or inactive property/Client context; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/properties/{propertyId}/tenant-companies:
+    get:
+      operationId: listCareWorkspaceTenants
+      summary: Discover current tenants in a granted care workspace property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 04A. Customer selection only, never private
+        tenant history, request access, PICs, or an occupancy projection.
+        Requires a live care workspace credential and current ACTIVE property
+        grant, actor, integration and CUSTOMER_CARE capability. Property and Client
+        must be ACTIVE; relationships are derived server-side. Only ACTIVE tenant
+        companies belonging to that Client with an ACTIVE, currently effective
+        tenant-building context in an ACTIVE building of the selected property
+        are eligible. Null effective bounds are unbounded; from/until boundaries
+        are inclusive at the server database statement time. No space relationship
+        is required. Multiple matching buildings return one tenant, not duplicates.
+        Historical-only, inactive, future-only and unrelated tenant contexts are
+        excluded before search and pagination; no private contacts or legal data.
+        q is a trimmed case-insensitive literal substring of tenantCode or
+        tenantName (not regex or SQL wildcards). Optional buildingId narrows to an
+        ACTIVE building inside the selected property; foreign, missing or inactive
+        selected buildings return uniform 404. Only q, buildingId, limit and cursor
+        are accepted; caller-supplied Client/actor, status, offset and body fields
+        are rejected. No Client-wide fallback or tenant existence enumeration.
+        Deterministic ID-ascending keyset pagination defaults to 25, maximum 100.
+        Integrity-protected cursors bind session, actor, integration, endpoint,
+        property, trimmed q, buildingId, limit, ordering and absolute session
+        expiry. Every page revalidates current session, grants and effective
+        context; no historical snapshot or continuing rights are conferred.
+        Empty authorized searches return 200 with items []; expired/revoked
+        sessions return 401, revoked/inaccessible selected scope returns 404,
+        and invalid or mismatched cursors return 400. Storage/signing failures
+        fail closed. Cache-Control is no-store; no total counts are returned.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Selection only, never authority; must be currently granted and active.
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 100 }
+          description: Trimmed nonblank literal name/code search; null bytes are rejected.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Optional narrowing selection inside the active granted property, never authority.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized page; empty when no current matching items remain.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceTenantPage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing, ungranted, revoked or inactive property/Client context; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/properties/{propertyId}/spaces:
+    get:
+      operationId: listCareWorkspaceSpaces
+      summary: Discover active physical units in a granted care workspace property
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 04B. Physical unit selection only: id is the
+        existing canonical spaces.id (spaceId), not a new Unit master identity.
+        Requires a live care workspace credential and ACTIVE property grant,
+        actor, integration and CUSTOMER_CARE capability. Traverse the existing
+        ACTIVE Space to Room to Area to Floor to Building to Property to Client
+        hierarchy. All ancestor relationships and parent IDs are derived
+        server-side, never supplied as authority. Optional buildingId narrows
+        to an ACTIVE building inside the granted property. Foreign, missing
+        or inactive selected scope returns uniform 404; an authorized empty
+        collection returns 200 with items [].
+        PART 04B supersedes the earlier occupied-space-only discovery restriction:
+        units need no tenant or occupancy relationship to be listed. No tenant,
+        occupancy, PIC or private-history inference or authority follows from
+        a unit selection. No occupancy data is queried or returned.
+        q is a trimmed, nonblank, case-insensitive literal substring of space
+        code or name, at most 100 characters, not regex or SQL wildcards.
+        Only buildingId, q, limit and cursor are accepted; tenantCompanyId,
+        clientId, careActorId, occupancy/status filters and body fields are rejected.
+        The minimized projection contains only id, code, name, roomId, buildingId.
+        Deterministic ID-ascending keyset pagination defaults to 25, maximum 100.
+        Integrity-protected cursors bind actor/integration/session, property,
+        endpoint, buildingId, trimmed search, limit, ordering and absolute session
+        expiry. They are not credentials: every page revalidates session,
+        grant and hierarchy in the projection statement before pagination.
+        Revoked/expired sessions return 401; inaccessible selected scope returns
+        404; malformed or mismatched cursors return 400. No historical snapshot,
+        total counts or stale fallback. Cache-Control is no-store. Storage or
+        server-held integration signing configuration failure fails closed.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Selection only, never authority; must be currently granted and active.
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 100 }
+          description: Trimmed nonblank literal name/code search; null bytes are rejected.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Optional narrowing selection inside the active granted property, never authority.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized page; empty when no current matching items remain.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceSpacePage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing, ungranted, revoked or inactive property/Client context; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/requests/{requestId}:
+    get:
+      operationId: getCareWorkspaceRequestDetail
+      summary: Read a request within the currently represented tenant context
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 06B. Workspace credential only. Requires
+        explicit propertyId, tenantCompanyId and buildingId; optional spaceId
+        must match the stored request. Reuses PART 06A current represented-context
+        authority and the existing safe request-detail projection. Revalidates
+        live workspace/actor/integration/capability, active property grant,
+        Client/Property/Building/Tenant and current effective tenant-building
+        context in the same SQL statement as the authorized request projection.
+        Space-bound requests require exact current tenant-space occupancy and
+        active physical ancestry even when spaceId is omitted. Building-only
+        requests require no artificial space relationship. Request ID, care
+        authorship and attribution provenance grant no historical exception.
+        Missing request, revoked property grant, turnover, inaccessible scope
+        and represented-context mismatch return uniform 404 without revealing
+        another tenant or unit request. Invalid/expired/revoked workspace
+        credentials return 401. Rejects list filters and unknown query/body
+        fields. No PIC contacts, evidence, financial data, new downstream access
+        or mutations; executionScopeId is an informational pointer only.
+        Cache-Control is no-store. Existing list and local User/admin reads
+        remain unchanged.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Existing bounded safe request detail; no list wrapper or additional lifecycle payload.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCustomerCareServiceRequest' }
+        '400':
+          description: Invalid/missing UUID selectors, unknown query/body fields or unsupported list filters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for missing/wrong-kind/expired/revoked credential or inactive actor/integration/capability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing request, grant revocation, turnover, invalid occupancy or selected/stored context mismatch; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority/storage failure; no stale or broader fallback.
+  /handyman/care/requests:
+    get:
+      operationId: listCareWorkspaceRequests
+      summary: List requests for a currently represented tenant context
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 06A. Workspace credential only; local User,
+        admin and handoff exchange credentials are not accepted. Requires explicit
+        propertyId, tenantCompanyId and buildingId, an active property grant,
+        live workspace/actor/integration/capability and active Client, Property,
+        Building and Tenant. Reuses existing effective occupancy authority and
+        the bounded Customer Care request projection. Optional spaceId selects
+        an exact currently occupied space. Without it, each space-bound request
+        still requires its own exact current tenant-space relationship and full
+        active physical ancestry; a building-only request requires the current
+        effective tenant-building context without an artificial space requirement.
+        Tenant identity and location must match each stored request. Turnover
+        denies former-tenant unit history and new occupants never inherit it.
+        Care authorship grants no historical exception. All authority and row
+        filtering occur in the same SQL statement before pagination, including
+        on continuation. No bulk property history, total count, detail, PIC
+        contact, financial data or downstream-resource access is exposed.
+        Filters are narrowing only. Unknown query/body fields are rejected.
+        Ordering is createdAt descending, then ID descending; cursor keys retain
+        database timestamp precision. Cursors are integrity-protected, expire
+        with the workspace session, bind actor/session/endpoint/selection/filters/
+        limit/order, and confer no authority. Results are current reads rather
+        than a stable historical snapshot. Cache-Control is no-store.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [INTAKE, TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS, READY_FOR_NEXT_STEP, REFERRED]
+        - name: channelAttributionId
+          in: query
+          schema: { type: string, format: uuid }
+          description: Existing safe narrowing filter; never an acting credential.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized bounded page, possibly empty; default limit 25, maximum 100, no total count.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceRequestPage' }
+        '400':
+          description: Invalid/missing selectors, unknown fields, unsupported filters or malformed/mismatched cursor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for missing/wrong-kind/expired/revoked credential or inactive actor/integration/capability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing/ungranted/revoked/inactive selected scope or no longer valid represented occupancy, without existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority/storage/signing configuration failure; no stale or broader fallback.
+  /handyman/care/properties/{propertyId}/create-exchanges:
+    post:
+      operationId: issueCareCreateExchange
+      summary: Issue a fresh create-only represented-context exchange
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 05B. Requires a live workspace session,
+        active actor/integration/capability, and active grant for the selected
+        Property. Validates active Client/tenant/building and physical hierarchy
+        using existing masters and resolves current effective occupancy using
+        existing handoff authority. Body IDs are selections, never authority.
+        An omitted spaceId selects effective building-only context; no space
+        relationship is fabricated. A selected space requires the exact current
+        tenant-space relationship in that building. No query parameters, PIC,
+        actor, Client, channel, expiry or other authority overrides are accepted.
+        Each call issues a fresh opaque single-use token stored hash-only in the
+        existing handoff exchange store, with an atomic server issuance receipt.
+        Lifetime is at most 120 seconds, further bounded by configured handoff
+        exchange TTL and remaining workspace lifetime. The token is create-only
+        for the existing POST /handyman/requests/care; it cannot be consumed by
+        generic exchange consumption, standalone attribution binding or bearer
+        routes. That POST and its payload remain unchanged. Consumption checks
+        current grant, the same occupancy identities, original property, live
+        workspace and active hierarchy; failure rolls back consumption. Server
+        derives CUSTOMER_CARE provenance and BM_SUPER_APP channel; no local
+        User/PIC impersonation, request reads or financial authority is added.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CareCreateExchangeSelection' }
+      responses:
+        '201':
+          description: Fresh represented-context exchange; issuance creates no request or attribution.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareCreateExchangeIssued' }
+        '400':
+          description: Invalid UUID, malformed selection or unsupported body/query fields.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; missing, wrong-kind, expired or revoked credential, inactive actor/integration or capability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND; missing/inactive/ungranted scope, mismatched hierarchy or non-current occupancy, without existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure failure; no partial receipt/exchange is persisted.
+  /handyman/care/properties/{propertyId}/occupancies:
+    get:
+      operationId: listCareWorkspaceOccupancies
+      summary: Project current effective tenant building and unit occupancy
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 04C. Informational read-time composition of
+        existing tenant_building_contexts and tenant_space_relationships. No new
+        occupancy master, persistence, credential or permission is created.
+        Requires live workspace authentication and an ACTIVE care-property grant,
+        actor/integration/capability, Property and Client. At least tenantCompanyId
+        or spaceId is required; buildingId is an optional conjunctive selector.
+        Client/actor authority inputs, PIC, q/search, status and body fields are
+        rejected. Tenant and Building must be ACTIVE and belong to the derived
+        Client/property. Both relationships must be ACTIVE and effective at the
+        same database statement time, with inclusive bounds and null unbounded.
+        With no spaceId, return BUILDING contexts plus any valid SPACE contexts.
+        BUILDING representation does not require any space relationship; spaceId,
+        tenantSpaceRelationshipId and its effective windows remain null, never
+        fabricated. With spaceId, return only its exact current SPACE occupancy
+        for the selected tenant/building (when supplied), never a building fallback.
+        SPACE rows additionally require the full ACTIVE Space-Room-Area-Floor-
+        Building-Property-Client hierarchy and exact tenant/building agreement
+        between both relationships and the physical space chain. No former,
+        future-only, inactive or foreign context is exposed. Invalid selected
+        representation, including no current exact occupancy, returns uniform 404.
+        Canonical context and relationship IDs, each relationship's original
+        effective windows and evaluatedAt are projections, not authorization
+        tokens. No PIC contacts, private history, lease or ownership claims.
+        Pagination defaults to 25, maximum 100. Stable order is kind (BUILDING
+        before SPACE) then the canonical relationship UUID ascending: building
+        context ID for BUILDING, tenant-space relationship ID for SPACE. No
+        synthesized occupancy ID is public. Cursors bind session/actor/integration,
+        endpoint/property, all selectors, limit, ordering and session expiry.
+        A signed current-result revision marker additionally rejects continuation
+        with 404 if turnover, effective windows or eligible contexts change.
+        Restart discovery rather than silently switching represented customers.
+        This is not a stored historical snapshot: every page reauthorizes current
+        records, grants and session before pagination. Revoked/expired sessions
+        return 401, invalid/mismatched cursors return 400, inaccessible scope or
+        changed occupancy continuation returns 404. Storage/signing failure fails
+        closed. Response Cache-Control is no-store; no totals are exposed.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: Selection only, never authority; must be currently granted and active.
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Represented tenant selection; tenantCompanyId or spaceId is required.
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Exact current unit occupancy selector; no building-only fallback when present.
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Optional narrowing selection inside the active granted property, never authority.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Current effective context page. No matching selected representation returns 404; a page past the end of an unchanged valid selection may be empty.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceOccupancyPage' }
+        '400':
+          description: Invalid UUID, query/body fields, bounds or cursor; existing validation envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for invalid, expired, revoked or wrong-kind credentials or inactive actor/integration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for inaccessible scope, invalid current representation, or changed occupancy continuation; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/session:
+    post:
+      operationId: admitCareWorkspace
+      summary: Admit an attested BM Customer Care actor to a bounded workspace session
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 02. Purpose-specific HMAC-SHA256 admission
+        over canonical stable JSON (recursively sorted object keys), using the
+        existing per-integration HANDYMAN_HANDOFF_SECRET_<NORMALIZED_CODE> secret.
+        The purpose and all actor fields are signed. Requires an ACTIVE integration
+        with CUSTOMER_CARE capability and an ACTIVE registered actor in that integration.
+        No tenant, property, building, space, User or PIC context is accepted.
+        Assertion lifetime is at most five minutes; future-issued, expired,
+        malformed, incorrectly signed or replayed assertions fail uniformly with
+        HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED (401). Assertion IDs are single-use
+        per integration in a separate purpose-specific replay store, including
+        concurrent retries and retries after logout. No clock-skew allowance.
+        Returns an opaque credential once; only its SHA-256 hash is stored.
+        The workspace session has a fixed 15-minute absolute lifetime, no refresh
+        and no sliding renewal. It is not a User/PIC session or create exchange.
+        Actor/integration deactivation or capability loss permanently revokes
+        issued sessions; reactivation requires fresh admission. Authentication
+        revalidates current identity on every use and fails closed on storage failure.
+        Admission attempts use the existing socket-IP login throttle in a separate
+        namespace (per-process; deployments must also enforce ingress limits).
+        Responses use Cache-Control no-store. No discovery, catalogue, request
+        read, or request-create authority is provided by this endpoint.
+      security:
+        - handoffAssertionSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CareWorkspaceAssertion' }
+      responses:
+        '201':
+          description: Workspace credential issued once; no local User session created.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceAdmission' }
+        '400':
+          description: Invalid JSON or unexpected query parameters; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; no identity enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: AUTH_RATE_LIMITED; too many admission attempts.
+          headers:
+            Retry-After:
+              schema: { type: integer, minimum: 1 }
+        '500':
+          description: Authority/storage unavailable; no credential issued and no stale fallback.
+    delete:
+      operationId: revokeCareWorkspaceSession
+      summary: Revoke the presented care workspace credential
+      tags: [Handoff]
+      description: >-
+        Requires a distinct care workspace credential, not a local bearer User
+        session or represented-context exchange. Accepts no query/context fields.
+        Logout is idempotent for an unexpired revoked token whose actor and
+        integration remain active and capable; all other uses of a revoked
+        credential are denied. Unknown, expired, wrong-kind, or invalid-identity
+        credentials return uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED (401).
+        No cross-actor administration, refresh, renewal, or User logout occurs.
+        Responses use Cache-Control no-store.
+      security:
+        - careWorkspaceSession: []
+      responses:
+        '204':
+          description: Presented session revoked (including repeated logout).
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+        '400':
+          description: Unexpected query or context body fields.
+        '401':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Storage failure; no successful revocation claimed.
   /handoff/assertions:
     post:
       operationId: acceptHandoffAssertion
@@ -72033,6 +72992,15 @@ paths:
 
 components:
   securitySchemes:
+    careWorkspaceSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque care workspace credential
+      description: >-
+        Distinct actor/integration-bound credential from POST /handyman/care/session.
+        Maximum 15-minute absolute lifetime; revocable, reusable, no refresh.
+        Never a local User/PIC session, RBAC grant, or represented-context create
+        exchange. The raw token must never be logged or placed in URLs.
     bearerAuth:
       type: http
       scheme: bearer
@@ -72073,6 +73041,18 @@ components:
         format: uuid
 
   parameters:
+    CareWorkspaceLimit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      description: Page size; cannot change while using an issued cursor.
+    CareWorkspaceCursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string, minLength: 1, maxLength: 2048 }
+      description: Opaque nextCursor from the same session, endpoint, scope and limit; never an authorization credential.
     # CR-BE-SAAS-01 PART 01 — SaaS Control Plane parameters.
     IdempotencyKey:
       name: Idempotency-Key
@@ -74459,6 +75439,330 @@ components:
                     $ref: "#/components/schemas/ClientFxPolicy"
 
   schemas:
+    CareCatalogueVariant:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, description]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+    CareCatalogueService:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, description, category, variants]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        category: { type: string }
+        variants:
+          type: array
+          items: { $ref: '#/components/schemas/CareCatalogueVariant' }
+    CareCatalogueProfile:
+      type: object
+      additionalProperties: false
+      required: [id, serviceCatalogId, serviceVariantId, inventoryItemId, specification, compatibility, typicalQuantity, commonality, customerMaterialOption, item]
+      properties:
+        id: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid, nullable: true }
+        inventoryItemId: { type: string, format: uuid }
+        specification: { type: string, nullable: true }
+        compatibility: { type: string, nullable: true }
+        typicalQuantity: { type: number, nullable: true }
+        commonality: { type: string, enum: [COMMON, OCCASIONAL, RARE] }
+        customerMaterialOption: { type: string, enum: [PROVIDER_SUPPLIED, CUSTOMER_SUPPLIED, CUSTOMER_CHOICE] }
+        item:
+          type: object
+          additionalProperties: false
+          required: [id, code, name, uomId]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            uomId: { type: string, format: uuid, nullable: true }
+    CareCatalogueProfileDetail:
+      type: object
+      additionalProperties: false
+      required: [id, serviceCatalogId, serviceVariantId, inventoryItemId, specification, compatibility, typicalQuantity, commonality, customerMaterialOption, item, referencePrice, evaluatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid, nullable: true }
+        inventoryItemId: { type: string, format: uuid }
+        specification: { type: string, nullable: true }
+        compatibility: { type: string, nullable: true }
+        typicalQuantity: { type: number, nullable: true }
+        commonality: { type: string, enum: [COMMON, OCCASIONAL, RARE] }
+        customerMaterialOption: { type: string, enum: [PROVIDER_SUPPLIED, CUSTOMER_SUPPLIED, CUSTOMER_CHOICE] }
+        item:
+          type: object
+          additionalProperties: false
+          required: [id, code, name, uomId]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            uomId: { type: string, format: uuid, nullable: true }
+        referencePrice:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/HandymanMaterialReferencePrice'
+        evaluatedAt: { type: string, format: date-time }
+    CareCatalogueServicePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareCatalogueService' }
+        nextCursor: { type: string, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
+    CareCatalogueProfilePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareCatalogueProfile' }
+        nextCursor: { type: string, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
+    CareWorkspaceRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/HandymanCustomerCareServiceRequest' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Signed scope/filter/session-bound continuation, not authority; null at end.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Database statement time shared by authority checks and projection.
+    CareCreateExchangeSelection:
+      type: object
+      additionalProperties: false
+      required: [tenantCompanyId, buildingId]
+      properties:
+        tenantCompanyId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId:
+          type: string
+          format: uuid
+          description: Optional exact occupied space; omit for building-only representation. Null is not accepted.
+    CareCreateExchangeIssued:
+      type: object
+      additionalProperties: false
+      required: [exchangeToken, expiresAt, context]
+      properties:
+        exchangeToken:
+          type: string
+          description: Raw create-only secret returned once; only its SHA-256 hash is persisted. Submit as exchangeToken to POST /handyman/requests/care, not as a bearer credential.
+        expiresAt: { type: string, format: date-time }
+        context:
+          allOf:
+            - $ref: '#/components/schemas/HandoffContextSnapshot'
+            - type: object
+              required: [propertyId, originChannel]
+              properties:
+                propertyId: { type: string, format: uuid }
+                originChannel: { type: string, enum: [BM_SUPER_APP] }
+                actorType: { type: string, enum: [CUSTOMER_CARE], nullable: false }
+                careActorId: { type: string, format: uuid, nullable: false }
+                actorReference: { type: string, nullable: false }
+                tenantPicId: { type: string, nullable: true, enum: [null] }
+                resolvedUserId: { type: string, nullable: true, enum: [null] }
+    CareWorkspaceOccupancy:
+      type: object
+      additionalProperties: false
+      description: Informational composition only; no occupancy master or acting credential.
+      required: [kind, clientId, propertyId, tenantCompanyId, buildingId, spaceId, tenantBuildingContextId, tenantSpaceRelationshipId, tenantBuildingEffectiveFrom, tenantBuildingEffectiveUntil, tenantSpaceEffectiveFrom, tenantSpaceEffectiveUntil, evaluatedAt]
+      properties:
+        kind: { type: string, enum: [BUILDING, SPACE] }
+        clientId: { type: string, format: uuid }
+        propertyId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: string, format: uuid, nullable: true }
+        tenantBuildingContextId: { type: string, format: uuid }
+        tenantSpaceRelationshipId: { type: string, format: uuid, nullable: true }
+        tenantBuildingEffectiveFrom: { type: string, format: date-time, nullable: true }
+        tenantBuildingEffectiveUntil: { type: string, format: date-time, nullable: true }
+        tenantSpaceEffectiveFrom: { type: string, format: date-time, nullable: true }
+        tenantSpaceEffectiveUntil: { type: string, format: date-time, nullable: true }
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Same database statement time used for authority and effectiveness, also returned on the page.
+    CareWorkspaceOccupancyPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceOccupancy' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Signed selection/revision-bound continuation handle, not a credential; null at end.
+        evaluatedAt: { type: string, format: date-time }
+    CareWorkspaceSpace:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, roomId, buildingId]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Existing canonical spaces.id (spaceId); no separate Unit identity.
+        code: { type: string }
+        name: { type: string }
+        roomId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+    CareWorkspaceSpacePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceSpace' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque session/scope/filter-bound keyset handle, null at end of current results.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Database statement timestamp for current authority, hierarchy and projection.
+    CareWorkspaceTenant:
+      type: object
+      additionalProperties: false
+      required: [id, tenantCode, tenantName]
+      properties:
+        id: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+    CareWorkspaceTenantPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceTenant' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque session/scope/search-bound keyset handle, null at end of current results.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Database statement timestamp for authorization, effective context and projection.
+    CareWorkspaceProperty:
+      type: object
+      additionalProperties: false
+      required: [id, clientId, code, name]
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+    CareWorkspacePropertyPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceProperty' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Null at end of current results; contains no token or grant administration fields.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Server database statement timestamp for authorization and projection.
+    CareWorkspaceBuilding:
+      type: object
+      additionalProperties: false
+      required: [id, propertyId, code, name]
+      properties:
+        id: { type: string, format: uuid }
+        propertyId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+    CareWorkspaceBuildingPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CareWorkspaceBuilding' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Null at end of current results; contains no token or grant administration fields.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Server database statement timestamp for authorization and projection.
+    CareWorkspaceAssertion:
+      type: object
+      additionalProperties: false
+      required: [purpose, integrationCode, assertionId, issuedAt, expiresAt, actor]
+      properties:
+        purpose: { type: string, enum: [HANDYMAN_CARE_WORKSPACE] }
+        integrationCode: { type: string, minLength: 1, maxLength: 128 }
+        assertionId: { type: string, minLength: 1, maxLength: 128 }
+        issuedAt:
+          type: string
+          format: date-time
+          description: UTC ISO-8601 timestamp ending in Z; not in the future.
+        expiresAt:
+          type: string
+          format: date-time
+          description: After issuedAt, at most five minutes later, and strictly after current server time.
+        actor:
+          type: object
+          additionalProperties: false
+          required: [type, actorReference]
+          properties:
+            type: { type: string, enum: [CUSTOMER_CARE] }
+            actorReference: { type: string, minLength: 1, maxLength: 128 }
+    CareWorkspaceAdmission:
+      type: object
+      additionalProperties: false
+      required: [workspaceToken, expiresAt]
+      properties:
+        workspaceToken:
+          type: string
+          pattern: '^hcw_[A-Za-z0-9_-]{43}$'
+          description: Returned once; 256-bit random opaque token stored hash-only.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Fixed absolute expiry, 15 minutes from issuance; never extended on use.
     # ------------------------------------------------------------------
     # CR-BE-UTL-01 PART 13 — Utility domain
     # ------------------------------------------------------------------

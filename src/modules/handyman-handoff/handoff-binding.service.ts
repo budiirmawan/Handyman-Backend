@@ -1,3 +1,5 @@
+import { AppError } from '../../shared/errors';
+import { lockCareCreateWorkspaceScope } from '../handyman-care-workspace/care-create-exchange.scope';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import type { HandymanCareActorType } from '../handyman-care-actors/handyman-care-actor.types';
@@ -78,6 +80,7 @@ async function bindWithinTransaction(
   if (
     !exchange ||
     exchange.status !== 'ACTIVE' ||
+    (!careOnly && exchange.purpose === 'CARE_CREATE') ||
     exchange.expiresAt.getTime() <= Date.now() ||
     (careOnly && (exchange.actorType !== 'CUSTOMER_CARE' ||
       !exchange.careActorId || !exchange.actorReference))
@@ -102,6 +105,25 @@ async function bindWithinTransaction(
   if (consumed.actorType !== null &&
       !(await isCurrentCareRepresentation(consumed, client))) {
     throw handoffExchangeInvalidError();
+  }
+
+  // Workspace-issued credentials retain their original property/session and
+  // active physical scope. This gate is exclusive to the new CARE_CREATE
+  // purpose; existing HANDOFF exchanges and the care POST contract are unchanged.
+  if (consumed.purpose === 'CARE_CREATE') {
+    if (!consumed.workspaceSessionId || !consumed.carePropertyId || !consumed.careActorId) throw handoffExchangeInvalidError();
+    try {
+      const scope = await lockCareCreateWorkspaceScope(client, {
+        sessionId: consumed.workspaceSessionId, careActorId: consumed.careActorId,
+        integrationId: consumed.integrationId, propertyId: consumed.carePropertyId,
+        tenantCompanyId: consumed.tenantCompanyId, buildingId: consumed.buildingId, spaceId: consumed.spaceId,
+      });
+      if (scope.actorReference !== consumed.actorReference || scope.clientId !== consumed.clientId ||
+          consumed.expiresAt.getTime() <= Date.now()) throw handoffExchangeInvalidError();
+    } catch (error) {
+      if (error instanceof AppError) throw handoffExchangeInvalidError();
+      throw error;
+    }
   }
 
   // 3) Provenance from the trusted chain the exchange originated from.
