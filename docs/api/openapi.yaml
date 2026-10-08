@@ -3014,6 +3014,84 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/requests/{requestId}:
+    get:
+      operationId: getCareWorkspaceRequestDetail
+      summary: Read a request within the currently represented tenant context
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 06B. Workspace credential only. Requires
+        explicit propertyId, tenantCompanyId and buildingId; optional spaceId
+        must match the stored request. Reuses PART 06A current represented-context
+        authority and the existing safe request-detail projection. Revalidates
+        live workspace/actor/integration/capability, active property grant,
+        Client/Property/Building/Tenant and current effective tenant-building
+        context in the same SQL statement as the authorized request projection.
+        Space-bound requests require exact current tenant-space occupancy and
+        active physical ancestry even when spaceId is omitted. Building-only
+        requests require no artificial space relationship. Request ID, care
+        authorship and attribution provenance grant no historical exception.
+        Missing request, revoked property grant, turnover, inaccessible scope
+        and represented-context mismatch return uniform 404 without revealing
+        another tenant or unit request. Invalid/expired/revoked workspace
+        credentials return 401. Rejects list filters and unknown query/body
+        fields. No PIC contacts, evidence, financial data, new downstream access
+        or mutations; executionScopeId is an informational pointer only.
+        Cache-Control is no-store. Existing list and local User/admin reads
+        remain unchanged.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Existing bounded safe request detail; no list wrapper or additional lifecycle payload.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCustomerCareServiceRequest' }
+        '400':
+          description: Invalid/missing UUID selectors, unknown query/body fields or unsupported list filters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for missing/wrong-kind/expired/revoked credential or inactive actor/integration/capability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing request, grant revocation, turnover, invalid occupancy or selected/stored context mismatch; no existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority/storage failure; no stale or broader fallback.
   /handyman/care/requests:
     get:
       operationId: listCareWorkspaceRequests

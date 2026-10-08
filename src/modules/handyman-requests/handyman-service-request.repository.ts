@@ -343,6 +343,34 @@ async function listWorkspaceProjectionsScoped(principal: CareWorkspacePrincipal,
   })) };
 }
 
+/** Detail uses the same represented-context authority as PART 06A. The ID
+ * never authenticates a request: match scope/occupancy and project together,
+ * without an unscoped existence lookup or the local admin historical wall. */
+async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, requestId: string,
+  selection: Pick<WorkspaceRequestSelection, 'propertyId' | 'tenantCompanyId' | 'buildingId' | 'spaceId'>) {
+  const result = await getPool().query<{
+    authenticated: boolean; item: Omit<JsonWorkspaceRequestRow, 'cursorCreatedAt'> | null;
+  }>(`
+    ${WORKSPACE_OCCUPANCY_CTES}, matched AS (
+      SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
+      ${CUSTOMER_CARE_PROJECTION_FROM}
+      WHERE r.id = $5 AND EXISTS (
+        SELECT 1 FROM records c WHERE c."clientId" = r.client_id
+          AND c."tenantCompanyId" = r.tenant_company_id AND c."buildingId" = r.building_id
+          AND c."spaceId" IS NOT DISTINCT FROM r.space_id
+      ) LIMIT $6
+    )
+    SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,
+      (SELECT to_jsonb(matched) FROM matched) AS item`,
+    [principal.sessionId, principal.careActorId, principal.integrationId, selection.propertyId,
+      requestId, 1, selection.tenantCompanyId, selection.buildingId, selection.spaceId]);
+  const { authenticated, item } = result.rows[0];
+  return { authenticated, item: item ? { ...item,
+    createdAt: new Date(item.createdAt), updatedAt: new Date(item.updatedAt),
+    attributionCreatedAt: new Date(item.attributionCreatedAt),
+  } : null };
+}
+
 export const handymanServiceRequestRepository = {
   insertRequest,
   findById,
@@ -352,4 +380,5 @@ export const handymanServiceRequestRepository = {
   findCustomerCareProjectionById,
   listCustomerCareProjectionsScoped,
   listWorkspaceProjectionsScoped,
+  findWorkspaceProjectionById,
 };
