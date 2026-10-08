@@ -19,16 +19,10 @@ export type WorkspaceOccupancy = {
   tenantSpaceEffectiveUntil: string | null;
 };
 
-/** No new occupancy persistence or snapshot permission. Both relationship
- * authorities, tenant and physical hierarchy are composed at statement time.
- * BUILDING rows do not require or invent a space relationship. */
-async function readOccupancies(principal: CareWorkspacePrincipal, propertyId: string,
-  afterId: string | null, limit: number, tenantCompanyId: string | null,
-  buildingId: string | null, spaceId: string | null) {
-  const result = await getPool().query<{
-    authenticated: boolean; accessible: boolean; evaluatedAt: Date;
-    revision: string; items: WorkspaceOccupancy[];
-  }>(`
+/** Shared current-representation SQL for occupancy discovery and request reads.
+ * $1..$4: workspace identity/property; $7..$9: tenant/building/optional space.
+ * Kept as one statement with the consuming projection, never a cached grant. */
+export const WORKSPACE_OCCUPANCY_CTES = `
     ${WORKSPACE_GRANTED_SCOPE_CTE}, context_base AS (
       SELECT p.client_id, p.id AS property_id, tc.id AS tenant_company_id,
         b.id AS building_id, tbc.id AS context_id,
@@ -65,7 +59,19 @@ async function readOccupancies(principal: CareWorkspacePrincipal, propertyId: st
       WHERE ($9::uuid IS NULL OR s.id = $9)
         AND (tsr.effective_from IS NULL OR tsr.effective_from <= statement_timestamp())
         AND (tsr.effective_until IS NULL OR tsr.effective_until >= statement_timestamp())
-    ), page AS (
+    )`;
+
+/** No new occupancy persistence or snapshot permission. Both relationship
+ * authorities, tenant and physical hierarchy are composed at statement time.
+ * BUILDING rows do not require or invent a space relationship. */
+async function readOccupancies(principal: CareWorkspacePrincipal, propertyId: string,
+  afterId: string | null, limit: number, tenantCompanyId: string | null,
+  buildingId: string | null, spaceId: string | null) {
+  const result = await getPool().query<{
+    authenticated: boolean; accessible: boolean; evaluatedAt: Date;
+    revision: string; items: WorkspaceOccupancy[];
+  }>(`
+    ${WORKSPACE_OCCUPANCY_CTES}, page AS (
       SELECT * FROM records WHERE ($5::text IS NULL OR id COLLATE "C" > $5 COLLATE "C")
       ORDER BY id COLLATE "C" ASC LIMIT $6
     )

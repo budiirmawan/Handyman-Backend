@@ -1,3 +1,5 @@
+import { WORKSPACE_OCCUPANCY_CTES } from '../handyman-care-workspace/care-workspace-occupancies.repository';
+import type { CareWorkspacePrincipal } from '../handyman-care-workspace/care-workspace.service';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
@@ -289,6 +291,58 @@ async function listCustomerCareProjectionsScoped(
   return result.rows;
 }
 
+export type WorkspaceRequestSelection = {
+  propertyId: string; tenantCompanyId: string; buildingId: string; spaceId: string | null;
+  status: HandymanServiceRequestListFilters['status'] | null;
+  channelAttributionId: string | null;
+  limit: number; afterId: string | null; afterCreatedAt: string | null;
+};
+
+type WorkspaceRequestRow = HandymanCustomerCareServiceRequestRecord & { cursorCreatedAt: string };
+type JsonWorkspaceRequestRow = Omit<WorkspaceRequestRow, 'createdAt' | 'updatedAt' | 'attributionCreatedAt'> & {
+  createdAt: string; updatedAt: string; attributionCreatedAt: string;
+};
+
+/** Workspace read adapter, NOT the local User/PIC/admin read wall. Reuse the
+ * exact existing request projection and current occupancy authority. Every row
+ * must match the selected tenant/building AND its applicable current occupancy,
+ * including when no space filter is provided. Authorization precedes keyset
+ * pagination, in the same statement snapshot; no post-page redaction/counts. */
+async function listWorkspaceProjectionsScoped(principal: CareWorkspacePrincipal, selection: WorkspaceRequestSelection) {
+  const result = await getPool().query<{
+    authenticated: boolean; accessible: boolean; evaluatedAt: Date; items: JsonWorkspaceRequestRow[];
+  }>(`
+    ${WORKSPACE_OCCUPANCY_CTES}, page AS (
+      SELECT ${CUSTOMER_CARE_PROJECTION_SELECT},
+        to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "cursorCreatedAt"
+      ${CUSTOMER_CARE_PROJECTION_FROM}
+      WHERE EXISTS (
+        SELECT 1 FROM records c WHERE c."clientId" = r.client_id
+          AND c."tenantCompanyId" = r.tenant_company_id AND c."buildingId" = r.building_id
+          AND c."spaceId" IS NOT DISTINCT FROM r.space_id
+      )
+        AND ($11::text IS NULL OR r.status = $11)
+        AND ($12::uuid IS NULL OR r.channel_attribution_id = $12)
+        AND ($5::uuid IS NULL OR (r.created_at, r.id) < ($10::timestamptz, $5::uuid))
+      ORDER BY r.created_at DESC, r.id DESC LIMIT $6
+    )
+    SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,
+      EXISTS(SELECT 1 FROM records) AS accessible,
+      statement_timestamp() AS "evaluatedAt",
+      COALESCE((SELECT jsonb_agg(to_jsonb(page) ORDER BY page."createdAt" DESC, page.id DESC)
+        FROM page), '[]'::jsonb) AS items`,
+    [principal.sessionId, principal.careActorId, principal.integrationId, selection.propertyId,
+      selection.afterId, selection.limit + 1, selection.tenantCompanyId, selection.buildingId,
+      selection.spaceId, selection.afterCreatedAt, selection.status, selection.channelAttributionId]);
+  const row = result.rows[0];
+  // Existing public projector consumes the domain's Date-valued record. The
+  // separate cursor key preserves PostgreSQL microseconds (JS Date cannot).
+  return { ...row, items: row.items.map(item => ({ ...item,
+    createdAt: new Date(item.createdAt), updatedAt: new Date(item.updatedAt),
+    attributionCreatedAt: new Date(item.attributionCreatedAt),
+  })) };
+}
+
 export const handymanServiceRequestRepository = {
   insertRequest,
   findById,
@@ -297,4 +351,5 @@ export const handymanServiceRequestRepository = {
   updateStatus,
   findCustomerCareProjectionById,
   listCustomerCareProjectionsScoped,
+  listWorkspaceProjectionsScoped,
 };

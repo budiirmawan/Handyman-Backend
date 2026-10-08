@@ -3014,6 +3014,94 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/requests:
+    get:
+      operationId: listCareWorkspaceRequests
+      summary: List requests for a currently represented tenant context
+      tags: [Handoff]
+      description: >-
+        CR-HM-CARE-WORKSPACE-01 PART 06A. Workspace credential only; local User,
+        admin and handoff exchange credentials are not accepted. Requires explicit
+        propertyId, tenantCompanyId and buildingId, an active property grant,
+        live workspace/actor/integration/capability and active Client, Property,
+        Building and Tenant. Reuses existing effective occupancy authority and
+        the bounded Customer Care request projection. Optional spaceId selects
+        an exact currently occupied space. Without it, each space-bound request
+        still requires its own exact current tenant-space relationship and full
+        active physical ancestry; a building-only request requires the current
+        effective tenant-building context without an artificial space requirement.
+        Tenant identity and location must match each stored request. Turnover
+        denies former-tenant unit history and new occupants never inherit it.
+        Care authorship grants no historical exception. All authority and row
+        filtering occur in the same SQL statement before pagination, including
+        on continuation. No bulk property history, total count, detail, PIC
+        contact, financial data or downstream-resource access is exposed.
+        Filters are narrowing only. Unknown query/body fields are rejected.
+        Ordering is createdAt descending, then ID descending; cursor keys retain
+        database timestamp precision. Cursors are integrity-protected, expire
+        with the workspace session, bind actor/session/endpoint/selection/filters/
+        limit/order, and confer no authority. Results are current reads rather
+        than a stable historical snapshot. Cache-Control is no-store.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [INTAKE, TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS, READY_FOR_NEXT_STEP, REFERRED]
+        - name: channelAttributionId
+          in: query
+          schema: { type: string, format: uuid }
+          description: Existing safe narrowing filter; never an acting credential.
+        - $ref: '#/components/parameters/CareWorkspaceLimit'
+        - $ref: '#/components/parameters/CareWorkspaceCursor'
+      responses:
+        '200':
+          description: Authorized bounded page, possibly empty; default limit 25, maximum 100, no total count.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareWorkspaceRequestPage' }
+        '400':
+          description: Invalid/missing selectors, unknown fields, unsupported filters or malformed/mismatched cursor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for missing/wrong-kind/expired/revoked credential or inactive actor/integration/capability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing/ungranted/revoked/inactive selected scope or no longer valid represented occupancy, without existence enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority/storage/signing configuration failure; no stale or broader fallback.
   /handyman/care/properties/{propertyId}/create-exchanges:
     post:
       operationId: issueCareCreateExchange
@@ -75368,6 +75456,23 @@ components:
           items: { $ref: '#/components/schemas/CareCatalogueProfile' }
         nextCursor: { type: string, nullable: true }
         evaluatedAt: { type: string, format: date-time }
+    CareWorkspaceRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, evaluatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/HandymanCustomerCareServiceRequest' }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Signed scope/filter/session-bound continuation, not authority; null at end.
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: Database statement time shared by authority checks and projection.
     CareCreateExchangeSelection:
       type: object
       additionalProperties: false

@@ -84,7 +84,7 @@ function toPublic(
   };
 }
 
-function toCustomerCarePublic(
+export function toCustomerCarePublic(
   record: HandymanCustomerCareServiceRequestRecord,
 ): PublicHandymanCustomerCareServiceRequest {
   return {

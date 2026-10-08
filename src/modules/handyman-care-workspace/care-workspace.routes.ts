@@ -1,3 +1,4 @@
+import { listCareWorkspaceRequests } from './care-workspace-requests.service';
 import { issueCareCreateExchange } from './care-create-exchange.service';
 import { readCareWorkspaceCatalogue } from './care-workspace-catalogue.service';
 import { Router } from 'express';
@@ -96,6 +97,14 @@ export function createCareWorkspaceRouter(): Router {
       const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await issueCareCreateExchange(match[1], req.params.propertyId, req.body, req.query), 201);
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      sendSuccess(res, await listCareWorkspaceRequests(match[1], req.query, req.body));
     } catch (error) { next(error); }
   });
   return router;
