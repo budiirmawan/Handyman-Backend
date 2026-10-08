@@ -7,7 +7,7 @@ import { listCareWorkspaceScope, listCareWorkspaceTenants, listCareWorkspaceSpac
 import { getAppConfig } from '../../config';
 import { sendSuccess } from '../../shared/api-response';
 import { AppError } from '../../shared/errors';
-import { isLoginRateLimited, recordLoginFailure } from '../auth/login-rate-limit';
+import { isLoginRateLimited, recordLoginFailure, recordLoginSuccess } from '../auth/login-rate-limit';
 import { admitCareWorkspace, revokeCareWorkspaceSession, workspaceUnauthorized } from './care-workspace.service';
 
 /** Care-only credential surface; no local User middleware or grant administration. */
@@ -15,19 +15,27 @@ export function createCareWorkspaceRouter(): Router {
   const router = Router();
   router.post('/handyman/care/session', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
+    // Existing local login-throttle convention, isolated namespace and socket
+    // address (never trust a forwarded header). Only a FAILED admission consumes
+    // quota, and a success resets it (auth.service.login convention): a BM host
+    // relaying operator admissions server-to-server must not spend the failure
+    // budget of every operator behind one egress address. The 429 gate, its
+    // namespace and admission/session/crypto authority are unchanged.
+    const key = `handyman-care-workspace:${req.socket.remoteAddress ?? 'unknown'}`;
     try {
-      // Existing local login-throttle convention, isolated namespace and socket
-      // address (never trust a forwarded header). Count all admission attempts.
-      const key = `handyman-care-workspace:${req.socket.remoteAddress ?? 'unknown'}`;
       if (isLoginRateLimited(key)) {
         res.setHeader('Retry-After', String(getAppConfig().security.loginRateLimitWindowMinutes * 60));
         throw new AppError({ code: 'AUTH_RATE_LIMITED', message: 'Too many admission attempts.', statusCode: 429 });
       }
-      recordLoginFailure(key);
       if (Object.keys(req.query).length) throw AppError.validation('Query parameters are not accepted.');
       const admitted = await admitCareWorkspace(req.body, req.header('x-hub-signature-256'));
+      recordLoginSuccess(key);
       sendSuccess(res, admitted, 201);
-    } catch (error) { next(error); }
+    } catch (error) {
+      // A throttle rejection is never charged back to the same namespace key.
+      if (!(error instanceof AppError) || error.statusCode !== 429) recordLoginFailure(key);
+      next(error);
+    }
   });
   router.delete('/handyman/care/session', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
