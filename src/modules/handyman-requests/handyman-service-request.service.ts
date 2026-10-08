@@ -2,7 +2,11 @@ import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
-import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import {
+  assertBuildingScopedResourceAccess,
+  buildingAccessDeniedError,
+  contextAccessService,
+} from '../context-access';
 import {
   handymanChannelAttributionNotFoundError,
   handymanChannelAttributionRepository,
@@ -335,9 +339,13 @@ export async function getHandymanServiceRequestDetail(
     undefined, handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: BE-02G building-scope guard over the request's
+  // own building_id (no same-Client shortcut). The C6 represented-customer
+  // SQL wall below is unchanged and stays the per-row authority.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const record = await handymanServiceRequestRepository.findCustomerCareProjectionById(
     undefined, handymanRequestId, actorUserId,
   );

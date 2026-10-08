@@ -1,15 +1,13 @@
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { priceCatalogLookupService } from '../price-catalog-entries';
 import {
   handymanServiceRequestRepository,
 } from '../handyman-requests';
+import { assertQuotationThreadBuildingAccess }
+  from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import { handymanQuotationNotFoundError } from './handyman-quotation.errors';
@@ -156,15 +154,10 @@ export async function addHandymanQuotationLine(
       throw handymanQuotationVersionNotDraftError();
     }
 
-    // 3) Realm authority over the server-derived client scope.
-    if (
-      !(await contextAccessService.canAccessClient(
-        actorUserId,
-        quotation.clientId,
-      ))
-    ) {
-      throw buildingAccessDeniedError();
-    }
+    // 3) Realm authority (CR-HM-SEC-01 PART 02): building-scope guard
+    //    traced to the parent request's building_id (BE-02G; no
+    //    same-Client shortcut).
+    await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
     // 4) Client-scoped master checks (no cross-client master references).
     if (
@@ -285,14 +278,13 @@ export async function listHandymanQuotationVersionLines(
     version.quotationId,
   );
   if (!quotation) throw handymanQuotationNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      quotation.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: building-scope guard traced to the parent
+  // request's building_id (BE-02G; no same-Client shortcut).
+  await assertQuotationThreadBuildingAccess(
+    undefined as never,
+    quotation,
+    actorUserId,
+  );
   const lines = await handymanQuotationLineRepository.listLines(
     undefined,
     version.id,
@@ -317,14 +309,13 @@ export async function getHandymanQuotationVersionTotals(
     version.quotationId,
   );
   if (!quotation) throw handymanQuotationNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      quotation.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: building-scope guard traced to the parent
+  // request's building_id (BE-02G; no same-Client shortcut).
+  await assertQuotationThreadBuildingAccess(
+    undefined as never,
+    quotation,
+    actorUserId,
+  );
   const sums = await handymanQuotationLineRepository.sumLines(
     undefined,
     version.id,

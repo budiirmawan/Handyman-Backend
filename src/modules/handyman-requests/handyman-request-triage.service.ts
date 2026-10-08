@@ -1,7 +1,7 @@
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
-import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
 import { handymanRequestTriageRepository } from './handyman-request-triage.repository';
@@ -123,16 +123,13 @@ export async function recordHandymanRequestTriage(
         throw handymanServiceRequestNotIntakeError();
       }
 
-      // 3) Realm authority: existing accessible-Client convention over the
-      //    request-derived scope (the request snapshot — never caller input).
-      if (
-        !(await contextAccessService.canAccessClient(
-          actorUserId,
-          request.clientId,
-        ))
-      ) {
-        throw buildingAccessDeniedError();
-      }
+      // 3) Realm authority (CR-HM-SEC-01 PART 02): BE-02G building-scope
+      //    guard over the request's own building_id (the request snapshot —
+      //    never caller input; no same-Client shortcut).
+      await assertBuildingScopedResourceAccess(actorUserId, {
+        clientId: request.clientId,
+        buildingId: request.buildingId,
+      });
 
       // 4) F2 pre-check inside the transaction (the UNIQUE constrains
       //    races); duplicates resolve to the SAME 409 contract.
@@ -221,14 +218,12 @@ export async function getHandymanRequestTriage(
       handymanRequestId,
     );
     if (!request) throw handymanServiceRequestNotFoundError();
-    if (
-      !(await contextAccessService.canAccessClient(
-        actorUserId,
-        request.clientId,
-      ))
-    ) {
-      throw buildingAccessDeniedError();
-    }
+    // CR-HM-SEC-01 PART 02: BE-02G building-scope guard over the
+    // request's own building_id (no same-Client shortcut).
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: request.clientId,
+      buildingId: request.buildingId,
+    });
   }
   const record = await handymanRequestTriageRepository.findByRequest(
     undefined,

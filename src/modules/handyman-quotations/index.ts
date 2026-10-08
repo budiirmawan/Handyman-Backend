@@ -11,6 +11,8 @@ export {
   getHandymanQuotation,
 } from './handyman-quotation.service';
 export { handymanQuotationRepository } from './handyman-quotation.repository';
+export { assertQuotationThreadBuildingAccess }
+  from './handyman-quotation-access';
 export {
   handymanQuotationNotFoundError,
   handymanQuotationAlreadyExistsError,

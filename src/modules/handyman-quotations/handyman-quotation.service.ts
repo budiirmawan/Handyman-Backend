@@ -1,17 +1,15 @@
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  assertBuildingScopedResourceAccess,
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import {
   handymanRequestDiagnosisRepository,
   handymanServiceRequestNotFoundError,
   handymanServiceRequestRepository,
 } from '../handyman-requests';
+import { assertQuotationThreadBuildingAccess }
+  from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import {
   handymanQuotationAlreadyExistsError,
@@ -185,14 +183,9 @@ export async function createHandymanQuotationRevision(
       quotationId,
     );
     if (!quotation) throw handymanQuotationNotFoundError();
-    if (
-      !(await contextAccessService.canAccessClient(
-        actorUserId,
-        quotation.clientId,
-      ))
-    ) {
-      throw buildingAccessDeniedError();
-    }
+    // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
+    // request's building_id (BE-02G; no same-Client shortcut).
+    await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
     const nextNumber =
       (await handymanQuotationRepository.maxVersionNumber(tx, quotation.id))
@@ -238,14 +231,13 @@ export async function getHandymanQuotation(
     handymanRequestId,
   );
   if (!quotation) throw handymanQuotationNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      quotation.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
+  // request's building_id (BE-02G; no same-Client shortcut).
+  await assertQuotationThreadBuildingAccess(
+    undefined as never,
+    quotation,
+    actorUserId,
+  );
   const versions = await handymanQuotationRepository.listVersions(
     undefined,
     quotation.id,
