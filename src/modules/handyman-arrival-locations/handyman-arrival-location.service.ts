@@ -1,9 +1,6 @@
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { generateSessionToken, hashSessionToken } from '../auth/session.token';
 import {
@@ -113,8 +110,9 @@ export function selectMostSpecificExpectedLocationLevel(
 
 /**
  * Authoritative expected-arrival location: the immutable CR-HM-06
- * execution-scope snapshot ONLY. Realm-guarded (Client access), and
- * the result contains exactly the snapshot chain — nothing else.
+ * execution-scope snapshot ONLY. Realm-guarded (BE-02G exact-Building
+ * access), and the result contains exactly the snapshot chain —
+ * nothing else.
  */
 export async function resolveHandymanExpectedArrivalLocation(
   executionScopeId: string,
@@ -127,11 +125,19 @@ export async function resolveHandymanExpectedArrivalLocation(
     executionScopeId,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId, scope.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 06B-2 — BE-02G exact-Building check on the
+  // authoritative server-derived scope building (migration 0395),
+  // replacing the client-level canAccessClient shortcut: a same-Client
+  // sibling Building assignment must not read the expected location.
+  // The denial vocabulary (403 BUILDING_ACCESS_DENIED — the guard's
+  // own thrower) and the wall's position (after the scope 404, before
+  // the snapshot projection) are unchanged. This wall also serves the
+  // delegated Customer Care read `getHandymanArrivalVerificationByScope`
+  // and the in-process QR/geofence resolvers.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   return {
     buildingId: scope.buildingId,
     floorId: scope.floorId,
@@ -168,11 +174,17 @@ export async function createHandymanArrivalLocationIdentifier(
       { field: 'buildingId', message: 'Building must exist and be ACTIVE.' },
     ]);
   }
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId, building.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 06B-2 — BE-02G exact-Building check on the
+  // loaded building's authoritative id/client, replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not register a QR identifier. The denial
+  // vocabulary (403 BUILDING_ACCESS_DENIED — the guard's own thrower)
+  // and the wall's position (after the building 404/ACTIVE check,
+  // before chain validation and any mutation) are unchanged.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: building.clientId,
+    buildingId: building.id,
+  });
 
   // Chain: completeness + real parent linkage against location masters.
   const details: { field: string; message: string }[] = [];
@@ -276,7 +288,8 @@ export async function createHandymanArrivalLocationIdentifier(
 
 /**
  * Registry lifecycle management: ACTIVE -> INACTIVE (the only
- * permitted write), audited. Realm-guarded.
+ * permitted write), audited. Realm-guarded (BE-02G exact-Building
+ * access).
  */
 export async function deactivateHandymanArrivalLocationIdentifier(
   identifierId: string,
@@ -287,11 +300,17 @@ export async function deactivateHandymanArrivalLocationIdentifier(
   const existing = await handymanArrivalLocationRepository
     .findIdentifierById(undefined, identifierId);
   if (!existing) throw arrivalLocationIdentifierNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId, existing.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 06B-2 — BE-02G exact-Building check on the
+  // identifier's authoritative building/client, replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not deactivate a QR identifier. The
+  // denial vocabulary (403 BUILDING_ACCESS_DENIED — the guard's own
+  // thrower) and the wall's position (after the identifier 404, before
+  // the transaction, audit event and mutation) are unchanged.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: existing.clientId,
+    buildingId: existing.buildingId,
+  });
   return withTransaction(async (tx) => {
     const record = await handymanArrivalLocationRepository
       .deactivateIdentifier(tx, identifierId);
