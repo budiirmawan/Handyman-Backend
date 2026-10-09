@@ -420,27 +420,3 @@ export async function withdrawHandymanServiceWarrantyClaim(
   return applyClaimAction(actorUserId, input.claimId, input.idempotencyKey,
     'WITHDRAW', {});
 }
-
-/** Read helper — a claim by id, or a bounded 404. */
-export async function getHandymanServiceWarrantyClaimById(
-  claimId: string,
-): Promise<HandymanServiceWarrantyClaimCommandResult['claim']> {
-  const id = ensureUuid(claimId, 'claimId');
-  const claim = await handymanServiceWarrantyClaimRepository.findClaimById(
-    getPool(),
-    id,
-  );
-  if (!claim) throw handymanServiceWarrantyClaimNotFoundError();
-  return claim;
-}
-
-/** Read helper — the warranty's claims, oldest first. */
-export async function listHandymanServiceWarrantyClaims(
-  warrantyId: string,
-): Promise<HandymanServiceWarrantyClaimCommandResult['claim'][]> {
-  const id = ensureUuid(warrantyId, 'warrantyId');
-  return handymanServiceWarrantyClaimRepository.listClaimsByWarrantyId(
-    getPool(),
-    id,
-  );
-}
