@@ -108,6 +108,16 @@ export async function prepareHandymanBast(
 
   return withTransaction(async (client) => {
     const scope = await loadAuthorizedScope(client, executionScopeId);
+    // CR-HM-SEC-01 PART 05B — local-staff BAST lifecycle write: the
+    // data-scope wall is the BE-02G building guard on the
+    // authoritative server-derived scope building (migration 0395) —
+    // no client-level shortcut. It runs BEFORE the active-BAST /
+    // replay / conflict paths, so a same-Client sibling Building
+    // actor learns nothing about existing BAST content.
+    await assertBuildingScopedResourceAccess(actor, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     const existing = await handymanBastRepository.findActiveBastByScopeId(
       client,
       executionScopeId,
@@ -155,6 +165,25 @@ async function applyPart01Transition(
     if (!bast) {
       throw handymanBastNotFoundError();
     }
+    // CR-HM-SEC-01 PART 05B — local-staff BAST lifecycle write: the
+    // data-scope wall is the BE-02G building guard on the
+    // authoritative server-derived scope building (migration 0395).
+    // It runs BEFORE the replay path, so a same-Client sibling
+    // Building actor can neither replay nor mutate; the eligibility
+    // gate (`loadAuthorizedScope`) keeps its original position after
+    // the replay short-circuit, preserving idempotent-replay
+    // semantics exactly.
+    const scope = await handymanScopeAssignmentRepository.findScopeById(
+      client,
+      bast.executionScopeId,
+    );
+    if (!scope) {
+      throw handymanExecutionScopeNotFoundError();
+    }
+    await assertBuildingScopedResourceAccess(actor, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     const replay = await handymanBastRepository.findEventByIdempotency(
       client,
       bast.id,
