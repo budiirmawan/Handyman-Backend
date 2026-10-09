@@ -184,9 +184,10 @@ async function authorityPreamble(
 }
 
 /**
- * CR-HM-SEC-01 PART 03C-1 + 03C-2 — CHECK_IN / START_WORK / PAUSE /
- * RESUME / MATERIAL_RUN authorization preamble (scoped to these
- * commands ONLY; COMPLETE / CHECK_OUT and the session reads keep
+ * CR-HM-SEC-01 PART 03C-1 + 03C-2 + 03C-3 — CHECK_IN / START_WORK /
+ * PAUSE / RESUME / MATERIAL_RUN / COMPLETE / CHECK_OUT authorization
+ * preamble (scoped to these commands ONLY; the session reads —
+ * active, time-projection, Customer Care view — keep
  * `authorityPreamble` for their own PARTs). Same frozen worker
  * contract — scope exists, CURRENT authoritative Lead resolved via
  * the CR-HM-07 seam, actor IS that Lead — but the data-scope wall is
@@ -568,7 +569,7 @@ async function sessionCloseTransition(
   const key = ensureKey(input.idempotencyKey);
   const rule = SESSION_CLOSE_RULES[action];
 
-  const { resolution } = await authorityPreamble(scopeUuid, actorUuid);
+  const { resolution } = await commandAuthorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     const locked = await tx.query(
