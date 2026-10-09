@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import {
+  assertBuildingScopedResourceAccess,
   buildingAccessDeniedError,
   contextAccessService,
 } from '../context-access';
@@ -358,13 +359,22 @@ export async function getHandymanBastCustomerCareDetail(
   if (!bast) {
     throw handymanBastNotFoundError();
   }
-  const allowed = await contextAccessService.canAccessClient(
-    actor,
-    bast.clientId,
+  // CR-HM-SEC-01 PART 05A — the BAST record is Client-scoped only, so
+  // the authoritative location is the server-derived execution scope
+  // building (migration 0395); the data-scope wall is the BE-02G
+  // building guard on that exact Building, not the client-level
+  // canAccessClient shortcut (no same-Client sibling leak).
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    getPool(),
+    bast.executionScopeId,
   );
-  if (!allowed) {
-    throw buildingAccessDeniedError();
+  if (!scope) {
+    throw handymanExecutionScopeNotFoundError();
   }
+  await assertBuildingScopedResourceAccess(actor, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const events = await handymanBastRepository.listEventsByBastId(
     getPool(),
     bast.id,
@@ -394,13 +404,14 @@ export async function getHandymanExecutionScopeBastCustomerCareView(
   if (!scope) {
     throw handymanExecutionScopeNotFoundError();
   }
-  const allowed = await contextAccessService.canAccessClient(
-    actor,
-    scope.clientId,
-  );
-  if (!allowed) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 05A — BE-02G building guard on the
+  // authoritative server-derived scope building (migration 0395); the
+  // client-level canAccessClient shortcut is NOT sufficient here — a
+  // same-Client sibling Building assignment must not open the read.
+  await assertBuildingScopedResourceAccess(actor, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const bast =
     (await handymanBastRepository.findActiveBastByScopeId(
       getPool(),
