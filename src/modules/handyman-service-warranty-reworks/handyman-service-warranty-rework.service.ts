@@ -4,8 +4,10 @@ import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
-import { handymanScopeAssignmentRepository }
-  from '../handyman-scope-assignments';
+import {
+  handymanScopeAssignmentRepository,
+  resolveHandymanAssignmentLead,
+} from '../handyman-scope-assignments';
 import { handymanServiceWarrantyClaimRepository }
   from '../handyman-service-warranty-claims';
 import type { HandymanServiceWarrantyClaimRecord }
@@ -134,6 +136,33 @@ async function assertReworkAuthority(
 }
 
 /**
+ * CR-HM-SEC-01 PART 07B-2A — CR-HM-04 field-worker ACTION authority
+ * (audited in PART 07B-1): the actor must be the scope's CURRENT
+ * ACTIVE assignment's authoritative Crew Lead.
+ * `resolveHandymanAssignmentLead` re-validates the ACTIVE assignment
+ * and its CURRENT Lead validity chain (and re-proves the BE-02G
+ * building wall); a Lead that went invalid after assignment, a
+ * missing assignment, or a non-Lead actor fails CLOSED with the
+ * module's existing 403 vocabulary (HANDYMAN_SERVICE_WARRANTY_REWORK_
+ * NOT_AUTHORIZED). Applies ONLY to the field-worker commands
+ * (PROPOSE / START / COMPLETE / VERIFY); the customer-side AUTHORIZE
+ * keeps building-wall-only authority — its action authority is the
+ * customer-side acceptance, not the crew chain.
+ */
+async function assertReworkLeadAction(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<void> {
+  const resolution = await resolveHandymanAssignmentLead(
+    executionScopeId,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
+    throw handymanServiceWarrantyReworkNotAuthorizedError();
+  }
+}
+
+/**
  * READ-ONLY CR-HM-10 reuse: the verification evidence must be the
  * rework's OWN evidence (same client + ORIGINAL execution scope), and a
  * consumed QC run must belong to that same scope and already have PASSED.
@@ -235,6 +264,11 @@ export async function proposeHandymanServiceWarrantyRework(
     );
   }
   await assertReworkAuthority(actorUuid, claim.executionScopeId);
+  // CR-HM-SEC-01 PART 07B-2A — PROPOSE is a field-worker (Lead)
+  // command: CR-HM-04 Lead action authority on the claim's ORIGINAL
+  // execution scope, after the resource 404 and the BE-02G building
+  // wall, before the transaction, replay and mutation.
+  await assertReworkLeadAction(claim.executionScopeId, actorUuid);
 
   return withTransaction(async (client) => {
     const locked = await lockClaimAndWarranty(
@@ -330,6 +364,17 @@ async function applyReworkAction(
       rework.warrantyId,
       actorUuid,
     );
+
+    // CR-HM-SEC-01 PART 07B-2A — START / COMPLETE / VERIFY are
+    // field-worker (crew Lead) commands: CR-HM-04 Lead action
+    // authority on the rework's ORIGINAL execution scope, after the
+    // in-transaction building re-proof and BEFORE the idempotent
+    // replay lookup and any mutation (a replay can never bypass the
+    // Lead check). AUTHORIZE (ACCEPT) is the customer-side decision
+    // and stays free of the Lead check.
+    if (action !== 'ACCEPT') {
+      await assertReworkLeadAction(rework.executionScopeId, actorUuid);
+    }
 
     const replay = await handymanServiceWarrantyReworkRepository
       .findReworkEventByIdempotency(client, rework.id, action, key);
