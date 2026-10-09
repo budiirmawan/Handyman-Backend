@@ -1,6 +1,6 @@
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
 import { handymanBastRepository, type HandymanBastRecord }
   from '../handyman-bast';
 import { handymanScopeAssignmentRepository }
@@ -72,8 +72,8 @@ function ensureKey(value: string): string {
 
 /**
  * START authority preamble: the scope must exist (bounded 404) and the
- * actor must hold access to the scope's client (403). Caller-supplied
- * customer/actor identity is never authority.
+ * actor must hold access to the scope's exact Building (403).
+ * Caller-supplied customer/actor identity is never authority.
  */
 async function authorityPreamble(scopeUuid: string, actorUserId: string) {
   const scope = await handymanScopeAssignmentRepository.findScopeById(
@@ -81,10 +81,17 @@ async function authorityPreamble(scopeUuid: string, actorUserId: string) {
     scopeUuid,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId,
-    scope.clientId,
-  ))) {
+  // CR-HM-SEC-01 PART 06C — BE-02G exact-Building check on the
+  // authoritative server-derived scope building (migration 0395),
+  // replacing the client-level canAccessClient shortcut: a same-Client
+  // sibling Building assignment must not start a warranty. The
+  // module's denial vocabulary (403 HANDYMAN_SERVICE_WARRANTY_NOT_
+  // AUTHORIZED) and error precedence (scope 404 precedes the access
+  // wall) are unchanged.
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
     throw handymanServiceWarrantyNotAuthorizedError();
   }
   return scope;
@@ -219,10 +226,23 @@ export async function expireHandymanServiceWarranty(
     warrantyUuid,
   );
   if (!existing) throw handymanServiceWarrantyNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUuid,
-    existing.clientId,
-  ))) {
+  // CR-HM-SEC-01 PART 06C — BE-02G exact-Building check on the
+  // authoritative server-derived scope building (migration 0395),
+  // resolved through the warranty's OWN execution scope, replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not expire a warranty. The module's denial
+  // vocabulary (403 HANDYMAN_SERVICE_WARRANTY_NOT_AUTHORIZED) and error
+  // precedence (warranty 404 precedes the access wall; authorization
+  // runs before replay and mutation) are unchanged.
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    existing.executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await canAccessBuildingScopedResource(actorUuid, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
     throw handymanServiceWarrantyNotAuthorizedError();
   }
 
