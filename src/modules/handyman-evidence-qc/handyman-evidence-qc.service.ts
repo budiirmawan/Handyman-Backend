@@ -484,7 +484,8 @@ export async function listHandymanEvidenceRecordsByScope(
 ): Promise<HandymanEvidenceRecordView[]> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await authorityPreamble(scopeUuid, actorUuid);
+  await leadReadAuthorityPreamble(scopeUuid, actorUuid,
+    handymanEvidenceNotAuthorizedError);
   const records = await handymanEvidenceQcRepository
     .listEvidenceRecordsByScope(undefined, scopeUuid);
   const views = [] as HandymanEvidenceRecordView[];
@@ -519,7 +520,8 @@ export async function getHandymanEvidenceRecordDetail(
   const record = await handymanEvidenceQcRepository
     .findEvidenceRecordById(undefined, recordUuid);
   if (!record) throw handymanEvidenceRecordNotFoundError();
-  await authorityPreamble(record.executionScopeId, actorUuid);
+  await leadReadAuthorityPreamble(record.executionScopeId, actorUuid,
+    handymanEvidenceNotAuthorizedError);
   const files = await handymanEvidenceQcRepository
     .listEvidenceFilesByRecord(undefined, recordUuid);
   const events = await handymanEvidenceQcRepository
@@ -601,17 +603,20 @@ async function qcAuthorityPreamble(
 }
 
 /**
- * CR-HM-SEC-01 PART 04A — QC/defect READ authorization preamble
- * (scoped to the read models ONLY; the QC/defect WRITES keep
- * `qcAuthorityPreamble` / `defectAuthorityPreamble` for their own
- * PARTs). Same frozen worker contract — scope exists, CURRENT
- * authoritative Lead resolved via the CR-HM-07 seam, actor IS that
- * Lead — but the data-scope wall is the BE-02G building guard on the
- * authoritative server-derived `executionScope.buildingId`
- * (migration 0395): an explicit ACTIVE `user_building_assignment` to
- * the scope's exact Building under its Client. The client-level
- * `canAccessClient` wall is NOT sufficient here — a same-Client
- * sibling Building assignment must not open the read.
+ * CR-HM-SEC-01 PART 04A + 04D — Lead READ authorization preamble
+ * (scoped to the read models ONLY: the QC-run/defect reads and the
+ * evidence-record reads; every WRITE keeps its own preamble —
+ * `authorityPreamble` / `qcAuthorityPreamble` /
+ * `defectAuthorityPreamble` — for its own PART). Same frozen worker
+ * contract — scope exists, CURRENT authoritative Lead resolved via
+ * the CR-HM-07 seam, actor IS that Lead, module-local error
+ * vocabulary via `notAuthorized` — but the data-scope wall is the
+ * BE-02G building guard on the authoritative server-derived
+ * `executionScope.buildingId` (migration 0395): an explicit ACTIVE
+ * `user_building_assignment` to the scope's exact Building under its
+ * Client. The client-level `canAccessClient` wall is NOT sufficient
+ * here — a same-Client sibling Building assignment must not open the
+ * read.
  */
 async function leadReadAuthorityPreamble(
   scopeUuid: string,
@@ -1243,6 +1248,16 @@ export type HandymanEvidenceCustomerCareDetailView = {
   finalized: boolean;
 };
 
+/**
+ * CR-HM-SEC-01 PART 04D — Customer Care EVIDENCE READ preamble
+ * (scoped to the evidence care views ONLY; the QC/defect care views
+ * use `customerCareQcReadPreamble` from PART 04A). Same actor model
+ * — a local Customer Care staff user (route: `tenant_company.read`),
+ * never a Crew Lead; BM SSO / care-workspace principals carry no
+ * userId and have no path to these projections — but the data-scope
+ * wall is the BE-02G building guard on the scope's exact Building,
+ * not the client-level `canAccessClient` shortcut.
+ */
 async function customerCareScopeReadPreamble(
   executionScopeId: string,
   actorUserId: string,
@@ -1252,11 +1267,13 @@ async function customerCareScopeReadPreamble(
   if (!scope) {
     throw handymanExecutionScopeNotFoundError();
   }
-  const allowed = await contextAccessService
-    .canAccessClient(actorUserId, scope.clientId);
-  if (!allowed) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 04D — explicit ACTIVE building assignment to
+  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
+  // (no same-Client shortcut, no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   return scope;
 }
 
