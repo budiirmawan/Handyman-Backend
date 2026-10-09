@@ -53,9 +53,14 @@ import { ensureTestDatabase } from './helpers/postgres';
  * client-level canAccessClient shortcuts in each wall's ORIGINAL
  * position: the WRITE wall after the request lock/404, before
  * eligibility, the uniqueness pre-check and mutation; the READ wall
- * after the request 404, before the referral lookup. The READ's
- * actor-optional distinction is preserved (the wall runs only when
- * an authenticated actor is supplied).
+ * after the request 404, before the referral lookup.
+ *
+ * PART 07C-2F (audit 07C-1, class C): the READ's actor is now
+ * MANDATORY — the actor-less bypass is removed; every read enforces
+ * the BE-02G exact-building authorization against the persisted
+ * request's authoritative {clientId, buildingId}, failing closed for
+ * a missing/invalid actor at validation. The HTTP contract is
+ * unchanged (the controller already passes req.auth.userId).
  *
  * Denial vocabulary unchanged: 403 BUILDING_ACCESS_DENIED — the
  * previous client-wall thrower is the guard's OWN thrower, so the
@@ -376,5 +381,49 @@ describe('CR-HM-SEC-01 PART 06J — referral read/write building-scope guard', (
     assert.equal(rows.length, 1);
     assert.equal(rows[0].id, seeded.id);
     assert.equal(rows[0].referred_by_user_id, staff);
+  });
+
+  it('3: missing/invalid actor — denied at validation with ZERO data leakage (actor is mandatory, no bypass)', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await referralFixture();
+    const staff = await staffActor(f.buildingA1.id);
+    // Seed a lawful referral so the denial is provably the actor
+    // requirement, not an empty record.
+    const seeded = await recordHandymanReferral({
+      handymanRequestId: f.request.id,
+      referralNote: 'Seeded referral.',
+    }, staff);
+
+    // PART 07C-2F (audit 07C-1, class C): the actor is MANDATORY.
+    // A missing/invalid actor fails closed at validation — before the
+    // request lookup and before any referral data is returned.
+    await assert.rejects(
+      getHandymanRequestReferral(f.request.id, ''),
+      (error: unknown) => {
+        assert.equal(errorCode(error), 'VALIDATION_ERROR');
+        assert.equal(errorStatus(error), 400);
+        return true;
+      },
+    );
+    await assert.rejects(
+      getHandymanRequestReferral(f.request.id, 'not-a-uuid'),
+      (error: unknown) => {
+        assert.equal(errorCode(error), 'VALIDATION_ERROR');
+        assert.equal(errorStatus(error), 400);
+        return true;
+      },
+    );
+
+    // Zero data leakage: the seeded referral row is intact and no
+    // referral data was returned through either denial.
+    const rows = await referralRows(f.request.id);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, seeded.id);
+
+    // Route-compatible actor usage still works (the controller's
+    // exact call shape: requestId + req.auth.userId).
+    const read = await getHandymanRequestReferral(f.request.id, staff);
+    assert.equal(read.id, seeded.id);
+    assert.equal(read.referralNote, 'Seeded referral.');
   });
 });

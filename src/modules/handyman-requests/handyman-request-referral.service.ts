@@ -190,14 +190,19 @@ export async function recordHandymanReferral(
 
 /** Bounded read of the immutable F2 referral record for one request. */
 /**
- * Bounded read. CR-HM-03 PART 05A (FROZEN F8): with an authenticated
- * actor supplied (HTTP), the BE-02G exact-Building scope is enforced
- * server-side against the request-derived {clientId, buildingId}
- * (PART 06J).
+ * Bounded read. CR-HM-03 PART 05A (FROZEN F8) + CR-HM-SEC-01
+ * PART 07C-2F (audit 07C-1, class C): the actor is MANDATORY — the
+ * actor-less bypass is removed, so EVERY read enforces the BE-02G
+ * exact-Building authorization against the persisted request's
+ * authoritative {clientId, buildingId} (PART 06J), in the wall's
+ * original position (after the request 404, before the referral
+ * lookup). Missing/invalid actor fails closed at validation; there
+ * is no internal bypass. The HTTP contract is unchanged: the
+ * lifecycle-api controller already passes req.auth.userId.
  */
 export async function getHandymanRequestReferral(
   handymanRequestId: string,
-  actorUserId?: string,
+  actorUserId: string,
 ): Promise<PublicHandymanRequestReferral> {
   if (!isValidUuid(handymanRequestId)) {
     throw AppError.validation('Request validation failed.', [
@@ -207,32 +212,27 @@ export async function getHandymanRequestReferral(
       },
     ]);
   }
-  if (actorUserId !== undefined) {
-    if (!isValidUuid(actorUserId)) {
-      throw AppError.validation('Request validation failed.', [
-        { field: 'actorUserId', message: 'actorUserId must be a valid UUID.' },
-      ]);
-    }
-    const request = await handymanServiceRequestRepository.findById(
-      undefined,
-      handymanRequestId,
-    );
-    if (!request) throw handymanServiceRequestNotFoundError();
-    // CR-HM-SEC-01 PART 06J — BE-02G exact-Building check on the
-    // request's authoritative {clientId, buildingId}, replacing the
-    // client-level canAccessClient shortcut: a same-Client sibling
-    // Building assignment must not read the referral record. The
-    // denial vocabulary (403 BUILDING_ACCESS_DENIED — the guard's
-    // own thrower) and the wall's position (after the request 404,
-    // before the referral lookup) are unchanged. The actor-optional
-    // distinction is preserved: the wall runs only when an
-    // authenticated actor is supplied (HTTP); actor-less internal
-    // reads keep their contract.
-    await assertBuildingScopedResourceAccess(actorUserId, {
-      clientId: request.clientId,
-      buildingId: request.buildingId,
-    });
+  if (!isValidUuid(actorUserId)) {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'actorUserId', message: 'actorUserId must be a valid UUID.' },
+    ]);
   }
+  const request = await handymanServiceRequestRepository.findById(
+    undefined,
+    handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  // CR-HM-SEC-01 PART 06J — BE-02G exact-Building check on the
+  // request's authoritative {clientId, buildingId}, replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not read the referral record. The
+  // denial vocabulary (403 BUILDING_ACCESS_DENIED — the guard's
+  // own thrower) and the wall's position (after the request 404,
+  // before the referral lookup) are unchanged.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const record = await handymanRequestReferralRepository.findByRequest(
     undefined,
     handymanRequestId,

@@ -426,7 +426,7 @@ describe('CR-HM-03 PART 04 — referral record', () => {
       q('DELETE FROM handyman_request_referrals WHERE id = $1', [referral.id]),
     );
     const readBack = await handymanServiceRequestReferralService
-      .getHandymanRequestReferral(f.request.id);
+      .getHandymanRequestReferral(f.request.id, adminUserId);
     assert.equal(readBack.referralNote, 'Immutable referral.');
   });
 
