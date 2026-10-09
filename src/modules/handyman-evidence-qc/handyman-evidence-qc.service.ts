@@ -2,11 +2,7 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import type { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
-import {
-  assertBuildingScopedResourceAccess,
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { isManagedStorageKey } from '../evidence/storage';
 import {
   handymanExecutionScopeNotFoundError,
@@ -172,9 +168,18 @@ function ensureCaptureTime(
 }
 
 /**
- * Shared authority preamble for PART 03 commands: scope exists (+404),
- * client context wall (403 BUILDING_ACCESS_DENIED), CURRENT Crew Lead
- * resolution (403 *_NOT_AUTHORIZED; helper members insufficient).
+ * CR-HM-SEC-01 PART 04E — shared authority preamble for the EVIDENCE
+ * WRITE commands (create record, add file, finalize — its ONLY
+ * callers after PART 04D moved the evidence reads to
+ * `leadReadAuthorityPreamble`): scope exists (+404), CURRENT Crew
+ * Lead resolution (403 *_NOT_AUTHORIZED; helper members
+ * insufficient), and the data-scope wall is the BE-02G building
+ * guard on the authoritative server-derived
+ * `executionScope.buildingId` (migration 0395) — an explicit ACTIVE
+ * `user_building_assignment` to the scope's exact Building under its
+ * Client. The client-level `canAccessClient` wall is NOT sufficient
+ * here — a same-Client sibling Building assignment must not open
+ * the write.
  */
 async function authorityPreamble(
   scopeUuid: string,
@@ -185,12 +190,10 @@ async function authorityPreamble(
     scopeUuid,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId,
-    scope.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const resolution = await resolveHandymanAssignmentLead(
     scopeUuid,
     actorUserId,
