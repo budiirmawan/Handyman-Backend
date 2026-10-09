@@ -1,7 +1,11 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
+import { handymanExecutionScopeNotFoundError }
+  from '../handyman-quotations';
+import { handymanScopeAssignmentRepository }
+  from '../handyman-scope-assignments';
 import { handymanServiceWarrantyClaimRepository }
   from '../handyman-service-warranty-claims';
 import type { HandymanServiceWarrantyClaimRecord }
@@ -87,11 +91,33 @@ function ensureNote(value: string | null | undefined, field: string): string {
   return raw;
 }
 
+/**
+ * CR-HM-SEC-01 PART 06D-4B — the chargeable commands' access wall
+ * (audited READ-ONLY in PART 06D-4A): the BE-02G exact-Building
+ * check on the authoritative server-derived scope building
+ * (migration 0395), resolved through the claim's ORIGINAL execution
+ * scope (the claim — and the work — carry the warranty's scope),
+ * replacing the client-level canAccessClient shortcut: a same-Client
+ * sibling Building assignment must not run any chargeable command.
+ * Fail-closed on a missing scope. The module's denial vocabulary
+ * (403 HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_AUTHORIZED) is
+ * unchanged, and the wall stays in its original authorization
+ * position (after the resource 404, before replay/mutation; the
+ * in-transaction re-proof keeps its slot too).
+ */
 async function assertChargeableAuthority(
   actorUserId: string,
-  clientId: string,
+  executionScopeId: string,
 ): Promise<void> {
-  if (!(await contextAccessService.canAccessClient(actorUserId, clientId))) {
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
     throw handymanChargeableAdditionalWorkNotAuthorizedError();
   }
 }
@@ -119,7 +145,7 @@ async function lockClaimAndWarranty(
       `claim-not-found=${claimId}`,
     );
   }
-  await assertChargeableAuthority(actorUserId, claim.clientId);
+  await assertChargeableAuthority(actorUserId, claim.executionScopeId);
   const warranty = await handymanServiceWarrantyRepository.findWarrantyById(
     client,
     warrantyId,
@@ -154,7 +180,7 @@ export async function proposeHandymanChargeableAdditionalWork(
       `claim-not-found=${claimUuid}`,
     );
   }
-  await assertChargeableAuthority(actorUuid, claim.clientId);
+  await assertChargeableAuthority(actorUuid, claim.executionScopeId);
 
   return withTransaction(async (client) => {
     const locked = await lockClaimAndWarranty(
