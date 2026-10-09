@@ -184,9 +184,10 @@ async function authorityPreamble(
 }
 
 /**
- * CR-HM-SEC-01 PART 03C-1 — CHECK_IN / START_WORK authorization
- * preamble (scoped to these two commands ONLY; every other command
- * keeps `authorityPreamble` for its own PART). Same frozen worker
+ * CR-HM-SEC-01 PART 03C-1 + 03C-2 — CHECK_IN / START_WORK / PAUSE /
+ * RESUME / MATERIAL_RUN authorization preamble (scoped to these
+ * commands ONLY; COMPLETE / CHECK_OUT and the session reads keep
+ * `authorityPreamble` for their own PARTs). Same frozen worker
  * contract — scope exists, CURRENT authoritative Lead resolved via
  * the CR-HM-07 seam, actor IS that Lead — but the data-scope wall is
  * the BE-02G building guard on the authoritative server-derived
@@ -424,7 +425,7 @@ async function workClockTransition(
   const key = ensureKey(input.idempotencyKey);
   const rule = WORK_CLOCK_RULES[action];
 
-  await authorityPreamble(scopeUuid, actorUuid);
+  await commandAuthorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     const locked = await tx.query(
