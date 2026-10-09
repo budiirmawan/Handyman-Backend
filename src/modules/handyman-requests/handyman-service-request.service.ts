@@ -231,7 +231,11 @@ async function createFromAuthorizedAttribution(
     throw error;
   }
 }
-/** Existing local-User create path is unchanged in authority and input. */
+/**
+ * Existing local-User create path: BE-02G exact-Building authority on
+ * the attribution's server-resolved client/building (PART 06I); the
+ * input is unchanged.
+ */
 export async function createHandymanServiceRequest(
   input: CreateHandymanServiceRequestInput,
   actorUserId: string,
@@ -245,9 +249,23 @@ export async function createHandymanServiceRequest(
     input.channelAttributionId,
   );
   if (!attribution) throw handymanChannelAttributionNotFoundError();
-  if (!(await contextAccessService.canAccessClient(actorUserId, attribution.clientId))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 06I — BE-02G exact-Building check on the
+  // attribution's authoritative server-resolved client/building pair
+  // (the attribution snapshot is the sole authority; the create input
+  // never carries a buildingId — caller-supplied context keys are
+  // ignored by contract), replacing the client-level canAccessClient
+  // shortcut: a same-Client sibling Building assignment must not
+  // create an intake request. The denial vocabulary (403
+  // BUILDING_ACCESS_DENIED — the guard's own thrower) and the wall's
+  // position (after the attribution 404, before validation, the
+  // one-request-per-attribution uniqueness check and insertion) are
+  // unchanged. This is the LOCAL-USER create path only; the BM
+  // Customer Care exchange-token intake (createCareHandymanServiceRequest)
+  // is a separate function and is NOT altered.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: attribution.clientId,
+    buildingId: attribution.buildingId,
+  });
   return createFromAuthorizedAttribution(input, attribution);
 }
 
