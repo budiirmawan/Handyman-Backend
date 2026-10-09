@@ -1,11 +1,7 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  assertBuildingScopedResourceAccess,
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import { handymanScopeAssignmentRepository }
@@ -280,13 +276,29 @@ async function applyCustomerSignOff(
     if (!bast) {
       throw handymanBastNotFoundError();
     }
-    const allowed = await contextAccessService.canAccessClient(
-      actor,
-      bast.clientId,
+    // CR-HM-SEC-01 PART 05C-2 — customer sign-off (ACCEPT/REJECT) is
+    // driven by a LOCAL Customer Care staff actor (route
+    // `tenant_company.manage`; BM SSO principals have no session
+    // userId and no path here — the customer signature is attested
+    // data, the represented tenant stays server-resolved). The
+    // data-scope wall is therefore the BE-02G building guard on the
+    // authoritative server-derived scope building (migration 0395),
+    // NOT the client-level canAccessClient shortcut: a same-Client
+    // sibling Building assignment must not open the sign-off. The
+    // guard keeps the wall's original slot — after the BAST
+    // existence check, before the evidence binding, the idempotent
+    // replay short-circuit, and the state transition.
+    const scope = await handymanScopeAssignmentRepository.findScopeById(
+      client,
+      bast.executionScopeId,
     );
-    if (!allowed) {
-      throw buildingAccessDeniedError();
+    if (!scope) {
+      throw handymanExecutionScopeNotFoundError();
     }
+    await assertBuildingScopedResourceAccess(actor, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     if (evidenceRecordId) {
       const ev = await client.query(
         `SELECT execution_scope_id
