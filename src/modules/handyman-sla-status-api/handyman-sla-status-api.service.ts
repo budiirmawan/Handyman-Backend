@@ -1076,7 +1076,16 @@ export async function readHandymanRequestStatusVisibility(
     throw AppError.notFound('Handyman service request not found.');
   }
 
-  await assertClientReadAccess(actorUserId, requestRow.clientId);
+  // CR-HM-SEC-01 PART 06H-2 (audit 07A finding 1) — BE-02G
+  // exact-Building check on the request row's authoritative
+  // buildingId (already selected), replacing the client-level
+  // shortcut in the wall's original position (after the request 404,
+  // before any sensitive projection).
+  await assertSubjectReadAccess(
+    actorUserId,
+    requestRow.clientId,
+    requestRow.buildingId,
+  );
 
   const scopeRes = await pool.query<{
     id: string;
@@ -1133,7 +1142,16 @@ export async function readHandymanExecutionScopeStatusVisibility(
     throw AppError.notFound('Handyman execution scope not found.');
   }
 
-  await assertClientReadAccess(actorUserId, scopeRow.clientId);
+  // CR-HM-SEC-01 PART 06H-2 (audit 07A finding 1) — BE-02G
+  // exact-Building check on the scope row's authoritative buildingId
+  // (already selected), replacing the client-level shortcut in the
+  // wall's original position (after the scope 404, before any
+  // sensitive projection).
+  await assertSubjectReadAccess(
+    actorUserId,
+    scopeRow.clientId,
+    scopeRow.buildingId,
+  );
 
   const reqRes = await pool.query<{
     id: string;
