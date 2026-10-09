@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import {
+  assertBuildingScopedResourceAccess,
   buildingAccessDeniedError,
   contextAccessService,
 } from '../context-access';
@@ -183,6 +184,48 @@ async function authorityPreamble(
 }
 
 /**
+ * CR-HM-SEC-01 PART 03C-1 — CHECK_IN / START_WORK authorization
+ * preamble (scoped to these two commands ONLY; every other command
+ * keeps `authorityPreamble` for its own PART). Same frozen worker
+ * contract — scope exists, CURRENT authoritative Lead resolved via
+ * the CR-HM-07 seam, actor IS that Lead — but the data-scope wall is
+ * the BE-02G building guard on the authoritative server-derived
+ * `executionScope.buildingId` (migration 0395): an explicit ACTIVE
+ * `user_building_assignment` to the scope's exact Building under its
+ * Client. The client-level `canAccessClient` wall is NOT sufficient
+ * here — a same-Client sibling Building assignment must not open the
+ * gate. The worker contract itself is unchanged: the Lead's action
+ * authority still derives from the assignment chain (never from an
+ * RBAC permission), and no admin-only rule is applied to the crew
+ * beyond this same per-Building data-scope guard.
+ */
+async function commandAuthorityPreamble(
+  scopeUuid: string,
+  actorUserId: string,
+) {
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    scopeUuid,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  // CR-HM-SEC-01 PART 03C-1 — explicit ACTIVE building assignment to
+  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
+  // (no same-Client shortcut, no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
+  const resolution = await resolveHandymanAssignmentLead(
+    scopeUuid,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
+    throw handymanWorkSessionNotAuthorizedError();
+  }
+  return { scope, resolution };
+}
+
+/**
  * CHECK_IN (governance §3/§5/§7): AUTHORIZED scope + immutable
  * CR-HM-07 VERIFIED arrival result + CURRENT authoritative Crew Lead
  * → create ONE CHECKED_IN session, append the CHECK_IN event, and
@@ -200,7 +243,7 @@ export async function checkInHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  const { scope, resolution } = await authorityPreamble(
+  const { scope, resolution } = await commandAuthorityPreamble(
     scopeUuid,
     actorUuid,
   );
@@ -287,7 +330,7 @@ export async function startWorkHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  await authorityPreamble(scopeUuid, actorUuid);
+  await commandAuthorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     // Row lock first: transitions are single-threaded per session.
