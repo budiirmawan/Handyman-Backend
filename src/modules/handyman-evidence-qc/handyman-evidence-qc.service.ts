@@ -562,8 +562,17 @@ function ensureChecklistIdentity(value: string): string {
 }
 
 /**
- * Same preamble as PART 03 but 403 maps to the QC vocabulary —
- * identical authority chain, module-local error code only.
+ * CR-HM-SEC-01 PART 04B — QC WRITE authorization preamble (OPEN /
+ * ITEM_SET / FINISH only; the QC reads use `leadReadAuthorityPreamble`
+ * from PART 04A). Same frozen worker contract — scope exists, CURRENT
+ * authoritative Lead resolved via the CR-HM-07 seam, actor IS that
+ * Lead, 403 maps to the QC vocabulary — but the data-scope wall is
+ * the BE-02G building guard on the authoritative server-derived
+ * `executionScope.buildingId` (migration 0395): an explicit ACTIVE
+ * `user_building_assignment` to the scope's exact Building under its
+ * Client. The client-level `canAccessClient` wall is NOT sufficient
+ * here — a same-Client sibling Building assignment must not open any
+ * QC write.
  */
 async function qcAuthorityPreamble(
   scopeUuid: string,
@@ -574,12 +583,13 @@ async function qcAuthorityPreamble(
     scopeUuid,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId,
-    scope.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 04B — explicit ACTIVE building assignment to
+  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
+  // (no same-Client shortcut, no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const resolution = await resolveHandymanAssignmentLead(
     scopeUuid,
     actorUserId,
