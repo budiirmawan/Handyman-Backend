@@ -19,7 +19,6 @@ import {
 } from '../src/modules/handyman-bast';
 import {
   expireHandymanServiceWarranty,
-  findHandymanServiceWarrantyByScopeId,
   startHandymanServiceWarranty,
 } from '../src/modules/handyman-service-warranties';
 import {
@@ -277,10 +276,13 @@ describe('CR-HM-15 PART 02 claim intake and decision', () => {
     assert.equal((await warrantyRow(warranty.id)).status, 'CLAIM_OPEN');
     assert.equal(submitted.event.eventType, 'SUBMIT');
     // The start boundary of the warranty is untouched by the claim.
-    const reloaded = await findHandymanServiceWarrantyByScopeId(scope.id);
-    assert.equal(reloaded?.startsAt.getTime(),
-      reloaded?.bastAcceptedAt.getTime());
-    assert.equal(reloaded?.bastId, opened.claim.bastId);
+    const reloaded = (await q(
+      `SELECT starts_at, bast_accepted_at, bast_id
+         FROM handyman_service_warranties WHERE execution_scope_id=$1`,
+      [scope.id])).rows[0];
+    assert.equal(new Date(reloaded?.starts_at).getTime(),
+      new Date(reloaded?.bast_accepted_at).getTime());
+    assert.equal(reloaded?.bast_id, opened.claim.bastId);
   });
 
   it('approves a submitted claim and freezes it as decided', async () => {

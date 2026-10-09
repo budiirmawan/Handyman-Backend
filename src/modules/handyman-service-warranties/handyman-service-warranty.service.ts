@@ -281,27 +281,3 @@ export async function expireHandymanServiceWarranty(
     return { warranty: updated, coverages, event, replayed: false };
   });
 }
-
-/** Read helper — the scope's warranty, or null when not started. */
-export async function findHandymanServiceWarrantyByScopeId(
-  executionScopeId: string,
-): Promise<HandymanServiceWarrantyRecord | null> {
-  const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
-  return handymanServiceWarrantyRepository.findWarrantyByExecutionScopeId(
-    getPool(),
-    scopeUuid,
-  );
-}
-
-/** Read helper — a warranty by id, or a bounded 404. */
-export async function getHandymanServiceWarrantyById(
-  warrantyId: string,
-): Promise<HandymanServiceWarrantyRecord> {
-  const warrantyUuid = ensureUuid(warrantyId, 'warrantyId');
-  const warranty = await handymanServiceWarrantyRepository.findWarrantyById(
-    getPool(),
-    warrantyUuid,
-  );
-  if (!warranty) throw handymanServiceWarrantyNotFoundError();
-  return warranty;
-}

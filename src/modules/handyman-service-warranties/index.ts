@@ -60,6 +60,4 @@ export { handymanServiceWarrantyRepository }
 export {
   startHandymanServiceWarranty,
   expireHandymanServiceWarranty,
-  findHandymanServiceWarrantyByScopeId,
-  getHandymanServiceWarrantyById,
 } from './handyman-service-warranty.service';

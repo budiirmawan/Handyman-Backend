@@ -19,7 +19,6 @@ import {
   prepareHandymanBast,
 } from '../src/modules/handyman-bast';
 import {
-  findHandymanServiceWarrantyByScopeId,
   startHandymanServiceWarranty,
 } from '../src/modules/handyman-service-warranties';
 import {
@@ -415,9 +414,12 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       assert.equal((await evidenceRow(evidenceId)).stage, 'RECTIFICATION');
       assert.equal((await qcRow(qc.id)).status, 'PASSED');
       // The warranty start boundary is still the accepted BAST instant.
-      const reloaded = await findHandymanServiceWarrantyByScopeId(scope.id);
-      assert.equal(reloaded?.startsAt.getTime(),
-        reloaded?.bastAcceptedAt.getTime());
+      const reloaded = (await q(
+        `SELECT status, starts_at, bast_accepted_at
+           FROM handyman_service_warranties WHERE execution_scope_id=$1`,
+        [scope.id])).rows[0];
+      assert.equal(new Date(reloaded?.starts_at).getTime(),
+        new Date(reloaded?.bast_accepted_at).getTime());
       assert.equal(reloaded?.status, 'REWORK_COMPLETE');
     });
 
