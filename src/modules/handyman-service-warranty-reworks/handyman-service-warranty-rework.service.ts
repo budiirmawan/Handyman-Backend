@@ -1,7 +1,11 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
+import { handymanExecutionScopeNotFoundError }
+  from '../handyman-quotations';
+import { handymanScopeAssignmentRepository }
+  from '../handyman-scope-assignments';
 import { handymanServiceWarrantyClaimRepository }
   from '../handyman-service-warranty-claims';
 import type { HandymanServiceWarrantyClaimRecord }
@@ -98,11 +102,33 @@ function ensureOptionalUuid(
   return ensureUuid(value, field);
 }
 
+/**
+ * CR-HM-SEC-01 PART 06D-3 — the rework commands' access wall: the
+ * BE-02G exact-Building check on the authoritative server-derived
+ * scope building (migration 0395), resolved through the
+ * rework -> claim/warranty -> executionScope chain (the claim and
+ * the rework both carry the warranty's ORIGINAL execution scope),
+ * replacing the client-level canAccessClient shortcut: a
+ * same-Client sibling Building assignment must not run any rework
+ * command. The module's denial vocabulary (403
+ * HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_AUTHORIZED) is unchanged, and
+ * the wall stays in its original authorization position (after the
+ * resource 404, before replay/mutation; the in-transaction re-proof
+ * keeps its slot too).
+ */
 async function assertReworkAuthority(
   actorUserId: string,
-  clientId: string,
+  executionScopeId: string,
 ): Promise<void> {
-  if (!(await contextAccessService.canAccessClient(actorUserId, clientId))) {
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
     throw handymanServiceWarrantyReworkNotAuthorizedError();
   }
 }
@@ -174,7 +200,7 @@ async function lockClaimAndWarranty(
       `claim-not-found=${claimId}`,
     );
   }
-  await assertReworkAuthority(actorUserId, claim.clientId);
+  await assertReworkAuthority(actorUserId, claim.executionScopeId);
   const warranty = await handymanServiceWarrantyRepository.findWarrantyById(
     client,
     warrantyId,
@@ -208,7 +234,7 @@ export async function proposeHandymanServiceWarrantyRework(
       `claim-not-found=${claimUuid}`,
     );
   }
-  await assertReworkAuthority(actorUuid, claim.clientId);
+  await assertReworkAuthority(actorUuid, claim.executionScopeId);
 
   return withTransaction(async (client) => {
     const locked = await lockClaimAndWarranty(
