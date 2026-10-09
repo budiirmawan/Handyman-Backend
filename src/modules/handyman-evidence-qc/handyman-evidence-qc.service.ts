@@ -1,7 +1,9 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
+import type { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
+  assertBuildingScopedResourceAccess,
   buildingAccessDeniedError,
   contextAccessService,
 } from '../context-access';
@@ -588,6 +590,46 @@ async function qcAuthorityPreamble(
   return { scope, resolution };
 }
 
+/**
+ * CR-HM-SEC-01 PART 04A — QC/defect READ authorization preamble
+ * (scoped to the read models ONLY; the QC/defect WRITES keep
+ * `qcAuthorityPreamble` / `defectAuthorityPreamble` for their own
+ * PARTs). Same frozen worker contract — scope exists, CURRENT
+ * authoritative Lead resolved via the CR-HM-07 seam, actor IS that
+ * Lead — but the data-scope wall is the BE-02G building guard on the
+ * authoritative server-derived `executionScope.buildingId`
+ * (migration 0395): an explicit ACTIVE `user_building_assignment` to
+ * the scope's exact Building under its Client. The client-level
+ * `canAccessClient` wall is NOT sufficient here — a same-Client
+ * sibling Building assignment must not open the read.
+ */
+async function leadReadAuthorityPreamble(
+  scopeUuid: string,
+  actorUserId: string,
+  notAuthorized: () => AppError,
+) {
+  const scope = await handymanExecutionScopeRepository.findScopeById(
+    undefined,
+    scopeUuid,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  // CR-HM-SEC-01 PART 04A — explicit ACTIVE building assignment to
+  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
+  // (no same-Client shortcut, no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
+  const resolution = await resolveHandymanAssignmentLead(
+    scopeUuid,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
+    throw notAuthorized();
+  }
+  return { scope, resolution };
+}
+
 /* ---- QC OPEN ---------------------------------------------------- */
 
 export type OpenHandymanQcRunInput = {
@@ -825,7 +867,8 @@ export async function listHandymanQcRunsByScope(
 ): Promise<HandymanQcRunView[]> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await qcAuthorityPreamble(scopeUuid, actorUuid);
+  await leadReadAuthorityPreamble(scopeUuid, actorUuid,
+    handymanQcNotAuthorizedError);
   const runs = await handymanEvidenceQcRepository
     .listQcRunsByScope(undefined, scopeUuid);
   const views = [] as HandymanQcRunView[];
@@ -853,7 +896,8 @@ export async function getHandymanQcRunDetail(
   const run = await handymanEvidenceQcRepository
     .findQcRunById(undefined, runUuid);
   if (!run) throw handymanQcRunNotFoundError();
-  await qcAuthorityPreamble(run.executionScopeId, actorUuid);
+  await leadReadAuthorityPreamble(run.executionScopeId, actorUuid,
+    handymanQcNotAuthorizedError);
   const items = await handymanEvidenceQcRepository
     .listQcRunItems(undefined, runUuid);
   const events = await handymanEvidenceQcRepository
@@ -1143,7 +1187,8 @@ export async function listHandymanDefectsByScope(
 ): Promise<HandymanDefectRecordRecord[]> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await defectAuthorityPreamble(scopeUuid, actorUuid);
+  await leadReadAuthorityPreamble(scopeUuid, actorUuid,
+    handymanDefectNotAuthorizedError);
   return handymanEvidenceQcRepository
     .listDefectsByScope(undefined, scopeUuid);
 }
@@ -1158,7 +1203,8 @@ export async function getHandymanDefectDetail(
   const defect = await handymanEvidenceQcRepository
     .findDefectById(undefined, defectUuid);
   if (!defect) throw handymanDefectNotFoundError();
-  await defectAuthorityPreamble(defect.executionScopeId, actorUuid);
+  await leadReadAuthorityPreamble(defect.executionScopeId, actorUuid,
+    handymanDefectNotAuthorizedError);
   const events = await handymanEvidenceQcRepository
     .listDefectEvents(undefined, defectUuid);
   return { defect, events };
@@ -1190,6 +1236,36 @@ async function customerCareScopeReadPreamble(
   if (!allowed) {
     throw buildingAccessDeniedError();
   }
+  return scope;
+}
+
+/**
+ * CR-HM-SEC-01 PART 04A — Customer Care QC/defect READ preamble
+ * (scoped to the QC-run/defect care views ONLY; the evidence care
+ * views keep `customerCareScopeReadPreamble` for their own PART).
+ * Same actor model as `customerCareScopeReadPreamble` — a local
+ * Customer Care staff user (route: `tenant_company.read`), never a
+ * Crew Lead; BM SSO / care-workspace principals carry no userId and
+ * have no path to these projections — but the data-scope wall is
+ * the BE-02G building guard on the scope's exact Building, not the
+ * client-level `canAccessClient` shortcut.
+ */
+async function customerCareQcReadPreamble(
+  executionScopeId: string,
+  actorUserId: string,
+) {
+  const scope = await handymanExecutionScopeRepository
+    .findScopeById(undefined, executionScopeId);
+  if (!scope) {
+    throw handymanExecutionScopeNotFoundError();
+  }
+  // CR-HM-SEC-01 PART 04A — explicit ACTIVE building assignment to
+  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
+  // (no same-Client shortcut, no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   return scope;
 }
 
@@ -1241,7 +1317,7 @@ export async function listHandymanQcRunsCustomerCareView(
 ): Promise<HandymanQcRunView[]> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await customerCareScopeReadPreamble(scopeUuid, actorUuid);
+  await customerCareQcReadPreamble(scopeUuid, actorUuid);
   const runs = await handymanEvidenceQcRepository
     .listQcRunsByScope(undefined, scopeUuid);
   const views = [] as HandymanQcRunView[];
@@ -1262,7 +1338,7 @@ export async function getHandymanQcRunCustomerCareDetail(
   const run = await handymanEvidenceQcRepository
     .findQcRunById(undefined, runUuid);
   if (!run) throw handymanQcRunNotFoundError();
-  await customerCareScopeReadPreamble(run.executionScopeId, actorUuid);
+  await customerCareQcReadPreamble(run.executionScopeId, actorUuid);
   const items = await handymanEvidenceQcRepository
     .listQcRunItems(undefined, runUuid);
   const events = await handymanEvidenceQcRepository
@@ -1276,7 +1352,7 @@ export async function listHandymanDefectsCustomerCareView(
 ): Promise<HandymanDefectRecordRecord[]> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await customerCareScopeReadPreamble(scopeUuid, actorUuid);
+  await customerCareQcReadPreamble(scopeUuid, actorUuid);
   return handymanEvidenceQcRepository
     .listDefectsByScope(undefined, scopeUuid);
 }
@@ -1290,7 +1366,7 @@ export async function getHandymanDefectCustomerCareDetail(
   const defect = await handymanEvidenceQcRepository
     .findDefectById(undefined, defectUuid);
   if (!defect) throw handymanDefectNotFoundError();
-  await customerCareScopeReadPreamble(defect.executionScopeId, actorUuid);
+  await customerCareQcReadPreamble(defect.executionScopeId, actorUuid);
   const events = await handymanEvidenceQcRepository
     .listDefectEvents(undefined, defectUuid);
   return { defect, events };
