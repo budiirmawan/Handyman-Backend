@@ -4,8 +4,10 @@ import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
-import { handymanScopeAssignmentRepository }
-  from '../handyman-scope-assignments';
+import {
+  handymanScopeAssignmentRepository,
+  resolveHandymanAssignmentLead,
+} from '../handyman-scope-assignments';
 import { handymanServiceWarrantyClaimRepository }
   from '../handyman-service-warranty-claims';
 import type { HandymanServiceWarrantyClaimRecord }
@@ -123,6 +125,32 @@ async function assertChargeableAuthority(
 }
 
 /**
+ * CR-HM-SEC-01 PART 07B-2B — CR-HM-04 field-worker ACTION authority
+ * (audited in PART 07B-1; mirrors the implemented 07B-2A rework
+ * pattern): PROPOSE is a Lead/provider command — the actor must be
+ * the scope's CURRENT ACTIVE assignment's authoritative Crew Lead.
+ * `resolveHandymanAssignmentLead` re-validates the ACTIVE assignment
+ * and its CURRENT Lead validity chain (and re-proves the BE-02G
+ * building wall); a missing/invalid/mismatched current-assignment
+ * Lead fails CLOSED with the module's existing 403 vocabulary
+ * (HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_AUTHORIZED). Applies ONLY
+ * to PROPOSE; the customer-side ACCEPT/REJECT stay free of the Lead
+ * check — their action authority is the customer-side decision.
+ */
+async function assertChargeableLeadAction(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<void> {
+  const resolution = await resolveHandymanAssignmentLead(
+    executionScopeId,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
+    throw handymanChargeableAdditionalWorkNotAuthorizedError();
+  }
+}
+
+/**
  * Locks and re-proves the parent claim and warranty inside the write
  * transaction, together with the actor's client authority. Both rows stay
  * READ-ONLY: the head is never written by this module.
@@ -181,6 +209,11 @@ export async function proposeHandymanChargeableAdditionalWork(
     );
   }
   await assertChargeableAuthority(actorUuid, claim.executionScopeId);
+  // CR-HM-SEC-01 PART 07B-2B — PROPOSE is a field-worker
+  // (Lead/provider) command: CR-HM-04 Lead action authority on the
+  // claim's ORIGINAL execution scope, after the resource 404 and the
+  // BE-02G building wall, before the idempotent replay and mutation.
+  await assertChargeableLeadAction(claim.executionScopeId, actorUuid);
 
   return withTransaction(async (client) => {
     const locked = await lockClaimAndWarranty(
