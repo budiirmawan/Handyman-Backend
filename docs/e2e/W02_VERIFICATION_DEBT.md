@@ -319,7 +319,16 @@ Menutup gap "create request tanpa audit event" dan memberi notification handoff 
 - Event dan outbox payload (E1) tidak memuat nama, telepon, email, exchange token, workspace token, atau assertion. Metadata hanya berisi identitas (`channelAttributionId`, `tenantCompanyId`, `spaceId`, `actorType`, `careActorId`, `originChannel`, `notificationHandoff`).
 - Notification intent tidak diterbitkan karena recipient/channel policy belum ditetapkan (A3). Status `BLOCKED_BY_POLICY` adalah **status evaluasi** yang dicatat di event. Ini bukan klaim delivery. Tidak ada baris `notifications` atau `notification_outbound_deliveries` yang dibuat.
 - Test: `tests/handyman-request-create-audit-part05.test.ts` 14/14 PASS (A1–A4, B1–B2, C1–C2, D1–D2, E1, F1–F3).
-- Regresi fokus: lihat hasil run final di laporan delivery (PASS/FAIL/SKIP dicatat per file). Tidak ada SKIP.
+- Regresi fokus (run final, 14 file): **168 PASS, 0 FAIL, 0 SKIP**. File: part05 (14), journey PART 04 (27), care-request-create, api, channel-attributions, reporter-contact, audit-integration part03, notification-contract part02, handoff attribution-binding, handoff care-actor-attribution, building-scope-guard part02, lifecycle-api, operations-queue, config-perm-01.
+- `npx tsc --noEmit -p .`: exit 0. `git diff --check`: bersih.
+
+### NOT VERIFIED (jujur, belum dibuktikan)
+
+- Full suite tidak dijalankan (sesuai instruksi PART 05).
+- Migrasi down (`0436` dan migrasi PART 05 bila ada) tidak diuji rollback-nya.
+- Create path di luar test fokus (mis. modul lain yang memanggil `createHandymanServiceRequest`) hanya dicakup regresi fokus, tidak diuji event-nya secara khusus.
+- Pengiriman notifikasi nyata (email, WhatsApp, push, in-app) tidak diuji karena memang BLOCKED_BY_POLICY. Tidak ada klaim delivery.
+- Fan-out webhook ke endpoint nyata (HTTP keluar) tidak diuji. Hanya marker outbox yang diverifikasi (E1).
 
 ### Residual notification (tetap terbuka)
 
