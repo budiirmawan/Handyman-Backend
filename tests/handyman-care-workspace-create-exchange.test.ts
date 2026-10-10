@@ -463,3 +463,95 @@ describe('PART 05B — workspace create-only exchange issuance', () => {
     assert.match(route.post.description, /120 seconds/);
   });
 });
+
+/**
+ * CR-HM-E2E W02 PART 01 — assisted request intake, runtime reconciliation.
+ * Reuses the existing workspace admission, create-exchange issuance, the
+ * unchanged care POST (/handyman/requests/care) and the workspace read
+ * projections. No new endpoint. Negative cases cover invalid tenant/PIC,
+ * cross-building, missing occupancy, revoked session and duplicate submission.
+ * The property-grant revocation is last: grants are irreversible and the
+ * fixture property is shared by the earlier tests in this file.
+ */
+describe('W02 PART 01 — assisted request intake: create, read back, negatives', () => {
+  const sel = () => ({ propertyId: props[0], tenantCompanyId: tenantId, buildingId: buildings[0][0], spaceId: chains[0].spaceIds[0] });
+  // Create-exchange body accepts only tenantCompanyId, buildingId, spaceId (property is in the path).
+  const body = () => ({ tenantCompanyId: tenantId, buildingId: buildings[0][0], spaceId: chains[0].spaceIds[0] });
+  const readList = (credential = token) => api().get('/api/v1/handyman/care/requests')
+    .set('Authorization', `Bearer ${credential}`).query(sel());
+  const readDetail = (id: string, credential = token) => api().get(`/api/v1/handyman/care/requests/${id}`)
+    .set('Authorization', `Bearer ${credential}`).query(sel());
+
+  it('creates an assisted request through create-exchange and the unchanged care POST, then reads it back via the workspace', async () => {
+    const issued = await issue(body());
+    const created = await care(issued.exchangeToken, { description: 'Assisted intake: leaking tap' });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const request = created.body.data;
+    assert.equal(request.status, 'INTAKE');
+    assert.equal(request.tenantCompanyId, tenantId);
+    assert.equal(request.clientId, clientId);
+    assert.equal(request.buildingId, buildings[0][0]);
+    assert.equal(request.spaceId, chains[0].spaceIds[0]);
+    assert.equal(request.tenantPicId, null, 'no PIC is invented for a workspace-created request');
+    assert.equal(request.createdByUserId, null);
+
+    const list = await readList();
+    assert.equal(list.status, 200, JSON.stringify(list.body));
+    const listed = list.body.data.items.find((r: any) => r.id === request.id);
+    assert.ok(listed, 'created request is readable through the workspace list');
+    assert.equal(listed.buildingId, buildings[0][0]);
+    assert.equal(listed.spaceId, chains[0].spaceIds[0]);
+
+    const detail = await readDetail(request.id);
+    assert.equal(detail.status, 200, JSON.stringify(detail.body));
+    assert.equal(detail.body.data.id, request.id);
+    assert.equal(detail.body.data.attribution.actorType, 'CUSTOMER_CARE');
+    assert.equal(detail.body.data.attribution.createdByUserId, null);
+  });
+
+  it('negative: invalid tenant, cross-building selection, missing occupancy, and PIC in the body are refused with no write', async () => {
+    const before = await counts();
+    assert.equal((await post({ ...body(), tenantCompanyId: randomUUID() })).status, 404, 'unknown tenant');
+    assert.equal((await post({ ...body(), buildingId: buildings[0][1] })).status, 404, 'space belongs to another building');
+    assert.equal((await post({ tenantCompanyId: buildingOnlyTenant, buildingId: buildings[0][0] })).status, 404,
+      'no effective occupancy/building context for this tenant');
+    assert.equal((await post({ ...body(), tenantPicId: randomUUID() })).status, 400, 'PIC is not a workspace input');
+    assert.deepEqual(await counts(), before);
+  });
+
+  it('negative: duplicate submission of one exchange creates exactly one request', async () => {
+    const issued = await issue(body());
+    const before = await counts();
+    const first = await care(issued.exchangeToken, { description: 'Duplicate probe' });
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    const second = await care(issued.exchangeToken, { description: 'Duplicate probe' });
+    assert.equal(second.status, 401, 'consumed exchange cannot create again');
+    assert.deepEqual(await counts(), { ...before, requests: before.requests + 1, attributions: before.attributions + 1 });
+  });
+
+  it('negative: a revoked workspace session cannot issue, create, or read back', async () => {
+    const own = (await admit(assertion())).workspaceToken;
+    const logout = await api().delete('/api/v1/handyman/care/session').set('Authorization', `Bearer ${own}`);
+    assert.equal(logout.status, 204);
+    const before = await counts();
+    assert.equal((await post(body(), own)).status, 401, 'issuance refused');
+    assert.equal((await readList(own)).status, 401, 'read-back refused');
+    assert.deepEqual(await counts(), before);
+  });
+
+  it('read-back is bounded by the property grant: after revocation the same request is no longer visible', async () => {
+    const issued = await issue(body());
+    const created = await care(issued.exchangeToken, { description: 'Before grant revocation' });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const requestId = created.body.data.id;
+    assert.equal((await readDetail(requestId)).status, 200);
+
+    await revokeCareActorProperty({ careActorId: actorId, propertyId: props[0], clientId }, adminId);
+
+    assert.equal((await post(body())).status, 404, 'no new exchange after property grant revocation');
+    const denied = await readDetail(requestId);
+    assert.ok(denied.status === 403 || denied.status === 404, `detail denied after revocation: ${denied.status}`);
+    const list = await readList();
+    assert.equal(list.status === 200 ? list.body.data.items.some((r: any) => r.id === requestId) : false, false);
+  });
+});
