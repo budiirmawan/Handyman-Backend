@@ -10,7 +10,6 @@ import {
 } from '../service-catalog';
 import {
   handymanServiceVariantCodeAlreadyExistsError,
-  handymanServiceVariantNotFoundError,
 } from './handyman-service-variant.errors';
 import { handymanServiceVariantRepository } from './handyman-service-variant.repository';
 import {
@@ -197,19 +196,15 @@ export async function listHandymanServiceVariants(
   return records.map(toPublic);
 }
 
-export async function getHandymanServiceVariant(
-  id: string,
-): Promise<PublicHandymanServiceVariant> {
-  const record = await handymanServiceVariantRepository.findById(
-    undefined,
-    id,
-  );
-  if (!record) throw handymanServiceVariantNotFoundError();
-  return toPublic(record);
-}
+// CR-HM-SEC-02 PART 05 (dead-helper hygiene): the actor-less
+// `getHandymanServiceVariant(id)` helper is removed. It performed a raw
+// by-id read with NO authorization parameter at all — a cross-Client
+// read of any variant — and had ZERO callers across src/ and tests/
+// (verified: only this module's own re-exports referenced it). The
+// authorized read paths (`listHandymanServiceVariants` with the
+// per-Client wall) and the repository are unchanged.
 
 export const handymanServiceVariantService = {
   createHandymanServiceVariant,
   listHandymanServiceVariants,
-  getHandymanServiceVariant,
 };

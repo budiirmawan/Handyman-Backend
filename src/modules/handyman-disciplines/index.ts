@@ -1,7 +1,6 @@
 export { handymanDisciplineRepository } from './handyman-discipline.repository';
 export {
   associateHandymanDisciplineToServiceCatalog,
-  getHandymanDisciplineAssociation,
   handymanDisciplineService,
 } from './handyman-discipline.service';
 export {
