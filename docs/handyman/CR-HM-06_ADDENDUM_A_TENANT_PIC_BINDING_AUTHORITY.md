@@ -200,7 +200,7 @@ C(row)    = { decision.decided_by_tenant_pic_id }
 
 | Scenario | Result |
 |---|---|
-| Pre-existing request with a lineage PIC, no binding row | Cannot be presented/decided under the new rule until a binding exists — and R-1.2 forces that binding to name **the same** PIC. One audited row converts them; recorded as BLK-BIND-BACKFILL (P1: bulk-bind derived rows, or gate per tenant as the PIC path opens) |
+| Pre-existing request with a lineage PIC, no binding row | Cannot be presented/decided under the new rule until a binding exists — and R-1.2 forces that binding to name **the same** PIC. One audited row converts them; recorded as BLK-BIND-BACKFILL (**P0 for rollout**, P1 for design: bulk-bind derived rows, or enable B12 per-tenant as the PIC path opens - see §8) |
 | Pre-existing request with NULL lineage PIC, before cutover | Unaffected while the staff path is still operative; after cutover, requires a binding (the F-06 remedy working as designed) |
 | Historical decision rows (`USER` class) | Readable forever; `approval_binding_id IS NULL` satisfies R-1.3 by the first disjunct; never reinterpreted (A01 A8/A9) |
 | Threads already decided | B18 makes them write-proof — the safest possible state at cutover |
@@ -213,7 +213,7 @@ C(row)    = { decision.decided_by_tenant_pic_id }
 | **BLK-GAP-1 (P0)** | Approval continuity at cutover. Between "A01 closes staff approval" and "binding + PIC session ship", care-assisted threads have no approver. Sequence B12–B18 **before** the staff route is closed (03C/03D land before 03E) so there is no standstill — but that leaves a window where staff approval remains operative *by deployment reality*, which decision 7 must explicitly tolerate as a migration window rather than a fallback. Alternative: accept a hard approval standstill until 03E | Product owner + release manager | **03E only** (03B–03D proceed) |
 | BLK-CARE-BIND (P1) | May a Customer Care workspace principal bind an approver (B10 defers it)? Needs a care-actor granter in the maker set | Architecture | later hardening |
 | BLK-BIND-SCOPE (P1) | Keep binding under `tenant_company.manage` (B8) or split a dedicated code? Residual: a manage-holder selects the signer | Product owner + Security | later hardening |
-| BLK-BIND-BACKFILL (P1) | Policy for existing lineage-PIC threads that must gain a binding row to move (§7.3) | Product owner + Operations | cutover plan |
+| BLK-BIND-BACKFILL (P0 for rollout, P1 for design) | Policy for existing threads that must gain a binding row to move (§7.3) — **and the enablement order of B12 itself**: the moment the issue-gate ships, every thread that has no binding can no longer be presented, so B12 must land together with (or after) the backfill policy, or be enabled per-tenant. Turning B12 on globally ahead of the policy is a self-inflicted presentation standstill, not a safety win | Product owner + Operations + release manager | **03B2 ship order** (the table, guard, and routes can land dark; the gate cannot) |
 | BLK-ISSUER (P1) | Add `issued_by_user_id` to versions + extend the `0391` guard, or accept author-based `M` (MC5')? | Architecture + CR-HM-06 owner | exit gate of the ledger PART |
 | BLK-PIC-SESSION-* | All non-binding blockers from A01 §12 (BLK-2 session authority freeze, BLK-3 staging measurement, BLK-4 route disposition, BLK-7 idempotency scoping, BLK-8 TTL, BLK-9 portal reads) | as listed in A01 | as listed in A01 |
 
@@ -226,7 +226,7 @@ C(row)    = { decision.decided_by_tenant_pic_id }
 - No staff approval fallback, and no "emergency approve" flag (decision 7).
 - No occupancy/property grant model for PICs (occupancy is their basis; care grants are a different namespace).
 - No permission code added by this addendum (registry gate untouched).
-- No population claim: how many threads are bindable today is **UNVERIFIED**; §7.3's rows are schema-logical statements, and BLK-3's aggregate-only queries (`docs/e2e/W03_PART01_PIC_READINESS_AND_REGISTRY_GUARD.md` §3, plus the new count below) remain the only permitted measurement path.
+- No population claim of any kind: how many threads already carry a lineage PIC (and therefore need a matching binding row before B12 may be switched on), and how many would need a fresh binding, are **UNVERIFIED**. Everything in §7.3 is a schema-logical statement readable from the DDL; the only permitted measurement path is BLK-3's aggregate-only queries (`docs/e2e/W03_PART01_PIC_READINESS_AND_REGISTRY_GUARD.md` §3), extended with a `handyman_quotations` × `handyman_service_requests.tenant_pic_id` count.
 
 ## 10. References
 

@@ -60,7 +60,7 @@
 2. **Kolom binding di `handyman_quotation_versions`** — ditolak: guard 0391 adalah daftar kolom sehingga kolom baru writable diam-diam, dan authority terduplikasi per versi.
 3. **Binding oleh Customer Care workspace principal** — ditunda (BLK-CARE-BIND), bukan ditolak permanen: granter masuk `M`, dan granter non-User membuat kesetaraan identitas tak terbukti tanpa aturan lintas-namespace baru.
 4. **Permission code khusus untuk binding** — ditunda (BLK-BIND-SCOPE) karena menyentuh katalog + gate registry di PART ber-kode; V1 memakai `tenant_company.manage` + BE-02G.
-5. **Bulk auto-backfill binding untuk thread lama** — tidak diputuskan di sini (BLK-BIND-BACKFILL); hanya agregat yang boleh mengukur, dan tidak ada angka yang saya klaim.
+5. **Bulk auto-backfill binding untuk thread lama** — tidak diputuskan di sini (BLK-BIND-BACKFILL); hanya agregat yang boleh mengukur, dan tidak ada angka yang saya klaim. Termasuk tidak diputuskan: **kapan B12 diaktifkan** (lihat §7 baris BLK-BIND-BACKFILL) - 03B2 boleh mendarat sebagai tabel+guard+rute dark; gate issue tidak.
 6. **Mengklaim FROZEN untuk urutan rilis** — tidak dilakukan; BLK-GAP-1 terbuka.
 
 ## 5. Ratifikasi: perubahan persis di dokumen governance
@@ -76,7 +76,7 @@
 ## 6. Coding sequence + acceptance criteria (lanjutan AC-1…AC-18 PART 02)
 
 Urutan: **03A ✓ (PART ini) → 03B (sesi) → 03B2 (binding) → 03C (ledger) → 03D (baca PIC) ∥ 03E (decide + soft-close staff) → 03F (hardening hilir) → 03G (OpenAPI) → 03H (sertifikasi)**.
-03B2 **harus** sebelum 03C (FK `approval_binding_id`) dan sebelum 03E (tanpa binding, approver tidak pernah ada). 03E tidak boleh shipped sebelum BLK-GAP-1 dijawab.
+03B2 **harus** sebelum 03C (FK `approval_binding_id`) dan sebelum 03E (tanpa binding, approver tidak pernah ada). 03E tidak boleh shipped sebelum BLK-GAP-1 dijawab; **B12 (gate issue) tidak boleh menyala sebelum kebijakan BLK-BIND-BACKFILL diputuskan** - kalau tidak, presentasi quotation berhenti untuk semua tenant yang belum punya binding.
 
 | PART | Isi (ringkas) | Acceptance criteria baru |
 |---|---|---|
@@ -96,7 +96,7 @@ Urutan: **03A ✓ (PART ini) → 03B (sesi) → 03B2 (binding) → 03C (ledger) 
 | **BLK-2** | P0 (proses, bukan desain) | Freeze otoritas sesi PIC terhadap CR-HM-01 D7 ("exchange = satu-satunya kredensial") | Architecture | 03B |
 | BLK-CARE-BIND | P1 | Bolehkah principal care workspace membuat binding (B10 menunda)? | Architecture | hardening |
 | BLK-BIND-SCOPE | P1 | Binding tetap di `tenant_company.manage` + BE-02G, atau kode permission sendiri? Residual: pemegang `manage` **memilih** penanda-tangan | Product owner + Security | hardening |
-| BLK-BIND-BACKFILL | P1 | Kebijakan thread ber-lineage-PIC yang butuh baris binding agar bisa lanjut (ADD-A §7.3) | Product owner + Operations | cutover plan |
+| BLK-BIND-BACKFILL | **P0 untuk rollout** (P1 untuk desain) | Kebijakan thread yang butuh baris binding agar bisa lanjut (ADD-A §7.3) **dan urutan pengaktifan B12**: begitu gate issue menyala, thread tanpa binding tidak bisa dipresentasikan - jadi B12 wajib mendarat bersama/setelah kebijakan backfill, atau diaktifkan per-tenant. Menyalakan B12 lebih dulu = standstill presentasi buatan sendiri, bukan kemenangan keamanan | Product owner + Operations + release manager | **urutan ship 03B2** (tabel + guard + rute boleh dark-launch; gate-nya tidak) |
 | BLK-ISSUER | P1 | Tambah `issued_by_user_id` ke versi (+ perluas guard 0391) atau terima `M` berbasis author (MC5') | Architecture + CR-HM-06 owner | exit gate 03C |
 | **BLK-3** | P0 untuk pengukuran | Agregat staging: thread dengan lineage PIC vs NULL; PIC yang terlink ke pemegang `tenant_company.manage` tenant-nya sendiri; jumlah binding yang dibutuhkan saat cutover. **Tanpa angka ini BLK-BIND-BACKFILL tidak bisa ditaksir** | DBA + Operations | cutover plan |
 | BLK-4 / 7 / 8 / 9 | P1/P2 | disposition rute staff (S1 default), scoping `idempotency_key`, TTL sesi, daftar baca portal | seperti tercatat di A01 §12 | seperti tercatat |
