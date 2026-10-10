@@ -21490,8 +21490,7 @@ paths:
         cardinality authority and the client never needs a Purchase Request
         id. Ordered by creation.
         AUTHORITY — authenticated + `material_request.field.read` +
-        Building access to the Work Order's Building (403
-        `BUILDING_ACCESS_DENIED`). Unknown Work Order → 404
+        exact BE-02G Client/Building access. Missing or inaccessible Work Order → 404
         `WORK_ORDER_NOT_FOUND`.
         READ MODEL (PART 04 FINAL) — Work Order material CONTEXT envelope
         `{ workOrderId, availableActions, materialRequests[] }`, so the client
@@ -21508,6 +21507,22 @@ paths:
         on-hand / available / stock-level quantity is published here. LIST
         does not carry the per-request `reservations` / `issues` arrays — use
         the detail read.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing or inaccessible Work Order → uniform 404
+        `WORK_ORDER_NOT_FOUND`. PR/MR ownership must also match the Work Order.
+        Inconsistent request chains or reservation children are excluded before
+        fulfillment projection. An accessible Work Order with no visible
+        requests retains its context envelope with `materialRequests: []`.
+        Order: `createdAt ASC, id ASC`.
+        Residual security risk: derived issue/demand quantities trust linked
+        usage rows; issue projections do not independently revalidate usage
+        ownership. SEC-03 does not harden historical/corrupt usage rows or
+        material-usage APIs.
       tags: [Mobile Execution]
       security:
         - bearerAuth: []
@@ -21548,7 +21563,9 @@ paths:
         `WOF_` request number, `requestType` `MATERIAL`, title derived from
         the Work Order number). Creation goes through the same BE-17B service
         as `POST /purchase-requests/{purchaseRequestId}/material-requests`:
-        same item Client-scope rule (400 `MATERIAL_REQUEST_ITEM_CLIENT_MISMATCH`),
+        same item Client-scope rule (an accessible wrong-Client item is 400
+        `MATERIAL_REQUEST_ITEM_CLIENT_MISMATCH`; a missing/inaccessible item is
+        404 `INVENTORY_ITEM_NOT_FOUND`),
         same UOM rule (`uomId` must equal the item's canonical UOM, 400
         `MATERIAL_REQUEST_ITEM_UOM_MISMATCH`, no conversion), same
         `quantity > 0`. Unknown item → 404 `INVENTORY_ITEM_NOT_FOUND`.
@@ -21561,7 +21578,8 @@ paths:
         AUTHORITY — authenticated + `material_request.field.request`
         (deliberately NOT `material_request.manage`, `purchase_request.manage`,
         `inventory_stock.manage` or `wo_procurement.manage`) + Building access
-        to the Work Order's Building (403 `BUILDING_ACCESS_DENIED`) + the
+        to the Work Order's exact Client/Building (404 `WORK_ORDER_NOT_FOUND`
+        when missing or inaccessible) + the
         BE-08F Work Order field-actor gate: the Work Order must have an ACTIVE
         assignment (400 `WORK_ORDER_EXECUTION_NO_ASSIGNMENT`) and the caller
         must be its assignee / team member / vendor workforce (403
@@ -21587,6 +21605,19 @@ paths:
         AUDIT — operational event `WORK_ORDER_MATERIAL_REQUESTED` on entity
         WORK_ORDER with `{workOrderId, materialRequestId, purchaseRequestId,
         itemId, quantity, uomId, requestedByUserId, requestedAt}`.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing or inaccessible Work Order → uniform 404
+        `WORK_ORDER_NOT_FOUND`. The existing field parent must match its Work
+        Order's Client/Building; inconsistent ownership fails closed and rolls
+        back the claim, new request and event. A valid replay retains the
+        stored response, but the persisted request's ownership chain is checked
+        again before returning it: inaccessible/inconsistent replayed MR → 404
+        `MATERIAL_REQUEST_NOT_FOUND`, with no duplicate mutation.
       tags: [Mobile Execution]
       security:
         - bearerAuth: []
@@ -21642,8 +21673,8 @@ paths:
         request, an unknown id, or any id outside that surface is 404
         `MATERIAL_REQUEST_NOT_FOUND` (existence is not confirmed).
         AUTHORITY — authenticated + `material_request.field.read` + Building
-        access to the associated Work Order's Building (403
-        `BUILDING_ACCESS_DENIED`); permission alone never crosses a Building.
+        access to the associated Work Order's exact Client/Building; a
+        missing/inaccessible request is 404 `MATERIAL_REQUEST_NOT_FOUND`.
         This is the canonical RECONCILIATION READ after an ambiguous
         create or cancel outcome (create is replay-safe by key; cancel is
         not — reload and inspect `status`).
@@ -21653,6 +21684,21 @@ paths:
         `inventory_work_order_material_usages` row linked to this request,
         newest `usedAt` first). Read-only: nothing here reserves, issues,
         returns, adjusts or acknowledges.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible, non-field or ownership-inconsistent request →
+        uniform 404 `MATERIAL_REQUEST_NOT_FOUND`. PR/MR ownership must match
+        the Work Order; inconsistent reservation children fail closed before
+        fulfillment, reservation or issue projection. The BE-08F field-actor
+        mutation gate is not an additional read permission requirement.
+        Residual security risk: derived issue/demand quantities trust linked
+        usage rows; issue projections do not independently revalidate usage
+        ownership. SEC-03 does not harden historical/corrupt usage rows or
+        material-usage APIs.
       tags: [Mobile Execution]
       security:
         - bearerAuth: []
@@ -21703,6 +21749,16 @@ paths:
         the withdrawal took effect; `OPEN` means it may be retried.
         AUDIT — operational event `WORK_ORDER_MATERIAL_REQUEST_CANCELLED` on
         entity WORK_ORDER.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible, non-field or ownership-inconsistent request →
+        uniform 404 `MATERIAL_REQUEST_NOT_FOUND`. PR/MR ownership must match
+        the Work Order; inconsistent reservation children fail closed. These
+        checks are repeated under the MR lock before transition or audit write.
       tags: [Mobile Execution]
       security:
         - bearerAuth: []
@@ -28969,6 +29025,17 @@ paths:
         Request's Building. `clientId`/`buildingId` derive from the Purchase
         Request; `uomId` is captured from the Item Master (a supplied `uomId`
         must match the item UOM exactly — no conversion).
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing or inaccessible parent → 404 `PURCHASE_REQUEST_NOT_FOUND`.
+        Missing or inaccessible supplied item/warehouse → 404
+        `INVENTORY_ITEM_NOT_FOUND` / `INVENTORY_WAREHOUSE_NOT_FOUND`.
+        An accessible but incompatible reference still yields its documented
+        400 mismatch error. The actor needs no `inventory_item.read` permission.
       tags: [Material Requests]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -29007,7 +29074,19 @@ paths:
     get:
       operationId: listMaterialRequestsByPurchaseRequest
       summary: List Material Request lines of a Purchase Request
-      description: Requires `material_request.read` and Building access.
+      description: >
+        Requires `material_request.read` and Building access.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing or inaccessible parent → 404 `PURCHASE_REQUEST_NOT_FOUND`.
+        Inconsistent child ownership chains are excluded in SQL. An accessible
+        parent with no visible matching lines returns an empty array.
+        Order: `createdAt DESC, id DESC`; nested detail objects are null.
+        Filters only narrow results and never widen authority.
       tags: [Material Requests]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -29016,6 +29095,62 @@ paths:
           in: query
           required: false
           schema: { $ref: "#/components/schemas/MaterialRequestStatus" }
+        - name: itemId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: purchaseRequestId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Material Request lines.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MaterialRequest" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /buildings/{buildingId}/material-requests:
+    get:
+      operationId: listMaterialRequestsByBuilding
+      summary: List Material Requests of a Building
+      description: >
+        Requires `material_request.read`; Building access enforced
+        (Client/Building isolation). Filters are optional and intersected.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        This explicit Building path retains 403 `BUILDING_ACCESS_DENIED`
+        for both missing and inaccessible Buildings. Each returned line must
+        match the authorized Client/Building pair and a consistent ownership
+        chain. Order: `createdAt DESC, id DESC`; nested detail objects are null.
+        No visible matching lines → empty array. Filters never widen scope.
+      tags: [Material Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/BuildingIdPath"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/MaterialRequestStatus" }
+        - name: purchaseRequestId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
         - name: itemId
           in: query
           required: false
@@ -29033,38 +29168,7 @@ paths:
                       data:
                         type: array
                         items: { $ref: "#/components/schemas/MaterialRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-
-  /buildings/{buildingId}/material-requests:
-    get:
-      operationId: listMaterialRequestsByBuilding
-      summary: List Material Requests of a Building
-      description: >
-        Requires `material_request.read`; Building access enforced
-        (Client/Building isolation). Optional `status` filter.
-      tags: [Material Requests]
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - $ref: "#/components/parameters/BuildingIdPath"
-        - name: status
-          in: query
-          required: false
-          schema: { $ref: "#/components/schemas/MaterialRequestStatus" }
-      responses:
-        "200":
-          description: Material Request lines.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/SuccessEnvelope"
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items: { $ref: "#/components/schemas/MaterialRequest" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
@@ -29072,7 +29176,24 @@ paths:
     get:
       operationId: listMaterialRequestsByItem
       summary: List Material Requests referencing an inventory item
-      description: Requires `material_request.read`. Optional `status` filter.
+      description: >
+        Lists visible request history for a Client-owned item.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Requires only `material_request.read`, not `inventory_item.read`.
+        Missing actor scope / zero reachable contexts → fixed 403
+        `BUILDING_ACCESS_DENIED`, independent of item existence. With a nonempty
+        scope, an item outside all reachable Clients and an unknown item both
+        yield 404 `INVENTORY_ITEM_NOT_FOUND`. Item visibility is Client-scoped;
+        every returned request is intersected with exact authorized
+        Client/Building pairs and a consistent MR/PR/Item/optional-Warehouse
+        chain in SQL. Unauthorized-only history returns an empty array, not
+        a denial or hidden count. Filters never grant additional access.
+        Order: `createdAt DESC, id DESC`; nested detail objects are null.
       tags: [Material Requests]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -29081,6 +29202,10 @@ paths:
           in: query
           required: false
           schema: { $ref: "#/components/schemas/MaterialRequestStatus" }
+        - name: purchaseRequestId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
       responses:
         "200":
           description: Material Request lines.
@@ -29094,6 +29219,7 @@ paths:
                       data:
                         type: array
                         items: { $ref: "#/components/schemas/MaterialRequest" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -29104,9 +29230,20 @@ paths:
       summary: Get a Material Request line (with fulfilment quantities)
       description: >
         Requires `material_request.read` and Building access. The detail read
-        additionally derives `receivedQuantity` (cumulative valid receipts)
+        additionally derives `receivedQuantity` (linked RECEIVED/FINALIZED receipts)
         and `remainingQuantity` = (`approvedQuantity` ?? `quantity`) −
         `receivedQuantity`. No separate remaining-quantity store exists.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent line → uniform 404
+        `MATERIAL_REQUEST_NOT_FOUND`, before nested details or receipt totals.
+        Residual security risk: receipt totals trust `material_request_id` and
+        receipt status; they do not independently revalidate receipt ownership.
+        SEC-03 does not harden historical/corrupt receipt rows or receipt APIs.
       tags: [Material Requests]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -29122,6 +29259,7 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/MaterialRequest" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -29134,6 +29272,17 @@ paths:
         or CANCELLED lines with `MATERIAL_REQUEST_NOT_OPEN` (item identity,
         requested/approved quantity, UOM and warehouse scope are
         fulfilment-critical and cannot be silently changed after approval).
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent line → uniform 404
+        `MATERIAL_REQUEST_NOT_FOUND`. The source is resolved and locked inside
+        the mutation transaction. A missing/inaccessible replacement warehouse
+        yields 404 `INVENTORY_WAREHOUSE_NOT_FOUND`; an accessible incompatible
+        warehouse retains its 400 mismatch error.
       tags: [Material Requests]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -29184,6 +29333,15 @@ paths:
         is the correction path after approval (PART 02); an already-cancelled
         line is rejected with `MATERIAL_REQUEST_NOT_OPEN`. Not a delete —
         history is preserved.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent line → uniform 404
+        `MATERIAL_REQUEST_NOT_FOUND`. Source-row authorization, ACTIVE
+        reservation check and cancellation run inside the same transaction.
       tags: [Material Requests]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -29223,10 +29381,27 @@ paths:
         item, Client, Building and UOM from the existing authorities; the
         selected warehouse must be in scope and have sufficient available stock.
         Demand is calculated under a Material Request lock as
-        `approvedQuantity ?? quantity - cumulativeIssued - activeReserved`.
+        `(approvedQuantity ?? quantity) - cumulativeIssued - activeReserved`.
         The reservation and existing balance reserved-quantity update commit
         atomically. No stock movement is created because on-hand does not
         change.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent source → uniform 404
+        `MATERIAL_REQUEST_NOT_FOUND`. Inconsistent existing reservation children
+        also fail closed before demand arithmetic. Missing/inaccessible input
+        item/warehouse → 404 `INVENTORY_ITEM_NOT_FOUND` /
+        `INVENTORY_WAREHOUSE_NOT_FOUND`; accessible incompatible inputs retain
+        the documented 400 mismatch errors. Lock order: MR → Stock Balance.
+        Reservation, balance update and operational event commit together.
+        Residual security risk: derived issue/demand quantities trust linked
+        usage rows; issue projections do not independently revalidate usage
+        ownership. SEC-03 does not harden historical/corrupt usage rows or
+        material-usage APIs.
       tags: [Material Reservations]
       security: [{ bearerAuth: [] }]
       x-required-permission: inventory_stock.manage
@@ -29278,6 +29453,18 @@ paths:
       description: >
         Requires `inventory_stock.read` and Building access. Results are scoped
         to the Material Request and may be filtered by reservation `status`.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent MR → uniform 404
+        `MATERIAL_REQUEST_NOT_FOUND`. Rows must also match the MR's Client,
+        Building and item, its optional target warehouse, and a warehouse in
+        the same Client/Building. Inconsistent reservation children are omitted.
+        An accessible MR with no visible matches returns an empty array.
+        Order: `createdAt DESC, id DESC`; nested detail objects are null.
       tags: [Material Reservations]
       security: [{ bearerAuth: [] }]
       x-required-permission: inventory_stock.read
@@ -29301,6 +29488,7 @@ paths:
                       data:
                         type: array
                         items: { $ref: "#/components/schemas/MaterialReservation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -29312,7 +29500,17 @@ paths:
       description: >
         Requires `inventory_stock.read` and Building access.
         `INVENTORY_MATERIAL_RESERVATION_NOT_FOUND` is returned when the
-        reservation does not exist.
+        reservation is missing, inaccessible or ownership-inconsistent.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent reservation → uniform
+        404 `INVENTORY_MATERIAL_RESERVATION_NOT_FOUND`. Reservation/MR Client,
+        Building, item and optional target-warehouse consistency is checked
+        along with warehouse ownership before nested detail projection.
       tags: [Material Reservations]
       security: [{ bearerAuth: [] }]
       x-required-permission: inventory_stock.read
@@ -29330,6 +29528,7 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/MaterialReservation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -29341,7 +29540,21 @@ paths:
       description: >
         Requires `inventory_stock.manage` and Building access. Only ACTIVE
         reservations can be released. The existing stock balance's reserved
-        quantity is reduced exactly once; on-hand is unchanged.
+        quantity is reduced by the remaining unconsumed allocation exactly
+        once; on-hand is unchanged.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent reservation/source →
+        uniform 404 `INVENTORY_MATERIAL_RESERVATION_NOT_FOUND`.
+        Reservation/MR Client, Building, item and optional target warehouse
+        must agree; the warehouse must belong to that Client/Building.
+        Lock order remains MR → Reservation → Stock Balance. Only the remaining
+        unconsumed allocation is released; stock on-hand is unchanged, and the
+        balance update, transition and operational event commit together.
       tags: [Material Reservations]
       security: [{ bearerAuth: [] }]
       x-required-permission: inventory_stock.manage
@@ -29359,6 +29572,7 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/MaterialReservation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -29375,7 +29589,21 @@ paths:
       description: >
         Requires `inventory_stock.manage` and Building access. Only ACTIVE
         reservations can be cancelled. The existing stock balance's reserved
-        quantity is reduced exactly once; on-hand is unchanged.
+        quantity is reduced by the remaining unconsumed allocation exactly
+        once; on-hand is unchanged.
+        CR-HM-SEC-03 — authority is the exact Client/Building pair returned
+        by BE-02G (ACTIVE user assignment and ACTIVE Building); same-Client
+        siblings and PLATFORM_ADMIN confer no implicit access. Resource
+        resolution and MR/PR/Item/optional-Warehouse ownership checks precede
+        enrichment or mutation. Permission failures remain 403; missing and
+        inaccessible resource responses do not distinguish existence.
+        Missing, inaccessible or ownership-inconsistent reservation/source →
+        uniform 404 `INVENTORY_MATERIAL_RESERVATION_NOT_FOUND`.
+        Reservation/MR Client, Building, item and optional target warehouse
+        must agree; the warehouse must belong to that Client/Building.
+        Lock order remains MR → Reservation → Stock Balance. Only the remaining
+        unconsumed allocation is cancelled; stock on-hand is unchanged, and the
+        balance update, transition and operational event commit together.
       tags: [Material Reservations]
       security: [{ bearerAuth: [] }]
       x-required-permission: inventory_stock.manage
@@ -29393,6 +29621,7 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/MaterialReservation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
