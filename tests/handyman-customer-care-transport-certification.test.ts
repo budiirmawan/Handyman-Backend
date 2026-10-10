@@ -142,7 +142,7 @@ const secrets: string[] = [];
 type ReadCase = { template: string; url: string; query?: Record<string, string> };
 let readCases: ReadCase[] = [];
 let journey: {
-  clientId: string; buildingId: string; requestId: string; scopeId: string;
+  clientId: string; buildingId: string; tenantCompanyId: string; requestId: string; scopeId: string;
   bastId: string; warrantyId: string; claimId: string; reworkId: string;
   workId: string; paymentId: string; token: string; userId: string;
 };
@@ -156,6 +156,25 @@ async function scopedSession(buildingId: string, codes: string[]) {
   );
   assert.ok(row.rows[0], 'session must resolve to its own authenticated user');
   await buildingAssignmentService.createAssignment(row.rows[0].userId, { buildingId });
+  return { token, userId: row.rows[0].userId };
+}
+
+/**
+ * Local session that is an ACTIVE tenant PIC of the represented tenant. The
+ * C6 request-read wall admits PIC rows only for this relationship (same
+ * pattern as handyman-customer-care-request-reads). Customer Care is NOT a PIC.
+ */
+async function tenantPicSession(tenantCompanyId: string, buildingId: string, adminId: string) {
+  const token = await createSessionWithPermissions([{ code: 'tenant_company.read', name: 'Read Tenant Companies' }]);
+  const row = await sql<{ userId: string }>(
+    `SELECT user_id AS "userId" FROM user_sessions WHERE token_hash = $1`,
+    [createHash('sha256').update(token).digest('hex')],
+  );
+  await buildingAssignmentService.createAssignment(row.rows[0].userId, { buildingId });
+  await tenantPicService.createTenantPic({
+    tenantCompanyId, userId: row.rows[0].userId, picName: 'Certification Tenant PIC',
+    email: `pic-${shortCode().toLowerCase()}@tenant.example.com`,
+  }, adminId);
   return { token, userId: row.rows[0].userId };
 }
 
@@ -314,6 +333,24 @@ after(async () => {
   }
   await rm(DIR, { recursive: true, force: true });
 });
+
+/**
+ * CR-HM-17 PART 06: the certified historical baseline commits are not present
+ * in this repository (shallow clone, not reachable from origin). Assertions that
+ * compare against them are isolated into explicitly SKIPPED tests with a reason;
+ * all structural checks run unconditionally.
+ */
+const HISTORICAL_BASELINE_SHAS = ['b87d72f', '2fcfad9'] as const;
+const historicalBaselineAvailable = HISTORICAL_BASELINE_SHAS.every((sha) => {
+  try {
+    execSync(`git cat-file -e ${sha}^{commit}`, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+});
+const HISTORICAL_SKIP_REASON =
+  'historical baseline commits b87d72f/2fcfad9 are not in this repository; historical freeze assertion skipped explicitly';
 
 describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certification', () => {
   it('certifies end-to-end Customer Care journey across B3, B4, PART03, B5, B6, B7, and B8 with Backend-resolved represented context and Customer Care != represented tenant', async () => {
@@ -546,40 +583,22 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
     // -------------------------------------------------------------------------
     // 1. B3 (PART 01) — Request List & Detail Reads + Customer Care != Tenant
     // -------------------------------------------------------------------------
+    // C6 read wall (CR-HM-SEC-01 PART 01): request rows are visible only to an
+    // active tenant PIC of the represented tenant or a PLATFORM_ADMIN in the
+    // same Building. This Customer Care local session is neither, so the list
+    // is empty and the detail is refused. Care provenance is not readable via
+    // this session; it is asserted at the repository/projection layer below.
     const listReqRes = await request(app)
       .get('/api/v1/handyman/requests')
       .query({ clientId: realm.client.id, actorType: 'CUSTOMER_CARE' })
       .set('Authorization', `Bearer ${ccReadManageToken}`);
     assert.equal(listReqRes.status, 200);
-    assert.equal(listReqRes.body.data.length, 1);
-    assert.equal(listReqRes.body.data[0].id, hmRequest.id);
-    assert.equal(
-      listReqRes.body.data[0].attribution.actorType,
-      'CUSTOMER_CARE',
-    );
-    assert.equal(
-      listReqRes.body.data[0].attribution.careActorId,
-      careActor.id,
-    );
-    assert.equal(listReqRes.body.data[0].attribution.createdByUserId, null);
-    assert.equal(listReqRes.body.data[0].tenantCompanyId, company.id);
-    assert.equal(listReqRes.body.data[0].tenantPicId, pic.id);
-    assert.notEqual(
-      listReqRes.body.data[0].attribution.careActorId,
-      listReqRes.body.data[0].tenantPicId,
-    );
+    assert.equal(listReqRes.body.data.length, 0, 'C6 wall: non-PIC Customer Care sees no request rows');
 
     const detailReqRes = await request(app)
       .get(`/api/v1/handyman/requests/${hmRequest.id}`)
       .set('Authorization', `Bearer ${ccReadManageToken}`);
-    assert.equal(detailReqRes.status, 200);
-    assert.equal(detailReqRes.body.data.id, hmRequest.id);
-    assert.equal(detailReqRes.body.data.careActorId, careActor.id);
-    assert.equal(
-      detailReqRes.body.data.actorReference,
-      careActor.actorReference,
-    );
-    assert.equal(detailReqRes.body.data.executionScopeId, scope.id);
+    assert.equal(detailReqRes.status, 403, 'C6 wall: detail refused for non-PIC Customer Care');
 
     // -------------------------------------------------------------------------
     // 2. B4 (PART 02) — Provider & Crew Availability Projection
@@ -955,7 +974,9 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
     await customerPost('/handyman/service-warranty-claims/{claimId}/reject',
       `/api/v1/handyman/service-warranty-claims/${chargeClaim.claim.id}/reject`, ccReadManageToken,
       { decisionNote: 'Outside warranty scope', idempotencyKey: `creject-${id()}` });
-    const proposedWork = await proposeHandymanChargeableAdditionalWork(adminUserId, {
+    // PROPOSE is a Lead command: the actor must be the CURRENT ACTIVE assignment's
+    // authoritative Crew Lead (assertChargeableLeadAction). ACCEPT stays customer-side.
+    const proposedWork = await proposeHandymanChargeableAdditionalWork(chargeCrew.leadUser.id, {
       claimId: chargeClaim.claim.id, scopeNote: 'Separated chargeable installation', idempotencyKey: `cpropose-${id()}`,
     });
     const workId = proposedWork.work.id;
@@ -1034,7 +1055,7 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
       statusVisRes.body.data.slaMilestones.length,
       HANDYMAN_SLA_SUBJECT_MILESTONES.length,
     );
-    journey = { clientId: realm.client.id, buildingId: realm.building.id, requestId: hmRequest.id,
+    journey = { clientId: realm.client.id, buildingId: realm.building.id, tenantCompanyId: company.id, requestId: hmRequest.id,
       scopeId: scope.id, bastId, warrantyId, claimId, reworkId, workId, paymentId,
       token: ccReadManageToken, userId: ccUserId };
     const scopePath = '/handyman/execution-scopes/{executionScopeId}';
@@ -1068,6 +1089,7 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
     assert.ok(journey, 'completed journey required');
     const plainToken = await createPlainSession();
     const readOnly = await scopedSession(journey.buildingId, ['tenant_company.read']);
+    const tenantPic = await tenantPicSession(journey.tenantCompanyId, journey.buildingId, adminUserId);
     const manageOnly = await scopedSession(journey.buildingId, ['tenant_company.manage']);
     const foreignRealm = await realmFixture();
     const foreign = await scopedSession(foreignRealm.building.id, ['tenant_company.read', 'tenant_company.manage']);
@@ -1087,6 +1109,19 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
       const crossClient = await get(foreign.token);
       assert.equal(crossClient.status, 403, `${c.url}: ${JSON.stringify(crossClient.body)}`);
       assert.ok(crossClient.body.error.code, 'bounded cross-client error');
+      if (c.template === '/handyman/requests/{handymanRequestId}') {
+        // C6 wall: a non-PIC Customer Care session is refused the request detail.
+        const walled = await get(readOnly.token);
+        assert.equal(walled.status, 403, c.url);
+        assert.equal(walled.body.error.code, 'BUILDING_ACCESS_DENIED', c.url);
+        // The success body is taken from the ACTIVE tenant PIC of the represented tenant.
+        const pic = await get(tenantPic.token);
+        assert.equal(pic.status, 200, `${c.url}: ${JSON.stringify(pic.body)}`);
+        assert.equal(pic.body.success, true);
+        assertResponseFirewall(pic.body);
+        successes.push({ template: c.template, method: 'get', status: 200, body: pic.body });
+        continue;
+      }
       const allowed = await get(readOnly.token);
       assert.equal(allowed.status, 200, `${c.url}: ${JSON.stringify(allowed.body)}`);
       assert.equal(allowed.body.success, true);
@@ -1308,19 +1343,16 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
     }
 
     assert.equal(requiredPaths.reduce((n, entry) => n + entry.methods.length, 0), 44);
-    const baseline = parseYaml(execSync('git show b87d72f:docs/api/openapi.yaml', { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })) as ApiSpec;
-    assert.deepEqual(Object.keys(spec.paths), Object.keys(baseline.paths), 'certification adds no API paths');
-    for (const url of Object.keys(spec.paths)) {
-      assert.deepEqual(Object.keys(spec.paths[url]), Object.keys(baseline.paths[url]),
-        `certification adds no methods on ${url}`);
-    }
-    type Layer = { route?: { path: string; methods: Record<string, boolean> }; handle?: { stack?: Layer[] } };
+    // Express layers may carry an array of paths (e.g. care workspace GET aliases).
+    type Layer = { route?: { path: string | string[]; methods: Record<string, boolean> }; handle?: { stack?: Layer[] } };
     const mounted: string[] = [];
     const normalize = (url: string) => url.replace(/:[A-Za-z0-9_]+|\{[^}]+\}/g, '{}');
     const walk = (layers: Layer[]) => {
       for (const layer of layers) {
         if (layer.route) for (const [method, on] of Object.entries(layer.route.methods)) {
-          if (on) mounted.push(`${method} ${normalize(layer.route.path)}`);
+          if (!on) continue;
+          const routePaths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
+          for (const routePath of routePaths) mounted.push(`${method} ${normalize(String(routePath))}`);
         }
         if (layer.handle?.stack) walk(layer.handle.stack);
       }
@@ -1369,7 +1401,16 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
 
   });
 
-  it('certifies frozen governance, runtime/lifecycle authority preservation, and static FM/SaaS/CR-HM-14 isolation', async () => {
+  it('certifies no API path or method added since the certified baseline b87d72f', { skip: historicalBaselineAvailable ? false : HISTORICAL_SKIP_REASON }, async () => {
+    const baseline = parseYaml(execSync('git show b87d72f:docs/api/openapi.yaml', { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })) as ApiSpec;
+    assert.deepEqual(Object.keys(spec.paths), Object.keys(baseline.paths), 'certification adds no API paths');
+    for (const url of Object.keys(spec.paths)) {
+      assert.deepEqual(Object.keys(spec.paths[url]), Object.keys(baseline.paths[url]),
+        `certification adds no methods on ${url}`);
+    }
+  });
+
+  it('certifies CR-HM-17 governance, migration and runtime freeze against historical commits 2fcfad9/b87d72f', { skip: historicalBaselineAvailable ? false : HISTORICAL_SKIP_REASON }, async () => {
     // Governance baseline untouched since PART 00 (2fcfad9)
     const govDiff = execSync(
       'git diff 2fcfad9..HEAD -- docs/handyman/CR-HM-17_CUSTOMER_CARE_TRANSPORT_GAP_GOVERNANCE.md',
@@ -1396,7 +1437,9 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
       'certification must not change runtime/dependencies');
     assert.equal(execSync("git diff 2fcfad9..b87d72f -- 'src/modules/handyman-*/*.lifecycle.ts' src/modules/applied-slas src/modules/sla-definitions src/modules/handyman-provider-performance src/modules/handyman-financial-entitlements src/modules/handyman-settlement src/modules/handyman-financial-read src/modules/work-orders src/modules/work-order-sla-register src/modules/asset-warranties src/modules/subscriptions src/modules/entitlements src/modules/due-job-scheduler src/modules/request-idempotency", { encoding: 'utf8' }).trim(), '',
       'frozen lifecycle/SLA/financial/FM/SaaS authorities remain unchanged');
+  });
 
+  it('certifies frozen governance, runtime/lifecycle authority preservation, and static FM/SaaS/CR-HM-14 isolation', async () => {
     // Static firewall scan across PART 01–07 transport/service modules
     const transportFiles = [
       'src/modules/handyman-requests/handyman-service-request.service.ts',

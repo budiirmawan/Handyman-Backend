@@ -740,28 +740,30 @@ Lapisan otorisasi (semua fail-closed, di service):
 - `tests/handyman-care-workspace-payment-report.test.ts` (PART 05): grantor sekarang memegang `permission.manage` dan akses building; revoke ulang diasersi `404`.
 - Baru: `tests/handyman-care-admin-provisioning.test.ts` (15 test): RBAC 401/403, delegasi, scope, grant + replay + audit, runtime report workspace setelah grant, revoke + audit + report ditolak + 404, allowlist verify, unknown fields, grant tidak otomatis, constraint identitas DB.
 
-### 17.4 Transport certification 1–5 (`tests/handyman-customer-care-transport-certification.test.ts`): diagnosis, belum diperbaiki
+### 17.4 Transport certification 1–5 (`tests/handyman-customer-care-transport-certification.test.ts`)
 
-Penyebab yang terbukti:
-- Test 1 gagal di `listReqRes.body.data.length === 1` (`0 !== 1`), B3 list `GET /api/v1/handyman/requests` untuk sesi Customer Care (`tenant_company.read`, bukan PIC tenant). List memakai `customerRequestReadScope`: baris hanya terlihat untuk PIC tenant aktif atau PLATFORM_ADMIN pada building yang sama. Ini sesuai keputusan keamanan CR-HM-SEC-01 PART 01 (dinding baca C6), sehingga test mengharapkan perilaku yang berbeda dari keputusan itu. Tes detail `GET /handyman/requests/:id` pada journey yang sama memakai pola yang sama. Dinding tidak dilonggarkan dan ekspektasi belum diubah tanpa persetujuan.
-- Test 2 dan 3 gagal karena `journey` tidak terbentuk dari test 1 (`completed journey required`, `assert.ok(journey)`). Ini efek berantai, bukan penyebab terpisah.
-- Test 4 memanggil `git show b87d72f:docs/api/openapi.yaml`. Test 5 memanggil `git diff 2fcfad9..HEAD` dan `git diff b87d72f -- src`. Commit `b87d72f` dan `2fcfad9` tidak ada di clone ini (repo shallow, 6 commit) dan tidak ditemukan di origin (`git fetch origin <sha>` gagal: `couldn't find remote ref`). Dokumen sertifikasi juga mencatatnya sebagai "pre-work HEAD" dari baseline lain.
-- Asersi freeze "tanpa perubahan migrasi/runtime sejak baseline" tidak bisa dipenuhi oleh PART manapun setelah PART 05, karena migrasi 0431–0433 dan service memang berubah. Ini keputusan, bukan bug.
+Penyebab yang terbukti dan tindakan (keputusan user: ekspektasi disesuaikan dengan dinding C6, asersi historis di-SKIP):
 
-Keputusan yang dibutuhkan dari user (lihat pertanyaan di chat):
-- Test 1–3: pilih apakah ekspektasi journey diubah ke perilaku dinding C6 (CC tanpa PIC tidak melihat request), atau dinding C6 perlu ditinjau ulang melalui keputusan keamanan.
-- Test 4–5: pilih baseline pengganti yang ada di repo (mis. commit sertifikasi yang benar), atau asersi freeze historis di-SKIP dengan alasan eksplisit sementara sisanya tetap berjalan.
+1. **B3 list/detail, test 1–2 (C6 read wall).** `GET /handyman/requests` dan `GET /handyman/requests/:id` untuk sesi Customer Care yang bukan PIC tenant aktif. List memakai `customerRequestReadScope`: baris hanya terlihat untuk PIC tenant aktif atau PLATFORM_ADMIN pada building yang sama (keputusan CR-HM-SEC-01 PART 01). Dinding tidak diubah. Ekspektasi test 1 sekarang: list `200` dengan `data.length === 0`; detail `403`. Test 2 mengasersi `403 BUILDING_ACCESS_DENIED` untuk sesi non-PIC, dan body sukses detail diambil dari sesi `tenant_company.read` yang menjadi PIC aktif tenant terwakili (pola test C6 yang sudah ada). Provenance Care tidak lagi dibaca lewat sesi ini; tidak diasersi di layer HTTP.
+2. **Chargeable additional work, test 1 (aktor PROPOSE).** Test memanggil PROPOSE dengan `adminUserId`. Aturan yang dibekukan: PROPOSE hanya oleh Crew Lead yang sedang aktif pada assignment scope (`assertChargeableLeadAction`). Aktor test diganti ke `chargeCrew.leadUser.id`. ACCEPT tetap customer-side. Service tidak diubah.
+3. **Test 4 (route parity).** Setelah baseline dipisah, `walk()` gagal karena `route.path` berupa array (alias GET care workspace). Harness diperbaiki agar membaca array path. Tidak ada perubahan route.
+4. **Test 4–5 (commit historis).** `b87d72f` dan `2fcfad9` tidak ada di clone ini (repo shallow, 6 commit) dan tidak ditemukan di origin. Asersi yang bergantung pada commit itu dipindah ke dua `it` dengan `skip` eksplisit dan alasan: `certifies no API path or method added since the certified baseline b87d72f` dan `certifies CR-HM-17 governance, migration and runtime freeze against historical commits 2fcfad9/b87d72f`. Skip hanya aktif bila commit tidak tersedia (`git cat-file`). Pemeriksaan struktural test 4 dan test 5 (firewall statis, parity route, body HTTP) tetap berjalan tanpa skip.
+
+Hasil transport file: `tests 7, pass 5, fail 0, skipped 2` (dua skip historis, lihat di atas).
 
 ### 17.5 Hasil validasi
 
 - Typecheck: `npx tsc --noEmit -p .` PASS.
-- Focused: `tests/handyman-care-admin-provisioning.test.ts` 15/15 PASS. Pasangan provisioning + property-scope 19/19 PASS. PART 05 payment report 11/11 PASS (run subset). Spaces dan ledger B6 PASS (run subset).
-- Subset Handyman 45 file (44 file subset PART 05 + `handyman-care-admin-provisioning`), DB bersih, `--test-concurrency=1`: `tests 343, pass 338, fail 5`. Kelima kegagalan adalah transport certification 1–5 (§17.4), sama seperti temuan diagnosis. Ledger B6 test 1 dan spaces sekarang PASS. Log: `/tmp/p06-subset2.log`.
-- Dalam run yang sama `property-scope` PART 02 sempat gagal karena count global grant (§17.3), sudah diperbaiki dan diverifikasi dengan pasangan file (19/19).
+- Focused: `tests/handyman-care-admin-provisioning.test.ts` 15/15 PASS. Pasangan provisioning + property-scope 19/19 PASS.
+- Transport certification: `tests 7, pass 5, fail 0, skipped 2` (skip historis eksplisit, §17.4).
+- Subset Handyman 45 file, DB bersih (`/tmp/reset-db.ts` sebelum run), `--test-concurrency=1`: `tests 345, pass 343, fail 0, skipped 2`. Log: `/tmp/p06-subset3.log`. Dua skip adalah asersi historis commit `b87d72f`/`2fcfad9` yang tidak ada di repo.
+- Tidak ada full test suite. Tidak ada klaim E2E complete.
 
 ### 17.6 Residual PART 06
 
-- Transport 1–5 belum PASS. Menunggu keputusan §17.4. Tidak ada klaim E2E complete.
+- Dua asersi historis transport (commit `b87d72f`/`2fcfad9`) di-SKIP secara eksplisit. Perlu SHA sertifikasi yang ada di repo bila freeze historis ingin diaktifkan kembali.
+- Tidak ada klaim E2E complete.
 - Ledger GET tidak menampilkan CONFIRM/REJECT kepada verifier (`canVerify` default false). Verifier memakai jalur verify yang sudah ada. Perlu keputusan bila ledger harus menampilkan aksi untuk verifier.
 - Grant payment tidak punya UI admin; hanya HTTP API dan OpenAPI.
+- Provenance Care pada B3 tidak lagi diasersi lewat sesi Customer Care (dinding C6). Perlu asersi lewat sesi PIC atau layer projection bila ingin dipertahankan.
 - Tidak ada full test suite. Tidak ada perubahan pada payment engine, invoice, settlement, QC, BAST, Work Order, atau Manager CLOSE.
