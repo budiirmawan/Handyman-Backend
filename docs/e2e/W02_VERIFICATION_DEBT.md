@@ -307,7 +307,21 @@ Menutup gap "create request tanpa audit event" dan memberi notification handoff 
 
 - R-P5-1: recipient dan channel policy untuk `HANDYMAN_REQUEST_CREATED` belum didefinisikan. Aktivasi memerlukan keputusan: siapa penerimanya (PIC hanya dengan kontak terverifikasi dan consent), channel apa, dan apakah emisi dilakukan setelah commit lewat `emitHandymanNotificationIntent`.
 - R-P5-2: `notificationHandoff` adalah snapshot saat create. Jika policy diaktifkan nanti, status delivery harus dilacak di ledger notifikasi yang ada, bukan dengan memperbarui event (append-only).
-- R-P5-3: jalur local-user kini menulis event atomik, tetapi belum ada assertion khusus event di test. Hanya tercakup oleh regresi (lulus).
-- R-P5-4: fan-out webhook dengan endpoint aktif belum diuji di PART ini. Default dark.
+- R-P5-3 (DITUTUP di final validation): jalur local-user diuji F1–F3 (atomik, rollback, tanpa assignment).
+- R-P5-4 (DITUTUP di final validation): fan-out outbox dengan endpoint aktif diuji di E1 (satu marker, payload bersih, replay tidak menambah marker).
 - R-P5-5: komentar header journey PART 04 masih menyebut `tenant_company.manage` untuk triage. Itu komentar stale. Perilaku yang berlaku diuji di PART 04A. Journey dibiarkan tidak berubah karena frozen.
 - R-P5-6: fault trigger dibuat di DB uji bersama dan dihapus setelah test. Risiko R-T4 (DB uji persisten) tetap berlaku.
+
+### Final validation (W02 PART 05, run lanjutan)
+
+- Audit atomik: care-path (A1, B2) dan local-user path (F1, F2) menulis event pada executor transaksi yang sama dengan insert request. Kegagalan audit membatalkan request, attribution, dan contact (B2, F2).
+- Replay (C1, E1), concurrency (C2), rollback (B2, F2), dan fault injection tidak meninggalkan duplicate event, request, atau outbox marker.
+- Event dan outbox payload (E1) tidak memuat nama, telepon, email, exchange token, workspace token, atau assertion. Metadata hanya berisi identitas (`channelAttributionId`, `tenantCompanyId`, `spaceId`, `actorType`, `careActorId`, `originChannel`, `notificationHandoff`).
+- Notification intent tidak diterbitkan karena recipient/channel policy belum ditetapkan (A3). Status `BLOCKED_BY_POLICY` adalah **status evaluasi** yang dicatat di event. Ini bukan klaim delivery. Tidak ada baris `notifications` atau `notification_outbound_deliveries` yang dibuat.
+- Test: `tests/handyman-request-create-audit-part05.test.ts` 14/14 PASS (A1–A4, B1–B2, C1–C2, D1–D2, E1, F1–F3).
+- Regresi fokus: lihat hasil run final di laporan delivery (PASS/FAIL/SKIP dicatat per file). Tidak ada SKIP.
+
+### Residual notification (tetap terbuka)
+
+- R-P5-1: policy recipient dan channel untuk `HANDYMAN_REQUEST_CREATED` belum ditetapkan. Keputusan yang dibutuhkan: penerima (PIC hanya dengan kontak terverifikasi dan consent), channel, dan titik emisi (setelah commit lewat `emitHandymanNotificationIntent`).
+- R-P5-2: status `BLOCKED_BY_POLICY` adalah snapshot saat create. Saat policy aktif, status delivery harus dilacak di ledger notifikasi yang ada. Event tidak boleh diperbarui (append-only).

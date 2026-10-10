@@ -25,6 +25,10 @@ import { tenantBuildingContextRepository } from '../src/modules/tenant-building-
 import { tenantCompanyRepository } from '../src/modules/tenant-companies';
 import { tenantSpaceRepository } from '../src/modules/tenant-spaces';
 import { createAdminUser, createSessionWithPermissions } from './helpers/access';
+import { handymanChannelAttributionService } from '../src/modules/handyman-channel-attributions';
+import { handymanServiceRequestService } from '../src/modules/handyman-requests';
+import { registerIntegrationWebhookSubscriptionProbe } from '../src/modules/integration-webhook-endpoints';
+import { resetIntegrationOutboxSubscriptionProbe } from '../src/modules/integration-outbox';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
@@ -610,5 +614,117 @@ describe('W02 PART 05 — request create audit & notification handoff', () => {
     assert.ok(!serialized.includes('y-secret'));
     assert.ok(!serialized.includes('Bearer q'));
     assert.equal(record.metadata.channelAttributionId, entityId, 'non-sensitive keys are kept');
+  });
+
+  it('E1 outbox: with an ACTIVE subscribed endpoint, one marker per create event; payload carries identities only; replay adds no marker', async () => {
+    process.env.INTEGRATION_WEBHOOKS_ENABLED = 'true';
+    registerIntegrationWebhookSubscriptionProbe();
+    try {
+      await pool.query(
+        `INSERT INTO integration_webhook_endpoints
+           (id, client_id, building_id, name, url, event_types, status, signing_secret, timeout_ms)
+         VALUES ($1, $2, NULL, 'W05 receiver', 'https://receiver.example.com/w05', $3, 'ACTIVE', 'whsec_w05_probe', 5000)`,
+        [randomUUID(), clientA, ['HANDYMAN_REQUEST_CREATED']],
+      );
+      const f = await intakeWithToken('A', SENSITIVE_REPORTER);
+      assert.equal(f.status, 201, JSON.stringify(f.body));
+      const [ev] = await createdEvents(f.id);
+      const markers = await pool.query(
+        `SELECT operational_event_id, entity_type, entity_id, payload FROM integration_outbox_events WHERE entity_id = $1`,
+        [f.id],
+      );
+      assert.equal(markers.rows.length, 1, 'one outbox marker for the one create event');
+      assert.equal(markers.rows[0].operational_event_id, ev.id);
+      assert.equal(markers.rows[0].entity_type, 'HANDYMAN_SERVICE_REQUEST');
+      const payload: string = markers.rows[0].payload;
+      for (const forbidden of [
+        'Sensitive Reporter Name', 'Sensitive Contact Name', '+628555000111', '+628555000222',
+        'secret.reporter@example.com', f.exchangeToken, 'assertion', 'exchangeToken', 'workspaceToken',
+      ]) {
+        assert.ok(!payload.includes(forbidden), `outbox payload must not contain ${forbidden}`);
+      }
+      assert.equal(JSON.parse(payload).metadata.notificationHandoff.status, 'BLOCKED_BY_POLICY');
+
+      const replay = await api().post(CREATE).send({
+        exchangeToken: f.exchangeToken, serviceCatalogId: serviceA, description: 'Replay',
+      });
+      assert.equal(replay.status, 401);
+      const after = await pool.query(
+        `SELECT count(*)::int AS n FROM integration_outbox_events WHERE entity_id = $1`, [f.id],
+      );
+      assert.equal(after.rows[0].n, 1, 'replay adds no outbox marker');
+    } finally {
+      delete process.env.INTEGRATION_WEBHOOKS_ENABLED;
+      resetIntegrationOutboxSubscriptionProbe();
+      await pool.query(`DELETE FROM integration_webhook_endpoints WHERE name = 'W05 receiver'`);
+    }
+  });
+
+  // ---- Local-user create path (createHandymanServiceRequest) --------------
+  async function localAttribution(userId: string): Promise<string> {
+    const attr = await handymanChannelAttributionService.createChannelAttribution({
+      tenantCompanyId: tenantA,
+      buildingId: buildingA,
+      spaceId: spaceA,
+      originChannel: 'BM_SUPER_APP',
+      originReference: `W05-LOCAL-${randomUUID().slice(0, 8)}`,
+      createdByUserId: userId,
+    });
+    return attr.id;
+  }
+
+  it('F1 local-user create: request and HANDYMAN_REQUEST_CREATED commit together, actor is the User, no Care actor fields', async () => {
+    const local = await operator(TRIAGE_ONLY, [buildingA]);
+    const attrId = await localAttribution(local.userId);
+    const created = await handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: attrId, serviceCatalogId: serviceA, description: 'Local create' },
+      local.userId,
+    );
+    const events = await createdEvents(created.id);
+    assert.equal(events.length, 1, 'exactly one create event for the local-user request');
+    assert.equal(events[0].actor_user_id, local.userId, 'the acting User is recorded');
+    assert.equal(events[0].metadata.channelAttributionId, attrId);
+    assert.equal(events[0].metadata.careActorId, null);
+    assert.equal(events[0].building_id, buildingA);
+    assert.equal(events[0].metadata.notificationHandoff.status, 'BLOCKED_BY_POLICY');
+  });
+
+  it('F2 local-user rollback: audit failure leaves no request and no event; retry creates exactly one', async () => {
+    const local = await operator(TRIAGE_ONLY, [buildingA]);
+    const attrId = await localAttribution(local.userId);
+    const reqBefore = (await pool.query(`SELECT count(*)::int AS n FROM handyman_service_requests`)).rows[0].n;
+    const evBefore = (await pool.query(
+      `SELECT count(*)::int AS n FROM operational_events WHERE event_type = 'HANDYMAN_REQUEST_CREATED'`)).rows[0].n;
+    await setFault(true);
+    try {
+      await assert.rejects(handymanServiceRequestService.createHandymanServiceRequest(
+        { channelAttributionId: attrId, serviceCatalogId: serviceA, description: 'Injected' },
+        local.userId,
+      ));
+    } finally {
+      await setFault(false);
+    }
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM handyman_service_requests`)).rows[0].n, reqBefore);
+    assert.equal((await pool.query(
+      `SELECT count(*)::int AS n FROM operational_events WHERE event_type = 'HANDYMAN_REQUEST_CREATED'`)).rows[0].n, evBefore);
+    const retry = await handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: attrId, serviceCatalogId: serviceA, description: 'Retry' },
+      local.userId,
+    );
+    assert.equal((await createdEvents(retry.id)).length, 1);
+  });
+
+  it('F3 local-user without Building assignment is denied before any write: no request, no event', async () => {
+    const outsider = await operator(TRIAGE_ONLY, []);
+    const attrId = await localAttribution(outsider.userId);
+    const reqBefore = (await pool.query(`SELECT count(*)::int AS n FROM handyman_service_requests`)).rows[0].n;
+    await assert.rejects(handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: attrId, serviceCatalogId: serviceA, description: 'Denied' },
+      outsider.userId,
+    ));
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM handyman_service_requests`)).rows[0].n, reqBefore);
+    assert.equal((await pool.query(
+      `SELECT count(*)::int AS n FROM operational_events WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND actor_user_id = $1`,
+      [outsider.userId])).rows[0].n, 0);
   });
 });
