@@ -1,5 +1,5 @@
 import { withTransaction } from '../../database';
-import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { buildingRepository } from '../buildings';
 import {
@@ -129,9 +129,15 @@ export async function createHandymanSchedulingReadiness(
     input.handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the
+  // authoritative parent request chain (migration 0378: the request's
+  // building_id is server-derived and NOT NULL), replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not open the write.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const timezone = await deriveTimezone(request.buildingId);
 
   const journalBase = { clientId: request.clientId, actorUserId };
@@ -204,18 +210,22 @@ export async function supersedeHandymanSchedulingReadiness(
         readinessId,
       );
       if (!current) throw handymanSchedulingReadinessNotFoundError();
-      if (!(await contextAccessService.canAccessClient(actorUserId, current.clientId))) {
-        throw buildingAccessDeniedError();
-      }
-      if (current.status !== 'ACTIVE') {
-        throw handymanSchedulingReadinessInvalidStatusError();
-      }
-
       const request = await handymanServiceRequestRepository.findById(
         tx,
         current.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the
+      // authoritative parent request chain, replacing the client-level
+      // canAccessClient shortcut (wall position preserved: after the
+      // readiness 404, before any mutation).
+      await assertBuildingScopedResourceAccess(actorUserId, {
+        clientId: current.clientId,
+        buildingId: request.buildingId,
+      });
+      if (current.status !== 'ACTIVE') {
+        throw handymanSchedulingReadinessInvalidStatusError();
+      }
       const timezone = await deriveTimezone(request.buildingId);
 
       const superseded = await handymanSchedulingReadinessRepository
@@ -293,11 +303,13 @@ export async function getHandymanSchedulingReadiness(
     handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (
-    actorUserId !== undefined &&
-    !(await contextAccessService.canAccessClient(actorUserId, request.clientId))
-  ) {
-    throw buildingAccessDeniedError();
+  if (actorUserId !== undefined) {
+    // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the parent
+    // request chain, replacing the client-level canAccessClient shortcut.
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: request.clientId,
+      buildingId: request.buildingId,
+    });
   }
   const current = await handymanSchedulingReadinessRepository
     .findActiveByRequest(undefined, request.id);
@@ -328,9 +340,12 @@ export async function listHandymanSchedulingReadinessHistory(
     handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the parent
+  // request chain, replacing the client-level canAccessClient shortcut.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const rows = await handymanSchedulingReadinessRepository.listByRequest(
     undefined,
     request.id,
