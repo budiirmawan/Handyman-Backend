@@ -141,8 +141,14 @@ before(async () => {
   await grantCareActorProperty({ careActorId, propertyId: realmA.property.id, clientId: realmA.client.id }, adminUserId);
 
   // Grantor holds report (delegation ceiling) and can administer grants.
-  grantorToken = await createSessionWithPermissions([{ code: REPORT, name: 'Report' }]);
+  // PART 06: the administrative grantor needs permission.manage, the delegated
+  // code, AND explicit building access to the care actor's granted property.
+  grantorToken = await createSessionWithPermissions([
+    { code: REPORT, name: 'Report' },
+    { code: 'permission.manage', name: 'Manage permissions' },
+  ]);
   grantorUserId = await userIdOf(grantorToken);
+  await buildingAssignmentService.createAssignment(grantorUserId, { buildingId: realmA.building.id });
   // Verifier holds verify through an explicit RBAC grant on its own role.
   verifierToken = await createSessionWithPermissions([{ code: VERIFY, name: 'Verify' }]);
   verifierUserId = await userIdOf(verifierToken);
@@ -279,8 +285,10 @@ describe('Customer Care payment REPORT through workspace session', () => {
     const denied = await report(requestId, scopeA);
     assert.equal(denied.status, 403, JSON.stringify(denied.body));
     assert.equal(denied.body.error.code, 'PERMISSION_DENIED');
-    assert.equal(await revokeCareActorPermission({ careActorId, permissionCode: REPORT }, grantorUserId), null,
-      'revocation is idempotent');
+    // PART 06: a repeated revoke is not an effective change: 404, no audit event.
+    await assert.rejects(
+      revokeCareActorPermission({ careActorId, permissionCode: REPORT }, grantorUserId),
+      (error: any) => error.statusCode === 404);
     // Another care actor with no grant at all is denied the same way.
     const otherToken = await admit(assertion({ actor: { type: 'CUSTOMER_CARE', actorReference: 'other-care' } }));
     const other = await report(requestId, scopeA, {}, otherToken);

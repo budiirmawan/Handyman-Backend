@@ -1,6 +1,7 @@
 import { migration0430BindCareCreateExchangePurpose } from './0430_bind_care_create_exchange_purpose';
 import { migration0431HandymanPaymentActorIdentity } from './0431_handyman_payment_actor_identity';
 import { migration0432HandymanCareActorPaymentPermission } from './0432_handyman_care_actor_payment_permission';
+import { migration0433HandymanPaymentCareEventScope } from './0433_handyman_payment_care_event_scope';
 import { migration0429CreateHandymanCareWorkspaceSessions } from './0429_create_handyman_care_workspace_sessions';
 import { migration0001InitialFoundation } from './0001_initial_foundation';
 import { migration0002CreateUsers } from './0002_create_users';
@@ -898,4 +899,5 @@ export const migrations: readonly Migration[] = [
   migration0430BindCareCreateExchangePurpose,
   migration0431HandymanPaymentActorIdentity,
   migration0432HandymanCareActorPaymentPermission,
+  migration0433HandymanPaymentCareEventScope,
 ];

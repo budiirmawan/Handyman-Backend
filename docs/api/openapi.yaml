@@ -6880,6 +6880,110 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/care-actors/{careActorId}/permissions:
+    get:
+      operationId: listHandymanCareActorPermissionGrants
+      summary: List permission grants of a Customer Care actor (administrative, PART 06)
+      tags: [Handyman Care Actors]
+      description: >-
+        CR-HM-CUSTOMER-PAYMENT-REPORT-01 PART 06. Requires permission.read (RBAC) and
+        scope: the caller must be an ACTIVE User with explicit building access to a
+        property where the care actor holds a property grant (ACTIVE or revoked history).
+        Returns ACTIVE and REVOKED grants. No default grant exists.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: careActorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 'Grant list.'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          grants:
+                            type: array
+                            items: { type: object }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: grantHandymanCareActorPermission
+      summary: Grant a care-actor-grantable permission (handyman.payment.report only) (PART 06)
+      tags: [Handyman Care Actors]
+      description: >-
+        CR-HM-CUSTOMER-PAYMENT-REPORT-01 PART 06. Requires permission.manage (RBAC),
+        the delegated code held by the caller, and scope as in the GET. Allowlist is
+        handyman.payment.report only; handyman.payment.verify is refused (400) and is
+        never grantable to a care actor. Idempotent: an existing ACTIVE grant returns
+        200 with created: false and writes no audit event. An effective grant returns
+        201 and writes HANDYMAN_CARE_ACTOR_PERMISSION_GRANTED in the same transaction.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: careActorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [permissionCode]
+              properties:
+                permissionCode: { type: string, enum: [handyman.payment.report] }
+      responses:
+        '200':
+          description: 'Existing ACTIVE grant (replay, created: false).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '201':
+          description: 'Grant created (created: true).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /handyman/care-actors/{careActorId}/permissions/{permissionCode}:
+    delete:
+      operationId: revokeHandymanCareActorPermission
+      summary: Revoke an ACTIVE care actor permission grant (PART 06)
+      tags: [Handyman Care Actors]
+      description: >-
+        CR-HM-CUSTOMER-PAYMENT-REPORT-01 PART 06. Requires permission.manage, delegation
+        of the code, and scope (revoked property history allowed). ACTIVE to REVOKED
+        only; writes HANDYMAN_CARE_ACTOR_PERMISSION_REVOKED in the same transaction.
+        404 when no ACTIVE grant exists (no audit event).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: careActorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: permissionCode
+          in: path
+          required: true
+          schema: { type: string, enum: [handyman.payment.report] }
+      responses:
+        '200':
+          description: 'Revoked grant.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /handyman/customer-ledger:
     get:
       tags: [Handyman Customer Ledger]

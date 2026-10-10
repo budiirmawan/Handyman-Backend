@@ -709,3 +709,59 @@ Tidak ada perubahan pada payment verification, CLOSE, schema DB, migrasi, atau l
 - Belum ada endpoint admin HTTP untuk grant `handyman.payment.report` ke care actor (service-level saja).
 - Event `operational_events` dan kegagalan transport/ledger yang sudah ada pada HEAD `fbb5cdc` (`availableActions` pada payload ledger, transport test 1–5) tidak diubah pada PART ini.
 - Ekspektasi test yang berubah karena perubahan kontrak yang disengaja: daftar route care di `handyman-care-workspace-scope.test.ts` dan graf FK payment di `handyman-customer-payments.test.ts` (keduanya menambah entri payment/care actor, tanpa jalur settlement/refund/allocation).
+
+## 17. PART 06 — Authority provisioning & runtime stabilization
+
+### 17.1 Kontrak admin provisioning (baru)
+
+Route baru: `src/modules/handyman-care-actors/handyman-care-actor-permission.routes.ts`, terdaftar di `src/routes/index.ts`. OpenAPI: `docs/api/openapi.yaml` (operationId `listHandymanCareActorPermissionGrants`, `grantHandymanCareActorPermission`, `revokeHandymanCareActorPermission`).
+
+- `GET /api/v1/handyman/care-actors/{careActorId}/permissions`: `permission.read` (RBAC). Mengembalikan riwayat grant ACTIVE dan REVOKED.
+- `POST /api/v1/handyman/care-actors/{careActorId}/permissions` body `{ "permissionCode": "handyman.payment.report" }`: `permission.manage` (RBAC). `201` dengan `created: true` untuk grant efektif, `200` dengan `created: false` untuk replay (tanpa audit baru).
+- `DELETE /api/v1/handyman/care-actors/{careActorId}/permissions/{permissionCode}`: `permission.manage` (RBAC). `200` untuk revoke efektif, `404` bila tidak ada grant ACTIVE (tanpa audit).
+
+Lapisan otorisasi (semua fail-closed, di service):
+1. Grantor harus User ACTIVE yang memegang `permission.manage` DAN kode permission yang didelegasikan (batas delegasi).
+2. Scope: grantor harus punya akses building (`contextAccessService.canAccessProperty`) ke salah satu property tempat care actor memegang grant property. Grant memakai grant ACTIVE; revoke dan list juga menerima riwayat grant property yang sudah dicabut.
+3. Allowlist: hanya `handyman.payment.report`. `handyman.payment.verify` ditolak `400` di route dan service, dan tidak bisa direpresentasikan di tabel grant (CHECK dari migrasi 0432).
+4. Audit: `HANDYMAN_CARE_ACTOR_PERMISSION_GRANTED` dan `HANDYMAN_CARE_ACTOR_PERMISSION_REVOKED` ditulis lewat `recordOperationalEvent` dalam transaksi yang sama dengan perubahan grant.
+5. Tidak ada grant otomatis. Tidak ada role name yang dijadikan authority. `handyman.payment.verify` hanya lewat `requirePermission('handyman.payment.verify')` pada route ledger.
+
+### 17.2 Identitas eksklusif USER / CARE_ACTOR
+
+- Migrasi `0433_handyman_payment_care_event_scope`: CHECK `handyman_customer_payment_events_care_event_check` dengan `actor_type = 'USER' OR event_type = 'RECORD_PAYMENT'`. Celah PART 05: event CARE_ACTOR sebelumnya bisa membawa event_type apa pun pada level schema.
+- Constraint PART 05 (`handyman_customer_payments_recorder_identity_check`, `handyman_customer_payment_events_actor_identity_check`) tetap dan diverifikasi ada di test.
+
+### 17.3 Perbaikan test
+
+- `tests/handyman-care-workspace-spaces.test.ts`: asersi `tenant_space_relationships` berbasis fixture (`building_id = ANY(...)`), bukan count global.
+- `tests/handyman-customer-care-ledger.test.ts`: ekspektasi helper ledger memakai proyeksi `availableActions` yang sama dengan controller (`computePaymentAvailableActions(status)`, fail-closed). Field kontrak tidak dihapus dan controller tidak diubah.
+- `tests/handyman-care-property-scope.test.ts`: asersi count global grant property dipersempit ke care actor test (mismatch urutan file, bukan regresi).
+- `tests/handyman-care-workspace-payment-report.test.ts` (PART 05): grantor sekarang memegang `permission.manage` dan akses building; revoke ulang diasersi `404`.
+- Baru: `tests/handyman-care-admin-provisioning.test.ts` (15 test): RBAC 401/403, delegasi, scope, grant + replay + audit, runtime report workspace setelah grant, revoke + audit + report ditolak + 404, allowlist verify, unknown fields, grant tidak otomatis, constraint identitas DB.
+
+### 17.4 Transport certification 1–5 (`tests/handyman-customer-care-transport-certification.test.ts`): diagnosis, belum diperbaiki
+
+Penyebab yang terbukti:
+- Test 1 gagal di `listReqRes.body.data.length === 1` (`0 !== 1`), B3 list `GET /api/v1/handyman/requests` untuk sesi Customer Care (`tenant_company.read`, bukan PIC tenant). List memakai `customerRequestReadScope`: baris hanya terlihat untuk PIC tenant aktif atau PLATFORM_ADMIN pada building yang sama. Ini sesuai keputusan keamanan CR-HM-SEC-01 PART 01 (dinding baca C6), sehingga test mengharapkan perilaku yang berbeda dari keputusan itu. Tes detail `GET /handyman/requests/:id` pada journey yang sama memakai pola yang sama. Dinding tidak dilonggarkan dan ekspektasi belum diubah tanpa persetujuan.
+- Test 2 dan 3 gagal karena `journey` tidak terbentuk dari test 1 (`completed journey required`, `assert.ok(journey)`). Ini efek berantai, bukan penyebab terpisah.
+- Test 4 memanggil `git show b87d72f:docs/api/openapi.yaml`. Test 5 memanggil `git diff 2fcfad9..HEAD` dan `git diff b87d72f -- src`. Commit `b87d72f` dan `2fcfad9` tidak ada di clone ini (repo shallow, 6 commit) dan tidak ditemukan di origin (`git fetch origin <sha>` gagal: `couldn't find remote ref`). Dokumen sertifikasi juga mencatatnya sebagai "pre-work HEAD" dari baseline lain.
+- Asersi freeze "tanpa perubahan migrasi/runtime sejak baseline" tidak bisa dipenuhi oleh PART manapun setelah PART 05, karena migrasi 0431–0433 dan service memang berubah. Ini keputusan, bukan bug.
+
+Keputusan yang dibutuhkan dari user (lihat pertanyaan di chat):
+- Test 1–3: pilih apakah ekspektasi journey diubah ke perilaku dinding C6 (CC tanpa PIC tidak melihat request), atau dinding C6 perlu ditinjau ulang melalui keputusan keamanan.
+- Test 4–5: pilih baseline pengganti yang ada di repo (mis. commit sertifikasi yang benar), atau asersi freeze historis di-SKIP dengan alasan eksplisit sementara sisanya tetap berjalan.
+
+### 17.5 Hasil validasi
+
+- Typecheck: `npx tsc --noEmit -p .` PASS.
+- Focused: `tests/handyman-care-admin-provisioning.test.ts` 15/15 PASS. Pasangan provisioning + property-scope 19/19 PASS. PART 05 payment report 11/11 PASS (run subset). Spaces dan ledger B6 PASS (run subset).
+- Subset Handyman 45 file (44 file subset PART 05 + `handyman-care-admin-provisioning`), DB bersih, `--test-concurrency=1`: `tests 343, pass 338, fail 5`. Kelima kegagalan adalah transport certification 1–5 (§17.4), sama seperti temuan diagnosis. Ledger B6 test 1 dan spaces sekarang PASS. Log: `/tmp/p06-subset2.log`.
+- Dalam run yang sama `property-scope` PART 02 sempat gagal karena count global grant (§17.3), sudah diperbaiki dan diverifikasi dengan pasangan file (19/19).
+
+### 17.6 Residual PART 06
+
+- Transport 1–5 belum PASS. Menunggu keputusan §17.4. Tidak ada klaim E2E complete.
+- Ledger GET tidak menampilkan CONFIRM/REJECT kepada verifier (`canVerify` default false). Verifier memakai jalur verify yang sudah ada. Perlu keputusan bila ledger harus menampilkan aksi untuk verifier.
+- Grant payment tidak punya UI admin; hanya HTTP API dan OpenAPI.
+- Tidak ada full test suite. Tidak ada perubahan pada payment engine, invoice, settlement, QC, BAST, Work Order, atau Manager CLOSE.

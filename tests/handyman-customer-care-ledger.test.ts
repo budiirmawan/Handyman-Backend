@@ -21,6 +21,8 @@ import {
   readHandymanLedgerClientBasisAt,
   readHandymanLedgerTransactionAt,
 } from '../src/modules/handyman-customer-ledger-read';
+import { computePaymentAvailableActions }
+  from '../src/modules/handyman-customer-payments/handyman-customer-payment.available-actions';
 import { allocateHandymanCustomerPayment }
   from '../src/modules/handyman-customer-payment-allocations';
 import {
@@ -254,6 +256,27 @@ async function setupScopeLedgerFixture() {
   };
 }
 
+/**
+ * PART 06: the HTTP ledger response projects every payment with the
+ * `availableActions` contract field (controller `toLedgerPaymentPayload`,
+ * fail-closed: no verify action without `canVerify`). The internal read
+ * helpers return the raw payment shape, so the expectation applies the same
+ * projection instead of deleting the contract field from the response.
+ */
+function withLedgerPaymentActions<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => withLedgerPaymentActions(item)) as T;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(record)) out[key] = withLedgerPaymentActions(child);
+    if (typeof record.paymentId === 'string' && typeof record.status === 'string' && !('availableActions' in record)) {
+      out.availableActions = computePaymentAvailableActions(record.status as never);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', () => {
   it('1: GET /handyman/execution-scopes/:executionScopeId/customer-ledger returns authoritative CR-HM-13 transaction facts and totals', async () => {
     const f = await setupScopeLedgerFixture();
@@ -348,7 +371,7 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       f.executionScopeId,
       careReader.userId,
     );
-    assert.deepEqual(res.body.data, expected);
+    assert.deepEqual(res.body.data, withLedgerPaymentActions(expected));
 
     const data = res.body.data;
     assert.equal(data.contractVersion, 'CR-HM-13-PART-06');
@@ -461,7 +484,7 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
         limit: 25,
       },
     );
-    assert.deepEqual(res.body.data, expected);
+    assert.deepEqual(res.body.data, withLedgerPaymentActions(expected));
     assert.equal(res.body.data.contractVersion, 'CR-HM-13-PART-06');
     assert.equal(res.body.data.readOnly, true);
     assert.equal(res.body.data.clientId, f1.clientId);

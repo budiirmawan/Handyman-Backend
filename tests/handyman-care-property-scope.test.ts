@@ -113,7 +113,8 @@ describe('Customer Care property scope authority — PART 02', () => {
     await assert.rejects(grantCareActorProperty({ careActorId, propertyId: otherPropertyId, clientId: otherClientId }, administratorUserId));
     const outsider = await userService.createUser({ email: `${suffix()}@test.invalid`, displayName: 'Outsider' });
     await assert.rejects(grantCareActorProperty({ careActorId, propertyId, clientId }, outsider.id));
-    assert.equal((await db().query('SELECT COUNT(*)::int AS n FROM handyman_care_property_grants')).rows[0].n, 0);
+    // Scoped to this test's care actor: other files in the same database may hold their own grants.
+    assert.equal((await db().query('SELECT COUNT(*)::int AS n FROM handyman_care_property_grants WHERE care_actor_id = $1', [careActorId])).rows[0].n, 0);
   });
 
   it('grants across one property, not a Client/foreign building; journals atomically', async (t) => {

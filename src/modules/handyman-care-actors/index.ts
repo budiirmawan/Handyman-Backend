@@ -1,3 +1,4 @@
+export { createCareActorPermissionAdminRouter } from './handyman-care-actor-permission.routes';
 export { handymanCareActorRepository } from './handyman-care-actor.repository';
 export {
   handymanCarePropertyScopeService,
@@ -10,6 +11,7 @@ export {
   CARE_ACTOR_GRANTABLE_PERMISSION_CODES,
   CARE_ACTOR_PAYMENT_REPORT_PERMISSION,
   grantCareActorPermission,
+  listCareActorPermissionGrants,
   hasActiveCareActorPermission,
   isCareWorkspaceSessionActive,
   revokeCareActorPermission,

@@ -1,17 +1,30 @@
 import type { PoolClient } from 'pg';
-import { getPool } from '../../database';
+import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
+import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { recordOperationalEvent } from '../operational-events';
 import { permissionService } from '../permissions';
+import { userRepository } from '../users';
 
 /**
- * CR-HM-CUSTOMER-PAYMENT-REPORT-01 PART 05 — permission provisioning for
+ * CR-HM-CUSTOMER-PAYMENT-REPORT-01 PART 05/06 — permission provisioning for
  * Customer Care actors (non-User principals).
  *
  * Mechanism: a grant references the EXISTING permission catalogue by code
  * (`permissions.code`). Authority is the permission code, never a role name.
- * Delegation ceiling: a grantor may only grant/revoke a permission they hold
- * through the existing RBAC resolution (`permissionService`). The allowlist
- * below is the only care-actor-grantable set; verify is never grantable here.
+ *
+ * PART 06 administrative rules (all fail-closed):
+ *  1. RBAC at the route: `permission.read` (list) / `permission.manage` (grant, revoke).
+ *  2. Grantor is an ACTIVE User who holds `permission.manage` and the permission
+ *     being delegated (delegation ceiling).
+ *  3. Scope: the grantor must have explicit building access to a property where
+ *     the care actor holds a property grant. Grant requires an ACTIVE property
+ *     grant; revoke/list also accept revoked property history so that access
+ *     can be withdrawn after the property grant itself was revoked.
+ *  4. Audit: every effective grant/revoke writes an operational event inside the
+ *     same transaction. Idempotent replays write nothing.
+ *
+ * The allowlist is the only care-actor-grantable set; verify is never grantable here.
  */
 export const CARE_ACTOR_PAYMENT_REPORT_PERMISSION = 'handyman.payment.report';
 export const CARE_ACTOR_GRANTABLE_PERMISSION_CODES: readonly string[] = [
@@ -56,85 +69,179 @@ function uuid(value: unknown, field: string): string {
   return value.toLowerCase();
 }
 
-function allowlisted(code: unknown): string {
+export function assertCareActorGrantablePermissionCode(code: unknown): string {
   if (typeof code !== 'string' || !CARE_ACTOR_GRANTABLE_PERMISSION_CODES.includes(code)) {
     throw AppError.validation('permissionCode is not grantable to a care actor.');
   }
   return code;
 }
 
-/** Delegation ceiling: the grantor must hold the permission itself. */
-async function assertGrantorHoldsPermission(grantorUserId: string, code: string) {
+function permissionDenied(message: string): AppError {
+  return new AppError({ code: ERROR_CODES.PERMISSION_DENIED, message, statusCode: 403 });
+}
+
+/** Grantor must be an ACTIVE User holding `permission.manage` and the delegated code. */
+async function assertGrantorDelegation(grantorUserId: string, code: string): Promise<void> {
+  const user = await userRepository.findById(grantorUserId);
+  if (user?.status !== 'ACTIVE') throw permissionDenied('Grantor is not an active user.');
   const held = await permissionService.resolvePermissionsForUser(grantorUserId);
+  if (!held.includes('permission.manage')) {
+    throw permissionDenied('Grantor does not hold permission.manage.');
+  }
   if (!held.includes(code)) {
-    throw new AppError({
-      code: ERROR_CODES.PERMISSION_DENIED,
-      message: 'Grantor does not hold the permission being delegated.',
-      statusCode: 403,
-    });
+    throw permissionDenied('Grantor does not hold the permission being delegated.');
   }
 }
 
-export async function grantCareActorPermission(
-  input: { careActorId: string; permissionCode: string },
+/**
+ * Scope: returns the first property (with its client) under which the care actor
+ * has a property grant that the grantor can access. Fail-closed otherwise.
+ */
+async function resolveAdministrativeScope(
+  executor: Executor,
   grantorUserId: string,
-): Promise<CareActorPermissionGrant> {
-  const careActorId = uuid(input.careActorId, 'careActorId');
-  const code = allowlisted(input.permissionCode);
-  const grantor = uuid(grantorUserId, 'grantorUserId');
-  await assertGrantorHoldsPermission(grantor, code);
-  const client = getPool();
-  const actor = await client.query(
-    `SELECT status FROM handyman_handoff_care_actors WHERE id = $1`,
+  careActorId: string,
+  includeRevoked: boolean,
+): Promise<{ propertyId: string; clientId: string }> {
+  const result = await executor.query<{ property_id: string; client_id: string }>(
+    `SELECT DISTINCT g.property_id, p.client_id
+       FROM handyman_care_property_grants g
+       JOIN properties p ON p.id = g.property_id
+      WHERE g.care_actor_id = $1 AND ($2::boolean OR g.status = 'ACTIVE')
+      ORDER BY g.property_id`,
+    [careActorId, includeRevoked],
+  );
+  for (const row of result.rows) {
+    if (await contextAccessService.canAccessProperty(grantorUserId, row.property_id)) {
+      return { propertyId: row.property_id, clientId: row.client_id };
+    }
+  }
+  throw buildingAccessDeniedError();
+}
+
+async function assertActiveCareActor(executor: Executor, careActorId: string): Promise<void> {
+  const actor = await executor.query(
+    `SELECT status FROM handyman_handoff_care_actors WHERE id = $1 FOR SHARE`,
     [careActorId],
   );
   if (actor.rows[0]?.status !== 'ACTIVE') {
     throw AppError.validation('careActorId must reference an ACTIVE care actor.');
   }
-  const catalogue = await client.query(
+}
+
+async function assertCatalogueActive(executor: Executor, code: string): Promise<void> {
+  const catalogue = await executor.query(
     `SELECT 1 FROM permissions WHERE code = $1 AND status = 'ACTIVE'`,
     [code],
   );
   if (catalogue.rowCount !== 1) {
     throw AppError.validation('permissionCode is not an ACTIVE catalogue permission.');
   }
-  // Idempotent: an existing ACTIVE grant is returned unchanged.
-  const inserted = await client.query(
-    `INSERT INTO handyman_care_actor_permission_grants
-       (id, care_actor_id, permission_code, status, granted_by_user_id)
-     VALUES (gen_random_uuid(), $1, $2, 'ACTIVE', $3)
-     ON CONFLICT (care_actor_id, permission_code) WHERE status = 'ACTIVE' DO NOTHING
-     RETURNING id`,
-    [careActorId, code, grantor],
-  );
-  const result = inserted.rows[0]
-    ? await client.query(`${SELECT} WHERE id = $1`, [inserted.rows[0].id])
-    : await client.query(
+}
+
+/**
+ * Grant (ACTIVE). Returns `created: false` for an idempotent replay, which
+ * writes no new grant and no new audit event.
+ */
+export async function grantCareActorPermission(
+  input: { careActorId: string; permissionCode: string },
+  grantorUserId: string,
+): Promise<{ grant: CareActorPermissionGrant; created: boolean }> {
+  const careActorId = uuid(input.careActorId, 'careActorId');
+  const code = assertCareActorGrantablePermissionCode(input.permissionCode);
+  const grantor = uuid(grantorUserId, 'grantorUserId');
+  await assertGrantorDelegation(grantor, code);
+  return withTransaction(async (tx) => {
+    await assertActiveCareActor(tx, careActorId);
+    await assertCatalogueActive(tx, code);
+    const scope = await resolveAdministrativeScope(tx, grantor, careActorId, false);
+    const inserted = await tx.query(
+      `INSERT INTO handyman_care_actor_permission_grants
+         (id, care_actor_id, permission_code, status, granted_by_user_id)
+       VALUES (gen_random_uuid(), $1, $2, 'ACTIVE', $3)
+       ON CONFLICT (care_actor_id, permission_code) WHERE status = 'ACTIVE' DO NOTHING
+       RETURNING id`,
+      [careActorId, code, grantor],
+    );
+    if (!inserted.rows[0]) {
+      const existing = await tx.query(
         `${SELECT} WHERE care_actor_id = $1 AND permission_code = $2 AND status = 'ACTIVE'`,
         [careActorId, code],
       );
-  return mapGrant(result.rows[0]);
+      return { grant: mapGrant(existing.rows[0]), created: false };
+    }
+    const row = await tx.query(`${SELECT} WHERE id = $1`, [inserted.rows[0].id]);
+    await recordOperationalEvent({
+      clientId: scope.clientId,
+      actorUserId: grantor,
+      eventType: 'HANDYMAN_CARE_ACTOR_PERMISSION_GRANTED',
+      entityType: 'HANDYMAN_CARE_ACTOR_PERMISSION_GRANT',
+      entityId: inserted.rows[0].id,
+      summary: 'Customer Care actor permission granted.',
+      metadata: { careActorId, permissionCode: code, propertyId: scope.propertyId },
+    }, tx);
+    return { grant: mapGrant(row.rows[0]), created: true };
+  });
 }
 
-/** ACTIVE -> REVOKED. Idempotent: returns null when no ACTIVE grant exists. */
+/**
+ * ACTIVE -> REVOKED. Throws 404 when no ACTIVE grant exists (no silent no-op,
+ * no audit for a non-effective request).
+ */
 export async function revokeCareActorPermission(
   input: { careActorId: string; permissionCode: string },
   revokerUserId: string,
-): Promise<CareActorPermissionGrant | null> {
+): Promise<CareActorPermissionGrant> {
   const careActorId = uuid(input.careActorId, 'careActorId');
-  const code = allowlisted(input.permissionCode);
+  const code = assertCareActorGrantablePermissionCode(input.permissionCode);
   const revoker = uuid(revokerUserId, 'revokerUserId');
-  await assertGrantorHoldsPermission(revoker, code);
+  await assertGrantorDelegation(revoker, code);
+  return withTransaction(async (tx) => {
+    const scope = await resolveAdministrativeScope(tx, revoker, careActorId, true);
+    const updated = await tx.query(
+      `UPDATE handyman_care_actor_permission_grants
+          SET status = 'REVOKED', revoked_by_user_id = $3, revoked_at = NOW()
+        WHERE care_actor_id = $1 AND permission_code = $2 AND status = 'ACTIVE'
+        RETURNING id`,
+      [careActorId, code, revoker],
+    );
+    if (!updated.rows[0]) {
+      throw AppError.notFound('Active care actor permission grant not found.');
+    }
+    const row = await tx.query(`${SELECT} WHERE id = $1`, [updated.rows[0].id]);
+    await recordOperationalEvent({
+      clientId: scope.clientId,
+      actorUserId: revoker,
+      eventType: 'HANDYMAN_CARE_ACTOR_PERMISSION_REVOKED',
+      entityType: 'HANDYMAN_CARE_ACTOR_PERMISSION_GRANT',
+      entityId: updated.rows[0].id,
+      summary: 'Customer Care actor permission revoked.',
+      metadata: { careActorId, permissionCode: code, propertyId: scope.propertyId },
+    }, tx);
+    return mapGrant(row.rows[0]);
+  });
+}
+
+/** Administrative read of grants (ACTIVE and REVOKED history) under the same scope rule. */
+export async function listCareActorPermissionGrants(
+  input: { careActorId: string },
+  readerUserId: string,
+): Promise<CareActorPermissionGrant[]> {
+  const careActorId = uuid(input.careActorId, 'careActorId');
+  const reader = uuid(readerUserId, 'readerUserId');
+  const user = await userRepository.findById(reader);
+  const held = user?.status === 'ACTIVE'
+    ? await permissionService.resolvePermissionsForUser(reader)
+    : [];
+  if (!held.includes('permission.read')) {
+    throw permissionDenied('Reader does not hold permission.read.');
+  }
+  await resolveAdministrativeScope(getPool(), reader, careActorId, true);
   const result = await getPool().query(
-    `UPDATE handyman_care_actor_permission_grants
-        SET status = 'REVOKED', revoked_by_user_id = $3, revoked_at = NOW()
-      WHERE care_actor_id = $1 AND permission_code = $2 AND status = 'ACTIVE'
-      RETURNING id`,
-    [careActorId, code, revoker],
+    `${SELECT} WHERE care_actor_id = $1 ORDER BY granted_at, id`,
+    [careActorId],
   );
-  if (!result.rows[0]) return null;
-  const row = await getPool().query(`${SELECT} WHERE id = $1`, [result.rows[0].id]);
-  return mapGrant(row.rows[0]);
+  return result.rows.map(mapGrant);
 }
 
 /**

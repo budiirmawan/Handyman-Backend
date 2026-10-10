@@ -144,7 +144,12 @@ describe('Care workspace physical unit discovery', () => {
       assert.equal(item.roomId, chain.roomId);
       assert.equal(item.buildingId, chain.buildingId);
     }
-    assert.equal((await pool.query('SELECT count(*)::int AS n FROM tenant_space_relationships')).rows[0].n, 0);
+    // Fixture-scoped (never a global row count): this file creates no tenant
+    // space relationship for its own Buildings, and the read must neither create
+    // nor infer one for them.
+    assert.equal((await pool.query(
+      'SELECT count(*)::int AS n FROM tenant_space_relationships WHERE building_id = ANY($1::uuid[])',
+      [buildings.flat()])).rows[0].n, 0);
     assert.ok(!JSON.stringify(response.body).includes('tenant'));
     assert.ok(!JSON.stringify(response.body).includes('occupancy'));
     assert.deepEqual(Object.keys(response.body.data).sort(), ['evaluatedAt', 'items', 'nextCursor']);
