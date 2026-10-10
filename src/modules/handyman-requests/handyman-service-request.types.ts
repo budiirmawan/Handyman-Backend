@@ -159,3 +159,10 @@ export type NewHandymanServiceRequest = {
   description: string | null;
   createdByUserId: string | null;
 };
+
+/** W02 PART 03 — reporter/contact snapshot input (data only, no authority). */
+export type HandymanRequestContactInput = {
+  name: string;
+  phone?: string;
+  email?: string;
+};

@@ -58,11 +58,25 @@ after(async () => {
   if (postgres) { await postgres.stop(); await rm(DIR, { recursive: true, force: true }); }
 });
 
+/** Grants of the given codes to any role. The shared test DB is persistent, and
+ * other suites create scoped fixture roles that hold payment codes on purpose.
+ * The assertions below therefore compare deltas and PLATFORM_ADMIN only. */
 async function grantsFor(codes: readonly string[]): Promise<number> {
   const { rows } = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM role_permission_assignments rpa
        JOIN permissions p ON p.id = rpa.permission_id
       WHERE p.code = ANY($1::text[])`,
+    [codes],
+  );
+  return rows[0].n;
+}
+
+async function platformAdminGrantsFor(codes: readonly string[]): Promise<number> {
+  const { rows } = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM role_permission_assignments rpa
+       JOIN permissions p ON p.id = rpa.permission_id
+       JOIN roles r ON r.id = rpa.role_id
+      WHERE p.code = ANY($1::text[]) AND r.code = 'PLATFORM_ADMIN'`,
     [codes],
   );
   return rows[0].n;
@@ -84,13 +98,15 @@ describe('W02 PART 02B — payment permission registry', () => {
     assert.equal(rows.find((r) => r.code === 'handyman.payment.verify')?.name, 'Verify Handyman Customer Payments');
   });
 
-  it('no role holds either payment code before the seed (migrations grant nothing)', async () => {
-    assert.equal(await grantsFor(PAYMENT_CODES), 0);
+  it('no migration grants either payment code to PLATFORM_ADMIN', async () => {
+    assert.equal(await platformAdminGrantsFor(PAYMENT_CODES), 0);
   });
 
-  it('the real foundation seed does not auto-grant either code to any role, including PLATFORM_ADMIN', async () => {
+  it('the real foundation seed adds no grant for either code (delta zero) and none to PLATFORM_ADMIN', async () => {
+    const before = await grantsFor(PAYMENT_CODES);
     await foundationAccessSeed.run(pool);
-    assert.equal(await grantsFor(PAYMENT_CODES), 0, 'no role grant for report or verify after seed');
+    assert.equal(await grantsFor(PAYMENT_CODES), before, 'seed must add zero grants for report or verify');
+    assert.equal(await platformAdminGrantsFor(PAYMENT_CODES), 0, 'PLATFORM_ADMIN holds neither code');
 
     // Sanity: the seed really ran and PLATFORM_ADMIN holds ordinary codes.
     const admin = await roleRepository.findByCode('PLATFORM_ADMIN');

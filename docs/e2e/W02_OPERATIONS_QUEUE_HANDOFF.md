@@ -3,7 +3,7 @@
 Authority: Handyman Journey v1.3 FROZEN, dan `docs/e2e/W02_ASSISTED_INTAKE_GAP_RECONCILIATION.md`.
 Baseline PART 02: `954a013`. PART 02A (operations authority hardening) menyusul di commit berikutnya pada branch `arena/c6fc25e1-handyman-backend`.
 
-Cakupan: Operations Queue read projection untuk request hasil Customer Care Assisted Intake. Tidak ada Work Order engine, reporter, PIC selection, approval quotation, cancellation, notification engine, atau frontend.
+Cakupan: Operations Queue read projection untuk request hasil Customer Care Assisted Intake. Tidak ada Work Order engine, PIC selection, (reporter/contact snapshot read-only sejak PART 03), approval quotation, cancellation, notification engine, atau frontend.
 
 ## 1. Endpoint
 
@@ -122,7 +122,7 @@ Typecheck: `npx tsc --noEmit` exit 0.
 | R-1 | Alur queue lalu triage belum diuji sebagai satu alur | P1 | PART 03 |
 | R-2 | OQ-6: operator building melihat semua tenant di building yang di-assign | P0 (keputusan) | Persetujuan bisnis |
 | R-3 | Provisioning role Operations produksi belum diputuskan. Tidak ada grant dari kode. | P0 (keputusan provisioning) | Lihat §2 |
-| R-4 | Reporter dan kontak pelapor (G05, G06) belum ada | P0 | W02 PART 10 |
+| R-4 | Reporter dan kontak pelapor (G05, G06) | PARTIAL: snapshot intake dan read Operations ada sejak PART 03 (`W02_VERIFICATION_DEBT.md` §5). Reporter belum wajib, dan identitasnya belum diverifikasi | W02 PART 10 untuk sisa |
 | R-5 | Notifikasi `HANDYMAN_REQUEST_CREATED` dan audit create (G22, G23) belum ada | P1 | W02 PART 12 |
 | R-6 | Approval quotation oleh PIC (G08) belum ada | P0 | W02 PART 11 |
 | R-7 | Frontend Operations queue UNVERIFIED (tidak ada di repo ini) | UNVERIFIED | Repo frontend |

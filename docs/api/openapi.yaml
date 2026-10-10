@@ -79795,6 +79795,10 @@ components:
       description: >-
         Care-only intake from an attested, single-use BM handoff exchange.
         No channelAttributionId or caller-provided actor/customer/location.
+        Optional reporter and contactPerson are recorded as an append-only
+        snapshot with the request (W02 PART 03). They are data only and never
+        grant permission, PIC link, or approval authority. Omitting reporter
+        keeps the previous behaviour (no snapshot is stored).
       required: [exchangeToken, serviceCatalogId]
       properties:
         exchangeToken:
@@ -79805,6 +79809,49 @@ components:
         serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
         serviceVariantId: { $ref: "#/components/schemas/Uuid" }
         description: { type: string, minLength: 1, maxLength: 1000 }
+        reporter:
+          $ref: "#/components/schemas/HandymanRequestContactInput"
+        contactPerson:
+          $ref: "#/components/schemas/HandymanRequestContactInput"
+          description: Requires phone or email. Requires reporter in the same request.
+
+    HandymanRequestContactInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        Person snapshot recorded by Customer Care at intake. Phone is normalized
+        to 6-15 digits with an optional leading plus (spaces, hyphens, dots and
+        parentheses are removed). Email is trimmed and lowercased. Validation
+        errors never echo the submitted value.
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        phone: { type: string, nullable: true, maxLength: 32 }
+        email: { type: string, nullable: true, maxLength: 254 }
+
+    HandymanRequestContactSnapshot:
+      type: object
+      description: >-
+        Intake reporter/contact snapshot (W02 PART 03). Exposed on the Operations
+        queue for triage only. Not exposed on the Customer Care C6 reads.
+      required: [capturedAt, reporter, contactPerson]
+      properties:
+        capturedAt: { type: string, format: date-time }
+        reporter:
+          type: object
+          required: [name, phone, email]
+          properties:
+            name: { type: string }
+            phone: { type: string, nullable: true }
+            email: { type: string, nullable: true }
+        contactPerson:
+          type: object
+          nullable: true
+          required: [name, phone, email]
+          properties:
+            name: { type: string }
+            phone: { type: string, nullable: true }
+            email: { type: string, nullable: true }
 
     HandymanServiceRequestStatus:
       type: string
@@ -82825,6 +82872,11 @@ components:
             actorType: { type: string }
             careActorId: { type: string, format: uuid, nullable: true }
             createdAt: { type: string, format: date-time }
+        contact:
+          description: Intake reporter/contact snapshot for triage. Null when none was recorded. Not an authority.
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/HandymanRequestContactSnapshot"
     HandymanCustomerCareServiceRequest:
       type: object
       description: >-

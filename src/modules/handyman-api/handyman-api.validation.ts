@@ -1,3 +1,4 @@
+import type { HandymanRequestContactInput } from '../handyman-requests/handyman-service-request.types';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
@@ -151,7 +152,83 @@ export type CreateCareHandymanServiceRequestInput = {
   serviceCatalogId: string;
   serviceVariantId?: string;
   description?: string;
+  reporter?: HandymanRequestContactInput;
+  contactPerson?: HandymanRequestContactInput;
 };
+
+/** W02 PART 03 — reporter/contact snapshot. Values are data only; they never
+ * grant permission, approval authority, or a tenant PIC link. Field-level
+ * errors never echo the submitted value. */
+function readContactParty(
+  value: unknown,
+  field: 'reporter' | 'contactPerson',
+  details: Detail[],
+): HandymanRequestContactInput | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Array.isArray(value)) {
+    details.push({ field, message: `${field} must be an object.` });
+    return undefined;
+  }
+  const allowedKeys = ['name', 'phone', 'email'];
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key))) {
+    details.push({ field, message: `${field} contains an unexpected field.` });
+    return undefined;
+  }
+  let ok = true;
+  let name = '';
+  if (typeof value.name !== 'string') {
+    ok = false;
+    details.push({ field: `${field}.name`, message: `${field}.name is required.` });
+  } else {
+    name = value.name.trim();
+    if (name.length < 1 || name.length > 120 || /[\u0000-\u001f\u007f]/.test(name)) {
+      ok = false;
+      details.push({ field: `${field}.name`, message: `${field}.name must be 1-120 printable characters.` });
+    }
+  }
+  let phone: string | undefined;
+  if (value.phone !== undefined && value.phone !== null) {
+    const normalized = typeof value.phone === 'string'
+      ? value.phone.replace(/[\s().-]/g, '') : '';
+    if (!/^[+]?[0-9]{6,15}$/.test(normalized)) {
+      ok = false;
+      details.push({ field: `${field}.phone`, message: `${field}.phone must be 6-15 digits with an optional leading +.` });
+    } else {
+      phone = normalized;
+    }
+  }
+  let email: string | undefined;
+  if (value.email !== undefined && value.email !== null) {
+    const normalized = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+    if (normalized.length < 3 || normalized.length > 254 ||
+        !/^[^\s@]+@[^\s@]+[.][^\s@]+$/.test(normalized)) {
+      ok = false;
+      details.push({ field: `${field}.email`, message: `${field}.email must be a valid email address (max 254).` });
+    } else {
+      email = normalized;
+    }
+  }
+  if (!ok) return undefined;
+  return { name, ...(phone ? { phone } : {}), ...(email ? { email } : {}) };
+}
+
+function readContactSnapshot(body: Record<string, unknown>, details: Detail[]): {
+  reporter?: HandymanRequestContactInput;
+  contactPerson?: HandymanRequestContactInput;
+} {
+  const reporter = readContactParty(body.reporter, 'reporter', details);
+  const contactPerson = readContactParty(body.contactPerson, 'contactPerson', details);
+  if (body.contactPerson !== undefined && body.reporter === undefined) {
+    details.push({ field: 'reporter', message: 'reporter is required when contactPerson is provided.' });
+  }
+  if (contactPerson && !contactPerson.phone && !contactPerson.email) {
+    details.push({ field: 'contactPerson', message: 'contactPerson requires a phone or an email.' });
+  }
+  return {
+    ...(reporter ? { reporter } : {}),
+    ...(contactPerson && (contactPerson.phone || contactPerson.email) ? { contactPerson } : {}),
+  };
+}
 
 /** Care-only intake uses an opaque single-use exchange credential, never an
  * attribution ID, caller-declared actor, tenant, property or unit. */
@@ -161,7 +238,7 @@ export function parseCreateCareHandymanServiceRequestBody(
   if (!isRecord(body)) {
     fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
   }
-  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description'];
+  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'reporter', 'contactPerson'];
   const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
     fail([{ field: 'body', message: 'Unexpected care request context field.' }]);
@@ -184,12 +261,14 @@ export function parseCreateCareHandymanServiceRequestBody(
       description = body.description.trim();
     }
   }
+  const contacts = readContactSnapshot(body, details);
   if (!exchangeToken || !serviceCatalogId || details.length) fail(details);
   return {
     exchangeToken,
     serviceCatalogId,
     ...(serviceVariantId ? { serviceVariantId } : {}),
     ...(description ? { description } : {}),
+    ...contacts,
   };
 }
 

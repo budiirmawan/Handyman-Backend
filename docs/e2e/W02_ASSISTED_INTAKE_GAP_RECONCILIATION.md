@@ -259,3 +259,11 @@ Daftar P0 yang tersisa: **G05** (reporter), **G08** (approval PIC). G20 dan G29 
 - PLATFORM_ADMIN tidak menerima kedua kode secara otomatis (dibuktikan oleh `tests/handyman-payment-permission-registry.test.ts`).
 - Runtime authorization, route, controller, payment workflow, dan C6 tidak berubah.
 - Detail, hasil test, dan residual: `docs/e2e/W02_VERIFICATION_DEBT.md`.
+
+## PART 03 — Reporter identity, contact & request provenance
+
+- Reporter dan contact person disimpan sebagai snapshot append-only di `handyman_service_request_contacts` (migration 0435), 1:1 dengan request, dengan provenans `captured_by_care_actor_id` dan `captured_at`.
+- Data ini tidak memberi permission, PIC link, User, atau approval authority. Tenant PIC dan aturan approval quotation tidak diubah.
+- Ditulis dalam transaksi yang sama dengan konsumsi exchange, attribution, dan request. Input tidak valid ditolak sebelum exchange dikonsumsi.
+- Operations queue menampilkan `contact` untuk triage. C6 Customer Care tidak mengeksposnya.
+- Detail, hasil test, dan residual: `docs/e2e/W02_VERIFICATION_DEBT.md` §5.

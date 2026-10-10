@@ -13,7 +13,9 @@ import type { HandymanServiceRequestStatus } from './handyman-service-request.ty
  * Read-only. Projects governed request fields plus the Customer Care
  * attribution provenance. Excluded by design: `actorReference` (assertion
  * subject reference), `createdByUserId`, any token/exchange/assertion
- * material, and tenant PIC contact data. Reporter, PIC approval, cancel, and
+ * material, and tenant PIC contact data. The intake reporter/contact snapshot
+ * IS exposed (W02 PART 03) because triage needs it; it grants no authority.
+ * Reporter, PIC approval, cancel, and
  * notification are out of scope for this PART.
  */
 
@@ -42,6 +44,15 @@ export type OperationsRequestPublic = {
     careActorId: string | null;
     createdAt: string;
   };
+  /** W02 PART 03 — reporter/contact snapshot recorded at intake; null when the
+   * intake carried no reporter. Data for triage only; not an authority. */
+  contact: OperationsRequestContact | null;
+};
+
+export type OperationsRequestContact = {
+  capturedAt: string;
+  reporter: { name: string; phone: string | null; email: string | null };
+  contactPerson: { name: string; phone: string | null; email: string | null } | null;
 };
 
 export type OperationsRequestPage = {
@@ -85,6 +96,24 @@ export function toOperationsRequestPublic(
       actorType: row.actorType,
       careActorId: row.careActorId,
       createdAt: row.attributionCreatedAt.toISOString(),
+    },
+    contact: toOperationsContact(row),
+  };
+}
+
+function toOperationsContact(row: OperationsQueueRow): OperationsRequestContact | null {
+  if (row.contactCapturedAt === null || row.reporterName === null) return null;
+  return {
+    capturedAt: row.contactCapturedAt.toISOString(),
+    reporter: {
+      name: row.reporterName,
+      phone: row.reporterPhone,
+      email: row.reporterEmail,
+    },
+    contactPerson: row.contactPersonName === null ? null : {
+      name: row.contactPersonName,
+      phone: row.contactPersonPhone,
+      email: row.contactPersonEmail,
     },
   };
 }

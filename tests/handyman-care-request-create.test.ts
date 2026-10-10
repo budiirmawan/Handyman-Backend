@@ -381,7 +381,10 @@ describe('PART 04 — Customer Care request creation authority', () => {
     const dto = spec.components.schemas.CreateCareHandymanServiceRequest;
     assert.deepEqual(dto.required, ['exchangeToken', 'serviceCatalogId']);
     assert.equal(dto.additionalProperties, false);
-    assert.deepEqual(Object.keys(dto.properties), ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description']);
+    // W02 PART 03: reporter/contactPerson are ADDITIVE optional snapshot fields
+    // (data only). required stays [exchangeToken, serviceCatalogId] and no
+    // actor, tenant, PIC or property field is accepted.
+    assert.deepEqual(Object.keys(dto.properties), ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'reporter', 'contactPerson']);
     assert.equal(dto.properties.exchangeToken.minLength, 1);
     assert.equal(dto.properties.exchangeToken.maxLength, 512);
     assert.equal(dto.properties.serviceCatalogId.$ref, '#/components/schemas/Uuid');

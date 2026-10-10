@@ -48,6 +48,13 @@ export type OperationsQueueRow = {
   actorType: string;
   careActorId: string | null;
   attributionCreatedAt: Date;
+  contactCapturedAt: Date | null;
+  reporterName: string | null;
+  reporterPhone: string | null;
+  reporterEmail: string | null;
+  contactPersonName: string | null;
+  contactPersonPhone: string | null;
+  contactPersonEmail: string | null;
 };
 
 const OPERATIONS_SELECT = `
@@ -76,7 +83,14 @@ const OPERATIONS_SELECT = `
   ca.origin_channel AS "originChannel",
   ca.actor_type AS "actorType",
   ca.care_actor_id AS "careActorId",
-  ca.created_at AS "attributionCreatedAt"
+  ca.created_at AS "attributionCreatedAt",
+  hc.captured_at AS "contactCapturedAt",
+  hc.reporter_name AS "reporterName",
+  hc.reporter_phone AS "reporterPhone",
+  hc.reporter_email AS "reporterEmail",
+  hc.contact_person_name AS "contactPersonName",
+  hc.contact_person_phone AS "contactPersonPhone",
+  hc.contact_person_email AS "contactPersonEmail"
 `;
 
 /**
@@ -109,6 +123,8 @@ const OPERATIONS_FROM = `
     ON sc.id = r.service_catalog_id AND sc.client_id = r.client_id
   LEFT JOIN spaces s
     ON s.id = r.space_id
+  LEFT JOIN handyman_service_request_contacts hc
+    ON hc.handyman_request_id = r.id
 `;
 
 async function listOperationsQueue(

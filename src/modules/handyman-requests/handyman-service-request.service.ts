@@ -29,11 +29,13 @@ import {
   handymanServiceRequestScopeMismatchError,
 } from './handyman-service-request.errors';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
+import { handymanServiceRequestContactRepository } from './handyman-service-request-contact.repository';
 import {
   isHandymanServiceRequestStatus,
   type CreateHandymanServiceRequestInput,
   type HandymanCustomerCareServiceRequestRecord,
   type HandymanServiceRequestListFilters,
+  type HandymanRequestContactInput,
   type HandymanServiceRequestRecord,
   type PublicHandymanCustomerCareServiceRequest,
   type PublicHandymanServiceRequest,
@@ -277,7 +279,10 @@ export async function createHandymanServiceRequest(
  * again before request insertion; any failure rolls back all three writes.
  */
 export async function createCareHandymanServiceRequest(
-  input: { exchangeToken: string } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'>,
+  input: { exchangeToken: string } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'> & {
+    reporter?: HandymanRequestContactInput;
+    contactPerson?: HandymanRequestContactInput;
+  },
 ): Promise<PublicHandymanServiceRequest> {
   if (typeof input?.exchangeToken !== 'string' || input.exchangeToken.length === 0) {
     throw handoffExchangeInvalidError();
@@ -292,7 +297,20 @@ export async function createCareHandymanServiceRequest(
         !(await isCurrentCareRepresentation(exchange, client))) {
       throw handoffExchangeInvalidError();
     }
-    return createFromAuthorizedAttribution(input, attribution, client);
+    const created = await createFromAuthorizedAttribution(input, attribution, client);
+    // W02 PART 03: the reporter/contact snapshot is recorded in the same
+    // transaction as the exchange consumption, attribution and request. It is
+    // data only: no PIC link, no User, no permission and no approval authority.
+    if (input.reporter !== undefined) {
+      await handymanServiceRequestContactRepository.insert(client, {
+        handymanRequestId: created.id,
+        channelAttributionId: attribution.id,
+        capturedByCareActorId: attribution.careActorId,
+        reporter: input.reporter,
+        contactPerson: input.contactPerson ?? null,
+      });
+    }
+    return created;
   });
 }
 
