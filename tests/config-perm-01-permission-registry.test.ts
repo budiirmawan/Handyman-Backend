@@ -150,6 +150,11 @@ const EXPECTED_UNASSIGNED_BY_DEFAULT = [
   'handyman.operations.request.read',
   // W02 PART 04A: Operations triage (POST) is exceptional, granted only by provisioning.
   'handyman.operations.request.triage',
+  // W03 PART 03B2: choosing WHO may consent on a quotation thread is
+  // exceptional (CR-HM-06/A01 v1.1 ADD-A B8's deferred BLK-BIND-SCOPE landing
+  // as a real code). Granted only by explicit provisioning, on top of
+  // tenant_company.manage — never instead of it.
+  'handyman.quotation.approval.binding.manage',
   // W02 PART 02B: payment verify/report are withheld from default grants.
   'handyman.payment.report',
   'handyman.payment.verify',
@@ -301,8 +306,10 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
     // 02B route-enforced payment codes (`handyman.payment.report|verify`,
     // registered in migration 0432, unassigned by default).
     // W02 PART 04A: + `handyman.operations.request.triage` (unassigned by default).
-    assert.equal(CATALOGUE.length, 356);
-    assert.equal(CATALOGUE_SET.size, 356, 'catalogue must contain no duplicates');
+    // W03 PART 03B2: + `handyman.quotation.approval.binding.manage` (unassigned
+    // by default; ADD-A B8's deferred dedicated binding code).
+    assert.equal(CATALOGUE.length, 357);
+    assert.equal(CATALOGUE_SET.size, 357, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {

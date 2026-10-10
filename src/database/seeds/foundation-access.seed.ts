@@ -257,6 +257,17 @@ export const FOUNDATION_PERMISSIONS: readonly {
   { code: 'handyman.operations.request.read', name: 'Read Handyman Operations Request Queue' },
   // W02 PART 04A — Operations triage (POST). Separate from tenant_company.manage.
   { code: 'handyman.operations.request.triage', name: 'Triage Handyman Operations Requests' },
+  // W03 PART 03B2 (CR-HM-06 ADD-A B8 deferred hardening / BLK-BIND-SCOPE) —
+  // the dedicated authority to confer or revoke WHO may consent on a quotation
+  // thread. Separate from `tenant_company.manage` ON PURPOSE: a manage-holder
+  // selecting the signer is a residual risk B8 accepted only "for V1", and this
+  // code closes it. Deliberately granted to NO role by default (see
+  // UNASSIGNED_BY_DEFAULT_PERMISSION_CODES), and it ADDS to B8's wall rather
+  // than replacing it — the route requires both codes plus BE-02G.
+  {
+    code: 'handyman.quotation.approval.binding.manage',
+    name: 'Manage Handyman Quotation Approval Bindings',
+  },
   // W02 PART 02B — Handyman customer payment codes. Names match migration
   // 0432 (ON CONFLICT DO NOTHING keeps one row). Both are route-enforced by
   // handyman-customer-ledger-api; neither is granted by default (see
@@ -774,6 +785,13 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   'handyman.operations.request.read',
   // W02 PART 04A — triage is an exceptional Operations authority; no default grant.
   'handyman.operations.request.triage',
+  // W03 PART 03B2 — choosing who is entitled to consent on a quotation is an
+  // exceptional authority: it must be granted deliberately to a named
+  // Operations/tenant-management role, never inherited by being a platform
+  // administrator. Until granted, the three binding routes 403 for everyone —
+  // including PLATFORM_ADMIN (ADD-A B8's `tenant_company.manage` wall still
+  // applies underneath).
+  'handyman.quotation.approval.binding.manage',
   // W02 PART 02B — payment verification is a User RBAC authority with
   // maker-checker separation; payment report is withheld from default grants
   // too. No role (including PLATFORM_ADMIN) inherits either by default.

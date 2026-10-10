@@ -17,7 +17,14 @@ import {
   supersedeHandymanQuotationVersion,
 } from '../handyman-quotations';
 import {
+  bindHandymanQuotationApprovalBinding,
+  getHandymanQuotationApprovalBinding,
+  revokeHandymanQuotationApprovalBinding,
+} from '../handyman-quotation-approval-bindings';
+import {
   parseQuotationApiUuidParam,
+  parseQuotationApprovalBindingBody,
+  parseQuotationApprovalBindingRevokeBody,
   parseQuotationDecisionBody,
   parseQuotationIssueBody,
   parseQuotationLineBody,
@@ -322,6 +329,86 @@ export async function getHandymanExecutionScopeHandler(
         ),
         actor(req),
       ),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * W03 PART 03B2 — Tenant PIC approval-binding staff surface (ADD-A C21/C22,
+ * B8/B11, A01 §9). Thin shells, exactly like the quotation handlers above:
+ * URL id + whitelisted body + `Idempotency-Key` header + authenticated actor,
+ * and the service module owns every eligibility decision.
+ *
+ * The three handlers are the ONLY way a binding row is ever written, and none
+ * of them can approve anything: the ledger write path has no reachable
+ * `handyman_quotation_decisions` surface (B9). A replayed write returns the
+ * ORIGINAL stored success (same body, same status) with `replayed: true`, and
+ * a revoke of an already-revoked thread is a 200 restatement, never an error.
+ */
+
+export async function postHandymanQuotationApprovalBindingHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { status, data } = await bindHandymanQuotationApprovalBinding(
+      {
+        quotationId: parseQuotationApiUuidParam(
+          p(req.params.quotationId),
+          'quotationId',
+        ),
+        ...parseQuotationApprovalBindingBody(req.body),
+        idempotencyKey: idempotencyHeader(req),
+      },
+      actor(req),
+    );
+    sendSuccess(res, data, status);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function postHandymanQuotationApprovalBindingRevokeHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const { status, data } = await revokeHandymanQuotationApprovalBinding(
+      {
+        quotationId: parseQuotationApiUuidParam(
+          p(req.params.quotationId),
+          'quotationId',
+        ),
+        ...parseQuotationApprovalBindingRevokeBody(req.body),
+        idempotencyKey: idempotencyHeader(req),
+      },
+      actor(req),
+    );
+    sendSuccess(res, data, status);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getHandymanQuotationApprovalBindingHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(
+      res,
+      await getHandymanQuotationApprovalBinding({
+        quotationId: parseQuotationApiUuidParam(
+          p(req.params.quotationId),
+          'quotationId',
+        ),
+        actorUserId: actor(req),
+      }),
     );
   } catch (error) {
     next(error);

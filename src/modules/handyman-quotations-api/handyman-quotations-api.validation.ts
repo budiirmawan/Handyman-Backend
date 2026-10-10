@@ -145,3 +145,93 @@ export function parseQuotationDecisionBody(body: unknown): {
   }
   return { decision: decision as DecideHandymanQuotationInput['decision'] };
 }
+
+/**
+ * W03 PART 03B2 — approval-binding body parsers (ADD-A B11, A01 §9).
+ *
+ * B11 is a structural rule, not a validation nicety: the binding endpoint
+ * accepts NOTHING other than `{tenantPicId, effectiveUntil?, note?}` (bind)
+ * and `{reason, effectiveUntil?}` (revoke). The returned object is built field
+ * by field and never spread from the request, so `tenantCompanyId`,
+ * `clientId`, `buildingId`, `spaceId`, `status`, `bindingVersion`,
+ * `occupancyAuthorityId`, `spaceAuthorityId`, `grantedByUserId`, `createdBy*`,
+ * `decidedBy*` or any snapshot column a caller smuggles alongside a real
+ * quotation id is structurally ignored — the server derives all of them from
+ * the thread's own lineage and `0437`'s guard re-checks every one.
+ */
+
+const ISO_WINDOW_MAX_LENGTH = 64;
+const NARRATIVE_MAX_LENGTH = 500;
+
+function isoWindow(
+  source: Record<string, unknown>,
+  field: 'effectiveUntil',
+): string | undefined {
+  const raw = typeof source[field] === 'string' ? source[field].trim() : '';
+  if (raw.length === 0) return undefined;
+  if (raw.length > ISO_WINDOW_MAX_LENGTH || !Number.isFinite(Date.parse(raw))) {
+    fail('Request validation failed.', [
+      {
+        field,
+        message: `${field} must be a valid ISO 8601 timestamp (max ${ISO_WINDOW_MAX_LENGTH} characters).`,
+      },
+    ]);
+  }
+  return raw;
+}
+
+function narrative(
+  source: Record<string, unknown>,
+  field: 'note' | 'reason',
+  required: boolean,
+): string | undefined {
+  const raw = typeof source[field] === 'string' ? source[field].trim() : '';
+  if (raw.length === 0) {
+    if (required) {
+      fail('Request validation failed.', [
+        {
+          field,
+          message: `${field} is required (1-${NARRATIVE_MAX_LENGTH} characters).`,
+        },
+      ]);
+    }
+    return undefined;
+  }
+  if (raw.length > NARRATIVE_MAX_LENGTH) {
+    fail('Request validation failed.', [
+      { field, message: `${field} must be at most ${NARRATIVE_MAX_LENGTH} characters.` },
+    ]);
+  }
+  return raw;
+}
+
+/** POST /handyman/quotations/:quotationId/approval-binding — body (B11). */
+export function parseQuotationApprovalBindingBody(body: unknown): {
+  tenantPicId: string;
+  effectiveUntil?: string;
+  note?: string;
+} {
+  const src = (body ?? {}) as Record<string, unknown>;
+  const tenantPicId = uuid(src.tenantPicId, 'tenantPicId');
+  const effectiveUntil = isoWindow(src, 'effectiveUntil');
+  const note = narrative(src, 'note', false);
+  return {
+    tenantPicId,
+    ...(effectiveUntil ? { effectiveUntil } : {}),
+    ...(note ? { note } : {}),
+  };
+}
+
+/** POST /handyman/quotations/:quotationId/approval-binding/revoke — body. */
+export function parseQuotationApprovalBindingRevokeBody(body: unknown): {
+  reason: string;
+  effectiveUntil?: string;
+} {
+  const src = (body ?? {}) as Record<string, unknown>;
+  const reason = narrative(src, 'reason', true) as string;
+  const effectiveUntil = isoWindow(src, 'effectiveUntil');
+  return {
+    reason,
+    ...(effectiveUntil ? { effectiveUntil } : {}),
+  };
+}

@@ -685,7 +685,24 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
       at('0438_handyman_quotation_decision_actor_identity') <
         at('0439_handyman_execution_scope_actor_identity'),
     );
-    assert.equal(ids.at(-1), '0439_handyman_execution_scope_actor_identity');
+    // The PART's ordering claim is CONSECUTIVENESS, not "which id is the tip":
+    // W03 PART 03B2 legitimately adds 0440 on top, and M6 is precisely the
+    // rule that nothing unrelated may ride between these three.
+    assert.equal(
+      at('0438_handyman_quotation_decision_actor_identity'),
+      at('0437_handyman_quotation_approval_bindings') + 1,
+      'no unrelated migration may ride between 0437 and 0438',
+    );
+    assert.equal(
+      at('0439_handyman_execution_scope_actor_identity'),
+      at('0438_handyman_quotation_decision_actor_identity') + 1,
+      'no unrelated migration may ride between 0438 and 0439',
+    );
+    assert.equal(
+      at('0440_handyman_quotation_approval_binding_permission'),
+      at('0439_handyman_execution_scope_actor_identity') + 1,
+      '03B2\'s permission migration must land directly after this PART',
+    );
   });
 
   it('is rerun-safe and re-entrant', async (t) => {
@@ -730,6 +747,20 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
     if (!requireDatabase(t)) return;
     // Declared before any PIC-attributed row exists: this is the empty-state
     // path an operator would actually take.
+    // LIFO first peels 0440 (W03 PART 03B2's catalogue row) off the top, which
+    // doubles as evidence for that migration's own down(): an UNASSIGNED code is
+    // removed with its migration and comes back on the way up.
+    const revertedPermission = await migrateDown(pool!);
+    assert.equal(
+      revertedPermission,
+      '0440_handyman_quotation_approval_binding_permission',
+    );
+    const orphan = await q(
+      `SELECT count(*)::int AS n FROM permissions
+        WHERE code = 'handyman.quotation.approval.binding.manage'`,
+    );
+    assert.equal(orphan.rows[0].n, 0, 'an unassigned code is removed with 0440');
+
     const reverted = await migrateDown(pool!);
     assert.equal(reverted, '0439_handyman_execution_scope_actor_identity');
     const gone = await q(
@@ -747,9 +778,17 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
     assert.equal(removed.rows[0].n, 0);
     assert.deepEqual(
       await migrateUp(pool!),
-      ['0439_handyman_execution_scope_actor_identity'],
-      'the re-apply must be exactly the migration that was reverted',
+      [
+        '0439_handyman_execution_scope_actor_identity',
+        '0440_handyman_quotation_approval_binding_permission',
+      ],
+      'the re-apply must be exactly the two migrations that were reverted, in order',
     );
+    const restoredPermission = await q(
+      `SELECT count(*)::int AS n FROM permissions
+        WHERE code = 'handyman.quotation.approval.binding.manage'`,
+    );
+    assert.equal(restoredPermission.rows[0].n, 1, '0440 re-applies exactly one row');
     // 0438 and 0437 roll back too while unpopulated (rolled back again so the
     // remaining tests keep a fully migrated schema).
     await inRollbackTx(async (client, run) => {

@@ -8,6 +8,7 @@ import { migration0436HandymanOperationsRequestTriagePermission } from './0436_h
 import { migration0437HandymanQuotationApprovalBindings } from './0437_handyman_quotation_approval_bindings';
 import { migration0438HandymanQuotationDecisionActorIdentity } from './0438_handyman_quotation_decision_actor_identity';
 import { migration0439HandymanExecutionScopeActorIdentity } from './0439_handyman_execution_scope_actor_identity';
+import { migration0440HandymanQuotationApprovalBindingPermission } from './0440_handyman_quotation_approval_binding_permission';
 import { migration0429CreateHandymanCareWorkspaceSessions } from './0429_create_handyman_care_workspace_sessions';
 import { migration0001InitialFoundation } from './0001_initial_foundation';
 import { migration0002CreateUsers } from './0002_create_users';
@@ -912,4 +913,5 @@ export const migrations: readonly Migration[] = [
   migration0437HandymanQuotationApprovalBindings,
   migration0438HandymanQuotationDecisionActorIdentity,
   migration0439HandymanExecutionScopeActorIdentity,
+  migration0440HandymanQuotationApprovalBindingPermission,
 ];
