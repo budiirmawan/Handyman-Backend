@@ -11,7 +11,7 @@ import { handymanDisciplineRepository }
   from '../src/modules/handyman-disciplines';
 import { assignHandymanExecutionScopeCrew }
   from '../src/modules/handyman-scope-assignments';
-import { createAdminUser } from './helpers/access';
+import { createAdminUser, createSessionWithPermissions } from './helpers/access';
 import {
   baseFixture,
   crewFixture,
@@ -660,5 +660,27 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
       const controller = readFileSync(
         `${apiDir}/handyman-evidence-qc-api.controller.ts`, 'utf8');
       assert.ok(controller.includes('sendSuccess'));
+    });
+  it('W01 PART 03: GET evidence/QC/defect denies a user with neither tenant_company.read nor a current Lead assignment',
+    async (t: TestContext) => {
+      if (!requireDatabase(t)) return;
+      const f = await leadFixture();
+      // Authenticated, but no permission and no Crew Lead assignment on this scope.
+      const outsider = await createSessionWithPermissions([]);
+      for (const url of [
+        evidenceBase(f.scope.id),
+        qcBase(f.scope.id),
+        defectBase(f.scope.id),
+        // Record/run/defect targets: unknown and malformed ids are denied
+        // with the SAME error (no existence leak).
+        `${V1}/handyman/evidence-records/${randomUUID()}`,
+        `${V1}/handyman/qc-runs/${randomUUID()}`,
+        `${V1}/handyman/defects/${randomUUID()}`,
+        `${V1}/handyman/evidence-records/not-a-uuid`,
+      ]) {
+        const res = await authed(outsider)('get', url).send({});
+        assert.equal(res.status, 403, url);
+        assert.equal(metErr(res), 'PERMISSION_DENIED', url);
+      }
     });
 });

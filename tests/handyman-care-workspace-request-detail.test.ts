@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -252,7 +252,8 @@ describe('PART 06B — care workspace represented request detail', () => {
   it('accepts only live workspace credentials, not User/admin, exchange, expired or revoked workspace credentials', async () => {
     assert.equal((await api().get(`${path}/${unitRequests[0]}`).query(selection())).status, 401);
     const exchange = await issueCareCreateExchange(token, properties[0], { tenantCompanyId: tenantId, buildingId: buildings[0] });
-    const expired = 'hcw_' + 'E'.repeat(43);
+    // Unique per call: token_hash is UNIQUE (fixed tokens collide across tests).
+    const expired = 'hcw_' + randomBytes(32).toString('base64url');
     await pool.query(`INSERT INTO handyman_care_workspace_sessions
       (id, integration_id, care_actor_id, assertion_id, token_hash, created_at, expires_at)
       VALUES ($1,$2,$3,$4,$5,now()-interval '16 minutes',now()-interval '1 minute')`,

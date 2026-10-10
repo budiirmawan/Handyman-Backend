@@ -719,7 +719,10 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
   it('6: firewall sweep — no gateway runtime, no allocation/refund/settlement surface', async (t) => {
     if (!requireDatabase(t)) return;
     const files = readdirSync(moduleDir).sort();
+    // W01 PART 03: available-actions.ts (CR-HM-17 read projection) is a
+    // pure, runtime-free helper; it is allowed and still scanned below.
     assert.deepEqual(files, [
+      'handyman-customer-payment.available-actions.ts',
       'handyman-customer-payment.errors.ts',
       'handyman-customer-payment.repository.ts',
       'handyman-customer-payment.service.ts',

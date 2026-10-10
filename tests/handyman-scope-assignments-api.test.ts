@@ -754,7 +754,7 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
       'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONFLICT');
   });
 
-  it('10: OpenAPI/runtime parity; ZERO downstream/FM APIs', async (t) => {
+  it('10: OpenAPI/runtime parity; PART C assignment surface bounded + ZERO downstream/FM APIs in it', async (t) => {
     if (!requireDatabase(t)) return;
     const { parse: parseYaml } = await import('yaml');
     const { readFileSync } = await import('node:fs');
@@ -803,8 +803,11 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
 
     // Exactly the two assignment URL shapes under collection-keyed
     // execution-scope paths; NO list/collection endpoint.
+    // W01 PART 03: execution-scope namespace now also hosts CR-owned work
+    // sessions, arrival, material and evidence/QC. The PART C invariant is
+    // scoped to ASSIGNMENT-shaped paths only.
     const scopePaths = Object.keys(doc.paths).filter((p) =>
-      p.includes('execution-scopes'),
+      p.includes('execution-scopes') && /assignment/i.test(p),
     );
     assert.deepEqual(scopePaths.sort(), [
       '/handyman/execution-scopes/{executionScopeId}/assignment',
@@ -812,6 +815,8 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
     ]);
     assert.equal(doc.paths['/handyman/execution-scopes'], undefined,
       'no execution-scope collection/list API');
+    assert.equal(doc.paths['/handyman/execution-scopes/{executionScopeId}/assignments'], undefined,
+      'no assignment collection/list API');
     // NO standalone Lead-resolver endpoint (CR-HM-07 consumes the
     // resolver internally).
     for (const p of Object.keys(doc.paths)) {
@@ -827,7 +832,7 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
     // assignment URL shapes (legacy FM work-order "assignments" live
     // in a separate pre-existing namespace, untouched by PART C).
     const partCSurface = Object.keys(doc.paths).filter((p) =>
-      p.includes('execution-scopes'));
+      p.includes('execution-scopes') && /assignment/i.test(p));
     assert.equal(partCSurface.length, 2,
       'PART C surface must be exactly the two assignment URL shapes');
     assert.deepEqual(

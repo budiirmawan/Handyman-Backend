@@ -450,7 +450,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     assert.equal(res.body.data.referredByUserId, adminUserId);
   });
 
-  it('10: OpenAPI contains exactly the intended 8-operation CR-HM-03 surface', async (t) => {
+  it('10: OpenAPI contains the CR-HM-03 4-step operations (8 ops) and only verified later-CR lifecycle paths', async (t) => {
     if (!requireDatabase(t)) return;
     const doc = parseYaml(readFileSync(
       join(process.cwd(), 'docs/api/openapi.yaml'),
@@ -491,16 +491,27 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
       'recordHandymanReferral',
       'recordHandymanRequestTriage',
     ]);
-    // no other lifecycle endpoints documented
+    // W01 PART 03: no UNDOCUMENTED lifecycle endpoints. The set below is the
+    // verified CR-owned surface (each path has a matching route in
+    // src/modules/handyman-*-api). CR-HM-03 owns the four lifecycle steps;
+    // readiness (CR-HM-05/06/07) and quotation (CR-HM-08) are later CRs.
     const lifecyclePaths = Object.keys(doc.paths).filter((p) =>
       p.startsWith('/handyman/requests/{handymanRequestId}/') &&
       p !== '/handyman/requests/{handymanRequestId}/intake-evidence',
     );
     assert.deepEqual(
       lifecyclePaths.sort(),
-      lifecycles.map(
-        (step) => `/handyman/requests/{handymanRequestId}/${step}`,
-      ).sort(),
+      [
+        ...lifecycles.map((step) => `/handyman/requests/{handymanRequestId}/${step}`),
+        '/handyman/requests/{handymanRequestId}/scheduling-readiness',
+        '/handyman/requests/{handymanRequestId}/scheduling-readiness/history',
+        '/handyman/requests/{handymanRequestId}/unit-access-readiness',
+        '/handyman/requests/{handymanRequestId}/unit-access-readiness/history',
+        '/handyman/requests/{handymanRequestId}/permit-readiness',
+        '/handyman/requests/{handymanRequestId}/permit-readiness/history',
+        '/handyman/requests/{handymanRequestId}/quotation',
+        '/handyman/requests/{handymanRequestId}/quotation/presented',
+      ].sort(),
     );
     // caller-authoritative fields must not exist in request schemas
     const schemas = doc.components.schemas;

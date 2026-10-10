@@ -613,7 +613,7 @@ describe('CR-HM-02 PART 05A — Handyman HTTP + OpenAPI surface', () => {
       '/handyman/catalogue/services': ['get'],
       '/handyman/catalogue/material-profiles': ['get'],
       '/handyman/catalogue/material-profiles/{profileId}': ['get'],
-      '/handyman/requests': ['post'],
+      '/handyman/requests': ['get', 'post'],
       '/handyman/requests/{handymanRequestId}/intake-evidence': ['get', 'post'],
     };
     for (const [path, methods] of Object.entries(expected)) {
@@ -629,22 +629,33 @@ describe('CR-HM-02 PART 05A — Handyman HTTP + OpenAPI surface', () => {
         );
       }
     }
-    // no invented Handyman surface: exactly these paths exist under /handyman
+    // CR-HM-02 surface is present (W01 PART 03: later CRs legitimately add
+    // paths; each later CR owns and certifies its own surface, so this
+    // test asserts the CR-HM-02 subset is intact rather than exact equality).
     const registeredHmPaths = Object.keys(spec.paths).filter((path) =>
       path.startsWith('/handyman/'),
     );
-    assert.deepEqual(registeredHmPaths.sort(), Object.keys(expected).sort());
-    // no lifecycle / triage / quotation / destructive verb anywhere under HM
+    for (const path of Object.keys(expected)) {
+      assert.ok(registeredHmPaths.includes(path), `CR-HM-02 path ${path}`);
+    }
+    // Destructive/terminal surface is still forbidden anywhere under HM.
+    // (Triage, quotation, assignment, QC, BAST are now CR-owned and are
+    // NOT forbidden here; close/cancel/transition/lifecycle remain forbidden
+    // until the Handyman-Manager CLOSE contract lands.)
     for (const path of registeredHmPaths) {
       assert.ok(
-        !/triage|diagnos|quotation|lifecycle|transition|cancel|assign|close|complete|qc|bast/i.test(path),
+        !/lifecycle|transition|cancel|\bclose\b/i.test(path),
         `forbidden surface leaked into ${path}`,
       );
       const verbs = Object.keys(
         (spec.paths as Json)[path],
       ).filter((verb) => verb !== 'parameters');
+      // W01 PART 03: DELETE is legitimately documented ONLY for the Customer
+      // Care workspace logout (DELETE /handyman/care/session, care-workspace
+      // routes). Any other mutating verb is still forbidden.
+      const allowedExtra = path === '/handyman/care/session' ? ['delete'] : [];
       assert.deepEqual(
-        verbs.filter((verb) => !['get', 'post'].includes(verb)),
+        verbs.filter((verb) => !['get', 'post', ...allowedExtra].includes(verb)),
         [],
         `${path} exposes no mutating verbs beyond POST`,
       );
@@ -683,7 +694,12 @@ describe('CR-HM-02 PART 05A — Handyman HTTP + OpenAPI surface', () => {
     ]) {
       assert.ok(schemas[name], `schema ${name} documented`);
     }
-    assert.deepEqual(schemas.HandymanServiceRequestStatus.enum, ['INTAKE']);
+    // W01 PART 03: CR-HM-03 added the lifecycle statuses; the enum must match
+    // HANDYMAN_SERVICE_REQUEST_STATUSES (handyman-service-request.types.ts).
+    assert.deepEqual(schemas.HandymanServiceRequestStatus.enum, [
+      'INTAKE', 'TRIAGE', 'INSPECTION_REQUIRED', 'DIAGNOSIS',
+      'READY_FOR_NEXT_STEP', 'REFERRED',
+    ]);
     assert.ok(
       !('fileReference' in schemas.HandymanIntakeEvidence.properties),
       'storage references never exposed in the intake evidence contract',

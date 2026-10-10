@@ -477,7 +477,7 @@ describe('CR-HM-05 PART 06A — readiness HTTP/OpenAPI surface', () => {
     assert.equal(read.body.data.history.length, 3);
   });
 
-  it('10: OpenAPI/runtime parity; ZERO target-binding/arrival/FM APIs', async (t) => {
+  it('10: OpenAPI/runtime parity; readiness CR surface + ZERO target-binding/QR/geofence/FM-work-order APIs', async (t) => {
     if (!requireDatabase(t)) return;
     const { parse: parseYaml } = await import('yaml');
     const { readFileSync } = await import('node:fs');
@@ -529,10 +529,13 @@ describe('CR-HM-05 PART 06A — readiness HTTP/OpenAPI surface', () => {
         `${path} must expose exactly ${ops.length} operation(s)`,
       );
     }
-    // ZERO target-binding / crew-assignment / arrival / QR / geofence /
-    // check-in / FM work-order APIs anywhere under /handyman
+    // W01 PART 03: the FM-boundary invariant still holds — ZERO
+    // target-binding / QR / geofence / FM work-order / permit-to-work APIs
+    // under /handyman. Crew assignment (CR-HM-04) and arrival verification
+    // / check-in (CR-HM-07 and work sessions) are now legitimate CR-owned
+    // surfaces, each certified by its own test, so they are not forbidden here.
     const forbiddenPath =
-      /assign|target|executionscope|arrival|qr|geofence|check-?in|work-?order|permit-to-work/i;
+      /target|qr|geofence|work-?order|permit-to-work|fm[-_]/i;
     const leaked = Object.keys(doc.paths).filter((p) =>
       p.startsWith('/handyman') && forbiddenPath.test(p),
     );

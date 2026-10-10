@@ -1,7 +1,7 @@
 import { serviceCatalogService } from '../src/modules/service-catalog';
 import { issueCareCreateExchange } from '../src/modules/handyman-care-workspace/care-create-exchange.service';
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -29,6 +29,10 @@ import { clearLoginRateLimits } from '../src/modules/auth/login-rate-limit';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 import { createAdminUser } from './helpers/access';
+
+/** Unique per call: token_hash is UNIQUE, so fixed tokens collide across tests. */
+const uniqueWorkspaceToken = (): string => 'hcw_' + randomBytes(32).toString('base64url');
+
 
 const DIR = '/tmp/handyman-care-workspace-create-exchange-pg';
 const PORT = 55535;
@@ -356,8 +360,8 @@ describe('PART 05B — workspace create-only exchange issuance', () => {
       process.env.HANDYMAN_HANDOFF_EXCHANGE_TTL_SECONDS = '20';
       assert.ok(new Date((await issue()).expiresAt).getTime() <= Date.now() + 20_000);
       process.env.HANDYMAN_HANDOFF_EXCHANGE_TTL_SECONDS = '120';
-      const short = 'hcw_' + 'S'.repeat(43);
-      const expired = 'hcw_' + 'E'.repeat(43);
+      const short = uniqueWorkspaceToken();
+      const expired = uniqueWorkspaceToken();
       for (const [raw, duration] of [[short, '90 seconds'], [expired, '-1 seconds']]) {
         await pool.query(`INSERT INTO handyman_care_workspace_sessions
           (id, integration_id, care_actor_id, assertion_id, token_hash, created_at, expires_at)

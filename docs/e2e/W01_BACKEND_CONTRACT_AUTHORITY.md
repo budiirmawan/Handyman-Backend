@@ -558,3 +558,70 @@ Aturan reuse: pakai kode FM **hanya** bila semantiknya identik dan kepemilikanny
 - Care workspace 5 file pada DB direset: 65/61/4.
 - Tidak ada perubahan kode, API, atau schema. Hanya dokumen ini yang berubah.
 - Node_modules tidak di-stage. Artefak log berada di `/tmp` (di luar repo).
+
+---
+
+## 14. PART 03 — Frozen baseline, test reconciliation, Lead read authority
+
+**Baseline bisnis:** `docs/e2e/HANDYMAN_BUSINESS_JOURNEY_v1.3_FROZEN.md` (kontrak v1.3, 10 Oktober 2026). File asli v1.3 belum ada di repository; dokumen itu adalah transkripsi kontrak yang diberikan dan mencatat open decisions OD-1..OD-6.
+
+### 14.1 Perubahan
+
+| Area | Perubahan | Catatan |
+|---|---|---|
+| Authority GET evidence/QC/defect | Route `read` diganti `requireEvidenceQcReadAuthority`: `tenant_company.read` ATAU Crew Lead aktif pada scope yang memiliki. | Lihat §14.2. POST tetap tanpa perubahan. |
+| Service evidence-qc | Tambah helper read-only: `findHandymanEvidenceQcReadScopeId`, `isCurrentHandymanCrewLeadForScope`. | Tidak mengubah business rule. |
+| Fixture token workspace | Token tetap `'hcw_'+'E'…` diganti token unik per panggilan (`randomBytes(32)` base64url, 43 karakter). | create-exchange, requests, request-detail. |
+| Tes stale (7) | Ekspektasi diperbarui setelah diverifikasi ke route dan OpenAPI (§14.3). | Negative assertion yang masih valid dipertahankan. |
+| Tes baru | Negatif: pengguna tanpa permission dan tanpa assignment ditolak 403 `PERMISSION_DENIED` pada scope, record, run, defect; id tidak dikenal dan tidak valid diperlakukan sama. | `handyman-evidence-qc-api.test.ts`. |
+
+Tidak ada perubahan pada payment verification, CLOSE, schema DB, migrasi, atau lifecycle lain.
+
+### 14.2 Lead read authority
+
+- **Admin, tidak berubah:** `tenant_company.read` + BE-02G building guard tetap berlaku.
+- **Crew Lead:** diizinkan bila `resolveHandymanAssignmentLead(scope, user).leadUserId === user`. Resolver ini sendiri menegakkan building assignment ACTIVE untuk Building exact dari scope. Lead tanpa building scope tetap ditolak.
+- **Ditolak:** pengguna tanpa permission dan bukan Lead aktif; Lead dari scope lain; id tidak dikenal atau tidak valid. Semua menghasilkan `PERMISSION_DENIED` (403), tanpa membocorkan keberadaan.
+- **Error infrastruktur** tidak ditelan; hanya `BUILDING_ACCESS_DENIED` dan `HANDYMAN_EXECUTION_SCOPE_NOT_FOUND` yang dipetakan menjadi "bukan Lead".
+- Helper ditaruh di service, bukan di file API baru, karena test CR-HM-10 mengunci API layer pada 4 file dan tidak ada akses repository langsung dari routes.
+
+### 14.3 Klasifikasi tes stale (verifikasi ke implementasi)
+
+| Test | Ekspektasi lama | Verifikasi | Perubahan |
+|---|---|---|---|
+| `handyman-api` #10 (CR-HM-02) | `/handyman/requests` hanya POST; regex negatif global | Route `GET` + `POST /handyman/requests` ada dan terdokumentasi | GET ditambahkan; daftar exact diganti pemeriksaan subset; regex negatif dipersempit ke `lifecycle|transition|cancel|close`; DELETE diizinkan hanya untuk `care/session` |
+| `handyman-api` status enum | `['INTAKE']` | `HANDYMAN_SERVICE_REQUEST_STATUSES` berisi 6 status | Enum 6 nilai |
+| `handyman-care-workspace-requests` detail | detail = 404 | `GET /handyman/care/requests/{requestId}` ada, GET-only, didokumentasikan | Assert detail GET-only; POST tetap 404 |
+| `handyman-care-workspace-scope` route families | 9 path | 12 path care (termasuk create-exchanges, requests, requests/{requestId}) | Daftar diperbarui |
+| `handyman-customer-payments` firewall | 5 file | `available-actions.ts` hanya impor tipe, tidak mengandung token terlarang | Ditambahkan ke daftar; scan tetap jalan |
+| `handyman-lifecycle-api` #10 (CR-HM-03) | "no other lifecycle endpoint" = 4 langkah | Readiness (3 pasang) dan quotation (2) terdaftar di route | Daftar 12 path lifecycle |
+| `handyman-readiness-api` #10 | ZERO assign/arrival/check-in | Assignment dan arrival adalah surface CR lain yang terdaftar | Batas FM dipertahankan: `target|qr|geofence|work-?order|permit-to-work|fm[-_]` (tidak ada path yang cocok) |
+| `handyman-scope-assignments-api` #10 (PART C) | 2 path execution-scope total | Execution-scope kini berisi work session, arrival, material, dll. | Batas PART C dipersempit ke path assignment; tidak ada endpoint koleksi |
+| `handyman-evidence-qc-api` #5 (API layer) | 4 file | Tetap 4 file (helper dipindah ke service) | Tidak diubah |
+
+### 14.4 Hasil validasi (database test bersih)
+
+| Cek | Hasil |
+|---|---|
+| `npm run typecheck` | **PASS** (exit 0, dijalankan 3x) |
+| `handyman-evidence-qc-api.test.ts` (sendiri, DB direset) | **PASS** 6/6 (sebelumnya 3 gagal) |
+| `handyman-api`, `handyman-care-workspace-request-detail`, `handyman-permit-readiness` (sendiri, DB direset) | **PASS** 34/34 |
+| Subset 25 file (daftar sama dengan run akhir), run akhir (DB direset) | **FAIL (1)**: 226 test, 225 pass, 1 fail, 0 skip, `EXIT=1` |
+| Subset run sebelumnya (DB direset) | 226 / 224 pass / 2 fail; 226 / 223 pass / 3 fail (sebelum fix terakhir) |
+
+**Satu kegagalan tersisa** (intermiten):
+- `handyman-unit-access-readiness.test.ts` test 9 "mutation + journal atomic" dan `handyman-permit-readiness.test.ts` test 9 (sama polanya; pada run akhir permit lulus).
+- Akar masalah: `operational_events.created_at` memakai `DEFAULT NOW()` (waktu awal transaksi, migrasi 0080). Event `SUPERSEDED` dan `CREATED` baru dalam transaksi yang sama mendapat timestamp identik. Query tes memakai `ORDER BY created_at, id` dengan `id` UUID acak, sehingga urutan tidak deterministik.
+- Ini cacat yang sudah ada, bukan regresi PART 03. File dan kode readiness tidak diubah. Perbaikan membutuhkan perubahan urutan event (`clock_timestamp()` atau sequence), yaitu perubahan schema/lifecycle yang dilarang di PART ini. Ditandai untuk PART 04.
+
+**Status E2E:** belum complete. Subset tidak 100% PASS. Tidak ada bukti runtime untuk payment verification, CLOSE, atau journey lintas frontend.
+
+### 14.5 Residual gap untuk PART 04
+
+1. **Intermiten urutan event** (§14.4): perbaiki urutan event readiness (schema/event sequence) atau ubah tes agar tidak bergantung pada urutan timestamp seri. Pilih salah satu secara eksplisit.
+2. **Token workspace tetap** masih ada di fixture yang belum saya ubah: `handyman-care-workspace-admission` (182, 151, 211), `catalogue` (292), `occupancies` (331), `scope` (264, 273), `spaces` (261), `tenants` (267). Tidak gagal di run ini, tetapi berisiko kolisi bila urutan berubah. Berikutnya: seragamkan dengan helper unik.
+3. **Lead authority negatif** belum punya tes khusus "Lead dari scope lain ditolak". Positif Lead sudah diuji (record detail + list, QC run detail + list, defect list + detail).
+4. **Nama layanan**: fungsi read yang dipakai Lead bernama `...CustomerCareView` karena preamble-nya building-scope; penamaan menyesatkan dan perlu dirapikan tanpa mengubah perilaku.
+5. **Payment verification (Finance, maker-checker)** dan **CLOSE (Handyman Manager)** belum diimplementasikan. F-04/F-05/G-01 di §3.F dan §3.G tetap terbuka.
+6. **Open decisions** OD-1..OD-6 di `HANDYMAN_BUSINESS_JOURNEY_v1.3_FROZEN.md` harus ditutup sebelum PART 04 menyentuh verifikasi dan CLOSE.
+7. **Settlement, fee komersial, warranty** memiliki lifecycle terpisah dan belum dikerjakan.

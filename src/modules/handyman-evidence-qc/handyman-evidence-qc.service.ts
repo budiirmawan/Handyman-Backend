@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
-import type { AppError } from '../../shared/errors';
+import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { isManagedStorageKey } from '../evidence/storage';
@@ -1411,4 +1411,61 @@ export async function getHandymanDefectCustomerCareDetail(
   const events = await handymanEvidenceQcRepository
     .listDefectEvents(undefined, defectUuid);
   return { defect, events };
+}
+
+/* ---- W01 PART 03: read-authority helpers for the GET surface ---------- */
+
+export type HandymanEvidenceQcReadTarget =
+  | { kind: 'record'; id: string }
+  | { kind: 'run'; id: string }
+  | { kind: 'defect'; id: string };
+
+/**
+ * Resolves the owning execution scope of a read target. Returns null for
+ * malformed or unknown ids so callers can deny without leaking existence.
+ */
+export async function findHandymanEvidenceQcReadScopeId(
+  target: HandymanEvidenceQcReadTarget,
+): Promise<string | null> {
+  if (!isValidUuid(target.id)) return null;
+  if (target.kind === 'record') {
+    const record = await handymanEvidenceQcRepository
+      .findEvidenceRecordById(undefined, target.id);
+    return record?.executionScopeId ?? null;
+  }
+  if (target.kind === 'run') {
+    const run = await handymanEvidenceQcRepository
+      .findQcRunById(undefined, target.id);
+    return run?.executionScopeId ?? null;
+  }
+  const defect = await handymanEvidenceQcRepository
+    .findDefectById(undefined, target.id);
+  return defect?.executionScopeId ?? null;
+}
+
+/**
+ * True only when `userId` is the CURRENT authoritative Crew Lead of the
+ * scope. `resolveHandymanAssignmentLead` enforces the ACTIVE building
+ * assignment for the scope's exact Building; building-denied, unknown, and
+ * no-assignment outcomes map to false. Infrastructure errors propagate.
+ */
+export async function isCurrentHandymanCrewLeadForScope(
+  executionScopeId: string,
+  userId: string,
+): Promise<boolean> {
+  if (!isValidUuid(executionScopeId)) return false;
+  try {
+    const resolution = await resolveHandymanAssignmentLead(
+      executionScopeId,
+      userId,
+    );
+    return resolution !== null && resolution.leadUserId === userId;
+  } catch (error) {
+    if (error instanceof AppError && (
+      error.code === ERROR_CODES.BUILDING_ACCESS_DENIED
+      || error.code === ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_NOT_FOUND)) {
+      return false;
+    }
+    throw error;
+  }
 }

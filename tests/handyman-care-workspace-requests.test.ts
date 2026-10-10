@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -31,6 +31,10 @@ import { listCareWorkspaceRequests } from '../src/modules/handyman-care-workspac
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 import { createAdminUser } from './helpers/access';
+
+/** Unique per call: token_hash is UNIQUE, so fixed tokens collide across tests. */
+const uniqueWorkspaceToken = (): string => 'hcw_' + randomBytes(32).toString('base64url');
+
 
 const DIR = '/tmp/handyman-care-workspace-requests-pg';
 const PORT = 55536;
@@ -291,7 +295,7 @@ describe('PART 06A — care workspace represented request list', () => {
     finally { await grantCareActorProperty({ careActorId: actorId, propertyId: properties[0], clientId: clients[0] }, adminId); }
     await revokeCareWorkspaceSession(token);
     assert.equal((await get({ ...unit(), limit: '1', cursor })).status, 401);
-    const expired = 'hcw_' + 'E'.repeat(43);
+    const expired = uniqueWorkspaceToken();
     await pool.query(`INSERT INTO handyman_care_workspace_sessions
       (id, integration_id, care_actor_id, assertion_id, token_hash, created_at, expires_at)
       VALUES ($1,$2,$3,$4,$5,now()-interval '16 minutes',now()-interval '1 minute')`,
@@ -376,15 +380,21 @@ describe('PART 06A — care workspace represented request list', () => {
     assert.deepEqual(await counts(), before);
   });
 
-  it('adds only list, not workspace detail/mutation, and documents the bounded existing projection', async () => {
-    assert.equal((await api().get(`${path}/${unitRequests[0]}`).set('Authorization', `Bearer ${token}`).query(selection())).status, 404);
+  it('exposes list + read-only detail (no mutation) and documents the bounded projection', async () => {
+    // W01 PART 03: GET detail is served by the care request-detail route
+    // (GET /handyman/care/requests/{requestId}, documented + certified in
+    // handyman-care-workspace-request-detail.test.ts). Mutation stays absent.
     assert.equal((await api().post(path).set('Authorization', `Bearer ${token}`).send(selection())).status, 404);
+    assert.equal((await api().post(`${path}/${unitRequests[0]}`).set('Authorization', `Bearer ${token}`).send(selection())).status, 404);
     const spec = parseYaml(readFileSync('docs/api/openapi.yaml', 'utf8'));
     const route = spec.paths['/handyman/care/requests'];
     assert.deepEqual(Object.keys(route), ['get']);
     assert.deepEqual(route.get.security, [{ careWorkspaceSession: [] }]);
     assert.deepEqual(route.get.parameters.filter((p: any) => p.required).map((p: any) => p.name), ['propertyId', 'tenantCompanyId', 'buildingId']);
     assert.equal(spec.components.schemas.CareWorkspaceRequestPage.properties.items.items.$ref, '#/components/schemas/HandymanCustomerCareServiceRequest');
+    const detail = spec.paths['/handyman/care/requests/{requestId}'];
+    assert.deepEqual(Object.keys(detail), ['get']);
+    assert.deepEqual(detail.get.security, [{ careWorkspaceSession: [] }]);
     assert.equal(spec.paths['/handyman/care/requests/{handymanRequestId}'], undefined);
   });
 });

@@ -319,10 +319,12 @@ describe('Care workspace property scope reads', () => {
     assert.equal((await api().post(path).set('Authorization', `Bearer ${token}`).send({})).status, 404);
   });
 
-  it('documents just the admitted care route families and bounded minimal projections', () => {
+  it('documents the admitted care route families (incl. PART 05B create-exchanges, PART 06A/detail requests) and bounded minimal projections', () => {
     const spec = parseYaml(readFileSync('docs/api/openapi.yaml', 'utf8'));
     assert.deepEqual(Object.keys(spec.paths).filter(p => p.startsWith('/handyman/care/')).sort(),
       ['/handyman/care/session', '/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings', '/handyman/care/properties/{propertyId}/tenant-companies', '/handyman/care/properties/{propertyId}/spaces', '/handyman/care/properties/{propertyId}/occupancies',
+        '/handyman/care/properties/{propertyId}/create-exchanges',
+        '/handyman/care/requests', '/handyman/care/requests/{requestId}',
         '/handyman/care/properties/{propertyId}/catalogue/services', '/handyman/care/properties/{propertyId}/catalogue/material-profiles',
         '/handyman/care/properties/{propertyId}/catalogue/material-profiles/{profileId}'].sort());
     for (const p of ['/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings']) {
