@@ -111,7 +111,7 @@ Titik putus utama: S0 (reporter), S9 (queue Operations), dan S11 (approval PIC).
 | `GET /api/v1/handyman/requests` | `customerRequestReadScope` (PIC atau PLATFORM_ADMIN) | — | Daftar | G29. Bukan queue Operations. |
 | `GET /api/v1/handyman/requests/:id` | Building scope | — | Detail | Ada, tetapi dibatasi scope |
 | `GET/POST /api/v1/handyman/requests/:id/intake-evidence` | `tenant_company.read` / `tenant_company.manage` | Foto atau video | Daftar atau 201 | G13 |
-| `POST /api/v1/handyman/requests/:id/triage` | `tenant_company.manage`, building scope | Keputusan triage | — | G21 |
+| `POST /api/v1/handyman/requests/:id/triage` | `handyman.operations.request.triage`, building scope (W02 PART 04A; sebelumnya `tenant_company.manage`) | Keputusan triage | — | G21 |
 | `GET /api/v1/handyman/requests/:id/status-visibility` | Ada (sla-status-api) | — | Status | Belum diverifikasi lebih lanjut |
 | `GET /api/v1/handyman/requests/:id/quotation/presented` | `tenant_company.read` | — | Versi yang disajikan | Read only (G08) |
 | `POST /api/v1/handyman/quotation-versions/:id/decision` | User lokal, building access | Keputusan dan `Idempotency-Key` | — | Bukan PIC (G08) |

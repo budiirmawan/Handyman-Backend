@@ -194,7 +194,8 @@ Test: `tests/handyman-intake-triage-journey.test.ts` (16 test: 4 journey J1–J4
 ### Temuan authority (keputusan, belum diubah)
 
 - `POST /handyman/requests/:id/triage` dijaga `tenant_company.manage` dan Building scope. `GET .../triage` dijaga `tenant_company.read`. Permission queue `handyman.operations.request.read` saja tidak cukup untuk triage atau membaca hasil triage.
-- Ini mengikuti authority triage yang sudah ada dan tidak diubah di PART ini. Operator Operations yang hanya diberi queue permission tidak bisa menyelesaikan triage. Jika bisnis ingin permission triage khusus Operations (misalnya `handyman.operations.request.triage`), itu perubahan authority dan route yang perlu keputusan tersendiri.
+- (Diperbarui di W02 PART 04A, §7: POST triage sekarang memakai `handyman.operations.request.triage`.)
+- Ini mengikuti authority triage yang sudah ada pada saat PART 04 ditulis dan tidak diubah di PART itu. Operator Operations yang hanya diberi queue permission tidak bisa menyelesaikan triage. Jika bisnis ingin permission triage khusus Operations (misalnya `handyman.operations.request.triage`), itu perubahan authority dan route yang perlu keputusan tersendiri.
 
 ### Residual gap menuju W02 closure
 
@@ -203,3 +204,47 @@ Test: `tests/handyman-intake-triage-journey.test.ts` (16 test: 4 journey J1–J4
 - R-T3: runtime E2E belum mencakup inspection, diagnosis, atau transisi setelah TRIAGED. Hanya triage dan status projection yang dibuktikan.
 - R-T4: DB test bersama bersifat persisten. Test memakai data unik dan membaca per-operator, tetapi assertion global tetap perlu delta bila ditambah.
 - R-2 (operator Building melihat semua tenant di Building) dan provisioning role Operations produksi tetap terbuka.
+
+## 7. W02 PART 04A — Operations triage authority separation
+
+Menutup R-T1 (§6) untuk sisi POST. Lifecycle, C6, dan Customer Care tidak diubah.
+
+### Authority (sebelum → sesudah)
+
+| Route | Sebelum | Sesudah |
+|---|---|---|
+| `POST /handyman/requests/:id/triage` | `tenant_company.manage` + Building scope | `handyman.operations.request.triage` + Building scope (ACTIVE assignment) |
+| `GET /handyman/requests/:id/triage` | `tenant_company.read` + Building scope | `tenant_company.read` ATAU `handyman.operations.request.read` (any-of) + Building scope yang sama dengan Operations Queue |
+
+- Permission baru `handyman.operations.request.triage` didaftarkan di katalog (`foundation-access.seed.ts`) dan migrasi `0436` (additive, `ON CONFLICT DO NOTHING`).
+- Masuk `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES`. Tidak ada grant ke role mana pun, termasuk PLATFORM_ADMIN. Tidak ada auto-grant.
+- Tidak ada fallback ke `tenant_company.manage`. Itu keputusan eksplisit yang belum diambil.
+- Generic `/handyman/requests*` tidak diperluas. Queue permission tidak membuka generic request.
+- Middleware baru `requireAnyPermission` (additive) di `rbac.middleware.ts`, dipakai hanya untuk GET triage.
+- Validasi bisnis, status transition, audit (`HANDYMAN_REQUEST_TRIAGED`), concurrency, dan idempotency tidak berubah. Perubahan hanya di gate route.
+
+### Dampak kompatibilitas dan provisioning
+
+- Pengguna dengan `tenant_company.manage` saja tidak bisa lagi POST triage (403). Ini perubahan perilaku yang disengaja.
+- PLATFORM_ADMIN tidak lagi menerima triage secara implisit. Akses triage harus diberikan lewat provisioning eksplisit (`handyman.operations.request.triage`) ke role Operations.
+- Caller GET triage existing (`tenant_company.read`) tidak terdampak.
+- Operator queue (`handyman.operations.request.read`) sekarang bisa GET triage pada request di Building yang di-assign. Ini disengaja karena scope-nya sama dengan queue.
+- Data produksi tidak diubah. Operator Operations yang ada perlu diberi permission triage oleh provisioning sebelum bisa triage.
+- Down-migration `0436` hanya menghapus katalog bila tidak ada grant.
+
+### Bukti (runtime)
+
+- `tests/handyman-intake-triage-journey.test.ts`: 27/27 PASS (16 lama + 11 authority PART 04A). Mencakup read-only ditolak, triage permission + assignment diterima tanpa `tenant_company.read`, manage-only ditolak, tanpa assignment, cross-building, cross-client, revoked role, inactive user (401), GET sesuai read authority, generic C6 tidak berubah, registry, dan no-auto-grant.
+- `tests/handyman-lifecycle-api.test.ts`: triage memakai operator triage khusus. Admin tanpa triage mendapat 403 di POST. GET tetap 200 untuk admin.
+- `tests/handyman-building-scope-guard-part02.test.ts`: aktor triage diberi permission eksplisit di fixture (`extraCodes`). Negatif tetap ditolak oleh Building scope.
+- `tests/config-perm-01-permission-registry.test.ts`: katalog 355 → 356, daftar unassigned ditambah.
+- Regresi `handyman-operations-queue` dan `handyman-request-reporter-contact` PASS.
+- `npx tsc --noEmit -p .` exit 0. Full suite tidak dijalankan (sesuai instruksi).
+- Focused total: 62/62 PASS (lifecycle, building-scope, operations-queue, reporter-contact, config-perm-01). Building-scope membutuhkan PostgreSQL via `DB_*`.
+
+### Residual PART 04A
+
+- R-P4A-1: keputusan fallback `tenant_company.manage` untuk triage belum diambil. Saat ini tidak ada fallback.
+- R-P4A-2: provisioning role Operations produksi (grant `handyman.operations.request.triage`) belum dilakukan. Itu operasi administratif, bukan perubahan kode.
+- R-P4A-3: tidak ada UI untuk memberi permission ini. Dikelola lewat RBAC yang ada.
+- R-T2, R-T3, R-T4 dari §6 tetap berlaku. Quotation, PIC approval, cancellation, dan notification tetap di luar scope.

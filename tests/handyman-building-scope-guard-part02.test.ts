@@ -84,6 +84,8 @@ let pool: Pool | null = null;
 let adminUserId = '';
 let disciplineId = '';
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
+/** W02 PART 04A: Operations triage authority (POST triage). */
+const TRIAGE_CODE = 'handyman.operations.request.triage';
 
 before(async () => {
   const db = await ensureTestDatabase();
@@ -377,6 +379,7 @@ async function requestFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
  */
 async function createScopedActor(
   buildingIds: readonly string[],
+  extraCodes: readonly string[] = [],
 ): Promise<{ token: string; userId: string }> {
   const tag = suffix();
   const password = 'ScopedPass123';
@@ -390,7 +393,8 @@ async function createScopedActor(
     code: `GUARD2_${tag}`,
     name: 'Request/Quotation Actor',
   });
-  for (const code of ['tenant_company.read', 'tenant_company.manage'] as const) {
+  // W02 PART 04A: `extraCodes` adds explicit authorities (e.g. triage) for a test actor.
+  for (const code of ['tenant_company.read', 'tenant_company.manage', ...extraCodes]) {
     const existing = await permissionRepository.findByCode(code);
     const permission =
       existing ??
@@ -567,7 +571,8 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     const { request } = await requestFixture(realm);
 
     // Positive: explicit assignment to the request's building.
-    const same = await createScopedActor([realm.buildingA1.id]);
+    // W02 PART 04A: POST triage requires handyman.operations.request.triage (not manage).
+    const same = await createScopedActor([realm.buildingA1.id], [TRIAGE_CODE]);
     const triage = await handymanServiceRequestTriageService
       .recordHandymanRequestTriage(
         {
@@ -597,7 +602,7 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     // Negative: same-client SIBLING building only.
     const realm3 = await realmFixture();
     const third = await requestFixture(realm3);
-    const sibling = await createScopedActor([realm3.buildingA2.id]);
+    const sibling = await createScopedActor([realm3.buildingA2.id], [TRIAGE_CODE]);
     const before = await quotationEventRows(third.request.id);
     await assertBuildingDenied(
       handymanServiceRequestTriageService.recordHandymanRequestTriage(
@@ -623,7 +628,7 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     // Negative: permission-only actor (RBAC without any assignment).
     const realm4 = await realmFixture();
     const fourth = await requestFixture(realm4);
-    const permOnly = await createScopedActor([]);
+    const permOnly = await createScopedActor([], [TRIAGE_CODE]);
     await assertBuildingDenied(
       handymanServiceRequestTriageService.recordHandymanRequestTriage(
         {

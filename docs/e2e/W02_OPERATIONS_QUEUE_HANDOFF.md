@@ -133,4 +133,4 @@ Typecheck: `npx tsc --noEmit` exit 0.
 ## PART 04 update — triage
 
 - Journey intake → queue → triage → queue ulang tervalidasi (`tests/handyman-intake-triage-journey.test.ts`).
-- Triage memakai authority existing `tenant_company.manage` + Building scope. Queue permission saja tidak memberi triage atau membaca hasil triage. Keputusan authority ada di `W02_VERIFICATION_DEBT.md` §6 (R-T1).
+- Triage (POST) memakai `handyman.operations.request.triage` + Building scope (W02 PART 04A). Tidak diturunkan dari `tenant_company.manage`. Permission ini tidak di-grant default; provisioning perlu grant eksplisit. Queue permission saja tidak memberi triage. Membaca triage (GET) memakai `tenant_company.read` atau queue read, dengan Building scope yang sama. Lihat `W02_VERIFICATION_DEBT.md` §7.

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
-import { requirePermission } from '../auth/rbac.middleware';
+import { requireAnyPermission, requirePermission } from '../auth/rbac.middleware';
 import {
   getHandymanDiagnosisHandler,
   getHandymanInspectionHandler,
@@ -15,8 +15,8 @@ import {
 /**
  * CR-HM-03 PART 05A — Handyman lifecycle surface (FROZEN F8).
  *
- *   POST /handyman/requests/:handymanRequestId/triage     manage
- *   GET  /handyman/requests/:handymanRequestId/triage     read
+ *   POST /handyman/requests/:handymanRequestId/triage     handyman.operations.request.triage (W02 PART 04A)
+ *   GET  /handyman/requests/:handymanRequestId/triage     tenant_company.read | handyman.operations.request.read
  *   POST /handyman/requests/:handymanRequestId/inspection manage
  *   GET  /handyman/requests/:handymanRequestId/inspection read
  *   POST /handyman/requests/:handymanRequestId/diagnosis  manage
@@ -42,17 +42,26 @@ export function createHandymanLifecycleApiRouter(): Router {
   const auth = authenticationMiddleware;
   const read = requirePermission('tenant_company.read');
   const manage = requirePermission('tenant_company.manage');
+  // W02 PART 04A — triage has its own Operations authority, not tenant_company.manage.
+  // Its READ keeps the existing tenant_company.read admission and admits the
+  // Operations queue read permission. Both paths apply the same Building scope
+  // inside the service (assertBuildingScopedResourceAccess).
+  const triageWrite = requirePermission('handyman.operations.request.triage');
+  const triageRead = requireAnyPermission([
+    'tenant_company.read',
+    'handyman.operations.request.read',
+  ]);
 
   router.post(
     '/handyman/requests/:handymanRequestId/triage',
     auth,
-    manage,
+    triageWrite,
     postHandymanTriageHandler,
   );
   router.get(
     '/handyman/requests/:handymanRequestId/triage',
     auth,
-    read,
+    triageRead,
     getHandymanTriageHandler,
   );
   router.post(

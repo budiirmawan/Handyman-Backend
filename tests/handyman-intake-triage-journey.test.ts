@@ -19,6 +19,7 @@ import { handoffIntegrationSecretEnvName, handoffRuntimeRepository } from '../sr
 import { propertyService } from '../src/modules/properties';
 import { roomService } from '../src/modules/rooms';
 import { serviceCatalogService } from '../src/modules/service-catalog';
+import { UNASSIGNED_BY_DEFAULT_PERMISSION_CODES } from '../src/database/seeds/foundation-access.seed';
 import { spaceService } from '../src/modules/spaces';
 import { tenantBuildingContextRepository } from '../src/modules/tenant-building-contexts';
 import { tenantCompanyRepository } from '../src/modules/tenant-companies';
@@ -57,7 +58,13 @@ const SECRET = 'intake-triage-journey-test-integration-secret';
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 const OPS = [{ code: 'handyman.operations.request.read', name: 'Read Handyman Operations Request Queue' }];
+// W02 PART 04A: Operations triage authority is its own permission, not tenant_company.manage.
 const TRIAGE = [
+  { code: 'handyman.operations.request.triage', name: 'Triage Handyman Operations Requests' },
+  { code: 'tenant_company.read', name: 'Read Tenant Companies' },
+];
+const TRIAGE_ONLY = [{ code: 'handyman.operations.request.triage', name: 'Triage Handyman Operations Requests' }];
+const MANAGE_ONLY = [
   { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
   { code: 'tenant_company.read', name: 'Read Tenant Companies' },
 ];
@@ -340,8 +347,10 @@ describe('W02 PART 04 — Customer Care intake → Operations triage journey', (
     assert.ok(everything.body.data.items.some((i: { id: string }) => i.id === requestId), 'default list keeps the request');
     const single = await detail(queueA.token, requestId);
     assert.equal(single.body.data.status, 'INSPECTION_REQUIRED');
-    // Triage read keeps its existing authority (tenant_company.read); the queue-only operator is correctly denied.
-    assert.equal((await triageRead(queueA.token, requestId)).status, 403);
+    // W02 PART 04A: triage read is admitted to the Operations queue operator with the same Building scope.
+    assert.equal((await triageRead(queueA.token, requestId)).status, 200);
+    // ...but an operator without Building assignment is still denied.
+    assert.equal((await triageRead(noAssign.token, requestId)).status, 403);
     const read = await triageRead(triageA.token, requestId);
     assert.equal(read.status, 200, JSON.stringify(read.body));
     assert.equal(read.body.data.triageDisposition, 'INSPECTION_REQUIRED');
@@ -476,3 +485,108 @@ describe('W02 PART 04 — Customer Care intake → Operations triage journey', (
     assert.equal(contacts.rows[0].n, 1);
   });
 });
+
+describe('W02 PART 04A — Operations triage authority separation', () => {
+  it('registry: the triage permission is registered once, ACTIVE, and unassigned by default (no auto-grant)', async () => {
+    const rows = await pool.query<{ n: number; status: string }>(
+      `SELECT count(*)::int AS n, min(status) AS status FROM permissions WHERE code = 'handyman.operations.request.triage'`,
+    );
+    assert.equal(rows.rows[0].n, 1);
+    assert.equal(rows.rows[0].status, 'ACTIVE');
+    const grants = await pool.query<{ n: number }>(
+      // Roles created by the test helper are SCOPED_* fixtures; no other role (seeded or
+      // migrated) may hold the triage permission. Default grants are also excluded by
+      // UNASSIGNED_BY_DEFAULT_PERMISSION_CODES below.
+      `SELECT count(*)::int AS n FROM role_permission_assignments r
+         JOIN permissions p ON p.id = r.permission_id
+         JOIN roles ro ON ro.id = r.role_id
+        WHERE p.code = 'handyman.operations.request.triage'
+          AND ro.code NOT LIKE 'SCOPED\_%'`,
+    );
+    assert.equal(grants.rows[0].n, 0, 'migration 0436 must not grant the permission to any non-fixture role');
+    assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.operations.request.triage'));
+  });
+
+  it('POST triage: the read-only Operations queue operator is denied (403) and nothing changes', async () => {
+    const f = await intake('A');
+    const res = await triage(queueA.token, f.id, decision);
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.equal((await state(f.id)).status, 'INTAKE');
+  });
+
+  it('POST triage: triage permission + Building assignment is accepted without tenant_company.read', async () => {
+    const pure = await operator(TRIAGE_ONLY, [buildingA]);
+    const f = await intake('A');
+    const res = await triage(pure.token, f.id, decision);
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.equal(res.body.data.actorUserId, pure.userId);
+    assert.equal((await state(f.id)).status, 'INSPECTION_REQUIRED');
+  });
+
+  it('POST triage: a tenant_company.manage holder is no longer an Operations triage authority (breaking change, explicit)', async () => {
+    const manager = await operator(MANAGE_ONLY, [buildingA]);
+    const f = await intake('A');
+    const res = await triage(manager.token, f.id, decision);
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.equal((await state(f.id)).status, 'INTAKE');
+  });
+
+  it('POST triage: triage permission without Building assignment is denied; no change', async () => {
+    const unassigned = await operator(TRIAGE_ONLY, []);
+    const f = await intake('A');
+    const res = await triage(unassigned.token, f.id, decision);
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.equal((await state(f.id)).status, 'INTAKE');
+  });
+
+  it('POST triage: cross-building and cross-client operators with triage permission are denied', async () => {
+    const f = await intake('A');
+    const otherBuilding = await operator(TRIAGE_ONLY, [buildingA2]);
+    const otherClient = await operator(TRIAGE_ONLY, [buildingB]);
+    assert.equal((await triage(otherBuilding.token, f.id, decision)).status, 403);
+    assert.equal((await triage(otherClient.token, f.id, decision)).status, 403);
+    assert.equal((await state(f.id)).status, 'INTAKE');
+  });
+
+  it('POST triage: a revoked triage role is denied on the next request, with no state change', async () => {
+    const revoke = await operator(TRIAGE_ONLY, [buildingA]);
+    const f = await intake('A');
+    await pool.query(`UPDATE user_role_assignments SET status = 'REVOKED' WHERE user_id = $1`, [revoke.userId]);
+    const res = await triage(revoke.token, f.id, decision);
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.equal((await state(f.id)).status, 'INTAKE');
+  });
+
+  it('POST triage: an inactive user is denied at authentication (401), with no change', async () => {
+    const inactive = await operator(TRIAGE_ONLY, [buildingA]);
+    const f = await intake('A');
+    await pool.query(`UPDATE users SET status = 'INACTIVE' WHERE id = $1`, [inactive.userId]);
+    const res = await triage(inactive.token, f.id, decision);
+    assert.equal(res.status, 401, JSON.stringify(res.body));
+    assert.equal((await state(f.id)).status, 'INTAKE');
+  });
+
+  it('GET triage: queue read permission + same Building scope is admitted; other Building and no assignment are denied', async () => {
+    const f = await intake('A');
+    assert.equal((await triage(triageA.token, f.id, decision)).status, 201);
+    assert.equal((await triageRead(queueA.token, f.id)).status, 200);
+    assert.equal((await triageRead(queueA2.token, f.id)).status, 403);
+    assert.equal((await triageRead(noAssign.token, f.id)).status, 403);
+  });
+
+  it('GET triage: a caller with neither read authority is denied', async () => {
+    const f = await intake('A');
+    const plain = await operator(TRIAGE_ONLY, [buildingA]);
+    const res = await triageRead(plain.token, f.id);
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+  });
+
+  it('generic C6 unchanged: the triage permission and the queue read permission do not open the generic request surface', async () => {
+    const f = await intake('A');
+    const generic = `/api/v1/handyman/requests/${f.id}`;
+    const triageOnly = await operator(TRIAGE_ONLY, [buildingA]);
+    assert.equal((await api().get(generic).set('Authorization', `Bearer ${triageOnly.token}`)).status, 403);
+    assert.equal((await api().get(generic).set('Authorization', `Bearer ${queueA.token}`)).status, 403);
+  });
+});
+

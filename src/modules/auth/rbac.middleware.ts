@@ -46,3 +46,40 @@ export function requirePermission(code: string) {
     }
   };
 }
+
+/**
+ * W02 PART 04A — any-of RBAC gate. Passes when the caller holds at least one of
+ * the codes. Used only where an existing read authority must stay admitted next
+ * to a new Operations authority. Same default-deny semantics as requirePermission.
+ */
+export function requireAnyPermission(codes: readonly string[]) {
+  return async function rbacAnyMiddleware(
+    req: Request,
+    _res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!req.auth) {
+        throw authenticationRequiredError();
+      }
+      const permissions = await permissionService.resolvePermissionsForUser(
+        req.auth.userId,
+      );
+      if (codes.some((code) => permissions.includes(code))) {
+        next();
+        return;
+      }
+      logger.warn('Permission denied', {
+        requestId: req.requestId,
+        userId: req.auth.userId,
+        requiredPermission: codes.join('|'),
+        path: req.path,
+        method: req.method,
+        result: 'denied',
+      });
+      next(permissionDeniedError());
+    } catch (error) {
+      next(error);
+    }
+  };
+}

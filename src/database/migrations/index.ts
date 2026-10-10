@@ -4,6 +4,7 @@ import { migration0432HandymanCareActorPaymentPermission } from './0432_handyman
 import { migration0433HandymanPaymentCareEventScope } from './0433_handyman_payment_care_event_scope';
 import { migration0434HandymanOperationsRequestPermission } from './0434_handyman_operations_request_permission';
 import { migration0435HandymanServiceRequestContacts } from './0435_handyman_service_request_contacts';
+import { migration0436HandymanOperationsRequestTriagePermission } from './0436_handyman_operations_request_triage_permission';
 import { migration0429CreateHandymanCareWorkspaceSessions } from './0429_create_handyman_care_workspace_sessions';
 import { migration0001InitialFoundation } from './0001_initial_foundation';
 import { migration0002CreateUsers } from './0002_create_users';
@@ -904,4 +905,5 @@ export const migrations: readonly Migration[] = [
   migration0433HandymanPaymentCareEventScope,
   migration0434HandymanOperationsRequestPermission,
   migration0435HandymanServiceRequestContacts,
+  migration0436HandymanOperationsRequestTriagePermission,
 ];

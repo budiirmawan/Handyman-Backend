@@ -4348,6 +4348,12 @@ paths:
         authority — smuggled actor/client/building/space/channel keys are
         structurally ignored. No diagnosis, inspection, classification,
         referral, provider, quotation, work-order or FM surface exists here.
+        W02 PART 04A authority: requires `handyman.operations.request.triage`
+        AND an ACTIVE Building assignment for the request's Building. It is
+        not derived from `tenant_company.manage` (no fallback), the permission
+        is unassigned by default, and PLATFORM_ADMIN is not granted it
+        implicitly. Denial (no permission, no assignment, cross-Building,
+        cross-Client, revoked role) leaves the request unchanged.
       tags: [Handyman Lifecycle]
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -4380,6 +4386,10 @@ paths:
         record (closest existing read-permission convention; the
         accessible-Client scope is enforced server-side from the
         request-derived scope).
+        W02 PART 04A authority: `tenant_company.read` OR
+        `handyman.operations.request.read` (any-of, so existing callers keep
+        access), and in both cases the same ACTIVE Building assignment scope
+        as the Operations Queue. The generic request surface is not widened.
       tags: [Handyman Lifecycle]
       security: [{ bearerAuth: [] }]
       responses:

@@ -255,6 +255,8 @@ export const FOUNDATION_PERMISSIONS: readonly {
   { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
   // W02 PART 02A — Operations Queue authority (exceptional; unassigned by default).
   { code: 'handyman.operations.request.read', name: 'Read Handyman Operations Request Queue' },
+  // W02 PART 04A — Operations triage (POST). Separate from tenant_company.manage.
+  { code: 'handyman.operations.request.triage', name: 'Triage Handyman Operations Requests' },
   // W02 PART 02B — Handyman customer payment codes. Names match migration
   // 0432 (ON CONFLICT DO NOTHING keeps one row). Both are route-enforced by
   // handyman-customer-ledger-api; neither is granted by default (see
@@ -770,6 +772,8 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   // to Operations roles by provisioning, never inherited by PLATFORM_ADMIN or
   // any tenant-facing role.
   'handyman.operations.request.read',
+  // W02 PART 04A — triage is an exceptional Operations authority; no default grant.
+  'handyman.operations.request.triage',
   // W02 PART 02B — payment verification is a User RBAC authority with
   // maker-checker separation; payment report is withheld from default grants
   // too. No role (including PLATFORM_ADMIN) inherits either by default.

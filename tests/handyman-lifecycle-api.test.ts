@@ -49,6 +49,9 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let token = '';
 let adminUserId = '';
+// W02 PART 04A: POST triage requires handyman.operations.request.triage (not granted to admin).
+let triageToken = '';
+let triageUserId = '';
 let disciplineIds: Record<string, string> = {};
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
@@ -70,6 +73,13 @@ before(async () => {
   const admin = await createAdminUser();
   token = admin.token;
   adminUserId = admin.userId;
+  triageToken = await createSessionWithPermissions([
+    { code: 'handyman.operations.request.triage', name: 'Triage Handyman Operations Requests' },
+    { code: 'tenant_company.read', name: 'Read Tenant Companies' },
+  ]);
+  triageUserId = (await pool!.query<{ id: string }>(
+    `SELECT id FROM users WHERE email LIKE 'scoped-%' ORDER BY created_at DESC LIMIT 1`,
+  )).rows[0].id;
   for (const code of [
     'SIMPLE_PLUMBING', 'FURNITURE', 'MINOR_CIVIL', 'GENERAL_HANDYMAN',
     'ELECTRICAL', 'AC', 'FM_COMMON_BUILDING',
@@ -101,6 +111,7 @@ const q = async (text: string, params: unknown[] = []) => {
 };
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
+const triageAuth = () => ({ Authorization: `Bearer ${triageToken}` });
 
 /** Full tenant context + immutable CR-HM-01 BM_SUPER_APP attribution. */
 async function attributedFixture() {
@@ -192,6 +203,8 @@ async function serviceEntry(clientId: string) {
 
 async function requestFixture() {
   const f = await attributedFixture();
+  // Operations triage operator needs the Building assignment (building scope).
+  await buildingAssignmentService.createAssignment(triageUserId, { buildingId: f.building.id }, adminUserId);
   const service = await serviceEntry(f.client.id);
   const request = await handymanServiceRequestService
     .createHandymanServiceRequest(
@@ -208,7 +221,7 @@ async function requestFixture() {
 async function diagnosisStateFixture(opts: { viaInspection?: boolean } = {}) {
   const f = await requestFixture();
   if (opts.viaInspection) {
-    await api().post(`${HM}/${f.request.id}/triage`).set(auth()).send({
+    await api().post(`${HM}/${f.request.id}/triage`).set(triageAuth()).send({
       disposition: 'INSPECTION_REQUIRED',
       note: 'Site check needed.',
     });
@@ -217,7 +230,7 @@ async function diagnosisStateFixture(opts: { viaInspection?: boolean } = {}) {
       notes: 'Inspected on site.',
     });
   } else {
-    await api().post(`${HM}/${f.request.id}/triage`).set(auth()).send({
+    await api().post(`${HM}/${f.request.id}/triage`).set(triageAuth()).send({
       disposition: 'DIAGNOSIS',
       note: 'Direct to diagnosis.',
     });
@@ -242,12 +255,12 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     if (!requireDatabase(t)) return;
     const f = await requestFixture();
     const res = await api().post(`${HM}/${f.request.id}/triage`)
-      .set(auth())
+      .set(triageAuth())
       .send({ disposition: 'INSPECTION_REQUIRED', note: 'Needs site visit.' });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(res.body.data.handymanRequestId, f.request.id);
     assert.equal(res.body.data.triageDisposition, 'INSPECTION_REQUIRED');
-    assert.equal(res.body.data.actorUserId, adminUserId);
+    assert.equal(res.body.data.actorUserId, triageUserId);
     assert.equal(res.body.data.clientId, f.client.id);
 
     const read = await api().get(`${HM}/${f.request.id}/triage`).set(auth());
@@ -257,7 +270,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     // repeat → 400: the PART 01 source-state gate (NOT_INTAKE) fires
     // before the duplicate pre-check on sequential attempts
     const wrongState = await api().post(`${HM}/${f.request.id}/triage`)
-      .set(auth())
+      .set(triageAuth())
       .send({ disposition: 'DIAGNOSIS', note: 'Second triage attempt.' });
     assert.equal(wrongState.status, 400);
     assert.equal(
@@ -269,7 +282,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     assert.equal(badId.status, 400);
     // unknown request → 404
     const missing = await api().post(`${HM}/${randomUUID()}/triage`)
-      .set(auth())
+      .set(triageAuth())
       .send({ disposition: 'DIAGNOSIS', note: 'No such request.' });
     assert.equal(missing.status, 404);
   });
@@ -277,7 +290,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
   it('2: POST /inspection + GET /inspection (INSPECTION_REQUIRED → DIAGNOSIS)', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await requestFixture();
-    await api().post(`${HM}/${f.request.id}/triage`).set(auth()).send({
+    await api().post(`${HM}/${f.request.id}/triage`).set(triageAuth()).send({
       disposition: 'INSPECTION_REQUIRED',
       note: 'Site check needed.',
     });
@@ -350,6 +363,11 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     const readOnly = await createSessionWithPermissions([
       { code: 'tenant_company.read', name: 'Read Tenant Companies' },
     ]);
+    // W02 PART 04A: PLATFORM_ADMIN holds tenant_company.manage but is NOT granted triage.
+    const adminTriage = await api().post(`${HM}/${f.request.id}/triage`)
+      .set(auth())
+      .send({ disposition: 'DIAGNOSIS', note: 'Admin without triage authority.' });
+    assert.equal(adminTriage.status, 403, JSON.stringify(adminTriage.body));
     const anonTriage = await api().post(`${HM}/${f.request.id}/triage`)
       .send({ disposition: 'DIAGNOSIS', note: 'No auth.' });
     assert.equal(anonTriage.status, 401);
@@ -371,7 +389,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
   it('6: reads require read authority', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await requestFixture();
-    await api().post(`${HM}/${f.request.id}/triage`).set(auth())
+    await api().post(`${HM}/${f.request.id}/triage`).set(triageAuth())
       .send({ disposition: 'DIAGNOSIS', note: 'For read test.' });
     const anon = await api().get(`${HM}/${f.request.id}/triage`);
     assert.equal(anon.status, 401);
@@ -388,7 +406,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     const f = await requestFixture();
     const other = await attributedFixture();
     const res = await api().post(`${HM}/${f.request.id}/triage`)
-      .set(auth())
+      .set(triageAuth())
       .send({
         disposition: 'DIAGNOSIS',
         note: 'Smuggled authority keys must be ignored.',
@@ -401,7 +419,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
         channelAttributionId: other.attribution.id,
       });
     assert.equal(res.status, 201, JSON.stringify(res.body));
-    assert.equal(res.body.data.actorUserId, adminUserId);
+    assert.equal(res.body.data.actorUserId, triageUserId);
     assert.notEqual(res.body.data.actorUserId, f.linkedUser.id);
     assert.equal(res.body.data.clientId, f.client.id);
     assert.equal(res.body.data.buildingId, f.building.id);
