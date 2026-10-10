@@ -95,7 +95,11 @@ export type HandymanCustomerPaymentRecord = {
   externalReference: string | null;
   /** DB-server clock at record time; callers never pass a time. */
   receivedAt: string;
-  recordedByUserId: string;
+  /** Reporter identity namespace. Exactly one of the two identities is set. */
+  recordedByActorType: HandymanPaymentActorType;
+  recordedByUserId: string | null;
+  recordedByCareActorId: string | null;
+  recordedByWorkspaceSessionId: string | null;
   decidedAt: string | null;
   decidedByUserId: string | null;
   rejectionReason: string | null;
@@ -109,10 +113,42 @@ export type HandymanCustomerPaymentEventRecord = {
   transactionId: string;
   eventType: HandymanCustomerPaymentEventType;
   idempotencyKey: string;
-  actorUserId: string;
+  actorType: HandymanPaymentActorType;
+  actorUserId: string | null;
+  actorCareActorId: string | null;
+  actorWorkspaceSessionId: string | null;
   occurredAt: string;
   createdAt: string;
 };
+
+/* ---- Actor identity (auditable, never interchangeable) ----------- */
+
+export type HandymanPaymentActorType = 'USER' | 'CARE_ACTOR';
+
+/**
+ * The identity that performed a payment action. A User is the existing
+ * authority (record/verify via RBAC). A Customer Care actor reports ONLY
+ * through a live workspace session and can never verify (schema-enforced
+ * allowlist + no decision path accepts this shape).
+ */
+export type HandymanPaymentActorRef =
+  | { actorType: 'USER'; userId: string }
+  | {
+      actorType: 'CARE_ACTOR';
+      careActorId: string;
+      workspaceSessionId: string;
+    };
+
+/** Caller-side recorder: a bare User id (existing) or a verified care actor. */
+export type HandymanPaymentRecorder =
+  | string
+  | {
+      kind: 'CARE_ACTOR';
+      careActorId: string;
+      workspaceSessionId: string;
+      /** Building of the request the workspace projected; must match scope. */
+      requestBuildingId: string;
+    };
 
 /* ---- Persistence inputs (server-derived fields ONLY) ------------ */
 
@@ -125,7 +161,7 @@ export type NewHandymanCustomerPayment = {
   providerName: string | null;
   providerReference: string | null;
   externalReference: string | null;
-  recordedByUserId: string;
+  recordedBy: HandymanPaymentActorRef;
 };
 
 export type NewHandymanCustomerPaymentEvent = {
@@ -134,7 +170,7 @@ export type NewHandymanCustomerPaymentEvent = {
   transactionId: string;
   eventType: HandymanCustomerPaymentEventType;
   idempotencyKey: string;
-  actorUserId: string;
+  actor: HandymanPaymentActorRef;
 };
 
 /* ---- Caller inputs ----------------------------------------------- */

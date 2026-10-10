@@ -3092,6 +3092,120 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Authority/storage failure; no stale or broader fallback.
+  /handyman/care/requests/{requestId}/payments:
+    post:
+      operationId: reportCareWorkspacePayment
+      summary: Report a PENDING customer payment claim for a request in the represented workspace context
+      tags: [Handoff]
+      description: >-
+        CR-HM-CUSTOMER-PAYMENT-REPORT-01 PART 05. Workspace credential only.
+        REPORT ONLY: creates one PENDING payment through the existing payment
+        engine. No confirm, reject, verify, or PAID path exists on this surface.
+        Requires explicit propertyId, tenantCompanyId and buildingId selectors
+        (spaceId optional) matching the stored request via the same projection as
+        the request detail read. Authority is re-checked inside the write
+        transaction: live session (not revoked, not expired), ACTIVE care actor and
+        CUSTOMER_CARE integration, an ACTIVE grant of permission
+        handyman.payment.report to the care actor, and an ACTIVE property grant
+        covering the scope's exact Building and Client. The recorder is persisted as
+        CARE_ACTOR identity (recordedByActorType, recordedByCareActorId); no User
+        identity is written. Body accepts only amount, channel, providerName,
+        providerReference, externalReference, idempotencyKey; any status, actor,
+        decision, or scope field is rejected. Same idempotencyKey replays the same
+        payment (replayed: true). Cache-Control is no-store.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [amount, channel, idempotencyKey]
+              properties:
+                amount: { type: string, pattern: '^\d{1,16}\.\d{1,2}$' }
+                channel:
+                  type: string
+                  enum: [CASH, BANK_TRANSFER, VIRTUAL_ACCOUNT, QRIS, CARD, OTHER]
+                providerName: { type: string, maxLength: 200 }
+                providerReference: { type: string, maxLength: 200 }
+                externalReference: { type: string, maxLength: 200 }
+                idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200':
+          description: 'PENDING payment (or replay of the same idempotencyKey, returned with replayed: true).'
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: string, format: uuid }
+                          status: { type: string, enum: [PENDING] }
+                          amount: { type: string }
+                          currency: { type: string }
+                          channel: { type: string }
+                          providerName: { type: string, nullable: true }
+                          providerReference: { type: string, nullable: true }
+                          externalReference: { type: string, nullable: true }
+                          receivedAt: { type: string, format: date-time }
+                          recordedByActorType: { type: string, enum: [CARE_ACTOR] }
+                          recordedByCareActorId: { type: string, format: uuid }
+                          createdAt: { type: string, format: date-time }
+                          replayed: { type: boolean }
+        '400':
+          description: Invalid selectors/body, unknown body fields (including status, actor, decision, scope).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED for missing/expired/revoked session or inactive actor/integration/capability.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '403':
+          description: PERMISSION_DENIED when the care actor holds no ACTIVE handyman.payment.report grant; NOT_AUTHORIZED when the scope is outside the active property grant.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for request outside the selected occupancy or revoked property grant.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: Duplicate external reference on the same transaction, or idempotency key bound to another fact.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   /handyman/care/requests:
     get:
       operationId: listCareWorkspaceRequests

@@ -823,12 +823,19 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
     );
     assert.deepEqual(
       fks.rows.map((r) => `${r.source}->${r.target}`).sort(),
+      // CR-HM-CUSTOMER-PAYMENT-REPORT-01 PART 05: the reporter/actor identity
+      // may be a Customer Care actor acting through a workspace session (the
+      // only two additional FKs). No allocation/refund/settlement edge exists.
       [
         'handyman_customer_payment_events->clients',
+        'handyman_customer_payment_events->handyman_care_workspace_sessions',
         'handyman_customer_payment_events->handyman_customer_payments',
+        'handyman_customer_payment_events->handyman_handoff_care_actors',
         'handyman_customer_payment_events->users',
         'handyman_customer_payments->clients',
+        'handyman_customer_payments->handyman_care_workspace_sessions',
         'handyman_customer_payments->handyman_customer_transactions',
+        'handyman_customer_payments->handyman_handoff_care_actors',
         'handyman_customer_payments->users',
       ],
     );

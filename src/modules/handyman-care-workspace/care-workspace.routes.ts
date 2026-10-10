@@ -1,6 +1,7 @@
 import { getCareWorkspaceRequestDetail } from './care-workspace-request-detail.service';
 import { listCareWorkspaceRequests } from './care-workspace-requests.service';
 import { issueCareCreateExchange } from './care-create-exchange.service';
+import { reportCareWorkspacePayment } from './care-workspace-payment.service';
 import { readCareWorkspaceCatalogue } from './care-workspace-catalogue.service';
 import { Router } from 'express';
 import { listCareWorkspaceScope, listCareWorkspaceTenants, listCareWorkspaceSpaces, listCareWorkspaceOccupancies } from './care-workspace-scope.service';
@@ -122,6 +123,15 @@ export function createCareWorkspaceRouter(): Router {
       const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await getCareWorkspaceRequestDetail(match[1], req.params.requestId, req.query, req.body));
+    } catch (error) { next(error); }
+  });
+  // Customer Care payment REPORT only (PART 05). No confirm/reject surface.
+  router.post('/handyman/care/requests/:requestId/payments', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      sendSuccess(res, await reportCareWorkspacePayment(match[1], req.params.requestId, req.query, req.body));
     } catch (error) { next(error); }
   });
   return router;

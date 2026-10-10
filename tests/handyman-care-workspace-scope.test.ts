@@ -325,6 +325,7 @@ describe('Care workspace property scope reads', () => {
       ['/handyman/care/session', '/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings', '/handyman/care/properties/{propertyId}/tenant-companies', '/handyman/care/properties/{propertyId}/spaces', '/handyman/care/properties/{propertyId}/occupancies',
         '/handyman/care/properties/{propertyId}/create-exchanges',
         '/handyman/care/requests', '/handyman/care/requests/{requestId}',
+        '/handyman/care/requests/{requestId}/payments',
         '/handyman/care/properties/{propertyId}/catalogue/services', '/handyman/care/properties/{propertyId}/catalogue/material-profiles',
         '/handyman/care/properties/{propertyId}/catalogue/material-profiles/{profileId}'].sort());
     for (const p of ['/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings']) {

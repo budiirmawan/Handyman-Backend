@@ -665,3 +665,47 @@ Tidak ada perubahan pada payment verification, CLOSE, schema DB, migrasi, atau l
 - Test HTTP `customer-care-transport-certification` test 1 dan seterusnya gagal sebelum langkah payment (assertion B3 list request `0 !== 1`), juga pada HEAD `6f9cabc`. Langkah payment di file itu belum tervalidasi runtime; cakupan HTTP payment dibuktikan oleh test fokus dan `customer-care-ledger` test 3–4.
 - `customer-care-ledger` test 1 dan transport test 4–5 gagal pada HEAD juga (diff `availableActions` pada payload ledger; `git show b87d72f` dan `git diff 2fcfad9..HEAD` mengacu commit yang tidak ada di clone ini).
 - Urutan event `operational_events` dalam satu transaksi tetap tie (cacat skema di luar PART 04).
+
+## 16. PART 05 — Customer Care workspace payment report (scope, identity, provisioning)
+
+### 16.1 Kontrak endpoint (baru)
+
+- `POST /api/v1/handyman/care/requests/{requestId}/payments?propertyId&tenantCompanyId&buildingId[&spaceId]`
+  - Kredensial: workspace session saja (`hcw_…`). Bukan bearer User.
+  - Hanya REPORT: membuat payment `PENDING` lewat engine payment yang sudah ada (`recordHandymanCustomerPayment`). Tidak ada CONFIRM, REJECT, verify, atau `PAID`.
+  - Body: `amount`, `channel`, `providerName?`, `providerReference?`, `externalReference?`, `idempotencyKey`. Field lain (status, actor, decision, scope) ditolak 400.
+  - Respons 200: `id, status=PENDING, amount, currency, channel, providerName, providerReference, externalReference, receivedAt, recordedByActorType=CARE_ACTOR, recordedByCareActorId, createdAt, replayed`.
+  - 401 `HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED` (sesi invalid/expired/revoked, actor/integrasi nonaktif). 403 `PERMISSION_DENIED` (tanpa grant `handyman.payment.report`). 404 `HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND` (request di luar okupansi terpilih atau grant properti dicabut). 403 `HANDYMAN_CUSTOMER_TRANSACTION_NOT_AUTHORIZED` (scope di luar Building/Client yang di-grant). 409 untuk external reference ganda.
+- Di OpenAPI: `reportCareWorkspacePayment` pada `docs/api/openapi.yaml`.
+
+### 16.2 Identitas pelapor yang dapat diaudit
+
+- Migrasi `0431`: `recorded_by_actor_type` (`USER` | `CARE_ACTOR`), `recorded_by_care_actor_id`, `recorded_by_workspace_session_id`. `recorded_by_user_id` menjadi nullable, dengan CHECK eksklusif. Hal yang sama berlaku untuk `actor_*` pada event. Guard immutability memasukkan identitas pelapor.
+- Maker-checker berdasarkan identitas: pelapor User tidak boleh memverifikasi (`HANDYMAN_CUSTOMER_PAYMENT_SELF_VERIFICATION_DENIED`). Pelapor Care Actor berada di namespace identitas berbeda, sehingga selalu dapat diverifikasi oleh User yang berwenang.
+- Verifier/decider tetap User-only.
+
+### 16.3 Provisioning permission
+
+- Katalog: migrasi `0432` mendaftarkan `handyman.payment.report` dan `handyman.payment.verify` di tabel `permissions` yang sudah ada. Tidak ada role, assignment default, atau nama role yang dijadikan otoritas.
+- Care Actor tidak memiliki role. Grant disimpan di `handyman_care_actor_permission_grants`, merujuk `permissions.code`. CHECK database membatasi grant care actor hanya ke `handyman.payment.report`, sehingga verify tidak dapat diberikan ke care actor.
+- Grant/revoke (`grantCareActorPermission` / `revokeCareActorPermission`) memerlukan grantor yang memegang permission tersebut melalui RBAC yang ada (batas delegasi). Tidak ada endpoint HTTP admin untuk grant ini, konsisten dengan grant properti care actor yang juga service-level.
+- Customer Care, Dispatcher, dan Lead Worker tidak mendapatkan `handyman.payment.verify` secara default. Finance/Authorized Manager memperolehnya hanya melalui assignment RBAC eksplisit (OD-1 tetap terbuka).
+
+### 16.4 Penegakan scope
+
+- Di dalam transaksi tulis: sesi masih hidup (`revoked_at` NULL, `expires_at` > clock DB, actor dan integrasi ACTIVE, capability CUSTOMER_CARE), grant report ACTIVE, scope = Building yang diproyeksikan, dan grant properti ACTIVE untuk Building dan Client scope.
+
+### 16.5 Hasil validasi
+
+- `npm run typecheck`: PASS.
+- Test fokus baru `tests/handyman-care-workspace-payment-report.test.ts`: 11/11 PASS (report, idempotensi dan external reference ganda, sesi invalid/revoked/expired, cross-scope, permission denied dan revoke, larangan confirm/reject dan ledger dari workspace, body smuggling, maker-checker lintas identitas, delegasi grant, verify tidak default).
+- Subset Handyman terkait (42 file `handyman-care|customer|payment|handoff|ledger` + file PART 04 dan PART 05, DB reset): 328 test, 321 pass, 7 fail.
+  - 6 kegagalan identik dengan HEAD `fbb5cdc` (baseline bersih): ledger test 1 (`availableActions` pada payload ledger) dan transport-certification test 1–5 (CR-HM-17 B6/PART 08).
+  - 1 kegagalan order-dependent: `handyman-care-workspace-spaces` test 1 mengasersi `tenant_space_relationships` kosong secara global. File yang sama lulus 14/14 bila dijalankan sendirian dari DB bersih; tidak disentuh PART 05.
+  - Seluruh test PART 05 (11) dan PART 04 (7) lulus dalam subset.
+
+### 16.6 Residual PART 05
+
+- Belum ada endpoint admin HTTP untuk grant `handyman.payment.report` ke care actor (service-level saja).
+- Event `operational_events` dan kegagalan transport/ledger yang sudah ada pada HEAD `fbb5cdc` (`availableActions` pada payload ledger, transport test 1–5) tidak diubah pada PART ini.
+- Ekspektasi test yang berubah karena perubahan kontrak yang disengaja: daftar route care di `handyman-care-workspace-scope.test.ts` dan graf FK payment di `handyman-customer-payments.test.ts` (keduanya menambah entri payment/care actor, tanpa jalur settlement/refund/allocation).

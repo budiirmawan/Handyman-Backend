@@ -7,6 +7,15 @@ export {
   type CarePropertyGrant,
 } from './handyman-care-property-scope.service';
 export {
+  CARE_ACTOR_GRANTABLE_PERMISSION_CODES,
+  CARE_ACTOR_PAYMENT_REPORT_PERMISSION,
+  grantCareActorPermission,
+  hasActiveCareActorPermission,
+  isCareWorkspaceSessionActive,
+  revokeCareActorPermission,
+  type CareActorPermissionGrant,
+} from './handyman-care-actor-permission.service';
+export {
   handymanCareActorResolver,
   parseHandoffCareActorClaim,
   resolveCareActorClaim,
