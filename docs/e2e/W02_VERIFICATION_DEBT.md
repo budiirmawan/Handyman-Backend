@@ -378,6 +378,12 @@ Batasan bukti: rollback diuji pada database kosong tanpa data produksi, dan hany
 
 Rekomendasi: perluas pola pemindaian (test only, tanpa mengubah runtime gate). Bukan blocker W03; sebaiknya ditutup di awal W03. Di-review-only ini tidak diubah.
 
+**STATUS TERKINI (W03 PART 01): CLOSED.** Gerbang kini memindai kedua bentuk admission
+(`requirePermission` dan `requireAnyPermission`), berjalan atas seluruh `src/**/*.ts`, dan mengabaikan
+komentar. Diverifikasi netral (himpunan kode identik: 333, 0 unregistered), ditambah fixture negatif
+berisi kode fiktif di balik any-of yang membuat suite gagal, plus mutation check (scanner dikembalikan
+ke bentuk lama → 2 test gagal). Suite: 16 PASS / 0 FAIL. Bukti: `docs/e2e/W03_PART01_PIC_READINESS_AND_REGISTRY_GUARD.md` §1.
+
 ### 10.3 Status verifikasi akhir W02
 
 - Backend runtime certification: **selesai dan bisa diulang**. 168 PASS / 0 FAIL / 0 SKIP (14 file), `tsc --noEmit` exit 0, `git diff --check` bersih, rollback schema terbukti.

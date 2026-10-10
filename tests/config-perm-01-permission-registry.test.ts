@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import {
@@ -23,15 +31,19 @@ import {
  * workflow and no authorization semantic. The guards below pin that boundary:
  *
  *  A. the 13 codes exist in the catalogue exactly once each;
- *  B–H. every requirePermission(...) code enforced by the organization,
+ *  B–H. every permission literal enforced by the organization,
  *       department, position, team, shift, skill and workforce routers
- *       resolves against the catalogue;
+ *       resolves against the catalogue — through EITHER admission shape
+ *       (`requirePermission('code')` or `requireAnyPermission([...])`);
  *  I. `workforce.read` was NOT invented (it pre-existed; still exactly once);
  *  J. no `configuration.*` umbrella permission was introduced;
  *  K. no wildcard / super-admin bypass was introduced, and the RBAC resolver
  *     still matches codes exactly;
  *  L. unrelated permission codes and the default-assignment policy are
  *     unchanged.
+ *  GUARD-A/B/C (W03 PART 01): the any-of shape is enforced, comments are never
+ *     enforcement, and a fictitious code behind `requireAnyPermission` makes
+ *     THIS suite fail (negative fixture over the same code path).
  *
  * OpenAPI reconciliation is deliberately out of scope: registering a permission
  * does not publish a route.
@@ -39,8 +51,12 @@ import {
 
 const SRC_DIR = resolve(__dirname, '../src');
 const MODULES_DIR = join(SRC_DIR, 'modules');
-const ROUTES_DIR = join(SRC_DIR, 'routes');
 const RBAC_MIDDLEWARE_PATH = join(SRC_DIR, 'modules/auth/rbac.middleware.ts');
+/** W02 PART 04A — the first and only `requireAnyPermission` mount in src/. */
+const LIFECYCLE_ROUTES_PATH = join(
+  SRC_DIR,
+  'modules/handyman-lifecycle-api/handyman-lifecycle-api.routes.ts',
+);
 
 /** The exact 13 codes this CR registers. Spelling is the enforced spelling. */
 const REGISTERED_BY_THIS_CR = [
@@ -164,28 +180,73 @@ const EXPECTED_UNASSIGNED_BY_DEFAULT = [
   'platform.audit.read',
 ];
 
-function walkRouteFiles(dir: string): string[] {
+function walkTsFiles(dir: string): string[] {
   const files: string[] = [];
   for (const name of readdirSync(dir)) {
     const path = join(dir, name);
-    if (statSync(path).isDirectory()) files.push(...walkRouteFiles(path));
-    else if (name.endsWith('.routes.ts')) files.push(path);
+    if (statSync(path).isDirectory()) files.push(...walkTsFiles(path));
+    else if (name.endsWith('.ts')) files.push(path);
   }
   return files;
 }
 
-const PERMISSION_CALL = /requirePermission\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
+/**
+ * W03 PART 01 — registry guard closure (blind spot F-01 of the W02/W03 review).
+ *
+ * The original gate understood exactly one admission shape,
+ * `requirePermission('code')`, and it only read `*.routes.ts`. W02 PART 04A
+ * introduced a second REAL admission shape — `requireAnyPermission([...])` in
+ * `src/modules/auth/rbac.middleware.ts`, first mounted on `GET .../triage` —
+ * and that shape was invisible: an unregistered code behind any-of is just as
+ * unreachable under default-deny as one behind requirePermission, yet nothing
+ * failed. A guard that can be bypassed by choosing a different middleware is
+ * not a guard.
+ *
+ * The gate now (a) understands both shapes, (b) walks every TypeScript file
+ * under `src/` so a literal mounted from a helper file is still enforcement,
+ * and (c) strips comments, so prose that merely names a code is never counted
+ * as enforcement. Measured neutral on the current tree: the scanned set is
+ * identical before and after this change (333 codes, 0 unregistered).
+ */
+const GUARD_CALL =
+  /require(?:Any)?Permission\s*\(\s*(\[[^\]]*\]|['"`][^'"`]+['"`])/g;
+const STRING_LITERAL = /['"`]([A-Za-z0-9_.]+)['"`]/g;
 
-/** code → the route files that enforce it, across every mounted router. */
-function enforcedCodesByFile(): Map<string, string[]> {
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+}
+
+/** Every permission literal enforced by a source string, both shapes. */
+function scanEnforcedPermissionLiterals(source: string): string[] {
+  const text = stripComments(source);
+  const found: string[] = [];
+  GUARD_CALL.lastIndex = 0;
+  let call: RegExpExecArray | null;
+  while ((call = GUARD_CALL.exec(text)) !== null) {
+    const args = (call[1] ?? '').trim();
+    if (args.startsWith('[')) {
+      STRING_LITERAL.lastIndex = 0;
+      let literal: RegExpExecArray | null;
+      while ((literal = STRING_LITERAL.exec(args)) !== null) {
+        found.push(literal[1] as string);
+      }
+      continue;
+    }
+    if (args.length > 2) found.push(args.slice(1, -1));
+  }
+  return found;
+}
+
+/** code → files that enforce it, across every guard site in `src/`. */
+function enforcedCodesByFile(files: readonly string[] = walkTsFiles(SRC_DIR)) {
   const out = new Map<string, string[]>();
-  for (const file of [...walkRouteFiles(MODULES_DIR), ...walkRouteFiles(ROUTES_DIR)]) {
+  for (const file of files) {
     const label = relative(SRC_DIR, file);
-    const source = readFileSync(file, 'utf8');
-    PERMISSION_CALL.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = PERMISSION_CALL.exec(source)) !== null) {
-      const code = match[1];
+    for (const code of scanEnforcedPermissionLiterals(
+      readFileSync(file, 'utf8'),
+    )) {
       const seen = out.get(code);
       if (seen) seen.push(label);
       else out.set(code, [label]);
@@ -194,13 +255,19 @@ function enforcedCodesByFile(): Map<string, string[]> {
   return out;
 }
 
+/** Codes enforced somewhere but absent from the catalogue. */
+function unregisteredCodes(enforced: Map<string, string[]>): string[] {
+  return [...enforced.keys()].filter((code) => !CATALOGUE_SET.has(code)).sort();
+}
+
 function codesInFiles(files: readonly string[]): string[] {
   const found = new Set<string>();
   for (const rel of files) {
-    const source = readFileSync(join(MODULES_DIR, rel), 'utf8');
-    PERMISSION_CALL.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = PERMISSION_CALL.exec(source)) !== null) found.add(match[1]);
+    for (const code of scanEnforcedPermissionLiterals(
+      readFileSync(join(MODULES_DIR, rel), 'utf8'),
+    )) {
+      found.add(code);
+    }
   }
   return [...found].sort();
 }
@@ -360,16 +427,13 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
     }
   });
 
-  it('ROUTE-TO-REGISTRY. no mounted router enforces an unregistered code', () => {
-    const enforced = enforcedCodesByFile();
-    const unresolved = [...enforced.keys()]
-      .filter((code) => !CATALOGUE_SET.has(code))
-      .sort();
+  it('ROUTE-TO-REGISTRY. no guard site in src/ enforces an unregistered code', () => {
+    const unresolved = unregisteredCodes(enforcedCodesByFile());
 
     assert.deepEqual(
       unresolved,
       [],
-      `route-enforced codes missing from FOUNDATION_PERMISSIONS: ${unresolved.join(', ')}`,
+      `enforced codes missing from FOUNDATION_PERMISSIONS: ${unresolved.join(', ')}`,
     );
 
     // The seven affected domains specifically: expected missing count is 0.
@@ -380,6 +444,100 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
           `${domain}: ${code} must exist in FOUNDATION_PERMISSIONS`,
         );
       }
+    }
+  });
+
+  it('GUARD-A. any-of admission is enforced by the same gate as requirePermission', () => {
+    const rbac = readFileSync(RBAC_MIDDLEWARE_PATH, 'utf8');
+    assert.ok(
+      /export function requirePermission\(/.test(rbac),
+      'single-code admission middleware must still exist (the gate reads it)',
+    );
+    assert.ok(
+      /export function requireAnyPermission\(/.test(rbac),
+      'any-of admission middleware must still exist (the gate reads it too)',
+    );
+
+    // Both shapes on the real W02 site are visible to the gate.
+    const lifecycle = [...new Set(scanEnforcedPermissionLiterals(
+      readFileSync(LIFECYCLE_ROUTES_PATH, 'utf8'),
+    ))];
+    for (const code of [
+      'tenant_company.read',
+      'handyman.operations.request.read',
+      'handyman.operations.request.triage',
+    ]) {
+      assert.ok(
+        lifecycle.includes(code),
+        `${code} must be visible to the registry gate (any-of or single)`,
+      );
+    }
+
+    // Shape coverage, so a narrowed scanner fails loudly rather than silently.
+    assert.deepEqual(
+      scanEnforcedPermissionLiterals(
+        "const g = requireAnyPermission(['z.two', 'z.one']);",
+      ).sort(),
+      ['z.one', 'z.two'],
+      'requireAnyPermission list members must all be scanned',
+    );
+    assert.deepEqual(
+      scanEnforcedPermissionLiterals("const g = requirePermission('y.one');"),
+      ['y.one'],
+      'requirePermission must still be scanned',
+    );
+  });
+
+  it('GUARD-B. comments are never counted as enforcement', () => {
+    assert.deepEqual(
+      scanEnforcedPermissionLiterals([
+        "/** docs name requirePermission('documented.only') */",
+        "// requireAnyPermission(['commented.only'])",
+        "const real = requirePermission('tenant_company.read');",
+      ].join('\n')),
+      ['tenant_company.read'],
+      'only live guard calls count; prose must not create or hide enforcement',
+    );
+  });
+
+  it('GUARD-C. NEGATIVE FIXTURE — a fictitious any-of code fails this gate', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'perm-guard-fixture-'));
+    const fixture = join(dir, 'fixture.routes.ts');
+    try {
+      writeFileSync(
+        fixture,
+        [
+          "import { requireAnyPermission, requirePermission } from '../rbac.middleware';",
+          '',
+          "const admitted = requireAnyPermission(['tenant_company.read']);",
+          "const inventedAnyOf = requireAnyPermission(['handyman.qa.fictional.anyof']);",
+          "const inventedSingle = requirePermission('handyman.qa.fictional.single');",
+          '',
+          'export default [admitted, inventedAnyOf, inventedSingle];',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      // Exactly the code path the repository-wide gate uses.
+      const unresolved = unregisteredCodes(enforcedCodesByFile([fixture]));
+
+      assert.deepEqual(
+        unresolved,
+        ['handyman.qa.fictional.anyof', 'handyman.qa.fictional.single'].sort(),
+        'an unregistered code must fail the gate in BOTH admission shapes',
+      );
+      assert.ok(
+        !unresolved.includes('tenant_company.read'),
+        'the registered literal must not be reported (precise failure)',
+      );
+      // Anti-vacuity: the fixture codes genuinely are absent from the catalogue.
+      assert.equal(CATALOGUE_SET.has('handyman.qa.fictional.anyof'), false);
+      assert.equal(CATALOGUE_SET.has('handyman.qa.fictional.single'), false);
+      // And the real repository scan stays clean under the broadened walk.
+      assert.deepEqual(unregisteredCodes(enforcedCodesByFile()), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

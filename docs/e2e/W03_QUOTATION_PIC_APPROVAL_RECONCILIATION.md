@@ -86,6 +86,12 @@ Koreksi fakta penting terhadap syarat journey: hari ini **syarat itu tidak diteg
 
 ---
 
+> **KOREKSI dari W03 PART 01 (F-05).** Langkah 2 di atas ("request induk terbaca di bawah dinding C6")
+> **tidak memadai**: seluruh predikat `customerRequestReadScope` — termasuk cabang PIC — bersarang di dalam
+> `EXISTS (user_building_assignments … status=ACTIVE)`, sehingga PIC murni tanpa assignment Building tetap
+> tertutup. Yang boleh di-reuse hanyalah komponen occupancy-nya, sebagai bagian dari predikat customer baru
+> yang tidak menuntut assignment. Lihat `W03_PART01_PIC_READINESS_AND_REGISTRY_GUARD.md` §2.2.
+
 ## 4. Lifecycle: quotation → present → keputusan PIC terautentikasi (deliverable diagram)
 
 ```
