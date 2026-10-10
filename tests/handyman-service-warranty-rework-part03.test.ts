@@ -40,9 +40,6 @@ import {
   startHandymanServiceWarrantyRework,
   completeHandymanServiceWarrantyRework,
   verifyHandymanServiceWarrantyRework,
-  getHandymanServiceWarrantyReworkById,
-  findHandymanServiceWarrantyReworkByClaimId,
-  listHandymanServiceWarrantyReworks,
   assertHandymanServiceWarrantyReworkIntakeEligible,
   nextHandymanServiceWarrantyReworkStatus,
   nextHandymanServiceWarrantyReworkHeadStatus,
@@ -499,11 +496,14 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_QC_INVALID),
       );
       // Nothing was written while verification kept failing.
-      const reloaded = await getHandymanServiceWarrantyReworkById(
-        proposed.rework.id);
+      const reloaded = (await q(
+        `SELECT status, verification_evidence_record_id,
+                verification_qc_run_id
+           FROM handyman_service_warranty_reworks WHERE id=$1`,
+        [proposed.rework.id])).rows[0];
       assert.equal(reloaded.status, 'REWORK_COMPLETE');
-      assert.equal(reloaded.verificationEvidenceRecordId, null);
-      assert.equal(reloaded.verificationQcRunId, null);
+      assert.equal(reloaded.verification_evidence_record_id, null);
+      assert.equal(reloaded.verification_qc_run_id, null);
       assert.equal(realm.client.id.length > 0, true);
     });
 
@@ -564,10 +564,14 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
         (await q(`SELECT count(*)::int AS n
                     FROM handyman_service_warranty_reworks WHERE claim_id=$1`,
         [claim.id])).rows[0].n, 1);
-      assert.equal((await listHandymanServiceWarrantyReworks(
-        first.rework.warrantyId)).length, 1);
-      assert.equal((await findHandymanServiceWarrantyReworkByClaimId(claim.id))
-        ?.id, first.rework.id);
+      assert.equal(
+        (await q(`SELECT id FROM handyman_service_warranty_reworks
+                   WHERE warranty_id=$1`, [first.rework.warrantyId]))
+          .rows.length, 1);
+      assert.equal(
+        (await q(`SELECT id FROM handyman_service_warranty_reworks
+                   WHERE claim_id=$1`, [claim.id])).rows[0].id,
+        first.rework.id);
     });
 
   it('refuses free rework for non-approved claims and foreign actors',

@@ -505,37 +505,9 @@ export async function verifyHandymanServiceWarrantyRework(
     });
 }
 
-/** Read helper — a rework by id, or a bounded 404. */
-export async function getHandymanServiceWarrantyReworkById(
-  reworkId: string,
-): Promise<HandymanServiceWarrantyReworkRecord> {
-  const id = ensureUuid(reworkId, 'reworkId');
-  const rework = await handymanServiceWarrantyReworkRepository.findReworkById(
-    getPool(),
-    id,
-  );
-  if (!rework) throw handymanServiceWarrantyReworkNotFoundError();
-  return rework;
-}
-
-/** Read helper — the claim's free rework, or null when none exists. */
-export async function findHandymanServiceWarrantyReworkByClaimId(
-  claimId: string,
-): Promise<HandymanServiceWarrantyReworkRecord | null> {
-  const id = ensureUuid(claimId, 'claimId');
-  return handymanServiceWarrantyReworkRepository.findReworkByClaimId(
-    getPool(),
-    id,
-  );
-}
-
-/** Read helper — the warranty's free reworks, oldest first. */
-export async function listHandymanServiceWarrantyReworks(
-  warrantyId: string,
-): Promise<HandymanServiceWarrantyReworkRecord[]> {
-  const id = ensureUuid(warrantyId, 'warrantyId');
-  return handymanServiceWarrantyReworkRepository.listReworksByWarrantyId(
-    getPool(),
-    id,
-  );
-}
+/**
+ * The frozen PART 01/03 read surface for the rework family is the
+ * guarded HTTP/API contract readers (06D-1) and the lifecycle
+ * commands; the former actor-less read helpers were removed in
+ * CR-HM-SEC-01 PART 07C-2C (dead/actor-less surface, 07C-1 class A).
+ */
