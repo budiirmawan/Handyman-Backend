@@ -1,6 +1,6 @@
 # CR-HM-06 — DECISION FREEZE (F1–F12)
 
-**Status: FROZEN on 2026-09-27, base `97a4c1b`.** Docs-only freeze: NO
+**Status: FROZEN on 2026-09-27, base `97a4c1b`. F6 REVISED IN PART at v1.1 on 2026-10-10 — see the block under §F6; the original F6 text is preserved verbatim above it.** Docs-only freeze: NO
 runtime, NO migration, NO tests, NO OpenAPI, NO roadmap change.
 Authoritative inputs: `CR-HM-06_START_GOVERNANCE.md`, frozen roadmap
 CR-HM-06 row, `CR-HM-04_PART04_ASSIGNMENT_BOUNDARY.md` (FROZEN),
@@ -70,6 +70,56 @@ quotation version** — never mutation of the decided version. Actor =
 authenticated local user with required Client/RBAC authority;
 customer/request context is **server-derived**; caller-supplied
 customer identity is **never authority**.
+
+
+> **F6 — REVISED v1.1 (ratified 2026-10-10, W03 PART 03A).** The paragraph above is
+> preserved **verbatim** for audit and is superseded **in part** — only its actor
+> clause. Normative sources: `CR-HM-06_AMENDMENT_01_TENANT_PIC_APPROVAL_ACTOR.md`
+> (A01 v1.1: amended F6 in §3, decisions A1–A9) and
+> `CR-HM-06_ADDENDUM_A_TENANT_PIC_BINDING_AUTHORITY.md` (late Tenant PIC binding
+> authority: B0–B20, revision R-1, maker-checker MC0–MC5').
+>
+> **What changed.** `Actor = authenticated local user with required Client/RBAC
+> authority` becomes: the decision actor is a **Tenant PIC principal** admitted
+> through a bounded, BM-attested PIC session, recorded explicitly and immutably as
+> `decision_actor_type = 'TENANT_PIC'` with `decided_by_tenant_pic_id`,
+> `decided_by_pic_session_id` and `approval_binding_id`. The approver may be
+> conferred **after** intake and **before** presentation, through an audited,
+> revocable, occupancy-verified **approval binding** on the quotation thread. No
+> local `users` row, `user_sessions` row, role, or RBAC grant is required for or
+> created by a PIC approver.
+>
+> **What does not change.** Explicitness; exactly one ISSUED version per decision;
+> APPROVE | REJECT vocabulary; revision by new immutable version only;
+> server-derived customer/request context; "caller-supplied customer identity is
+> never authority" (a binding is an act of authority by a manager of that exact
+> tenant and Building, never an identity claim inside the decide call); F7
+> concurrency/idempotency; F8 APPROVE-only scope creation; F9 minimum authority;
+> F10–F12 firewalls. A `USER`-class decision row may no longer be created — staff
+> approval is not customer consent — while historical `USER` rows remain valid,
+> readable, and never reinterpreted.
+>
+> **Tokens added by this revised freeze.** The Frozen-tokens table at the top of
+> this file is **not** rewritten; the additions live here:
+>
+> | Token | Value |
+> |---|---|
+> | APPROVAL_ACTOR_CLASSES | TENANT_PIC (prospective) · USER (historical, read-only) |
+> | PIC_APPROVAL_EXCLUSIVE | NEW USER-CLASS DECISION ROWS FORBIDDEN |
+> | PIC_SESSION_CREDENTIAL | BOUNDED_ATTESTED_NO_LOCAL_USER |
+> | MAKER_CHECKER_RULE | IDENTITY_EQUIVALENCE_NO_BORROW (maker set includes the binding granter) |
+> | APPROVAL_BINDING_ANCHOR | QUOTATION_THREAD (never the request row, never a version row) |
+> | APPROVAL_BINDING_LIFECYCLE | BIND_BEFORE_PRESENT · PIN_WHILE_ISSUED · REVOKE_ALWAYS · FROZEN_AFTER_DECISION |
+> | APPROVAL_ANTI_FABRICATION | R-1: decision PIC = binding PIC; binding PIC = lineage PIC whenever the lineage names one |
+> | EXECUTION_SCOPE_CREATION_ORIGIN | VALID_TENANT_PIC_APPROVAL_ONLY |
+> | C6_AND_STAFF_BUILDING_SCOPE | NOT_EXTENDED |
+> | LEDGER_CHANGE | ADDITIVE_ONLY_NO_BACKFILL_UPDATE |
+>
+> **Ratification is contract-level, not certification.** No implementation PART has
+> started, and one P0 remains open and is reported here rather than smoothed over:
+> **BLK-GAP-1** — approval continuity at cutover (the staff path may not be closed
+> before the binding + PIC session paths ship). Owner: product owner + release
+> manager; see ADD-A §8.
 
 ## F7 — Concurrency / idempotency
 
@@ -144,3 +194,8 @@ timestamp ordering.
 ---
 *This freeze governs CR-HM-06 parts 01–07B only; any deviation requires
 an explicit revised freeze before implementation.*
+
+*v1.1 revision (2026-10-10): F6 actor clause revised in part by `CR-HM-06/A01` v1.1,
+with `CR-HM-06_ADDENDUM_A_*` supplying the late Tenant PIC binding authority that
+resolves F-06. Both are contract-level ratifications recorded in the same commit as
+this file's change; no runtime, migration, OpenAPI, or test change accompanied them.*

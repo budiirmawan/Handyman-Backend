@@ -4,8 +4,11 @@
 **Referenced by:** `CR-HM-01_AMENDMENT_01_CUSTOMER_CARE_ACTOR_HANDOFF.md` (frozen D4–D8), `CR-HM-CARE-WORKSPACE-01_PART01_AUTHORITY_CONTRACT_FREEZE.md` (§2 session admission, §7 routes/errors, §8 predicate separation), `docs/e2e/HANDYMAN_BUSINESS_JOURNEY_v1.3_FROZEN.md` (§2, §4.3, §8, §9).
 **Repository:** Handyman-Backend holds the design authority; the BM Super App side owns the attesting half (§12 BLK-1 and BLK-2).
 **Type:** GOVERNANCE / DESIGN RECORD — **no runtime, migration, OpenAPI, or test change is made by this document.**
-**Amendment id:** `CR-HM-06/A01` · **Version:** 1.0 · **Date:** 2026-10-10 · **Working HEAD:** `21a7b47` (`arena/44e8ce22-handyman-backend`).
-**Status:** **AMENDMENT PROPOSED — NOT RATIFIED.** The verbatim F6 text stays in force until the freeze owner records the revised freeze (§12). No implementation PART may start against this amendment before ratification.
+**Amendment id:** `CR-HM-06/A01` · **Version:** 1.1 (v1.0 → v1.1 ratification revision) · **Date:** 2026-10-10 · **Working HEAD:** `2db34f2` (`arena/44e8ce22-handyman-backend`).
+**Status:** **AMENDMENT RATIFIED (contract level) at W03 PART 03A, 2026-10-10.** The revised freeze is recorded explicitly in `CR-HM-06_DECISION_FREEZE.md` (block "F6 — REVISED v1.1"); the original F6 text stays in that file verbatim and is superseded **in part**, never edited away.
+**Ratification scope:** the amended F6 actor class, A1–A9, the session contract (§4–§5), the ledger design (§6–§7), maker-checker (§8) and compatibility (§9–§11) are **FROZEN as contract**.
+**Ratification certifies nothing about code:** no implementation PART has started, and one **P0 release-sequencing decision remains open (BLK-GAP-1)**, reported in `CR-HM-06_ADDENDUM_A_TENANT_PIC_BINDING_AUTHORITY.md` §8.
+**v1.1 delta (explicit):** rule **R-1** replaces v1.0's ledger coherence rule `tenant_pic_id IS NOT DISTINCT FROM decided_by_tenant_pic_id` (§6.1, §6.2); the maker set gains the binding granter (§8 MC0); BLK-1 is resolved by the ratified late-binding authority; BLK-5 is superseded by MC0. No other v1.0 text changes.
 
 ---
 
@@ -20,6 +23,7 @@
 | `main` ancestry | `git merge-base --is-ancestor origin/main HEAD` → TRUE (21 ahead / 0 behind at entry) |
 | Frozen inputs read | `CR-HM-06_DECISION_FREEZE.md` (146 lines, F1–F12 verbatim), journey v1.3 (96 lines), `CR-HM-01_AMENDMENT_01_*` (349 lines), `CR-HM-CARE-WORKSPACE-01_PART01_*` (365 lines) |
 | Ledger/migrations read | `0391`, `0394`, `0395`, `0396`, `0425`, `0426`, `0427`, `0429`, `0430`, `0431`, `0432`, `0375`, `0378`, `0145`, `0080`, `0002` |
+| Addendum read | `CR-HM-06_ADDENDUM_A_TENANT_PIC_BINDING_AUTHORITY.md` — the ratified late-binding authority v1.1 depends on; it is the normative source for the binding table, B0-B20, R-1 and MC0-MC5' |
 | Runtime read | quotation decision service/repository/types, execution-scope service/repository, quotation access guard, quotations + lifecycle route tables, care workspace service/routes/scope/create-exchange, care actor registry + permission service, handoff context + care representation services, `migrate.ts`, `shared/errors.ts` |
 | DB / OpenAPI / code executed | **NONE** — no PostgreSQL, no migration, no `src/` or `docs/api/` change |
 | Full test suite | **NOT run** (per standing rule); no focused suite was needed because no code changed |
@@ -113,7 +117,7 @@ Pre-existing tokens (`QUOTATION_AUTHORITY`, `VERSION_MUTATION`, `CUSTOMER_APPROV
 | T4 | Assertion replay mints a second session | `UNIQUE (integration_id, assertion_id)` tombstone → 23505 collapses into the uniform 401 | `0429`, `care-workspace.service.ts:143-147` |
 | T5 | PIC revoked / tenant suspended mid-session | AFTER UPDATE trigger on `tenant_pics` (+ `tenant_companies`) revoking live sessions, **plus** per-call re-resolution; never rely on the trigger alone | `handyman_care_workspace_invalidate_actor` (`0429`) |
 | T6 | Staff principal borrows a PIC session (or vice versa) | separate credential store, separate principal type, separate router, **no fallback between token kinds**; admission re-checks actor kind against the resolved PIC | CR-HM-CARE-WORKSPACE-01 §2 ("Identical header syntax does not make it a local User bearer token") |
-| T7 | Cross-tenant: PIC of tenant A decides tenant B's quotation | ledger-level coherence CHECK `tenant_pic_id IS NOT DISTINCT FROM decided_by_tenant_pic_id` + session `tenant_company_id` asserted equal to the request's | §7.2 (mirrors `0427` no-borrow trigger) |
+| T7 | Cross-tenant: PIC of tenant A decides tenant B's quotation | v1.1: binding coherence R-1.1 (`decided_by_tenant_pic_id` = the ACTIVE binding's PIC, resolved in the ledger guard) **and** the binding's own B2 (`pic.tenant_company_id = request.tenant_company_id`); plus session `tenant_company_id` asserted equal to the request's | ADD-A §3.2/§5, §6.2 (mirrors `0427` no-borrow trigger) |
 | T8 | Mixed-version fleet silently downgrades a PIC assertion to a legacy staff handoff | PIC traffic uses a **dedicated integration code** that exists only once PIC-capable release + provisioning landed; a legacy node has no such integration → 401 | `CR-HM-01_AMENDMENT_01` §3.6 |
 | T9 | Infra/DB error treated as "not authorized" **or** as "authorized" | errors propagate; only explicit rejections become 401; 5xx never falls back to stale grants | `care-workspace.service.ts:148-150`, CARE-WORKSPACE §7 error table |
 
@@ -165,6 +169,7 @@ ALTER TABLE handyman_quotation_decisions
   ADD COLUMN decision_actor_type TEXT NOT NULL DEFAULT 'USER',
   ADD COLUMN decided_by_tenant_pic_id UUID REFERENCES tenant_pics (id),
   ADD COLUMN decided_by_pic_session_id UUID REFERENCES handyman_pic_workspace_sessions (id),
+  ADD COLUMN approval_binding_id UUID REFERENCES handyman_quotation_approval_bindings (id),
   ALTER COLUMN decided_by_user_id DROP NOT NULL,
   ADD CONSTRAINT handyman_quotation_decisions_actor_identity_check CHECK (
        (decision_actor_type = 'USER'
@@ -175,8 +180,14 @@ ALTER TABLE handyman_quotation_decisions
         AND decided_by_user_id IS NULL
         AND decided_by_tenant_pic_id IS NOT NULL
         AND decided_by_pic_session_id IS NOT NULL)
+  ),
+  ADD CONSTRAINT handyman_quotation_decisions_binding_check CHECK (
+       (decision_actor_type = 'USER'       AND approval_binding_id IS NULL)
+    OR (decision_actor_type = 'TENANT_PIC' AND approval_binding_id IS NOT NULL)
   );
 ```
+
+`approval_binding_id`, and the binding table it references, are specified in **`CR-HM-06_ADDENDUM_A_TENANT_PIC_BINDING_AUTHORITY.md`**, ratified in the same act as this revision: they exist because F-06 proved that the request lineage PIC cannot be the only possible source of an approver (ratified decisions 3+4). They land in **this same `ALTER`**, never in a later one (ADD-A M2) — otherwise an intermediate state exists in which a `TENANT_PIC` row is legal but unlinked to any authority.
 
 | Clause | Why this and not otherwise |
 |---|---|
@@ -184,6 +195,7 @@ ALTER TABLE handyman_quotation_decisions
 | Separate nullable actor columns, not an overloaded `decided_by_user_id` | A `tenant_pics.id` must never be written into a column whose FK says `users(id)`. Two namespaces, two columns, exactly-one CHECK — the `0431` rule, verbatim in mechanism. |
 | `DROP NOT NULL` on `decided_by_user_id` | Required by A2 (no user for a PIC). Kept **named and populated** for historical rows so no consumer has to be retrained to read history. |
 | `decided_by_pic_session_id` | Satisfies "explicit, immutable, auditable": the decision can be traced to the exact credential that authorized it, which is what makes revocation semantics meaningful after the fact. |
+| `approval_binding_id` NOT NULL for `TENANT_PIC` rows (binding CHECK) | An approver must exist only through an act of authority that is separately auditable; the decision row keeps a direct pointer to that act, which is what makes the binding "unchangeable after the decision" observable without a join heuristic (ADD-A §5, R-1.3) |
 | exactly-one CHECK (not `NUM_NONNULLS`-style) | PostgreSQL has no such operator; the disjunction is the repo idiom (`0431`, `0426`, `0427`). |
 | **No** new permission code in this migration | Permission codes are a catalogue concern (`foundation-permission-catalogue.ts`) and are enumerated by the PART 01 registry gate. Reads/mutations for staff stay as-is; the PIC path is not RBAC-governed by design (A1/A2). |
 
@@ -195,7 +207,7 @@ ALTER TABLE handyman_quotation_decisions
 CREATE OR REPLACE FUNCTION handyman_quotation_decision_guard() RETURNS trigger
 LANGUAGE plpgsql AS $handyman_quotation_decision_guard$
 DECLARE
-  pic_tenant UUID; pic_status TEXT; pic_user UUID;
+  pic_tenant UUID; pic_status TEXT; pic_user UUID; binding_pic UUID;
   version_creator UUID; root_creator UUID;
 BEGIN
   IF TG_OP = 'INSERT' THEN
@@ -203,8 +215,12 @@ BEGIN
       RAISE EXCEPTION 'Only an attested Tenant PIC may decide a Handyman quotation.'
         USING ERRCODE = '23514';
     END IF;
-    IF NEW.tenant_pic_id IS DISTINCT FROM NEW.decided_by_tenant_pic_id THEN
-      RAISE EXCEPTION 'A PIC decision must name the PIC the request lineage attributes.'
+    -- R-1.1 (v1.1): the approver must be exactly the PIC its binding confers
+    SELECT b.tenant_pic_id INTO binding_pic
+      FROM handyman_quotation_approval_bindings b
+      WHERE b.id = NEW.approval_binding_id AND b.status = 'ACTIVE';
+    IF binding_pic IS NULL OR binding_pic <> NEW.decided_by_tenant_pic_id THEN
+      RAISE EXCEPTION 'A PIC decision must name the PIC its approval binding confers.'
         USING ERRCODE = '23514';
     END IF;
     -- liveness and tenant membership are not inferable from a snapshot column
@@ -246,7 +262,8 @@ Notes the implementer must not "simplify":
 
 - **Rename-by-replacement:** keep the *existing trigger name* so any operational runbook/test that names it stays accurate; only the timing list grows. `CREATE OR REPLACE FUNCTION` alone is **not** sufficient.
 - **`ERRCODE '23514'`** is the repo's convention for these guards (`0427`, `0429`, `0430`) so tests can assert the failure kind, not just a 500.
-- The `PIC decision must name the PIC the request lineage attributes` rule is what makes the PIC-less-request case (§11 BLK-1) unpatchable at the ledger: nobody can invent a PIC at decision time. Do not "relax" it to allow a decision-time PIC.
+- **v1.1 replaces** v1.0's "the decision PIC must equal the request lineage PIC" with R-1 (§6.1 above, ADD-A §5). The anti-fabrication property is **moved, not weakened**: no approver can be invented inside a decision call, because the decision still accepts no identity that is not already conferred by an `ACTIVE`, occupancy-verified, audited **binding** (R-1.1), and a binding may never contradict a PIC that BM already attested (R-1.2). What v1.0 made impossible for every lineage-less request, v1.1 makes possible only through an explicit act of authority with a named granter, an effective window, and a revocation history.
+- The decide call therefore stays **identity-free in its input**. Widening the approver source must never become "pass a PIC id in the body"; ADD-A B11 is the testable form of that sentence.
 - Historical rows are untouched; the INSERT branch only governs new writes. This is what makes the amendment prospective-only (A9) **structurally**, not by policy.
 - A trigger body that reads `handyman_quotation_versions`/`tenant_pics` runs inside the same transaction as the decision insert, so it sees the locked version row (the service holds `lockVersionById` first, `handyman-quotation-decision.service.ts:155-163`) — no cross-table lock-ordering inversion, because both reads are of rows already locked FOR UPDATE by the caller.
 
@@ -300,8 +317,10 @@ ALTER TABLE handyman_execution_scopes
 Definitions, all drawn from stored facts:
 
 ```
-M (maker set of version V)  = { handyman_quotations.created_by_user_id (root)
-                              ∪ handyman_quotation_versions.created_by_user_id (V) }
+M (maker set of version V, v1.1)
+     = { handyman_quotations.created_by_user_id                   (root author)
+       ∪ handyman_quotation_versions.created_by_user_id          (version author)
+       ∪ handyman_quotation_approval_bindings.granted_by_user_id  (the granter) }
 C (checker set of a row)    = { decided_by_tenant_pic_id }
                               ∪ { tenant_pics.user_id of that PIC, when NOT NULL }
 ```
@@ -311,7 +330,8 @@ C (checker set of a row)    = { decided_by_tenant_pic_id }
 | **MC1** | A decision is rejected when `M ∩ C ≠ ∅`. Because the two namespaces are disjoint, the **only** detectable same-human case is a PIC whose optional `user_id` link names an authoring user — which is exactly why A6 forbids evaluating on `users.id` alone. |
 | **MC2** | MC1 is evaluated **both** in the service (to return a proper error) and in the ledger INSERT guard (§6.2) so that no future caller can bypass it. |
 | **MC3** | Error surface: reuse the existing `HANDYMAN_QUOTATION_DECISION_CONFLICT` (409) rather than minting a new enumerable code — self-approval is "a decision that cannot be recorded against this version", the same diagnostic class as an idempotency/fingerprint conflict (`handyman-quotation-decision.service.ts:53-60`). |
-| **MC4** | Residual risk accepted and recorded: when `tenant_pics.user_id IS NULL`, no stored fact can prove distinctness. Mitigation is prospective, at the only place the two namespaces touch: `tenant-pic` create/`syncUserId` must **refuse** linking a `user_id` that holds `tenant_company.manage` for that same tenant company (the repository already locks the tenant row and rejects link conflicts, `tenant-pic.repository.ts:47-74`, so a third check is idiomatic). Detection on existing rows is aggregate-only (§11 BLK-7). |
+| **MC0** | v1.1 adds the **binding granter** to `M` (ADD-A §6). This is what makes "a manager may select the signer" safe: selecting a signer who is the granter themselves — directly, or through that PIC's linked user — is refused at binding-write time **and** at decision-insert time |
+| **MC4** | Residual risk recorded: when `tenant_pics.user_id IS NULL`, no stored fact can prove distinctness. Mitigation is prospective, at the only place the two namespaces touch: `tenant-pic` create/`syncUserId` must **refuse** linking a `user_id` that holds `tenant_company.manage` for that same tenant company (the repository already locks the tenant row and rejects link conflicts, `tenant-pic.repository.ts:47-74`, so a third check is idiomatic). Detection on existing rows is aggregate-only (§11 BLK-7). |
 | **MC5** | The **issuer** of a version is not a stored column on `handyman_quotation_versions` (0391 has no `issued_by`/`issued_at`; the projection writes only `status`, `valid_until`, `updated_at` — `handyman-quotation.repository.ts:195-212`), so `M` is author-based, not presentation-based. Widening `M` to include the issuer requires a new column **and** an extension of `handyman_quotation_version_block_mutation`, whose guard is a *column list* (immutable-by-enumeration, `0391:79-113`) — any column not listed is silently mutable. Recorded as BLK-6. |
 
 **Note on F7 (unchanged):** `lockVersionById`-family locking, `Idempotency-Key` **header** + sha256 fingerprint, one authoritative decision per version, conflicting replay rejected — all preserved. The amendment does not weaken them; it removes the actor-sameness assumption from the replay branch (see §10.3).
@@ -325,8 +345,11 @@ C (checker set of a row)    = { decided_by_tenant_pic_id }
 | `GET /handyman/pic/requests/{handymanRequestId}` | new bounded read: request + presented version + lines/totals + own decision state; **no** property-wide history | new path |
 | `POST /handyman/pic/quotation-versions/{quotationVersionId}/decision` | new; body exactly `{decision}`; `Idempotency-Key` header required; 201 decision (+ `executionScope`), 401, 404, 409 | new path |
 | `GET /handyman/pic/quotation-versions/{quotationVersionId}/decision` | new; exact read of the caller's own decision | new path |
+| `POST /handyman/quotations/{quotationId}/approval-binding` | new, **staff** surface (`authenticationMiddleware` + `tenant_company.manage` + BE-02G, per B8); body exactly `{tenantPicId, effectiveUntil?}`; 201 binding, 404 uniform for an ineligible PIC (B1-B5), 409 for a pinned thread (B13) or a lineage conflict (R-1.2) | new path |
+| `DELETE /handyman/quotations/{quotationId}/approval-binding` | new, staff; always permitted (B15); 204 idempotent | new path |
+| `GET /handyman/quotations/{quotationId}/approval-binding` | new, staff (`tenant_company.read`) + PIC read of the same fact through the portal read (C22); exposes ids, status, window, granter id only | new path |
 | securitySchemes | new `PicWorkspaceBearer` (http bearer, distinct scheme) — **never** reuse the local `bearerAuth` scheme | additive |
-| `HandymanQuotationDecisionRecord` (`openapi.yaml:82440`) | `decidedByUserId` → `nullable: true`; add `decisionActorType` (`enum: [USER, TENANT_PIC]`), `decidedByTenantPicId` (uuid, nullable), `decidedByPicSessionId` (uuid, nullable); description rewritten to "actor class is explicit; a PIC row has no user id by design" | additive/relaxing |
+| `HandymanQuotationDecisionRecord` (`openapi.yaml:82440`) | `decidedByUserId` → `nullable: true`; add `decisionActorType` (`enum: [USER, TENANT_PIC]`), `decidedByTenantPicId` (uuid, nullable), `decidedByPicSessionId` (uuid, nullable), `approvalBindingId` (uuid, nullable — v1.1, the authority under which a PIC signed); description rewritten to "actor class is explicit; a PIC row has no user id by design; `tenantPicId` remains the intake lineage snapshot and is never repurposed" | additive/relaxing |
 | `HandymanExecutionScopeRecord` | `createdByUserId` → `nullable: true`; add `createdByActorType`, `createdByTenantPicId` | additive/relaxing |
 | staff `POST /handyman/quotation-versions/{quotationVersionId}/decision` (`:5749-5778`) | dispositioned per §10.4; `GET` read of a historical decision stays available to `tenant_company.read` | behavior change |
 | `POST /handoff/assertions`, `handyman-api` routes, care workspace routes | **unchanged** | none |
@@ -387,11 +410,11 @@ Either way the DB-level INSERT rule (§6.2) means **no** staff approval can be r
 
 | # | Decision needed | Owner | Blocks |
 |---|---|---|---|
-| BLK-1 | **Requests with `tenant_pic_id IS NULL` have no eligible approver.** Verified mainline, not an edge case: `handyman_service_requests.tenant_pic_id` is nullable (`0378:40`); the request inherits it from attribution (`handyman-service-request.service.ts:232`); and the care create-exchange whitelist is exactly `['tenantCompanyId','buildingId','spaceId']` (`care-create-exchange.service.ts:26-31`) — **a PIC cannot be bound at care-assisted creation at all**, while assisted intake is the journey's only creation path (§4.1). The §6.2 coherence rule makes this unpatchable at the ledger by design. Options: (a) make PIC selection mandatory for the quoted path (the care workspace already exposes a bounded PIC selection route — CARE-WORKSPACE §7 "Require buildingId, optional spaceId; bounded optional-PIC selection") — smallest change, requires CR-HM-02 + CARE-WORKSPACE amendment + BM work; (b) a governed "tenant consent recorded offline" ledger — rejected: it re-introduces staff-as-customer; (c) ship PARTs that do not depend on the decide path and defer approvals — safest sequencing fallback | Product owner + CR-HM-02/CARE-WORKSPACE owner + BM | **03E**, and any release that closes the staff route |
+| BLK-1 | **RESOLVED at v1.1** by ratified decisions 3+4 and `CR-HM-06_ADDENDUM_A_*` (late, audited, revocable approval binding). Original finding preserved for audit: ~~requests with `tenant_pic_id IS NULL` have no eligible approver~~. Residual consequence re-routed to BLK-GAP-1 (release sequencing) and BLK-BIND-BACKFILL (existing lineage-PIC threads needing a binding row). Original v1.0 finding, kept for audit: verified mainline, not an edge case — `handyman_service_requests.tenant_pic_id` is nullable (`0378:40`); the request inherits it from attribution (`handyman-service-request.service.ts:232`); and the care create-exchange whitelist is exactly `['tenantCompanyId','buildingId','spaceId']` (`care-create-exchange.service.ts:26-31`) — **a PIC cannot be bound at care-assisted creation at all**, while assisted intake is the journey's only creation path (§4.1). The v1.0 §6.2 coherence rule made this unpatchable at the ledger by design. v1.0 options (a) mandate a PIC at intake, (b) an offline-consent ledger, (c) defer approvals were **all rejected**; the ratified resolution is a fourth path — late, audited, revocable **approval binding** (`CR-HM-06_ADDENDUM_A_*`), which keeps intake optional (decision 3) and makes the binding, not the caller, the source of the approver (decision 4) | **CLOSED at v1.1** (product decisions 3+4 ratified); successors: BLK-GAP-1 + BLK-BIND-BACKFILL in ADD-A §8 | nothing — replaced by ADD-A §8 |
 | BLK-2 | **A reusable PIC session needs its own freeze.** CR-HM-01 D7 keeps the one-time exchange as the only handoff credential; the care workspace obtained an explicit authority freeze for a bounded reusable session (CARE-WORKSPACE-01 PART 01 §2) *before* implementation. The PIC needs the equivalent: an authority paragraph naming the purpose, TTL, revocation and non-fallback rules — and an explicit statement that D4's "actor is never a PIC" is **not** being weakened (the PIC is resolved from Handyman's own master, not from a BM-asserted actor block) | Architecture | **03B** |
 | BLK-3 | **Staging measurement before any population claim**: PIC-linked rate, `users` holding `tenant_company.manage` for the same tenant as their PIC link (MC4 detection), requests with NULL PIC, existing duplicate `idempotency_key` across tenants (BLK-7 precondition). Aggregate-only queries are already specified in `docs/e2e/W03_PART01_PIC_READINESS_AND_REGISTRY_GUARD.md` §3; the schema change itself does not depend on them, but BLK-1 sizing, MC4's backfill question, and BLK-8 do | DBA + Operations | BLK-1 sizing, BLK-7, MC4 remediation |
 | BLK-4 | **Staff route disposition S1 vs S2** (§10.4) — three frontends share the endpoint (journey §8) | Product owner + FE owners | **03E** |
-| BLK-5 | **MC4's prospective provisioning rule** (refuse a PIC↔User link where that user manages the same tenant) constrains `tenant-pics` UX and needs sign-off; without it, self-approval is detectable only when a link exists | Product owner + Security | **03C** (DB rule) + **03E** (service rule) |
+| BLK-5 | **SUPERSEDED at v1.1**: MC0/MC1' enforce the same property at the binding chokepoint (the granter is in `M`), so `tenant-pics` provisioning UX needs no new restriction. Detecting pre-existing captured links stays advisory and aggregate-only (BLK-3) | Product owner + Security | **03C** (DB rule) + **03E** (service rule) |
 | BLK-6 | **Maker set authorship basis (MC5)**: accept creator-based `M`, or add `issued_by_user_id` to `handyman_quotation_versions` **and** extend `handyman_quotation_version_block_mutation`'s column list (an unlisted column is silently mutable — `0391:79-113`) | Architecture + CR-HM-06 owner | **03C** exit gate |
 | BLK-7 | **Idempotency scoping (PART 00 T-06)**: `handyman_quotation_decisions_key_unique` is a **global** `UNIQUE (idempotency_key)` (`0394`), which is a cross-tenant 409 oracle. Proposed: replace with `UNIQUE (tenant_company_id, idempotency_key)`. Requires BLK-3's duplicate count to be zero, and per R6 must be its own migration | Architecture + DBA | **03F** |
 | BLK-8 | **TTL/UX bound** (rule 15): whether the portal can complete a decision inside a ≤600s session, or needs the 900s ceiling; a per-decision single-use credential is the alternative if UX cannot tolerate re-admission | Product owner + BM | **03B** constants |
@@ -403,15 +426,16 @@ CR-HM-06's own frozen PART table (01–07B) is **not** resequenced: those PARTs 
 
 | PART | Scope | Explicitly NOT in scope | Exit gate |
 |---|---|---|---|
-| **03A** | Governance landing: ratified §12 BLK-1/BLK-2 decisions recorded; pointer lines added to `CR-HM-06_DECISION_FREEZE.md` §F6 and the journey OD table by their owners (§14.2) | any code | amendment marked RATIFIED with commit sha |
+| **03A** ✓ | Governance landing (DONE at `docs/e2e/W03_PART03A_LATE_PIC_BINDING_RATIFICATION.md`): ratified §12 BLK-1/BLK-2 decisions recorded; pointer lines added to `CR-HM-06_DECISION_FREEZE.md` §F6 and the journey OD table by their owners (§14.2) | any code | amendment marked RATIFIED with commit sha |
 | **03B** | Session foundation: `handyman_pic_workspace_sessions` (+ replay tombstone, immutability guard, revocation triggers on `tenant_pics`/`tenant_companies`), `actor_capability` widening, `admitPicWorkspace`/`resolvePicWorkspacePrincipal`/revoke, `POST`/`DELETE /handyman/pic/session` | ledger, decision path, any RBAC grant | focused auth tests: replay, window, expiry-after-lock-wait, cross-tenant, revoked PIC mid-session, malformed/unknown keys, credential-kind separation, token-hash never echoed |
+| **03B2** | Approval binding foundation (ADD-A §3): bindings table + guard, B1–B5 eligibility, B12 issue gate, B13–B16 pin/revoke, B18 after-decision freeze, staff write/read routes. No ledger change, no PIC decision path | any decision-path change | bind/refuse matrix, one-ACTIVE index, pin-while-ISSUED, revoke-always, after-decision freeze, R-1.2 lineage conflict, caller identity structurally ignored |
 | **03C** | Ledger additive actor identity (both tables) + guard rewrite with INSERT branch + types/repository/projection | any behavior change on the staff path yet | migration tests on legacy parity: existing rows readable, `USER` INSERT now refused, coherence and no-borrow rules each have a red test |
 | **03D** | PIC read surface (bounded `GET /handyman/pic/requests/:id` + own decision) | mutations | 404-uniformity, minimization, no-C6-reuse test (assert the new predicate does not reference `user_building_assignments`) |
 | **03E** | PIC decide surface + MC1/MC2 maker-checker + replay actor check (C2) + `Deprecation` on staff route (S1) | scope-creation guard changes (already covered by 03C's rules — verify, don't duplicate), staff removal | end-to-end: admission → read → approve → scope exists; reject path; second-decision conflict; self-approval refused; `Idempotency-Key` header contract |
 | **03F** | Downstream eligibility hardening + regression: E1–E3 DB-level guard ratified or explicitly waived; re-run focused suites of the `0396`–`0422` consumers | new downstream features | no bypass test: a forged INSERT of a scope with a `USER` decision must raise |
 | **03G** | Certification: OpenAPI delta implemented, W03 certification doc, debt register updated | new scope | all PART gates green; mutation checks on the guard tests |
 
-Dependency: 03A → 03B → 03C → (03D ∥ 03E) → 03F → 03G. `03C` is the only schema-behavior release for the ledgers; it must not be split from the guard rewrite, and it may not ride with BLK-7's constraint change (R6).
+Dependency: **03A ✓ (done at W03 PART 03A)** → 03B → 03B2 → 03C → (03D ∥ 03E) → 03F → 03G. 03B2 precedes 03C because the ledger's `approval_binding_id` FK must reference a table that already exists, and it precedes 03E because "bind before present" (ADD-A B12) is the rule that makes a PIC approver exist at all. `03C` is the only schema-behavior release for the ledgers; it must not be split from the guard rewrite, and it may not ride with BLK-7's constraint change (R6).
 
 ## 14. Explicit non-goals & integrity statement
 
@@ -425,11 +449,19 @@ Dependency: 03A → 03B → 03C → (03D ∥ 03E) → 03F → 03G. `03C` is the 
 - No local `users`/`user_sessions` provisioning, no "customer kind" flag, no impersonation/act-as mechanism.
 - No PIC actor registry table (§5.4 rule 22), no property-grant concept for PICs (occupancy is their basis), no bulk/broad read surface.
 - No correction/repair surface for already-recorded decisions.
+- No auto-binding, no default binding, no derived binding minted at read time, and no mutation of `handyman_service_requests.tenant_pic_id` — the binding authority lives entirely in `CR-HM-06_ADDENDUM_A_*` and its own new table.
 - No measurement claims: population numbers stay UNVERIFIED (`W03_PART01_…` §3 supplies the queries; BLK-3 gates their use).
 
-### 14.2 Pointer patch proposed, **not applied**
+### 14.2 Pointer patch — status after ratification
 
-Frozen documents are not edited by this PART. Their owners should apply:
+Ratification applied the CR-HM-06 pointer as an **explicit, labelled revision**: the original F6 text remains in that file verbatim, marked superseded in part, with the revised block beside it. Nothing was edited away. The journey document is **not** touched — it is the product owner's business contract, and decisions 3+4 require no change to it (the journey never demanded a PIC at intake, so §4.1/§4.3 as written stay consistent with ADD-A).
+
+| Target | Status |
+|---|---|
+| `CR-HM-06_DECISION_FREEZE.md` §F6 | **APPLIED** at v1.1 (labelled pointer + revised F6 block, original text retained) |
+| journey v1.3 §9 OD table | **NOT APPLIED** — owner action; OD-7 (who may confer an approver after intake) is submitted for the product owner to accept or reject |
+
+Patch text kept for the record:
 
 ```
 CR-HM-06_DECISION_FREEZE.md, immediately under "## F6 — Customer approval":
@@ -449,9 +481,11 @@ docs/e2e/HANDYMAN_BUSINESS_JOURNEY_v1.3_FROZEN.md, OD table (§9):
 
 This record is governance/design only. It changes no runtime code, no migration, no OpenAPI document, no test, and no frozen document. Every structural claim above is traceable to a file:line at HEAD `21a7b47` (§1, §11 of `docs/e2e/W03_PART02_PIC_APPROVAL_CONTRACT_FREEZE.md`). Where a rule is a *proposal*, it is marked PROPOSED or listed in §12; where a consequence is uncomfortable (BLK-1, MC4 residual, MC5), it is stated rather than smoothed over.
 
-**AMENDMENT 01 PROPOSED — CR-HM-06 F6 remains verbatim until 03A records ratification. No implementation PART may start before it.**
+**AMENDMENT 01 v1.1 RATIFIED AS CONTRACT — recorded in `CR-HM-06_DECISION_FREEZE.md` ("F6 — REVISED v1.1") together with `CR-HM-06_ADDENDUM_A_*`. Ratification is not certification: 03B–03G are unstarted, and BLK-GAP-1 (P0, release sequencing) must be answered by the product owner before 03E may close the staff approval path.**
 
 ## 15. References
+
+- `docs/handyman/CR-HM-06_ADDENDUM_A_TENANT_PIC_BINDING_AUTHORITY.md` — **v1.1 dependency**: late Tenant PIC binding authority (B0–B20, R-1, MC0–MC5', M1–M6, C17–C24, ADD-A blockers).
 
 - `docs/handyman/CR-HM-06_DECISION_FREEZE.md` — F6 (amended), F7/F8/F9 (unchanged), frozen tokens, PART sequence.
 - `docs/handyman/CR-HM-01_AMENDMENT_01_CUSTOMER_CARE_ACTOR_HANDOFF.md` — D4–D8, §3.6 downgrade protection, §4 invariants.

@@ -237,6 +237,7 @@ Prinsip: satu PART = satu keputusan yang sudah disetujui; authority hanya boleh 
 > - `W03-01` sudah dieksekusi sebagai **W03 PART 01** (gerbang registry + readiness PIC; `21a7b47`).
 > - `W03-03` sudah dieksekusi sebagai **W03 PART 02** → amandemen formal **`CR-HM-06/A01`** (`docs/handyman/CR-HM-06_AMENDMENT_01_TENANT_PIC_APPROVAL_ACTOR.md`), **PROPOSED**.
 > - Urutan normative saat ini = **amendment §13 (03A–03G)**; blocker = `docs/e2e/W03_PART02_PIC_APPROVAL_CONTRACT_FREEZE.md` §6.
+> - **03A sudah dieksekusi** (2026-10-10): F6 diratifikasi pada **v1.1** + `CR-HM-06_ADDENDUM_A_TENANT_PIC_BINDING_AUTHORITY.md` (late PIC binding, menjawab F-06). Urutan kini **03B → 03B2 → 03C → (03D ∥ 03E) → 03F → 03G → 03H**; lihat `docs/e2e/W03_PART03A_LATE_PIC_BINDING_RATIFICATION.md` §6. Baris BLK-1/BLK-5 di PART 02 §6 **digantikan** di sana.
 > - `W03-05` tidak berlaku sebagaimana ditulis: langkah "§3 langkah 2–3" (reuse C6 sebagai otoritas approver) **batal oleh F-05**, dan maker-checker-nya (`W03-02`) diserap ke MC1/MC2 + perbaikan replay-actor (C2) di amendment §8/§10.
 > - `W03-04` (permission `decide`) **tidak jadi** untuk jalur PIC: A2 membuat PIC non-RBAC by construction; permission hanya relevan bila arsitektur kelak menuntut baca staff yang lebih sempit.
 
