@@ -383,3 +383,10 @@ Rekomendasi: perluas pola pemindaian (test only, tanpa mengubah runtime gate). B
 - Backend runtime certification: **selesai dan bisa diulang**. 168 PASS / 0 FAIL / 0 SKIP (14 file), `tsc --noEmit` exit 0, `git diff --check` bersih, rollback schema terbukti.
 - Yang secara sadar **tidak** dibuktikan: full suite, response comparison dengan frontend, E2E lintas repo, pengiriman notifikasi nyata, fan-out webhook keluar, rollback migration historis, dan test occupancy-turnover (G19).
 - Tidak ada satu pun klaim di atas yang diubah menjadi klaim positif oleh dokumen ini.
+
+### 10.4 Drift assertion lama yang perlu dicatat (D-3, masih terbuka)
+
+- `tests/r08-part01b-operational-detail-evidence.test.ts:488` dan `tests/r08-part02b-operational-detail-finding.test.ts:676` mengasumsikan `migrations.length === 348` ("no migration added"). Katalog repo hari ini = **436** migration (`0001`–`0436`).
+- Kedua file tidak termasuk batch 168 PASS dan tidak pernah dijalankan di W02, jadi bukan regresi W02. Tetapi siapa pun yang menjalankannya akan melihat kegagalan yang terlihat seperti regresi, padahal assertion stale.
+- Penyebab: W01 menambah `0431`–`0433`, W02 menambah `0434`–`0436`. Angka 434 di §3 (D-3) juga sudah usang.
+- Perbaikan yang benar = memperbarui angka harapan atau mengganti assertion menjadi "jumlah migration tidak menyusut" (bukan angka absolut). Perubahan test di luar scope review ini, jadi tidak dilakukan.
