@@ -1,3 +1,5 @@
+import type { BuildingScopedResourceRef } from '../context-access';
+
 /**
  * BE-17B — Material Request domain types.
  *
@@ -139,3 +141,6 @@ export type MaterialRequestFilters = {
   purchaseRequestId?: string;
   itemId?: string;
 };
+
+/** Trusted BE-02G contexts for the item-list read boundary; never client-wide. */
+export type MaterialRequestItemScope = readonly BuildingScopedResourceRef[];

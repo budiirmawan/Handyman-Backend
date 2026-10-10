@@ -1,5 +1,7 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
+import { resolveBuildingsForUser } from '../building-assignments';
+import { buildingAccessDeniedError } from '../context-access';
 import { purchaseRequestRepository } from '../purchase-requests';
 import { purchaseRequestNotFoundError } from '../purchase-requests/purchase-request.errors';
 import { inventoryItemNotFoundError } from '../inventory-items/inventory-item.errors';
@@ -22,6 +24,7 @@ import { inventoryMaterialReservationRepository } from '../inventory-material-re
 import type {
   CreateMaterialRequestInput,
   MaterialRequestFilters,
+  MaterialRequestItemScope,
   MaterialRequestRecord,
   NewMaterialRequest,
   PublicMaterialRequest,
@@ -256,21 +259,34 @@ export async function listMaterialRequestsByPurchaseRequest(
 }
 
 /**
- * Lists Material Requests that reference one Item. An Item is Client-scoped,
- * not Building-scoped, so the caller (controller) is responsible for enforcing
- * a Building context on this route. The Item is validated first (unknown Item
- * → 404).
+ * Actor-facing item list. BE-02G is the sole assignment/hierarchy authority.
+ * Resolve it once before looking up the item, with no role or sibling bypass.
+ * Missing actor / zero contexts denies independently of item existence. Items
+ * outside reachable Clients are indistinguishable from nonexistent items;
+ * authorized items with zero visible requests return an empty list.
  */
 export async function listMaterialRequestsByItem(
   itemId: string,
   filters: MaterialRequestFilters,
+  actorUserId: string,
 ): Promise<PublicMaterialRequest[]> {
-  const item = await inventoryItemRepository.findById(itemId);
-  if (!item) {
+  if (!actorUserId) {
+    throw buildingAccessDeniedError();
+  }
+  const contexts = await resolveBuildingsForUser(actorUserId);
+  const scope: MaterialRequestItemScope = contexts.flatMap((context) =>
+    context.client
+      ? [{ clientId: context.client.id, buildingId: context.building.id }]
+      : [],
+  );
+  if (scope.length === 0) {
+    throw buildingAccessDeniedError();
+  }
+  if (!(await materialRequestRepository.itemExistsInScope(itemId, scope))) {
     throw inventoryItemNotFoundError();
   }
 
-  const records = await materialRequestRepository.listByItem(itemId, filters);
+  const records = await materialRequestRepository.listByItem(itemId, filters, scope);
   return records.map(toPublicMaterialRequest);
 }
 

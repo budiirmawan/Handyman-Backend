@@ -125,9 +125,8 @@ export async function listByBuildingHandler(
 
 /**
  * `GET /items/:itemId/material-requests` — lists Material Requests referencing
- * one Item. An Item is Client-scoped, not Building-scoped, so Building
- * isolation is enforced here by deriving an accessible Building from the first
- * returned request; a caller without access to any such Building receives 403.
+ * one Item. The service resolves the actor's explicit BE-02G contexts before
+ * item lookup; the repository intersects every row with that scope in SQL.
  */
 export async function listByItemHandler(
   req: Request,
@@ -144,15 +143,8 @@ export async function listByItemHandler(
     const materialRequests = await materialRequestService.listMaterialRequestsByItem(
       itemId,
       filters,
+      req.auth.userId,
     );
-
-    const anyBuildingId = materialRequests[0]?.buildingId;
-    if (anyBuildingId) {
-      await contextAccessService.assertBuildingAccess(
-        req.auth.userId,
-        anyBuildingId,
-      );
-    }
 
     sendSuccess(res, materialRequests);
   } catch (error) {

@@ -44,6 +44,7 @@ export { createMaterialRequestRouter } from './material-request.routes';
 export type {
   CreateMaterialRequestInput,
   MaterialRequestFilters,
+  MaterialRequestItemScope,
   MaterialRequestRecord,
   MaterialRequestStatus,
   NewMaterialRequest,
