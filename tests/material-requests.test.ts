@@ -396,10 +396,10 @@ describe('create material request', () => {
       quantity: 1,
       warehouseId: warehouseB.id,
     });
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 404);
     assert.equal(
       response.body.error.code,
-      'MATERIAL_REQUEST_WAREHOUSE_BUILDING_MISMATCH',
+      'INVENTORY_WAREHOUSE_NOT_FOUND',
     );
   });
 
@@ -701,15 +701,15 @@ describe('RBAC and isolation', () => {
     const read = await api()
       .get(`/api/v1/material-requests/${created.body.data.id}`)
       .set(authHeaders(outsider.token));
-    assert.equal(read.status, 403);
-    assert.equal(read.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(read.status, 404);
+    assert.equal(read.body.error.code, 'MATERIAL_REQUEST_NOT_FOUND');
 
     const write = await api()
       .patch(`/api/v1/material-requests/${created.body.data.id}`)
       .set(authHeaders(outsider.token))
       .send({ quantity: 20 });
-    assert.equal(write.status, 403);
-    assert.equal(write.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(write.status, 404);
+    assert.equal(write.body.error.code, 'MATERIAL_REQUEST_NOT_FOUND');
   });
 
   it('denies purchase-request-nested routes across the isolation boundary', async (t) => {
@@ -742,14 +742,14 @@ describe('RBAC and isolation', () => {
     const read = await api()
       .get(`/api/v1/material-requests/${createdB.body.data.id}`)
       .set(authHeaders());
-    assert.equal(read.status, 403);
-    assert.equal(read.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(read.status, 404);
+    assert.equal(read.body.error.code, 'MATERIAL_REQUEST_NOT_FOUND');
 
     const list = await api()
       .get(`/api/v1/purchase-requests/${prB.id}/material-requests`)
       .set(authHeaders());
-    assert.equal(list.status, 403);
-    assert.equal(list.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(list.status, 404);
+    assert.equal(list.body.error.code, 'PURCHASE_REQUEST_NOT_FOUND');
     void buildingA;
   });
 });

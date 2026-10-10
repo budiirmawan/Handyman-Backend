@@ -1,3 +1,6 @@
+import { resolveMaterialScope } from '../material-requests/material-request.scope';
+import type { MaterialRequestItemScope } from '../material-requests/material-request.types';
+import { inventoryItemNotFoundError } from '../inventory-items/inventory-item.errors';
 import { withTransaction } from '../../database';
 import { contextAccessService } from '../context-access';
 import {
@@ -70,7 +73,7 @@ import type {
  *      (route) — deliberately NOT material_request.manage /
  *      purchase_request.manage / inventory_stock.manage / wo_procurement.manage
  *   3. Work Order exists                                  → 404 WORK_ORDER_NOT_FOUND
- *   4. Building access to the Work Order's Building       → 403 BUILDING_ACCESS_DENIED
+ *   4. Exact BE-02G scope (missing/inaccessible)          → uniform 404
  *   5. CREATE/CANCEL only: BE-08F Work Order field gate
  *      (`assertWorkOrderFieldActor`: active assignment + actor is assignee /
  *      team member / vendor workforce)                    → 400 / 403
@@ -246,6 +249,20 @@ async function loadWorkOrderWithBuildingAccess(
   return workOrder;
 }
 
+/** Only the four MR endpoints opt in; material-items/usage retain their contracts. */
+async function loadScopedWorkOrder(id: string, scope: MaterialRequestItemScope): Promise<WorkOrderRecord> {
+  if (!(await mobileMaterialRequestRepository.workOrderExistsInScope(id, scope))) throw workOrderNotFoundError();
+  const workOrder = await workOrderRepository.findById(id);
+  if (!workOrder) throw workOrderNotFoundError();
+  return workOrder;
+}
+
+async function loadScopedFieldRequest(id: string, scope: MaterialRequestItemScope) {
+  const row = await mobileMaterialRequestRepository.findFieldByIdInScope(id, scope);
+  if (!row || await inventoryMaterialReservationRepository.hasInconsistentReservations(id)) throw materialRequestNotFoundError();
+  return row;
+}
+
 /**
  * GET /mobile/work-orders/:workOrderId/material-requests  (PART 04 envelope)
  *
@@ -259,9 +276,10 @@ export async function listMobileWorkOrderMaterialRequests(
   workOrderId: string,
   actorUserId: string,
 ): Promise<MobileWorkOrderMaterialContext> {
-  const workOrder = await loadWorkOrderWithBuildingAccess(workOrderId, actorUserId);
+  const scope = await resolveMaterialScope(actorUserId);
+  const workOrder = await loadScopedWorkOrder(workOrderId, scope);
   const ctx = await resolveMobileMaterialActorContext(workOrder, actorUserId);
-  const rows = await mobileMaterialRequestRepository.listByWorkOrder(workOrder.id);
+  const rows = await mobileMaterialRequestRepository.listByWorkOrderInScope(workOrder.id, scope);
   return {
     workOrderId: workOrder.id,
     availableActions: evaluateMobileWorkOrderMaterialActions(ctx),
@@ -296,9 +314,9 @@ export async function getMobileMaterialRequest(
   materialRequestId: string,
   actorUserId: string,
 ): Promise<MobileMaterialRequestDetail> {
-  const row = await mobileMaterialRequestRepository.findFieldById(materialRequestId);
-  if (!row) throw materialRequestNotFoundError();
-  const workOrder = await loadWorkOrderWithBuildingAccess(row.workOrderId, actorUserId);
+  const scope = await resolveMaterialScope(actorUserId);
+  const row = await loadScopedFieldRequest(materialRequestId, scope);
+  const workOrder = await loadScopedWorkOrder(row.workOrderId, scope);
   const ctx = await resolveMobileMaterialActorContext(workOrder, actorUserId);
   const [base, reservations, issues] = await Promise.all([
     oneWithFulfillment(row, ctx),
@@ -436,12 +454,14 @@ export async function createMobileWorkOrderMaterialRequest(
   idempotencyKey: string,
 ): Promise<{ data: MobileMaterialRequest; replayed: boolean }> {
   // Authority BEFORE the claim — never poison the key.
-  const workOrder = await loadWorkOrderWithBuildingAccess(workOrderId, actorUserId);
+  const scope = await resolveMaterialScope(actorUserId);
+  const workOrder = await loadScopedWorkOrder(workOrderId, scope);
   await assertWorkOrderFieldActor(workOrder.id, actorUserId);
   // PART 04 — same evaluator as LIST/DETAIL; the stored response carries the
   // snapshot taken at creation (replay returns it verbatim).
   const ctx = await resolveMobileMaterialActorContext(workOrder, actorUserId);
 
+  if (!(await materialRequestRepository.itemExistsInScope(input.itemId, scope))) throw inventoryItemNotFoundError();
   const requestFingerprint = computeRequestFingerprint({
     workOrderId: workOrder.id,
     itemId: input.itemId,
@@ -461,6 +481,7 @@ export async function createMobileWorkOrderMaterialRequest(
         actorUserId,
         client,
       );
+      if (parent.clientId !== workOrder.clientId || parent.buildingId !== workOrder.buildingId) throw materialRequestNotFoundError();
       const created = await createMaterialRequest(
         {
           purchaseRequestId: parent.id,
@@ -494,13 +515,20 @@ export async function createMobileWorkOrderMaterialRequest(
         },
         client,
       );
-      const row = await mobileMaterialRequestRepository.findFieldById(created.id, client);
+      const row = await mobileMaterialRequestRepository.findFieldByIdInScope(created.id, scope, client);
       if (!row) throw materialRequestNotFoundError();
       return { responseStatus: 201, responseBody: await oneWithFulfillment(row, ctx, client) };
     },
   });
 
-  return { data: result.responseBody as MobileMaterialRequest, replayed: result.replayed };
+  // A replay retains its original action snapshot, but must not resurrect a
+  // response whose persisted ownership chain has since become inaccessible.
+  const data = result.responseBody as MobileMaterialRequest;
+  if (result.replayed) {
+    const replayed = await loadScopedFieldRequest(data.id, scope);
+    if (replayed.workOrderId !== workOrder.id) throw materialRequestNotFoundError();
+  }
+  return { data, replayed: result.replayed };
 }
 
 /**
@@ -520,14 +548,16 @@ export async function cancelMobileMaterialRequest(
   materialRequestId: string,
   actorUserId: string,
 ): Promise<MobileMaterialRequest> {
-  const row = await mobileMaterialRequestRepository.findFieldById(materialRequestId);
-  if (!row) throw materialRequestNotFoundError();
-  const workOrder = await loadWorkOrderWithBuildingAccess(row.workOrderId, actorUserId);
+  const scope = await resolveMaterialScope(actorUserId);
+  const row = await loadScopedFieldRequest(materialRequestId, scope);
+  const workOrder = await loadScopedWorkOrder(row.workOrderId, scope);
   await assertWorkOrderFieldActor(workOrder.id, actorUserId);
   const ctx = await resolveMobileMaterialActorContext(workOrder, actorUserId);
 
   const updated = await withTransaction(async (client) => {
-    const locked = await materialRequestRepository.findByIdForUpdate(client, row.id);
+    const locked = await materialRequestRepository.findByIdInScope(row.id, scope, client);
+    if (!(await mobileMaterialRequestRepository.findFieldByIdInScope(row.id, scope, client)) ||
+        await inventoryMaterialReservationRepository.hasInconsistentReservations(row.id, client)) throw materialRequestNotFoundError();
     if (!locked) throw materialRequestNotFoundError();
     // Field guard: stricter than the management OPEN|APPROVED rule.
     if (locked.status !== 'OPEN') throw materialRequestNotOpenError();
@@ -562,7 +592,7 @@ export async function cancelMobileMaterialRequest(
       },
       client,
     );
-    const fresh = await mobileMaterialRequestRepository.findFieldById(cancelled.id, client);
+    const fresh = await mobileMaterialRequestRepository.findFieldByIdInScope(cancelled.id, scope, client);
     if (!fresh) throw materialRequestNotFoundError();
     return fresh;
   });

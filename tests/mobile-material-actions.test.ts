@@ -227,8 +227,8 @@ describe('PART 04 — Work Order action REQUEST_MATERIAL (1-6)', () => {
     // 5. Building-inaccessible actor cannot obtain context
     const stranger = await createAdminUser();
     const x = await list(f, stranger.token);
-    assert.equal(x.status, 403);
-    assert.equal(x.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(x.status, 404);
+    assert.equal(x.body.error.code, 'WORK_ORDER_NOT_FOUND');
   });
 });
 

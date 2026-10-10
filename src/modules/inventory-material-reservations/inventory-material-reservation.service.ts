@@ -1,6 +1,6 @@
 import { withTransaction } from '../../database';
 import { recordOperationalEvent } from '../operational-events';
-import { contextAccessService } from '../context-access';
+import { resolveMaterialScope } from '../material-requests/material-request.scope';
 import { materialRequestRepository } from '../material-requests';
 import { materialRequestNotFoundError } from '../material-requests/material-request.errors';
 import { inventoryItemRepository } from '../inventory-items';
@@ -112,13 +112,6 @@ function toPublicWithDetails(
   return result;
 }
 
-async function assertBuildingAccess(
-  actorUserId: string,
-  buildingId: string,
-): Promise<void> {
-  await contextAccessService.assertBuildingAccess(actorUserId, buildingId);
-}
-
 function assertSourceScope(
   reservation: MaterialReservationRecord,
   materialRequest: {
@@ -158,19 +151,15 @@ function requireActiveDemand(status: string): void {
 export async function createMaterialReservation(
   input: CreateMaterialReservationInput,
 ): Promise<PublicMaterialReservation> {
+  const scope = await resolveMaterialScope(input.createdByUserId);
   const result = await withTransaction(async (client) => {
-    const materialRequest = await materialRequestRepository.findByIdForUpdate(
-      client,
-      input.materialRequestId,
-    );
-    if (!materialRequest) {
+    const materialRequest = await materialRequestRepository.findByIdInScope(input.materialRequestId, scope, client);
+    if (!materialRequest || await inventoryMaterialReservationRepository.hasInconsistentReservations(input.materialRequestId, client)) {
       throw materialRequestNotFoundError();
     }
 
-    await assertBuildingAccess(
-      input.createdByUserId,
-      materialRequest.buildingId,
-    );
+    if (input.itemId && !(await materialRequestRepository.itemExistsInScope(input.itemId, scope))) throw inventoryItemNotFoundError();
+    if (!(await materialRequestRepository.warehouseExistsInScope(input.warehouseId, scope))) throw inventoryWarehouseNotFoundError();
     requireActiveDemand(materialRequest.status);
 
     const item = await inventoryItemRepository.findById(materialRequest.itemId);
@@ -294,7 +283,7 @@ export async function createMaterialReservation(
   });
 
   const detailed =
-    await inventoryMaterialReservationRepository.findByIdWithDetails(result.id);
+    await inventoryMaterialReservationRepository.findByIdWithDetailsInScope(result.id, scope);
   return detailed ? toPublicWithDetails(detailed) : toPublic(result);
 }
 
@@ -302,12 +291,12 @@ export async function getMaterialReservationById(
   id: string,
   actorUserId: string,
 ): Promise<PublicMaterialReservation> {
+  const scope = await resolveMaterialScope(actorUserId);
   const detailed =
-    await inventoryMaterialReservationRepository.findByIdWithDetails(id);
+    await inventoryMaterialReservationRepository.findByIdWithDetailsInScope(id, scope);
   if (!detailed) {
     throw materialReservationNotFoundError();
   }
-  await assertBuildingAccess(actorUserId, detailed.buildingId as string);
   return toPublicWithDetails(detailed);
 }
 
@@ -316,19 +305,17 @@ export async function listMaterialReservationsByMaterialRequest(
   filters: Omit<MaterialReservationFilters, 'materialRequestId'>,
   actorUserId: string,
 ): Promise<PublicMaterialReservation[]> {
-  const materialRequest = await materialRequestRepository.findById(
-    materialRequestId,
-  );
+  const scope = await resolveMaterialScope(actorUserId);
+  const materialRequest = await materialRequestRepository.findByIdInScope(materialRequestId, scope);
   if (!materialRequest) {
     throw materialRequestNotFoundError();
   }
-  await assertBuildingAccess(actorUserId, materialRequest.buildingId);
 
   const records =
-    await inventoryMaterialReservationRepository.listByMaterialRequest({
+    await inventoryMaterialReservationRepository.listByMaterialRequestInScope({
       materialRequestId,
       status: filters.status,
-    });
+    }, scope);
   return records.map(toPublic);
 }
 
@@ -337,7 +324,8 @@ async function transitionMaterialReservation(
   status: 'RELEASED' | 'CANCELLED',
   actorUserId: string,
 ): Promise<PublicMaterialReservation> {
-  const existing = await inventoryMaterialReservationRepository.findById(id);
+  const scope = await resolveMaterialScope(actorUserId);
+  const existing = await inventoryMaterialReservationRepository.findByIdInScope(id, scope);
   if (!existing) {
     throw materialReservationNotFoundError();
   }
@@ -345,20 +333,13 @@ async function transitionMaterialReservation(
   const result = await withTransaction(async (client) => {
     // The source id is immutable, so this read establishes which source row to
     // lock before locking the reservation itself.
-    const materialRequest = await materialRequestRepository.findByIdForUpdate(
-      client,
-      existing.materialRequestId,
-    );
+    const materialRequest = await materialRequestRepository.findByIdInScope(existing.materialRequestId, scope, client);
     if (!materialRequest) {
-      throw materialRequestNotFoundError();
+      throw materialReservationNotFoundError();
     }
-    await assertBuildingAccess(actorUserId, materialRequest.buildingId);
 
     const reservation =
-      await inventoryMaterialReservationRepository.findByIdForUpdate(
-        client,
-        id,
-      );
+      await inventoryMaterialReservationRepository.findByIdInScope(id, scope, client);
     if (!reservation) {
       throw materialReservationNotFoundError();
     }
@@ -428,7 +409,7 @@ async function transitionMaterialReservation(
   });
 
   const detailed =
-    await inventoryMaterialReservationRepository.findByIdWithDetails(result.id);
+    await inventoryMaterialReservationRepository.findByIdWithDetailsInScope(result.id, scope);
   return detailed ? toPublicWithDetails(detailed) : toPublic(result);
 }
 
