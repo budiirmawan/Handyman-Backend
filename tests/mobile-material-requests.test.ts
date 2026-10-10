@@ -297,14 +297,14 @@ describe('PART 01 — create authority', () => {
     assert.equal(r3.status, 403);
   });
 
-  it('10. Building access failure → 403 BUILDING_ACCESS_DENIED (no key poisoning)', async (t) => {
+  it('10. Building access failure → 404 WORK_ORDER_NOT_FOUND (no key poisoning)', async (t) => {
     if (!ready(t)) return;
     const f = await fixture();
     const outsider = await createAdminUser(); // full permissions, no Building assignment
     const key = randomUUID();
     const r = await create(f, body(f), key, outsider.token);
-    assert.equal(r.status, 403);
-    assert.equal(r.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(r.status, 404);
+    assert.equal(r.body.error.code, 'WORK_ORDER_NOT_FOUND');
     assert.equal((await idempotencyRows(key)).length, 0);
   });
 
@@ -356,8 +356,8 @@ describe('PART 01 — validation & non-effects', () => {
       clientId: otherClient.id, code: `ITM_${suffix()}`, name: 'Foreign', itemType: 'MATERIAL',
     });
     const r1 = await create(f, body(f, { itemId: foreign.id, uomId: null }));
-    assert.equal(r1.status, 400);
-    assert.equal(r1.body.error.code, 'MATERIAL_REQUEST_ITEM_CLIENT_MISMATCH');
+    assert.equal(r1.status, 404);
+    assert.equal(r1.body.error.code, 'INVENTORY_ITEM_NOT_FOUND');
     const r2 = await create(f, body(f, { itemId: randomUUID() }));
     assert.equal(r2.status, 404);
     assert.equal(r2.body.error.code, 'INVENTORY_ITEM_NOT_FOUND');
@@ -495,7 +495,7 @@ describe('PART 01 — idempotency', () => {
     const good = await create(f, body(f), key);
     assert.equal(good.status, 201);
     // business failure inside the transaction: item client mismatch is raised
-    // AFTER the claim (inside work) → no request, no claim, no event.
+    // Inaccessible item denied before claim → no request, no claim, no event.
     const otherClient = await clientService.createClient({ code: `C_${suffix()}`, name: 'Other' });
     const foreign = await inventoryItemService.createInventoryItem({
       clientId: otherClient.id, code: `ITM_${suffix()}`, name: 'Foreign', itemType: 'MATERIAL',
@@ -503,7 +503,7 @@ describe('PART 01 — idempotency', () => {
     const key2 = randomUUID();
     const evBefore = await eventCount('WORK_ORDER_MATERIAL_REQUESTED');
     const r = await create(f, body(f, { itemId: foreign.id, uomId: null }), key2);
-    assert.equal(r.status, 400);
+    assert.equal(r.status, 404);
     assert.equal((await idempotencyRows(key2)).length, 0);
     assert.equal(await eventCount('WORK_ORDER_MATERIAL_REQUESTED'), evBefore);
     const rows = await pool!.query(`SELECT COUNT(*)::int AS n FROM material_requests WHERE item_id = $1`, [foreign.id]);
@@ -565,10 +565,10 @@ describe('PART 01 — read / list', () => {
     // cross-building
     const stranger = await createAdminUser();
     const x = await get(r.body.data.id, stranger.token);
-    assert.equal(x.status, 403);
-    assert.equal(x.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(x.status, 404);
+    assert.equal(x.body.error.code, 'MATERIAL_REQUEST_NOT_FOUND');
     const xl = await list(f, stranger.token);
-    assert.equal(xl.status, 403);
+    assert.equal(xl.status, 404);
     // no field read permission
     const none = await createSessionWithPermissions([MANAGE]);
     const n = await get(r.body.data.id, none);
