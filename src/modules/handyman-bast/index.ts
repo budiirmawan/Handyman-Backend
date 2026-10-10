@@ -66,7 +66,6 @@ export {
   voidHandymanBast,
   acceptHandymanBast,
   rejectHandymanBast,
-  getHandymanBastById,
   getHandymanBastCustomerCareDetail,
   getHandymanExecutionScopeBastCustomerCareView,
 } from './handyman-bast.service';

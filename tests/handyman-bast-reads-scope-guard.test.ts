@@ -81,13 +81,14 @@ import { ensureTestDatabase } from './helpers/postgres';
  * staff building-assignment rule is therefore applied to exactly
  * the local staff actor and to nobody else.
  *
- * `getHandymanBastById` (no actor parameter, no access wall, not
- * exposed by any route) is intentionally untouched, as are BAST
- * WRITES and customer acceptance (`applyCustomerSignOff` keeps its
- * own client-level wall for a later PART), QC, Evidence, finance,
- * and unrelated modules. Response shapes, no-existence-leak
- * behavior (BAST/scope 404 precedes the access wall, as before),
- * and the error vocabulary are unchanged.
+ * The actor-less `getHandymanBastById` read helper (no actor
+ * parameter, no access wall, never exposed by any route) was
+ * removed in CR-HM-SEC-01 PART 07C-2E as dead surface; the routed
+ * BAST reads stay on the guarded customer-care readers. BAST
+ * WRITES and customer acceptance, QC, Evidence, finance,
+ * and unrelated modules are untouched. Response shapes,
+ * no-existence-leak behavior (BAST/scope 404 precedes the access
+ * wall, as before), and the error vocabulary are unchanged.
  *
  * Two focused cases:
  *   1. authorized BAST reads — a Customer Care staff actor with an

@@ -365,16 +365,6 @@ async function applyCustomerSignOff(
   });
 }
 
-/** Read helper — unused by HTTP in this PART. */
-export async function getHandymanBastById(
-  bastId: string,
-): Promise<HandymanBastRecord> {
-  const id = ensureUuid(bastId, 'bastId');
-  const bast = await handymanBastRepository.findBastById(getPool(), id);
-  if (!bast) throw handymanBastNotFoundError();
-  return bast;
-}
-
 export type HandymanBastDetailView = {
   bast: HandymanBastRecord;
   acceptance: HandymanBastAcceptanceReadContract;
