@@ -132,6 +132,9 @@ const UNRELATED_PINNED: Record<string, string> = {
 const EXPECTED_UNASSIGNED_BY_DEFAULT = [
   // W02 PART 02A: Operations queue authority is exceptional, granted only by provisioning.
   'handyman.operations.request.read',
+  // W02 PART 02B: payment verify/report are withheld from default grants.
+  'handyman.payment.report',
+  'handyman.payment.verify',
   'operational_budget.override',
   'rfq.award',
   'price_catalog.override',
@@ -225,9 +228,11 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
 
     // 320 pre-existing + 13 registered by this CR + 19 CR-BE-SAAS-01
     // platform.* codes (PART 01 seed) + 1 W02 PART 02A Operations queue code
-    // (`handyman.operations.request.read`, unassigned by default).
-    assert.equal(CATALOGUE.length, 353);
-    assert.equal(CATALOGUE_SET.size, 353, 'catalogue must contain no duplicates');
+    // (`handyman.operations.request.read`, unassigned by default) + 2 W02 PART
+    // 02B route-enforced payment codes (`handyman.payment.report|verify`,
+    // registered in migration 0432, unassigned by default).
+    assert.equal(CATALOGUE.length, 355);
+    assert.equal(CATALOGUE_SET.size, 355, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {

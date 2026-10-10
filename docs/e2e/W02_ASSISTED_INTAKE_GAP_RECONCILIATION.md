@@ -251,3 +251,11 @@ Daftar P0 yang tersisa: **G05** (reporter), **G08** (approval PIC). G20 dan G29 
 - Provisioning role Operations produksi belum diputuskan (tidak ada grant dari kode). Lihat `W02_OPERATIONS_QUEUE_HANDOFF.md` §2 dan R-3.
 - C6 (`customerRequestReadScope`, route generic) tidak berubah.
 - R-2 (operator building melihat semua tenant di building) tetap menunggu persetujuan.
+
+## PART 02B — Permission Registry Reconciliation
+
+- `handyman.payment.report` dan `handyman.payment.verify` didaftarkan di `FOUNDATION_PERMISSIONS` dan `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES` (nama sama dengan migration 0432). Tanpa default grant.
+- `handyman.payment.report` tetap hanya untuk Care Actor sesuai allowlist CHECK 0432. `handyman.payment.verify` hanya lewat User RBAC dan maker-checker.
+- PLATFORM_ADMIN tidak menerima kedua kode secara otomatis (dibuktikan oleh `tests/handyman-payment-permission-registry.test.ts`).
+- Runtime authorization, route, controller, payment workflow, dan C6 tidak berubah.
+- Detail, hasil test, dan residual: `docs/e2e/W02_VERIFICATION_DEBT.md`.

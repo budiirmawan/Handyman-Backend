@@ -99,14 +99,14 @@ Mutation check (PART 02): guard PIC dinonaktifkan sementara. Test PART 02 "fail-
 | `handyman-care-workspace-create-exchange.test.ts` | PASS |
 | `handyman-lifecycle-api.test.ts` | PASS (triage) |
 | `handyman-api.test.ts` | PASS |
-| `config-perm-01-permission-registry.test.ts` | 12 PASS, 1 FAIL (lihat 5.3) |
+| `config-perm-01-permission-registry.test.ts` | 13 PASS (setelah PART 02B, lihat 5.3) |
 | **Total** | **80 PASS, 1 FAIL, 0 SKIP** |
 
 Typecheck: `npx tsc --noEmit` exit 0.
 
-### 5.3 Kegagalan yang sudah ada (bukan dari PART 02A)
+### 5.3 Kegagalan yang sudah ada (RESOLVED di PART 02B)
 
-`config-perm-01` test 13 (ROUTE-TO-REGISTRY) gagal. Daftar yang hilang hanya `handyman.payment.report` dan `handyman.payment.verify`. Keduanya didaftarkan lewat migration `0432` (PART 05/06) dan tidak ada di `FOUNDATION_PERMISSIONS`. Kegagalan ini **sudah ada di HEAD `954a013`**, dibuktikan dengan menjalankan test yang sama di HEAD (stash sementara). PART 02A tidak mengubahnya. Perbaikannya memerlukan keputusan tentang registrasi payment codes di seed, sehingga tidak dilakukan di sini.
+`config-perm-01` test 13 (ROUTE-TO-REGISTRY) sebelumnya gagal karena `handyman.payment.report` dan `handyman.payment.verify` tidak ada di `FOUNDATION_PERMISSIONS`. PART 02B mendaftarkannya tanpa default grant. Detail dan bukti: `W02_VERIFICATION_DEBT.md` §1. Hasil: 13/13 PASS.
 
 ### 5.4 Bukti C6 tidak berubah
 
@@ -127,5 +127,5 @@ Typecheck: `npx tsc --noEmit` exit 0.
 | R-6 | Approval quotation oleh PIC (G08) belum ada | P0 | W02 PART 11 |
 | R-7 | Frontend Operations queue UNVERIFIED (tidak ada di repo ini) | UNVERIFIED | Repo frontend |
 | R-8 | Tidak ada E2E lintas repo. Bukti hanya backend runtime. | — | Tidak diklaim |
-| R-9 | Payment permission codes tidak ada di `FOUNDATION_PERMISSIONS` (config-perm-01 test 13) | P1 (kegagalan lama) | Keputusan terpisah |
+| R-9 | Payment permission codes (ROUTE-TO-REGISTRY) | RESOLVED (PART 02B) | `W02_VERIFICATION_DEBT.md` §1 |
 | R-10 | Test `r08-*` menyebut 348 migration. Repo sekarang punya 434. Tidak dijalankan di PART ini | P2 | Perbaikan terpisah |
