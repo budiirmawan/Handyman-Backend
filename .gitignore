@@ -1,0 +1,13 @@
+# Local development artifacts only. Nothing here changes tracked content.
+# Mirrors the artifact set already excluded by .dockerignore, minus source-ish
+# entries (tests/, docs/, README*.md) which stay tracked.
+node_modules/
+dist/
+coverage/
+.nyc_output/
+.data/
+*.log
+npm-debug.log*
+.env
+.env.*
+!.env.example

@@ -345,3 +345,41 @@ Menutup gap "create request tanpa audit event" dan memberi notification handoff 
 - Static. `npx tsc --noEmit -p .` exit 0. `git diff --check` bersih.
 - Yang tidak berubah. Tidak ada file `src/` atau `tests/` yang disunting pada langkah pemulihan. Full suite tetap tidak dijalankan. Daftar NOT VERIFIED dan residual R-P5-1 sampai R-P5-6 di §8 tetap berlaku, termasuk R-P5-1 (recipient dan channel policy `HANDYMAN_REQUEST_CREATED` belum ditetapkan) yang masih menunggu keputusan produk.
 - Catatan housekeeping. Repo ini tidak punya `.gitignore`, sehingga `node_modules/` hasil `npm ci` tampil untracked. Sengaja tidak di-commit dan tidak dibuatkan `.gitignore` di sini karena di luar cakupan PART 05.
+
+## 10. Final gap reconciliation (W02, review only — 2026-10-10)
+
+Acuan capability matrix final: `docs/e2e/W02_ASSISTED_INTAKE_GAP_RECONCILIATION.md` §8.1 (29 capability: CLOSED 16, PARTIAL 4, BLOCKED_BY_POLICY 1, DEFERRED 6, UNVERIFIED 2). Bagian ini hanya mencatat perubahan status debt.
+
+### Debt yang berubah status
+
+| ID | Debt | Status sebelumnya | Status sekarang | Bukti |
+|---|---|---|---|---|
+| D-1 | ROUTE-TO-REGISTRY payment codes | RESOLVED (PART 02B) | **RESOLVED, masih hijau** | `config-perm-01` 13/13 PASS di batch 168 run |
+| D-8 | Provisioning role Operations produksi | Keputusan terbuka | **TETAP TERBUKA (B-2)** | Tidak ada grant dari kode. Setelah PART 04A, grant `handyman.operations.request.triage` juga wajib agar triage bisa dijalankan operator produksi |
+| D-9 | Reporter, PIC approval, notifikasi, audit create | Belum diimplementasi | **TERCABUT SEBAGIAN** | Reporter + audit create CLOSED (PART 03, PART 05). PIC approval → W03 (G08). Notifikasi → BLOCKED_BY_POLICY (G22, R-P5-1) |
+| R-T1 | Keputusan authority triage | Tertutup di PART 04A | **CLOSED** | §7; journey 27/27 PASS |
+| NOT VERIFIED §8 | Migrasi down tidak diuji rollback | Terbuka | **CLOSED untuk 0434, 0435, 0436** | Lihat §10.1 |
+| R-P5-5 | Komentar stale `tenant_company.manage` di header journey PART 04 | Terbuka (frozen) | **TETAP TERBUKA, sengaja** | Journey dibiarkan tidak berubah; komentar header adalah teks, bukan perilaku |
+
+### 10.1 Bukti rollback schema (tambahan konkret, dijalankan di HEAD `308f3b0`)
+
+Cluster fresh (embedded PostgreSQL 18.4), database uji terpisah, CLI proyek (`tsx src/database/cli.ts`):
+
+1. `migrate` → `Applied 436 migration(s).` (sampai `0436_handyman_operations_request_triage_permission`).
+2. `down` ×3 → `Rolled back 0436_…triage_permission`, `Rolled back 0435_…service_request_contacts`, `Rolled back 0434_…operations_request_permission`.
+3. Verifikasi setelah down: `to_regclass('public.handyman_service_request_contacts')` = `null`; `count(*) FROM permissions WHERE code IN ('handyman.operations.request.triage','handyman.operations.request.read')` = `0`.
+4. Re-`migrate` → `Applied 3 migration(s).`; tabel dan kedua baris katalog kembali; total applied 436.
+
+Batasan bukti: rollback diuji pada database kosong tanpa data produksi, dan hanya untuk tiga migration W02. Migration historis lain tidak diuji down-nya di sini.
+
+### 10.2 Temuan baru F-01 (gerbang registry buta terhadap any-of)
+
+`tests/config-perm-01-permission-registry.test.ts:177` memindai hanya pola `requirePermission('code')` di file `*.routes.ts`. Middleware any-of yang ditambahkan PART 04A (`requireAnyPermission([...])` di `src/modules/auth/rbac.middleware.ts:55`, dipakai tepat satu kali untuk `GET .../triage`) tidak masuk pemindaian. Tidak ada pelanggaran aktif — `tenant_company.read` dan `handyman.operations.request.read` sama-sama sudah terdaftar di katalog — tetapi ROUTE-TO-REGISTRY tidak akan menangkap kode baru yang hanya dipasang lewat any-of.
+
+Rekomendasi: perluas pola pemindaian (test only, tanpa mengubah runtime gate). Bukan blocker W03; sebaiknya ditutup di awal W03. Di-review-only ini tidak diubah.
+
+### 10.3 Status verifikasi akhir W02
+
+- Backend runtime certification: **selesai dan bisa diulang**. 168 PASS / 0 FAIL / 0 SKIP (14 file), `tsc --noEmit` exit 0, `git diff --check` bersih, rollback schema terbukti.
+- Yang secara sadar **tidak** dibuktikan: full suite, response comparison dengan frontend, E2E lintas repo, pengiriman notifikasi nyata, fan-out webhook keluar, rollback migration historis, dan test occupancy-turnover (G19).
+- Tidak ada satu pun klaim di atas yang diubah menjadi klaim positif oleh dokumen ini.

@@ -273,3 +273,102 @@ Daftar P0 yang tersisa: **G05** (reporter), **G08** (approval PIC). G20 dan G29 
 - Journey runtime terbukti: Customer Care intake (INTAKE + snapshot reporter) → Operations queue/detail → triage existing → status projection, queue filter, audit event. Lihat `W02_VERIFICATION_DEBT.md` §6.
 - Tidak ada perubahan source. Gap yang ditemukan adalah keputusan authority, bukan bug runtime: triage memakai `tenant_company.manage` (bukan permission queue Operations). Tidak diubah tanpa keputusan.
 - Negative, replay, dan concurrency terbukti: cross-building, cross-client, assignment dicabut, care token ditolak, transisi tidak valid ditolak, triage ganda menghasilkan satu decision dan satu event.
+
+---
+
+## 8. FINAL RECONCILIATION — W02 Assisted Intake (review only, 2026-10-10)
+
+Baseline pembuktian: branch `arena/44e8ce22-handyman-backend`, HEAD `308f3b0`, ancestry `main`@`9602991` → 18 ahead / 0 behind (fast-forward, tidak ada rewrite). Working tree bersih. Rentang perubahan W02 saja: `f6b1419..HEAD` = 36 file, +4615/−34.
+
+Legenda status akhir: **CLOSED** (implementasi ada, dibatasi scope-nya, dan ada bukti runtime pada HEAD ini) · **PARTIAL** (sebagian tertutup, sisa tercatat) · **BLOCKED_BY_POLICY** (kode siap, tetapi tidak diaktifkan karena keputusan policy belum ada) · **UNVERIFIED** (bukti berada di luar repo ini) · **DEFERRED** (sengaja tidak dikerjakan di W02, menunggu keputusan atau week lain).
+
+### 8.1 Capability matrix (29 baris, final)
+
+| ID | Capability | Status akhir | Bukti di HEAD ini | Sisa / catatan |
+|---|---|---|---|---|
+| G01 | Customer Care admission, sesi, revoke | **CLOSED** | `care-workspace.routes.ts`; `tests/handyman-care-workspace-admission.test.ts` (15 test); jalur admission dilalui ulang oleh journey PART 04 (27/27 PASS di run 168) | — |
+| G02 | Provisioning & revoke permission care actor | **CLOSED** | `handyman-care-actor-permission.service.ts`; `tests/handyman-care-admin-provisioning.test.ts`; modul ini 0-diff pada rentang W02 | Bukti runtime berasal dari run W01 (PART 06), tidak diulang di batch 168 |
+| G03 | Pemilihan Tenant Company | **CLOSED** | `care-workspace-tenants.repository.ts`; `tests/handyman-care-workspace-tenants.test.ts`; OpenAPI `.../tenant-companies` | — |
+| G04 | Property, building, space, occupancy | **CLOSED** | `care-create-exchange.scope.ts` + body `buildingId`/`spaceId?`; `tests/handyman-care-workspace-spaces.test.ts`; exchange dibatasi `min(120s, config)` (`care-create-exchange.service.ts:46`) | — |
+| G05 | Actual reporter | **CLOSED** | Migration `0435` (tabel append-only + CHECK), validasi `handyman-api.validation.ts:219-229`, ditulis satu transaksi; `handyman-request-reporter-contact.test.ts` 11/11 PASS | R-P3-1: `reporter` belum wajib (kompatibilitas mundur). Butuh keputusan bisnis, bukan kode |
+| G06 | Contact person dan fallback kontak | **PARTIAL** | `contactPerson` tersimpan sebagai snapshot dengan CHECK completeness | Urutan fallback D3 (reporter → PIC primary → email/phone tenant) **tidak diimplementasi**; grep tidak menemukan derivasi dari `tenant_pics`/`tenant_companies`. Nilai juga tidak diverifikasi identitasnya (R-P3-2) |
+| G07 | Link PIC di request | **PARTIAL** | Injeksi `tenantPicId`/`userId` dari CC ditolak 400 (dibuktikan di 16 kasus negatif PART 03); `tenant_pic_id` tetap dari attribution | Sisi approver (PIC terverifikasi) = G08, W03. Butuh D2 |
+| G08 | Otoritas approval quotation oleh PIC | **DEFERRED (W03)** | `handyman-quotations-api.routes.ts:35` masih `manage`; `handyman-quotation-decision.repository.ts` mencatat `decided_by_user_id` lokal | Tidak ada jalur approval PIC. Bukan regresi: W02 tidak menyentuh quotation engine. Prasyarat D2 |
+| G09 | Read request berbasis occupancy (C6) | **CLOSED** | `customerRequestReadScope` (`handyman-service-request.repository.ts:184`) dan file repository **0 baris diff** pada `f6b1419..HEAD` | Wall tidak dilonggarkan oleh queue baru |
+| G10 | Service category dan variant | **CLOSED** | `serviceCatalogId` wajib, `serviceVariantId?`, validasi cross-client ACTIVE di `createFromAuthorizedAttribution` | — |
+| G11 | Deskripsi masalah | **CLOSED** | `description` 1–1000, di allowed-list parser care (`:241`) | — |
+| G12 | Priority / urgency | **DEFERRED** | `priority` tidak ada di allowed-list care body; tidak ada kolom di migration Handyman W02 | D7 rekomendasi (b) tunda. Jangan duplikasi dari legacy (G28) |
+| G13 | Foto / attachment saat intake dari CC | **PARTIAL** | `GET/POST /handyman/requests/:id/intake-evidence` (read/manage) ada dan terdaftar OpenAPI; `care-workspace.routes.ts` **tidak** punya route evidence (grep: 0 hasil) | D8 belum diputuskan. Opsi (c) tetap ditolak (SI-08) |
+| G14 | Create-exchange dan assisted create | **CLOSED** | `tests/handyman-care-workspace-create-exchange.test.ts` 20/20 PASS; 201 INTAKE, `createdByUserId` null, attribution `CUSTOMER_CARE` | — |
+| G15 | Nomor request yang dibaca manusia | **DEFERRED** | Tidak ada `request_number` di modul Handyman (hanya di legacy `0081`/`0148`) | D9 rekomendasi (b): UUID saja untuk W02 |
+| G16 | Idempotency dan replay create | **PARTIAL** | Idempotensi level exchange terbukti 3× independen: replay → 401, concurrency → tepat satu 201 (PART 03, PART 05 C1/C2 di run 168) | Tidak ada `Idempotency-Key` pada create request (grep: 0 di `handyman-api/*.ts`). Dibatasi scope: token single-use sudah mengikat satu create ke satu exchange |
+| G17 | Kebijakan duplicate request | **DEFERRED** | Tidak ada logika dedupe di `handyman-requests` | D4 belum diputuskan. Rencana PART 13 |
+| G18 | Readback list dan detail CC | **CLOSED** | `tests/handyman-care-workspace-requests.test.ts` + `request-detail.test.ts`; scope di `care-workspace-requests.service.ts`; snapshot kontak tidak diekspos (cek rekursif di test PART 03) | — |
+| G19 | Visibilitas historis setelah occupancy turnover | **DEFERRED** | Wall C6 tidak berubah (0-diff), `PLATFORM_ADMIN` tetap per-Building | Tidak ada test turnover. D5 default (a) dipertahankan. AC-10 terbuka |
+| G20 | Handoff ke Operations queue | **CLOSED** | `GET /handyman/operations/requests[/:id]` + `handyman-operations-queue.{repository,service}.ts`; 19/19 PASS; OpenAPI `:4106` dan `:4183` | Menampilkan `contact` untuk triage → lihat R-2 |
+| G21 | Triage, referral, assignment | **CLOSED** | `handyman-request-triage.service.ts`; journey PART 04 27/27 PASS; triage kini berpintu `handyman.operations.request.triage` (`handyman-lifecycle-api.routes.ts:49`) | R-P4A-1: tidak ada fallback `manage` (keputusan eksplisit) |
+| G22 | Notifikasi Operations saat intake | **BLOCKED_BY_POLICY** | Event dan kontrak ada (`handyman-notification-contract.ts:49-56`, templateKey `HANDYMAN_REQUEST_CREATED`); create mencatat `notificationHandoff.status = BLOCKED_BY_POLICY` (`handyman-service-request.service.ts:149-154, 269`) | Tidak ada `emitHandymanNotificationIntent` di modul requests (grep: 0) → memang tidak diterbitkan. Butuh R-P5-1 (recipient + channel + consent) |
+| G23 | Audit dan provenance create | **CLOSED** | `HANDYMAN_REQUEST_CREATED` di audit contract (`:87`) + emit di executor transaksi yang sama (`:255`); rollback dan no-PII dibuktikan `handyman-request-create-audit-part05.test.ts` 14/14 PASS | R-P5-2: status handoff adalah snapshot create; delivery nanti dicatat di ledger, bukan update event |
+| G24 | Pembatalan / withdrawal | **DEFERRED** | Tidak ada `CANCELLED` pada vocabulary status Handyman | D7 (b). Journey frozen membatasi |
+| G25 | Kontrak OpenAPI | **CLOSED** (untuk permukaan W02) | `docs/api/openapi.yaml` +227 baris pada rentang W02: queue, otoritas triage (`:4351`, `:4390`), `HandymanRequestContactInput` (`:79828`), `HandymanRequestContactSnapshot` (`:79842`, dipakai `:82889`) | Belum dibandingkan dengan konsumsi frontend (bagian AC-12) |
+| G26 | Frontend Customer Care | **UNVERIFIED** | Tidak ada di repo ini | Repo frontend. Tidak ada klaim E2E |
+| G27 | Frontend Operations queue | **UNVERIFIED** | Tidak ada di repo ini; backend queue sudah tersedia sehingga FE bisa mulai | Repo frontend, setelah kontrak disetujui |
+| G28 | Intake Work Order legacy (`tenant-service-requests`) | **CLOSED** (out-of-scope by design) | Modul legacy tidak disentuh W02; tidak ada duplikasi field legacy (`priority`, `request_number`) ke path care Handyman (dibuktikan di G12/G15) | Tetap jalur Work Order sendiri |
+| G29 | Runtime visibility queue untuk Operations tanpa PIC | **CLOSED** | `tests/handyman-operations-queue.test.ts` test 9, 11, 12 (re-run PASS di batch 168): User tanpa PIC tidak melihat request di C6, queue hanya Building yang di-assign, tanpa assignment → 403 | — |
+
+Ringkasan 29 capability: **CLOSED 16** (G01, G02, G03, G04, G05, G09, G10, G11, G14, G18, G20, G21, G23, G25, G28, G29) · **PARTIAL 4** (G06, G07, G13, G16) · **BLOCKED_BY_POLICY 1** (G22) · **DEFERRED 6** (G08, G12, G15, G17, G19, G24) · **UNVERIFIED 2** (G26, G27). Total 29.
+
+### 8.2 Journey review (backend runtime, per fase)
+
+| Fase | Pintu masuk | Otoritas | Status |
+|---|---|---|---|
+| S1 CC admission → sesi | `POST /handyman/care/session` | assertion + property grant | CLOSED |
+| S3 create-exchange | `POST .../create-exchanges` | sesi CC + scope grant; token TTL `min(120s, config)`, single-use | CLOSED |
+| S4 request create | `POST /handyman/requests/care` | exchange token; 201 INTAKE; `createdByUserId` null; attribution `CUSTOMER_CARE` | CLOSED |
+| S4b snapshot reporter/kontak | body opsional `reporter`, `contactPerson` | ditulis di transaksi yang sama; input invalid → 400 sebelum token terbakar | CLOSED (fallback D3 belum ada) |
+| S8 audit create | `recordHandymanEvent(HANDYMAN_REQUEST_CREATED, …, client)` | satu executor dengan insert; metadata hanya identitas | CLOSED |
+| S8b notification seam | kontrak + `notificationHandoff` | tidak menerbitkan intent | BLOCKED_BY_POLICY |
+| S9 Operations queue | `GET /handyman/operations/requests[/:id]` | `handyman.operations.request.read` + ACTIVE building assignment (fail-closed) | CLOSED |
+| S10 triage | `POST /handyman/requests/:id/triage` | `handyman.operations.request.triage` + `assertBuildingScopedResourceAccess`; audit `HANDYMAN_REQUEST_TRIAGED` | CLOSED |
+| S11 approval PIC | `POST /handyman/quotation-versions/:id/decision` | masih `tenant_company.manage` + building access User lokal | DEFERRED ke W03 |
+
+### 8.3 Security review (tidak ada regresi, semua diperiksa di HEAD ini)
+
+- **Duplicate authority:** triage POST tidak lagi menerima `tenant_company.manage` (tidak ada fallback). Satu-satunya any-of gate adalah `GET .../triage` (`tenant_company.read` ATAU `handyman.operations.request.read`) dengan Building scope yang sama; `requireAnyPermission` dipakai tepat satu kali di seluruh `src/`. Tidak ada dua jalur tulis untuk kemampuan yang sama.
+- **Permission overgrant:** hanya 2 kode baru di W02 (`handyman.operations.request.read`, `.triage`), keduanya additive di migration `0434`/`0436` (`ON CONFLICT DO NOTHING`, tanpa baris grant) dan terdaftar di `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES` (`foundation-access.seed.ts:774,776`). grep seed/migration: tidak ada grant ke role mana pun, termasuk PLATFORM_ADMIN.
+- **Data exposure:** snapshot reporter/kontak hanya muncul di Operations queue; modul care-workspace tidak memiliki satu pun referensi `contact` (grep: 0 hasil) dan test PART 03 melakukan cek rekursif pada respons C6. Payload audit dan marker outbox hanya identitas (Dibuktikan A2/E1, part05 14/14).
+- **C6 dan frozen journey:** `handyman-service-request.repository.ts` (berisi `customerRequestReadScope`) = **0 baris diff** pada rentang W02. `handyman-service-request.service.ts` berubah +75 baris, tetapi seluruh hunks berada di jalur create saja (`createFromAuthorizedAttribution`, `createHandymanServiceRequest`, `createCareHandymanServiceRequest`); tidak ada hunk pada read/projection path. `docs/e2e/HANDYMAN_BUSINESS_JOURNEY_v1.3_FROZEN.md` tidak disentuh (0 diff).
+- **Schema:** hanya additive (`0434`, `0435`, `0436`). Tidak ada constraint yang dilemahkan; `0435` justru menambah trigger append-only UPDATE/DELETE.
+- **Rollback schema:** untuk pertama kalinya dibuktikan dieksekusi, bukan hanya dibaca. Pada cluster fresh: 436 migration UP → `down` ×3 (`0436`, `0435`, `0434`) → `to_regclass('public.handyman_service_request_contacts') = null` dan 0 baris permission Operations → re-UP = 3 migration, tabel dan 2 baris katalog kembali, total applied 436.
+- **Temuan F-01 (perlu ditindak, bukan blocker runtime):** gerbang ROUTE-TO-REGISTRY memakai regex `PERMISSION_CALL = /requirePermission\(...\)/` (`tests/config-perm-01-permission-registry.test.ts:177`) dan **tidak memindai `requireAnyPermission`**. Kedua kode pada GET triage hari ini memang terdaftar, jadi tidak ada pelanggaran aktif; tetapi gerbang itu punya blind spot untuk any-of gate di masa depan. Perbaikan = perluasan regex test (di luar W02, review-only di sini).
+- **Temuan F-02:** tabel "Ringkasan status" §1 adalah snapshot pra-coding dan kini usang terhadap implementasi; matriks §8.1 menjadi acuan closure.
+
+### 8.4 Backend runtime certification vs frontend vs cross-repo
+
+- **Backend runtime certification W02: selesai.** Bukti = 168 PASS / 0 FAIL / 0 SKIP pada regresi fokus 14 file (dijalankan ulang independently di sandbox pemulihan dengan embedded PostgreSQL 18.4, cluster fresh), `npx tsc --noEmit -p .` exit 0, `git diff --check` bersih, plus bukti rollback migration di §8.3.
+- **Frontend (G26, G27): tidak diklaim.** Tidak ada FE di repo ini. Yang bisa dikirim ke repo frontend: kontrak OpenAPI W02 (queue, contact input/snapshot, otoritas triage).
+- **Cross-repo / E2E (AC-13): tidak diklaim.** Tidak ada bukti runtime dua sisi. Setiap kalimat yang mengesankan "E2E selesai" harus ditolak.
+
+### 8.5 Blocker menuju W03 dan keputusan yang tersisa
+
+| ID | Item | Jenis | Blokir W03? |
+|---|---|---|---|
+| B-1 | **R-2 / OQ-6** — operator Building melihat semua tenant di Building yang di-assign (termasuk snapshot kontak pelapor) | Keputusan bisnis + privacy | **Ya**, karena W03 menambah data komersial (quotation) di permukaan yang sama |
+| B-2 | **R-3 / D-8** — provisioning role Operations produksi (grant `handyman.operations.request.read` dan `.triage`) | Operasional/admin (bukan kode) | **Ya** untuk pemakaian produksi; triage kini tidak punya grant default sama sekali akibat PART 04A |
+| B-3 | **D2** — sumber otoritas PIC untuk approval quotation | Keputusan bisnis | **Ya**: prasyarat desain W03 |
+| B-4 | **D1 sisa (R-P3-1)** — `reporter` diwajibkan atau tidak | Keputusan bisnis | Tidak memblokir; memengaruhi kualitas data yang dibaca W03 |
+| B-5 | **D3** — urutan fallback kontak | Keputusan bisnis | Tidak memblokir W03; catat sebagai PARTIAL G06 |
+| B-6 | **R-P5-1** — recipient + channel policy `HANDYMAN_REQUEST_CREATED` | Keputusan produk | Tidak memblokir; G22 tetap BLOCKED_BY_POLICY sampai diputuskan |
+| B-7 | **F-01** — ROUTE-TO-REGISTRY tidak memindai `requireAnyPermission` | Housekeeping test | Tidak memblokir; sebaiknya ditutup di awal W03 |
+| B-8 | **AC-12 / G26, G27** — verifikasi kontrak frontend | Repo lain | Tidak memblokir W03 backend; memblokir klaim E2E |
+
+### 8.6 Gap yang memang menjadi scope week lain
+
+- **W03 Quotation:** G08 (approval PIC), sisa G07 (beneficiary vs approver), `GET /handyman/requests/:id/quotation/presented` yang baru read-only, `Idempotency-Key` yang sudah ada di decision quotation (reuse, jangan duplikasi pola), dan SI-07/SI-11 (maker-checker approval PIC).
+- **Bukan W02 dan bukan W03 (ke week berikutnya / backlog; W10 tidak punya definisi di repo ini — lihat catatan):** G12 priority, G15 nomor request, G17 duplicate policy, G24 cancel/withdrawal, G19 visibilitas historis (D5, D7, D9), G13 evidence dari CC (D8), G22 aktivasi delivery notifikasi (R-P5-1), G26/G27 frontend (W02-FE-TRACK), dan R-P5-4/R-P5-6 (keputusan outbox/ledger dan DB test persisten). Catatan: dokumen repo tidak mendefinisikan W10; pemetaan week untuk item-item ini harus ditetapkan di perencanaan W03, jangan disimpulkan dari dokumen ini.
+
+### 8.7 Keputusan closure
+
+- **W02 BACKEND RUNTIME CERTIFICATION: CLOSED.** Seluruh P0 yang menjadi tanggung jawab W02 (G05, G20, G23, G29) tertutup dengan bukti runtime yang bisa diulang; tidak ada regresi C6, tidak ada overgrant, tidak ada exposure baru, tidak ada perubahan C6/frozen journey, dan rollback schema terbukti.
+- **W02 sebagai journey end-to-end: tetap PARTIAL.** AC-04 (approval PIC), AC-08 (duplicate), AC-09 (lampiran CC), AC-10 (turnover) belum terpenuhi, dan AC-12/AC-13 tidak bisa dibuktikan dari repo ini. Semua penundaan itu adalah keputusan (D2–D9) atau scope week lain, bukan cacat runtime.
+- Konsekuensi: W03 boleh mulai. Dua gerbang non-kode (B-1 R-2, B-2 provisioning R-3) harus diputuskan/dikerjakan sebelum fitur queue dan triage dipakai di produksi.
