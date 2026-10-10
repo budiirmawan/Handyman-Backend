@@ -233,6 +233,13 @@ Review delapan aspek (item 8):
 
 Prinsip: satu PART = satu keputusan yang sudah disetujui; authority hanya boleh bergeser ke arah lebih sempit; tidak ada permission baru dengan grant default; tidak ada rute paralel untuk fakta yang sama.
 
+> **STATUS RANTAI (diperbarui 2026-10-10).** Tabel di bawah adalah rekomendasi PART 00 dan **dipertahankan apa adanya untuk audit**; dia bukan lagi urutan kerja.
+> - `W03-01` sudah dieksekusi sebagai **W03 PART 01** (gerbang registry + readiness PIC; `21a7b47`).
+> - `W03-03` sudah dieksekusi sebagai **W03 PART 02** → amandemen formal **`CR-HM-06/A01`** (`docs/handyman/CR-HM-06_AMENDMENT_01_TENANT_PIC_APPROVAL_ACTOR.md`), **PROPOSED**.
+> - Urutan normative saat ini = **amendment §13 (03A–03G)**; blocker = `docs/e2e/W03_PART02_PIC_APPROVAL_CONTRACT_FREEZE.md` §6.
+> - `W03-05` tidak berlaku sebagaimana ditulis: langkah "§3 langkah 2–3" (reuse C6 sebagai otoritas approver) **batal oleh F-05**, dan maker-checker-nya (`W03-02`) diserap ke MC1/MC2 + perbaikan replay-actor (C2) di amendment §8/§10.
+> - `W03-04` (permission `decide`) **tidak jadi** untuk jalur PIC: A2 membuat PIC non-RBAC by construction; permission hanya relevan bila arsitektur kelak menuntut baca staff yang lebih sempit.
+
 | PART | Isi | Prasyarat | Ukuran | Batas keras |
 |---|---|---|---|---|
 | **W03-01** | Ukur & dokumentasi: readiness link PIC (Q-D8), matriks `manage`-holders di produksi, dan 0 perubahan kode. Perbaiki gerbang registry (§7, test-only) | — | dokumen + 1 test patch | Jangan menyentuh runtime gate |
