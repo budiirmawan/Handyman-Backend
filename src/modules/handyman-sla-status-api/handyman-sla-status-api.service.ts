@@ -5,8 +5,9 @@
  * Strictly read-only transport and status visibility rollup:
  *   1. `readHandymanSubjectSlaView(actorUserId, subjectType, subjectId)` —
  *      rejects non-Handyman SLA subject types (`!isHandymanSlaSubjectType`),
- *      verifies subject existence + `contextAccessService.canAccessClient`,
- *      and wraps `appliedSlaService.getBySubject(subjectId)` with the frozen
+ *      verifies subject existence + the BE-02G exact-Building guard on the
+ *      subject's authoritative buildingId (PART 06H), and wraps
+ *      `appliedSlaService.getBySubject(subjectId)` with the frozen
  *      9-milestone coordinate map (`HANDYMAN_SLA_SUBJECT_MILESTONES`).
  *   2. `readHandymanProviderPerformanceView(actorUserId, query)` —
  *      enforces `canAccessClient` (and building ownership when `buildingId`
@@ -27,6 +28,7 @@ import { AppError } from '../../shared/errors';
 import { appliedSlaService, type PublicAppliedSla, type PublicSlaClock } from '../applied-slas';
 import { isValidUuid } from '../clients';
 import {
+  assertBuildingScopedResourceAccess,
   buildingAccessDeniedError,
   contextAccessService,
 } from '../context-access';
@@ -331,6 +333,37 @@ async function assertClientReadAccess(
 }
 
 /**
+ * CR-HM-SEC-01 PART 06H — the SUBJECT SLA view's access wall: the
+ * BE-02G exact-Building check on the authoritative buildingId already
+ * resolved by `findDomainSubjectContext` (each of the five subject
+ * types carries a NOT NULL `building_id`: the request row, the
+ * execution scope snapshot — migration 0395 — or a scope-join for the
+ * assignment/defect/claim subjects), replacing the client-level
+ * canAccessClient shortcut: a same-Client sibling Building assignment
+ * must not read the SLA subject view. The denial vocabulary (403
+ * BUILDING_ACCESS_DENIED — the guard's own thrower) and the wall's
+ * position (after the subject 404s, before the projection) are
+ * unchanged. Fail-closed: without a trustworthy buildingId there is no
+ * exact-Building wall, so the read is denied rather than broadened.
+ */
+async function assertSubjectReadAccess(
+  actorUserId: string,
+  clientId: string,
+  buildingId: string | null,
+): Promise<void> {
+  if (!isValidUuid(actorUserId)) {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'actorUserId', message: 'actorUserId must be a valid UUID.' },
+    ]);
+  }
+  if (!buildingId) throw buildingAccessDeniedError();
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId,
+    buildingId,
+  });
+}
+
+/**
  * GET /handyman/sla/subjects/:subjectType/:subjectId
  */
 export async function readHandymanSubjectSlaView(
@@ -371,7 +404,7 @@ export async function readHandymanSubjectSlaView(
     throw AppError.notFound('Handyman SLA subject not found.');
   }
 
-  await assertClientReadAccess(actorUserId, clientId);
+  await assertSubjectReadAccess(actorUserId, clientId, buildingId);
 
   const projectedApplied = applied
     ? projectAppliedSla(subjectType, subjectId, applied)
@@ -1043,7 +1076,16 @@ export async function readHandymanRequestStatusVisibility(
     throw AppError.notFound('Handyman service request not found.');
   }
 
-  await assertClientReadAccess(actorUserId, requestRow.clientId);
+  // CR-HM-SEC-01 PART 06H-2 (audit 07A finding 1) — BE-02G
+  // exact-Building check on the request row's authoritative
+  // buildingId (already selected), replacing the client-level
+  // shortcut in the wall's original position (after the request 404,
+  // before any sensitive projection).
+  await assertSubjectReadAccess(
+    actorUserId,
+    requestRow.clientId,
+    requestRow.buildingId,
+  );
 
   const scopeRes = await pool.query<{
     id: string;
@@ -1100,7 +1142,16 @@ export async function readHandymanExecutionScopeStatusVisibility(
     throw AppError.notFound('Handyman execution scope not found.');
   }
 
-  await assertClientReadAccess(actorUserId, scopeRow.clientId);
+  // CR-HM-SEC-01 PART 06H-2 (audit 07A finding 1) — BE-02G
+  // exact-Building check on the scope row's authoritative buildingId
+  // (already selected), replacing the client-level shortcut in the
+  // wall's original position (after the scope 404, before any
+  // sensitive projection).
+  await assertSubjectReadAccess(
+    actorUserId,
+    scopeRow.clientId,
+    scopeRow.buildingId,
+  );
 
   const reqRes = await pool.query<{
     id: string;

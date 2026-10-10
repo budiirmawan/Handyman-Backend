@@ -19,7 +19,6 @@ import {
   prepareHandymanBast,
 } from '../src/modules/handyman-bast';
 import {
-  findHandymanServiceWarrantyByScopeId,
   startHandymanServiceWarranty,
 } from '../src/modules/handyman-service-warranties';
 import {
@@ -41,9 +40,6 @@ import {
   startHandymanServiceWarrantyRework,
   completeHandymanServiceWarrantyRework,
   verifyHandymanServiceWarrantyRework,
-  getHandymanServiceWarrantyReworkById,
-  findHandymanServiceWarrantyReworkByClaimId,
-  listHandymanServiceWarrantyReworks,
   assertHandymanServiceWarrantyReworkIntakeEligible,
   nextHandymanServiceWarrantyReworkStatus,
   nextHandymanServiceWarrantyReworkHeadStatus,
@@ -339,14 +335,16 @@ describe('CR-HM-15 PART 03 rework lifecycle guards', () => {
 describe('CR-HM-15 PART 03 free rework execution', () => {
   it('binds the rework to the approved claim, warranty and original scope',
     async () => {
-      const { scope, bast, warranty, claim } = await approvedClaimFixture();
+      const { scope, bast, warranty, claim, leadUserId } =
+        await approvedClaimFixture();
       const bastBefore = await bastRow(bast.id);
       const warrantyBefore = await warrantyRow(warranty.id);
       const claimBefore = await claimRow(claim.id);
-      const proposed = await proposeHandymanServiceWarrantyRework(actor, {
-        claimId: claim.id, idempotencyKey: id(),
-        scopeNote: 'Re-seal the joint and re-test under pressure.',
-      });
+      const proposed = await proposeHandymanServiceWarrantyRework(
+        leadUserId, {
+          claimId: claim.id, idempotencyKey: id(),
+          scopeNote: 'Re-seal the joint and re-test under pressure.',
+        });
       assert.equal(proposed.replayed, false);
       assert.equal(proposed.rework.status, 'REWORK_DRAFT');
       assert.equal(proposed.rework.claimId, claim.id);
@@ -369,16 +367,17 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
     async () => {
       const { scope, warranty, claim, leadUserId } =
         await approvedClaimFixture();
-      const proposed = await proposeHandymanServiceWarrantyRework(actor, {
-        claimId: claim.id, idempotencyKey: id(),
-      });
+      const proposed = await proposeHandymanServiceWarrantyRework(
+        leadUserId, {
+          claimId: claim.id, idempotencyKey: id(),
+        });
       const authorized = await authorizeHandymanServiceWarrantyRework(actor, {
         reworkId: proposed.rework.id, idempotencyKey: id(),
       });
       assert.equal(authorized.rework.status, 'REWORK_AUTHORIZED');
       assert.equal(authorized.rework.authorizedByUserId, actor);
       assert.equal(authorized.warrantyStatus, 'CLAIM_APPROVED');
-      const started = await startHandymanServiceWarrantyRework(actor, {
+      const started = await startHandymanServiceWarrantyRework(leadUserId, {
         reworkId: proposed.rework.id, idempotencyKey: id(),
       });
       assert.equal(started.rework.status, 'REWORK_IN_PROGRESS');
@@ -386,10 +385,11 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       assert.equal(started.warrantyStatus, 'REWORK_IN_PROGRESS');
       assert.equal((await warrantyRow(warranty.id)).status,
         'REWORK_IN_PROGRESS');
-      const completed = await completeHandymanServiceWarrantyRework(actor, {
-        reworkId: proposed.rework.id, idempotencyKey: id(),
-        completionNote: 'Joint re-sealed; pressure test passed on site.',
-      });
+      const completed = await completeHandymanServiceWarrantyRework(
+        leadUserId, {
+          reworkId: proposed.rework.id, idempotencyKey: id(),
+          completionNote: 'Joint re-sealed; pressure test passed on site.',
+        });
       assert.equal(completed.rework.status, 'REWORK_COMPLETE');
       assert.equal(completed.rework.completionNote,
         'Joint re-sealed; pressure test passed on site.');
@@ -400,7 +400,7 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
         leadUserId);
       const qc = await qcRunViaAuthority(scope.id, 'PASS', leadUserId);
       assert.equal(qc.status, 'PASSED');
-      const verified = await verifyHandymanServiceWarrantyRework(actor, {
+      const verified = await verifyHandymanServiceWarrantyRework(leadUserId, {
         reworkId: proposed.rework.id, idempotencyKey: id(),
         evidenceRecordId: evidenceId, qcRunId: qc.id,
       });
@@ -415,30 +415,34 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       assert.equal((await evidenceRow(evidenceId)).stage, 'RECTIFICATION');
       assert.equal((await qcRow(qc.id)).status, 'PASSED');
       // The warranty start boundary is still the accepted BAST instant.
-      const reloaded = await findHandymanServiceWarrantyByScopeId(scope.id);
-      assert.equal(reloaded?.startsAt.getTime(),
-        reloaded?.bastAcceptedAt.getTime());
+      const reloaded = (await q(
+        `SELECT status, starts_at, bast_accepted_at
+           FROM handyman_service_warranties WHERE execution_scope_id=$1`,
+        [scope.id])).rows[0];
+      assert.equal(new Date(reloaded?.starts_at).getTime(),
+        new Date(reloaded?.bast_accepted_at).getTime());
       assert.equal(reloaded?.status, 'REWORK_COMPLETE');
     });
 
   it('requires rework evidence and only consumes a PASSED QC run',
     async () => {
       const { realm, scope, claim, leadUserId } = await approvedClaimFixture();
-      const proposed = await proposeHandymanServiceWarrantyRework(actor, {
-        claimId: claim.id, idempotencyKey: id(),
-      });
+      const proposed = await proposeHandymanServiceWarrantyRework(
+        leadUserId, {
+          claimId: claim.id, idempotencyKey: id(),
+        });
       await authorizeHandymanServiceWarrantyRework(actor, {
         reworkId: proposed.rework.id, idempotencyKey: id(),
       });
-      await startHandymanServiceWarrantyRework(actor, {
+      await startHandymanServiceWarrantyRework(leadUserId, {
         reworkId: proposed.rework.id, idempotencyKey: id(),
       });
-      await completeHandymanServiceWarrantyRework(actor, {
+      await completeHandymanServiceWarrantyRework(leadUserId, {
         reworkId: proposed.rework.id, idempotencyKey: id(),
       });
       // Evidence is mandatory.
       await assert.rejects(
-        verifyHandymanServiceWarrantyRework(actor, {
+        verifyHandymanServiceWarrantyRework(leadUserId, {
           reworkId: proposed.rework.id, idempotencyKey: id(),
           evidenceRecordId: '',
         }),
@@ -449,14 +453,14 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       const foreignEvidence = await evidenceViaAuthority(foreign.scope.id,
         'RECTIFICATION', foreign.leadUserId);
       await assert.rejects(
-        verifyHandymanServiceWarrantyRework(actor, {
+        verifyHandymanServiceWarrantyRework(leadUserId, {
           reworkId: proposed.rework.id, idempotencyKey: id(),
           evidenceRecordId: foreignEvidence,
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_EVIDENCE_INVALID),
       );
       await assert.rejects(
-        verifyHandymanServiceWarrantyRework(actor, {
+        verifyHandymanServiceWarrantyRework(leadUserId, {
           reworkId: proposed.rework.id, idempotencyKey: id(),
           evidenceRecordId: id(),
         }),
@@ -471,32 +475,35 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       const ownEvidence = await evidenceViaAuthority(scope.id,
         'RECTIFICATION', leadUserId);
       await assert.rejects(
-        verifyHandymanServiceWarrantyRework(actor, {
+        verifyHandymanServiceWarrantyRework(leadUserId, {
           reworkId: proposed.rework.id, idempotencyKey: id(),
           evidenceRecordId: ownEvidence, qcRunId: foreignQc.id,
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_QC_INVALID),
       );
       await assert.rejects(
-        verifyHandymanServiceWarrantyRework(actor, {
+        verifyHandymanServiceWarrantyRework(leadUserId, {
           reworkId: proposed.rework.id, idempotencyKey: id(),
           evidenceRecordId: ownEvidence, qcRunId: ownFailedQc.id,
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_QC_INVALID),
       );
       await assert.rejects(
-        verifyHandymanServiceWarrantyRework(actor, {
+        verifyHandymanServiceWarrantyRework(leadUserId, {
           reworkId: proposed.rework.id, idempotencyKey: id(),
           evidenceRecordId: ownEvidence, qcRunId: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_QC_INVALID),
       );
       // Nothing was written while verification kept failing.
-      const reloaded = await getHandymanServiceWarrantyReworkById(
-        proposed.rework.id);
+      const reloaded = (await q(
+        `SELECT status, verification_evidence_record_id,
+                verification_qc_run_id
+           FROM handyman_service_warranty_reworks WHERE id=$1`,
+        [proposed.rework.id])).rows[0];
       assert.equal(reloaded.status, 'REWORK_COMPLETE');
-      assert.equal(reloaded.verificationEvidenceRecordId, null);
-      assert.equal(reloaded.verificationQcRunId, null);
+      assert.equal(reloaded.verification_evidence_record_id, null);
+      assert.equal(reloaded.verification_qc_run_id, null);
       assert.equal(realm.client.id.length > 0, true);
     });
 
@@ -504,17 +511,17 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
     async () => {
       const { scope, claim, leadUserId } = await approvedClaimFixture();
       const proposeKey = id();
-      const first = await proposeHandymanServiceWarrantyRework(actor, {
+      const first = await proposeHandymanServiceWarrantyRework(leadUserId, {
         claimId: claim.id, idempotencyKey: proposeKey,
       });
-      const replay = await proposeHandymanServiceWarrantyRework(actor, {
+      const replay = await proposeHandymanServiceWarrantyRework(leadUserId, {
         claimId: claim.id, idempotencyKey: proposeKey,
       });
       assert.equal(replay.replayed, true);
       assert.equal(replay.rework.id, first.rework.id);
       assert.equal(replay.event.id, first.event.id);
       await assert.rejects(
-        proposeHandymanServiceWarrantyRework(actor, {
+        proposeHandymanServiceWarrantyRework(leadUserId, {
           claimId: claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_CONFLICT),
@@ -522,7 +529,7 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       // Steps cannot be skipped: START before ACCEPT, COMPLETE before
       // START, VERIFY before COMPLETE.
       await assert.rejects(
-        startHandymanServiceWarrantyRework(actor, {
+        startHandymanServiceWarrantyRework(leadUserId, {
           reworkId: first.rework.id, idempotencyKey: id(),
         }),
         hasCode(
@@ -538,14 +545,14 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       assert.equal(acceptReplay.replayed, true);
       assert.equal(acceptReplay.event.id, authorized.event.id);
       await assert.rejects(
-        completeHandymanServiceWarrantyRework(actor, {
+        completeHandymanServiceWarrantyRework(leadUserId, {
           reworkId: first.rework.id, idempotencyKey: id(),
         }),
         hasCode(
           ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_ILLEGAL_TRANSITION),
       );
       await assert.rejects(
-        verifyHandymanServiceWarrantyRework(actor, {
+        verifyHandymanServiceWarrantyRework(leadUserId, {
           reworkId: first.rework.id, idempotencyKey: id(),
           evidenceRecordId: await evidenceViaAuthority(scope.id, 'QC',
             leadUserId),
@@ -557,10 +564,14 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
         (await q(`SELECT count(*)::int AS n
                     FROM handyman_service_warranty_reworks WHERE claim_id=$1`,
         [claim.id])).rows[0].n, 1);
-      assert.equal((await listHandymanServiceWarrantyReworks(
-        first.rework.warrantyId)).length, 1);
-      assert.equal((await findHandymanServiceWarrantyReworkByClaimId(claim.id))
-        ?.id, first.rework.id);
+      assert.equal(
+        (await q(`SELECT id FROM handyman_service_warranty_reworks
+                   WHERE warranty_id=$1`, [first.rework.warrantyId]))
+          .rows.length, 1);
+      assert.equal(
+        (await q(`SELECT id FROM handyman_service_warranty_reworks
+                   WHERE claim_id=$1`, [claim.id])).rows[0].id,
+        first.rework.id);
     });
 
   it('refuses free rework for non-approved claims and foreign actors',
@@ -573,7 +584,7 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
           'DEFECT', pending.leadUserId),
       });
       await assert.rejects(
-        proposeHandymanServiceWarrantyRework(actor, {
+        proposeHandymanServiceWarrantyRework(pending.leadUserId, {
           claimId: draft.claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_ELIGIBLE),
@@ -582,7 +593,7 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
         claimId: draft.claim.id, idempotencyKey: id(),
       });
       await assert.rejects(
-        proposeHandymanServiceWarrantyRework(actor, {
+        proposeHandymanServiceWarrantyRework(pending.leadUserId, {
           claimId: draft.claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_ELIGIBLE),
@@ -604,7 +615,7 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       assert.equal(withdrawn.claim.status, 'CLAIM_WITHDRAWN');
       assert.equal(withdrawn.warrantyStatus, 'ACTIVE');
       await assert.rejects(
-        proposeHandymanServiceWarrantyRework(actor, {
+        proposeHandymanServiceWarrantyRework(withdrawnFixture.leadUserId, {
           claimId: toWithdraw.claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_ELIGIBLE),
@@ -627,7 +638,7 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       });
       assert.equal(rejected.claim.status, 'CLAIM_REJECTED');
       await assert.rejects(
-        proposeHandymanServiceWarrantyRework(actor, {
+        proposeHandymanServiceWarrantyRework(rejectedFixture.leadUserId, {
           claimId: toReject.claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_ELIGIBLE),
@@ -651,8 +662,9 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
     });
 
   it('enforces binding, history and firewall laws in SQL', async () => {
-    const { scope, warranty, claim } = await approvedClaimFixture();
-    const proposed = await proposeHandymanServiceWarrantyRework(actor, {
+    const { scope, warranty, claim, leadUserId } =
+      await approvedClaimFixture();
+    const proposed = await proposeHandymanServiceWarrantyRework(leadUserId, {
       claimId: claim.id, idempotencyKey: id(),
     });
     const reworkId = proposed.rework.id;

@@ -1,7 +1,11 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
+import { handymanExecutionScopeNotFoundError }
+  from '../handyman-quotations';
+import { handymanScopeAssignmentRepository }
+  from '../handyman-scope-assignments';
 import {
   handymanServiceWarrantyNotFoundError,
   handymanServiceWarrantyRepository,
@@ -98,11 +102,31 @@ function ensureOptionalUuid(
   return ensureUuid(value, field);
 }
 
+/**
+ * CR-HM-SEC-01 PART 06D-2 — the claim commands' access wall: the
+ * BE-02G exact-Building check on the authoritative server-derived
+ * scope building (migration 0395), resolved through the claim's /
+ * warranty's ORIGINAL execution scope (the claim inherits it from its
+ * warranty at creation), replacing the client-level canAccessClient
+ * shortcut: a same-Client sibling Building assignment must not run
+ * any claim command. The module's denial vocabulary (403
+ * HANDYMAN_SERVICE_WARRANTY_CLAIM_NOT_AUTHORIZED) is unchanged, and
+ * the wall stays in its original authorization position (after the
+ * resource 404, before replay/mutation).
+ */
 async function assertClaimAuthority(
   actorUserId: string,
-  clientId: string,
+  executionScopeId: string,
 ): Promise<void> {
-  if (!(await contextAccessService.canAccessClient(actorUserId, clientId))) {
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
     throw handymanServiceWarrantyClaimNotAuthorizedError();
   }
 }
@@ -148,7 +172,7 @@ async function lockWarrantyForClaim(
     true,
   );
   if (!warranty) throw handymanServiceWarrantyNotFoundError();
-  await assertClaimAuthority(actorUserId, warranty.clientId);
+  await assertClaimAuthority(actorUserId, warranty.executionScopeId);
   return warranty;
 }
 
@@ -177,7 +201,7 @@ export async function openHandymanServiceWarrantyClaim(
     warrantyUuid,
   );
   if (!preflight) throw handymanServiceWarrantyNotFoundError();
-  await assertClaimAuthority(actorUuid, preflight.clientId);
+  await assertClaimAuthority(actorUuid, preflight.executionScopeId);
   if (evidenceRecordId) {
     await assertEvidenceBelongs(
       getPool(),
@@ -273,7 +297,7 @@ async function applyClaimAction(
     claimId,
   );
   if (!existing) throw handymanServiceWarrantyClaimNotFoundError();
-  await assertClaimAuthority(actorUuid, existing.clientId);
+  await assertClaimAuthority(actorUuid, existing.executionScopeId);
 
   return withTransaction(async (client) => {
     const warranty = await lockWarrantyForClaim(
@@ -395,28 +419,4 @@ export async function withdrawHandymanServiceWarrantyClaim(
 ): Promise<HandymanServiceWarrantyClaimCommandResult> {
   return applyClaimAction(actorUserId, input.claimId, input.idempotencyKey,
     'WITHDRAW', {});
-}
-
-/** Read helper — a claim by id, or a bounded 404. */
-export async function getHandymanServiceWarrantyClaimById(
-  claimId: string,
-): Promise<HandymanServiceWarrantyClaimCommandResult['claim']> {
-  const id = ensureUuid(claimId, 'claimId');
-  const claim = await handymanServiceWarrantyClaimRepository.findClaimById(
-    getPool(),
-    id,
-  );
-  if (!claim) throw handymanServiceWarrantyClaimNotFoundError();
-  return claim;
-}
-
-/** Read helper — the warranty's claims, oldest first. */
-export async function listHandymanServiceWarrantyClaims(
-  warrantyId: string,
-): Promise<HandymanServiceWarrantyClaimCommandResult['claim'][]> {
-  const id = ensureUuid(warrantyId, 'warrantyId');
-  return handymanServiceWarrantyClaimRepository.listClaimsByWarrantyId(
-    getPool(),
-    id,
-  );
 }

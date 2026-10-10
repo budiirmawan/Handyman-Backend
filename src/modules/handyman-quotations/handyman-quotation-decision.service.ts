@@ -2,12 +2,11 @@ import { createHash } from 'node:crypto';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { buildingAccessDeniedError } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from '../handyman-requests';
+import { assertQuotationThreadBuildingAccess }
+  from './handyman-quotation-access';
 import { handymanExecutionScopeRepository }
   from './handyman-execution-scope.repository';
 import {
@@ -162,14 +161,9 @@ export async function decideHandymanQuotation(
       version.quotationId,
     );
     if (!quotation) throw handymanQuotationNotFoundError();
-    if (
-      !(await contextAccessService.canAccessClient(
-        actorUserId,
-        quotation.clientId,
-      ))
-    ) {
-      throw buildingAccessDeniedError();
-    }
+    // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
+    // request's building_id (BE-02G; no same-Client shortcut).
+    await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
     // 2) One authoritative decision per version: replay or conflict.
     const existing = await handymanQuotationDecisionRepository
@@ -332,13 +326,19 @@ export async function getHandymanQuotationDecision(
   const record = await handymanQuotationDecisionRepository
     .findDecisionByVersion(undefined, quotationVersionId);
   if (!record) throw decisionNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      record.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: building-scope authority traced through the
+  // decision's quotation thread to the parent request's building_id
+  // (BE-02G; no same-Client shortcut). A missing thread root is denied
+  // exactly like an inaccessible Building (no existence leak).
+  const quotation = await handymanQuotationRepository.findQuotationById(
+    undefined,
+    record.quotationId,
+  );
+  if (!quotation) throw buildingAccessDeniedError();
+  await assertQuotationThreadBuildingAccess(
+    undefined as never,
+    quotation,
+    actorUserId,
+  );
   return toPublicDecision(record);
 }

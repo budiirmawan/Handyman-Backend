@@ -46,15 +46,25 @@ function map(row: Row): HandymanExecutionScopeAssignmentRecord {
 async function lockScopeById(
   executor: Pick<PoolClient, 'query'>,
   id: string,
-): Promise<{ id: string; clientId: string; status: string } | null> {
+): Promise<{
+  id: string;
+  clientId: string;
+  status: string;
+  buildingId: string;
+} | null> {
   const result = await executor.query(
-    `SELECT id, client_id, status FROM handyman_execution_scopes
+    `SELECT id, client_id, status, building_id FROM handyman_execution_scopes
       WHERE id = $1 FOR UPDATE`,
     [id],
   );
   const row = result.rows[0];
   return row
-    ? { id: row.id, clientId: row.client_id, status: row.status }
+    ? {
+        id: row.id,
+        clientId: row.client_id,
+        status: row.status,
+        buildingId: row.building_id,
+      }
     : null;
 }
 
@@ -62,15 +72,25 @@ async function lockScopeById(
 async function findScopeById(
   executor: Pick<PoolClient, 'query'> = getPool(),
   id: string,
-): Promise<{ id: string; clientId: string; status: string } | null> {
+): Promise<{
+  id: string;
+  clientId: string;
+  status: string;
+  buildingId: string;
+} | null> {
   const result = await executor.query(
-    `SELECT id, client_id, status FROM handyman_execution_scopes
+    `SELECT id, client_id, status, building_id FROM handyman_execution_scopes
       WHERE id = $1`,
     [id],
   );
   const row = result.rows[0];
   return row
-    ? { id: row.id, clientId: row.client_id, status: row.status }
+    ? {
+        id: row.id,
+        clientId: row.client_id,
+        status: row.status,
+        buildingId: row.building_id,
+      }
     : null;
 }
 

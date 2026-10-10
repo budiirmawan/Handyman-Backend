@@ -1,7 +1,13 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
+import { handymanExecutionScopeNotFoundError }
+  from '../handyman-quotations';
+import {
+  handymanScopeAssignmentRepository,
+  resolveHandymanAssignmentLead,
+} from '../handyman-scope-assignments';
 import { handymanServiceWarrantyClaimRepository }
   from '../handyman-service-warranty-claims';
 import type { HandymanServiceWarrantyClaimRecord }
@@ -98,11 +104,60 @@ function ensureOptionalUuid(
   return ensureUuid(value, field);
 }
 
+/**
+ * CR-HM-SEC-01 PART 06D-3 — the rework commands' access wall: the
+ * BE-02G exact-Building check on the authoritative server-derived
+ * scope building (migration 0395), resolved through the
+ * rework -> claim/warranty -> executionScope chain (the claim and
+ * the rework both carry the warranty's ORIGINAL execution scope),
+ * replacing the client-level canAccessClient shortcut: a
+ * same-Client sibling Building assignment must not run any rework
+ * command. The module's denial vocabulary (403
+ * HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_AUTHORIZED) is unchanged, and
+ * the wall stays in its original authorization position (after the
+ * resource 404, before replay/mutation; the in-transaction re-proof
+ * keeps its slot too).
+ */
 async function assertReworkAuthority(
   actorUserId: string,
-  clientId: string,
+  executionScopeId: string,
 ): Promise<void> {
-  if (!(await contextAccessService.canAccessClient(actorUserId, clientId))) {
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
+    throw handymanServiceWarrantyReworkNotAuthorizedError();
+  }
+}
+
+/**
+ * CR-HM-SEC-01 PART 07B-2A — CR-HM-04 field-worker ACTION authority
+ * (audited in PART 07B-1): the actor must be the scope's CURRENT
+ * ACTIVE assignment's authoritative Crew Lead.
+ * `resolveHandymanAssignmentLead` re-validates the ACTIVE assignment
+ * and its CURRENT Lead validity chain (and re-proves the BE-02G
+ * building wall); a Lead that went invalid after assignment, a
+ * missing assignment, or a non-Lead actor fails CLOSED with the
+ * module's existing 403 vocabulary (HANDYMAN_SERVICE_WARRANTY_REWORK_
+ * NOT_AUTHORIZED). Applies ONLY to the field-worker commands
+ * (PROPOSE / START / COMPLETE / VERIFY); the customer-side AUTHORIZE
+ * keeps building-wall-only authority — its action authority is the
+ * customer-side acceptance, not the crew chain.
+ */
+async function assertReworkLeadAction(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<void> {
+  const resolution = await resolveHandymanAssignmentLead(
+    executionScopeId,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
     throw handymanServiceWarrantyReworkNotAuthorizedError();
   }
 }
@@ -174,7 +229,7 @@ async function lockClaimAndWarranty(
       `claim-not-found=${claimId}`,
     );
   }
-  await assertReworkAuthority(actorUserId, claim.clientId);
+  await assertReworkAuthority(actorUserId, claim.executionScopeId);
   const warranty = await handymanServiceWarrantyRepository.findWarrantyById(
     client,
     warrantyId,
@@ -208,7 +263,12 @@ export async function proposeHandymanServiceWarrantyRework(
       `claim-not-found=${claimUuid}`,
     );
   }
-  await assertReworkAuthority(actorUuid, claim.clientId);
+  await assertReworkAuthority(actorUuid, claim.executionScopeId);
+  // CR-HM-SEC-01 PART 07B-2A — PROPOSE is a field-worker (Lead)
+  // command: CR-HM-04 Lead action authority on the claim's ORIGINAL
+  // execution scope, after the resource 404 and the BE-02G building
+  // wall, before the transaction, replay and mutation.
+  await assertReworkLeadAction(claim.executionScopeId, actorUuid);
 
   return withTransaction(async (client) => {
     const locked = await lockClaimAndWarranty(
@@ -304,6 +364,17 @@ async function applyReworkAction(
       rework.warrantyId,
       actorUuid,
     );
+
+    // CR-HM-SEC-01 PART 07B-2A — START / COMPLETE / VERIFY are
+    // field-worker (crew Lead) commands: CR-HM-04 Lead action
+    // authority on the rework's ORIGINAL execution scope, after the
+    // in-transaction building re-proof and BEFORE the idempotent
+    // replay lookup and any mutation (a replay can never bypass the
+    // Lead check). AUTHORIZE (ACCEPT) is the customer-side decision
+    // and stays free of the Lead check.
+    if (action !== 'ACCEPT') {
+      await assertReworkLeadAction(rework.executionScopeId, actorUuid);
+    }
 
     const replay = await handymanServiceWarrantyReworkRepository
       .findReworkEventByIdempotency(client, rework.id, action, key);
@@ -434,37 +505,9 @@ export async function verifyHandymanServiceWarrantyRework(
     });
 }
 
-/** Read helper — a rework by id, or a bounded 404. */
-export async function getHandymanServiceWarrantyReworkById(
-  reworkId: string,
-): Promise<HandymanServiceWarrantyReworkRecord> {
-  const id = ensureUuid(reworkId, 'reworkId');
-  const rework = await handymanServiceWarrantyReworkRepository.findReworkById(
-    getPool(),
-    id,
-  );
-  if (!rework) throw handymanServiceWarrantyReworkNotFoundError();
-  return rework;
-}
-
-/** Read helper — the claim's free rework, or null when none exists. */
-export async function findHandymanServiceWarrantyReworkByClaimId(
-  claimId: string,
-): Promise<HandymanServiceWarrantyReworkRecord | null> {
-  const id = ensureUuid(claimId, 'claimId');
-  return handymanServiceWarrantyReworkRepository.findReworkByClaimId(
-    getPool(),
-    id,
-  );
-}
-
-/** Read helper — the warranty's free reworks, oldest first. */
-export async function listHandymanServiceWarrantyReworks(
-  warrantyId: string,
-): Promise<HandymanServiceWarrantyReworkRecord[]> {
-  const id = ensureUuid(warrantyId, 'warrantyId');
-  return handymanServiceWarrantyReworkRepository.listReworksByWarrantyId(
-    getPool(),
-    id,
-  );
-}
+/**
+ * The frozen PART 01/03 read surface for the rework family is the
+ * guarded HTTP/API contract readers (06D-1) and the lifecycle
+ * commands; the former actor-less read helpers were removed in
+ * CR-HM-SEC-01 PART 07C-2C (dead/actor-less surface, 07C-1 class A).
+ */

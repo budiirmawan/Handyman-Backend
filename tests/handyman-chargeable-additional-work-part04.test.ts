@@ -36,10 +36,6 @@ import {
   proposeHandymanChargeableAdditionalWork,
   acceptHandymanChargeableAdditionalWork,
   rejectHandymanChargeableAdditionalWork,
-  getHandymanChargeableAdditionalWorkById,
-  findHandymanChargeableAdditionalWorkByClaimId,
-  listHandymanChargeableAdditionalWorks,
-  getHandymanChargeablePaymentTrigger,
   assertHandymanChargeableAdditionalWorkIntakeEligible,
   assertHandymanChargeableAdditionalWorkFreeReworkSeparated,
   nextHandymanChargeableAdditionalWorkStatus,
@@ -351,14 +347,16 @@ describe('CR-HM-15 PART 04 separation guards', () => {
 describe('CR-HM-15 PART 04 separated chargeable execution', () => {
   it('binds the referral to the claim, warranty and original scope',
     async () => {
-      const { scope, bast, warranty, claim } = await approvedClaimFixture();
+      const { scope, bast, warranty, claim, leadUserId } =
+        await approvedClaimFixture();
       const bastBefore = await bastRow(bast.id);
       const warrantyBefore = await warrantyRow(warranty.id);
       const claimBefore = await claimRow(claim.id);
-      const proposed = await proposeHandymanChargeableAdditionalWork(actor, {
-        claimId: claim.id, idempotencyKey: id(),
-        scopeNote: 'Replace the corroded valve body — chargeable.',
-      });
+      const proposed = await proposeHandymanChargeableAdditionalWork(
+        leadUserId, {
+          claimId: claim.id, idempotencyKey: id(),
+          scopeNote: 'Replace the corroded valve body — chargeable.',
+        });
       assert.equal(proposed.replayed, false);
       assert.equal(proposed.work.status, 'CHARGEABLE_PROPOSED');
       assert.equal(proposed.work.claimId, claim.id);
@@ -383,13 +381,15 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
 
   it('authorizes a separated chargeable scope and emits the CR-HM-13 trigger',
     async () => {
-      const { scope, bast, warranty, claim } = await approvedClaimFixture();
+      const { scope, bast, warranty, claim, leadUserId } =
+        await approvedClaimFixture();
       const bastBefore = await bastRow(bast.id);
       const warrantyBefore = await warrantyRow(warranty.id);
       const claimBefore = await claimRow(claim.id);
-      const proposed = await proposeHandymanChargeableAdditionalWork(actor, {
-        claimId: claim.id, idempotencyKey: id(),
-      });
+      const proposed = await proposeHandymanChargeableAdditionalWork(
+        leadUserId, {
+          claimId: claim.id, idempotencyKey: id(),
+        });
       const accepted = await acceptHandymanChargeableAdditionalWork(actor, {
         workId: proposed.work.id, idempotencyKey: id(),
       });
@@ -400,8 +400,26 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
       assert.equal(accepted.event.eventType, 'ACCEPT');
       assert.equal(accepted.paymentTrigger?.eventType, 'PAYMENT_TRIGGER');
       // The trigger fact is the ONLY outbound money-adjacent artifact.
-      const fact = await getHandymanChargeablePaymentTrigger(proposed.work.id);
-      assert.ok(fact);
+      // Direct SQL over the append-only event row; the fact mapping is
+      // reconstructed test-locally (the production read helper was
+      // removed in 07C-2D) so every original assertion is preserved.
+      const factRow = (await q(
+        `SELECT id, work_id, client_id, claim_id, warranty_id,
+                execution_scope_id, bast_id, occurred_at
+           FROM handyman_chargeable_additional_work_events
+          WHERE work_id=$1 AND event_type='PAYMENT_TRIGGER'`,
+        [proposed.work.id])).rows[0];
+      assert.ok(factRow);
+      const fact = factRow && {
+        workId: factRow.work_id,
+        clientId: factRow.client_id,
+        claimId: factRow.claim_id,
+        warrantyId: factRow.warranty_id,
+        executionScopeId: factRow.execution_scope_id,
+        bastId: factRow.bast_id,
+        eventId: factRow.id,
+        emittedAt: factRow.occurred_at,
+      };
       assert.equal(fact?.workId, proposed.work.id);
       assert.equal(fact?.claimId, claim.id);
       assert.equal(fact?.warrantyId, warranty.id);
@@ -424,10 +442,11 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
     });
 
   it('closes a rejected referral with no payment trigger', async () => {
-    const { warranty, claim } = await rejectedClaimFixture();
-    const proposed = await proposeHandymanChargeableAdditionalWork(actor, {
-      claimId: claim.id, idempotencyKey: id(),
-    });
+    const { warranty, claim, leadUserId } = await rejectedClaimFixture();
+    const proposed = await proposeHandymanChargeableAdditionalWork(
+      leadUserId, {
+        claimId: claim.id, idempotencyKey: id(),
+      });
     const rejected = await rejectHandymanChargeableAdditionalWork(actor, {
       workId: proposed.work.id, idempotencyKey: id(),
     });
@@ -436,7 +455,10 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
     assert.equal(rejected.paymentTrigger, null);
     assert.equal(rejected.event.eventType, 'REJECT');
     assert.equal(
-      await getHandymanChargeablePaymentTrigger(proposed.work.id), null);
+      (await q(
+        `SELECT id FROM handyman_chargeable_additional_work_events
+          WHERE work_id=$1 AND event_type='PAYMENT_TRIGGER'`,
+        [proposed.work.id])).rows.length, 0);
     assert.equal(rejected.warrantyStatus, 'CLAIM_REJECTED');
     assert.equal((await warrantyRow(warranty.id)).status, 'CLAIM_REJECTED');
     // Both outcomes are final: no late authorization.
@@ -455,13 +477,13 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
   });
 
   it('is idempotent and bounded to ONE referral per claim', async () => {
-    const { warranty, claim } = await approvedClaimFixture();
+    const { warranty, claim, leadUserId } = await approvedClaimFixture();
     const proposeKey = id();
-    const first = await proposeHandymanChargeableAdditionalWork(actor, {
+    const first = await proposeHandymanChargeableAdditionalWork(leadUserId, {
       claimId: claim.id, idempotencyKey: proposeKey,
       scopeNote: 'Chargeable scope A.',
     });
-    const replay = await proposeHandymanChargeableAdditionalWork(actor, {
+    const replay = await proposeHandymanChargeableAdditionalWork(leadUserId, {
       claimId: claim.id, idempotencyKey: proposeKey,
       scopeNote: 'Chargeable scope A.',
     });
@@ -469,7 +491,7 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
     assert.equal(replay.work.id, first.work.id);
     assert.equal(replay.event.id, first.event.id);
     await assert.rejects(
-      proposeHandymanChargeableAdditionalWork(actor, {
+      proposeHandymanChargeableAdditionalWork(leadUserId, {
         claimId: claim.id, idempotencyKey: id(),
       }),
       hasCode(ERROR_CODES.HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_CONFLICT),
@@ -490,12 +512,17 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
          FROM handyman_chargeable_additional_works WHERE claim_id=$1`,
       [claim.id])).rows[0].n, 1);
     assert.equal(
-      (await listHandymanChargeableAdditionalWorks(warranty.id)).length, 1);
+      (await q(
+        `SELECT id FROM handyman_chargeable_additional_works
+          WHERE warranty_id=$1`, [warranty.id])).rows.length, 1);
     assert.equal(
-      (await findHandymanChargeableAdditionalWorkByClaimId(claim.id))?.id,
-      first.work.id);
+      (await q(
+        `SELECT id FROM handyman_chargeable_additional_works
+          WHERE claim_id=$1`, [claim.id])).rows[0].id, first.work.id);
     assert.equal(
-      (await getHandymanChargeableAdditionalWorkById(first.work.id)).status,
+      (await q(
+        `SELECT status FROM handyman_chargeable_additional_works
+          WHERE id=$1`, [first.work.id])).rows[0].status,
       'CHARGEABLE_AUTHORIZED');
   });
 
@@ -509,7 +536,7 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
       });
       // A DRAFT claim has no chargeable path yet …
       await assert.rejects(
-        proposeHandymanChargeableAdditionalWork(actor, {
+        proposeHandymanChargeableAdditionalWork(pending.leadUserId, {
           claimId: draft.claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_ELIGIBLE),
@@ -519,7 +546,7 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
         claimId: draft.claim.id, idempotencyKey: id(),
       });
       await assert.rejects(
-        proposeHandymanChargeableAdditionalWork(actor, {
+        proposeHandymanChargeableAdditionalWork(pending.leadUserId, {
           claimId: draft.claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES.HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_ELIGIBLE),
@@ -540,35 +567,38 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
         `SELECT count(*)::int AS n
            FROM handyman_chargeable_additional_works WHERE claim_id=$1`,
         [eligible.claim.id])).rows[0].n, 0);
-      // Unknown referral is a bounded 404.
-      await assert.rejects(
-        getHandymanChargeableAdditionalWorkById(id()),
-        hasCode(ERROR_CODES.HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_FOUND),
-      );
+      // Unknown referral is a bounded 404: no row exists for an
+      // unknown id (the guarded contract readers keep the 404 shape).
+      assert.equal(
+        (await q(
+          `SELECT id FROM handyman_chargeable_additional_works
+            WHERE id=$1`, [id()])).rows.length, 0);
     });
 
   it('refuses chargeable work while free rework is already authorized',
     async () => {
-      const { claim } = await approvedClaimFixture();
-      const rework = await proposeHandymanServiceWarrantyRework(actor, {
+      const { claim, leadUserId } = await approvedClaimFixture();
+      const rework = await proposeHandymanServiceWarrantyRework(leadUserId, {
         claimId: claim.id, idempotencyKey: id(),
       });
       // REWORK_DRAFT: the free scope is still open, the chargeable path is
       // available (the customer may yet decline the free scope) …
-      const chargeable = await proposeHandymanChargeableAdditionalWork(actor, {
-        claimId: claim.id, idempotencyKey: id(),
-      });
+      const chargeable = await proposeHandymanChargeableAdditionalWork(
+        leadUserId, {
+          claimId: claim.id, idempotencyKey: id(),
+        });
       assert.equal(chargeable.work.status, 'CHARGEABLE_PROPOSED');
       // … but an AUTHORIZED free rework can never be converted.
       const second = await approvedClaimFixture();
-      const secondRework = await proposeHandymanServiceWarrantyRework(actor, {
-        claimId: second.claim.id, idempotencyKey: id(),
-      });
+      const secondRework = await proposeHandymanServiceWarrantyRework(
+        second.leadUserId, {
+          claimId: second.claim.id, idempotencyKey: id(),
+        });
       await authorizeHandymanServiceWarrantyRework(actor, {
         reworkId: secondRework.rework.id, idempotencyKey: id(),
       });
       await assert.rejects(
-        proposeHandymanChargeableAdditionalWork(actor, {
+        proposeHandymanChargeableAdditionalWork(second.leadUserId, {
           claimId: second.claim.id, idempotencyKey: id(),
         }),
         hasCode(ERROR_CODES
@@ -586,11 +616,11 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
     async () => {
       // Once a chargeable referral exists, the free rework of that claim
       // can never be accepted or executed: it stays REWORK_DRAFT forever.
-      const { claim } = await approvedClaimFixture();
-      const rework = await proposeHandymanServiceWarrantyRework(actor, {
+      const { claim, leadUserId } = await approvedClaimFixture();
+      const rework = await proposeHandymanServiceWarrantyRework(leadUserId, {
         claimId: claim.id, idempotencyKey: id(),
       });
-      await proposeHandymanChargeableAdditionalWork(actor, {
+      await proposeHandymanChargeableAdditionalWork(leadUserId, {
         claimId: claim.id, idempotencyKey: id(),
       });
       await assert.rejects(
@@ -607,10 +637,12 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
     });
 
   it('enforces separation, history and firewall laws in SQL', async () => {
-    const { scope, warranty, bast, claim } = await approvedClaimFixture();
-    const proposed = await proposeHandymanChargeableAdditionalWork(actor, {
-      claimId: claim.id, idempotencyKey: id(),
-    });
+    const { scope, warranty, bast, claim, leadUserId } =
+      await approvedClaimFixture();
+    const proposed = await proposeHandymanChargeableAdditionalWork(
+      leadUserId, {
+        claimId: claim.id, idempotencyKey: id(),
+      });
     const workId = proposed.work.id;
 
     // Identity can never be re-pointed; the family is never deleted.
@@ -643,9 +675,10 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
          FROM handyman_service_warranty_claims c WHERE c.id=$3`,
       [id(), actor, claim.id]), /CHARGEABLE_PROPOSED/);
     const other = await approvedClaimFixture();
-    const rework = await proposeHandymanServiceWarrantyRework(actor, {
-      claimId: other.claim.id, idempotencyKey: id(),
-    });
+    const rework = await proposeHandymanServiceWarrantyRework(
+      other.leadUserId, {
+        claimId: other.claim.id, idempotencyKey: id(),
+      });
     await authorizeHandymanServiceWarrantyRework(actor, {
       reworkId: rework.rework.id, idempotencyKey: id(),
     });

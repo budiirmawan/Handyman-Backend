@@ -1,7 +1,7 @@
 import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
 import {
   handymanExecutionScopeRepository,
   handymanQuotationLineRepository,
@@ -77,9 +77,9 @@ function ensureKey(value: string): string {
 
 /**
  * PART 01 authority preamble: the scope must exist (client-bounded 404)
- * and the actor must hold client access (403). Caller-supplied
- * customer/actor identity is never authority. Later PARTs may add
- * further actor requirements; PART 01 does not invent one.
+ * and the actor must hold access to the scope's exact Building (403).
+ * Caller-supplied customer/actor identity is never authority. Later
+ * PARTs may add further actor requirements; PART 01 does not invent one.
  */
 async function authorityPreamble(scopeUuid: string, actorUserId: string) {
   const scope = await handymanExecutionScopeRepository.findScopeById(
@@ -87,10 +87,17 @@ async function authorityPreamble(scopeUuid: string, actorUserId: string) {
     scopeUuid,
   );
   if (!scope) throw handymanCustomerTransactionScopeNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId,
-    scope.clientId,
-  ))) {
+  // CR-HM-SEC-01 PART 06E-1 — BE-02G exact-Building check on the
+  // authoritative server-derived scope building (migration 0395),
+  // replacing the client-level canAccessClient shortcut: a same-Client
+  // sibling Building assignment must not open the ledger. The module's
+  // denial vocabulary (403 HANDYMAN_CUSTOMER_TRANSACTION_NOT_AUTHORIZED)
+  // and error precedence (scope 404 precedes the access wall) are
+  // unchanged.
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
     throw handymanCustomerTransactionNotAuthorizedError();
   }
   return scope;

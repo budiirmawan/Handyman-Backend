@@ -6,7 +6,8 @@
  *
  * Strictly thin transport:
  *   - Wraps the 5 published `CR-HM-15 PART 05` contract readers with
- *     `contextAccessService.canAccessClient(actorUserId, contract.warranty.clientId)`
+ *     the BE-02G exact-Building guard on the contract warranty's
+ *     authoritative execution-scope building (PART 06D-1)
  *   - Wraps only governed customer-side claim and decision commands (`open`,
  *     `submit`, `approve`, `reject`, `withdraw` claim; `authorize` free rework;
  *     `accept` / `reject` chargeable additional work)
@@ -18,7 +19,7 @@
  */
 
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
 import {
   assertHandymanServiceWarrantyContractShape,
   HandymanServiceWarrantyContract,
@@ -28,6 +29,10 @@ import {
   readHandymanServiceWarrantyContractByWarrantyId,
   readHandymanServiceWarrantyReworkContract,
 } from '../handyman-service-warranty-contracts';
+import { handymanExecutionScopeNotFoundError }
+  from '../handyman-quotations';
+import { handymanScopeAssignmentRepository }
+  from '../handyman-scope-assignments';
 import {
   handymanServiceWarrantyNotAuthorizedError,
   handymanServiceWarrantyValidationError,
@@ -306,6 +311,37 @@ function requirePlainBody(
 }
 
 /**
+ * CR-HM-SEC-01 PART 06D-1 — the READ views' access wall: the
+ * contract's authoritative server-derived scope building (migration
+ * 0395), resolved through the contract warranty's OWN
+ * `executionScopeId`, replaces the client-level canAccessClient
+ * shortcut — a same-Client sibling Building assignment must not read
+ * any contract view. The BE-02G guard's predicate
+ * (`canAccessBuildingScopedResource` — the exact check
+ * `assertBuildingScopedResourceAccess` wraps) is applied directly so
+ * each view keeps its module-local denial vocabulary EXACTLY (the
+ * caller passes its own not-authorized thrower). Error precedence is
+ * unchanged: the contract reader's resource 404 precedes the wall.
+ */
+async function assertContractBuildingAccess(
+  actorUserId: string,
+  contract: HandymanServiceWarrantyContract,
+  notAuthorized: () => Error,
+): Promise<void> {
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    contract.warranty.executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
+    throw notAuthorized();
+  }
+}
+
+/**
  * GET /handyman/execution-scopes/:executionScopeId/service-warranty
  */
 export async function readExecutionScopeServiceWarrantyView(
@@ -322,14 +358,11 @@ export async function readExecutionScopeServiceWarrantyView(
     await readHandymanServiceWarrantyContractByExecutionScopeId(
       executionScopeId,
     );
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      contract.warranty.clientId,
-    ))
-  ) {
-    throw handymanServiceWarrantyNotAuthorizedError();
-  }
+  await assertContractBuildingAccess(
+    actorUserId,
+    contract,
+    handymanServiceWarrantyNotAuthorizedError,
+  );
   return serializeContract(contract);
 }
 
@@ -348,14 +381,11 @@ export async function readServiceWarrantyByIdView(
   }
   const contract =
     await readHandymanServiceWarrantyContractByWarrantyId(warrantyId);
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      contract.warranty.clientId,
-    ))
-  ) {
-    throw handymanServiceWarrantyNotAuthorizedError();
-  }
+  await assertContractBuildingAccess(
+    actorUserId,
+    contract,
+    handymanServiceWarrantyNotAuthorizedError,
+  );
   return serializeContract(contract);
 }
 
@@ -373,14 +403,11 @@ export async function readServiceWarrantyClaimByIdView(
     throw handymanServiceWarrantyClaimValidationError('claimId');
   }
   const contract = await readHandymanServiceWarrantyClaimContract(claimId);
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      contract.warranty.clientId,
-    ))
-  ) {
-    throw handymanServiceWarrantyClaimNotAuthorizedError();
-  }
+  await assertContractBuildingAccess(
+    actorUserId,
+    contract,
+    handymanServiceWarrantyClaimNotAuthorizedError,
+  );
   return serializeContract(contract);
 }
 
@@ -398,14 +425,11 @@ export async function readServiceWarrantyReworkByIdView(
     throw handymanServiceWarrantyReworkValidationError('reworkId');
   }
   const contract = await readHandymanServiceWarrantyReworkContract(reworkId);
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      contract.warranty.clientId,
-    ))
-  ) {
-    throw handymanServiceWarrantyReworkNotAuthorizedError();
-  }
+  await assertContractBuildingAccess(
+    actorUserId,
+    contract,
+    handymanServiceWarrantyReworkNotAuthorizedError,
+  );
   return serializeContract(contract);
 }
 
@@ -423,14 +447,11 @@ export async function readChargeableAdditionalWorkByIdView(
     throw handymanChargeableAdditionalWorkValidationError('workId');
   }
   const contract = await readHandymanChargeableAdditionalWorkContract(workId);
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      contract.warranty.clientId,
-    ))
-  ) {
-    throw handymanChargeableAdditionalWorkNotAuthorizedError();
-  }
+  await assertContractBuildingAccess(
+    actorUserId,
+    contract,
+    handymanChargeableAdditionalWorkNotAuthorizedError,
+  );
   return serializeContract(contract);
 }
 

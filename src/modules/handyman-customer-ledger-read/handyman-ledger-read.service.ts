@@ -1,4 +1,7 @@
-import { contextAccessService } from '../context-access';
+import {
+  canAccessBuildingScopedResource,
+  contextAccessService,
+} from '../context-access';
 import { isValidUuid } from '../clients';
 import {
   handymanCustomerTransactionNotAuthorizedError,
@@ -122,7 +125,14 @@ function ensureLimit(value: number | undefined): number {
   return value;
 }
 
-/** The CR-HM-13 client-access wall (same law as every ledger PART). */
+/**
+ * The CR-HM-13 access wall (same law as every ledger PART): an
+ * unknown scope is a bounded 404 (never fabricated) and an actor
+ * without access to the scope's exact Building is a bounded 403.
+ * Serves ONLY `readHandymanLedgerTransactionAt` — the intentionally
+ * client-wide `readHandymanLedgerClientBasisAt` keeps its own
+ * client-level wall and is NOT served by this preamble.
+ */
 async function scopeAuthorityPreamble(
   scopeUuid: string,
   actorUserId: string,
@@ -132,10 +142,17 @@ async function scopeAuthorityPreamble(
     scopeUuid,
   );
   if (!scope) throw handymanCustomerTransactionScopeNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId,
-    scope.clientId,
-  ))) {
+  // CR-HM-SEC-01 PART 06G — BE-02G exact-Building check on the
+  // authoritative server-derived scope building (migration 0395),
+  // replacing the client-level canAccessClient shortcut: a same-Client
+  // sibling Building assignment must not read the ledger transaction.
+  // The module's denial vocabulary (403
+  // HANDYMAN_CUSTOMER_TRANSACTION_NOT_AUTHORIZED) and error precedence
+  // (scope 404 precedes the access wall) are unchanged.
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
     throw handymanCustomerTransactionNotAuthorizedError();
   }
   return scope;

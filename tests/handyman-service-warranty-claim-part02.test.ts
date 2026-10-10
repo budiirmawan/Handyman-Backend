@@ -19,7 +19,6 @@ import {
 } from '../src/modules/handyman-bast';
 import {
   expireHandymanServiceWarranty,
-  findHandymanServiceWarrantyByScopeId,
   startHandymanServiceWarranty,
 } from '../src/modules/handyman-service-warranties';
 import {
@@ -28,8 +27,6 @@ import {
   approveHandymanServiceWarrantyClaim,
   rejectHandymanServiceWarrantyClaim,
   withdrawHandymanServiceWarrantyClaim,
-  getHandymanServiceWarrantyClaimById,
-  listHandymanServiceWarrantyClaims,
   assertHandymanServiceWarrantyClaimIntakeEligible,
   nextHandymanServiceWarrantyClaimStatus,
   nextHandymanServiceWarrantyClaimHeadStatus,
@@ -277,10 +274,13 @@ describe('CR-HM-15 PART 02 claim intake and decision', () => {
     assert.equal((await warrantyRow(warranty.id)).status, 'CLAIM_OPEN');
     assert.equal(submitted.event.eventType, 'SUBMIT');
     // The start boundary of the warranty is untouched by the claim.
-    const reloaded = await findHandymanServiceWarrantyByScopeId(scope.id);
-    assert.equal(reloaded?.startsAt.getTime(),
-      reloaded?.bastAcceptedAt.getTime());
-    assert.equal(reloaded?.bastId, opened.claim.bastId);
+    const reloaded = (await q(
+      `SELECT starts_at, bast_accepted_at, bast_id
+         FROM handyman_service_warranties WHERE execution_scope_id=$1`,
+      [scope.id])).rows[0];
+    assert.equal(new Date(reloaded?.starts_at).getTime(),
+      new Date(reloaded?.bast_accepted_at).getTime());
+    assert.equal(reloaded?.bast_id, opened.claim.bastId);
   });
 
   it('approves a submitted claim and freezes it as decided', async () => {
@@ -430,8 +430,9 @@ describe('CR-HM-15 PART 02 claim intake and decision', () => {
         [warranty.id])).rows[0].n, 1);
       // The claim is bound to the scope's ORIGINAL warranty, and the
       // claim list proves only this scope's warranty is affected.
-      assert.equal((await listHandymanServiceWarrantyClaims(warranty.id)).length,
-        1);
+      assert.equal(
+        (await q(`SELECT id FROM handyman_service_warranty_claims
+                   WHERE warranty_id=$1`, [warranty.id])).rows.length, 1);
       assert.equal(scope.id.length > 0, true);
     });
 
@@ -564,8 +565,10 @@ describe('CR-HM-15 PART 02 claim intake and decision', () => {
       // The original BAST and warranty anchors survive all of the above.
       assert.equal((await bastRow(opened.claim.bastId)).status, 'ACCEPTED');
       assert.equal((await warrantyRow(warranty.id)).status, 'ACTIVE');
-      assert.equal((await getHandymanServiceWarrantyClaimById(opened.claim.id))
-        .status, 'CLAIM_DRAFT');
+      assert.equal(
+        (await q(`SELECT status FROM handyman_service_warranty_claims
+                   WHERE id=$1`, [opened.claim.id])).rows[0].status,
+        'CLAIM_DRAFT');
     });
 
   it('keeps zero FM / SaaS coupling and no money vocabulary', async () => {

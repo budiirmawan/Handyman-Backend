@@ -1,10 +1,7 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import { handymanScopeAssignmentRepository }
@@ -107,6 +104,16 @@ export async function prepareHandymanBast(
 
   return withTransaction(async (client) => {
     const scope = await loadAuthorizedScope(client, executionScopeId);
+    // CR-HM-SEC-01 PART 05B — local-staff BAST lifecycle write: the
+    // data-scope wall is the BE-02G building guard on the
+    // authoritative server-derived scope building (migration 0395) —
+    // no client-level shortcut. It runs BEFORE the active-BAST /
+    // replay / conflict paths, so a same-Client sibling Building
+    // actor learns nothing about existing BAST content.
+    await assertBuildingScopedResourceAccess(actor, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     const existing = await handymanBastRepository.findActiveBastByScopeId(
       client,
       executionScopeId,
@@ -154,6 +161,25 @@ async function applyPart01Transition(
     if (!bast) {
       throw handymanBastNotFoundError();
     }
+    // CR-HM-SEC-01 PART 05B — local-staff BAST lifecycle write: the
+    // data-scope wall is the BE-02G building guard on the
+    // authoritative server-derived scope building (migration 0395).
+    // It runs BEFORE the replay path, so a same-Client sibling
+    // Building actor can neither replay nor mutate; the eligibility
+    // gate (`loadAuthorizedScope`) keeps its original position after
+    // the replay short-circuit, preserving idempotent-replay
+    // semantics exactly.
+    const scope = await handymanScopeAssignmentRepository.findScopeById(
+      client,
+      bast.executionScopeId,
+    );
+    if (!scope) {
+      throw handymanExecutionScopeNotFoundError();
+    }
+    await assertBuildingScopedResourceAccess(actor, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     const replay = await handymanBastRepository.findEventByIdempotency(
       client,
       bast.id,
@@ -250,13 +276,29 @@ async function applyCustomerSignOff(
     if (!bast) {
       throw handymanBastNotFoundError();
     }
-    const allowed = await contextAccessService.canAccessClient(
-      actor,
-      bast.clientId,
+    // CR-HM-SEC-01 PART 05C-2 — customer sign-off (ACCEPT/REJECT) is
+    // driven by a LOCAL Customer Care staff actor (route
+    // `tenant_company.manage`; BM SSO principals have no session
+    // userId and no path here — the customer signature is attested
+    // data, the represented tenant stays server-resolved). The
+    // data-scope wall is therefore the BE-02G building guard on the
+    // authoritative server-derived scope building (migration 0395),
+    // NOT the client-level canAccessClient shortcut: a same-Client
+    // sibling Building assignment must not open the sign-off. The
+    // guard keeps the wall's original slot — after the BAST
+    // existence check, before the evidence binding, the idempotent
+    // replay short-circuit, and the state transition.
+    const scope = await handymanScopeAssignmentRepository.findScopeById(
+      client,
+      bast.executionScopeId,
     );
-    if (!allowed) {
-      throw buildingAccessDeniedError();
+    if (!scope) {
+      throw handymanExecutionScopeNotFoundError();
     }
+    await assertBuildingScopedResourceAccess(actor, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
     if (evidenceRecordId) {
       const ev = await client.query(
         `SELECT execution_scope_id
@@ -323,16 +365,6 @@ async function applyCustomerSignOff(
   });
 }
 
-/** Read helper — unused by HTTP in this PART. */
-export async function getHandymanBastById(
-  bastId: string,
-): Promise<HandymanBastRecord> {
-  const id = ensureUuid(bastId, 'bastId');
-  const bast = await handymanBastRepository.findBastById(getPool(), id);
-  if (!bast) throw handymanBastNotFoundError();
-  return bast;
-}
-
 export type HandymanBastDetailView = {
   bast: HandymanBastRecord;
   acceptance: HandymanBastAcceptanceReadContract;
@@ -358,13 +390,22 @@ export async function getHandymanBastCustomerCareDetail(
   if (!bast) {
     throw handymanBastNotFoundError();
   }
-  const allowed = await contextAccessService.canAccessClient(
-    actor,
-    bast.clientId,
+  // CR-HM-SEC-01 PART 05A — the BAST record is Client-scoped only, so
+  // the authoritative location is the server-derived execution scope
+  // building (migration 0395); the data-scope wall is the BE-02G
+  // building guard on that exact Building, not the client-level
+  // canAccessClient shortcut (no same-Client sibling leak).
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    getPool(),
+    bast.executionScopeId,
   );
-  if (!allowed) {
-    throw buildingAccessDeniedError();
+  if (!scope) {
+    throw handymanExecutionScopeNotFoundError();
   }
+  await assertBuildingScopedResourceAccess(actor, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const events = await handymanBastRepository.listEventsByBastId(
     getPool(),
     bast.id,
@@ -394,13 +435,14 @@ export async function getHandymanExecutionScopeBastCustomerCareView(
   if (!scope) {
     throw handymanExecutionScopeNotFoundError();
   }
-  const allowed = await contextAccessService.canAccessClient(
-    actor,
-    scope.clientId,
-  );
-  if (!allowed) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 05A — BE-02G building guard on the
+  // authoritative server-derived scope building (migration 0395); the
+  // client-level canAccessClient shortcut is NOT sufficient here — a
+  // same-Client sibling Building assignment must not open the read.
+  await assertBuildingScopedResourceAccess(actor, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const bast =
     (await handymanBastRepository.findActiveBastByScopeId(
       getPool(),
