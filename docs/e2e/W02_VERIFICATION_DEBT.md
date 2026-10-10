@@ -248,3 +248,66 @@ Menutup R-T1 (§6) untuk sisi POST. Lifecycle, C6, dan Customer Care tidak diuba
 - R-P4A-2: provisioning role Operations produksi (grant `handyman.operations.request.triage`) belum dilakukan. Itu operasi administratif, bukan perubahan kode.
 - R-P4A-3: tidak ada UI untuk memberi permission ini. Dikelola lewat RBAC yang ada.
 - R-T2, R-T3, R-T4 dari §6 tetap berlaku. Quotation, PIC approval, cancellation, dan notification tetap di luar scope.
+
+## 8. W02 PART 05 — Request create audit & notification closure
+
+Menutup gap "create request tanpa audit event" dan memberi notification handoff yang bisa ditelusuri. Journey (PART 04) dan kontrak lifecycle tidak diubah.
+
+### Rekonsiliasi (sebelum PART 05)
+
+- Create request tidak menulis event apa pun. Event Handyman yang sudah ada: `HANDYMAN_REQUEST_TRIAGED`, `HANDYMAN_INSPECTION_RECORDED`, `HANDYMAN_DIAGNOSIS_RECORDED`, `HANDYMAN_REFERRAL_CREATED`, dan event care-grant. Tidak ada event untuk request-created.
+- `recordHandymanEvent` (seam audit Handyman, admission fail-closed) dan `emitHandymanNotificationIntent` (seam intent notifikasi) sudah ada, tetapi sebelumnya tidak dipakai di jalur create.
+- Pembedaan yang dipakai:
+  - **Audit event**: baris `operational_events` (append-only, fakta bisnis).
+  - **Domain event**: event yang sama, dengan `factKind: DOMAIN` di kontrak audit.
+  - **Notification intent**: keluaran `emitHandymanNotificationIntent`. Tidak dibuat untuk create (lihat di bawah).
+  - **Delivery receipt**: baris `notification_outbound_deliveries` / `notifications`. Tidak dibuat untuk create.
+- Tidak ada migrasi. `operational_events.event_type` berupa TEXT tanpa CHECK allowlist. Tidak ada perubahan API, sehingga OpenAPI tidak diubah.
+
+### Event contract: `HANDYMAN_REQUEST_CREATED`
+
+- Ditulis oleh `recordHandymanEvent` di **executor transaksi yang sama** dengan insert request (atomik). Berlaku untuk jalur Customer Care (`createCareHandymanServiceRequest`) dan jalur local-user (`createHandymanServiceRequest`, sekarang juga dibungkus transaksi).
+- Entity: `HANDYMAN_SERVICE_REQUEST` / `entity_id` = request ID.
+- Kolom: `client_id`, `building_id` (dari snapshot attribution), `actor_user_id` (null pada Care path), `request_id` dan `source` (korelasi HTTP, tidak bisa di-override), `occurred_at`.
+- `metadata`: `channelAttributionId`, `tenantCompanyId`, `spaceId`, `actorType`, `careActorId`, `originChannel`, `notificationHandoff`.
+- `summary`: `Handyman service request created.` (tanpa data pribadi).
+- Tidak berisi: nama, telepon, email reporter atau contact person, exchange token, workspace token, assertion, password, atau key rahasia. Metadata ikut dibawa ke payload outbox integrasi, sehingga hanya identitas yang boleh masuk.
+
+### Notification handoff
+
+- Status: **`BLOCKED_BY_POLICY`**, reason `RECIPIENT_CHANNEL_POLICY_NOT_DEFINED`.
+- Alasan: kontrak notifikasi Handyman menyatakan audience `SUBSCRIPTION_RULE` (BE-26D). Resolusi penerima BE-26C dapat menjangkau `TENANT_PIC`. Itu tidak boleh dinotifikasi tanpa kontak terverifikasi dan kebijakan channel. Tidak ada recipient atau channel policy Handyman untuk create, sehingga intent tidak dipanggil.
+- Tidak ada delivery yang diklaim. Test A3 membuktikan tidak ada baris notification intent atau delivery yang dibuat.
+- Entri kontrak `HANDYMAN_REQUEST_CREATED` ditambahkan ke `HANDYMAN_NOTIFICATION_CONTRACT` (audience `SUBSCRIPTION_RULE`, templateKey `HANDYMAN_REQUEST_CREATED`) sebagai seam siap aktivasi.
+- Fan-out integrasi (outbox) mengikuti mekanisme existing: baris outbox hanya ada jika ada endpoint webhook aktif. Default-nya dark, dan test A3 memastikan tidak ada baris outbox untuk event create.
+
+### Keamanan (bukti runtime)
+
+- A2: event tidak memuat nama, telepon, email reporter/contact, exchange token, atau kata `assertion`. Data reporter tetap di store kontak PART 03.
+- D1: key credential-like di body HTTP ditolak 400 sebelum transaksi (tidak ada request, tidak ada event, exchange tidak terkonsumsi).
+- D2: seam audit membuang key sensitif (`token`, `accessToken`, `assertion`, `authorization`) sebelum persist, dan mempertahankan key non-sensitif.
+
+### Hasil test
+
+- `tests/handyman-request-create-audit-part05.test.ts`: 10/10 PASS.
+  - A1 create sukses: tepat satu event, dengan request, tenant, building, attribution, actor type, timestamp, dan korelasi HTTP.
+  - A2 tidak ada data sensitif di event.
+  - A3 notification handoff `BLOCKED_BY_POLICY`, tanpa intent, delivery, atau outbox.
+  - A4 request tetap `INTAKE`.
+  - B1 create gagal (service tidak dikenal): tanpa event, tanpa request, exchange tidak terkonsumsi, retry berhasil dengan tepat satu event.
+  - B2 rollback: fault injection di level DB (trigger sementara yang melempar saat event create ditulis). Request, attribution, dan contact tidak tersisa. Exchange tidak terkonsumsi. Retry tanpa fault menghasilkan tepat satu request dan satu event. Trigger dihapus setelah test.
+  - C1 replay exchange: 401, tanpa request, event, atau contact kedua.
+  - C2 concurrent (3 request paralel, satu exchange): tepat satu 201, satu request, satu event.
+  - D1, D2 seperti di atas.
+- Regresi fokus (bersama): **164/164 PASS**. Termasuk journey PART 04 (27), lifecycle, building-scope, operations-queue, care-request-create, api, channel-attributions, reporter-contact, handoff attribution (2), audit/integration part03, notification contract part02, dan config-perm-01.
+- Dua test kontrak (`HANDYMAN_AUDIT_EVENT_CONTRACT` 15→16, `HANDYMAN_NOTIFICATION_CONTRACT` 12→13) diperbarui secara sadar. Teks `meaning` sempat memuat kata "channel" dan gagal test channel-free. Sudah diperbaiki menjadi "origin attribution snapshot".
+- `npx tsc --noEmit -p .`: exit 0. Full suite tidak dijalankan.
+
+### Residual PART 05
+
+- R-P5-1: recipient dan channel policy untuk `HANDYMAN_REQUEST_CREATED` belum didefinisikan. Aktivasi memerlukan keputusan: siapa penerimanya (PIC hanya dengan kontak terverifikasi dan consent), channel apa, dan apakah emisi dilakukan setelah commit lewat `emitHandymanNotificationIntent`.
+- R-P5-2: `notificationHandoff` adalah snapshot saat create. Jika policy diaktifkan nanti, status delivery harus dilacak di ledger notifikasi yang ada, bukan dengan memperbarui event (append-only).
+- R-P5-3: jalur local-user kini menulis event atomik, tetapi belum ada assertion khusus event di test. Hanya tercakup oleh regresi (lulus).
+- R-P5-4: fan-out webhook dengan endpoint aktif belum diuji di PART ini. Default dark.
+- R-P5-5: komentar header journey PART 04 masih menyebut `tenant_company.manage` untuk triage. Itu komentar stale. Perilaku yang berlaku diuji di PART 04A. Journey dibiarkan tidak berubah karena frozen.
+- R-P5-6: fault trigger dibuat di DB uji bersama dan dihapus setelah test. Risiko R-T4 (DB uji persisten) tetap berlaku.

@@ -96,7 +96,7 @@ after(async () => {
 
 describe('CR-HM-16 PART 02 — Handyman notification event contract (frozen)', () => {
   it('admits the SLA chain and the certified domain vocabulary with meaning/audience/template', () => {
-    assert.equal(HANDYMAN_NOTIFICATION_CONTRACT.length, 12);
+    assert.equal(HANDYMAN_NOTIFICATION_CONTRACT.length, 13); // W02 PART 05: + HANDYMAN_REQUEST_CREATED
     const seen = new Set<string>();
     for (const entry of HANDYMAN_NOTIFICATION_CONTRACT) {
       assert.ok(!seen.has(entry.eventType), `${entry.eventType} admitted once`);

@@ -136,7 +136,7 @@ after(async () => {
 
 describe('CR-HM-16 PART 03 — Handyman audit/integration/reliability contract (frozen)', () => {
   it('freezes the audit vocabulary and the inherited laws', () => {
-    assert.equal(HANDYMAN_AUDIT_EVENT_CONTRACT.length, 15);
+    assert.equal(HANDYMAN_AUDIT_EVENT_CONTRACT.length, 16); // W02 PART 05: + HANDYMAN_REQUEST_CREATED
     const seen = new Set<string>();
     for (const entry of HANDYMAN_AUDIT_EVENT_CONTRACT) {
       assert.ok(!seen.has(entry.eventType), `${entry.eventType} admitted once`);

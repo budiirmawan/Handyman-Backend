@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
+import { recordHandymanEvent } from '../handyman-audit';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
@@ -137,14 +138,27 @@ function assertUuid(value: string | undefined, field: string): void {
 
 type AttributionSnapshot = Pick<HandymanChannelAttributionRecord,
   'id' | 'clientId' | 'tenantCompanyId' | 'tenantPicId' | 'buildingId' |
-  'spaceId' | 'originChannel' | 'originReference' | 'createdByUserId'>;
+  'spaceId' | 'originChannel' | 'originReference' | 'createdByUserId' |
+  'actorType' | 'careActorId'>;
+
+/**
+ * W02 PART 05 — notification handoff status recorded on the create event.
+ * No recipient/channel policy exists for Handyman request creation (BE-26C
+ * can resolve TENANT_PIC, which must never be notified without verified
+ * contact and policy). Therefore no intent is emitted and no delivery is
+ * claimed: the handoff is explicitly BLOCKED_BY_POLICY.
+ */
+const REQUEST_CREATED_NOTIFICATION_HANDOFF = Object.freeze({
+  status: 'BLOCKED_BY_POLICY',
+  reason: 'RECIPIENT_CHANNEL_POLICY_NOT_DEFINED',
+});
 
 /** Shared catalogue, one-request-per-attribution and immutable snapshot rules.
  * The caller MUST authorize acting identity before entering this function. */
 async function createFromAuthorizedAttribution(
   input: Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'>,
   attribution: AttributionSnapshot,
-  client?: PoolClient,
+  client: PoolClient,
 ): Promise<PublicHandymanServiceRequest> {
   assertUuid(input.serviceCatalogId, 'serviceCatalogId');
   if (input.serviceVariantId !== undefined) {
@@ -207,8 +221,9 @@ async function createFromAuthorizedAttribution(
   }
 
   // 6) Immutable attribution-derived context snapshot (never mutated).
+  let record: HandymanServiceRequestRecord;
   try {
-    const record = await handymanServiceRequestRepository.insertRequest(
+    record = await handymanServiceRequestRepository.insertRequest(
       client,
       {
         clientId: attribution.clientId,
@@ -225,13 +240,38 @@ async function createFromAuthorizedAttribution(
         createdByUserId: attribution.createdByUserId,
       },
     );
-    return toPublic(record);
   } catch (error) {
     if (isAttributionUniqueViolation(error)) {
       throw handymanServiceRequestAlreadyExistsError();
     }
     throw error;
   }
+  // W02 PART 05: audit on the SAME executor as the insert (atomic). Identities
+  // only: no reporter/contact data, no exchange token, no assertion. The
+  // attribution is referenced by id; the actor is a User, or a Care actor
+  // identified by actorType + careActorId (no User exists on the Care path).
+  await recordHandymanEvent(
+    {
+      eventType: 'HANDYMAN_REQUEST_CREATED',
+      entityType: 'HANDYMAN_SERVICE_REQUEST',
+      entityId: record.id,
+      clientId: attribution.clientId,
+      buildingId: attribution.buildingId,
+      actorUserId: attribution.createdByUserId,
+      summary: 'Handyman service request created.',
+      metadata: {
+        channelAttributionId: attribution.id,
+        tenantCompanyId: attribution.tenantCompanyId,
+        spaceId: attribution.spaceId,
+        actorType: attribution.actorType,
+        careActorId: attribution.careActorId,
+        originChannel: attribution.originChannel,
+        notificationHandoff: { ...REQUEST_CREATED_NOTIFICATION_HANDOFF },
+      },
+    },
+    client,
+  );
+  return toPublic(record);
 }
 /**
  * Existing local-User create path: BE-02G exact-Building authority on
@@ -268,7 +308,10 @@ export async function createHandymanServiceRequest(
     clientId: attribution.clientId,
     buildingId: attribution.buildingId,
   });
-  return createFromAuthorizedAttribution(input, attribution);
+  // W02 PART 05: request row and its audit event commit or roll back together.
+  return withTransaction((client) =>
+    createFromAuthorizedAttribution(input, attribution, client),
+  );
 }
 
 /**

@@ -46,6 +46,15 @@ export const HANDYMAN_NOTIFICATION_CONTRACT = [
   },
   // ---- Handyman domain events (certified CR-HM-01..15 vocabularies) ------
   {
+    // W02 PART 05 — audience is the BE-26D subscription rule only. No recipient
+    // or channel policy is configured for Handyman yet, so the create path
+    // records a BLOCKED_BY_POLICY handoff and emits no intent (see PART 05 docs).
+    eventType: 'HANDYMAN_REQUEST_CREATED',
+    meaning: 'A service request was created from an origin attribution snapshot (notification handoff seam).',
+    audience: 'SUBSCRIPTION_RULE',
+    templateKey: 'HANDYMAN_REQUEST_CREATED',
+  },
+  {
     eventType: 'HANDYMAN_REQUEST_TRIAGED',
     meaning: 'A service request received its triage outcome.',
     audience: 'SUBSCRIPTION_RULE',

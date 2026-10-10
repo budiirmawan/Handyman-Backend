@@ -82,6 +82,13 @@ export const HANDYMAN_AUDIT_EVENT_CONTRACT: readonly HandymanAuditEventEntry[] =
   },
   // ---- Handyman domain events (certified CR-HM-01..15 vocabularies) ------
   {
+    // W02 PART 05 — the request row was created in the same transaction as its
+    // attribution/exchange. Carries identities only (no contact, no assertion).
+    eventType: 'HANDYMAN_REQUEST_CREATED',
+    factKind: 'DOMAIN',
+    meaning: 'A service request was created from an immutable origin attribution snapshot.',
+  },
+  {
     eventType: 'HANDYMAN_REQUEST_TRIAGED',
     factKind: 'DOMAIN',
     meaning: 'A service request received its triage outcome.',
