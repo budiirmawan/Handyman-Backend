@@ -228,3 +228,17 @@ Syarat minimum closure: AC-01 sampai AC-11 terpenuhi, AC-12 dan AC-13 diverifika
 - Pencarian source dilakukan pada `src/modules/handyman-*`, route inventory, migration 0144, 0145, 0378, 0380, 0382, dan OpenAPI `docs/api/openapi.yaml`.
 - Status MISSING hanya diberikan setelah pencarian lintas source, route, dan schema. Jika ada bukti baru, status harus diperbarui.
 - Tidak ada perubahan kode, schema, API, atau frontend dalam PART ini.
+
+---
+
+## Pembaruan status setelah W02 PART 02
+
+Bagian di atas adalah snapshot pra-coding dan tidak diubah. Pembaruan berikut mengacu ke `docs/e2e/W02_OPERATIONS_QUEUE_HANDOFF.md`.
+
+| ID | Status sebelumnya | Status sekarang | Bukti |
+|---|---|---|---|
+| G20 Handoff ke Operations queue | MISSING | **EXISTING (backend, runtime PASS)** untuk list dan detail Building-scoped. Notifikasi tetap MISSING (G22). | `GET /handyman/operations/requests[/:id]`, `tests/handyman-operations-queue.test.ts` 15/15 PASS |
+| G29 Visibilitas queue untuk Operations (UNVERIFIED) | UNVERIFIED | **EXISTING (terverifikasi runtime)**. User tanpa PIC dan tanpa assignment tidak melihat request di `GET /handyman/requests` (C6) dan di queue baru hanya melihat Building yang di-assign. | Test 9, 11, 12 pada `tests/handyman-operations-queue.test.ts` |
+| D6 | Keputusan | Diterapkan sebagai scope Building baru. `customerRequestReadScope` tidak dilonggarkan. Tambahan: fail-closed untuk identitas tenant PIC (OQ-3). | `W02_OPERATIONS_QUEUE_HANDOFF.md` §2 |
+
+Daftar P0 yang tersisa: **G05** (reporter), **G08** (approval PIC). G20 dan G29 tidak lagi P0. Keputusan R-2 (operator building melihat semua tenant di building) perlu persetujuan.

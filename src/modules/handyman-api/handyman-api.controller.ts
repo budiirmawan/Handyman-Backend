@@ -6,6 +6,7 @@ import { serviceCatalogService } from '../service-catalog';
 import { handymanServiceVariantService } from '../handyman-catalog';
 import { handymanCommonMaterialProfileService } from '../handyman-catalog';
 import { handymanServiceRequestService } from '../handyman-requests';
+import { handymanOperationsQueueService } from '../handyman-requests/handyman-operations-queue.service';
 import {
   HANDYMAN_INTAKE_MAX_FILE_BYTES,
   handymanIntakeEvidenceService,
@@ -18,6 +19,7 @@ import {
   parseHandymanMaterialProfileDescribeQuery,
   parseHandymanMaterialProfileIdParam,
   parseHandymanMaterialProfileListQuery,
+  parseHandymanOperationsRequestListQuery,
   parseHandymanRequestIdParam,
   parseHandymanServiceRequestListQuery,
 } from './handyman-api.validation';
@@ -235,6 +237,43 @@ export async function getHandymanServiceRequestDetailHandler(
     );
     const request = await handymanServiceRequestService
       .getHandymanServiceRequestDetail(handymanRequestId, req.auth.userId);
+    sendSuccess(res, request);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /handyman/operations/requests — W02 PART 02 Operations queue list.
+ * Scope is the caller's explicit Building assignments (no PIC/C6 shortcut).
+ */
+export async function listHandymanOperationsRequestsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const query = parseHandymanOperationsRequestListQuery(req.query);
+    const page = await handymanOperationsQueueService
+      .listOperationsRequests(query, req.auth.userId);
+    sendSuccess(res, page);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** GET /handyman/operations/requests/:handymanRequestId — triage detail. */
+export async function getHandymanOperationsRequestDetailHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const handymanRequestId = parseHandymanRequestIdParam(
+      p(req.params.handymanRequestId),
+    );
+    const request = await handymanOperationsQueueService
+      .getOperationsRequestDetail(handymanRequestId, req.auth.userId);
     sendSuccess(res, request);
   } catch (error) {
     next(error);

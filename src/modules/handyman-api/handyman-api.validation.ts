@@ -254,6 +254,91 @@ export function parseHandymanServiceRequestListQuery(
   };
 }
 
+/**
+ * W02 PART 02 — Operations queue list query. Strict allowlist: no client or
+ * tenant selector is accepted, because the queue scope is derived from the
+ * caller's Building assignments only. The cursor is opaque base64url JSON
+ * `{c, i}`; a tampered cursor can only pick a page inside the same SQL scope.
+ */
+export type HandymanOperationsRequestListQuery = {
+  status: HandymanServiceRequestStatus | null;
+  buildingId: string | null;
+  limit: number;
+  afterId: string | null;
+  afterCreatedAt: string | null;
+};
+
+const OPERATIONS_CURSOR_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+export function parseHandymanOperationsRequestListQuery(
+  query: unknown,
+): HandymanOperationsRequestListQuery {
+  const source = isRecord(query) ? query : {};
+  const details: Detail[] = [];
+  const allowed = ['status', 'buildingId', 'limit', 'cursor'];
+  for (const key of Object.keys(source)) {
+    if (!allowed.includes(key)) {
+      details.push({ field: key, message: 'Unexpected query parameter.' });
+    }
+  }
+  const buildingId = readId(source.buildingId, 'buildingId', false, details) ?? null;
+
+  let status: HandymanServiceRequestStatus | null = null;
+  if (source.status !== undefined && source.status !== '') {
+    const normalized =
+      typeof source.status === 'string' ? source.status.trim() : source.status;
+    if (!isHandymanServiceRequestStatus(normalized)) {
+      details.push({
+        field: 'status',
+        message: 'status is not a recognized Handyman request status.',
+      });
+    } else {
+      status = normalized;
+    }
+  }
+
+  let limit = 20;
+  if (source.limit !== undefined) {
+    const raw = typeof source.limit === 'string' ? source.limit : '';
+    if (!/^\d{1,3}$/.test(raw) || Number(raw) < 1 || Number(raw) > 100) {
+      details.push({ field: 'limit', message: 'limit must be an integer from 1 to 100.' });
+    } else {
+      limit = Number(raw);
+    }
+  }
+
+  let afterId: string | null = null;
+  let afterCreatedAt: string | null = null;
+  if (source.cursor !== undefined && source.cursor !== '') {
+    const decoded = typeof source.cursor === 'string' && source.cursor.length <= 512
+      ? decodeOperationsCursor(source.cursor)
+      : null;
+    if (!decoded) {
+      details.push({ field: 'cursor', message: 'cursor is not valid.' });
+    } else {
+      afterId = decoded.i;
+      afterCreatedAt = decoded.c;
+    }
+  }
+
+  if (details.length) fail(details);
+  return { status, buildingId, limit, afterId, afterCreatedAt };
+}
+
+function decodeOperationsCursor(
+  raw: string,
+): { c: string; i: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    if (!isRecord(parsed)) return null;
+    if (typeof parsed.c !== 'string' || !OPERATIONS_CURSOR_TIME.test(parsed.c)) return null;
+    if (typeof parsed.i !== 'string' || !isValidUuid(parsed.i)) return null;
+    return { c: parsed.c, i: parsed.i.toLowerCase() };
+  } catch {
+    return null;
+  }
+}
+
 export function parseHandymanMaterialProfileIdParam(raw: string): string {
   const details: Detail[] = [];
   const id = readId(raw, 'profileId', true, details);

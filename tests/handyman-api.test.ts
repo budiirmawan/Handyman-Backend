@@ -653,7 +653,15 @@ describe('CR-HM-02 PART 05A — Handyman HTTP + OpenAPI surface', () => {
       // W01 PART 03: DELETE is legitimately documented ONLY for the Customer
       // Care workspace logout (DELETE /handyman/care/session, care-workspace
       // routes). Any other mutating verb is still forbidden.
-      const allowedExtra = path === '/handyman/care/session' ? ['delete'] : [];
+      // W02 PART 02 (verified): PART 06 admin revoke is the exact DELETE route
+      // `/handyman/care-actors/{careActorId}/permissions/{permissionCode}`
+      // (handyman-care-actor-permission.routes.ts, router.delete). Only that
+      // exact path+verb is allowed; no other mutating verb is opened.
+      const allowedExtra =
+        path === '/handyman/care/session' ||
+        path === '/handyman/care-actors/{careActorId}/permissions/{permissionCode}'
+          ? ['delete']
+          : [];
       assert.deepEqual(
         verbs.filter((verb) => !['get', 'post', ...allowedExtra].includes(verb)),
         [],

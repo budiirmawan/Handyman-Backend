@@ -4103,6 +4103,117 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /handyman/operations/requests:
+    get:
+      operationId: listHandymanOperationsRequests
+      summary: List the Operations queue of Handyman requests (Building-scoped)
+      description: >
+        W02 PART 02 — Operations queue read projection for intake handoff.
+        Requires `tenant_company.read` (RBAC permission, no role-name check).
+        Scope is the caller's explicit ACTIVE Building assignments under the
+        request's own Client, with the Building, Property, Client, and User
+        chain ACTIVE. There is no tenant PIC shortcut and no PLATFORM_ADMIN
+        bypass. The Customer Care C6 wall on `GET /handyman/requests` is not
+        changed by this endpoint. Results are FIFO (oldest `createdAt` first).
+        Filters: `status` (a recognized Handyman status), `buildingId` (must be
+        inside the caller's scope, otherwise the page is empty). Requests from
+        other Buildings, Properties, or Clients never appear in any page.
+        Unknown query parameters (including `clientId`, `tenantCompanyId`)
+        return 400. The cursor is opaque. It cannot widen scope because the
+        scope predicate is always applied in SQL. The projection excludes the
+        attribution `actorReference`, `createdByUserId`, assertion/exchange/token
+        material, and tenant PIC contact data.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string, maxLength: 512 }
+      responses:
+        "200":
+          description: One page of the caller's Operations queue.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, nextCursor]
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/HandymanOperationsRequest"
+                          nextCursor:
+                            type: string
+                            nullable: true
+                            description: Pass as `cursor` to fetch the next page. Null when no further page exists.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /handyman/operations/requests/{handymanRequestId}:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanOperationsRequest
+      summary: Get one Operations queue Handyman request (triage detail)
+      description: >
+        W02 PART 02 — Operations triage detail, same Building-scope and
+        `tenant_company.read` rules as the queue list. A request that is
+        unknown, in another Building, or in another Client returns the same
+        404, so existence is not leaked. The projection matches the queue item.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Operations queue request projection.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanOperationsRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /handyman/requests/{handymanRequestId}/intake-evidence:
     parameters:
       - name: handymanRequestId
@@ -82660,6 +82771,52 @@ components:
         actorReference: { type: string, maxLength: 128, nullable: true }
         createdAt: { type: string, format: date-time }
 
+    HandymanOperationsRequest:
+      type: object
+      required: [id, clientId, status, description, createdAt, updatedAt, tenant, location, service, attribution]
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        status: { type: string }
+        description: { type: string, maxLength: 1000 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        tenant:
+          type: object
+          required: [id, code, name, picId]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            picId: { type: string, format: uuid, nullable: true }
+        location:
+          type: object
+          required: [propertyId, propertyName, buildingId, buildingCode, buildingName, spaceId, spaceCode, spaceName]
+          properties:
+            propertyId: { type: string, format: uuid }
+            propertyName: { type: string }
+            buildingId: { type: string, format: uuid }
+            buildingCode: { type: string }
+            buildingName: { type: string }
+            spaceId: { type: string, format: uuid, nullable: true }
+            spaceCode: { type: string, nullable: true }
+            spaceName: { type: string, nullable: true }
+        service:
+          type: object
+          required: [catalogId, catalogName, variantId]
+          properties:
+            catalogId: { type: string, format: uuid }
+            catalogName: { type: string }
+            variantId: { type: string, format: uuid, nullable: true }
+        attribution:
+          type: object
+          description: Customer Care provenance only. No assertion, token, or actorReference.
+          required: [originChannel, actorType, careActorId, createdAt]
+          properties:
+            originChannel: { type: string }
+            actorType: { type: string }
+            careActorId: { type: string, format: uuid, nullable: true }
+            createdAt: { type: string, format: date-time }
     HandymanCustomerCareServiceRequest:
       type: object
       description: >-

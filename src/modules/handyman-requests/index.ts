@@ -144,3 +144,8 @@ export type {
   NewHandymanRequestReferralRecord,
   PublicHandymanRequestReferral,
 } from './handyman-request-referral.types';
+export {
+  handymanOperationsQueueService,
+  getOperationsRequestDetail,
+  listOperationsRequests,
+} from './handyman-operations-queue.service';

@@ -5,7 +5,9 @@ import {
   createHandymanServiceRequestHandler,
   createCareHandymanServiceRequestHandler,
   describeHandymanMaterialProfileHandler,
+  getHandymanOperationsRequestDetailHandler,
   getHandymanServiceRequestDetailHandler,
+  listHandymanOperationsRequestsHandler,
   listHandymanCatalogueServicesHandler,
   listHandymanIntakeEvidenceHandler,
   listHandymanMaterialProfilesHandler,
@@ -24,6 +26,8 @@ import {
  *   POST /handyman/requests                                    local-User attribution-bound intake
  *   POST /handyman/requests/care                               care exchange-bound intake
  *   GET  /handyman/requests                                    bounded Customer Care request list
+ *   GET  /handyman/operations/requests                         Operations queue (W02 PART 02)
+ *   GET  /handyman/operations/requests/:handymanRequestId      Operations triage detail (W02 PART 02)
  *   GET  /handyman/requests/:handymanRequestId                 bounded Customer Care request detail
  *   GET  /handyman/requests/:handymanRequestId/intake-evidence bounded list
  *   POST /handyman/requests/:handymanRequestId/intake-evidence bounded PHOTO/VIDEO upload
@@ -85,6 +89,19 @@ export function createHandymanApiRouter(): Router {
     auth,
     read,
     getHandymanServiceRequestDetailHandler,
+  );
+  // W02 PART 02 — Operations queue (Building-scoped, tenant_company.read).
+  router.get(
+    '/handyman/operations/requests',
+    auth,
+    read,
+    listHandymanOperationsRequestsHandler,
+  );
+  router.get(
+    '/handyman/operations/requests/:handymanRequestId',
+    auth,
+    read,
+    getHandymanOperationsRequestDetailHandler,
   );
   router.get(
     '/handyman/requests/:handymanRequestId/intake-evidence',
