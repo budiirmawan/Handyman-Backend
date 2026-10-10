@@ -1,8 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
-import { contextAccessService } from '../context-access';
-import { purchaseRequestService } from '../purchase-requests';
 import { materialRequestService } from './material-request.service';
 import {
   parseBuildingIdParam,
@@ -21,8 +19,7 @@ function paramString(value: string | string[]): string {
 /**
  * `POST /purchase-requests/:purchaseRequestId/material-requests`. The
  * requester is derived from the authenticated session. Building isolation is
- * enforced by resolving the Purchase Request's Building and asserting the
- * caller holds an ACTIVE assignment.
+ * enforced by the actor-facing service's scoped parent resolution.
  */
 export async function createMaterialRequestHandler(
   req: Request,
@@ -39,19 +36,11 @@ export async function createMaterialRequestHandler(
     );
     const input = parseCreateMaterialRequestBody(req.body);
 
-    const purchaseRequest = await purchaseRequestService.getPurchaseRequestById(
-      purchaseRequestId,
-    );
-    await contextAccessService.assertBuildingAccess(
-      req.auth.userId,
-      purchaseRequest.buildingId,
-    );
-
-    const materialRequest = await materialRequestService.createMaterialRequest({
+    const materialRequest = await materialRequestService.createMaterialRequestForActor({
       ...input,
       purchaseRequestId,
       requestedByUserId: req.auth.userId,
-    });
+    }, req.auth.userId);
     sendSuccess(res, materialRequest, 201);
   } catch (error) {
     next(error);
@@ -77,19 +66,9 @@ export async function listByPurchaseRequestHandler(
     }
 
     const filters = parseMaterialRequestFilters(req.query);
-    const purchaseRequest = await purchaseRequestService.getPurchaseRequestById(
-      purchaseRequestId,
+    const materialRequests = await materialRequestService.listMaterialRequestsByPurchaseRequestForActor(
+      purchaseRequestId, filters, req.auth.userId,
     );
-    await contextAccessService.assertBuildingAccess(
-      req.auth.userId,
-      purchaseRequest.buildingId,
-    );
-
-    const materialRequests =
-      await materialRequestService.listMaterialRequestsByPurchaseRequest(
-        purchaseRequestId,
-        filters,
-      );
     sendSuccess(res, materialRequests);
   } catch (error) {
     next(error);
@@ -111,11 +90,13 @@ export async function listByBuildingHandler(
     const buildingId = parseBuildingIdParam(
       paramString(req.params.buildingId),
     );
+    if (!req.auth) throw authenticationRequiredError();
     const filters = parseMaterialRequestFilters(req.query);
     const materialRequests =
-      await materialRequestService.listMaterialRequestsByBuilding(
+      await materialRequestService.listMaterialRequestsByBuildingForActor(
         buildingId,
         filters,
+        req.auth.userId,
       );
     sendSuccess(res, materialRequests);
   } catch (error) {
@@ -153,8 +134,8 @@ export async function listByItemHandler(
 }
 
 /**
- * `GET /material-requests/:id` carries no Building route parameter, so BE-02
- * Building isolation is enforced here after resolving the record's Building.
+ * `GET /material-requests/:id` applies exact scoped SQL resolution before
+ * enrichment, with uniform missing/inaccessible responses.
  */
 export async function getMaterialRequestHandler(
   req: Request,
@@ -167,13 +148,7 @@ export async function getMaterialRequestHandler(
       throw authenticationRequiredError();
     }
 
-    const materialRequest = await materialRequestService.getMaterialRequestById(
-      id,
-    );
-    await contextAccessService.assertBuildingAccess(
-      req.auth.userId,
-      materialRequest.buildingId,
-    );
+    const materialRequest = await materialRequestService.getMaterialRequestByIdForActor(id, req.auth.userId);
 
     sendSuccess(res, materialRequest);
   } catch (error) {
@@ -194,15 +169,8 @@ export async function updateMaterialRequestHandler(
 
     const input = parseUpdateMaterialRequestBody(req.body);
 
-    const existing = await materialRequestService.getMaterialRequestById(id);
-    await contextAccessService.assertBuildingAccess(
-      req.auth.userId,
-      existing.buildingId,
-    );
-
-    const materialRequest = await materialRequestService.updateMaterialRequest(
-      id,
-      input,
+    const materialRequest = await materialRequestService.updateMaterialRequestForActor(
+      id, input, req.auth.userId,
     );
     sendSuccess(res, materialRequest);
   } catch (error) {
@@ -221,14 +189,8 @@ export async function cancelMaterialRequestHandler(
       throw authenticationRequiredError();
     }
 
-    const existing = await materialRequestService.getMaterialRequestById(id);
-    await contextAccessService.assertBuildingAccess(
-      req.auth.userId,
-      existing.buildingId,
-    );
-
-    const materialRequest = await materialRequestService.cancelMaterialRequest(
-      id,
+    const materialRequest = await materialRequestService.cancelMaterialRequestForActor(
+      id, req.auth.userId,
     );
     sendSuccess(res, materialRequest);
   } catch (error) {
