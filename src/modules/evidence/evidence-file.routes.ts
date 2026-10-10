@@ -7,7 +7,11 @@ import { sendSuccess } from '../../shared/api-response';
 import { isValidUuid } from '../clients';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
-import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import {
+  assertBuildingScopedResourceAccess,
+  buildingAccessDeniedError,
+  contextAccessService,
+} from '../context-access';
 import {
   createEvidenceStorage,
   evidenceStorageKey,
@@ -35,6 +39,9 @@ import { verifyEvidenceIntegrity } from './evidence-integrity-verification.servi
  * the Evidence entity. Access is governed by the existing authentication,
  * RBAC permission and BE-02G Client-scope rules (evidence tables carry
  * client_id only, so the accessible-Client set is the authoritative scope).
+ * Sole exception (CR-HM-SEC-02 PART 03, decision D7): HANDYMAN_REQUEST rows
+ * inherit the exact-Building authorization of their parent
+ * handyman_service_requests row — see the branch in `loadEvidence`.
  *
  * Security: storage keys are derived from the validated evidence UUID only —
  * no client-supplied path ever reaches the filesystem and internal storage
@@ -82,6 +89,30 @@ async function loadEvidence(evidenceId: string, userId: string) {
   }
   if (['FINDING', 'FINDING_REWORK', 'FINDING_VERIFICATION'].includes(row.execution_type as string)) {
     await loadEvidenceExecution(row.execution_type as string, row.execution_id as string, userId);
+  }
+  // CR-HM-SEC-02 PART 03 (PART 00A frozen decision D7) — HANDYMAN_REQUEST
+  // evidence inherits authorization from its parent Handyman request. The
+  // parent `handyman_service_requests` row is building-scoped
+  // (`building_id UUID NOT NULL`, migration 0378), so the BE-02G
+  // exact-Building guard — not the Client-level check above — is the
+  // authoritative wall here: an actor assigned only to a same-Client
+  // SIBLING building must not reach the bytes, metadata, retention or
+  // integrity operations mounted on this router. A missing parent, or a
+  // parent owned by a different Client than the evidence row, fails closed
+  // exactly like a non-existent evidence row (no parent details leak).
+  if (row.execution_type === 'HANDYMAN_REQUEST') {
+    const parent = await getPool().query<{ client_id: string; building_id: string }>(
+      'SELECT client_id, building_id FROM handyman_service_requests WHERE id = $1',
+      [row.execution_id],
+    );
+    const parentRow = parent.rows[0];
+    if (!parentRow || parentRow.client_id !== row.client_id) {
+      throw AppError.notFound('Evidence not found.');
+    }
+    await assertBuildingScopedResourceAccess(userId, {
+      clientId: row.client_id as string,
+      buildingId: parentRow.building_id,
+    });
   }
   return row;
 }
