@@ -1,6 +1,7 @@
 # W01 PART 01 — Backend Contract & Authority Reconciliation
 
-**Status: AUDIT ONLY — tidak ada perubahan business logic, schema DB, atau API.**
+**Status: AUDIT ONLY (PART 01) + BASELINE RUNTIME & PERSONA AUTHORITY CONTRACT (PART 02, §13) — tidak ada perubahan business logic, schema DB, atau API.**
+**Update PART 02:** lihat §13. Runtime baseline: typecheck PASS; subset 25 file 200/212 pass (12 fail, diklasifikasikan di §13.3). E2E tetap belum complete.
 **Tanggal:** 2026-10-10
 **Repository:** `budiirmawan/Handyman-Backend`
 **Branch:** `arena/c6fc25e1-handyman-backend` (tidak ada branch baru)
@@ -405,3 +406,155 @@ Dijalankan pada working tree sebelum commit:
 ## 12. Lampiran: perintah audit yang dipakai
 
 Tidak ada perubahan kode. Perintah audit yang dipakai bersifat baca-saja (`grep`, `sed`, skrip Python ke `/tmp`). Skrip tidak disimpan di repository.
+
+---
+
+## 13. PART 02 — Runtime Baseline & Persona Authority Contract
+
+**Status:** dokumen kontrak + baseline runtime. **Tanpa perubahan API, schema DB, atau business logic.** Tidak ada PR dibuat.
+**Tanggal:** 2026-10-10 · **Branch:** `arena/c6fc25e1-handyman-backend` · **Baseline sebelum PART 02:** `cbb64c7`
+
+### 13.1 Ringkasan
+
+- **Runtime:** typecheck PASS. Subset 25 file Handyman dijalankan (bukan full suite): **212 tests, 200 pass, 12 fail, 0 skip**. Dari 12 kegagalan, **9 adalah defect tes** (2 kolisi token tetap, 7 ekspektasi stale) dan **3 adalah temuan authority nyata** (Lead tidak bisa membaca evidence/QC karena route read memakai `tenant_company.read`).
+- **Hipotesis awal "duplicate key karena DB tidak di-reset" terbantah:** kolisi terjadi juga pada DB yang baru direset, di dalam satu run.
+- **Authority HTTP Handyman sangat sempit:** seluruh route Handyman hanya memakai dua kode permission, `tenant_company.read` (14 route) dan `tenant_company.manage` (9 route). Sisanya dijaga assignment Lead atau scope di service. Tidak ada kode `handyman.*` di seed.
+- **K0 masih terbuka:** dokumen "Business Journey Lifecycle v1.3 FROZEN" **tetap tidak ditemukan** di repo (`docs/HANDYMAN_JOURNEY_LIFECYCLE.json` masih v1.0). Kontrak di §13.6 dirumuskan dari ringkasan v1.3 yang diberikan user dan **harus diverifikasi terhadap file v1.3 asli** sebelum PART 03 dimulai.
+
+### 13.2 Baseline runtime (PASS / FAIL / BLOCKED)
+
+| Cek | Status | Bukti / catatan |
+|---|---|---|
+| Install dependency | PASS | `npm ci` sesuai lockfile; log di `/tmp/npmci.log` (di luar repo). |
+| PostgreSQL 18.4 `127.0.0.1:5432` | PASS | Proses "Test PostgreSQL" berjalan. |
+| `npm run typecheck` | PASS | Diulang pada PART 02. |
+| Subset 25 file Handyman, run #2 (DB **tidak** direset) | **FAIL** | 200/212 pass, 12 fail, `EXIT=1`. Log: `/tmp/w01-p02-subset.log`. |
+| Care workspace 5 file, DB `asentra_test` **direset** | **FAIL** | 61/65 pass, 4 fail (2 duplicate key + 2 stale). Log: `/tmp/w01-p02-care-fresh.log`. |
+| Subset 25 file pada DB direset | NOT RUN | Hanya subset care workspace yang dijalankan ulang di DB baru. |
+| Full test suite | NOT RUN | Sesuai batasan PART 02. |
+| Evidence/QC over HTTP | **FAIL** (3 test) | Authority mismatch, lihat §13.3 kelas C. |
+| OpenAPI exact-equality | **FAIL** (sebagian) | Ekspektasi stale, lihat §13.3 kelas B. |
+| E2E tiga frontend / BM Super App channel | **BLOCKED** | Tidak ada bukti runtime lintas frontend pada PART 02. |
+
+Status E2E: **belum complete.** Tidak ada pernyataan E2E complete tanpa bukti runtime.
+
+### 13.3 Klasifikasi 12 kegagalan
+
+Kelas A = defect tes (kolisi data); B = ekspektasi stale; C = temuan authority (kode, bukan tes).
+
+| # | Test (file:baris) | Kelas | Penyebab | Tindakan (PART 03 / cleanup tes) |
+|---|---|---|---|---|
+| 1 | CR-HM-02 OpenAPI exact surface (`handyman-api.test.ts:605`) | B | Aktual memiliki satu `get` tambahan pada path yang diekspektasikan hanya `post`. Belum diperiksa per path. | Periksa path, perbarui ekspektasi. |
+| 2 | Caps TTL by exchange and remaining workspace lifetime (`handyman-care-workspace-create-exchange.test.ts:351`) | A | Token tetap `'hcw_' + 'E'.repeat(43)` dipakai ulang di beberapa test dalam satu run. `token_hash` unik → `duplicate key`. Terjadi pada DB direset. | Ganti dengan token unik per test (`randomBytes`). |
+| 3 | Revalidates grants and revocation/expiry on all pages (`handyman-care-workspace-requests.test.ts:287`) | A | Kolisi token yang sama seperti #2. | Sama seperti #2. |
+| 4 | Adds only list, not detail/mutation (`handyman-care-workspace-requests.test.ts:379`) | B | Test mengharapkan `GET /handyman/care/requests/{id}` = 404 dan tidak terdokumentasi di OpenAPI. Kode dan OpenAPI keduanya memuatnya, dan ada `handyman-care-workspace-request-detail.test.ts` yang menunjukkan detail sengaja ditambahkan kemudian. | Konfirmasi tahap pengenalan detail, lalu perbarui test. |
+| 5 | Documents just the admitted care route families (`handyman-care-workspace-scope.test.ts:322`) | B | Daftar route tidak memuat `create-exchanges` (PART 05B) dan `care/requests` (PART 06A). | Perbarui daftar ke surface yang sah. |
+| 6 | Firewall sweep, file customer-payment (`handyman-customer-payments.test.ts:719`) | B | `readdirSync` menemukan `handyman-customer-payment.available-actions.ts` (CR-HM-17) yang belum ada di daftar tes. | Tambahkan file ke daftar yang diizinkan. |
+| 7 | Evidence CREATE/FILE_ADD/FINALIZE (`handyman-evidence-qc-api.test.ts:192`, baris 314) | C | `GET /handyman/evidence-records/:id` diproteksi `requirePermission('tenant_company.read')`. Lead fixture tidak memiliki permission itu → `PERMISSION_DENIED`. POST create lolos karena route tidak memakai `requirePermission`. | Keputusan persona (§13.4): read Lead harus berbasis assignment. |
+| 8 | QC OPEN/ITEM_SET/FINISH (`handyman-evidence-qc-api.test.ts:342`, baris 407) | C | `GET` list QC scope → 403. Penyebab sama seperti #7. | Sama seperti #7. |
+| 9 | Defect ladder (`handyman-evidence-qc-api.test.ts:426`, baris 484) | C | `GET` list defect → `403 !== 200`. Penyebab sama. | Sama seperti #7. |
+| 10 | OpenAPI 8-operation CR-HM-03 surface (`handyman-lifecycle-api.test.ts:453`) | B | Surface bertambah: diagnosis, inspection, permit-readiness, quotation, scheduling-readiness, unit-access-readiness, dan history masing-masing. | Perbarui ekspektasi ke daftar terverifikasi. |
+| 11 | OpenAPI/runtime parity, readiness (`handyman-readiness-api.test.ts:480`) | B | Aktual memuat path readiness/quotation/arrival yang ditambahkan CR berikutnya. | Perbarui ekspektasi. |
+| 12 | OpenAPI/runtime parity, scope assignment (`handyman-scope-assignments-api.test.ts:757`) | B | Aktual memuat `/execution-scopes/{id}/assignment` dan path terkait; ekspektasi "ZERO" tidak diperbarui. | Perbarui ekspektasi. |
+
+**Ringkas:** kelas A 2, kelas B 7 (#1, 4, 5, 6, 10, 11, 12), kelas C 3 (#7, 8, 9).
+
+**Catatan kelas B:** tes "parity / ZERO surface" menjadi stale karena CR berikutnya menambah surface secara sah. Mengubah ekspektasi hanya boleh dilakukan **setelah** setiap path dicocokkan dengan CR yang memilikinya. Jangan memperbarui ekspektasi secara massal tanpa pemeriksaan.
+
+### 13.4 Persona → permission matrix
+
+Keterangan kolom: **Existing HTTP** = permission yang benar-benar dipakai route. **Resource scope existing** = guard di service/middleware yang sudah ada. **Perlu ditambahkan** = usulan kode `handyman.*` baru, atau kandidat reuse kode FM bila semantiknya identik.
+
+| Persona | Identitas backend | Existing HTTP permission | Resource scope existing | Perlu ditambahkan (usulan) | Batas tindakan (v1.3, verifikasi K0) |
+|---|---|---|---|---|---|
+| **Customer Care** | Actor BM terverifikasi (`CUSTOMER_CARE`) lewat care workspace | Tidak ada (auth `careWorkspaceSession`) | Grant workspace: property, tenant company, building | Tidak perlu permission user; capability workspace `handyman.payment.report` | Intake, read yang di-grant, create-exchange, **lapor pembayaran (PENDING)**. Tidak: CONFIRM/REJECT, verify, BAST accept, CLOSE. |
+| **Dispatcher** | User lokal | `tenant_company.read/manage` (sebagian route) | `assertBuildingScopedResourceAccess` (building + client aktif) | `handyman.dispatch.manage` (kandidat reuse `schedule.manage` bila semantik sama) | Jadwal, assign crew, antrean. Tidak: verify pembayaran, CLOSE. |
+| **Inspector** | **Belum ada di v1.0** | Tidak ada | — | `handyman.inspection.perform` | Inspeksi, diagnosis, temuan. Tidak: approve QC, CLOSE. |
+| **Lead Worker** | User + assignment Lead (`resolveHandymanAssignmentLead`) | `tenant_company.read` untuk GET evidence/QC (**penyebab kelas C**); write tanpa permission | Assignment Lead per execution scope | Tidak untuk write. Read harus berbasis assignment, bukan `tenant_company.read`. | Work session, material, evidence, QC item, reply defect. Tidak: QC approve atas scope yang ia kerjakan, verify, CLOSE. |
+| **Supervisor** | **Belum ada di v1.0** | Tidak ada | — | `handyman.qc.review` (+ kandidat reuse `supervisor_inspection.manage`, `finding.close`) | QC independen. **Wajib: Supervisor bukan Lead pada scope yang sama.** |
+| **Finance** | **Belum ada role Handyman** (hanya `ADMIN_FINANCE` di v1.0) | Pembayaran confirm memakai `tenant_company.manage` | Building scope | `handyman.payment.verify` (kandidat reuse `invoice_payment_status.manage`, `payment_receipt.manage` hanya jika semantik identik) | Verify/reject pembayaran yang dilaporkan. **Wajib: verifier ≠ pelapor (maker-checker).** |
+| **Authorized Manager** | **Belum ada** | Tidak ada | — | `handyman.payment.verify` dan/atau `handyman.scope.approve` (**K-P02-3**) | Verifikasi di atas ambang (ambang belum ditentukan). Tidak: CLOSE. |
+| **Handyman Manager** | **Belum ada di v1.0 / seed** | Tidak ada | — | `handyman.scope.close` (eksklusif) | Satu-satunya yang boleh CLOSE final scope/request. |
+
+**Catatan:** Helper Worker tidak memiliki authority sendiri (sesuai §5). Tenant tidak login langsung (sesuai README-HANDYMAN-OVERWRITE).
+
+### 13.5 Permission: existing, perlu ditambahkan, dan resource-scope
+
+**A. Existing (dipakai runtime saat ini)**
+
+- `tenant_company.read` (14 route, termasuk GET evidence/QC/defect yang gagal di kelas C).
+- `tenant_company.manage` (9 route, termasuk `POST /execution-scopes/:id/customer-payments` dan `…/confirm|reject`).
+
+**B. Existing di seed/FM, tetapi belum dipakai Handyman (kandidat reuse, bukan otomatis)**
+
+`work_order.manage/read`, `bast.accept`, `payment_receipt.manage`, `invoice_payment_status.manage`, `permit.approve`, `supervisor_inspection.manage`, `finding.close`, `tenant_invoice.manage`, `evidence.manage`, `schedule.manage`.
+Aturan reuse: pakai kode FM **hanya** bila semantiknya identik dan kepemilikannya FM. Jika Handyman memiliki keputusan (report, verify, CLOSE, QC review), gunakan namespace `handyman.*` baru agar authority tidak bocor ke persona FM.
+
+**C. Perlu ditambahkan (usulan, belum diimplementasikan)**
+
+`handyman.payment.report` (capability workspace Customer Care), `handyman.payment.verify`, `handyman.scope.close`, `handyman.qc.review`, `handyman.inspection.perform`, `handyman.dispatch.manage`, `handyman.scope.approve` (opsional, K-P02-3). Penambahan dilakukan lewat konfigurasi/provisioning, bukan seed role baru (seed hanya punya `PLATFORM_ADMIN`).
+
+**D. Resource-scope enforcement (existing, dipertahankan)**
+
+- Building + client: `assertBuildingScopedResourceAccess` (`context-access.service.ts`), menolak dengan `BUILDING_ACCESS_DENIED` (403) bila tidak ada assignment ACTIVE. Dipakai evidence-qc.
+- Lead assignment: `resolveHandymanAssignmentLead` untuk write work session, material, evidence, QC, defect.
+- Care workspace grant: property/tenant/building, dengan pemeriksaan ulang tiap halaman (sudah diuji lulus di `handyman-care-workspace-scope`).
+
+**Keputusan persona-scope untuk kelas C:** route **read** Handyman dijaga oleh `resolveHandymanAssignmentLead` atau assignment building, **bukan** `tenant_company.read`. Dengan begitu Lead dapat membaca scope yang ia kerjakan tanpa diberi permission tenant. Ini perubahan authority yang harus diimplementasikan di PART 03, bukan di tes.
+
+### 13.6 Kontrak authority (berdasarkan ringkasan v1.3; verifikasi K0)
+
+**Customer Care — payment reporting**
+- Pelaporan dilakukan lewat **care workspace** (capability `handyman.payment.report`), bukan bearer `tenant_company.manage`. Tidak ada endpoint duplikat untuk tiga frontend.
+- Hasil: klaim pembayaran `PENDING` dengan `recorded_by` = actor care.
+- Read projection untuk Customer Care **tidak boleh** memuat `CONFIRM` atau `REJECT` pada `available-actions`. Ini menutup B3 (F-04).
+
+**Finance — verification**
+- Verifikasi dilakukan oleh principal dengan `handyman.payment.verify` dan building scope.
+- Aksi: `CONFIRM` atau `REJECT` pada status `PENDING`.
+- **Maker-checker wajib:** `decided_by_user_id` ≠ `recorded_by_user_id`. Kolom sudah ada dan tersimpan (`repository.ts` 31–32, 158), tetapi belum dibandingkan (F-05 / B3). Enforcement ini adalah pekerjaan PART 03.
+- Authorized Manager: hanya jika K-P02-3 menetapkan peran verifier. Ambang nilai belum ditentukan.
+
+**Manager-only CLOSE**
+- Hanya **Handyman Manager** (`handyman.scope.close`) yang boleh CLOSE final scope/request. Customer Care, Dispatcher, Finance, Authorized Manager, Supervisor, dan Lead **tidak** boleh.
+- Prasyarat CLOSE (perlu konfirmasi v1.3): pembayaran terverifikasi, BAST diterima, QC disetujui, dan tidak ada defect terbuka.
+- State `CLOSED` belum ada di `HANDYMAN_EXECUTION_SCOPE_STATUSES` maupun `HANDYMAN_SERVICE_REQUEST_STATUSES` (G-01, B4).
+
+### 13.7 Pemetaan data (tanpa duplikasi authority)
+
+**Execution Scope vs Work Order**
+- **Execution Scope** adalah anchor authority eksekusi Handyman: status, crew, assignment, ledger, dan CLOSE. Ini milik Handyman.
+- **Work Order** adalah objek FM. Bukti: kode Handyman menyatakan secara eksplisit "NO FM work_order references" (`handyman-work-session.types.ts`, `handyman-arrival-location.service.ts`). Saat ini **tidak ada tautan**.
+- **Keputusan:** Handyman **tidak** membuat state machine Work Order kedua. Jika tautan dibutuhkan, cukup referensi ID read-only (`work_order.read`) yang dicatat sebagai keputusan eksplisit di PART 03. Work Order tidak boleh menjadi sumber status CLOSE.
+
+**Building vs Tower**
+- **Tower = Building.** Bukti: kode contoh `TOWER_A` pada validasi Building (`building.validation.ts`). Tidak ada tabel Tower.
+- **Keputusan:** tidak ada entitas Tower baru. Label "Tower" hanya klasifikasi atau nama di atas Building. Hierarki: Building → Floor → Space/Unit (Space/Unit sebagai child Floor perlu dikonfirmasi di PART 03).
+- Scope key untuk authority = Building (+ Client), sesuai `assertBuildingScopedResourceAccess`.
+
+### 13.8 Keputusan baru yang dibutuhkan
+
+| ID | Keputusan | Rekomendasi |
+|---|---|---|
+| K0 (lanjutan) | Sediakan file **Business Journey Lifecycle v1.3 FROZEN** | Wajib sebelum PART 03. Kontrak §13.6 dan matriks §13.4 bergantung pada file ini. |
+| K-P02-1 | Read Handyman Lead: `tenant_company.read` atau assignment | Assignment (§13.5 D). |
+| K-P02-2 | Reuse kode FM atau namespace `handyman.*` | `handyman.*` untuk keputusan Handyman; reuse FM hanya jika semantik identik. |
+| K-P02-3 | Authorized Manager: verifier pembayaran dan/atau approver scope? Ambang nilai? | Belum ditentukan. Tunggu v1.3. |
+| K-P02-4 | Supervisor vs Lead pada scope yang sama | Dilarang (segregasi). |
+
+### 13.9 Rekomendasi PART 03
+
+1. Verifikasi v1.3 terhadap §13.6 (K0) sebelum coding.
+2. Perbaiki **kelas A** (token unik per test) dan **kelas B** (ekspektasi stale, dengan pemeriksaan per path). Ini bukan perubahan API.
+3. Ubah authority read Lead dari `tenant_company.read` ke assignment, lalu jalankan ulang tiga test kelas C.
+4. Implementasikan maker-checker pada verify (F-05) dan pastikan `available-actions` Customer Care tidak memuat CONFIRM/REJECT.
+5. Tambahkan state CLOSED dan route CLOSE hanya untuk `handyman.scope.close`, setelah prasyarat v1.3 dikonfirmasi.
+6. Baru setelah itu, jalankan ulang subset pada DB direset dan catat PASS/FAIL. Jangan menyatakan E2E complete sebelum ada bukti runtime lintas journey.
+
+### 13.10 Validasi PART 02
+
+- `npm run typecheck`: PASS.
+- Subset 25 file: 212/200/12, dijelaskan di §13.3.
+- Care workspace 5 file pada DB direset: 65/61/4.
+- Tidak ada perubahan kode, API, atau schema. Hanya dokumen ini yang berubah.
+- Node_modules tidak di-stage. Artefak log berada di `/tmp` (di luar repo).
