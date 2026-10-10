@@ -36,10 +36,6 @@ import {
   proposeHandymanChargeableAdditionalWork,
   acceptHandymanChargeableAdditionalWork,
   rejectHandymanChargeableAdditionalWork,
-  getHandymanChargeableAdditionalWorkById,
-  findHandymanChargeableAdditionalWorkByClaimId,
-  listHandymanChargeableAdditionalWorks,
-  getHandymanChargeablePaymentTrigger,
   assertHandymanChargeableAdditionalWorkIntakeEligible,
   assertHandymanChargeableAdditionalWorkFreeReworkSeparated,
   nextHandymanChargeableAdditionalWorkStatus,
@@ -400,14 +396,19 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
       assert.equal(accepted.event.eventType, 'ACCEPT');
       assert.equal(accepted.paymentTrigger?.eventType, 'PAYMENT_TRIGGER');
       // The trigger fact is the ONLY outbound money-adjacent artifact.
-      const fact = await getHandymanChargeablePaymentTrigger(proposed.work.id);
+      const fact = (await q(
+        `SELECT id, work_id, claim_id, warranty_id, execution_scope_id,
+                bast_id
+           FROM handyman_chargeable_additional_work_events
+          WHERE work_id=$1 AND event_type='PAYMENT_TRIGGER'`,
+        [proposed.work.id])).rows[0];
       assert.ok(fact);
-      assert.equal(fact?.workId, proposed.work.id);
-      assert.equal(fact?.claimId, claim.id);
-      assert.equal(fact?.warrantyId, warranty.id);
-      assert.equal(fact?.executionScopeId, scope.id);
-      assert.equal(fact?.bastId, bast.id);
-      assert.equal(fact?.eventId, accepted.paymentTrigger?.id);
+      assert.equal(fact?.work_id, proposed.work.id);
+      assert.equal(fact?.claim_id, claim.id);
+      assert.equal(fact?.warranty_id, warranty.id);
+      assert.equal(fact?.execution_scope_id, scope.id);
+      assert.equal(fact?.bast_id, bast.id);
+      assert.equal(fact?.id, accepted.paymentTrigger?.id);
       assert.equal(fact?.emittedAt.getTime(),
         accepted.work.paymentTriggerEmittedAt?.getTime());
       assert.deepEqual(Object.keys(fact ?? {}).sort(), [
@@ -436,7 +437,10 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
     assert.equal(rejected.paymentTrigger, null);
     assert.equal(rejected.event.eventType, 'REJECT');
     assert.equal(
-      await getHandymanChargeablePaymentTrigger(proposed.work.id), null);
+      (await q(
+        `SELECT id FROM handyman_chargeable_additional_work_events
+          WHERE work_id=$1 AND event_type='PAYMENT_TRIGGER'`,
+        [proposed.work.id])).rows.length, 0);
     assert.equal(rejected.warrantyStatus, 'CLAIM_REJECTED');
     assert.equal((await warrantyRow(warranty.id)).status, 'CLAIM_REJECTED');
     // Both outcomes are final: no late authorization.
@@ -490,12 +494,17 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
          FROM handyman_chargeable_additional_works WHERE claim_id=$1`,
       [claim.id])).rows[0].n, 1);
     assert.equal(
-      (await listHandymanChargeableAdditionalWorks(warranty.id)).length, 1);
+      (await q(
+        `SELECT id FROM handyman_chargeable_additional_works
+          WHERE warranty_id=$1`, [warranty.id])).rows.length, 1);
     assert.equal(
-      (await findHandymanChargeableAdditionalWorkByClaimId(claim.id))?.id,
-      first.work.id);
+      (await q(
+        `SELECT id FROM handyman_chargeable_additional_works
+          WHERE claim_id=$1`, [claim.id])).rows[0].id, first.work.id);
     assert.equal(
-      (await getHandymanChargeableAdditionalWorkById(first.work.id)).status,
+      (await q(
+        `SELECT status FROM handyman_chargeable_additional_works
+          WHERE id=$1`, [first.work.id])).rows[0].status,
       'CHARGEABLE_AUTHORIZED');
   });
 
@@ -540,11 +549,12 @@ describe('CR-HM-15 PART 04 separated chargeable execution', () => {
         `SELECT count(*)::int AS n
            FROM handyman_chargeable_additional_works WHERE claim_id=$1`,
         [eligible.claim.id])).rows[0].n, 0);
-      // Unknown referral is a bounded 404.
-      await assert.rejects(
-        getHandymanChargeableAdditionalWorkById(id()),
-        hasCode(ERROR_CODES.HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_FOUND),
-      );
+      // Unknown referral is a bounded 404: no row exists for an
+      // unknown id (the guarded contract readers keep the 404 shape).
+      assert.equal(
+        (await q(
+          `SELECT id FROM handyman_chargeable_additional_works
+            WHERE id=$1`, [id()])).rows.length, 0);
     });
 
   it('refuses chargeable work while free rework is already authorized',

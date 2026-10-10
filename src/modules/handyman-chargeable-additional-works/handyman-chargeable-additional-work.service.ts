@@ -423,54 +423,9 @@ export async function rejectHandymanChargeableAdditionalWork(
   return applyChargeableDecision(actorUserId, input, 'REJECT');
 }
 
-export async function getHandymanChargeableAdditionalWorkById(
-  workIdRaw: string,
-): Promise<HandymanChargeableAdditionalWorkRecord> {
-  const workId = ensureUuid(workIdRaw, 'workId');
-  const work = await handymanChargeableAdditionalWorkRepository.findWorkById(
-    getPool(),
-    workId,
-  );
-  if (!work) throw handymanChargeableAdditionalWorkNotFoundError();
-  return work;
-}
-
-export async function findHandymanChargeableAdditionalWorkByClaimId(
-  claimIdRaw: string,
-): Promise<HandymanChargeableAdditionalWorkRecord | null> {
-  const claimId = ensureUuid(claimIdRaw, 'claimId');
-  return handymanChargeableAdditionalWorkRepository.findWorkByClaimId(
-    getPool(),
-    claimId,
-  );
-}
-
-export async function listHandymanChargeableAdditionalWorks(
-  warrantyIdRaw: string,
-): Promise<HandymanChargeableAdditionalWorkRecord[]> {
-  const warrantyId = ensureUuid(warrantyIdRaw, 'warrantyId');
-  return handymanChargeableAdditionalWorkRepository.listWorksByWarrantyId(
-    getPool(),
-    warrantyId,
-  );
-}
-
 /**
- * The outbound CR-HM-13 seam, READ-ONLY: the emitted payment trigger fact
- * of an authorized chargeable scope, or null when the scope was never
- * authorized. CR-HM-13 owns pricing, ledger, payment and settlement.
+ * The frozen PART 01/04 read surface for the chargeable family is the
+ * guarded HTTP/API contract readers (06D-1) and the lifecycle
+ * commands; the former actor-less read helpers were removed in
+ * CR-HM-SEC-01 PART 07C-2D (dead/actor-less surface, 07C-1 class A).
  */
-export async function getHandymanChargeablePaymentTrigger(
-  workIdRaw: string,
-): Promise<HandymanChargeablePaymentTriggerFact | null> {
-  const workId = ensureUuid(workIdRaw, 'workId');
-  const work = await handymanChargeableAdditionalWorkRepository.findWorkById(
-    getPool(),
-    workId,
-  );
-  if (!work) throw handymanChargeableAdditionalWorkNotFoundError();
-  return handymanChargeableAdditionalWorkRepository.findPaymentTriggerForWork(
-    getPool(),
-    workId,
-  );
-}
