@@ -8,7 +8,7 @@ import {
 import {
   computeEvidenceSha256,
 } from '../evidence/evidence-integrity';
-import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanServiceRequestRepository } from '../handyman-requests';
 import {
   handymanIntakeEvidenceNotIntakeError,
@@ -96,14 +96,16 @@ export async function recordHandymanIntakeEvidence(
   if (request.status !== 'INTAKE') {
     throw handymanIntakeEvidenceNotIntakeError();
   }
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      request.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 02 — BE-02G exact-Building guard on the
+  // authoritative parent request chain (migration 0378: the request's
+  // building_id is server-derived and NOT NULL), replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not open the upload. Authorization runs
+  // before MIME/size validation, the storage write and the DB insert.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
 
   // 2) Bounded kind policy (PHOTO = existing safe semantics; VIDEO =
   //    explicit Handyman allowlist, frozen D2).
@@ -185,14 +187,13 @@ export async function listHandymanIntakeEvidence(
     handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      request.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 02 — BE-02G exact-Building guard on the parent
+  // request chain, replacing the client-level canAccessClient shortcut:
+  // no sibling-building evidence metadata leakage.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const records = await handymanIntakeEvidenceRepository.listForRequest(
     undefined,
     request.id,

@@ -544,6 +544,14 @@ describe('CR-HM-07 PART 03B — building geofence policy + signal', () => {
       code: `B_${suffix()}`,
       name: 'Other Building',
     });
+    // CR-HM-SEC-02 PART 05 (D5): saving a per-Building policy requires
+    // the BE-02G exact-Building guard — the operator needs an explicit
+    // ACTIVE assignment to THAT building (no same-Client shortcut). The
+    // test's intent (policy selection by snapshot building only) is
+    // unchanged.
+    await buildingAssignmentService.createAssignment(adminUserId, {
+      buildingId: otherBuilding.id,
+    });
     const otherPolicy = await saveHandymanBuildingGeospatialPolicy(
       policyInput(otherBuilding.id, { geofenceRadiusMeters: 3_000 }),
       adminUserId,

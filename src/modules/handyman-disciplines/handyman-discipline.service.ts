@@ -97,35 +97,16 @@ export async function associateHandymanDisciplineToServiceCatalog(
   }
 }
 
-/** Read the association for one catalogue entry (same client scope check). */
-export async function getHandymanDisciplineAssociation(
-  serviceCatalogId: string,
-  actorUserId: string,
-): Promise<HandymanDisciplineServiceAssociationRecord> {
-  if (!isValidUuid(serviceCatalogId) || !isValidUuid(actorUserId)) {
-    throw AppError.validation('Request validation failed.', [
-      { field: 'serviceCatalogId', message: 'serviceCatalogId must be a valid UUID.' },
-    ]);
-  }
-  const association = await handymanDisciplineRepository.findAssociationByCatalog(
-    undefined,
-    serviceCatalogId,
-  );
-  if (!association) {
-    throw AppError.notFound('Discipline association not found.');
-  }
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      association.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
-  return association;
-}
+// CR-HM-SEC-02 PART 05 (dead-helper hygiene): the
+// `getHandymanDisciplineAssociation` service entry point is removed —
+// it had ZERO callers across src/ and tests/ (verified: only this
+// module's own re-exports referenced it). The association itself stays
+// client-scoped-only (frozen D6): `associateHandymanDisciplineToServiceCatalog`
+// keeps its contractual client-level authority and gains NO building
+// scope. The repository functionality used by request diagnosis
+// (`findDisciplineById`, `findAssociationByCatalog`) is preserved
+// unchanged.
 
 export const handymanDisciplineService = {
   associateHandymanDisciplineToServiceCatalog,
-  getHandymanDisciplineAssociation,
 };
