@@ -447,21 +447,36 @@ describe('CR-HM-05 PART 03 — permit readiness', () => {
     assert.equal(
       await tableCount('handyman_permit_readiness'), beforeRows + 1);
     assert.equal(await tableCount('operational_events'), beforeEv + 2);
+    // W01 PART 04: order-independent journal assertion. operational_events
+    // created_at defaults to NOW() (transaction start), so CREATED/SUPERSEDED
+    // written in one transaction tie and an ORDER BY id tie-break is random.
+    // Assert the same event types, the entity references, and the supersession
+    // link instead of the sequence.
     const events = await q(
-      `SELECT event_type FROM operational_events
+      `SELECT event_type, entity_id, metadata FROM operational_events
        WHERE entity_type = 'HANDYMAN_PERMIT_READINESS'
-         AND metadata->>'handymanRequestId' = $1
-       ORDER BY created_at ASC, id ASC`,
+         AND metadata->>'handymanRequestId' = $1`,
       [f.request.id],
     );
     assert.deepEqual(
-      events.rows.map((r) => r.event_type),
+      events.rows.map((r) => r.event_type).sort(),
       [
         'HANDYMAN_PERMIT_READINESS_CREATED',
-        'HANDYMAN_PERMIT_READINESS_SUPERSEDED',
         'HANDYMAN_PERMIT_READINESS_CREATED',
-      ],
+        'HANDYMAN_PERMIT_READINESS_SUPERSEDED',
+      ].sort(),
     );
+    const supersededEvents = events.rows.filter(
+      (r) => r.event_type === 'HANDYMAN_PERMIT_READINESS_SUPERSEDED');
+    assert.equal(supersededEvents.length, 1);
+    assert.equal(supersededEvents[0].entity_id, created.id);
+    const createdEntityIds = events.rows
+      .filter((r) => r.event_type === 'HANDYMAN_PERMIT_READINESS_CREATED')
+      .map((r) => r.entity_id);
+    assert.ok(createdEntityIds.includes(created.id));
+    const successorId = createdEntityIds.find((id) => id !== created.id);
+    assert.ok(successorId, 'successor CREATED event references the new row');
+    assert.equal(supersededEvents[0].metadata.supersededByReadinessId, successorId);
   });
 
   it('10: FM permits/work-orders + arrival/attendance/session surfaces unchanged', async (t) => {

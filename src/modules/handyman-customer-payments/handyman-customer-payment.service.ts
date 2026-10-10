@@ -12,6 +12,7 @@ import {
   handymanCustomerPaymentConflictError,
   handymanCustomerPaymentInvalidError,
   handymanCustomerPaymentNotFoundError,
+  handymanCustomerPaymentSelfVerificationError,
 } from './handyman-customer-payment.errors';
 import { handymanCustomerPaymentRepository }
   from './handyman-customer-payment.repository';
@@ -289,6 +290,12 @@ async function decide(
       // Cross-transaction / cross-client identity is never resolved
       // into a foreign payment fact: bounded 404 instead.
       throw handymanCustomerPaymentNotFoundError();
+    }
+    // PART 04 maker-checker (identity-based): the recorder of this claim
+    // may never be its verifier. Checked before replay so no decision by
+    // the recorder can ever be produced or replayed.
+    if (current.recordedByUserId === actorUuid) {
+      throw handymanCustomerPaymentSelfVerificationError();
     }
     const eventType = decision === 'CONFIRMED'
       ? 'CONFIRM_PAYMENT'

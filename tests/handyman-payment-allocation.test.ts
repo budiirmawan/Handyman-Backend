@@ -185,6 +185,14 @@ async function allocationFixture(options: {
   await buildingAssignmentService.createAssignment(actor.id, {
     buildingId: realm.building.id,
   });
+  // PART 04 maker-checker: confirm/reject by a DIFFERENT identity.
+  const verifier = await userService.createUser({
+    email: `alloc-verifier-${randomUUID().slice(0, 8)}@example.com`,
+    displayName: 'Allocation Verifier',
+  });
+  await buildingAssignmentService.createAssignment(verifier.id, {
+    buildingId: realm.building.id,
+  });
   const outsider = await userService.createUser({
     email: `alloc-outsider-${randomUUID().slice(0, 8)}@example.com`,
     displayName: 'Allocation Outsider',
@@ -225,7 +233,7 @@ async function allocationFixture(options: {
       executionScopeId: scope.id,
       paymentId,
       idempotencyKey: key(),
-    }, actor.id);
+    }, verifier.id);
     paymentId = confirmed.payment.id;
   } else if (status === 'REJECTED') {
     const rejected = await rejectHandymanCustomerPayment({
@@ -233,7 +241,7 @@ async function allocationFixture(options: {
       paymentId,
       reason: 'unverifiable claim',
       idempotencyKey: key(),
-    }, actor.id);
+    }, verifier.id);
     paymentId = rejected.payment.id;
   }
 
@@ -252,6 +260,7 @@ async function allocationFixture(options: {
     paymentStatus: status,
     paymentAmount: recorded.payment.amount,
     actorUserId: actor.id,
+    verifierUserId: verifier.id,
     outsiderUserId: outsider.id,
   };
 }
@@ -552,7 +561,7 @@ describe('CR-HM-13 PART 04 — payment allocation', () => {
       executionScopeId: f.executionScopeId,
       paymentId: recorded.payment.id,
       idempotencyKey: key(),
-    }, f.actorUserId);
+    }, f.verifierUserId);
     const second = await allocateHandymanCustomerPayment({
       executionScopeId: f.executionScopeId,
       paymentId: recorded.payment.id,
@@ -578,7 +587,7 @@ describe('CR-HM-13 PART 04 — payment allocation', () => {
       executionScopeId: f.executionScopeId,
       paymentId: thirdRecord.payment.id,
       idempotencyKey: key(),
-    }, f.actorUserId);
+    }, f.verifierUserId);
     await assert.rejects(
       () => allocateHandymanCustomerPayment({
         executionScopeId: f.executionScopeId,

@@ -322,9 +322,11 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
 
     const financialBefore = await fingerprints('financial');
     // A local Customer Care session is separate from attested BM provenance.
-    const cc = await scopedSession(realm.building.id, ['tenant_company.read', 'tenant_company.manage']);
+    const cc = await scopedSession(realm.building.id, ['tenant_company.read', 'tenant_company.manage', 'handyman.payment.report']);
     const ccReadManageToken = cc.token;
     const ccUserId = cc.userId;
+    // PART 04: verification by a different identity holding handyman.payment.verify.
+    const payVerifier = await scopedSession(realm.building.id, ['tenant_company.read', 'handyman.payment.verify']);
 
     // Represented tenant context (distinct from Customer Care actor)
     const company = await tenantCompanyService.createTenantCompany(
@@ -846,7 +848,7 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
       .post(
         `/api/v1/handyman/execution-scopes/${scope.id}/customer-payments/${paymentId}/confirm`,
       )
-      .set('Authorization', `Bearer ${ccReadManageToken}`)
+      .set('Authorization', `Bearer ${payVerifier.token}`)
       .send({
         idempotencyKey: `pay-conf-${id()}`,
       });
@@ -1094,10 +1096,11 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
     assert.deepEqual(await fingerprints(), before, 'GET/denied access must not write Handyman or shared SLA state');
   });
 
-  it('certifies manage-only customer commands, read-only and foreign-client command denial, and Lead/provider/FM/SaaS/CR-HM-14 command firewalls', async () => {
+  it('certifies split payment report/verify commands, read-only and foreign-client command denial, and Lead/provider/FM/SaaS/CR-HM-14 command firewalls', async () => {
     assert.ok(journey);
     const reader = await scopedSession(journey.buildingId, ['tenant_company.read']);
-    const manager = await scopedSession(journey.buildingId, ['tenant_company.manage']);
+    const reporter = await scopedSession(journey.buildingId, ['handyman.payment.report']);
+    const verifier = await scopedSession(journey.buildingId, ['handyman.payment.verify']);
     const foreignRealm = await realmFixture();
     const foreign = await scopedSession(foreignRealm.building.id, ['tenant_company.read', 'tenant_company.manage']);
     const root = `/api/v1/handyman/execution-scopes/${journey.scopeId}`;
@@ -1154,12 +1157,12 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
     // Positive manage-only path: no implicit read grant, no internal money writer.
     const financialBefore = await fingerprints('financial');
     const pending = await customerPost('/handyman/execution-scopes/{executionScopeId}/customer-payments',
-      `${root}/customer-payments`, manager.token,
+      `${root}/customer-payments`, reporter.token,
       { amount: '10.00', channel: 'CASH', idempotencyKey: `manage-${id()}` });
     assert.equal(pending.payment.status, 'PENDING');
-    assert.equal(pending.payment.recordedByUserId, manager.userId);
+    assert.equal(pending.payment.recordedByUserId, reporter.userId);
     const rejected = await customerPost('/handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/reject',
-      `${root}/customer-payments/${pending.payment.id}/reject`, manager.token,
+      `${root}/customer-payments/${pending.payment.id}/reject`, verifier.token,
       { reason: 'Certification of manage boundary', idempotencyKey: `reject-${id()}` });
     assert.equal(rejected.payment.status, 'REJECTED');
     assert.deepEqual(await fingerprints('financial'), financialBefore);

@@ -213,6 +213,16 @@ function rejectsDb(pattern: RegExp) {
 }
 
 /** One ledger transaction (charge lines, payment, allocations). */
+/** PART 04 maker-checker: a verifier identity distinct from the recorder. */
+async function createVerifierFor(buildingId: string): Promise<string> {
+  const verifier = await userService.createUser({
+    email: `ledger-verifier-${randomUUID().slice(0, 8)}@example.com`,
+    displayName: 'Ledger Verifier',
+  });
+  await buildingAssignmentService.createAssignment(verifier.id, { buildingId });
+  return verifier.id;
+}
+
 async function scopeLedger(
   realm: Awaited<ReturnType<typeof realmFixture>>,
   chain: Awaited<ReturnType<typeof locationChain>>,
@@ -220,6 +230,7 @@ async function scopeLedger(
   options: LedgerOptions = {},
 ) {
   const f = await scopeFixture(realm, chain);
+  const verifierUserId = await createVerifierFor(realm.building.id);
   assert.ok(f.scope, 'approved scope required');
   const scope = f.scope!;
   const versionId = scope.approvedQuotationVersionId;
@@ -289,7 +300,7 @@ async function scopeLedger(
         executionScopeId: scope.id,
         paymentId,
         idempotencyKey: key(),
-      }, actorUserId);
+      }, verifierUserId);
       const allocations = options.allocations ?? [
         { line: 'LABOR' as const, amount: '40.00' },
         { line: 'MATERIAL' as const, amount: '30.00' },
@@ -582,7 +593,7 @@ describe('CR-HM-13 PART 06 — published read contract + firewall verification',
       executionScopeId: pending.executionScopeId,
       paymentId: pending.paymentId!,
       idempotencyKey: key(),
-    }, pending.actorUserId);
+    }, await createVerifierFor(pending.realm.building.id));
     const after = await readHandymanLedgerTransactionAt(
       pending.executionScopeId, pending.actorUserId,
     );

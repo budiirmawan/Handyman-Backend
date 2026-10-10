@@ -401,7 +401,12 @@ async function laborLineId(scope: { approvedQuotationVersionId: string }) {
  * Full funded ledger chain: open transaction → compose LABOR charge
  * line (100.00 IDR) → record + confirm a 100.00 payment.
  */
-async function fundedLedger(scopeId: string, lineId: string, staff: string) {
+async function fundedLedger(
+  scopeId: string,
+  lineId: string,
+  staff: string,
+  verifier: string,
+) {
   await openHandymanCustomerTransaction({
     executionScopeId: scopeId,
     idempotencyKey: `open-${randomUUID()}`,
@@ -421,7 +426,7 @@ async function fundedLedger(scopeId: string, lineId: string, staff: string) {
     executionScopeId: scopeId,
     paymentId: recorded.payment.id,
     idempotencyKey: `confirm-${randomUUID()}`,
-  }, staff);
+  }, verifier);
   return {
     chargeLineId: composed.chargeLine.id,
     paymentId: confirmed.payment.id,
@@ -434,9 +439,11 @@ describe('CR-HM-SEC-01 PART 06F-1 — payment allocation building-scope guard', 
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
+    // PART 04 maker-checker: a different identity verifies in the same building.
+    const verifier = await staffActor(realm.buildingA1.id);
     const lineId = await laborLineId(scope);
     const { chargeLineId, paymentId } =
-      await fundedLedger(scope.id, lineId, staff);
+      await fundedLedger(scope.id, lineId, staff, verifier);
 
     // ALLOCATE — append-only allocation fact + derived remainders.
     const allocateKey = `alloc-${randomUUID()}`;
@@ -493,9 +500,11 @@ describe('CR-HM-SEC-01 PART 06F-1 — payment allocation building-scope guard', 
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
+    // PART 04 maker-checker: a different identity verifies in the same building.
+    const verifier = await staffActor(realm.buildingA1.id);
     const lineId = await laborLineId(scope);
     const { chargeLineId, paymentId } =
-      await fundedLedger(scope.id, lineId, staff);
+      await fundedLedger(scope.id, lineId, staff, verifier);
     // Seed a lawful allocation so the denial is provably the access
     // wall, not an empty projection.
     await allocateHandymanCustomerPayment({

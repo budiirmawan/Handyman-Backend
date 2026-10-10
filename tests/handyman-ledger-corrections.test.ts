@@ -202,6 +202,14 @@ async function correctionFixture(options: {
   await buildingAssignmentService.createAssignment(actor.id, {
     buildingId: realm.building.id,
   });
+  // PART 04 maker-checker: confirm/reject by a DIFFERENT identity.
+  const verifier = await userService.createUser({
+    email: `corr-verifier-${randomUUID().slice(0, 8)}@example.com`,
+    displayName: 'Correction Verifier',
+  });
+  await buildingAssignmentService.createAssignment(verifier.id, {
+    buildingId: realm.building.id,
+  });
   const outsider = await userService.createUser({
     email: `corr-outsider-${randomUUID().slice(0, 8)}@example.com`,
     displayName: 'Correction Outsider',
@@ -235,7 +243,7 @@ async function correctionFixture(options: {
     executionScopeId: scope.id,
     paymentId: recorded.payment.id,
     idempotencyKey: key(),
-  }, actor.id);
+  }, verifier.id);
 
   let allocationId: string | null = null;
   if (options.allocate !== false) {

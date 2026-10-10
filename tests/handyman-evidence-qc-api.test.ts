@@ -683,4 +683,27 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
         assert.equal(metErr(res), 'PERMISSION_DENIED', url);
       }
     });
+  it('W01 PART 04: Crew Lead of scope A is denied reads AND writes on scope B (cross-scope), while own scope still works',
+    async (t: TestContext) => {
+      if (!requireDatabase(t)) return;
+      const a = await leadFixture();
+      const b = await leadFixture();
+      assert.notEqual(a.scope.id, b.scope.id);
+      // Positive control: Lead A reads its own scope.
+      const own = await authed(a.token)('get', qcBase(a.scope.id)).send({});
+      assert.equal(own.status, 200);
+      // Cross-scope read: Lead A on scope B → denied (no assignment there).
+      for (const url of [evidenceBase(b.scope.id), qcBase(b.scope.id), defectBase(b.scope.id)]) {
+        const res = await authed(a.token)('get', url).send({});
+        assert.equal(res.status, 403, url);
+        assert.equal(metErr(res), 'PERMISSION_DENIED', url);
+      }
+      // Cross-scope write: Lead A opens evidence on scope B → denied.
+      const write = await postWith(a.token)(evidenceBase(b.scope.id), {
+        stage: 'BEFORE', idempotencyKey: `k-${randomUUID()}`,
+      });
+      assert.ok(write.status >= 400, `cross-scope write must be denied, got ${write.status}`);
+      assert.notEqual(write.status, 201);
+      assert.notEqual(write.status, 200);
+    });
 });

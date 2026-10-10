@@ -162,6 +162,15 @@ async function paymentFixture(options: { open?: boolean } = {}) {
     email: `payment-outsider-${randomUUID().slice(0, 8)}@example.com`,
     displayName: 'Payment Outsider',
   });
+  // PART 04 maker-checker: verification is performed by a DIFFERENT actor
+  // identity (the recorder `actor` may never confirm/reject its own claim).
+  const verifier = await userService.createUser({
+    email: `payment-verifier-${randomUUID().slice(0, 8)}@example.com`,
+    displayName: 'Payment Verifier',
+  });
+  await buildingAssignmentService.createAssignment(verifier.id, {
+    buildingId: realm.building.id,
+  });
 
   if (options.open === false) {
     // A scope whose ledger transaction was never opened: the lawful
@@ -173,6 +182,7 @@ async function paymentFixture(options: { open?: boolean } = {}) {
       chargeLineId: null as string | null,
       chargeAmount: null as string | null,
       actorUserId: actor.id,
+      verifierUserId: verifier.id,
       outsiderUserId: outsider.id,
     };
   }
@@ -194,6 +204,7 @@ async function paymentFixture(options: { open?: boolean } = {}) {
     chargeLineId: charge.chargeLine.id,
     chargeAmount: charge.chargeLine.amount,
     actorUserId: actor.id,
+    verifierUserId: verifier.id,
     outsiderUserId: outsider.id,
   };
 }
@@ -430,11 +441,11 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
       executionScopeId: f.executionScopeId,
       paymentId: pending.payment.id,
       idempotencyKey: confirmKey,
-    }, f.actorUserId);
+    }, f.verifierUserId);
     assert.equal(confirmed.replayed, false);
     assert.equal(confirmed.payment.status, 'CONFIRMED');
     assert.ok(confirmed.payment.decidedAt, 'decided_at is server-set');
-    assert.equal(confirmed.payment.decidedByUserId, f.actorUserId);
+    assert.equal(confirmed.payment.decidedByUserId, f.verifierUserId);
     assert.equal(confirmed.payment.rejectionReason, null);
     assert.equal(confirmed.event.eventType, 'CONFIRM_PAYMENT');
     // Only now is the fact authoritative received funds.
@@ -451,7 +462,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
       executionScopeId: f.executionScopeId,
       paymentId: pending.payment.id,
       idempotencyKey: confirmKey,
-    }, f.actorUserId);
+    }, f.verifierUserId);
     assert.equal(replay.replayed, true);
     assert.equal(replay.payment.status, 'CONFIRMED');
     assert.equal(replay.event.id, confirmed.event.id);
@@ -461,7 +472,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
         executionScopeId: f.executionScopeId,
         paymentId: pending.payment.id,
         idempotencyKey: key(),
-      }, f.actorUserId),
+      }, f.verifierUserId),
       rejectsConflict(),
     );
     await assert.rejects(
@@ -470,7 +481,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
         paymentId: pending.payment.id,
         reason: 'late rejection attempt',
         idempotencyKey: key(),
-      }, f.actorUserId),
+      }, f.verifierUserId),
       rejectsConflict(),
     );
     // A rejection is terminal in the same way, and requires a reason.
@@ -486,7 +497,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
         paymentId: second.payment.id,
         reason: '   ',
         idempotencyKey: key(),
-      }, f.actorUserId),
+      }, f.verifierUserId),
       rejectsInvalid(),
     );
     await assert.rejects(
@@ -495,7 +506,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
         paymentId: second.payment.id,
         reason: 'z'.repeat(201),
         idempotencyKey: key(),
-      }, f.actorUserId),
+      }, f.verifierUserId),
       rejectsInvalid(),
     );
     const rejected = await rejectHandymanCustomerPayment({
@@ -503,7 +514,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
       paymentId: second.payment.id,
       reason: 'unverifiable claim',
       idempotencyKey: key(),
-    }, f.actorUserId);
+    }, f.verifierUserId);
     assert.equal(rejected.payment.status, 'REJECTED');
     assert.equal(rejected.payment.rejectionReason, 'unverifiable claim');
     assert.equal(rejected.event.eventType, 'REJECT_PAYMENT');
@@ -523,7 +534,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
         executionScopeId: other.executionScopeId,
         paymentId: pending.payment.id,
         idempotencyKey: key(),
-      }, other.actorUserId),
+      }, other.verifierUserId),
       rejectsNotFound(),
     );
   });
@@ -640,7 +651,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
       executionScopeId: f.executionScopeId,
       paymentId,
       idempotencyKey: key(),
-    }, f.actorUserId);
+    }, f.verifierUserId);
     await assert.rejects(
       () => q(
         `UPDATE handyman_customer_payments

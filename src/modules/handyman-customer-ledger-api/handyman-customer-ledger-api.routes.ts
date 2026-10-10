@@ -22,14 +22,20 @@ import {
  *   POST /handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/reject
  *
  * Reads require `tenant_company.read` + `canAccessClient`.
- * Payment commands require `tenant_company.manage` + `canAccessClient`
- * + single-use `idempotencyKey`.
+ * Payment reporting (POST customer-payments) requires
+ * `handyman.payment.report` + `canAccessClient` + `idempotencyKey`.
+ * Payment verification (POST .../confirm, POST .../reject) requires
+ * `handyman.payment.verify` + `canAccessClient` + `idempotencyKey`, and the
+ * verifier must not be the recorder of that payment (maker-checker).
  */
 export function createHandymanCustomerLedgerApiRouter(): Router {
   const router = Router();
   const auth = authenticationMiddleware;
   const read = requirePermission('tenant_company.read');
-  const manage = requirePermission('tenant_company.manage');
+  // PART 04: payment reporting and payment verification are separate
+  // explicit permissions. tenant_company.manage no longer authorizes either.
+  const report = requirePermission('handyman.payment.report');
+  const verify = requirePermission('handyman.payment.verify');
 
   router.get(
     '/handyman/execution-scopes/:executionScopeId/customer-ledger',
@@ -52,19 +58,19 @@ export function createHandymanCustomerLedgerApiRouter(): Router {
   router.post(
     '/handyman/execution-scopes/:executionScopeId/customer-payments',
     auth,
-    manage,
+    report,
     postRecordCustomerPaymentHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/confirm',
     auth,
-    manage,
+    verify,
     postConfirmCustomerPaymentHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/reject',
     auth,
-    manage,
+    verify,
     postRejectCustomerPaymentHandler,
   );
 

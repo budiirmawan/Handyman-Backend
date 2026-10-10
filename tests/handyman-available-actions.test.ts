@@ -73,9 +73,15 @@ describe('CR-HM-17 P1 FIX02 — B6 payment availableActions', () => {
     'PENDING', 'CONFIRMED', 'REJECTED',
   ];
 
-  it('PENDING → CONFIRM and REJECT', () => {
-    const actions = computePaymentAvailableActions('PENDING');
+  it('PENDING → CONFIRM and REJECT only for an explicit verifier (PART 04)', () => {
+    const actions = computePaymentAvailableActions('PENDING', true);
     assert.deepEqual([...actions], ['CONFIRM', 'REJECT']);
+  });
+
+  it('PENDING → no verification action for a Customer Care reporter (PART 04)', () => {
+    // Default is fail-closed: reporting authority never offers CONFIRM/REJECT.
+    assert.deepEqual([...computePaymentAvailableActions('PENDING')], []);
+    assert.deepEqual([...computePaymentAvailableActions('PENDING', false)], []);
   });
 
   it('CONFIRMED → no actions (terminal)', () => {
@@ -90,7 +96,7 @@ describe('CR-HM-17 P1 FIX02 — B6 payment availableActions', () => {
 
   it('only PENDING status has non-empty actions', () => {
     for (const status of allStatuses) {
-      const actions = computePaymentAvailableActions(status);
+      const actions = computePaymentAvailableActions(status, true);
       if (status === 'PENDING') {
         assert.ok(actions.length > 0, `PENDING should have actions`);
       } else {
@@ -228,9 +234,9 @@ describe('CR-HM-17 P1 FIX02 — authority preservation', () => {
   });
 
   it('B6: no new lifecycle rules (only status-derived)', () => {
-    // PENDING is the only status where Customer Care can decide
+    // PENDING is the only status where a verifier can decide
     // This matches CR-HM-13 PART 03 payment decision authority
-    const actions = computePaymentAvailableActions('PENDING');
+    const actions = computePaymentAvailableActions('PENDING', true);
     assert.ok(actions.includes('CONFIRM'));
     assert.ok(actions.includes('REJECT'));
     assert.equal(actions.length, 2);

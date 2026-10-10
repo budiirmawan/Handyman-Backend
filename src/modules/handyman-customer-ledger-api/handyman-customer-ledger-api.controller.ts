@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
+import { permissionService } from '../permissions';
 import {
   readHandymanLedgerClientBasisAt,
   readHandymanLedgerTransactionAt,
@@ -242,7 +243,23 @@ function toClientBasisReadPayload(read: HandymanLedgerClientBasisRead) {
   };
 }
 
-function toPaymentRecordPayload(payment: HandymanCustomerPaymentRecord) {
+/**
+ * PART 04: the viewer decides which verification actions are offered.
+ * `canVerify` is the explicit `handyman.payment.verify` permission; the
+ * recorder of a payment never receives verification actions for it.
+ */
+type PaymentViewer = { userId: string; canVerify: boolean };
+
+async function paymentViewer(req: Request): Promise<PaymentViewer> {
+  const userId = actor(req);
+  const permissions = await permissionService.resolvePermissionsForUser(userId);
+  return { userId, canVerify: permissions.includes('handyman.payment.verify') };
+}
+
+function toPaymentRecordPayload(
+  payment: HandymanCustomerPaymentRecord,
+  viewer: PaymentViewer,
+) {
   return {
     id: payment.id,
     clientId: payment.clientId,
@@ -260,7 +277,10 @@ function toPaymentRecordPayload(payment: HandymanCustomerPaymentRecord) {
     decidedByUserId: payment.decidedByUserId,
     rejectionReason: payment.rejectionReason,
     createdAt: payment.createdAt,
-    availableActions: computePaymentAvailableActions(payment.status),
+    availableActions: computePaymentAvailableActions(
+      payment.status,
+      viewer.canVerify && payment.recordedByUserId !== viewer.userId,
+    ),
   };
 }
 
@@ -280,9 +300,10 @@ function toPaymentEventPayload(event: HandymanCustomerPaymentEventRecord) {
 
 function toPaymentCommandPayload(
   result: HandymanCustomerPaymentCommandResult,
+  viewer: PaymentViewer,
 ) {
   return {
-    payment: toPaymentRecordPayload(result.payment),
+    payment: toPaymentRecordPayload(result.payment, viewer),
     event: toPaymentEventPayload(result.event),
     replayed: result.replayed,
   };
@@ -336,15 +357,18 @@ export async function getExecutionScopeCustomerPaymentsHandler(
     const executionScopeId = parseCustomerLedgerScopeParam(
       p(req.params.executionScopeId),
     );
+    const viewer = await paymentViewer(req);
     const payments = await listHandymanCustomerPayments(
       executionScopeId,
-      actor(req),
+      viewer.userId,
     );
     sendSuccess(
       res,
       {
         executionScopeId,
-        payments: payments.map(toPaymentRecordPayload),
+        payments: payments.map((payment) =>
+          toPaymentRecordPayload(payment, viewer),
+        ),
       },
       200,
     );
@@ -375,7 +399,7 @@ export async function postRecordCustomerPaymentHandler(
       },
       actor(req),
     );
-    sendSuccess(res, toPaymentCommandPayload(result), 200);
+    sendSuccess(res, toPaymentCommandPayload(result, await paymentViewer(req)), 200);
   } catch (error) {
     next(error);
   }
@@ -400,7 +424,7 @@ export async function postConfirmCustomerPaymentHandler(
       },
       actor(req),
     );
-    sendSuccess(res, toPaymentCommandPayload(result), 200);
+    sendSuccess(res, toPaymentCommandPayload(result, await paymentViewer(req)), 200);
   } catch (error) {
     next(error);
   }
@@ -426,7 +450,7 @@ export async function postRejectCustomerPaymentHandler(
       },
       actor(req),
     );
-    sendSuccess(res, toPaymentCommandPayload(result), 200);
+    sendSuccess(res, toPaymentCommandPayload(result, await paymentViewer(req)), 200);
   } catch (error) {
     next(error);
   }

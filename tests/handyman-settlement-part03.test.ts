@@ -1,3 +1,4 @@
+import { buildingAssignmentService } from '../src/modules/building-assignments';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
@@ -36,6 +37,8 @@ Object.assign(process.env, { NODE_ENV:'test', LOG_LEVEL:'error',
 let pg: EmbeddedPostgres;
 let pool: Pool;
 let actor: string;
+// PART 04 maker-checker: confirm/reject by a DIFFERENT identity.
+let verifier: string;
 const id = () => randomUUID();
 const q = (sql: string, params: unknown[] = []) => pool.query(sql,params);
 before(async () => {
@@ -50,6 +53,7 @@ before(async () => {
   const config = await ensureTestDatabase(); assert.ok(config);
   pool = await initDatabase(config); await migrateUp(pool);
   actor = (await createAdminUser()).userId;
+  verifier = (await createAdminUser()).userId;
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(
     undefined,'GENERAL_HANDYMAN');
   assert.ok(discipline);
@@ -62,6 +66,8 @@ after(async () => {
 
 async function fixture() {
   const { realm, scope } = await baseFixture();
+  // PART 04: the separate verifier holds the scope Building (exact-Building wall).
+  await buildingAssignmentService.createAssignment(verifier, { buildingId: realm.building.id });
   const crew = await crewFixture(realm);
   await assignHandymanExecutionScopeCrew({executionScopeId:scope.id,
     providerContextId:crew.providerContext.id,crewId:crew.crew.id},actor);
@@ -101,7 +107,7 @@ async function fund(scopeId: string, amount: string) {
     idempotencyKey:id(),
   },actor);
   await confirmHandymanCustomerPayment({executionScopeId:scopeId,
-    paymentId:payment.payment.id,idempotencyKey:id()},actor);
+    paymentId:payment.payment.id,idempotencyKey:id()},verifier);
   await allocateHandymanCustomerPayment({executionScopeId:scopeId,
     paymentId:payment.payment.id,
     chargeLineId:(await q(`SELECT id FROM handyman_charge_lines

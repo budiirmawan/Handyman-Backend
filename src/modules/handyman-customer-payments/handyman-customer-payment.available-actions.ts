@@ -21,10 +21,18 @@ export type HandymanCustomerPaymentAvailableAction =
   | 'CONFIRM'
   | 'REJECT';
 
+/**
+ * PART 04: CONFIRM/REJECT are verification actions. They are offered ONLY
+ * when the viewer holds the explicit `handyman.payment.verify` permission
+ * AND is not the recorder of this payment (maker-checker). Default is
+ * fail-closed: no verification action is offered without `canVerify`.
+ * Reporting (RECORD) is never an available action of a payment.
+ */
 export function computePaymentAvailableActions(
   status: HandymanCustomerPaymentStatus,
+  canVerify: boolean = false,
 ): readonly HandymanCustomerPaymentAvailableAction[] {
-  if (status === 'PENDING') {
+  if (status === 'PENDING' && canVerify) {
     return ['CONFIRM', 'REJECT'] as const;
   }
   return [] as const;

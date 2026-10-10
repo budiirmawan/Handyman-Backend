@@ -261,6 +261,14 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       { code: 'tenant_company.read', name: 'Read tenant company' },
     ]);
 
+    // PART 04 maker-checker: confirm by a DIFFERENT identity in the same Building.
+    const verifier = await userService.createUser({
+      email: `care-verifier-${randomUUID().slice(0, 8)}@example.com`,
+      displayName: 'Care Verifier',
+    });
+    await buildingAssignmentService.createAssignment(verifier.id, {
+      buildingId: f.buildingId,
+    });
     const recorded = await recordHandymanCustomerPayment(
       {
         executionScopeId: f.executionScopeId,
@@ -279,7 +287,7 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
         paymentId: recorded.payment.id,
         idempotencyKey: key(),
       },
-      adminUserId,
+      verifier.id,
     );
     const allocLabor = await allocateHandymanCustomerPayment(
       {
@@ -498,7 +506,13 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
     const f = await setupScopeLedgerFixture();
     const careManager = await createCustomerCareActor(f.buildingId, [
       { code: 'tenant_company.read', name: 'Read tenant company' },
-      { code: 'tenant_company.manage', name: 'Manage tenant company' },
+      { code: 'handyman.payment.report', name: 'Report handyman customer payment' },
+    ]);
+    // PART 04: verification is an explicit permission held by a DIFFERENT
+    // identity than the reporter (maker-checker, RBAC separation).
+    const payVerifier = await createCustomerCareActor(f.buildingId, [
+      { code: 'tenant_company.read', name: 'Read tenant company' },
+      { code: 'handyman.payment.verify', name: 'Verify handyman customer payment' },
     ]);
 
     const recordKey = key();
@@ -564,19 +578,19 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       .post(
         `/api/v1/handyman/execution-scopes/${f.executionScopeId}/customer-payments/${payment1Id}/confirm`,
       )
-      .set('Authorization', `Bearer ${careManager.token}`)
+      .set('Authorization', `Bearer ${payVerifier.token}`)
       .send({ idempotencyKey: confirmKey });
     assert.equal(confirmRes.status, 200);
     assert.equal(confirmRes.body.data.replayed, false);
     assert.equal(confirmRes.body.data.payment.status, 'CONFIRMED');
-    assert.equal(confirmRes.body.data.payment.decidedByUserId, careManager.userId);
+    assert.equal(confirmRes.body.data.payment.decidedByUserId, payVerifier.userId);
     assert.equal(confirmRes.body.data.event.eventType, 'CONFIRM_PAYMENT');
 
     const replayConfirm = await api()
       .post(
         `/api/v1/handyman/execution-scopes/${f.executionScopeId}/customer-payments/${payment1Id}/confirm`,
       )
-      .set('Authorization', `Bearer ${careManager.token}`)
+      .set('Authorization', `Bearer ${payVerifier.token}`)
       .send({ idempotencyKey: confirmKey });
     assert.equal(replayConfirm.status, 200);
     assert.equal(replayConfirm.body.data.replayed, true);
@@ -585,7 +599,7 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       .post(
         `/api/v1/handyman/execution-scopes/${f.executionScopeId}/customer-payments/${payment1Id}/reject`,
       )
-      .set('Authorization', `Bearer ${careManager.token}`)
+      .set('Authorization', `Bearer ${payVerifier.token}`)
       .send({ idempotencyKey: key(), reason: 'late reject attempt' });
     assert.equal(rejectAfterConfirm.status, 409);
 
@@ -606,7 +620,7 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       .post(
         `/api/v1/handyman/execution-scopes/${f.executionScopeId}/customer-payments/${payment2Id}/reject`,
       )
-      .set('Authorization', `Bearer ${careManager.token}`)
+      .set('Authorization', `Bearer ${payVerifier.token}`)
       .send({
         idempotencyKey: rejectKey,
         reason: 'unverified transfer slip',
@@ -624,7 +638,7 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       .post(
         `/api/v1/handyman/execution-scopes/${f.executionScopeId}/customer-payments/${payment2Id}/reject`,
       )
-      .set('Authorization', `Bearer ${careManager.token}`)
+      .set('Authorization', `Bearer ${payVerifier.token}`)
       .send({
         idempotencyKey: rejectKey,
         reason: 'unverified transfer slip',
@@ -673,7 +687,13 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
     );
     const validManager = await createCustomerCareActor(f.buildingId, [
       { code: 'tenant_company.read', name: 'Read tenant company' },
-      { code: 'tenant_company.manage', name: 'Manage tenant company' },
+      { code: 'handyman.payment.report', name: 'Report handyman customer payment' },
+    ]);
+    // PART 04: verification is an explicit permission held by a DIFFERENT
+    // identity than the reporter (maker-checker, RBAC separation).
+    const payVerifier = await createCustomerCareActor(f.buildingId, [
+      { code: 'tenant_company.read', name: 'Read tenant company' },
+      { code: 'handyman.payment.verify', name: 'Verify handyman customer payment' },
     ]);
 
     const getRoutes = [
@@ -759,7 +779,7 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       .post(
         `/api/v1/handyman/execution-scopes/${f.executionScopeId}/customer-payments/${unknownUuid}/confirm`,
       )
-      .set('Authorization', `Bearer ${validManager.token}`)
+      .set('Authorization', `Bearer ${payVerifier.token}`)
       .send({ idempotencyKey: key() });
     assert.equal(missingPaymentConfirm.status, 404);
 

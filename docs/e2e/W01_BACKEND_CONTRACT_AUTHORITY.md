@@ -625,3 +625,43 @@ Tidak ada perubahan pada payment verification, CLOSE, schema DB, migrasi, atau l
 5. **Payment verification (Finance, maker-checker)** dan **CLOSE (Handyman Manager)** belum diimplementasikan. F-04/F-05/G-01 di §3.F dan §3.G tetap terbuka.
 6. **Open decisions** OD-1..OD-6 di `HANDYMAN_BUSINESS_JOURNEY_v1.3_FROZEN.md` harus ditutup sebelum PART 04 menyentuh verifikasi dan CLOSE.
 7. **Settlement, fee komersial, warranty** memiliki lifecycle terpisah dan belum dikerjakan.
+
+## 15. PART 04 — Readiness test determinism, Lead cross-scope, payment report/verify split
+
+**Baseline:** `docs/e2e/HANDYMAN_BUSINESS_JOURNEY_v1.3_FROZEN.md` (v1.3, tidak diubah). Tidak ada perubahan schema, event business logic, Work Order, QC, BAST, atau CLOSE.
+
+### 15.1 Perubahan
+
+| Area | Perubahan | Catatan |
+|---|---|---|
+| Test readiness (permit, unit access) | Test 9 "mutation + journal atomic" tidak lagi mengurutkan `operational_events` dengan `ORDER BY created_at, id`. Asersi berbasis multiset tipe event, `entity_id` SUPERSEDED = baris lama, dan `metadata.supersededByReadinessId` = baris CREATED baru. Atomicity (jumlah baris dan event) tetap. | Akar: `created_at DEFAULT NOW()` memberi timestamp sama dalam satu transaksi (migrasi `0080`). Diperbaiki di test, bukan schema. |
+| Lead cross-scope (evidence/QC API) | Test negatif baru: Lead scope A ditolak `PERMISSION_DENIED` pada GET evidence/QC/defect scope B dan POST evidence scope B; positive control Lead scope A = 200. | Implementasi Lead tidak diubah. |
+| Payment reporting | `POST customer-payments` memerlukan `handyman.payment.report` (bukan lagi `tenant_company.manage`). | Authority tetap `canAccessBuildingScopedResource` (exact Building). |
+| Payment verification | `POST .../confirm` dan `POST .../reject` memerlukan `handyman.payment.verify`. `tenant_company.manage` saja tidak lagi memberi hak verifikasi. | Authorized Manager hanya berwenang bila permission ini diberikan secara sah. |
+| Maker-checker | `decide()` menolak bila `actorUserId = recordedByUserId` dengan 403 `HANDYMAN_CUSTOMER_PAYMENT_SELF_VERIFICATION_DENIED`, dicek sebelum replay dan sebelum transisi. | Berbasis identitas, bukan peran. |
+| `available-actions` | `computePaymentAvailableActions(status, canVerify = false)`. CONFIRM/REJECT hanya untuk PENDING, viewer `handyman.payment.verify`, dan bukan pelapor. Default tertutup. Projection ledger-read tidak menampilkan aksi keputusan. | Customer Care (reporter) tidak pernah menerima CONFIRM/REJECT. |
+| PAID | Tidak ada status PAID pada modul payment. Dana diterima hanya dihitung dari `CONFIRMED` (`received_gross`). PENDING tetap provisional (`PROVISIONAL_PAYMENTS_PENDING`). | Tidak ada perubahan kode ledger. Dibuktikan oleh test VERIFY dan REJECT. |
+| Error baru | `HANDYMAN_CUSTOMER_PAYMENT_SELF_VERIFICATION_DENIED` (403) di `src/shared/errors.ts`. | |
+| OpenAPI | Deskripsi record/confirm/reject diperbarui ke permission report/verify. | Struktur path dan schema tidak berubah. |
+
+### 15.2 Kontrak permission (baru)
+
+| Operasi | Permission | Building | Catatan |
+|---|---|---|---|
+| GET payment/ledger | `tenant_company.read` | (tidak berubah) | |
+| POST customer-payments (report) | `handyman.payment.report` | exact | Hanya PENDING. |
+| POST .../confirm, .../reject (verify) | `handyman.payment.verify` | exact | Pelapor ditolak (maker-checker). |
+
+### 15.3 Validasi
+
+- `npm run typecheck`: PASS (exit 0).
+- Subset 16 file (payment, ledger, settlement, allocation, readiness, evidence-qc API): 113 test, 107 pass, 6 fail, 0 skip. Keenam kegagalan identik dengan HEAD `6f9cabc` (diverifikasi pada salinan `git archive` yang bersih): `customer-care-ledger` test 1 dan `customer-care-transport-certification` test 1–5 (lihat §15.4).
+- Test fokus baru `tests/handyman-payment-verification-authority.test.ts`: 7/7 PASS (REPORT, DENY-REPORT, VERIFY, REJECT, DENY-VERIFY, CROSS-BUILDING, MAKER-CHECKER).
+
+### 15.4 Residual untuk PART 05
+
+- Customer Care via sesi workspace (BM Super App) belum memiliki endpoint report; pelaporan saat ini lewat bearer user dengan `handyman.payment.report`. Keputusan apakah workspace report perlu endpoint sendiri belum diambil (tidak membuat endpoint baru di PART 04).
+- Provisioning: permission `handyman.payment.report` dan `handyman.payment.verify` harus diberikan ke peran yang berwenang (Customer Care untuk report; Finance/Authorized Manager untuk verify). Belum ada seed/migrasi role; ini keputusan operasional (OD-1).
+- Test HTTP `customer-care-transport-certification` test 1 dan seterusnya gagal sebelum langkah payment (assertion B3 list request `0 !== 1`), juga pada HEAD `6f9cabc`. Langkah payment di file itu belum tervalidasi runtime; cakupan HTTP payment dibuktikan oleh test fokus dan `customer-care-ledger` test 3–4.
+- `customer-care-ledger` test 1 dan transport test 4–5 gagal pada HEAD juga (diff `availableActions` pada payload ledger; `git show b87d72f` dan `git diff 2fcfad9..HEAD` mengacu commit yang tidak ada di clone ini).
+- Urutan event `operational_events` dalam satu transaksi tetap tie (cacat skema di luar PART 04).

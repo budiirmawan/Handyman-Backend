@@ -47,3 +47,15 @@ export function handymanCustomerPaymentInvalidError(
     details: [`field=${field}`],
   });
 }
+
+/**
+ * PART 04 maker-checker: the actor who RECORDED a payment claim may not
+ * be the actor who CONFIRMS or REJECTS it (identity, not role).
+ */
+export function handymanCustomerPaymentSelfVerificationError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_CUSTOMER_PAYMENT_SELF_VERIFICATION_DENIED,
+    message: 'The recorder of a payment may not verify that payment.',
+    statusCode: 403,
+  });
+}

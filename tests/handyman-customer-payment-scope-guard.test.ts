@@ -400,6 +400,8 @@ describe('CR-HM-SEC-01 PART 06E-2 — customer payment building-scope guard', ()
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
+    // PART 04 maker-checker: a different identity verifies in the same building.
+    const verifier = await staffActor(realm.buildingA1.id);
     await openLedger(scope.id, staff);
 
     // RECORD_PAYMENT — PENDING claim + audit event.
@@ -438,7 +440,7 @@ describe('CR-HM-SEC-01 PART 06E-2 — customer payment building-scope guard', ()
       executionScopeId: scope.id,
       paymentId: recorded.payment.id,
       idempotencyKey: confirmKey,
-    }, staff);
+    }, verifier);
     assert.equal(confirmed.replayed, false);
     assert.equal(confirmed.payment.status, 'CONFIRMED');
     assert.ok(confirmed.payment.decidedAt);
@@ -449,7 +451,7 @@ describe('CR-HM-SEC-01 PART 06E-2 — customer payment building-scope guard', ()
       executionScopeId: scope.id,
       paymentId: recorded.payment.id,
       idempotencyKey: confirmKey,
-    }, staff);
+    }, verifier);
     assert.equal(confirmReplay.replayed, true);
     assert.equal(confirmReplay.event.id, confirmed.event.id);
 
@@ -472,6 +474,8 @@ describe('CR-HM-SEC-01 PART 06E-2 — customer payment building-scope guard', ()
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
+    // PART 04 maker-checker: a different identity verifies in the same building.
+    const verifier = await staffActor(realm.buildingA1.id);
     await openLedger(scope.id, staff);
     // Seed a lawful PENDING payment so the denial is provably the
     // access wall, not an empty projection.
