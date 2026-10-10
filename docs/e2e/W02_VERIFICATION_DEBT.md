@@ -143,3 +143,63 @@ Catatan proses: satu test registry (PART 02B) gagal pada DB bersama yang persist
 - R-P3-5: R-2 (operator Building melihat semua tenant di Building) tetap terbuka. Operations queue kini juga menampilkan data kontak pelapor untuk baris yang terlihat.
 - R-P3-6: E2E lintas repo belum dibuktikan. Frontend Customer Care dan Operations tetap UNVERIFIED (D-6).
 - R-P3-7: DB test non-embedded bersifat persisten. Assertion yang bergantung pada state global harus memakai delta (lihat catatan proses di atas).
+
+## 6. W02 PART 04 — Intake → Operations triage runtime journey
+
+Test: `tests/handyman-intake-triage-journey.test.ts` (16 test: 4 journey J1–J4, 9 negatif N1–N9, 3 replay R1–R3). Tidak ada perubahan source. Tidak ada endpoint, permission, atau schema baru.
+
+### Journey (real endpoint, real authority)
+
+| Step | Hasil | Bukti |
+|---|---|---|
+| J1 Customer Care intake → create-exchange (tenant + unit) → POST care intake → INTAKE + reporter snapshot | PASS | status INTAKE, tenant/building/space sesuai pilihan, `originChannel` BM_SUPER_APP, 1 snapshot |
+| J2 Operations queue (`status=INTAKE`) dan detail konsisten dengan intake | PASS | tenant, location, attribution (careActorId), contact, PIC id dari attribution |
+| J3 Triage (`POST .../triage`, authority existing) → INSPECTION_REQUIRED | PASS | 201, 1 decision record, 1 audit `HANDYMAN_REQUEST_TRIAGED` (actor, building, disposition; tanpa teks note) |
+| J4 Queue setelah triage: hilang dari INTAKE, muncul di INSPECTION_REQUIRED, tetap ada di default list; tenant, lokasi, dan snapshot tidak berubah; triage read 200 | PASS | |
+
+### Negative cases
+
+| Case | Hasil |
+|---|---|
+| N1 operator hanya punya queue permission mencoba triage | 403, status tetap INTAKE, 0 event |
+| N2 cross-building (operator Building A2, request di A): triage 403; queue detail 404 | PASS |
+| N3 cross-client: 403 triage, 404 detail | PASS |
+| N4 assignment dicabut: triage 403, queue 403 | PASS |
+| N5 tanpa assignment / tanpa permission / token tidak valid | 403, 403, 401 |
+| N6 Care workspace token sebagai operator (triage dan queue) | 401 |
+| N7 disposition tidak valid, note kosong atau >500, field body asing | 400 (5 payload), status tetap INTAKE |
+| N8 triage ulang request yang sudah TRIAGED | 400 `HANDYMAN_SERVICE_REQUEST_NOT_INTAKE`, status tidak mundur |
+| N9 request di luar scope / id tidak dikenal / id bukan UUID | 404 / 400. Field `status` di body tidak berpengaruh |
+
+### Replay & idempotency
+
+| Case | Hasil |
+|---|---|
+| R1 triage berulang 3 kali | 3x 400, tepat 1 decision, tepat 1 event |
+| R2 dua triage paralel | tepat 1 x 201 dan 1 x 400, 1 decision, 1 event, status = disposition pemenang |
+| R3 replay care exchange | 401, tidak ada request atau snapshot baru |
+
+### Hasil regresi (run bersama)
+
+| Suite | Hasil |
+|---|---|
+| `handyman-intake-triage-journey` (baru) | 16 PASS |
+| `handyman-lifecycle-api` | PASS (termasuk triage existing) |
+| `handyman-building-scope-guard-part02` | PASS |
+| `handyman-operations-queue` | PASS |
+| `handyman-request-reporter-contact` | PASS |
+| Subtotal 5 file | 65 PASS, 0 FAIL, 0 SKIP |
+| `npx tsc --noEmit` | exit 0 |
+
+### Temuan authority (keputusan, belum diubah)
+
+- `POST /handyman/requests/:id/triage` dijaga `tenant_company.manage` dan Building scope. `GET .../triage` dijaga `tenant_company.read`. Permission queue `handyman.operations.request.read` saja tidak cukup untuk triage atau membaca hasil triage.
+- Ini mengikuti authority triage yang sudah ada dan tidak diubah di PART ini. Operator Operations yang hanya diberi queue permission tidak bisa menyelesaikan triage. Jika bisnis ingin permission triage khusus Operations (misalnya `handyman.operations.request.triage`), itu perubahan authority dan route yang perlu keputusan tersendiri.
+
+### Residual gap menuju W02 closure
+
+- R-T1: keputusan authority triage Operations (lihat di atas).
+- R-T2: quotation, PIC approval, cancellation, notification, dan frontend tidak diimplementasikan di PART ini (sesuai scope).
+- R-T3: runtime E2E belum mencakup inspection, diagnosis, atau transisi setelah TRIAGED. Hanya triage dan status projection yang dibuktikan.
+- R-T4: DB test bersama bersifat persisten. Test memakai data unik dan membaca per-operator, tetapi assertion global tetap perlu delta bila ditambah.
+- R-2 (operator Building melihat semua tenant di Building) dan provisioning role Operations produksi tetap terbuka.

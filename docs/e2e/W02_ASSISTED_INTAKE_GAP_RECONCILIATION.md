@@ -267,3 +267,9 @@ Daftar P0 yang tersisa: **G05** (reporter), **G08** (approval PIC). G20 dan G29 
 - Ditulis dalam transaksi yang sama dengan konsumsi exchange, attribution, dan request. Input tidak valid ditolak sebelum exchange dikonsumsi.
 - Operations queue menampilkan `contact` untuk triage. C6 Customer Care tidak mengeksposnya.
 - Detail, hasil test, dan residual: `docs/e2e/W02_VERIFICATION_DEBT.md` §5.
+
+## PART 04 — Intake → Operations triage runtime journey
+
+- Journey runtime terbukti: Customer Care intake (INTAKE + snapshot reporter) → Operations queue/detail → triage existing → status projection, queue filter, audit event. Lihat `W02_VERIFICATION_DEBT.md` §6.
+- Tidak ada perubahan source. Gap yang ditemukan adalah keputusan authority, bukan bug runtime: triage memakai `tenant_company.manage` (bukan permission queue Operations). Tidak diubah tanpa keputusan.
+- Negative, replay, dan concurrency terbukti: cross-building, cross-client, assignment dicabut, care token ditolak, transisi tidak valid ditolak, triage ganda menghasilkan satu decision dan satu event.

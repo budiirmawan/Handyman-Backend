@@ -129,3 +129,8 @@ Typecheck: `npx tsc --noEmit` exit 0.
 | R-8 | Tidak ada E2E lintas repo. Bukti hanya backend runtime. | — | Tidak diklaim |
 | R-9 | Payment permission codes (ROUTE-TO-REGISTRY) | RESOLVED (PART 02B) | `W02_VERIFICATION_DEBT.md` §1 |
 | R-10 | Test `r08-*` menyebut 348 migration. Repo sekarang punya 434. Tidak dijalankan di PART ini | P2 | Perbaikan terpisah |
+
+## PART 04 update — triage
+
+- Journey intake → queue → triage → queue ulang tervalidasi (`tests/handyman-intake-triage-journey.test.ts`).
+- Triage memakai authority existing `tenant_company.manage` + Building scope. Queue permission saja tidak memberi triage atau membaca hasil triage. Keputusan authority ada di `W02_VERIFICATION_DEBT.md` §6 (R-T1).
