@@ -1,4 +1,5 @@
 import { AppError, ERROR_CODES } from '../../shared/errors';
+import { buildingAccessDeniedError, contextAccessService } from '../context-access';
 import {
   handymanOperationsQueueRepository,
   type OperationsQueueRow,
@@ -88,11 +89,22 @@ export function toOperationsRequestPublic(
   };
 }
 
+/**
+ * W02 PART 02A — explicit denial for a caller with no ACTIVE Building
+ * assignment (the permission alone is not enough). Uses the existing
+ * Building resolver; no new authority source.
+ */
+async function assertHasOperationsBuildingScope(actorUserId: string): Promise<void> {
+  const buildingIds = await contextAccessService.getAccessibleBuildingIds(actorUserId);
+  if (buildingIds.length === 0) throw buildingAccessDeniedError();
+}
+
 /** Lists the actor's Building-scoped queue, oldest first (FIFO). */
 export async function listOperationsRequests(
   input: Omit<OperationsQueueSelection, 'actorUserId'>,
   actorUserId: string,
 ): Promise<OperationsRequestPage> {
+  await assertHasOperationsBuildingScope(actorUserId);
   const rows = await handymanOperationsQueueRepository.listOperationsQueue({
     ...input,
     actorUserId,
@@ -116,6 +128,7 @@ export async function getOperationsRequestDetail(
   id: string,
   actorUserId: string,
 ): Promise<OperationsRequestPublic> {
+  await assertHasOperationsBuildingScope(actorUserId);
   const row = await handymanOperationsQueueRepository.findOperationsRequestById(
     actorUserId,
     id,

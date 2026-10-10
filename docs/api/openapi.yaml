@@ -4108,13 +4108,19 @@ paths:
       operationId: listHandymanOperationsRequests
       summary: List the Operations queue of Handyman requests (Building-scoped)
       description: >
-        W02 PART 02 — Operations queue read projection for intake handoff.
-        Requires `tenant_company.read` (RBAC permission, no role-name check).
-        Scope is the caller's explicit ACTIVE Building assignments under the
-        request's own Client, with the Building, Property, Client, and User
-        chain ACTIVE. There is no tenant PIC shortcut and no PLATFORM_ADMIN
-        bypass. The Customer Care C6 wall on `GET /handyman/requests` is not
-        changed by this endpoint. Results are FIFO (oldest `createdAt` first).
+        W02 PART 02/02A — Operations queue read projection for intake handoff.
+        Authority is the RBAC permission `handyman.operations.request.read`
+        (no role-name check; the permission is unassigned by default and is
+        granted only by deliberate provisioning) PLUS an explicit ACTIVE
+        Building assignment under the request's own Client, with the Building,
+        Property, Client, and User chain ACTIVE. `tenant_company.read` is not
+        an authority for this queue. A caller with the permission but no ACTIVE
+        Building assignment receives 403 BUILDING_ACCESS_DENIED. A tenant PIC
+        link does not exclude a dual-role user (who is admitted only through
+        this permission and assignment), and a PIC without this permission is
+        denied (403). A user with an inactive account or session is denied at
+        authentication (401). The Customer Care C6 wall on
+        `GET /handyman/requests` is not changed by this endpoint. Results are FIFO (oldest `createdAt` first).
         Filters: `status` (a recognized Handyman status), `buildingId` (must be
         inside the caller's scope, otherwise the page is empty). Requests from
         other Buildings, Properties, or Clients never appear in any page.
@@ -4184,10 +4190,12 @@ paths:
       operationId: getHandymanOperationsRequest
       summary: Get one Operations queue Handyman request (triage detail)
       description: >
-        W02 PART 02 — Operations triage detail, same Building-scope and
-        `tenant_company.read` rules as the queue list. A request that is
-        unknown, in another Building, or in another Client returns the same
-        404, so existence is not leaked. The projection matches the queue item.
+        W02 PART 02/02A — Operations triage detail, same
+        `handyman.operations.request.read` plus explicit Building assignment
+        rules as the queue list (parity). A caller with no ACTIVE Building
+        assignment gets 403. A request that is unknown, in another Building, or
+        in another Client returns the same 404, so existence is not leaked. The
+        projection is identical to the queue item.
       tags: [Handyman Requests]
       security: [{ bearerAuth: [] }]
       responses:

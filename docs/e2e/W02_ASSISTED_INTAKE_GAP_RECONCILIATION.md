@@ -242,3 +242,12 @@ Bagian di atas adalah snapshot pra-coding dan tidak diubah. Pembaruan berikut me
 | D6 | Keputusan | Diterapkan sebagai scope Building baru. `customerRequestReadScope` tidak dilonggarkan. Tambahan: fail-closed untuk identitas tenant PIC (OQ-3). | `W02_OPERATIONS_QUEUE_HANDOFF.md` §2 |
 
 Daftar P0 yang tersisa: **G05** (reporter), **G08** (approval PIC). G20 dan G29 tidak lagi P0. Keputusan R-2 (operator building melihat semua tenant di building) perlu persetujuan.
+
+## Pembaruan authority setelah W02 PART 02A
+
+- Authority Operations Queue sekarang: permission `handyman.operations.request.read` (unassigned by default) **dan** ACTIVE Building assignment. `tenant_company.read` bukan lagi authority queue.
+- Blanket exclusion PIC ACTIVE dihapus. Dual-role (PIC + permission Operations + assignment) diizinkan. PIC tanpa permission ditolak 403.
+- User dengan permission tetapi tanpa assignment: 403 `BUILDING_ACCESS_DENIED`.
+- Provisioning role Operations produksi belum diputuskan (tidak ada grant dari kode). Lihat `W02_OPERATIONS_QUEUE_HANDOFF.md` §2 dan R-3.
+- C6 (`customerRequestReadScope`, route generic) tidak berubah.
+- R-2 (operator building melihat semua tenant di building) tetap menunggu persetujuan.

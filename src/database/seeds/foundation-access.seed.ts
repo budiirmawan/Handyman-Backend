@@ -253,6 +253,8 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // BE-14A — Tenant Company
   { code: 'tenant_company.read', name: 'Read Tenant Companies' },
   { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
+  // W02 PART 02A — Operations Queue authority (exceptional; unassigned by default).
+  { code: 'handyman.operations.request.read', name: 'Read Handyman Operations Request Queue' },
   // BE-16A — Inventory Item Master
   { code: 'inventory_item.read', name: 'Read Inventory Items' },
   { code: 'inventory_item.manage', name: 'Manage Inventory Items' },
@@ -756,6 +758,11 @@ export const FOUNDATION_PERMISSIONS: readonly {
  * platform administrator.
  */
 export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new Set([
+  // W02 PART 02A — the Handyman Operations Queue reads every request in the
+  // caller's assigned Buildings across tenants. It must be granted deliberately
+  // to Operations roles by provisioning, never inherited by PLATFORM_ADMIN or
+  // any tenant-facing role.
+  'handyman.operations.request.read',
   'operational_budget.override',
   'rfq.award',
   // CR-BE-PRICE-01 PART 01 — retroactive correction of an effective price

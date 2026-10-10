@@ -67,6 +67,8 @@ let serviceIdB: string;
 let requests: Record<string, { id: string; createdAt?: string }> = {};
 let opsA: { token: string; userId: string };
 let picUser: { token: string; userId: string };
+let picNoOps: { token: string; userId: string };
+let tenantReadOnly: { token: string; userId: string };
 let noAssign: { token: string; userId: string };
 let noPerm: { token: string; userId: string };
 let opsB: { token: string; userId: string };
@@ -98,6 +100,8 @@ async function operator(codes: { code: string; name: string }[], buildingIds: st
   return { token, userId };
 }
 
+/** W02 PART 02A — the Operations queue authority (not tenant_company.read). */
+const OPS = [{ code: 'handyman.operations.request.read', name: 'Read Handyman Operations Request Queue' }];
 const READ = [{ code: 'tenant_company.read', name: 'Read Tenant Companies' }];
 
 /** Create one request through the real Customer Care path. */
@@ -204,15 +208,21 @@ before(async () => {
   }
 
   // Operators. Explicit assignments only; no PIC shortcut.
-  opsA = await operator(READ, [b1]);
-  opsB = await operator(READ, [b3]);
-  opsC = await operator(READ, [b4]);
-  noAssign = await operator(READ, []);
+  opsA = await operator(OPS, [b1]);
+  opsB = await operator(OPS, [b3]);
+  opsC = await operator(OPS, [b4]);
+  noAssign = await operator(OPS, []);
   noPerm = await operator([{ code: 'checklist.read', name: 'Read Checklists' }], [b1]);
-  picUser = await operator(READ, [b1]);
-  await tenantPicService.createTenantPic({
-    tenantCompanyId: tenants.T1, picName: 'Tenant One PIC', email: 'pic@tenant-one.example.com', userId: picUser.userId,
-  }, adminId);
+  tenantReadOnly = await operator(READ, [b1]);
+  // Dual-role: tenant PIC link + Operations permission + explicit assignment.
+  picUser = await operator(OPS, [b1]);
+  // Tenant PIC without the Operations permission (assignment present).
+  picNoOps = await operator(READ, [b1]);
+  for (const pic of [picUser, picNoOps]) {
+    await tenantPicService.createTenantPic({
+      tenantCompanyId: tenants.T1, picName: 'Tenant One PIC', email: `pic-${pic.userId.slice(0, 8)}@tenant-one.example.com`, userId: pic.userId,
+    }, adminId);
+  }
 
   careToken = (await admit()).workspaceToken;
   // Tenant-scoped requests, all created through the Customer Care path.
@@ -356,11 +366,17 @@ describe('W02 PART 02 — Operations queue', () => {
     assert.deepEqual(shape(otherClient), shape(unknown), 'no existence oracle (other Client)');
   });
 
-  it('a User without a Building assignment sees an empty queue and cannot read any detail', async () => {
+  it('a User with the permission but without an ACTIVE Building assignment is denied (403) on list and detail', async () => {
     const response = await list(noAssign.token);
-    assert.equal(response.status, 200);
-    assert.deepEqual(response.body.data.items, []);
-    assert.equal((await detail(noAssign.token, requests.R1.id)).status, 404);
+    assert.equal(response.status, 403, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, 'BUILDING_ACCESS_DENIED');
+    const one = await detail(noAssign.token, requests.R1.id);
+    assert.equal(one.status, 403, JSON.stringify(one.body));
+  });
+
+  it('tenant_company.read alone is no longer the Operations queue authority (403)', async () => {
+    assert.equal((await list(tenantReadOnly.token)).status, 403);
+    assert.equal((await detail(tenantReadOnly.token, requests.R1.id)).status, 403);
   });
 
   it('a User with a Building assignment but without tenant_company.read is denied (403)', async () => {
@@ -369,23 +385,33 @@ describe('W02 PART 02 — Operations queue', () => {
     assert.equal((await detail(noPerm.token, requests.R1.id)).status, 403);
   });
 
-  it('a tenant PIC with a Building assignment does not unlock the Operations queue (fail-closed)', async () => {
-    const queue = await list(picUser.token);
-    assert.equal(queue.status, 200);
-    assert.deepEqual(queue.body.data.items, [], 'tenant-side identity must not see building-wide requests');
-    assert.equal((await detail(picUser.token, requests.R1.id)).status, 404);
-    assert.equal((await detail(picUser.token, requests.R5.id)).status, 404);
+  it('a tenant PIC without the Operations permission is denied (403), even with a Building assignment', async () => {
+    const queue = await list(picNoOps.token);
+    assert.equal(queue.status, 403, JSON.stringify(queue.body));
+    assert.equal((await detail(picNoOps.token, requests.R1.id)).status, 403);
+  });
+
+  it('dual-role user (tenant PIC + Operations permission + assignment) is admitted by the authority, not by role', async () => {
+    const queue = await list(picUser.token, { limit: 100 });
+    assert.equal(queue.status, 200, JSON.stringify(queue.body));
+    const ids = queue.body.data.items.map((r: any) => r.id);
+    assert.ok(ids.includes(requests.R1.id) && ids.includes(requests.R5.id), 'Building-scoped authority applies');
+    assert.ok(!ids.includes(requests.R2.id) && !ids.includes(requests.R3.id), 'still fail-closed outside the Building');
+    assert.equal((await detail(picUser.token, requests.R1.id)).status, 200);
   });
 
   it('the generic Customer Care read GET /handyman/requests stays on the C6 wall', async () => {
     // Operator without PIC link: the C6 wall returns no rows.
-    const operatorView = await generic(opsA.token, { clientId: clientA });
+    // Generic read needs tenant_company.read (C6 unchanged). tenantReadOnly has no PIC link.
+    const operatorView = await generic(tenantReadOnly.token, { clientId: clientA });
     assert.equal(operatorView.status, 200);
     const operatorIds = operatorView.body.data.map((r: any) => r.id);
     assert.ok(!operatorIds.includes(requests.R1.id), 'C6 wall unchanged for non-PIC operators');
+    // Operations permission alone does not open the generic C6 read either.
+    assert.equal((await generic(opsA.token, { clientId: clientA })).status, 403);
 
     // Represented PIC: the C6 wall still shows its own tenant's occupied request.
-    const picView = await generic(picUser.token, { clientId: clientA, tenantCompanyId: tenants.T1 });
+    const picView = await generic(picNoOps.token, { clientId: clientA, tenantCompanyId: tenants.T1 });
     assert.equal(picView.status, 200, JSON.stringify(picView.body));
     const picIds = picView.body.data.map((r: any) => r.id);
     assert.ok(picIds.includes(requests.R1.id), 'C6 PIC read unchanged');
@@ -393,7 +419,7 @@ describe('W02 PART 02 — Operations queue', () => {
   });
 
   it('a revoked permission is denied on the next request', async () => {
-    const revoke = await operator(READ, [opsBuilding('b1')]);
+    const revoke = await operator(OPS, [opsBuilding('b1')]);
     assert.equal((await list(revoke.token)).status, 200);
     await pool.query(`UPDATE user_role_assignments SET status = 'REVOKED' WHERE user_id = $1`, [revoke.userId]);
     const response = await list(revoke.token);
@@ -402,22 +428,45 @@ describe('W02 PART 02 — Operations queue', () => {
   });
 
   it('a revoked session is rejected with 401', async () => {
-    const session = await operator(READ, [opsBuilding('b1')]);
+    const session = await operator(OPS, [opsBuilding('b1')]);
     assert.equal((await list(session.token)).status, 200);
     await sessionService.revokeActiveSessionsForUser(session.userId);
     const response = await list(session.token);
     assert.equal(response.status, 401, JSON.stringify(response.body));
   });
 
-  it('a deactivated Building assignment removes the request from the queue', async () => {
-    const assigned = await operator(READ, [opsBuilding('b1')]);
-    const seenBefore = await list(assigned.token, { buildingId: opsBuilding('b1'), limit: 100 });
-    assert.ok(seenBefore.body.data.items.some((r: any) => r.id === requests.R1.id));
+  it('deactivated Building assignments remove requests; the last assignment removed is a 403', async () => {
+    const assigned = await operator(OPS, [opsBuilding('b1'), opsBuilding('b2')]);
+    const both = await list(assigned.token, { limit: 100 });
+    assert.ok(both.body.data.items.some((r: any) => r.id === requests.R1.id));
     await buildingAssignmentService.deactivateAssignment(assigned.userId, opsBuilding('b1'));
-    const after = await list(assigned.token, { buildingId: opsBuilding('b1'), limit: 100 });
-    assert.equal(after.status, 200);
-    assert.deepEqual(after.body.data.items, []);
+    const partial = await list(assigned.token, { limit: 100 });
+    assert.equal(partial.status, 200);
+    assert.ok(!partial.body.data.items.some((r: any) => r.id === requests.R1.id), 'B1 removed');
     assert.equal((await detail(assigned.token, requests.R1.id)).status, 404);
+    await buildingAssignmentService.deactivateAssignment(assigned.userId, opsBuilding('b2'));
+    assert.equal((await list(assigned.token)).status, 403, 'no assignment left: explicit denial');
+    assert.equal((await detail(assigned.token, requests.R2.id)).status, 403);
+  });
+
+  it('inactive user is denied at authentication (401), with no queue data', async () => {
+    const inactive = await operator(OPS, [opsBuilding('b1')]);
+    assert.equal((await list(inactive.token)).status, 200);
+    await pool.query(`UPDATE users SET status = 'INACTIVE' WHERE id = $1`, [inactive.userId]);
+    const response = await list(inactive.token);
+    assert.equal(response.status, 401, JSON.stringify(response.body));
+    assert.equal((await detail(inactive.token, requests.R1.id)).status, 401);
+  });
+
+  it('queue list and detail are parity-identical for every visible request', async () => {
+    const queue = await list(opsA.token, { limit: 100 });
+    assert.equal(queue.status, 200);
+    assert.ok(queue.body.data.items.length >= 3);
+    for (const item of queue.body.data.items) {
+      const one = await detail(opsA.token, item.id);
+      assert.equal(one.status, 200, JSON.stringify(one.body));
+      assert.deepEqual(one.body.data, item, `detail parity for ${item.id}`);
+    }
   });
 });
 

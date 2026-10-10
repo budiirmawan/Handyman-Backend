@@ -130,6 +130,8 @@ const UNRELATED_PINNED: Record<string, string> = {
 
 /** Exceptional authorities withheld from PLATFORM_ADMIN — must stay exactly these. */
 const EXPECTED_UNASSIGNED_BY_DEFAULT = [
+  // W02 PART 02A: Operations queue authority is exceptional, granted only by provisioning.
+  'handyman.operations.request.read',
   'operational_budget.override',
   'rfq.award',
   'price_catalog.override',
@@ -222,9 +224,10 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
     }
 
     // 320 pre-existing + 13 registered by this CR + 19 CR-BE-SAAS-01
-    // platform.* codes (PART 01 seed).
-    assert.equal(CATALOGUE.length, 352);
-    assert.equal(CATALOGUE_SET.size, 352, 'catalogue must contain no duplicates');
+    // platform.* codes (PART 01 seed) + 1 W02 PART 02A Operations queue code
+    // (`handyman.operations.request.read`, unassigned by default).
+    assert.equal(CATALOGUE.length, 353);
+    assert.equal(CATALOGUE_SET.size, 353, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {

@@ -6,10 +6,10 @@ import type { HandymanServiceRequestStatus } from './handyman-service-request.ty
  *
  * Separate from the C6 Customer Care wall (`customerRequestReadScope` in
  * handyman-service-request.repository.ts), which stays unchanged. Operations
- * authority is the User's explicit ACTIVE Building assignment under the
- * request's own Client, with the Building/Property/Client/User chain ACTIVE.
- * There is no PIC shortcut and no PLATFORM_ADMIN bypass here. The route guard
- * (`tenant_company.read`) is applied before this query runs.
+ * authority = permission `handyman.operations.request.read` (route guard) +
+ * the User's explicit ACTIVE Building assignment under the request's own
+ * Client, with the Building/Property/Client/User chain ACTIVE. No role name,
+ * no PLATFORM_ADMIN bypass, and no blanket tenant-PIC exclusion.
  */
 
 export type OperationsQueueSelection = {
@@ -79,19 +79,18 @@ const OPERATIONS_SELECT = `
   ca.created_at AS "attributionCreatedAt"
 `;
 
-/** Explicit Building assignment + full active chain. $1 = actor user id. */
+/**
+ * Explicit ACTIVE Building assignment + ACTIVE User. $1 = actor user id.
+ * Authority is the permission (route guard `handyman.operations.request.read`)
+ * plus this assignment. A tenant PIC link is NOT an exclusion here: a dual-role
+ * user is admitted only through the Operations permission and an explicit
+ * Building assignment (W02 PART 02A).
+ */
 const OPERATIONS_SCOPE = `EXISTS (
     SELECT 1 FROM user_building_assignments uba
       JOIN users u ON u.id = uba.user_id AND u.status = 'ACTIVE'
     WHERE uba.user_id = $1 AND uba.status = 'ACTIVE'
       AND uba.building_id = r.building_id
-  )
-  -- Fail-closed for tenant-side identities: C6 requires PIC accounts to hold
-  -- a Building assignment, so an ACTIVE tenant PIC link must never unlock the
-  -- building-wide Operations queue (it would expose other tenants' requests).
-  AND NOT EXISTS (
-    SELECT 1 FROM tenant_pics tpic
-    WHERE tpic.user_id = $1 AND tpic.status = 'ACTIVE'
   )`;
 
 const OPERATIONS_FROM = `

@@ -26,7 +26,7 @@ import {
  *   POST /handyman/requests                                    local-User attribution-bound intake
  *   POST /handyman/requests/care                               care exchange-bound intake
  *   GET  /handyman/requests                                    bounded Customer Care request list
- *   GET  /handyman/operations/requests                         Operations queue (W02 PART 02)
+ *   GET  /handyman/operations/requests                         Operations queue (W02 PART 02/02A, handyman.operations.request.read)
  *   GET  /handyman/operations/requests/:handymanRequestId      Operations triage detail (W02 PART 02)
  *   GET  /handyman/requests/:handymanRequestId                 bounded Customer Care request detail
  *   GET  /handyman/requests/:handymanRequestId/intake-evidence bounded list
@@ -50,6 +50,8 @@ export function createHandymanApiRouter(): Router {
   const auth = authenticationMiddleware;
   const read = requirePermission('tenant_company.read');
   const manage = requirePermission('tenant_company.manage');
+  // W02 PART 02A — Operations queue authority (exceptional, not tenant_company.read).
+  const operationsRead = requirePermission('handyman.operations.request.read');
 
   router.get(
     '/handyman/catalogue/services',
@@ -90,17 +92,17 @@ export function createHandymanApiRouter(): Router {
     read,
     getHandymanServiceRequestDetailHandler,
   );
-  // W02 PART 02 — Operations queue (Building-scoped, tenant_company.read).
+  // W02 PART 02/02A — Operations queue (Building-scoped, handyman.operations.request.read).
   router.get(
     '/handyman/operations/requests',
     auth,
-    read,
+    operationsRead,
     listHandymanOperationsRequestsHandler,
   );
   router.get(
     '/handyman/operations/requests/:handymanRequestId',
     auth,
-    read,
+    operationsRead,
     getHandymanOperationsRequestDetailHandler,
   );
   router.get(

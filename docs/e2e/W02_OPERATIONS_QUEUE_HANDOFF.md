@@ -1,97 +1,131 @@
-# W02 PART 02 — Operations Queue & Intake Handoff (Evidence)
+# W02 PART 02 / 02A — Operations Queue & Intake Handoff (Evidence)
 
 Authority: Handyman Journey v1.3 FROZEN, dan `docs/e2e/W02_ASSISTED_INTAKE_GAP_RECONCILIATION.md`.
-Baseline: `d23b9ce`. Branch: `arena/c6fc25e1-handyman-backend`.
+Baseline PART 02: `954a013`. PART 02A (operations authority hardening) menyusul di commit berikutnya pada branch `arena/c6fc25e1-handyman-backend`.
 
-Cakupan: Operations Queue read projection untuk request hasil Customer Care Assisted Intake. Tidak ada Work Order engine baru, tidak ada reporter, PIC selection, approval quotation, cancellation, atau notification engine.
+Cakupan: Operations Queue read projection untuk request hasil Customer Care Assisted Intake. Tidak ada Work Order engine, reporter, PIC selection, approval quotation, cancellation, notification engine, atau frontend.
 
 ## 1. Endpoint
 
-| Method | Path | Permission | Scope |
+| Method | Path | Permission | Scope tambahan |
 |---|---|---|---|
-| GET | `/api/v1/handyman/operations/requests` | `tenant_company.read` | Explicit ACTIVE Building assignment |
-| GET | `/api/v1/handyman/operations/requests/:handymanRequestId` | `tenant_company.read` | Sama dengan list |
+| GET | `/api/v1/handyman/operations/requests` | `handyman.operations.request.read` | ACTIVE Building assignment |
+| GET | `/api/v1/handyman/operations/requests/:handymanRequestId` | `handyman.operations.request.read` | ACTIVE Building assignment (sama dengan list) |
 
-Query list: `status` (status Handyman yang dikenal), `buildingId` (UUID, di luar scope menghasilkan halaman kosong), `limit` (1–100, default 20), `cursor` (opaque). Parameter lain, termasuk `clientId` dan `tenantCompanyId`, ditolak 400.
+Query list: `status`, `buildingId` (di luar scope menghasilkan halaman kosong), `limit` (1–100, default 20), `cursor` (opaque). Parameter lain, termasuk `clientId` dan `tenantCompanyId`, ditolak 400.
 
-Respons list: `data: { items, nextCursor }`. Urutan FIFO (`createdAt` ASC, `id` ASC). Respons detail: `data` berisi item yang sama.
+Respons list tetap: `data: { items, nextCursor }` (backward compatible dengan PART 02). Urutan FIFO. Respons detail memakai item yang sama.
 
 Projection item: `id`, `clientId`, `status`, `description`, `createdAt`, `updatedAt`, `tenant {id, code, name, picId}`, `location {propertyId, propertyName, buildingId, buildingCode, buildingName, spaceId, spaceCode, spaceName}`, `service {catalogId, catalogName, variantId}`, `attribution {originChannel, actorType, careActorId, createdAt}`.
 
-Dikecualikan dari projection: `actorReference`, `createdByUserId`, token/exchange/assertion, data kontak PIC.
+Dikecualikan: `actorReference`, `createdByUserId`, token/exchange/assertion, data kontak PIC.
 
-## 2. Keputusan yang diterapkan
+## 2. Permission registry dan provisioning
+
+| Item | Nilai |
+|---|---|
+| Code | `handyman.operations.request.read` |
+| Registry | Migration `0434_handyman_operations_request_permission` (katalog `permissions`, ON CONFLICT DO NOTHING) dan `FOUNDATION_PERMISSIONS` di seed |
+| Default grant | **Tidak ada**. Code ada di `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES`, sehingga PLATFORM_ADMIN dan role lain tidak mewarisinya |
+| Pengganti | `tenant_company.read` tidak lagi menjadi authority queue |
+
+Provisioning produksi (keputusan, belum dilakukan):
+- Repository hanya mendefinisikan satu role, `PLATFORM_ADMIN`. Role aplikasi (Operations, Dispatcher, Supervisor, dan lainnya) diprovisikan lewat kebijakan atau konfigurasi, sesuai komentar di seed.
+- Karena role Operations produksi tidak terdefinisi di repository, tidak ada grant yang diberikan dari kode. Itu sengaja.
+- Rekomendasi: role Operations yang disetujui diberi `handyman.operations.request.read` secara eksplisit, dengan pencatatan siapa yang memberi. Pemegang `tenant_company.read` yang sekarang tidak otomatis mendapat akses.
+- Dampak: operator yang belum diprovisikan menerima 403 pada queue. Endpoint queue belum dipakai produksi (PART 02 hanya menambah endpoint), jadi tidak ada regresi produksi yang diketahui.
+
+## 3. Keputusan authority (PART 02A)
 
 | ID | Keputusan | Alasan |
 |---|---|---|
-| OQ-1 | Scope = explicit ACTIVE Building assignment, dengan chain Building, Property, Client, dan User ACTIVE | Sesuai D6 (gap reconciliation). Tidak ada shortcut PIC, tidak ada bypass PLATFORM_ADMIN. |
-| OQ-2 | `customerRequestReadScope` dan `GET /handyman/requests` tidak diubah | Dinding C6 tetap. Test membuktikan dinding tetap berlaku. |
-| OQ-3 | **Fail-closed untuk identitas tenant**: user dengan PIC ACTIVE tidak pernah mendapat queue, meskipun punya Building assignment | C6 mensyaratkan PIC punya assignment (`canAccessClient`). Tanpa guard ini, PIC tenant akan melihat request tenant lain di building yang sama. |
-| OQ-4 | Operator building melihat semua tenant di building yang di-assign | Ini otoritas building yang eksplisit. Perlu persetujuan, lihat residual R-2. |
-| OQ-5 | Unknown dan out-of-scope mendapat 404 yang sama | Tidak ada oracle keberadaan lintas building atau client. |
-| OQ-6 | Cursor opaque `{c, i}` tervalidasi ketat | Cursor tidak bisa memperluas scope karena scope selalu ada di SQL. |
+| OQ-1 | Authority = permission `handyman.operations.request.read` (route guard) **dan** ACTIVE Building assignment, dengan chain Building, Property, Client, dan User ACTIVE | Permission membuktikan fungsi. Assignment membuktikan cakupan building. Tidak ada role-name check. |
+| OQ-2 | Blanket exclusion PIC ACTIVE **dihapus** dan diganti authority berbasis permission | User dengan PIC dan permission Operations boleh (dual-role). PIC tanpa permission ditolak 403. |
+| OQ-3 | User dengan permission tetapi tanpa ACTIVE Building assignment: **403 `BUILDING_ACCESS_DENIED`** untuk list dan detail | Penolakan eksplisit. Memakai resolver building yang sudah ada (`getAccessibleBuildingIds`). |
+| OQ-4 | User inactive atau session dicabut: **401** dari authentication | Perilaku existing. Scope SQL juga memfilter `users.status = 'ACTIVE'`. |
+| OQ-5 | Unknown, di building lain, atau di client lain: **404** dengan bentuk error yang sama | Tidak ada oracle keberadaan. |
+| OQ-6 | Operator building melihat semua tenant di building yang di-assign | Mengikuti scope building eksplisit. Perlu persetujuan, lihat R-2. |
+| OQ-7 | `customerRequestReadScope`, `GET /handyman/requests`, dan route generic tidak diubah | Dinding C6 tetap. Bukti: 0 baris diff pada repository, service, dan controller generic. |
 
-## 3. Implementasi
+## 4. Perubahan ekspektasi test (diverifikasi terhadap route aktual)
 
-- `src/modules/handyman-requests/handyman-operations-queue.repository.ts`: SQL projection dan scope.
-- `src/modules/handyman-requests/handyman-operations-queue.service.ts`: mapper publik, pagination, detail.
-- `src/modules/handyman-api/handyman-api.validation.ts`: `parseHandymanOperationsRequestListQuery` (allowlist, status, limit, cursor).
-- `src/modules/handyman-api/handyman-api.controller.ts` dan `handyman-api.routes.ts`: dua handler dan dua route.
-- `docs/api/openapi.yaml`: dua path baru dan schema `HandymanOperationsRequest`. Spec tetap OpenAPI 3.0.3 (`nullable: true`).
+| Test sebelumnya | Ekspektasi lama | Ekspektasi baru | Alasan |
+|---|---|---|---|
+| User tanpa assignment | 200 queue kosong, detail 404 | 403 `BUILDING_ACCESS_DENIED` | OQ-3, penolakan eksplisit |
+| PIC dengan assignment (tanpa OPS) | 200 queue kosong | 403 | OQ-2 |
+| Assignment dinonaktifkan (satu-satunya) | 200 kosong | 403 untuk assignment terakhir. Dengan dua assignment, B1 hilang dan B2 tetap | OQ-3 |
+| `config-perm-01` test A | katalog 352 | katalog 353 | Satu code baru dari PART 02A |
+| `config-perm-01` test L | daftar unassigned tanpa code baru | `handyman.operations.request.read` ditambahkan | Policy default sengaja tidak memberi grant |
+| `handyman-api` test 10 (PART 02) | daftar DELETE hanya `/handyman/care/session` | ditambah path `/handyman/care-actors/{careActorId}/permissions/{permissionCode}` | Route DELETE PART 06 yang sudah ada |
 
-## 4. Bukti runtime
+## 5. Bukti runtime
 
-Test: `tests/handyman-operations-queue.test.ts` (embedded PostgreSQL, fixture lewat jalur Customer Care nyata: admission, create-exchange, `POST /handyman/requests/care`).
+### 5.1 `tests/handyman-operations-queue.test.ts`: 19 PASS, 0 FAIL, 0 SKIP
+
+Fixture memakai jalur Customer Care nyata (admission, create-exchange, `POST /handyman/requests/care`), dengan embedded PostgreSQL.
 
 | # | Test | Hasil |
 |---|---|---|
-| 1 | Operator terotorisasi membaca queue Building-nya; Building, Property, dan Client lain tidak muncul | PASS |
-| 2 | Cross-property dan cross-client tidak bocor secara lateral | PASS |
-| 3 | Projection tidak memuat `actorReference`, `createdByUserId`, token, assertion, atau kontak PIC | PASS |
-| 4 | Request dari `POST /handyman/requests/care` muncul di queue pada read berikutnya | PASS |
-| 5 | Pagination FIFO tanpa duplikat dan tanpa baris di luar scope | PASS |
+| 1 | Authorized Operations membaca queue Building-nya; Building, Property, dan Client lain tidak muncul | PASS |
+| 2 | Cross-property dan cross-client: operator P2 dan client B hanya melihat Building-nya | PASS |
+| 3 | Projection tidak memuat `actorReference`, `createdByUserId`, token, assertion, atau email kontak | PASS |
+| 4 | Request dari `POST /handyman/requests/care` muncul untuk Operations yang berwenang | PASS |
+| 5 | Pagination FIFO sama dengan urutan tanpa paging; tanpa duplikat | PASS |
 | 6 | Filter status dan buildingId tidak memperluas scope | PASS |
-| 7 | Query tidak valid ditolak; cursor yang dibuat untuk row luar scope tidak membocorkan row | PASS |
-| 8 | Detail in-scope 200; out-of-scope dan unknown 404 dengan bentuk error identik | PASS |
-| 9 | User tanpa assignment: queue kosong, detail 404 | PASS |
-| 10 | User dengan assignment tetapi tanpa `tenant_company.read`: 403 | PASS |
-| 11 | Tenant PIC dengan assignment tidak membuka queue (fail-closed) | PASS |
-| 12 | `GET /handyman/requests` tetap pada C6: operator tanpa PIC tidak melihat, PIC melihat tenant-nya sendiri | PASS |
-| 13 | Permission dicabut: 403 pada request berikutnya | PASS |
-| 14 | Session dicabut: 401 | PASS |
-| 15 | Assignment Building dinonaktifkan: request hilang dari queue | PASS |
+| 7 | Query tidak valid ditolak; cursor ke row luar scope tidak membocorkan row | PASS |
+| 8 | Detail in-scope 200; out-of-scope dan unknown 404 dengan error identik | PASS |
+| 9 | Permission tanpa Building assignment: 403 pada list dan detail | PASS |
+| 10 | `tenant_company.read` saja tidak lagi authority queue: 403 | PASS |
+| 11 | Permission lain (`checklist.read`) dengan assignment: 403 | PASS |
+| 12 | Tenant PIC tanpa permission Operations (dengan assignment): 403 | PASS |
+| 13 | Dual-role (PIC + permission + assignment): 200, Building-scoped, tetap fail-closed di luar Building | PASS |
+| 14 | `GET /handyman/requests` tetap C6: non-PIC tidak melihat, PIC melihat tenant-nya, permission Operations tidak membuka generic | PASS |
+| 15 | Permission dicabut: 403 | PASS |
+| 16 | Session dicabut: 401 | PASS |
+| 17 | Assignment dinonaktifkan: hanya Building yang dicabut hilang; assignment terakhir dicabut menjadi 403 | PASS |
+| 18 | User inactive: 401 | PASS |
+| 19 | Parity list dan detail: setiap item identik dengan detailnya | PASS |
 
-Hasil file test: **15 PASS, 0 FAIL, 0 SKIP**.
+Mutation check (PART 02A): route guard `handyman.operations.request.read` dinonaktifkan sementara. Empat test gagal (10, 11, 12, 15). Guard dikembalikan.
 
-Mutation check: guard PIC (OQ-3) dinonaktifkan sementara, lalu test 11 GAGAL. Guard dikembalikan. Ini membuktikan test 11 benar-benar menguji guard.
+Mutation check (PART 02): guard PIC dinonaktifkan sementara. Test PART 02 "fail-closed PIC" gagal, lalu dikembalikan.
 
-### Regresi focused (5 file)
+### 5.2 Regresi focused
 
 | File | Hasil |
 |---|---|
-| `handyman-operations-queue.test.ts` | 15 PASS |
+| `handyman-operations-queue.test.ts` | 19 PASS |
 | `handyman-customer-care-request-reads.test.ts` | PASS (C6 tidak berubah) |
 | `handyman-care-workspace-create-exchange.test.ts` | PASS |
 | `handyman-lifecycle-api.test.ts` | PASS (triage) |
-| `handyman-api.test.ts` | 11 PASS |
-| **Total** | **64 PASS, 0 FAIL, 0 SKIP** |
+| `handyman-api.test.ts` | PASS |
+| `config-perm-01-permission-registry.test.ts` | 12 PASS, 1 FAIL (lihat 5.3) |
+| **Total** | **80 PASS, 1 FAIL, 0 SKIP** |
 
 Typecheck: `npx tsc --noEmit` exit 0.
 
-### Perubahan ekspektasi test yang sudah ada
+### 5.3 Kegagalan yang sudah ada (bukan dari PART 02A)
 
-`tests/handyman-api.test.ts` (test 10, "OpenAPI matches the actual CR-HM-02 HTTP surface exactly") sebelumnya GAGAL karena route `DELETE /handyman/care-actors/{careActorId}/permissions/{permissionCode}` dari PART 06 belum ada di daftar pengecualian. Route ini ada di HEAD (`handyman-care-actor-permission.routes.ts`, `router.delete`). Pengecualian ditambahkan hanya untuk path dan verb yang sama. Verb lain tetap dilarang. Kegagalan ini sudah ada sebelum PART 02 dan bukan akibat perubahan PART 02.
+`config-perm-01` test 13 (ROUTE-TO-REGISTRY) gagal. Daftar yang hilang hanya `handyman.payment.report` dan `handyman.payment.verify`. Keduanya didaftarkan lewat migration `0432` (PART 05/06) dan tidak ada di `FOUNDATION_PERMISSIONS`. Kegagalan ini **sudah ada di HEAD `954a013`**, dibuktikan dengan menjalankan test yang sama di HEAD (stash sementara). PART 02A tidak mengubahnya. Perbaikannya memerlukan keputusan tentang registrasi payment codes di seed, sehingga tidak dilakukan di sini.
 
-## 5. Residual gap (untuk PART berikutnya)
+### 5.4 Bukti C6 tidak berubah
+
+- `src/modules/handyman-requests/handyman-service-request.repository.ts`: 0 baris diff (berisi `customerRequestReadScope`).
+- `src/modules/handyman-requests/handyman-service-request.service.ts`: 0 baris diff.
+- `src/modules/handyman-api/handyman-api.controller.ts` (handler generic): 0 baris diff.
+- `src/modules/handyman-api/handyman-api.routes.ts`: hanya dua route Operations yang berubah (`read` menjadi `operationsRead`). Route generic tidak berubah.
+
+## 6. Residual gap
 
 | ID | Gap | Severity | Rencana |
 |---|---|---|---|
-| R-1 | Triage dari queue belum diuji end-to-end (queue lalu `POST /handyman/requests/:id/triage`). Triage memakai guard yang sama, tetapi belum dibuktikan dalam satu alur. | P1 | Test alur queue lalu triage di PART 03 |
-| R-2 | OQ-4: operator building melihat semua tenant di building-nya. Perlu persetujuan bisnis. | P0 (keputusan) | Keputusan D6 lanjutan |
-| R-3 | Role produksi mana yang memegang `tenant_company.read` belum diverifikasi dari seed. Seed hanya mendefinisikan permission. | P1 | Verifikasi RBAC provisioning |
-| R-4 | Reporter dan kontak pelapor (G05, G06) belum ada | P0 | W02 PART 10 (sesuai gap reconciliation) |
+| R-1 | Alur queue lalu triage belum diuji sebagai satu alur | P1 | PART 03 |
+| R-2 | OQ-6: operator building melihat semua tenant di building yang di-assign | P0 (keputusan) | Persetujuan bisnis |
+| R-3 | Provisioning role Operations produksi belum diputuskan. Tidak ada grant dari kode. | P0 (keputusan provisioning) | Lihat §2 |
+| R-4 | Reporter dan kontak pelapor (G05, G06) belum ada | P0 | W02 PART 10 |
 | R-5 | Notifikasi `HANDYMAN_REQUEST_CREATED` dan audit create (G22, G23) belum ada | P1 | W02 PART 12 |
 | R-6 | Approval quotation oleh PIC (G08) belum ada | P0 | W02 PART 11 |
-| R-7 | Frontend Operations queue UNVERIFIED (tidak ada di repo ini) | UNVERIFIED | Verifikasi di repo frontend |
+| R-7 | Frontend Operations queue UNVERIFIED (tidak ada di repo ini) | UNVERIFIED | Repo frontend |
 | R-8 | Tidak ada E2E lintas repo. Bukti hanya backend runtime. | — | Tidak diklaim |
-| R-9 | Queue menampilkan semua status, tidak hanya INTAKE. Pemfilteran per status tersedia lewat query. | P2 | Konfirmasi produk |
+| R-9 | Payment permission codes tidak ada di `FOUNDATION_PERMISSIONS` (config-perm-01 test 13) | P1 (kegagalan lama) | Keputusan terpisah |
+| R-10 | Test `r08-*` menyebut 348 migration. Repo sekarang punya 434. Tidak dijalankan di PART ini | P2 | Perbaikan terpisah |
