@@ -134,3 +134,24 @@ staff/legacy payment reporting after independently signed PIC approval. The firs
 expanded run was 17 PASS / 1 FAIL due to a test reading a nonexistent scope ID
 field from the decision response; corrected to query the actual PIC-created
 Execution Scope. No authority guard was relaxed. Bounded final regressions pending.
+
+
+### Expanded regression checkpoint
+
+The initial 17-file bounded run at `877c666` was **195 PASS / 1 FAIL / 0 SKIP**.
+The failure was an obsolete OpenAPI route-family exact allowlist (it omitted both
+prior quotation paths and new staff routes). The expected list now enumerates all
+registered routes explicitly; no assertion was removed or broadened to a wildcard.
+Production typecheck passed (36.81 seconds).
+
+The separate legacy payment file initially had **11 cancelled tests** due to its
+setup omitting current direct-policy authority, before any payment test ran. Its
+fixture now explicitly opts in to DIRECT_ALLOWED, gives its test Operations actor
+the required triage permission, and records scope clarity/reason. The shared helper
+is unchanged for every caller not opting in; no production guards were altered.
+Real signed PIC fixture approval remains required. Focused retry: **11 PASS / 0 FAIL /
+0 CANCELLED / 0 SKIP** (14.39 seconds). The one-shot isolated runner is
+`NODE_ENV=test LOG_LEVEL=error npx tsx tests/helpers/run-staff-payment-regression.ts`;
+it propagates the test exit code after PostgreSQL teardown.
+
+Final combined rerun pending at this checkpoint.

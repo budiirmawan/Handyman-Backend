@@ -326,6 +326,15 @@ describe('Care workspace property scope reads', () => {
         '/handyman/care/properties/{propertyId}/create-exchanges',
         '/handyman/care/requests', '/handyman/care/requests/{requestId}',
         '/handyman/care/requests/{requestId}/payments',
+        '/handyman/care/quotation-inbox',
+        '/handyman/care/requests/{requestId}/quotations/{versionId}',
+        '/handyman/care/requests/{requestId}/quotations/{versionId}/pic-handoffs',
+        '/handyman/care/requests/{requestId}/quotations/{versionId}/presentations',
+        '/handyman/care/staff-sso/launches', '/handyman/care/staff-sso/exchange', '/handyman/care/staff-sso/revoke',
+        '/handyman/care/staff-sso/session', '/handyman/care/staff-authority/bindings',
+        '/handyman/care/staff-authority/bindings/{bindingId}/grants',
+        '/handyman/care/staff-authority/bindings/{id}', '/handyman/care/staff-authority/grants/{id}',
+        '/handyman/care/staff-authority/sessions/{id}',
         '/handyman/care/properties/{propertyId}/catalogue/services', '/handyman/care/properties/{propertyId}/catalogue/material-profiles',
         '/handyman/care/properties/{propertyId}/catalogue/material-profiles/{profileId}'].sort());
     for (const p of ['/handyman/care/properties', '/handyman/care/properties/{propertyId}/buildings']) {

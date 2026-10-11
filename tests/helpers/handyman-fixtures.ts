@@ -52,16 +52,20 @@ import { bindAndAdmitFixturePic, decideFixturePic } from './handyman-pic-fixture
  */
 
 export type HandymanFixtureInit = {
+  /** Explicit opt-in for downstream fixtures using the current Direct policy. */
+  explicitDirectQuotation?: boolean;
   adminUserId: string;
   disciplineId: string;
   query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
 };
 
+let explicitDirectQuotation = false;
 let adminUserId = '';
 let disciplineId = '';
 let sql: HandymanFixtureInit['query'];
 
 export function initHandymanFixtures(init: HandymanFixtureInit): void {
+  explicitDirectQuotation = init.explicitDirectQuotation === true;
   adminUserId = init.adminUserId;
   disciplineId = init.disciplineId;
   sql = init.query;
@@ -235,6 +239,7 @@ export async function quotationFixture(
     code: `HM${suffix()}`,
     name: 'Handyman Service',
     category: 'FM_HINT_TEXT',
+    ...(explicitDirectQuotation ? { inspectionPolicy: 'DIRECT_ALLOWED' as const } : {}),
   }, adminUserId);
   const request = await handymanServiceRequestService
     .createHandymanServiceRequest(
@@ -244,11 +249,13 @@ export async function quotationFixture(
       },
       adminUserId,
     );
+  if (explicitDirectQuotation) await grantPermissionToUser(adminUserId,'handyman.operations.request.triage','Operations direct-scope triage');
   await handymanServiceRequestTriageService.recordHandymanRequestTriage(
     {
       handymanRequestId: request.id,
       triageDisposition: 'DIAGNOSIS',
       triageNote: 'Direct to diagnosis.',
+      ...(explicitDirectQuotation ? {scopeClarityConfirmed:true,directQuotationReason:'Test fixture has measured dimensions and a specified replacement scope; physical inspection is unnecessary.'} : {}),
     },
     adminUserId,
   );

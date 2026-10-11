@@ -25,7 +25,7 @@ export function mountBmStaffLaunchRoutes(router: Router) {
           sendSuccess(res,result,202);
         } else {
           if(!req.body || typeof req.body!=='object' || Array.isArray(req.body) ||
-             Object.keys(req.body).some(k=>!(action==='exchange'?['launchReference','tenantCompanyId']:['launchReference']).includes(k)) || !('launchReference' in req.body)) throw AppError.validation('Only launchReference is accepted.');
+             Object.keys(req.body).some(k=>!(action==='exchange'?['launchReference','tenantCompanyId']:['launchReference']).includes(k)) || !('launchReference' in req.body)) throw AppError.validation('Only launchReference and, for exchange, tenantCompanyId are accepted.');
           if(action==='exchange') { const session=await exchangeBmStaffLaunch(req.body.launchReference,req.body.tenantCompanyId); recordLoginSuccess(key); sendSuccess(res,session,201); }
           else { await revokeBmStaffLaunch(req.body.launchReference); recordLoginSuccess(key); res.status(204).end(); }
         }

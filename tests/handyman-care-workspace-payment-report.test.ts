@@ -119,7 +119,7 @@ before(async () => {
   adminUserId = admin.userId;
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'GENERAL_HANDYMAN');
   if (!discipline) throw new Error('GENERAL_HANDYMAN discipline seed missing');
-  initHandymanFixtures({ adminUserId, disciplineId: discipline.id,
+  initHandymanFixtures({ adminUserId, disciplineId: discipline.id, explicitDirectQuotation:true,
     query: async (text, params = []) => pool.query(text, params) });
 
   realmA = await realmFixture('Granted');
