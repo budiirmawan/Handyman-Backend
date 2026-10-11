@@ -5,7 +5,7 @@ import { after, before, describe, it, type TestContext } from 'node:test';
 import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
-import { closePool, initDatabase, migrateUp } from '../src/database';
+import { closePool, initDatabase, migrateUp, withTransaction } from '../src/database';
 import {
   handymanCareActorRepository,
   handymanCareActorService,
@@ -175,6 +175,39 @@ describe('CR-HM-01 A01 PART 07 — Customer Care actor persistence', () => {
       }),
       (error: unknown) => (error as { code?: string }).code === 'VALIDATION_ERROR',
     );
+  });
+
+  it('rolls back integration creation and capability mutation through one transaction client', async (t) => {
+    if (!ready(t)) return;
+    const integrationCode = `BM_TX_${suffix()}`;
+
+    await assert.rejects(
+      withTransaction(async (client) => {
+        const integration = await handoffRuntimeRepository.createIntegration(
+          {
+            integrationCode,
+            displayName: 'Transactional BM integration',
+          },
+          client,
+        );
+        const unchanged = await handymanCareActorService.setIntegrationActorCapability(
+          {
+            integrationId: integration.id,
+            capability: 'NONE',
+          },
+          client,
+        );
+        assert.equal(unchanged.actorCapability, 'NONE');
+        throw new Error('rollback transaction-client test');
+      }),
+      /rollback transaction-client test/,
+    );
+
+    const persisted = await getPool().query(
+      'SELECT id FROM handyman_handoff_integrations WHERE integration_code = $1',
+      [integrationCode],
+    );
+    assert.equal(persisted.rowCount, 0);
   });
 
   it('registers a Customer Care actor inside a capable integration', async (t) => {

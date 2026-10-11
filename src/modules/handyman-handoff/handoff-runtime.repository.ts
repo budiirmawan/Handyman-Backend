@@ -25,12 +25,15 @@ const INTEGRATION_SELECT = `id, integration_code AS "integrationCode",
   display_name AS "displayName", status,
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
-async function createIntegration(input: {
-  integrationCode: string;
-  displayName: string;
-  status?: 'ACTIVE' | 'INACTIVE';
-}): Promise<HandoffIntegrationRecord> {
-  const result = await executor().query<HandoffIntegrationRecord>(
+async function createIntegration(
+  input: {
+    integrationCode: string;
+    displayName: string;
+    status?: 'ACTIVE' | 'INACTIVE';
+  },
+  client?: PoolClient,
+): Promise<HandoffIntegrationRecord> {
+  const result = await executor(client).query<HandoffIntegrationRecord>(
     `INSERT INTO handyman_handoff_integrations
        (id, integration_code, display_name, status)
      VALUES ($1,$2,$3,$4) RETURNING ${INTEGRATION_SELECT}`,

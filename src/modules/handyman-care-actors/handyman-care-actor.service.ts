@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
 import {
   handymanCareActorIntegrationInvalidError,
@@ -86,11 +87,19 @@ export function toPublicHandymanCareActor(
   };
 }
 
-/** Operational provisioning of the integration's actor-capability scope. */
-export async function setIntegrationActorCapability(input: {
-  integrationId: string;
-  capability: unknown;
-}): Promise<HandymanHandoffIntegrationActorScope> {
+/**
+ * Low-level server-side mutation of the integration's actor-capability scope.
+ * This function is not an authorization boundary: callers must authorize the
+ * operator before invoking it. `client` only joins an existing DB transaction;
+ * it does not confer authorization.
+ */
+export async function setIntegrationActorCapability(
+  input: {
+    integrationId: string;
+    capability: unknown;
+  },
+  client?: PoolClient,
+): Promise<HandymanHandoffIntegrationActorScope> {
   if (!isHandymanHandoffIntegrationActorCapability(input.capability)) {
     throw AppError.validation('Actor capability validation failed.', [
       {
@@ -102,6 +111,7 @@ export async function setIntegrationActorCapability(input: {
   const updated = await handymanCareActorRepository.setIntegrationActorCapability(
     input.integrationId,
     input.capability,
+    client,
   );
   if (!updated) throw handymanCareActorIntegrationNotFoundError();
   return updated;
