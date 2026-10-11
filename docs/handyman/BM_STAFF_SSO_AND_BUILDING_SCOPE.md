@@ -155,11 +155,62 @@ staff-to-PIC impersonation. Migrations 0441–0451 and the signed PIC decision
 engine, explicit quotation-version/PIC binding, S1 staff403 and B12 OFF remain
 unchanged.
 
-## Validation
+## Validation — 2026-10-12 (Asia/Jakarta)
 
-Initial production typecheck: PASS. Focused transport PostgreSQL/HTTP tests:
-12 PASS / 0 FAIL / 0 SKIP after correcting a test to use the registered PIC
-session endpoint (initial run: 11 PASS / 1 FAIL due to that test URL). No runtime
-guard was relaxed. Bounded existing Care/PIC regressions: pending final run.
-Successful local staff admission and per-operation Building enforcement:
-BLOCKED / NOT RUN (missing production identity and entitlement authority).
+Validated source/test/API checkpoint:
+`dcc63c621f80f21ef5768dc6af5aaa410734dd0d`.
+
+| Check | Actual result |
+| --- | --- |
+| New isolated PostgreSQL/HTTP transport tests | **12 PASS / 0 FAIL / 0 SKIP** |
+| Bounded final run: transport plus seven existing Care/PIC/quotation/inspection files | **63 PASS / 0 FAIL / 0 SKIP / 0 CANCELLED**, 154.41 seconds |
+| Production `npm run typecheck` | **PASS**, exit 0, 30.06 seconds |
+| OpenAPI YAML parse, three registered paths, referenced local schemas, no exchange success response | **PASS** |
+| `git diff --check` | **PASS** |
+| Historical migrations 0441–0451 | **Unchanged**; only new 0452 plus registry entry |
+| Successful BM staff SSO admission, local User ACTIVE/CUSTOMER_CARE/exact-Building access, per-operation staff scope and staff-session logout | **BLOCKED / NOT RUN** — no production identity/entitlement bridge; not counted as passing or silently skipped tests |
+| Production BM/WebView integration, multi-replica deployment/rotation | **NOT RUN**; prerequisites above, no deploy performed |
+
+The initial focused run was 11 PASS / 1 FAIL because the isolation test called
+an unregistered PIC URL. The test now uses the registered PIC session endpoint
+and sends a complete request-create body. Focused rerun: 12 PASS. No runtime
+security guard was relaxed. Intentional audit-failure tests emit database/HTTP
+500 logs and assert rollback; those scenarios passed in the final run.
+
+New checks cover signature/purpose/issuer/audience binding, strict timestamps
+and TTL, unknown subjects and forbidden User/permission claims, inactive actors,
+wrong property/Building and inactive hierarchy, concurrent assertion/reference
+replay, expiry, irrevocable cancellation, integration/actor/capability revocation,
+missing/weak/rotated keys, audit rollback, throttling, property regrant isolation,
+credential separation and absence of created Users/grants/sessions.
+These are transport tests, **not** a claim that authorized staff SSO works.
+
+Existing passing regressions exercise signed Care intake, resident communication
+and assisted quotation, explicit PIC/version binding, signed PIC approval,
+exact-Building isolation under existing authorities, S1 staff403, B12 OFF, and
+exactly one authorized Execution Scope. Historical inspections/revisits remain
+intact. No full suite, unrelated audit, PR, deployment or privileged provisioning.
+
+Final bounded command:
+
+```sh
+ASENTRA_USE_EMBEDDED_POSTGRES=true NODE_ENV=test LOG_LEVEL=error npx tsx --test --test-concurrency=1 \
+  tests/handyman-bm-staff-launch-transport.test.ts \
+  tests/handyman-care-quotation-assistance.test.ts \
+  tests/handyman-care-assisted-quotation-journey.test.ts \
+  tests/handyman-care-workspace-request-detail.test.ts \
+  tests/handyman-pic-workspace-session.test.ts \
+  tests/handyman-direct-quotation-journey.test.ts \
+  tests/handyman-inspection-integrated-journey.test.ts \
+  tests/handyman-inspection-revisit-journey.test.ts
+npm run typecheck
+```
+
+Pushed bounded checkpoints:
+
+- `976674e017d872e2957b92ce09c68705e923af84` — transport and explicit blocker.
+- `13abf9eccdb62e1f3773d609ad43b4e8f5750c79` — PostgreSQL/HTTP tests before execution.
+- `dcc63c621f80f21ef5768dc6af5aaa410734dd0d` — API docs and focused-test correction,
+  pushed before final bounded regressions.
+
+This results record is a documentation-only follow-up to the validated checkpoint.
