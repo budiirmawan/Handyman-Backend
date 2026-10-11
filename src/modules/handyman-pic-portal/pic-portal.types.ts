@@ -11,7 +11,9 @@ import type { HandymanQuotationAuthorityStatus } from '../handyman-quotation-app
  *    idempotency key or request fingerprint, no occupancy-authority ids, and no
  *    person data of any kind. Every field here exists because the portal needs it
  *    to explain a number or to know why it may not act yet.
- * 2. ELIGIBILITY IS A REPORT, NOT A LEASE. The reason set is computed from the
+ * 2. ELIGIBILITY IS A REPORT, NOT A LEASE (and 03E keeps it that way: the decide
+ *    path re-runs this SAME evaluator under its locks rather than trusting a
+ *    previous report, and refuses with 409 when the report and the ledger differ). The reason set is computed from the
  *    SAME facts the ledger guard enforces at INSERT, so it predicts the decide
  *    path — it cannot reserve it. Concurrency, a revoke landing after this read,
  *    or an occupancy turnover at decision time all remain the ledger's business
@@ -179,6 +181,49 @@ export type PublicPicPortalApprovalEligibility = {
   evaluatedAt: string;
   /** A literal `false`: this read reports a state, it never reserves an outcome. */
   guaranteesDecision: false;
+};
+
+/**
+ * W03 PART 03E — the decide surface's body (A01 §9, ADD-A B11).
+ *
+ * Exactly one key, and it is not a claim about who is deciding: the tenant, the
+ * PIC, the session and the binding are all resolved from the credential, so a
+ * body that could name them would be a second, weaker path to the same row.
+ * Unknown keys are refused by the route's parser before this type is built, and
+ * `Idempotency-Key` travels as a header because the key is a property of the
+ * attempt, not of the decision.
+ */
+export type PicPortalDecisionRequestBody = {
+  decision: 'APPROVE' | 'REJECT';
+};
+
+/**
+ * The execution target an APPROVE created, minimized for a PIC (C16).
+ *
+ * A PIC approved a price for a unit; what it needs back is WHICH version is now
+ * locked in and WHERE the work is authorized. So: no `createdByUserId`, no
+ * channel attribution, no provenance ids, and — unlike the staff projection — not
+ * even the actor class, because the decision block in the same response already
+ * says who signed. `tenantCompanyId`/`tenantPicId` stay out too: they are the
+ * approval half of the scope (F9), not the operational half, and a PIC read has
+ * never been allowed to see them.
+ */
+export type PublicPicPortalExecutionScope = {
+  executionScopeId: string;
+  status: string;
+  quotationId: string;
+  approvedQuotationVersionId: string;
+  handymanRequestId: string;
+  buildingId: string;
+  spaceId: string | null;
+  createdAt: string;
+};
+
+/** `POST /handyman/pic/quotation-versions/:id/decision` — 201 payload. */
+export type PublicPicPortalDecisionWrite = {
+  decision: PublicPicPortalDecision;
+  /** Non-null on APPROVE only (E5: a REJECT creates nothing). */
+  executionScope: PublicPicPortalExecutionScope | null;
 };
 
 /** Inputs to the pure evaluator: facts already resolved in the caller's

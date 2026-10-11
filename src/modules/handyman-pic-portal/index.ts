@@ -1,10 +1,15 @@
 /**
- * W03 PART 03D — the bounded, credential-scoped quotation read for a Tenant PIC.
+ * W03 PART 03D + 03E — the bounded, credential-scoped quotation thread for a
+ * Tenant PIC: three reads and ONE write.
  *
- * Exports are the three reads, the router, and the eligibility vocabulary. What is
- * deliberately NOT here: any write, any decision submission, any staff projection
- * reuse, and any second implementation of "authenticated" (03C's
- * `withPicWorkspaceSession` is the only credential seam this module uses).
+ * What is deliberately NOT here: any staff projection reuse, any second
+ * implementation of "authenticated" (03C's `withPicWorkspaceSession` is the only
+ * credential seam this module uses), and any second ledger. 03E's
+ * `submitPicQuotationDecision` reaches the decisions table exclusively through
+ * `handyman-quotations`' in-transaction decision engine, so a PIC approval and the
+ * pre-amendment staff approval are the same code path with a different actor —
+ * which is what makes "no approval bypass" (03E item 13) a structural fact rather
+ * than a reviewed behaviour.
  */
 export { createPicPortalRouter } from './pic-portal.routes';
 export {
@@ -12,6 +17,10 @@ export {
   readPicPortalOwnDecision,
   readPicPortalQuotation,
 } from './pic-portal.service';
+export {
+  parsePicDecisionBody,
+  submitPicQuotationDecision,
+} from './pic-portal-decide.service';
 export {
   evaluatePicApprovalEligibility,
   PIC_PORTAL_ELIGIBILITY_CODES,
@@ -21,6 +30,8 @@ export {
   type PublicPicPortalApprovalEligibility,
   type PublicPicPortalBinding,
   type PublicPicPortalDecision,
+  type PublicPicPortalDecisionWrite,
+  type PublicPicPortalExecutionScope,
   type PublicPicPortalLine,
   type PublicPicPortalQuotationRead,
   type PublicPicPortalTotals,

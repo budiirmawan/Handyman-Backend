@@ -3631,6 +3631,101 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Storage failure; no decision is claimed.
+    post:
+      operationId: submitPicQuotationDecision
+      summary: Record this Tenant PIC's APPROVE or REJECT against the presented quotation version
+      tags: [Handoff]
+      description: >-
+        W03 PART 03E. The write A01 §6.2 was written for: an APPROVE or REJECT recorded by the
+        Tenant PIC itself, into the existing immutable decision ledger, with no staff fallback and
+        no second ledger. Everything that determines authority is resolved from the credential and
+        the thread - tenant, PIC, workspace session, the quotation thread's own ACTIVE approval
+        binding, the presented version and its validity - so the body is exactly `{decision}` and
+        the only other input is the required `Idempotency-Key` header. Nothing here accepts a
+        tenant id, a PIC id, a session id, a binding id or an amount, and a body key other than
+        `decision` is refused with the same 400 the read surface uses for a query-string context.
+        The version is locked FOR UPDATE through the credential predicate, eligibility is evaluated
+        under that lock with the same rules the approval-eligibility read reports, and the authority
+        half is revalidated after the write in the same transaction: a binding revoked, an occupancy
+        lapsed, a PIC deactivated or a session logged out mid-flight therefore rolls the decision,
+        its lifecycle projection, its Execution Scope and its journal back together rather than
+        recording a decision that lost its authority. Maker-checker (MC1') is enforced here and by
+        the ledger's own INSERT guard: a PIC whose linked user authored the thread, the version, or
+        the binding that confers it cannot approve its own work. A successful APPROVE returns the
+        atomically-created Execution Scope, minimized (target ids and status only: no staff actor,
+        no attribution provenance, no approval-half fields per F9); a REJECT returns null and
+        creates nothing (E5). Replaying the same key with the same decision returns the ORIGINAL
+        recorded decision, and only the same PIC of the same tenant may replay it - any other caller
+        receives the conflict. Every authority refusal is the single conflict code, because MC3
+        fixes that and the reason vocabulary belongs to the eligibility read; a thread that is not
+        this credential's is the same uniform 404 the reads give, so an id can never be probed for
+        existence. Responses use Cache-Control no-store.
+      security:
+        - picWorkspaceSession: []
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >-
+            Trimmed, 1-200 characters, required (400 on `idempotencyKey` otherwise). Scoped to the
+            version by the ledger's own unique constraints; a key reused across versions is a
+            conflict, never a silent second decision.
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PicPortalDecisionBody' }
+      responses:
+        '201':
+          description: >-
+            The decision as recorded (and, for APPROVE, the Execution Scope it created). A replay of
+            the caller's own decision returns this same 201 with the original facts.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PicPortalDecisionWrite' }
+        '400':
+          description: >-
+            Malformed identifier, a body key other than `decision`, an out-of-vocabulary decision, or
+            a missing/out-of-range Idempotency-Key; existing validation envelope.
+        '401':
+          description: >-
+            Uniform HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED: absent, malformed, expired or revoked
+            credential, or an authority that lapsed between verification and write.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: >-
+            Uniform HANDYMAN_PIC_WORKSPACE_RESOURCE_NOT_FOUND for an unknown version, another
+            tenant's version, the same tenant's other Building, or a Space the credential does not
+            cover alike.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: >-
+            HANDYMAN_QUOTATION_DECISION_CONFLICT - the one refusal code of this route (MC3): a second
+            different decision on the version, a replay by a different actor, a read-only credential,
+            no ACTIVE approval binding, a lapsed binding window, a binding conferring another PIC, a
+            lineage PIC mismatch, lapsed tenant/client/occupancy state, a superseded or expired
+            version, or a maker-checker conflict. No reason is named here; read
+            `/handyman/pic/requests/{handymanRequestId}/approval-eligibility` for that.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   /handyman/pic/requests/{handymanRequestId}:
     get:
       operationId: readPicPortalQuotation
@@ -6074,7 +6169,20 @@ paths:
       tags: [Handyman Quotations]
       operationId: decideHandymanQuotation
       summary: Customer decision (APPROVE or REJECT) bound to the exact ISSUED quotation version
-      description: "The decision is explicit and version-bound: actor is the authenticated session user; customer/tenant context is server-derived from the immutable request/attribution lineage; idempotency follows the existing Idempotency-Key header convention. A successful APPROVE atomically creates the authoritative Handyman Execution Scope and returns it on the decision result for downstream target discovery; REJECT never creates scope. Quotation approval is not BAST acceptance, not payment, and not authorization of payment."
+      deprecated: true
+      description: >-
+        SOFT-CLOSED by W03 PART 03E (CR-HM-06/A01 v1.1 §10.4 S1, owner-ratified 2026-10-11):
+        quotation approval is a Tenant PIC authority, so a staff principal can no longer record a
+        NEW decision here. The route stays mounted and answers a controlled
+        `403 PERMISSION_DENIED` before any query runs, with `Deprecation: true` and a
+        `Link: rel="successor-version"` pointing at the PIC decision route on every response -
+        a typed refusal an un-migrated client can act on, deliberately not a 404 it would read as
+        an outage and not a 500 from a half-implemented write. History is untouched: decisions this
+        route recorded before the close remain readable below and in the ledger with
+        `decisionActorType: USER` (C8, and no backfill). No `Sunset` date is advertised because
+        removal is pinned to the BM-side rollout promise that is still an owner decision
+        (A01 §12). Migrate to POST /handyman/pic/quotation-versions/{quotationVersionId}/decision.
+        The decision was explicit and version-bound: actor is the authenticated session user; customer/tenant context is server-derived from the immutable request/attribution lineage; idempotency follows the existing Idempotency-Key header convention. A successful APPROVE atomically creates the authoritative Handyman Execution Scope and returns it on the decision result for downstream target discovery; REJECT never creates scope. Quotation approval is not BAST acceptance, not payment, and not authorization of payment.
       parameters:
         - name: quotationVersionId
           in: path
@@ -6089,14 +6197,36 @@ paths:
               $ref: '#/components/schemas/DecideHandymanQuotationRequest'
       responses:
         '201':
-          description: Immutable decision (APPROVE includes the created Execution Scope)
+          description: >-
+            Unreachable while the route is soft-closed: retained so the historical response shape of
+            this operation is not erased from the contract, but no staff call produces it.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HandymanQuotationDecisionResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: >-
+            The controlled refusal of the closed staff write path: `PERMISSION_DENIED`, raised before
+            the request body, the version or the idempotency key is examined, so this route cannot be
+            used to probe a version's state. It is a policy answer about the CALLER's actor class -
+            which is why the staff surface is 403 here while a PIC whose own authority facts do not
+            add up is answered 409 on the PIC route.
+          headers:
+            Deprecation:
+              description: >-
+                RFC 9799 deprecation indicator, sent on every response of this operation. Value is
+                the bare `true` with no `@<date>` and no `Sunset` header: the removal milestone is an
+                owner rollout decision, not a date this repository may assert.
+              schema: { type: string, enum: ['true'] }
+            Link:
+              description: >-
+                `rel="successor-version"` targeting the PIC decision route for the same version.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
     get:
@@ -77013,6 +77143,57 @@ components:
           description: >
             "Was it me", answered server-side so the question never requires exposing another
             PIC's identity to resolve.
+    PicPortalDecisionBody:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      description: >-
+        W03 PART 03E, ADD-A B11: the decision itself and nothing else. Tenant, PIC, session and
+        binding are resolved from the credential; an input that could name them would be a second,
+        weaker path to the same ledger row, so extra keys are refused before any query runs.
+      properties:
+        decision: { type: string, enum: [APPROVE, REJECT] }
+    PicPortalExecutionScope:
+      type: object
+      additionalProperties: false
+      required:
+        - executionScopeId
+        - status
+        - quotationId
+        - approvedQuotationVersionId
+        - handymanRequestId
+        - buildingId
+        - spaceId
+        - createdAt
+      description: >-
+        The execution target an APPROVE created, minimized for a PIC (A01 §10.3 C16). It answers
+        "which version is now locked in, and where the work is authorized": the approval half of
+        the scope (tenant company, PIC, binding, staff provenance, channel attribution) stays
+        internal per F9, and the actor class is omitted as well because the decision block in the
+        same response already names the signer.
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        status: { type: string, enum: [AUTHORIZED] }
+        quotationId: { type: string, format: uuid }
+        approvedQuotationVersionId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+    PicPortalDecisionWrite:
+      type: object
+      additionalProperties: false
+      required: [decision, executionScope]
+      description: >-
+        201 payload of the PIC decision route. `decision` is the ledger row as recorded, projected
+        through the same minimization as the receipt read (`decidedByUserId` has no key here, so a
+        PIC view can never carry a staff identity).
+      properties:
+        decision: { $ref: '#/components/schemas/PicPortalDecision' }
+        executionScope:
+          $ref: '#/components/schemas/PicPortalExecutionScope'
+          nullable: true
+          description: Non-null for APPROVE only; always null for REJECT (E5).
     PicPortalApprovalEligibility:
       type: object
       additionalProperties: false
@@ -83228,8 +83409,28 @@ components:
           description: Explicit customer decision bound to the exact ISSUED version; idempotency key/fingerprint derive from the Idempotency-Key header plus this payload.
     HandymanQuotationDecisionRecord:
       type: object
-      description: Immutable, version-bound customer decision record; tenant context is a server-derived lineage snapshot (tenantPicId may be null and is never fabricated). Quotation approval is not BAST acceptance and not payment.
+      description: "Immutable, version-bound customer decision record; tenant context is a server-derived lineage snapshot (tenantPicId may be null and is never fabricated). Quotation approval is not BAST acceptance and not payment. W03 PART 03E (A01 §6.3/§9, migrations 0438/0442) widens it with the actor-identity fields: `decisionActorType` says WHOSE authority signed the row, `decidedByUserId` becomes nullable because a Tenant PIC decision has no staff user and none is invented for it (C4 - a null here is a designed absence, not missing data), and the three PIC ids name the PIC, the credential and the binding the decision stood on. Rows written before the close keep `decisionActorType: USER` with their user id and no PIC ids (C5: historical USER decisions are never rewritten, never backfilled, and remain readable)."
       properties:
+        decisionActorType:
+          type: string
+          enum: [USER, TENANT_PIC]
+          description: >-
+            Discriminator stored on the row, so `decidedByUserId: null` is never ambiguous. SYSTEM
+            is not a legal value at this surface: the ledger guard refuses it, and this projection
+            does not widen the ledger vocabulary (A01 §10.2).
+        decidedByTenantPicId: { type: string, format: uuid, nullable: true }
+        decidedByPicSessionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The workspace credential that carried the decision; an id, never a token.
+        approvalBindingId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            The approval binding this decision stands on, recorded rather than re-derived so an
+            audit can reconstruct which authority was in force without reading the binding table.
         id: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
         quotationId: { type: string, format: uuid }
@@ -83239,7 +83440,14 @@ components:
           enum: [APPROVE, REJECT]
         tenantCompanyId: { type: string, format: uuid }
         tenantPicId: { type: string, format: uuid, nullable: true }
-        decidedByUserId: { type: string, format: uuid }
+        decidedByUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Set for a legacy `USER` decision; always null for a `TENANT_PIC` decision, whose actor is
+            named by `decidedByTenantPicId`. A consumer must never LEFT-join it to `users` on the
+            assumption that a decision has a staff actor (E4).
         idempotencyKey: { type: string }
         decidedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
@@ -83274,7 +83482,29 @@ components:
         status:
           type: string
           enum: [AUTHORIZED]
-        createdByUserId: { type: string, format: uuid }
+        createdByUserId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Null for a scope created by a Tenant PIC approval (W03 PART 03E, A01 §7.1/§10.3 C6/C7);
+            no staff id is fabricated to fill it. Any consumer joining this column to `users` must
+            LEFT-join and read `createdByActorType` first, and must treat a PIC-created scope as a
+            complete, valid authorization rather than a row with missing data.
+        createdByActorType:
+          type: string
+          enum: [USER, TENANT_PIC]
+          description: >-
+            Which authority created the scope. `SYSTEM` is absent by construction: exactly one
+            creator exists, the APPROVE branch of a quotation decision (E1).
+        createdByTenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Set for a `TENANT_PIC` scope and required to equal the APPROVE decision's
+            `decidedByTenantPicId` (E2). The session id that carried the approval is stored in the
+            row for audit and is deliberately NOT part of this projection.
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 

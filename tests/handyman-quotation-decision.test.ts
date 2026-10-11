@@ -369,64 +369,122 @@ async function issuedFixture() {
   return { ...f, bundle, version, uomId };
 }
 
-describe('CR-HM-06 PART 04 — quotation customer decision', () => {
-  it('1: current ISSUED exact version can APPROVE', async (t) => {
+/**
+ * RETARGETED BY W03 PART 03E (CR-HM-06/A01 v1.1 §10.4 **S1**, owner-ratified
+ * 2026-10-11) — the CR-HM-06 PART 06 decision suite now asserts the S1 contract
+ * instead of the pre-amendment staff authority.
+ *
+ * What changed and why it is not a softening:
+ *
+ *   - Every test here used to drive the decision engine through a staff
+ *     principal, because before A01 that was the only principal with approval
+ *     authority. A01 moved that authority to the attested Tenant PIC; §10.4 S1
+ *     (ratified) keeps the staff route mounted and refuses a staff decision as a
+ *     policy answer. Since `0442` the *database* also refused a `USER` row, so
+ *     these tests had been failing on a raw CHECK violation surfacing as
+ *     `INTERNAL_SERVER_ERROR`. Asserting that shape any longer would freeze a
+ *     500-era behavior into the regression suite, which is why the owner directed
+ *     a retarget rather than a leave-red.
+ *   - The engine's invariants are NOT dropped. Replay identity, one decision per
+ *     version, replay-vs-conflict, atomicity of decision + projection + scope +
+ *     journal, REJECT-creates-nothing, and the side-effect census are all
+ *     exercised against a live database in
+ *     `tests/handyman-pic-portal-decide.test.ts`, i.e. through the only write path
+ *     that still exists. What this file keeps is the staff surface's own contract,
+ *     which is now: controlled refusal, no state change, no row, no event.
+ *   - The fixture work each test does (issue a version, supersede it, expire it,
+ *     smuggle a body) is preserved verbatim, because those states still have to be
+ *     reachable — the refusal must not depend on the version being decidable.
+ */
+
+/** The S1 refusal, asserted as a refusal and as an absence. */
+async function assertStaffDecisionRefused(
+  run: () => Promise<unknown>,
+  versionId: string,
+  quotationId: string,
+  label: string,
+  expectedVersionStatus = 'ISSUED',
+): Promise<void> {
+  await assert.rejects(
+    run(),
+    (error: unknown) => {
+      const e = error as { statusCode?: number; code?: string; message?: string };
+      assert.equal(e.code, 'PERMISSION_DENIED', `${label}: code`);
+      assert.equal(e.statusCode, 403, `${label}: status`);
+      // The refusal is raised BEFORE the version is read, so no state can be
+      // probed through it — which is what makes the same answer correct for a
+      // DRAFT, an expired, and a nonexistent version alike.
+      assert.match(e.message ?? '', /Tenant PIC authority/, `${label}: message`);
+      return true;
+    },
+    `${label}: a staff principal must be refused inside the error contract`,
+  );
+  assert.equal(await decisionCount(quotationId), 0, `${label}: no decision row`);
+  const journal = await q(
+    `SELECT count(*)::int AS n FROM operational_events
+      WHERE metadata->>'quotationVersionId' = $1
+        AND event_type IN ('HANDYMAN_QUOTATION_APPROVED',
+                           'HANDYMAN_QUOTATION_REJECTED')`,
+    [versionId],
+  );
+  assert.equal(journal.rows[0].n, 0, `${label}: nothing journalled`);
+  const scopes = await q(
+    `SELECT count(*)::int AS n FROM handyman_execution_scopes
+      WHERE approved_quotation_version_id = $1`,
+    [versionId],
+  );
+  assert.equal(scopes.rows[0].n, 0, `${label}: no Execution Scope`);
+  const versionRow = await q(
+    'SELECT status FROM handyman_quotation_versions WHERE id = $1',
+    [versionId],
+  );
+  assert.equal(
+    versionRow.rows[0]?.status,
+    expectedVersionStatus,
+    `${label}: a refusal is not a state change`,
+  );
+}
+
+describe('CR-HM-06 PART 04 / W03 PART 03E — the staff decision arm is closed, not widened', () => {
+  it('1: APPROVE is no longer a staff authority; the version stays presented', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const decision = await decideHandymanQuotation(
+    await assertStaffDecisionRefused(
+      () => decideHandymanQuotation(
+        f.version.id,
+        { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+        adminUserId,
+      ),
       f.version.id,
-      { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.bundle.quotation.id,
+      'staff APPROVE',
     );
-    assert.equal(decision.decision, 'APPROVE');
-    assert.equal(decision.quotationVersionId, f.version.id);
-    assert.equal(decision.clientId, f.client.id);
-    const versionRow = await q(
-      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
-      [f.version.id],
+    // The staff READ seam is untouched (C8): history stays readable, which is how
+    // an auditor reconciles a pre-amendment decision after the write door closes.
+    await assert.rejects(
+      getHandymanQuotationDecision(f.version.id, adminUserId),
+      (error: unknown) =>
+        errorCode(error) === 'HANDYMAN_QUOTATION_DECISION_NOT_FOUND',
+      'no decision exists — and the read says so, without exposing anything else',
     );
-    assert.equal(versionRow.rows[0].status, 'APPROVED');
-    const events = await q(
-      `SELECT event_type FROM operational_events
-        WHERE metadata->>'quotationVersionId' = $1
-          AND event_type = 'HANDYMAN_QUOTATION_APPROVED'`,
-      [f.version.id],
-    );
-    assert.equal(events.rows.length, 1);
-    // PART 05 final semantics: APPROVE atomically created the scope.
-    const scope = await getHandymanExecutionScopeByQuotationVersion(
-      f.version.id, adminUserId,
-    );
-    assert.equal(scope.status, 'AUTHORIZED');
-    assert.equal(scope.approvedQuotationVersionId, f.version.id);
-    assert.equal(scope.quotationDecisionId, decision.id);
-    assert.equal(decision.executionScope?.id, scope.id);
   });
 
-  it('2: current ISSUED exact version can REJECT', async (t) => {
+  it('2: REJECT is refused the same way, and cannot leave a REJECTED projection', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const decision = await decideHandymanQuotation(
+    await assertStaffDecisionRefused(
+      () => decideHandymanQuotation(
+        f.version.id,
+        { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
+        adminUserId,
+      ),
       f.version.id,
-      { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.bundle.quotation.id,
+      'staff REJECT',
     );
-    assert.equal(decision.decision, 'REJECT');
-    const versionRow = await q(
-      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
-      [f.version.id],
-    );
-    assert.equal(versionRow.rows[0].status, 'REJECTED');
-    const events = await q(
-      `SELECT event_type FROM operational_events
-        WHERE metadata->>'quotationVersionId' = $1
-          AND event_type = 'HANDYMAN_QUOTATION_REJECTED'`,
-      [f.version.id],
-    );
-    assert.equal(events.rows.length, 1);
   });
 
-  it('3: DRAFT/SUPERSEDED/EXPIRED cannot be decided', async (t) => {
+  it('3: DRAFT/SUPERSEDED/EXPIRED are refused for the same reason as an ISSUED version', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const v2 = await createHandymanQuotationRevision(
@@ -441,15 +499,17 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
           { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
           adminUserId,
         ),
-        (e: unknown) =>
-          errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
-        `decide ${status}`,
+        (e: unknown) => errorCode(e) === 'PERMISSION_DENIED',
+        `decide ${status}: policy first, state never`,
       );
+      // The state assertions this test used to make are still made — by the
+      // lifecycle suite (`handyman-quotation-lifecycle`), which owns presentation
+      // state; here they would only re-assert that a refusal wrote nothing.
+      assert.equal(await decisionCount(f.bundle.quotation.id), 0);
     }
-    assert.equal(await decisionCount(f.bundle.quotation.id), 0);
   });
 
-  it('4: expired-by-server-time ISSUED cannot be approved/rejected', async (t) => {
+  it('4: an expired-by-server-time ISSUED version is refused without being read', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     await q(`UPDATE handyman_quotation_versions
@@ -462,8 +522,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
           { decision, idempotencyKey: `k-${randomUUID()}` },
           adminUserId,
         ),
-        (e: unknown) =>
-          errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
+        (e: unknown) => errorCode(e) === 'PERMISSION_DENIED',
       );
     }
     assert.equal(await decisionCount(f.bundle.quotation.id), 0);
@@ -471,10 +530,10 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       'SELECT status FROM handyman_quotation_versions WHERE id = $1',
       [f.version.id],
     );
-    assert.equal(row.rows[0].status, 'ISSUED');
+    assert.equal(row.rows[0].status, 'ISSUED', 'expiry is projected by its own path, not by a refusal');
   });
 
-  it('5: customer context derived server-side; smuggling cannot override', async (t) => {
+  it('5: a smuggled customer context is never read, because nothing is read', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const otherCompany = await tenantCompanyService.createTenantCompany(
@@ -491,15 +550,32 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       buildingId: randomUUID(),
       status: 'APPROVED',
     } as unknown as Parameters<typeof decideHandymanQuotation>[1];
-    const decision = await decideHandymanQuotation(
-      f.version.id, smuggled, adminUserId,
+    // The whitelist that made smuggling inert (`DecideHandymanQuotationInput`
+    // carries only `decision` + `idempotencyKey`) is still the reason a body can
+    // never name a tenant — and 03E adds the stronger fact that this arm writes
+    // nothing at all, so no context is derived from anything.
+    await assertStaffDecisionRefused(
+      () => decideHandymanQuotation(f.version.id, smuggled, adminUserId),
+      f.version.id,
+      f.bundle.quotation.id,
+      'smuggled staff APPROVE',
     );
-    assert.equal(decision.tenantCompanyId, f.company.id);
-    assert.equal(decision.tenantPicId, f.pic.id);
-    assert.equal(decision.clientId, f.client.id);
+    const lineage = await q(
+      `SELECT r.tenant_company_id, r.tenant_pic_id
+         FROM handyman_quotations qq
+         JOIN handyman_service_requests r ON r.id = qq.handyman_request_id
+        WHERE qq.id = $1`,
+      [f.bundle.quotation.id],
+    );
+    assert.equal(
+      lineage.rows[0].tenant_company_id,
+      f.company.id,
+      'the thread keeps the tenant its own lineage gave it',
+    );
+    assert.equal(lineage.rows[0].tenant_pic_id, f.pic.id);
   });
 
-  it('6: actor derived from authenticated local user; NULL PIC never fabricated', async (t) => {
+  it('6: no staff actor is written to the ledger at all, and a NULL PIC stays NULL', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const smuggled = {
@@ -507,12 +583,16 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       idempotencyKey: `k-${randomUUID()}`,
       decidedByUserId: randomUUID(),
     } as unknown as Parameters<typeof decideHandymanQuotation>[1];
-    const decision = await decideHandymanQuotation(
-      f.version.id, smuggled, adminUserId,
+    await assertStaffDecisionRefused(
+      () => decideHandymanQuotation(f.version.id, smuggled, adminUserId),
+      f.version.id,
+      f.bundle.quotation.id,
+      'staff APPROVE with a caller-supplied actor',
     );
-    assert.equal(decision.decidedByUserId, adminUserId);
-    // A request chain without a PIC keeps tenantPicId NULL (lineage
-    // NULL is never fabricated into an identity).
+    // A request chain without a PIC keeps tenantPicId NULL: the lineage rule this
+    // test existed for, asserted where it is actually decided — at intake, not at
+    // the ledger. 03E's PIC suite proves the same for a recorded decision, whose
+    // `tenant_pic_id` comes from the request row and is never invented.
     const g = await attributedFixture();
     const attributionNoPic = await createChannelAttribution({
       tenantCompanyId: g.company.id,
@@ -560,75 +640,77 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     await issueHandymanQuotationVersion(
       v.id, { validUntil: FUTURE() }, adminUserId,
     );
-    const decision2 = await decideHandymanQuotation(
+    // A thread with no PIC and no binding has NO approver at all after S1: staff is
+    // 403 and no PIC credential exists to decide. That is the ratified controlled
+    // standstill (ADD-A BLK-GAP-1), not a hole to code around.
+    await assertStaffDecisionRefused(
+      () => decideHandymanQuotation(
+        v.id, { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+        adminUserId,
+      ),
       v.id,
-      { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      bundle2.quotation.id,
+      'staff APPROVE on a PIC-less thread',
     );
-    assert.equal(decision2.tenantPicId, null);
-    assert.equal(decision2.tenantCompanyId, g.company.id);
   });
 
-  it('7: same idempotency key + same fingerprint replays same decision', async (t) => {
+  it('7: replay is decided by the ledger, so a staff replay attempt is simply refused', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const key = `k-${randomUUID()}`;
-    const first = await decideHandymanQuotation(
-      f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
-    );
-    const replay = await decideHandymanQuotation(
-      f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
-    );
-    assert.equal(replay.id, first.id);
-    assert.equal(replay.decision, 'APPROVE');
-    assert.equal(await decisionCount(f.bundle.quotation.id), 1);
-    const eventCount = await q(
-      `SELECT count(*)::int AS n FROM operational_events
-        WHERE metadata->>'quotationVersionId' = $1
-          AND event_type = 'HANDYMAN_QUOTATION_APPROVED'`,
-      [f.version.id],
-    );
-    assert.equal(eventCount.rows[0].n, 1);
-  });
-
-  it('8: conflicting replay / second different decision rejected', async (t) => {
-    if (!requireDatabase(t)) return;
-    const f = await issuedFixture();
-    const key = `k-${randomUUID()}`;
-    await decideHandymanQuotation(
-      f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
-    );
-    // Same key + conflicting decision.
-    await assert.rejects(
-      decideHandymanQuotation(
-        f.version.id, { decision: 'REJECT', idempotencyKey: key },
-        adminUserId,
-      ),
-      (e: unknown) => errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
-    );
-    // Different key + decided version.
-    await assert.rejects(
-      decideHandymanQuotation(
+    for (const attempt of ['first', 'replay']) {
+      await assertStaffDecisionRefused(
+        () => decideHandymanQuotation(
+          f.version.id, { decision: 'APPROVE', idempotencyKey: key },
+          adminUserId,
+        ),
         f.version.id,
-        { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+        f.bundle.quotation.id,
+        `staff APPROVE ${attempt}`,
+      );
+    }
+    assert.equal(await decisionCount(f.bundle.quotation.id), 0, 'no row, so no replay');
+  });
+
+  it('8: the conflict rules survive the close and now live on the PIC arm', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await issuedFixture();
+    const key = `k-${randomUUID()}`;
+    await assertStaffDecisionRefused(
+      () => decideHandymanQuotation(
+        f.version.id, { decision: 'APPROVE', idempotencyKey: key },
         adminUserId,
       ),
-      (e: unknown) => errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
+      f.version.id,
+      f.bundle.quotation.id,
+      'staff APPROVE',
     );
-    assert.equal(await decisionCount(f.bundle.quotation.id), 1);
+    for (const [decision, label] of [
+      ['REJECT', 'same key, conflicting decision'],
+      ['APPROVE', 'different key, already-decided version'],
+    ] as const) {
+      await assert.rejects(
+        decideHandymanQuotation(
+          f.version.id, { decision, idempotencyKey: `k-${randomUUID()}` },
+          adminUserId,
+        ),
+        (e: unknown) => errorCode(e) === 'PERMISSION_DENIED',
+        label,
+      );
+    }
+    assert.equal(await decisionCount(f.bundle.quotation.id), 0);
     const row = await q(
       'SELECT status FROM handyman_quotation_versions WHERE id = $1',
       [f.version.id],
     );
-    assert.equal(row.rows[0].status, 'APPROVED');
+    assert.equal(row.rows[0].status, 'ISSUED');
+    // One-decision-per-version, and conflict-vs-replay as a ledger question, are
+    // asserted on the arm that can still write:
+    // `tests/handyman-pic-portal-decide.test.ts`.
   });
 
-  it('9: APPROVE/REJECT transition + immutable decision are atomic', async (t) => {
+  it('9: a refusal writes nothing, and the ledger still refuses a forged USER row', async (t) => {
     if (!requireDatabase(t)) return;
-    // Failure path atomicity: conflicting decision writes NOTHING.
     const f = await issuedFixture();
     await q(`UPDATE handyman_quotation_versions SET status = 'SUPERSEDED'
               WHERE id = $1`, [f.version.id]);
@@ -644,41 +726,41 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       ),
     );
     assert.equal(
-      await tableCount('handyman_quotation_decisions'), before.decisions);
+      await tableCount('handyman_quotation_decisions'), before.decisions,
+    );
     assert.equal(await tableCount('operational_events'), before.events);
-    // Success path: decision + projection appear together.
-    const ok = await decideHandymanQuotation(
-      (await issuedFixture()).version.id,
-      { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
-    );
-    const joined = await q(
-      `SELECT d.decision, v.status
-         FROM handyman_quotation_decisions d
-         JOIN handyman_quotation_versions v
-           ON v.id = d.quotation_version_id
-        WHERE d.id = $1`,
-      [ok.id],
-    );
-    assert.deepEqual(
-      [joined.rows[0].decision, joined.rows[0].status],
-      ['REJECT', 'REJECTED'],
-    );
-    // Decision is immutable (DB backstop).
+    // The floor under the soft-close, asserted directly: even a caller that skipped
+    // the service cannot put a staff actor into the ledger. This is why closing the
+    // route (rather than deleting it) is not a hole (§10.4).
     await assert.rejects(
-      q(`UPDATE handyman_quotation_decisions SET decision = 'APPROVE'
-          WHERE id = $1`, [ok.id]),
+      q(
+        `INSERT INTO handyman_quotation_decisions
+           (id, client_id, quotation_id, quotation_version_id, decision,
+            tenant_company_id, tenant_pic_id, decided_by_user_id,
+            decision_actor_type, idempotency_key, request_fingerprint)
+         VALUES ($1,$2,$3,$4,'APPROVE',$5,$6,$7,'USER',$8,$9)`,
+        [
+          randomUUID(), f.client.id, f.bundle.quotation.id, f.version.id,
+          f.company.id, f.pic.id, adminUserId, `forged-${randomUUID()}`,
+          '0'.repeat(64),
+        ],
+      ),
+      (error: unknown) => {
+        assert.equal(
+          (error as { code?: string }).code,
+          '23514',
+          'the ledger guard, not a convention, is what forbids a USER decision',
+        );
+        return true;
+      },
     );
-    await assert.rejects(
-      q('DELETE FROM handyman_quotation_decisions WHERE id = $1', [ok.id]),
-    );
-    const read = await getHandymanQuotationDecision(
-      ok.quotationVersionId, adminUserId,
-    );
-    assert.equal(read.decision, 'REJECT');
+    // And immutability of recorded history is still enforced by the same DB, which
+    // is the property PART 04 asserted and 03E must not weaken: a refusal may not
+    // become a repair path.
+    assert.equal(await decisionCount(f.bundle.quotation.id), 0);
   });
 
-  it('10: zero execution-scope/payment/BAST/FM/crew/scheduling side effects', async (t) => {
+  it('10: the closed arm has zero downstream side effects', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const before = {
@@ -688,10 +770,15 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       crews: await tableCount('handyman_work_crews'),
       moves: await tableCount('inventory_stock_movements'),
     };
-    await decideHandymanQuotation(
+    await assertStaffDecisionRefused(
+      () => decideHandymanQuotation(
+        f.version.id,
+        { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+        adminUserId,
+      ),
       f.version.id,
-      { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.bundle.quotation.id,
+      'staff APPROVE',
     );
     const after = {
       vendorQuotations: await tableCount('vendor_quotations'),
@@ -701,12 +788,6 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       moves: await tableCount('inventory_stock_movements'),
     };
     assert.deepEqual(after, before);
-    const scopeCount = await q(
-      `SELECT count(*)::int AS n FROM handyman_execution_scopes
-        WHERE approved_quotation_version_id = $1`,
-      [f.version.id],
-    );
-    assert.equal(scopeCount.rows[0].n, 1);
     const events = await q(
       `SELECT event_type, metadata FROM operational_events
         WHERE metadata->>'quotationVersionId' = $1
@@ -714,12 +795,6 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
                              'HANDYMAN_QUOTATION_REJECTED')`,
       [f.version.id],
     );
-    assert.equal(events.rows.length, 1);
-    for (const k of Object.keys(events.rows[0].metadata as object)) {
-      assert.ok(
-        !/executionscope|payment|bast|workorder|crew|schedul/i.test(k),
-        `forbidden journal key ${k}`,
-      );
-    }
+    assert.equal(events.rows.length, 0);
   });
 });

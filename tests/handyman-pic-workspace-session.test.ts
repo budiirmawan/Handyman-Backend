@@ -1094,14 +1094,21 @@ describe('W03 PART 03C — no fallback between credential kinds', () => {
         `the PIC credential module must not touch ${forbidden} (A2/A7/rule 19)`,
       );
     }
-    // Release safety: no decision endpoint may exist in this PART, and no
-    // binding surface either.
+    // Release safety, re-verified at 03E: a PIC may now POST a decision, and it
+    // may do so only with a credential — an unauthenticated call to the decide
+    // route is a 401 from the seam, never a 200 and never a 403 that would
+    // confirm the route's authorization model. The quotation READ path still has
+    // no POST handler, and no binding surface for PICs exists at all: binding
+    // remains a staff-only act (ADD-A B8/B10), so both answer 404.
+    const decide = await api()
+      .post('/api/v1/handyman/pic/quotation-versions/x/decision')
+      .send({ decision: 'APPROVE' });
+    assert.equal(decide.status, 401, 'the decide route exists and is credential-only');
     for (const path of [
-      '/api/v1/handyman/pic/quotation-versions/x/decision',
       '/api/v1/handyman/pic/requests/' + randomUUID(),
       '/api/v1/handyman/pic/quotations/' + randomUUID() + '/approval-binding',
     ]) {
-      assert.equal((await api().post(path).send({})).status, 404, `${path} must not exist yet`);
+      assert.equal((await api().post(path).send({})).status, 404, `${path} must not exist`);
     }
     for (const verb of ['put', 'patch'] as const) {
       const response = await (api() as any)[verb]('/api/v1/handyman/pic/session').send({});

@@ -273,6 +273,23 @@ export async function postHandymanQuotationDecisionHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
+    /**
+     * W03 PART 03E, A01 §10.4 C9/C10 — the staff decision path is soft-closed, and
+     * the header says so BEFORE the body is inspected, so a client that polls this
+     * route learns the migration target even on the refusal. `Deprecation: true`
+     * carries no date on purpose: §10.4 fixes removal to a rollout milestone that
+     * is still an owner decision (recorded as an open blocker in A01 §12), and a
+     * `Sunset` date invented here would be a promise the codebase cannot keep.
+     * The route stays mounted (C10) so an un-migrated client gets a typed 403 it
+     * can act on rather than a 404 it would read as an outage.
+     */
+    res.setHeader('Deprecation', 'true');
+    res.setHeader(
+      'Link',
+      '</handyman/pic/quotation-versions/'
+        + p(req.params.quotationVersionId)
+        + '/decision>; rel="successor-version"',
+    );
     sendSuccess(
       res,
       await decideHandymanQuotation(

@@ -444,7 +444,7 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     );
   });
 
-  it('6: APPROVE HTTP returns the authoritative Execution Scope (discoverable)', async (t) => {
+  it("6: the closed staff APPROVE arm refuses with 403, names its successor, and creates no scope", async (t) => {
     if (!requireDatabase(t)) return;
     const f = await diagnosedFixture();
     const bundle = await createQuotationHttp(f.request.id);
@@ -469,37 +469,50 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       preScope.body.error.code,
       'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND',
     );
+    // RETARGETED by W03 PART 03E (§10.4 S1, owner-ratified): approval is a Tenant
+    // PIC authority, so this arm answers the controlled refusal. The scope facts
+    // this test used to assert from a 201 are asserted against a live database on
+    // the arm that can still write them —
+    // `tests/handyman-pic-portal-decide.test.ts` (APPROVE returns the scope, the
+    // version-keyed read returns the same row, REJECT returns null).
     const approved = await api().post(`${VERSION(versionId)}/decision`)
       .set(auth())
       .set('Idempotency-Key', `k-${randomUUID()}`)
       .send({ decision: 'APPROVE' });
-    assert.equal(approved.status, 201, JSON.stringify(approved.body));
-    assert.equal(approved.body.data.decision, 'APPROVE');
-    assert.equal(approved.body.data.quotationVersionId, versionId);
-    assert.equal(approved.body.data.decidedByUserId, adminUserId);
-    const scope = approved.body.data.executionScope;
-    assert.ok(scope, 'APPROVE must expose the authoritative scope');
-    assert.equal(scope.status, 'AUTHORIZED');
-    assert.equal(scope.approvedQuotationVersionId, versionId);
-    assert.equal(scope.quotationDecisionId, approved.body.data.id);
-    assert.equal(scope.quotationId, bundle.quotation.id);
-    assert.equal(scope.handymanRequestId, f.request.id);
-    assert.equal(scope.tenantCompanyId, f.company.id);
-    assert.equal(scope.buildingId, f.building.id);
-    // The same scope is discoverable through the bounded version-keyed read.
+    assert.equal(approved.status, 403, JSON.stringify(approved.body));
+    assert.equal(approved.body.error.code, 'PERMISSION_DENIED');
+    assert.equal(approved.headers['deprecation'], 'true');
+    assert.ok(
+      String(approved.headers['link']).includes(`pic/quotation-versions/${versionId}/decision`),
+      `successor link missing: ${approved.headers['link']}`,
+    );
+    assert.ok(
+      String(approved.headers['link']).includes('rel="successor-version"'),
+      `successor link rel missing: ${approved.headers['link']}`,
+    );
+    assert.equal(approved.headers['sunset'], undefined, 'no Sunset date (owner decision)');
+    // No half-written approval: the version stays presented, no scope exists, and
+    // the decision read answers its own not-found rather than a 403 (C8: history
+    // stays readable, it is only the write that closed).
+    const afterRefusal = await api().get(`${VERSION(versionId)}/decision`).set(auth());
+    assert.equal(afterRefusal.status, 404);
+    assert.equal(afterRefusal.body.error.code, 'HANDYMAN_QUOTATION_DECISION_NOT_FOUND');
     const scopedRead = await api()
       .get(`${VERSION(versionId)}/execution-scope`)
       .set(auth());
-    assert.equal(scopedRead.status, 200);
-    assert.deepEqual(scopedRead.body.data, scope);
-    const decisionRead = await api().get(`${VERSION(versionId)}/decision`)
-      .set(auth());
-    assert.equal(decisionRead.status, 200);
-    assert.equal(decisionRead.body.data.decision, 'APPROVE');
-    assert.equal(decisionRead.body.data.quotationVersionId, versionId);
+    assert.equal(scopedRead.status, 404);
+    assert.equal(
+      scopedRead.body.error.code,
+      'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND',
+    );
+    const versionRow = await q(
+      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
+      [versionId],
+    );
+    assert.equal(versionRow.rows[0].status, 'ISSUED', 'a refusal is not a state change');
   });
 
-  it('7: REJECT HTTP yields no Execution Scope', async (t) => {
+  it('7: the closed staff REJECT arm refuses too, and still yields no Execution Scope', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await diagnosedFixture();
     const bundle = await createQuotationHttp(f.request.id);
@@ -520,9 +533,13 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       .set(auth())
       .set('Idempotency-Key', `k-${randomUUID()}`)
       .send({ decision: 'REJECT' });
-    assert.equal(rejected.status, 201, JSON.stringify(rejected.body));
-    assert.equal(rejected.body.data.decision, 'REJECT');
-    assert.equal(rejected.body.data.executionScope, null);
+    // RETARGETED by W03 PART 03E: REJECT was never an authority a staff principal
+    // keeps either, so both arms of the closed route answer the same refusal. The
+    // "REJECT creates no scope" invariant (E5) is asserted where a REJECT can still
+    // be recorded, in the PIC decide suite.
+    assert.equal(rejected.status, 403, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.error.code, 'PERMISSION_DENIED');
+    assert.equal(rejected.headers['deprecation'], 'true');
     const scopedRead = await api()
       .get(`${VERSION(versionId)}/execution-scope`)
       .set(auth());
@@ -533,8 +550,16 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     );
     const decisionRead = await api().get(`${VERSION(versionId)}/decision`)
       .set(auth());
-    assert.equal(decisionRead.status, 200);
-    assert.equal(decisionRead.body.data.decision, 'REJECT');
+    assert.equal(decisionRead.status, 404);
+    assert.equal(
+      decisionRead.body.error.code,
+      'HANDYMAN_QUOTATION_DECISION_NOT_FOUND',
+    );
+    const versionRow = await q(
+      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
+      [versionId],
+    );
+    assert.equal(versionRow.rows[0].status, 'ISSUED');
   });
 
   it('8: read/manage RBAC split; actor is always the session user', async (t) => {
@@ -637,23 +662,32 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       .set(auth())
       .set('Idempotency-Key', `k-${randomUUID()}`)
       .send({ decision: 'APPROVE', ...smuggle });
-    assert.equal(approved.status, 201, JSON.stringify(approved.body));
-    assert.equal(approved.body.data.quotationVersionId, versionId);
-    assert.equal(approved.body.data.decidedByUserId, adminUserId);
-    assert.ok(approved.body.data.executionScope);
+    // RETARGETED by W03 PART 03E: the whitelist that made smuggling inert is
+    // unchanged, and the arm is now closed as well — so the "never echoed" property
+    // is asserted against the refusal, which is the strongest form of it: the staff
+    // decision response carries no projection of anything at all.
+    assert.equal(approved.status, 403, JSON.stringify(approved.body));
+    assert.equal(approved.body.error.code, 'PERMISSION_DENIED');
+    assert.equal(approved.body.data, undefined);
     // Smuggled downstream fields are never echoed anywhere.
-    const raw = JSON.stringify(approved.body.data);
+    const raw = JSON.stringify(approved.body);
     for (const forbidden of [
       'workOrderId', 'crewId', 'scheduleId', 'arrivalToken', 'qrCode',
       'geofenceProof',
     ]) {
       assert.equal(
-        forbidden in approved.body.data ||
-          (approved.body.data.executionScope && forbidden in approved.body.data.executionScope),
+        raw.includes(forbidden),
         false,
         `forbidden field echoed: ${forbidden} (${raw.length} bytes)`,
       );
     }
+    // ...and the whitelisted read/write paths this test built stay intact: the
+    // version was priced, issued and presented with server-derived numbers only.
+    const versionRow = await q(
+      'SELECT status FROM handyman_quotation_versions WHERE id = $1',
+      [versionId],
+    );
+    assert.equal(versionRow.rows[0].status, 'ISSUED');
   });
 
   it('10: OpenAPI/runtime parity; ZERO downstream/payment/BAST/FM APIs', async (t) => {

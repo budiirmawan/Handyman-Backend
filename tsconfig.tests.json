@@ -11,7 +11,8 @@
     "tests/handyman-quotation-pic-binding-migration.test.ts",
     "tests/handyman-quotation-approval-binding-runtime.test.ts",
     "tests/handyman-pic-workspace-session.test.ts",
-    "tests/handyman-pic-portal-read.test.ts"
+    "tests/handyman-pic-portal-read.test.ts",
+    "tests/handyman-pic-portal-decide.test.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

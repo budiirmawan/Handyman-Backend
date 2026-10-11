@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { readPicWorkspaceBearer } from '../handyman-pic-session';
+import { submitPicQuotationDecision } from './pic-portal-decide.service';
 import {
   readPicPortalApprovalEligibility,
   readPicPortalOwnDecision,
@@ -19,8 +20,17 @@ import {
  * authorized by the resolved thread's own lineage, so a staff token cannot borrow
  * it and a PIC token cannot reach a staff surface.
  *
- * Nothing on this router mutates. `03E` owns the decide path; the eligibility read
- * below reports that path's preconditions without entering it.
+ * The three GETs still mutate nothing, and `03E` adds exactly one write to this
+ * router — the decide path below — which is authorized the same way: by the
+ * credential and the thread's own binding, never by a staff grant. The
+ * eligibility read reports that path's preconditions without entering it.
+ *
+ * The POST differs in one mechanical respect: `readPicWorkspaceBearer` refuses ANY
+ * body, which is correct while the surface is read-only and impossible for a
+ * decision. So the route passes `undefined` in the body slot — the query rule
+ * stays enforced in full — and `parsePicDecisionBody` inside the service holds the
+ * body to exactly `{decision}`, refusing every other key with the same 400 class.
+ * There is no way to smuggle a tenant, a PIC, a session or a binding in here.
  */
 export function createPicPortalRouter(): Router {
   const router = Router();
@@ -75,6 +85,35 @@ export function createPicPortalRouter(): Router {
         sendSuccess(
           res,
           await readPicPortalOwnDecision(token, req.params.quotationVersionId),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    '/handyman/pic/quotation-versions/:quotationVersionId/decision',
+    async (req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try {
+        const { token } = readPicWorkspaceBearer(
+          req.header('authorization'),
+          req.query,
+          undefined,
+        );
+        sendSuccess(
+          res,
+          await submitPicQuotationDecision(
+            token,
+            req.params.quotationVersionId,
+            req.body,
+            // A header, not a body key: the key identifies this ATTEMPT, and
+            // trimming and the 1-200 bound are enforced in the service so both
+            // surfaces validate a key the same way.
+            req.header('Idempotency-Key'),
+          ),
+          201,
         );
       } catch (error) {
         next(error);

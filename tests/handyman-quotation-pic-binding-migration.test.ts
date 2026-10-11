@@ -1071,17 +1071,22 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
         })),
       'Only an attested Tenant PIC may decide a Handyman quotation.',
     );
-    // The live staff route is unchanged in this PART, so the refusal the
-    // tenant-facing path now hits comes from the DB floor. This is the
-    // controlled standstill recorded in the PART document - no fallback, and
-    // no fallback test either: it is asserted as a fact.
+    // The staff route is no longer "unchanged in this PART": W03 PART 03E
+    // soft-closed it (§10.4 S1, owner-ratified 2026-10-11), so the answer a staff
+    // caller gets is now the typed policy refusal raised BEFORE any query, and the
+    // DB floor asserted by the loop above is what remains underneath it for every
+    // other writer. The controlled standstill itself did not move: a thread with no
+    // binding has no approver, there is no fallback, and there is no fallback test
+    // either - it stays asserted as a fact, now in the error contract rather than
+    // as a raw CHECK violation.
     const issued = await buildThread({ issue: true });
     await expectRefusal(
       () => decideHandymanQuotation(issued.versionId, {
         decision: 'APPROVE',
         idempotencyKey: `standstill-${randomUUID()}`,
       }, adminUserId),
-      'Only an attested Tenant PIC may decide a Handyman quotation.',
+      'Quotation approval is a Tenant PIC authority; a staff principal cannot record a new decision.',
+      { code: 'PERMISSION_DENIED' },
     );
     const residue = await q(
       `SELECT count(*)::int AS n FROM ${DECISION_TABLE}

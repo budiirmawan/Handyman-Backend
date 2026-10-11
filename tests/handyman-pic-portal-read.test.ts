@@ -1650,8 +1650,13 @@ describe('W03 PART 03D — the eligibility predicate itself', () => {
 
 describe('W03 PART 03D — the read is authorized by the credential, not by a grant', () => {
   const moduleDir = join(process.cwd(), 'src/modules/handyman-pic-portal');
+  // 03E adds a fourth file, and it is IN this list rather than outside it: the
+  // prohibition on borrowing a staff grant is a rule about the PIC surface, and
+  // the day a write path appears on it is exactly the day the rule needs to be
+  // checked against that file too.
   const sources = () =>
-    ['pic-portal.routes.ts', 'pic-portal.service.ts', 'pic-portal.repository.ts']
+    ['pic-portal.routes.ts', 'pic-portal.service.ts', 'pic-portal.repository.ts',
+      'pic-portal-decide.service.ts']
       .map(file => readFileSync(join(moduleDir, file), 'utf8'))
       // Comments may name what the code must not call; the gate reads code.
       .map(text =>
@@ -1699,12 +1704,23 @@ describe('W03 PART 03D — the read is authorized by the credential, not by a gr
     assert.match(staffAccess, /assertBuildingScopedResourceAccess/);
   });
 
-  it('ships exactly three GETs, no mutation, and no decide path', () => {
+  it('ships three GETs and exactly one mutation — the 03E decide POST', () => {
     const code = sources();
     assert.equal((code.match(/router\.get\(/g) ?? []).length, 3);
-    for (const verb of ['router.post(', 'router.put(', 'router.patch(', 'router.delete(']) {
-      assert.ok(!code.includes(verb), `03D must not register ${verb}`);
+    // RETARGETED by 03E (was: `no router.post at all`). The census is still a
+    // census: one write, on one path, and nothing else may appear.
+    assert.equal((code.match(/router\.post\(/g) ?? []).length, 1);
+    for (const verb of ['router.put(', 'router.patch(', 'router.delete(']) {
+      assert.ok(!code.includes(verb), `03D/03E must not register ${verb}`);
     }
+    const routesSource = readFileSync(join(moduleDir, 'pic-portal.routes.ts'), 'utf8');
+    assert.equal(
+      (routesSource.match(/'\/handyman\/pic\/quotation-versions\/:quotationVersionId\/decision'/g) ?? [])
+        .length,
+      2,
+      'the decide path is exactly one GET plus one POST',
+    );
+    assert.match(routesSource, /router\.post\(\s*'\/handyman\/pic\/quotation-versions\/:quotationVersionId\/decision'/);
     assert.match(code, /\/handyman\/pic\/requests\/:handymanRequestId/);
     assert.match(code, /\/handyman\/pic\/requests\/:handymanRequestId\/approval-eligibility/);
     assert.match(code, /\/handyman\/pic\/quotation-versions\/:quotationVersionId\/decision/);
@@ -1719,6 +1735,16 @@ describe('W03 PART 03D — the read is authorized by the credential, not by a gr
     ]) {
       assert.ok(!code.includes(write), `03D must not call ${write}`);
     }
+    // 03E's write reaches the ledger through ONE function, and not through the
+    // staff operation it replaces: no fallback, no second decision entry point.
+    const decide = readFileSync(join(moduleDir, 'pic-portal-decide.service.ts'), 'utf8');
+    // One entry point into the ledger, and no SQL of its own: whatever the guard
+    // below the repository does, the portal never re-implements a write.
+    assert.equal((decide.match(/await recordPicQuotationDecision\(/g) ?? []).length, 1);
+    for (const forbidden of ['INSERT INTO', 'UPDATE handyman_', 'handyman_quotation_decisions']) {
+      assert.ok(!decide.includes(forbidden), `the portal must not touch ${forbidden} directly`);
+    }
+    assert.ok(!/from '\.\.\/handyman-quotations-api'/.test(decide));
     // The reads are SELECT-only over the ledgers they touch.
     const repository = readFileSync(join(moduleDir, 'pic-portal.repository.ts'), 'utf8');
     for (const write of [
@@ -1732,23 +1758,37 @@ describe('W03 PART 03D — the read is authorized by the credential, not by a gr
     assert.ok(!/handyman_execution_scopes/.test(repository), 'no Execution Scope read');
   });
 
-  it('leaves the staff decide path exactly as closed as it was (B12 OFF, no fallback)', async (t) => {
+  it('leaves the staff decide path closed — now as a controlled 403, not a raw guard error', async (t) => {
     if (!requireDatabase(t)) return;
     const thread = await buildThread({ issue: true, bind: true });
+    // RETARGETED by 03E item 10. Before this PART the staff write reached the
+    // ledger and was refused there by `0442`'s INSERT guard, so the guard's text
+    // surfaced through a raw `23514` — a 500 wearing a policy message. The close
+    // is now a typed answer raised before any I/O, which is what A01 §10.4 S1
+    // requires while B12 stays OFF; the guard remains underneath as the floor.
     await assert.rejects(
       () => decideHandymanQuotation(thread.versionId, {
         decision: 'APPROVE',
         idempotencyKey: `03d-${randomUUID()}`,
       }, adminUserId),
       (error: unknown) => {
-        const message = (error as Error).message ?? '';
-        assert.match(
-          message,
-          /Only an attested Tenant PIC may decide a Handyman quotation\./,
-        );
+        const appError = error as { statusCode?: number; code?: string; message?: string };
+        assert.equal(appError.statusCode, 403);
+        assert.equal(appError.code, 'PERMISSION_DENIED');
+        assert.match(appError.message ?? '', /Tenant PIC authority/);
         return true;
       },
-      'a staff principal must still be refused by the ledger floor',
+      'a staff principal must be refused by policy, in the error contract',
+    );
+    assert.equal(
+      (
+        await q(
+          `SELECT count(*)::int AS n FROM handyman_quotation_decisions WHERE quotation_version_id = $1`,
+          [thread.versionId],
+        )
+      ).rows[0].n,
+      0,
+      'the refusal must not have written a decision on the way out',
     );
     // And 03D did not add a way around it: no route on this surface can decide.
     const attempted = await api()

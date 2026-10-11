@@ -8,6 +8,7 @@ import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanExecutionScopeRepository }
   from './handyman-execution-scope.repository';
 import type {
+  HandymanExecutionScopeActor,
   HandymanExecutionScopeRecord,
   NewHandymanExecutionScope,
   PublicHandymanExecutionScope,
@@ -20,6 +21,14 @@ import type {
  * repository); this module additionally owns the authoritative
  * location derivation (fail-closed) and the bounded read seams.
  * No assignment/scheduling/arrival/session/payment/BAST surface.
+ *
+ * W03 PART 03E (A01 §7.1/§7.2 E1–E3, §10.3 C6/C7): creation is now actor-aware —
+ * `buildExecutionScopeInput` takes the deciding actor rather than a staff user id,
+ * checks the scope PIC against the decision PIC (E2), and the read seam projects
+ * the actor class. There is still exactly one call site of `insertScope` in this
+ * repository (the APPROVE branch of the decision engine), which is what makes E1
+ * structural rather than a convention; the matching DB-side guard on the scope row
+ * is the ratified 03F row and is NOT implemented here.
  */
 
 function assertUuid(value: string | undefined, field: string): void {
@@ -52,6 +61,21 @@ export function handymanExecutionScopeConflictError(): AppError {
     code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_CONFLICT,
     message:
       'An execution scope already exists for this approved quotation version.',
+    statusCode: 409,
+  });
+}
+
+/**
+ * A01 §7.2 E2 — the scope's tenant/PIC context disagrees with the decision that
+ * authorises it. Reuses the existing scope-conflict code because C15 forbids
+ * minting new vocabulary for this PART; the diagnostic class is identical ("the
+ * scope this transaction is about to write is not the one the decision supports").
+ */
+export function handymanExecutionScopeActorMismatchError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_CONFLICT,
+    message:
+      'The execution scope context does not match the decision that authorises it.',
     statusCode: 409,
   });
 }
@@ -108,12 +132,33 @@ export async function buildExecutionScopeInput(args: {
   tenantPicId: string | null;
   derivedBuildingId: string;
   derivedSpaceId: string | null;
-  createdByUserId: string;
+  /**
+   * The deciding principal, passed straight through. E1's "only the APPROVE
+   * branch of a decision may create a scope" is why this is an actor and not a
+   * user id: a PIC approval has no user id, and inventing one to fill a NOT NULL
+   * column is the leak A01 §6.1 exists to close.
+   */
+  actor: HandymanExecutionScopeActor;
+  /** E2: the PIC recorded on the APPROVE decision itself. */
+  decisionTenantPicId: string | null;
 }): Promise<NewHandymanExecutionScope> {
   const location = await deriveExecutionScopeLocation({
     buildingId: args.derivedBuildingId,
     spaceId: args.derivedSpaceId,
   });
+  if (args.actor.kind === 'TENANT_PIC') {
+    // E2, service-side half. The DB guard independently requires the same PIC to
+    // be ACTIVE in this tenant and the session to belong to it, so a stale or
+    // borrowed id cannot ride a correct binding; this check exists so the caller
+    // gets a typed conflict instead of a rolled-back insert.
+    if (args.decisionTenantPicId !== args.actor.tenantPicId) {
+      throw handymanExecutionScopeActorMismatchError();
+    }
+  } else if (args.decisionTenantPicId !== null) {
+    // A USER decision never carries a PIC attribution, so this combination means
+    // the decision and the scope were assembled from different rows.
+    throw handymanExecutionScopeActorMismatchError();
+  }
   return {
     clientId: args.clientId,
     handymanRequestId: args.handymanRequestId,
@@ -124,7 +169,7 @@ export async function buildExecutionScopeInput(args: {
     tenantCompanyId: args.tenantCompanyId,
     tenantPicId: args.tenantPicId,
     ...location,
-    createdByUserId: args.createdByUserId,
+    actor: args.actor,
   };
 }
 
@@ -148,6 +193,11 @@ export function toPublicExecutionScope(
     spaceId: row.spaceId,
     status: row.status,
     createdByUserId: row.createdByUserId,
+    createdByActorType: row.createdByActorType,
+    createdByTenantPicId: row.createdByTenantPicId,
+    // C7 deliberately does NOT project `createdByPicSessionId`: the session id is
+    // the credential's identity, and a downstream operational read has no reason
+    // to learn which credential carried an approval it only has to execute.
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

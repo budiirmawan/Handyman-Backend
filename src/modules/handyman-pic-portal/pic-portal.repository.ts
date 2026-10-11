@@ -155,10 +155,25 @@ export async function findPresentedVersion(
  * an unknown one does, and it must fail in this single statement rather than in
  * a second lookup.
  */
+/**
+ * Lock strength is a parameter, not a second function, because the WHERE clause IS
+ * the credential predicate and a copy of it would be a second thing to keep
+ * correct. The default stays `FOR SHARE`: a read must not block a writer longer
+ * than it must.
+ *
+ * `03E` passes `'update'`, and that is not an optimization — it is what keeps the
+ * decide path deadlock-free. The ledger engine locks the version `FOR UPDATE`
+ * itself; if the portal had first taken `FOR SHARE` on the same row, two PIC
+ * sessions deciding concurrently would each hold a shared lock and each try to
+ * upgrade, which Postgres resolves by aborting one of them with `40P01` — a 500
+ * on an endpoint whose contract is 201/401/404/409. Taking the exclusive lock once,
+ * through the credential predicate, means the engine's re-lock is already held.
+ */
 export async function findVersionForCredential(
   tx: PoolClient,
   principal: PicWorkspacePrincipal,
   quotationVersionId: string,
+  options: { lock?: 'share' | 'update' } = {},
 ): Promise<PicPortalVersionRow | null> {
   const result = await tx.query<Record<string, unknown>>(
     `SELECT v.id AS version_id, v.quotation_id, q.handyman_request_id,
@@ -174,7 +189,7 @@ export async function findVersionForCredential(
         AND r.tenant_company_id = ${UUID_CAST('$2')}
         AND r.building_id = ${UUID_CAST('$3')}
         AND ($4::uuid IS NULL OR r.space_id = $4::uuid)
-      FOR SHARE OF v`,
+      FOR ${options.lock === 'update' ? 'UPDATE' : 'SHARE'} OF v`,
     [quotationVersionId, principal.tenantCompanyId, principal.buildingId,
       principal.spaceId],
   );

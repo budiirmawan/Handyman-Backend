@@ -72,18 +72,31 @@ export type {
 } from './handyman-execution-scope.types';
 export { HANDYMAN_EXECUTION_SCOPE_STATUSES }
   from './handyman-execution-scope.types';
+export { HANDYMAN_EXECUTION_SCOPE_ACTOR_TYPES }
+  from './handyman-execution-scope.types';
+export type { HandymanExecutionScopeActor }
+  from './handyman-execution-scope.types';
 export {
+  assertQuotationDecisionInput,
   decideHandymanQuotation,
   getHandymanQuotationDecision,
+  picDecisionRefusedError,
+  recordPicQuotationDecision,
+  staffApprovalForbiddenError,
+  type HandymanQuotationDecisionResult,
 } from './handyman-quotation-decision.service';
 export { handymanQuotationDecisionRepository }
   from './handyman-quotation-decision.repository';
 export type {
+  DecideHandymanQuotationInput,
   HandymanQuotationDecision,
+  HandymanQuotationDecisionActor,
+  HandymanQuotationDecisionActorType,
   HandymanQuotationDecisionRecord,
   PublicHandymanQuotationDecision,
-  DecideHandymanQuotationInput,
 } from './handyman-quotation-decision.types';
+export { HANDYMAN_QUOTATION_DECISION_ACTOR_TYPES }
+  from './handyman-quotation-decision.types';
 export { HANDYMAN_QUOTATION_DECISIONS } from './handyman-quotation-decision.types';
 export {
   issueHandymanQuotationVersion,
