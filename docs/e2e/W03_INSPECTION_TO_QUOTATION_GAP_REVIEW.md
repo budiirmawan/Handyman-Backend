@@ -164,6 +164,10 @@ The detailed additive contract, proposed persistence/lifecycle, idempotency and 
 
 Accordingly, the old STOP is superseded only as to the business direction needed to design the lifecycle. Implementation remains unauthorized until the new contract is frozen. No code, migration, permission seed, or test was added by this owner-direction follow-up.
 
+## Final authority reconciliation follow-up — baseline `fe9ba93`
+
+The latest owner proposals and their runtime/frozen-authority status are reconciled in [`CR-HM-INSPECTION-01_FINAL_AUTHORITY_RECONCILIATION.md`](../handyman/CR-HM-INSPECTION-01_FINAL_AUTHORITY_RECONCILIATION.md). The explicit, unratified CR-HM-03 F8 amendment proposal is [`CR-HM-INSPECTION-01_CR-HM-03_F8_AMENDMENT_01_PROPOSAL.md`](../handyman/CR-HM-INSPECTION-01_CR-HM-03_F8_AMENDMENT_01_PROPOSAL.md). Freeze verdict: **BLOCKED / not frozen** pending the F1/F2-compatible `NOT_INSPECTABLE` resolution, legacy cutover, reassignment timing, and formal F8/roadmap ratification. Direct-quotation eligibility remains a separate pending authority. No runtime code, migration, permission seed, or test was changed/run.
+
 ## Guardrails and disposition
 
 - CR-HM-03 F1/F3 and the frozen roadmap remain authoritative. Evidence and reinspection are not silently added to CR-HM-03; evidence stays with CR-HM-10.

@@ -7,6 +7,7 @@
 | Branch / reviewed baseline | `arena/b4a8612c-handyman-backend` / `65c3ea0fc44b1ec9543c4e419ad71efa48272b40` |
 | Change class | Design contract only — no production code, migration, permission seed, or test change |
 | Related review | [`W03_INSPECTION_TO_QUOTATION_GAP_REVIEW.md`](../e2e/W03_INSPECTION_TO_QUOTATION_GAP_REVIEW.md), including the historical Part 02 STOP and owner-direction follow-up |
+| Final reconciliation | [`CR-HM-INSPECTION-01_FINAL_AUTHORITY_RECONCILIATION.md`](CR-HM-INSPECTION-01_FINAL_AUTHORITY_RECONCILIATION.md) — owner proposals 1–8 and freeze verdict |
 
 > **Freeze condition:** the approved business direction below is sufficient to design the additive authority, but this contract is not implementation-ready until the authority and compatibility decisions in §12 are answered. No unresolved policy is inferred here.
 
@@ -300,3 +301,7 @@ Before this contract is marked **FROZEN** or implemented:
 - verify the final routes, permission checks, scope checks, and direct-route isolation against those decisions;
 - approve the additive persistence and report-to-0381/0382 linkage; and
 - run only the focused tests for this contract first. Do not use this design as authorization for a full-suite run, deploy, PIC/Execution Scope change, or direct-quotation policy implementation.
+
+## 14. Final authority reconciliation — baseline `fe9ba93`
+
+The dated [`Final Authority Reconciliation & Freeze Review`](CR-HM-INSPECTION-01_FINAL_AUTHORITY_RECONCILIATION.md) records the owner's proposals 1–8 against the frozen CR-HM-03/04 authorities and current schema/services/routes/RBAC. That reconciliation supersedes earlier open items only where it explicitly says so (notably diagnosis-to-accepted-report linkage, use of the existing authenticated `users.id` identity without a new worker profile/context, and reviewer/submitter separation). For diagnosis provenance, it proposes retaining the existing separate diagnosis write after report acceptance and storing the accepted report id directly on 0382; it does not assume review-time diagnosis materialization. It **does not** mark this contract frozen. The companion [CR-HM-03 F8 amendment proposal](CR-HM-INSPECTION-01_CR-HM-03_F8_AMENDMENT_01_PROPOSAL.md) is also not ratified; roadmap numbering remains unchanged.
