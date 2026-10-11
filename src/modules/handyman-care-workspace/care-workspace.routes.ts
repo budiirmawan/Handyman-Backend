@@ -1,3 +1,4 @@
+import { mountBmStaffLaunchRoutes } from './bm-staff-launch.routes';
 import { createCareQuotationHandoff, getCareQuotation, listCareQuotationInbox, presentCareQuotation } from './care-quotation.service';
 import { getCareWorkspaceRequestDetail } from './care-workspace-request-detail.service';
 import { listCareWorkspaceRequests } from './care-workspace-requests.service';
@@ -15,6 +16,7 @@ import { admitCareWorkspace, revokeCareWorkspaceSession, workspaceUnauthorized }
 /** Care-only credential surface; no local User middleware or grant administration. */
 export function createCareWorkspaceRouter(): Router {
   const router = Router();
+  mountBmStaffLaunchRoutes(router);
   router.post('/handyman/care/session', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     // Existing local login-throttle convention, isolated namespace and socket
