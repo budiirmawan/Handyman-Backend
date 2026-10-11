@@ -186,8 +186,39 @@ B12 stays OFF (issue is not approval; a binding is still required to decide).
 - Focused PostgreSQL assistance file: **9 PASS / 0 FAIL / 0 SKIP**, 24.15 seconds.
 - Integrated signed Care → inbox → presentation → signed PIC claim/approval →
   Execution Scope journey: **1 PASS / 0 FAIL / 0 SKIP**, 15.22 seconds.
-- OpenAPI YAML parsing PASS. Final combined regression/typecheck results are
-  recorded after the bounded final run.
+- `af7af41`: authority locking, expanded nine-case PostgreSQL coverage and API/
+  BM integration documentation; pushed before the final longer regression run.
+
+### Final bounded validation at `af7af41`
+
+```sh
+ASENTRA_USE_EMBEDDED_POSTGRES=true NODE_ENV=test LOG_LEVEL=error \
+  npx tsx --test --test-concurrency=1 \
+  tests/handyman-care-quotation-assistance.test.ts \
+  tests/handyman-care-assisted-quotation-journey.test.ts \
+  tests/handyman-care-workspace-request-detail.test.ts \
+  tests/handyman-pic-workspace-session.test.ts \
+  tests/handyman-direct-quotation-journey.test.ts \
+  tests/handyman-inspection-integrated-journey.test.ts \
+  tests/handyman-inspection-revisit-journey.test.ts
+```
+
+**51 PASS / 0 FAIL / 0 SKIP / 0 CANCELLED**, exit 0, **136.17 seconds**.
+This includes nine new PostgreSQL assistance cases, the new integrated Care/PIC
+journey, existing Care represented-scope and signed PIC admission/security cases,
+and all three prior direct/inspection/revisit quotation-to-scope journeys.
+
+`npm run typecheck`: **PASS**, exit 0, **30.43 seconds**, on the same runtime.
+OpenAPI YAML, all six new paths and referenced components: **PASS**.
+`git diff --check`: **PASS**. Migration comparison against the saved baseline
+shows only new 0451 and registration; migrations through 0450 remain unchanged.
+The final checkpoint records these results without changing runtime or tests.
+
+At initial verification, restored workspace files matched `c21cda2` byte-for-byte
+while the local Git pointer was at an older ancestor. After fetching the current
+remote, the same branch was fast-forwarded to the exact expected baseline without
+replacing files, resetting, stashing or losing changes. The worktree was clean
+before implementation.
 
 Initial test failures were infrastructure/fixture issues: embedded PostgreSQL's
 package install symlinks needed hydration after `npm ci --ignore-scripts`; the
