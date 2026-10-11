@@ -1,3 +1,4 @@
+import { assertRequestOpen } from './handyman-prequotation-operations.service';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
@@ -91,6 +92,7 @@ export async function recordHandymanReferral(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      assertRequestOpen(request);
 
       // 2) Realm authority: BE-02G exact-Building check on the
       //    locked request's authoritative {clientId, buildingId}

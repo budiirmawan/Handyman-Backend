@@ -1,3 +1,4 @@
+import { assertRequestOpen } from './handyman-prequotation-operations.service';
 import { assertDirectQuotationAuthorization } from './handyman-direct-quotation-policy';
 import { resolveAcceptedInspectionReport } from './handyman-inspection-prerequisite';
 import { AppError } from '../../shared/errors';
@@ -110,6 +111,7 @@ export async function recordHandymanDiagnosis(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      assertRequestOpen(request);
 
       // 2) Frozen F1 source-state gate.
       if (request.status !== 'DIAGNOSIS') {

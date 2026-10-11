@@ -1,3 +1,4 @@
+import { assertRequestOpen } from './handyman-prequotation-operations.service';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
@@ -158,6 +159,7 @@ export async function assignHandymanInspectionField(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      assertRequestOpen(request);
 
       await assertInspectionPath(tx, request.id);
 

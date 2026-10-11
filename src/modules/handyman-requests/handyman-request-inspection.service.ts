@@ -1,3 +1,4 @@
+import { assertRequestOpen } from './handyman-prequotation-operations.service';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
@@ -111,6 +112,7 @@ export async function recordHandymanInspection(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      assertRequestOpen(request);
 
       // 2) Frozen F1 source-state gate: inspection only from INSPECTION_REQUIRED.
       if (request.status !== 'INSPECTION_REQUIRED') {

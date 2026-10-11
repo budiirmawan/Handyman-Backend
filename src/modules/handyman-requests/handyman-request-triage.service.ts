@@ -1,3 +1,4 @@
+import { assertRequestOpen } from './handyman-prequotation-operations.service';
 import { resolveTriagePolicy } from './handyman-direct-quotation-policy';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
@@ -127,6 +128,7 @@ export async function recordHandymanRequestTriage(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      assertRequestOpen(request);
 
       // 2) Frozen F1 source-state gate: a triage decision only from INTAKE.
       if (request.status !== 'INTAKE') {

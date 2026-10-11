@@ -29,6 +29,7 @@ export const HANDYMAN_SERVICE_REQUEST_STATUSES = [
   'DIAGNOSIS',
   'READY_FOR_NEXT_STEP',
   'REFERRED',
+  'CANCELLED_PRE_QUOTATION',
 ] as const;
 export type HandymanServiceRequestStatus =
   (typeof HANDYMAN_SERVICE_REQUEST_STATUSES)[number];

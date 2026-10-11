@@ -1,3 +1,4 @@
+import { assertRequestOpen } from './handyman-prequotation-operations.service';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
@@ -262,6 +263,7 @@ export async function submitHandymanInspectionReport(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      assertRequestOpen(request);
 
       // Realm authority first (BE-02G exact Building; no same-Client shortcut).
       await assertBuildingScopedResourceAccess(actorUserId, {
@@ -451,6 +453,7 @@ export async function reviewHandymanInspectionReport(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
+      assertRequestOpen(request);
 
       await assertBuildingScopedResourceAccess(actorUserId, {
         clientId: request.clientId,
