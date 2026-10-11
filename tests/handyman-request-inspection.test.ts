@@ -27,6 +27,7 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { createAdminUser } from './helpers/access';
 import { ensureTestDatabase } from './helpers/postgres';
+import { assignFieldInspectorFixture } from './helpers/handyman-fixtures';
 
 /**
  * CR-HM-03 PART 02 — focused tests for the Handyman inspection record.
@@ -197,6 +198,9 @@ async function inspectionFixture() {
     },
     adminUserId,
   );
+  // CR-HM-INSPECTION-01 PART A: the in-scope inspection write is bound to the
+  // active Field assignment (single writer); the fixture assigns the actor.
+  await assignFieldInspectorFixture(request.id, adminUserId, adminUserId);
   return { ...f, service, request };
 }
 

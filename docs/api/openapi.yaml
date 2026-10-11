@@ -4830,6 +4830,90 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /handyman/requests/{handymanRequestId}/inspection-assignment:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: assignHandymanInspectionField
+      summary: Assign or reassign the pre-quotation Field inspector
+      description: >
+        CR-HM-INSPECTION-01 PART A — Operations assigns the individual Field
+        Worker/Surveyor of a request whose persisted triage disposition is
+        INSPECTION_REQUIRED, before quotation and independently of CR-HM-04
+        execution assignment. Requires the dedicated
+        `handyman.operations.inspection.assign` authority and the exact
+        Building scope derived from the request. The target must be an ACTIVE
+        local user holding `handyman.field.inspection.report.submit` with
+        access to the request Building. One ACTIVE assignment exists per
+        request; a reassignment requires a reason, keeps the superseded row
+        forever and never erases history. It changes no request status and
+        creates no Execution Scope, quotation or price authority.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignHandymanInspectionFieldRequest"
+      responses:
+        "201":
+          description: Assignment (or reassignment) recorded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInspectionAssignmentState"
+        "200":
+          description: Identical replay — the current assignment is unchanged.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInspectionAssignmentState"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: getHandymanInspectionAssignment
+      summary: Read the current Field inspector assignment and its history
+      description: >
+        CR-HM-INSPECTION-01 PART A — bounded read of the request's ACTIVE
+        assignment plus the immutable supersession history. Existing scoped
+        request-read admission (`tenant_company.read` or
+        `handyman.operations.request.read`) with the service's exact-Building
+        guard.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current assignment (may be null) + history, oldest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInspectionAssignmentState"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /handyman/requests/{handymanRequestId}/inspection:
     parameters:
       - name: handymanRequestId
@@ -4840,11 +4924,18 @@ paths:
       operationId: recordHandymanInspection
       summary: Record the structured inspection for one Handyman request
       description: >
-        CR-HM-03 PART 05A (frozen F1/F2/F3) — valid only while the request
-        is in INSPECTION_REQUIRED; the structured result + notes record is
-        created atomically with the DIAGNOSIS projection and journal
-        event. FROZEN F3: no inspection evidence exists (evidence defers
-        to CR-HM-10; PHOTO/VIDEO intake semantics are untouched).
+        CR-HM-03 PART 05A (frozen F1/F2/F3), amended by CR-HM-INSPECTION-01
+        PART A — valid only while the request is in INSPECTION_REQUIRED; the
+        structured result + notes record is created atomically with the
+        DIAGNOSIS projection and journal event. This is the ONLY in-scope
+        physical inspection writer: it requires the dedicated
+        `handyman.field.inspection.report.submit` authority AND the caller
+        must be the request's ACTIVE assigned Field inspector (409
+        HANDYMAN_INSPECTION_ASSIGNMENT_REQUIRED / 403
+        HANDYMAN_INSPECTION_FIELD_DENIED). A generic `tenant_company.manage`
+        grant can no longer create an in-scope 0381 row. FROZEN F3: no
+        inspection evidence exists (evidence defers to CR-HM-10; PHOTO/VIDEO
+        intake semantics are untouched).
       tags: [Handyman Lifecycle]
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -84036,6 +84127,53 @@ components:
         inspectionNotes: { type: string }
         inspectedByUserId: { $ref: "#/components/schemas/Uuid" }
         inspectedAt: { type: string, format: date-time }
+    AssignHandymanInspectionFieldRequest:
+      type: object
+      description: >
+        CR-HM-INSPECTION-01 PART A — caller-owned assignment inputs only; the
+        actor and the request/client/building snapshot are never body fields.
+      required: [assignedFieldUserId]
+      properties:
+        assignedFieldUserId: { $ref: "#/components/schemas/Uuid" }
+        reassignmentReason: { type: string, maxLength: 500 }
+    HandymanInspectionAssignment:
+      type: object
+      description: >
+        CR-HM-INSPECTION-01 PART A — one immutable assignment fact (a
+        superseded row keeps its assignee, assigner and reason forever).
+      required:
+        [id, clientId, handymanRequestId, channelAttributionId, buildingId,
+         assignedFieldUserId, assignedByUserId, assignedAt, status,
+         supersededAt, supersededByAssignmentId, supersedesAssignmentId,
+         supersessionReason]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        assignedFieldUserId: { $ref: "#/components/schemas/Uuid" }
+        assignedByUserId: { $ref: "#/components/schemas/Uuid" }
+        assignedAt: { type: string, format: date-time }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByAssignmentId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        supersedesAssignmentId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        supersessionReason: { type: string, nullable: true }
+    HandymanInspectionAssignmentState:
+      type: object
+      required: [current, history, changed]
+      properties:
+        current:
+          allOf:
+            - $ref: "#/components/schemas/HandymanInspectionAssignment"
+          nullable: true
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanInspectionAssignment" }
+        changed: { type: boolean }
     HandymanDiagnosisRecord:
       type: object
       description: >-

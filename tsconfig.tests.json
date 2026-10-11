@@ -17,6 +17,7 @@
     "tests/handyman-execution-scope-assignment-service.test.ts",
     "tests/handyman-arrival-results.test.ts",
     "tests/handyman-work-sessions.test.ts",
+    "tests/handyman-inspection-assignment.test.ts",
     "tests/handyman-quotation-lifecycle.test.ts",
     "tests/handyman-quotation-decision.test.ts",
     "tests/handyman-quotations-api.test.ts"

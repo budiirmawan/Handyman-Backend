@@ -155,6 +155,12 @@ const EXPECTED_UNASSIGNED_BY_DEFAULT = [
   // as a real code). Granted only by explicit provisioning, on top of
   // tenant_company.manage — never instead of it.
   'handyman.quotation.approval.binding.manage',
+  // CR-HM-INSPECTION-01 PART A: assigning the pre-quotation Field inspector,
+  // submitting that Field report, and reviewing it are three separate
+  // exceptional authorities — each granted only by explicit provisioning.
+  'handyman.operations.inspection.assign',
+  'handyman.field.inspection.report.submit',
+  'handyman.operations.inspection.report.review',
   // W02 PART 02B: payment verify/report are withheld from default grants.
   'handyman.payment.report',
   'handyman.payment.verify',
@@ -308,8 +314,12 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
     // W02 PART 04A: + `handyman.operations.request.triage` (unassigned by default).
     // W03 PART 03B2: + `handyman.quotation.approval.binding.manage` (unassigned
     // by default; ADD-A B8's deferred dedicated binding code).
-    assert.equal(CATALOGUE.length, 357);
-    assert.equal(CATALOGUE_SET.size, 357, 'catalogue must contain no duplicates');
+    // CR-HM-INSPECTION-01 PART A: + the three pre-quotation Field inspection
+    // codes (assign / report submit / report review), all unassigned by
+    // default and enforced by the new inspection surface plus the amended
+    // in-scope POST /inspection writer.
+    assert.equal(CATALOGUE.length, 360);
+    assert.equal(CATALOGUE_SET.size, 360, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {

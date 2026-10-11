@@ -268,6 +268,25 @@ export const FOUNDATION_PERMISSIONS: readonly {
     code: 'handyman.quotation.approval.binding.manage',
     name: 'Manage Handyman Quotation Approval Bindings',
   },
+  // CR-HM-INSPECTION-01 PART A — pre-quotation Field inspection authority.
+  // Three dedicated codes (assignment by Operations, report submission by the
+  // assigned Field user, report review by Operations). None of them is a
+  // substitute for, or granted by, `tenant_company.manage`; all three are
+  // deliberately granted to NO role by default (see
+  // UNASSIGNED_BY_DEFAULT_PERMISSION_CODES) so provisioning is an explicit
+  // administrative act. Names match migration 0445 (ON CONFLICT DO NOTHING).
+  {
+    code: 'handyman.operations.inspection.assign',
+    name: 'Assign Field Inspectors to Handyman Requests',
+  },
+  {
+    code: 'handyman.field.inspection.report.submit',
+    name: 'Submit Handyman Field Inspection Reports',
+  },
+  {
+    code: 'handyman.operations.inspection.report.review',
+    name: 'Review Handyman Field Inspection Reports',
+  },
   // W02 PART 02B — Handyman customer payment codes. Names match migration
   // 0432 (ON CONFLICT DO NOTHING keeps one row). Both are route-enforced by
   // handyman-customer-ledger-api; neither is granted by default (see
@@ -791,6 +810,13 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   // administrator. Until granted, the three binding routes 403 for everyone —
   // including PLATFORM_ADMIN (ADD-A B8's `tenant_company.manage` wall still
   // applies underneath).
+  // CR-HM-INSPECTION-01 PART A — assigning the pre-quotation Field inspector,
+  // submitting the Field report, and reviewing that report are three separate
+  // exceptional authorities. No role (including PLATFORM_ADMIN) inherits any of
+  // them by default; until provisioned, the routes 403 for everyone.
+  'handyman.operations.inspection.assign',
+  'handyman.field.inspection.report.submit',
+  'handyman.operations.inspection.report.review',
   'handyman.quotation.approval.binding.manage',
   // W02 PART 02B — payment verification is a User RBAC authority with
   // maker-checker separation; payment report is withheld from default grants

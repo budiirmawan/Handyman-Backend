@@ -54,6 +54,7 @@ import { createAdminUser } from './helpers/access';
 import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
+import { assignFieldInspectorFixture } from './helpers/handyman-fixtures';
 
 /**
  * CR-HM-SEC-01 PART 02 — focused tests for the BE-02G building-scope
@@ -704,6 +705,9 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     assert.equal(await requestStatus(f.request.id), 'INSPECTION_REQUIRED');
 
     const same = await createScopedActor([realm.buildingA1.id]);
+    // CR-HM-INSPECTION-01 PART A: the in-scope write requires the active
+    // Field assignment for the acting user (single writer).
+    await assignFieldInspectorFixture(f.request.id, same.userId, adminUserId);
     const inspection = await handymanServiceRequestInspectionService
       .recordHandymanInspection(
         {
@@ -779,6 +783,7 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
       },
       adminUserId,
     );
+    await assignFieldInspectorFixture(f2.request.id, adminUserId, adminUserId);
     await handymanServiceRequestInspectionService.recordHandymanInspection(
       {
         handymanRequestId: f2.request.id,

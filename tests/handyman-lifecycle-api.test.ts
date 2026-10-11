@@ -14,7 +14,10 @@ import { clientService } from '../src/modules/clients';
 import { floorService } from '../src/modules/floors';
 import { createChannelAttribution } from '../src/modules/handyman-channel-attributions';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
-import { handymanServiceRequestService } from '../src/modules/handyman-requests';
+import {
+  handymanServiceRequestService,
+  handymanRequestInspectionAssignmentService,
+} from '../src/modules/handyman-requests';
 import { propertyService } from '../src/modules/properties';
 import { roomService } from '../src/modules/rooms';
 import { serviceCatalogService } from '../src/modules/service-catalog';
@@ -26,6 +29,7 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import {
   createAdminUser,
+  createFieldInspectorSession,
   createPlainSession,
   createSessionWithPermissions,
 } from './helpers/access';
@@ -52,6 +56,10 @@ let adminUserId = '';
 // W02 PART 04A: POST triage requires handyman.operations.request.triage (not granted to admin).
 let triageToken = '';
 let triageUserId = '';
+// CR-HM-INSPECTION-01 PART A: the in-scope inspection writer is the assigned
+// Field inspector holding handyman.field.inspection.report.submit.
+let fieldToken = '';
+let fieldUserId = '';
 let disciplineIds: Record<string, string> = {};
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
@@ -77,6 +85,9 @@ before(async () => {
     { code: 'handyman.operations.request.triage', name: 'Triage Handyman Operations Requests' },
     { code: 'tenant_company.read', name: 'Read Tenant Companies' },
   ]);
+  const field = await createFieldInspectorSession();
+  fieldToken = field.token;
+  fieldUserId = field.userId;
   triageUserId = (await pool!.query<{ id: string }>(
     `SELECT id FROM users WHERE email LIKE 'scoped-%' ORDER BY created_at DESC LIMIT 1`,
   )).rows[0].id;
@@ -112,6 +123,7 @@ const q = async (text: string, params: unknown[] = []) => {
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 const triageAuth = () => ({ Authorization: `Bearer ${triageToken}` });
+const fieldAuth = () => ({ Authorization: `Bearer ${fieldToken}` });
 
 /** Full tenant context + immutable CR-HM-01 BM_SUPER_APP attribution. */
 async function attributedFixture() {
@@ -225,7 +237,15 @@ async function diagnosisStateFixture(opts: { viaInspection?: boolean } = {}) {
       disposition: 'INSPECTION_REQUIRED',
       note: 'Site check needed.',
     });
-    await api().post(`${HM}/${f.request.id}/inspection`).set(auth()).send({
+    await buildingAssignmentService.createAssignment(fieldUserId, {
+      buildingId: f.building.id,
+    });
+    await handymanRequestInspectionAssignmentService
+      .assignHandymanInspectionField(
+        { handymanRequestId: f.request.id, assignedFieldUserId: fieldUserId },
+        adminUserId,
+      );
+    await api().post(`${HM}/${f.request.id}/inspection`).set(fieldAuth()).send({
       result: 'INSPECTED',
       notes: 'Inspected on site.',
     });
@@ -295,12 +315,26 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
       disposition: 'INSPECTION_REQUIRED',
       note: 'Site check needed.',
     });
-    const res = await api().post(`${HM}/${f.request.id}/inspection`)
+    await buildingAssignmentService.createAssignment(fieldUserId, {
+      buildingId: f.building.id,
+    });
+    // CR-HM-INSPECTION-01 PART A: the legacy generic manage writer is closed
+    // for the in-scope path (no assignment / no Field authority).
+    const legacy = await api().post(`${HM}/${f.request.id}/inspection`)
       .set(auth())
+      .send({ result: 'INSPECTED', notes: 'Legacy manage attempt.' });
+    assert.equal(legacy.status, 403, JSON.stringify(legacy.body));
+    await handymanRequestInspectionAssignmentService
+      .assignHandymanInspectionField(
+        { handymanRequestId: f.request.id, assignedFieldUserId: fieldUserId },
+        adminUserId,
+      );
+    const res = await api().post(`${HM}/${f.request.id}/inspection`)
+      .set(fieldAuth())
       .send({ result: 'INSPECTED', notes: 'Pipe joint cracked.' });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(res.body.data.inspectionResult, 'INSPECTED');
-    assert.equal(res.body.data.inspectedByUserId, adminUserId);
+    assert.equal(res.body.data.inspectedByUserId, fieldUserId);
     const rows = await q(
       'SELECT status FROM handyman_service_requests WHERE id = $1',
       [f.request.id],
@@ -522,6 +556,8 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
       lifecyclePaths.sort(),
       [
         ...lifecycles.map((step) => `/handyman/requests/{handymanRequestId}/${step}`),
+        // CR-HM-INSPECTION-01 PART A — separate Field authority surface.
+        '/handyman/requests/{handymanRequestId}/inspection-assignment',
         '/handyman/requests/{handymanRequestId}/scheduling-readiness',
         '/handyman/requests/{handymanRequestId}/scheduling-readiness/history',
         '/handyman/requests/{handymanRequestId}/unit-access-readiness',
@@ -534,6 +570,33 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     );
     // caller-authoritative fields must not exist in request schemas
     const schemas = doc.components.schemas;
+    // CR-HM-INSPECTION-01 PART A — the assignment surface is documented with
+    // exactly two operations and a caller-owned field whitelist.
+    const assignmentPath = doc.paths[
+      '/handyman/requests/{handymanRequestId}/inspection-assignment'
+    ];
+    assert.deepEqual(
+      Object.keys(assignmentPath)
+        .filter((k) => k === 'get' || k === 'post')
+        .sort(),
+      ['get', 'post'],
+    );
+    assert.equal(
+      assignmentPath.post.operationId,
+      'assignHandymanInspectionField',
+    );
+    assert.equal(
+      assignmentPath.get.operationId,
+      'getHandymanInspectionAssignment',
+    );
+    assert.deepEqual(
+      Object.keys(
+        (schemas.AssignHandymanInspectionFieldRequest
+          .properties as Record<string, unknown>) ?? {},
+      ).sort(),
+      ['assignedFieldUserId', 'reassignmentReason'],
+    );
+
     for (const [name, keys] of [
       ['RecordHandymanTriageRequest', ['disposition', 'note']],
       ['RecordHandymanInspectionRequest', ['result', 'notes']],

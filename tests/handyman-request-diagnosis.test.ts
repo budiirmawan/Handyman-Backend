@@ -32,6 +32,7 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { createAdminUser } from './helpers/access';
 import { ensureTestDatabase } from './helpers/postgres';
+import { assignFieldInspectorFixture } from './helpers/handyman-fixtures';
 
 /**
  * CR-HM-03 PART 03 — focused tests for diagnosis + F9 scope authority.
@@ -242,6 +243,8 @@ async function inspectedDiagnosisFixture() {
     },
     adminUserId,
   );
+  // CR-HM-INSPECTION-01 PART A: assign the Field inspector (single writer).
+  await assignFieldInspectorFixture(request.id, adminUserId, adminUserId);
   await handymanServiceRequestInspectionService.recordHandymanInspection(
     {
       handymanRequestId: request.id,

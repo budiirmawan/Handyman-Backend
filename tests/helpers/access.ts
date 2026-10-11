@@ -651,3 +651,75 @@ export async function createSessionWithPermissions(
 
   return login.body.data.sessionToken as string;
 }
+
+/**
+ * CR-HM-INSPECTION-01 PART A — grants one permission code to an EXISTING user
+ * through a dedicated role (idempotent). Fixtures use it to make their actor
+ * eligible as an assignment target, because the assignment service validates
+ * the target's standing instead of the caller's route permission.
+ */
+export async function grantPermissionToUser(
+  userId: string,
+  code: string,
+  name: string,
+): Promise<void> {
+  const current = await permissionService.resolvePermissionsForUser(userId);
+  if (current.includes(code)) return;
+  const permissionId = await ensurePermissionId(code, name);
+  const role = await roleService.createRole({
+    code: `GRANT_${randomUUID().slice(0, 8).toUpperCase()}`,
+    name: `${name} Grant`,
+  });
+  await permissionService.assignPermissionToRole(role.id, permissionId);
+  await roleService.assignRoleToUser(userId, role.id);
+}
+
+/**
+ * CR-HM-INSPECTION-01 PART A — a Field inspector session: an authenticated
+ * local user holding exactly the dedicated report-submission authority. The
+ * caller (fixture) is responsible for the Building assignment and for the
+ * request-scoped assignment fact.
+ */
+export async function createFieldInspectorSession(): Promise<{
+  token: string;
+  userId: string;
+}> {
+  return createSessionWithUser([
+    {
+      code: 'handyman.field.inspection.report.submit',
+      name: 'Submit Handyman Field Inspection Reports',
+    },
+    { code: 'tenant_company.read', name: 'Read Tenant Companies' },
+  ]);
+}
+
+/** Creates a user + role carrying exactly the given codes, then logs in. */
+async function createSessionWithUser(
+  codes: readonly { code: string; name: string }[],
+): Promise<{ token: string; userId: string }> {
+  const suffixValue = randomUUID().slice(0, 8).toUpperCase();
+  const password = 'ScopedPass123';
+
+  const user = await userService.createUser({
+    email: `granted-${suffixValue.toLowerCase()}@example.com`,
+    displayName: 'Granted User',
+  });
+  await credentialService.createInitialCredential({ userId: user.id, password });
+
+  const role = await roleService.createRole({
+    code: `GRANTED_${suffixValue}`,
+    name: 'Granted Role',
+  });
+  for (const permission of codes) {
+    const permissionId = await ensurePermissionId(permission.code, permission.name);
+    await permissionService.assignPermissionToRole(role.id, permissionId);
+  }
+  await roleService.assignRoleToUser(user.id, role.id);
+
+  const login = await api().post('/api/v1/auth/login').send({
+    email: user.email,
+    password,
+  });
+
+  return { token: login.body.data.sessionToken as string, userId: user.id };
+}

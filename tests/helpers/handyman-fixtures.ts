@@ -37,6 +37,10 @@ import { userService } from '../../src/modules/users';
 import { vendorWorkforceService } from '../../src/modules/vendor-workforce';
 import { vendorService } from '../../src/modules/vendors';
 import { workforceService } from '../../src/modules/workforce';
+import {
+  assignHandymanInspectionField,
+} from '../../src/modules/handyman-requests';
+import { grantPermissionToUser } from './access';
 import { bindAndAdmitFixturePic, decideFixturePic } from './handyman-pic-fixtures';
 
 /**
@@ -302,4 +306,26 @@ export async function baseFixture() {
   const chain = await locationChain(realm);
   const f = await scopeFixture(realm, chain);
   return { realm, chain, scope: f.scope };
+}
+
+/**
+ * CR-HM-INSPECTION-01 PART A — makes a fixture actor the request's assigned
+ * Field inspector so legacy in-scope inspection fixtures keep working with the
+ * single-writer rule (the assignment authority itself is covered by
+ * tests/handyman-inspection-assignment.test.ts).
+ */
+export async function assignFieldInspectorFixture(
+  handymanRequestId: string,
+  fieldUserId: string,
+  actorUserId: string,
+): Promise<void> {
+  await grantPermissionToUser(
+    fieldUserId,
+    'handyman.field.inspection.report.submit',
+    'Submit Handyman Field Inspection Reports',
+  );
+  await assignHandymanInspectionField(
+    { handymanRequestId, assignedFieldUserId: fieldUserId },
+    actorUserId,
+  );
 }

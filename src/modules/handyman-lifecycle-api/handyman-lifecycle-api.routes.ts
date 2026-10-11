@@ -17,7 +17,10 @@ import {
  *
  *   POST /handyman/requests/:handymanRequestId/triage     handyman.operations.request.triage (W02 PART 04A)
  *   GET  /handyman/requests/:handymanRequestId/triage     tenant_company.read | handyman.operations.request.read
- *   POST /handyman/requests/:handymanRequestId/inspection manage
+ *   POST /handyman/requests/:handymanRequestId/inspection field report submit
+ *                                                     (CR-HM-INSPECTION-01 PART A;
+ *                                                      service also requires the
+ *                                                      active Field assignment)
  *   GET  /handyman/requests/:handymanRequestId/inspection read
  *   POST /handyman/requests/:handymanRequestId/diagnosis  manage
  *   GET  /handyman/requests/:handymanRequestId/diagnosis  read
@@ -51,6 +54,16 @@ export function createHandymanLifecycleApiRouter(): Router {
     'tenant_company.read',
     'handyman.operations.request.read',
   ]);
+  /**
+   * CR-HM-INSPECTION-01 PART A — the in-scope physical inspection write is
+   * no longer a `tenant_company.manage` operation. The Field report-submission
+   * authority is required here and the service additionally requires the
+   * caller to BE the request's ACTIVE assigned Field inspector, so a generic
+   * manage grant can never create an in-scope 0381 row. Reads are unchanged.
+   */
+  const inspectionWrite = requirePermission(
+    'handyman.field.inspection.report.submit',
+  );
 
   router.post(
     '/handyman/requests/:handymanRequestId/triage',
@@ -67,7 +80,7 @@ export function createHandymanLifecycleApiRouter(): Router {
   router.post(
     '/handyman/requests/:handymanRequestId/inspection',
     auth,
-    manage,
+    inspectionWrite,
     postHandymanInspectionHandler,
   );
   router.get(

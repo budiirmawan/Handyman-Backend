@@ -5,6 +5,7 @@ import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
 import { handymanRequestInspectionRepository } from './handyman-request-inspection.repository';
+import { assertAssignedFieldInspector } from './handyman-request-inspection-assignment.service';
 import {
   handymanServiceRequestAlreadyInspectedError,
   handymanServiceRequestNotInspectionRequiredError,
@@ -123,6 +124,13 @@ export async function recordHandymanInspection(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+
+      // 3b) CR-HM-INSPECTION-01 PART A — single-writer binding. For the
+      //     in-scope inspection path the authenticated actor must BE the
+      //     request's ACTIVE assigned Field inspector; the legacy generic
+      //     `tenant_company.manage` route permission is no longer an
+      //     alternative writer (fail closed when nothing is assigned).
+      await assertAssignedFieldInspector(tx, request.id, actorUserId);
 
       // 4) F2 pre-check inside the transaction; UNIQUE constrains races to
       //    the SAME 409 contract.

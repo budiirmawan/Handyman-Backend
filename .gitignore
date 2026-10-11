@@ -11,3 +11,5 @@ npm-debug.log*
 .env
 .env.*
 !.env.example
+# Arena session scratch (never part of the deliverable).
+.arena-tmp/

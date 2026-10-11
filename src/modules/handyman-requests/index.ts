@@ -149,3 +149,38 @@ export {
   getOperationsRequestDetail,
   listOperationsRequests,
 } from './handyman-operations-queue.service';
+/**
+ * CR-HM-INSPECTION-01 PART A — pre-quotation Field inspection assignment
+ * exports (owner-approved additive authority; NOT CR-HM-04 execution
+ * assignment, no Execution Scope/provider/crew identity).
+ */
+export {
+  handymanRequestInspectionAssignmentRepository,
+} from './handyman-request-inspection-assignment.repository';
+export {
+  HANDYMAN_FIELD_REPORT_PERMISSION,
+  assignHandymanInspectionField,
+  assertAssignedFieldInspector,
+  getHandymanInspectionAssignment,
+  handymanRequestInspectionAssignmentService,
+  requireActiveHandymanInspectionAssignment,
+} from './handyman-request-inspection-assignment.service';
+export {
+  handymanInspectionAssignmentNotEligibleError,
+  handymanInspectionAssignmentRequiredError,
+  handymanInspectionAssignmentTargetInvalidError,
+  handymanInspectionFieldDeniedError,
+  handymanInspectionReassignmentNotAllowedError,
+  handymanInspectionReassignmentReasonRequiredError,
+} from './handyman-request-inspection-assignment.errors';
+export {
+  HANDYMAN_INSPECTION_ASSIGNMENT_STATUSES,
+} from './handyman-request-inspection-assignment.types';
+export type {
+  AssignHandymanInspectionFieldInput,
+  HandymanInspectionAssignmentRecord,
+  HandymanInspectionAssignmentStatus,
+  NewHandymanInspectionAssignmentRecord,
+  PublicHandymanInspectionAssignment,
+  PublicHandymanInspectionAssignmentState,
+} from './handyman-request-inspection-assignment.types';

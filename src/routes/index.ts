@@ -38,6 +38,7 @@ import { createHandoverDocumentRouter } from '../modules/handover-documents/hand
 import { createHandoffHandymanRouter } from '../modules/handyman-handoff/handoff.routes';
 import { createHandymanApiRouter } from '../modules/handyman-api';
 import { createHandymanLifecycleApiRouter } from '../modules/handyman-lifecycle-api';
+import { createHandymanInspectionApiRouter } from '../modules/handyman-inspection-api';
 import { createHandymanProviderApiRouter } from '../modules/handyman-provider-api';
 import { createHandymanReadinessApiRouter } from '../modules/handyman-readiness-api';
 import { createHandymanQuotationsApiRouter } from '../modules/handyman-quotations-api';
@@ -822,6 +823,11 @@ export function createApiRouter(): Router {
   // and no catalogue/master mutation is exposed.
   router.use(createHandymanApiRouter());
   router.use(createHandymanLifecycleApiRouter());
+  // CR-HM-INSPECTION-01 PART A — pre-quotation Field inspection assignment
+  // (separate from the frozen eight-operation lifecycle router; its in-scope
+  // POST /inspection write requires the dedicated Field authority + the
+  // active assignment enforced by the service).
+  router.use(createHandymanInspectionApiRouter());
   // CR-HM-04 PART 05A — provider/worker/crew surface (frozen F9): exactly
   // the existing PART 01–03 service operations (create/exact read/status/
   // membership/Lead). NO assignment surface: PART 04 freezes assignment as

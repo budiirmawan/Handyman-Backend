@@ -32,6 +32,7 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { createAdminUser } from './helpers/access';
 import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
+import { assignFieldInspectorFixture } from './helpers/handyman-fixtures';
 import {
   addHandymanQuotationLine,
   getHandymanExecutionScopeByQuotationVersion,
@@ -258,6 +259,8 @@ async function _inspectedDiagnosisFixture() {
     },
     adminUserId,
   );
+  // CR-HM-INSPECTION-01 PART A: assign the Field inspector (single writer).
+  await assignFieldInspectorFixture(request.id, adminUserId, adminUserId);
   await handymanServiceRequestInspectionService.recordHandymanInspection(
     {
       handymanRequestId: request.id,
