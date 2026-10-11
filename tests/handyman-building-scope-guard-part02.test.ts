@@ -51,6 +51,7 @@ import {
   permissionService,
 } from '../src/modules/permissions';
 import { createAdminUser } from './helpers/access';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
@@ -221,6 +222,15 @@ function errorStatus(error: unknown): number | undefined {
 async function assertBuildingDenied(promise: Promise<unknown>): Promise<void> {
   await assert.rejects(promise, (error: unknown) => {
     assert.equal(errorCode(error), 'BUILDING_ACCESS_DENIED');
+    assert.equal(errorStatus(error), 403);
+    return true;
+  });
+}
+
+/** W03 S1: staff APPROVE/REJECT remains a controlled 403 for every Building. */
+async function assertStaffDecisionDenied(promise: Promise<unknown>): Promise<void> {
+  await assert.rejects(promise, (error: unknown) => {
+    assert.equal(errorCode(error), 'PERMISSION_DENIED');
     assert.equal(errorStatus(error), 403);
     return true;
   });
@@ -503,6 +513,29 @@ async function issuedFixture() {
     adminUserId,
   );
   return { ...f, issued };
+}
+
+type IssuedFixture = Awaited<ReturnType<typeof issuedFixture>>;
+
+async function decideIssuedFixtureAsPic(
+  f: IssuedFixture,
+  decision: 'APPROVE' | 'REJECT',
+  idempotencyKey: string,
+) {
+  const picSession = await bindAndAdmitFixturePic({
+    quotationId: f.bundle.quotation.id,
+    tenantCompanyId: f.company.id,
+    tenantPicId: f.pic.id,
+    buildingId: f.realm.buildingA1.id,
+    spaceId: f.attribution.spaceId,
+    granterUserId: adminUserId,
+  });
+  return decideFixturePic(
+    picSession.workspaceToken,
+    f.version.id,
+    { decision, idempotencyKey },
+    adminUserId,
+  );
 }
 
 /** Diagnosed request + quotation thread (version 1 DRAFT) in a given realm. */
@@ -995,38 +1028,54 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     assert.equal(superseded.status, 'SUPERSEDED');
   });
 
-  it('8: decision (decide + read) — same building allowed; sibling and permission-only denied with zero mutation', async (t) => {
+  it('8: PIC decision + read — S1 closes every staff write; Building still bounds historical reads', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
     const same = await createScopedActor([f.realm.buildingA1.id]);
 
-    // Positive: the same-building actor decides over HTTP (201) — REJECT
-    // creates no execution scope.
-    const resDecide = await api()
-      .post(`${HM}/quotation-versions/${f.version.id}/decision`)
-      .set(auth(same.token))
-      .set('Idempotency-Key', `http-${randomUUID()}`)
-      .send({ decision: 'REJECT' });
-    assert.equal(resDecide.status, 201, JSON.stringify(resDecide.body));
+    // Seed one legitimate PIC REJECT so this test can exercise the existing
+    // same-Building decision read without treating staff as an approver.
+    const picDecision = await decideIssuedFixtureAsPic(
+      f,
+      'REJECT',
+      `pic-reject-${randomUUID()}`,
+    );
+    assert.equal(picDecision.decision, 'REJECT');
     assert.equal(await decisionRows(f.version.id), 1);
     assert.equal(await scopeRows(f.version.id), 0);
 
     const read = await getHandymanQuotationDecision(f.version.id, same.userId);
     assert.equal(read.decision, 'REJECT');
 
-    // Negative: sibling and permission-only actors can neither decide nor
-    // read the decision (403, no content leak); nothing mutates.
+    // S1: even a same-Building staff actor receives 403 PERMISSION_DENIED.
+    const resDecide = await api()
+      .post(`${HM}/quotation-versions/${f.version.id}/decision`)
+      .set(auth(same.token))
+      .set('Idempotency-Key', `staff-${randomUUID()}`)
+      .send({ decision: 'APPROVE' });
+    assert.equal(resDecide.status, 403, JSON.stringify(resDecide.body));
+    assert.equal(resDecide.body.error.code, 'PERMISSION_DENIED');
+    await assertStaffDecisionDenied(
+      decideHandymanQuotation(
+        f.version.id,
+        { decision: 'APPROVE', idempotencyKey: `same-${randomUUID()}` },
+        same.userId,
+      ),
+    );
+
+    // S1's staff refusal is distinct from the Building guard on decision reads:
+    // sibling and permission-only callers remain 403/no-content-leak as readers.
     const sibling = await createScopedActor([f.realm.buildingA2.id]);
     const permOnly = await createScopedActor([]);
     const eventsBefore = await quotationEventRows(f.request.id);
-    await assertBuildingDenied(
+    await assertStaffDecisionDenied(
       decideHandymanQuotation(
         f.version.id,
         { decision: 'APPROVE', idempotencyKey: `sib-${randomUUID()}` },
         sibling.userId,
       ),
     );
-    await assertBuildingDenied(
+    await assertStaffDecisionDenied(
       decideHandymanQuotation(
         f.version.id,
         { decision: 'APPROVE', idempotencyKey: `perm-${randomUUID()}` },
@@ -1039,8 +1088,8 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     await assertBuildingDenied(
       getHandymanQuotationDecision(f.version.id, permOnly.userId),
     );
-    // No mutation on denial: still exactly the one REJECT decision, no
-    // scope, no new events.
+    // No mutation on denied staff decisions or reads: exactly the PIC's one
+    // REJECT decision remains, with no scope or added quotation events.
     assert.equal(await decisionRows(f.version.id), 1);
     assert.equal(await scopeRows(f.version.id), 0);
     assert.equal(await quotationEventRows(f.request.id), eventsBefore);
@@ -1060,11 +1109,12 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     assert.ok(presented);
     assert.equal(presented?.id, f.version.id);
 
-    // APPROVE by the same-building actor creates the execution scope.
-    const approved = await decideHandymanQuotation(
-      f.version.id,
-      { decision: 'APPROVE', idempotencyKey: `appr-${randomUUID()}` },
-      same.userId,
+    // A valid bound Tenant PIC APPROVE creates the scope; the same-building
+    // staff actor remains only the bounded reader in this test.
+    const approved = await decideIssuedFixtureAsPic(
+      f,
+      'APPROVE',
+      `appr-${randomUUID()}`,
     );
     assert.ok(approved.executionScope);
     assert.equal(await scopeRows(f.version.id), 1);

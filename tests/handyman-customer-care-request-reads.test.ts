@@ -22,7 +22,6 @@ import { handoffRuntimeRepository } from '../src/modules/handyman-handoff/handof
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
-  decideHandymanQuotation,
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import {
@@ -48,6 +47,7 @@ import {
   createSessionWithPermissions,
 } from './helpers/access';
 import { api } from './helpers/http';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -326,6 +326,12 @@ async function createCustomerReader(tenantCompanyId: string, buildingId: string)
 async function authorizeExecutionScopeForRequest(
   clientId: string,
   handymanRequestId: string,
+  picContext: {
+    tenantCompanyId: string;
+    tenantPicId: string;
+    buildingId: string;
+    spaceId: string;
+  },
 ) {
   await handymanServiceRequestTriageService.recordHandymanRequestTriage(
     {
@@ -371,13 +377,20 @@ async function authorizeExecutionScopeForRequest(
     { validUntil: new Date(Date.now() + 3_600_000).toISOString() },
     adminUserId,
   );
-  const decision = await decideHandymanQuotation(
+  // Care creates the request, but only the represented, explicitly bound PIC
+  // may approve the issued quotation and create its execution scope.
+  const picSession = await bindAndAdmitFixturePic({
+    quotationId: quotation.quotation.id,
+    tenantCompanyId: picContext.tenantCompanyId,
+    tenantPicId: picContext.tenantPicId,
+    buildingId: picContext.buildingId,
+    spaceId: picContext.spaceId,
+    granterUserId: adminUserId,
+  });
+  const decision = await decideFixturePic(
+    picSession.workspaceToken,
     version.id,
-    {
-      decision: 'APPROVE',
-      idempotencyKey: randomUUID(),
-      note: 'Customer approved via Customer Care',
-    },
+    { decision: 'APPROVE', idempotencyKey: randomUUID() },
     adminUserId,
   );
   assert.ok(decision.executionScope);
@@ -455,6 +468,12 @@ describe('CR-HM-17 GAP PART 01 — B3 Customer Care request reads', () => {
     const scope = await authorizeExecutionScopeForRequest(
       f.client.id,
       created.id,
+      {
+        tenantCompanyId: f.company.id,
+        tenantPicId: f.pic.id,
+        buildingId: f.building.id,
+        spaceId: f.space.id,
+      },
     );
 
     const detail = await getHandymanServiceRequestDetail(

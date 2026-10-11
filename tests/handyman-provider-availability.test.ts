@@ -26,7 +26,6 @@ import {
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
-  decideHandymanQuotation,
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import {
@@ -59,6 +58,7 @@ import {
   createSessionWithPermissions,
 } from './helpers/access';
 import { api } from './helpers/http';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -422,13 +422,18 @@ async function createAuthorizedExecutionScope(
     { validUntil: new Date(Date.now() + 3_600_000).toISOString() },
     adminUserId,
   );
-  const decision = await decideHandymanQuotation(
+  const picSession = await bindAndAdmitFixturePic({
+    quotationId: quotation.quotation.id,
+    tenantCompanyId: company.id,
+    tenantPicId: pic.id,
+    buildingId: realm.building.id,
+    spaceId: realm.space.id,
+    granterUserId: adminUserId,
+  });
+  const decision = await decideFixturePic(
+    picSession.workspaceToken,
     version.id,
-    {
-      decision: 'APPROVE',
-      idempotencyKey: randomUUID(),
-      note: 'Approved',
-    },
+    { decision: 'APPROVE', idempotencyKey: randomUUID() },
     adminUserId,
   );
   assert.ok(decision.executionScope);

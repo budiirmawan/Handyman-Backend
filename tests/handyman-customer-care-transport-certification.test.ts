@@ -51,7 +51,6 @@ import { estimateHandymanMaterialExecutionLine } from '../src/modules/handyman-m
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
-  decideHandymanQuotation,
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import {
@@ -82,6 +81,7 @@ import {
   createPlainSession,
   createSessionWithPermissions,
 } from './helpers/access';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import {
   crewFixture,
   initHandymanFixtures,
@@ -93,14 +93,20 @@ import { ensureTestDatabase } from './helpers/postgres';
 
 const PORT = 55468;
 const DIR = '/tmp/hm17-part08-certification-pg';
-Object.assign(process.env, {
-  DB_HOST: '127.0.0.1',
-  DB_PORT: String(PORT),
-  DB_USER: 'postgres',
-  DB_PASSWORD: '',
-  DB_NAME: 'asentra_test',
-  DB_SSL: 'false',
-});
+// A caller can supply a pre-migrated, isolated test database. The default
+// standalone behavior still starts this file's own embedded PostgreSQL server.
+const USE_EXTERNAL_TEST_DATABASE =
+  process.env.HANDYMAN_TEST_EXTERNAL_POSTGRES === 'true';
+if (!USE_EXTERNAL_TEST_DATABASE) {
+  Object.assign(process.env, {
+    DB_HOST: '127.0.0.1',
+    DB_PORT: String(PORT),
+    DB_USER: 'postgres',
+    DB_PASSWORD: '',
+    DB_NAME: 'asentra_test',
+    DB_SSL: 'false',
+  });
+}
 
 let pg: EmbeddedPostgres | null = null;
 let adminUserId = '';
@@ -285,22 +291,24 @@ async function customerPost(template: string, url: string, token: string, body: 
 
 before(async () => {
   spec = parseYaml(await readFile('docs/api/openapi.yaml', 'utf8')) as ApiSpec;
-  await rm(DIR, { recursive: true, force: true });
-  await mkdir(DIR, { recursive: true });
-  pg = new EmbeddedPostgres({
-    databaseDir: DIR,
-    port: PORT,
-    user: 'postgres',
-    password: '',
-    persistent: true,
-    authMethod: 'trust',
-  });
-  await pg.initialise();
-  await pg.start();
-  const c = pg.getPgClient('postgres', '127.0.0.1');
-  await c.connect();
-  await c.query('CREATE DATABASE asentra_test');
-  await c.end();
+  if (!USE_EXTERNAL_TEST_DATABASE) {
+    await rm(DIR, { recursive: true, force: true });
+    await mkdir(DIR, { recursive: true });
+    pg = new EmbeddedPostgres({
+      databaseDir: DIR,
+      port: PORT,
+      user: 'postgres',
+      password: '',
+      persistent: true,
+      authMethod: 'trust',
+    });
+    await pg.initialise();
+    await pg.start();
+    const c = pg.getPgClient('postgres', '127.0.0.1');
+    await c.connect();
+    await c.query('CREATE DATABASE asentra_test');
+    await c.end();
+  }
 
   const cfg = await ensureTestDatabase();
   assert.ok(cfg, 'database config required');
@@ -331,7 +339,9 @@ after(async () => {
       /* ignore */
     }
   }
-  await rm(DIR, { recursive: true, force: true });
+  if (!USE_EXTERNAL_TEST_DATABASE) {
+    await rm(DIR, { recursive: true, force: true });
+  }
 });
 
 /**
@@ -573,7 +583,18 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
       { validUntil: new Date(Date.now() + 3_600_000).toISOString() },
       adminUserId,
     );
-    const decision = await decideHandymanQuotation(
+    // The represented tenant PIC is the approver; Customer Care remains the
+    // request-intake actor, never a quotation-decision fallback.
+    const picSession = await bindAndAdmitFixturePic({
+      quotationId: qBundle.quotation.id,
+      tenantCompanyId: company.id,
+      tenantPicId: pic.id,
+      buildingId: realm.building.id,
+      spaceId: chain.space.id,
+      granterUserId: adminUserId,
+    });
+    const decision = await decideFixturePic(
+      picSession.workspaceToken,
       qVersion.id,
       { decision: 'APPROVE', idempotencyKey: `q-dec-${id()}` },
       adminUserId,

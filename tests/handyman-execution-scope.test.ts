@@ -31,9 +31,9 @@ import { tenantPicService } from '../src/modules/tenant-pics';
 import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { createAdminUser } from './helpers/access';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import {
   addHandymanQuotationLine,
-  decideHandymanQuotation,
   getHandymanExecutionScopeByQuotationVersion,
   getHandymanQuotationDecision,
   expireHandymanQuotationVersion,
@@ -421,11 +421,35 @@ async function spacelessIssuedFixture() {
   return { ...f, request, bundle, version };
 }
 
+type PicBindingFixture = {
+  bundle: { quotation: { id: string } };
+  company: { id: string };
+  pic: { id: string };
+  building: { id: string };
+  space: { id: string };
+};
+
+async function bindFixturePic(
+  f: PicBindingFixture,
+  spaceId: string | null = f.space.id,
+) {
+  return bindAndAdmitFixturePic({
+    quotationId: f.bundle.quotation.id,
+    tenantCompanyId: f.company.id,
+    tenantPicId: f.pic.id,
+    buildingId: f.building.id,
+    spaceId,
+    granterUserId: adminUserId,
+  });
+}
+
 describe('CR-HM-06 PART 05 — approved execution scope', () => {
   it('1: APPROVE creates exactly one AUTHORIZED execution scope', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const decision = await decideHandymanQuotation(
+    const picSession = await bindFixturePic(f);
+    const decision = await decideFixturePic(
+      picSession.workspaceToken,
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
@@ -435,7 +459,10 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     assert.equal(scope.status, 'AUTHORIZED');
     assert.equal(await scopeCount(f.version.id), 1);
     const event = await q(
-      `SELECT event_type, entity_type FROM operational_events
+      `SELECT event_type, entity_type, actor_user_id,
+              metadata->>'createdByActorType' AS scope_actor_type,
+              metadata->>'createdByTenantPicId' AS scope_pic_id
+         FROM operational_events
         WHERE metadata->>'executionScopeId' = $1`,
       [scope.id],
     );
@@ -443,12 +470,17 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     assert.equal(event.rows[0].event_type,
       'HANDYMAN_EXECUTION_SCOPE_CREATED');
     assert.equal(event.rows[0].entity_type, 'HANDYMAN_EXECUTION_SCOPE');
+    assert.equal(event.rows[0].actor_user_id, null);
+    assert.equal(event.rows[0].scope_actor_type, 'TENANT_PIC');
+    assert.equal(event.rows[0].scope_pic_id, f.pic.id);
   });
 
   it('2: scope lineage matches exact approved quotation/version/decision/request', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const decision = await decideHandymanQuotation(
+    const picSession = await bindFixturePic(f);
+    const decision = await decideFixturePic(
+      picSession.workspaceToken,
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
@@ -460,13 +492,20 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     assert.equal(scope.quotationId, f.bundle.quotation.id);
     assert.equal(scope.approvedQuotationVersionId, f.version.id);
     assert.equal(scope.quotationDecisionId, decision.id);
-    assert.equal(scope.createdByUserId, adminUserId);
+    assert.equal(scope.createdByUserId, null);
+    assert.equal(scope.createdByActorType, 'TENANT_PIC');
+    assert.equal(scope.createdByTenantPicId, f.pic.id);
+    assert.equal(decision.decisionActorType, 'TENANT_PIC');
+    assert.equal(decision.decidedByTenantPicId, f.pic.id);
+    assert.equal(decision.approvalBindingId, picSession.binding.id);
   });
 
   it('3: customer + location snapshot server-derived', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const decision = await decideHandymanQuotation(
+    const picSession = await bindFixturePic(f);
+    const decision = await decideFixturePic(
+      picSession.workspaceToken,
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
@@ -535,18 +574,30 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     await issueHandymanQuotationVersion(
       version.id, { validUntil: FUTURE() }, adminUserId,
     );
-    const decision = await decideHandymanQuotation(
+    const picSession = await bindFixturePic({
+      bundle,
+      company: g.company,
+      pic: g.pic,
+      building: g.building,
+      space: g.space,
+    });
+    const decision = await decideFixturePic(
+      picSession.workspaceToken,
       version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
     );
     assert.equal(decision.executionScope?.tenantPicId, null);
+    assert.equal(decision.executionScope?.createdByActorType, 'TENANT_PIC');
+    assert.equal(decision.executionScope?.createdByTenantPicId, g.pic.id);
   });
 
   it('5: REJECT creates zero execution scope', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const decision = await decideHandymanQuotation(
+    const picSession = await bindFixturePic(f);
+    const decision = await decideFixturePic(
+      picSession.workspaceToken,
       f.version.id,
       { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
@@ -565,17 +616,19 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
   it('6: non-approved quotation version cannot create scope directly', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
+    const picSession = await bindFixturePic(f);
     for (const status of ['DRAFT', 'SUPERSEDED', 'EXPIRED'] as const) {
       await q(`UPDATE handyman_quotation_versions SET status = $2
                 WHERE id = $1`, [f.version.id, status]);
       await assert.rejects(
-        decideHandymanQuotation(
+        decideFixturePic(
+          picSession.workspaceToken,
           f.version.id,
           { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
           adminUserId,
         ),
         (e: unknown) =>
-          errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
+          errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
       );
     }
     assert.equal(await scopeCount(f.version.id), 0);
@@ -592,13 +645,18 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
   it('7: same APPROVE replay returns same decision + same scope, no duplicate', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
+    const picSession = await bindFixturePic(f);
     const key = `k-${randomUUID()}`;
-    const first = await decideHandymanQuotation(
-      f.version.id, { decision: 'APPROVE', idempotencyKey: key },
+    const first = await decideFixturePic(
+      picSession.workspaceToken,
+      f.version.id,
+      { decision: 'APPROVE', idempotencyKey: key },
       adminUserId,
     );
-    const replay = await decideHandymanQuotation(
-      f.version.id, { decision: 'APPROVE', idempotencyKey: key },
+    const replay = await decideFixturePic(
+      picSession.workspaceToken,
+      f.version.id,
+      { decision: 'APPROVE', idempotencyKey: key },
       adminUserId,
     );
     assert.equal(replay.id, first.id);
@@ -618,9 +676,11 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
   it('8: conflicting/concurrent scope creation cannot violate one-scope-per-version', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
+    const picSession = await bindFixturePic(f);
     const results = await Promise.allSettled(
       [0, 1].map((i) =>
-        decideHandymanQuotation(
+        decideFixturePic(
+          picSession.workspaceToken,
           f.version.id,
           {
             decision: 'APPROVE',
@@ -661,13 +721,17 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
   it('9: forced scope-creation failure rolls back decision + APPROVED status + events + scope', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await spacelessIssuedFixture();
+    // The request's actual attribution has no space; keep that scope context
+    // aligned in the PIC assertion instead of borrowing the fixture's unused space.
+    const picSession = await bindFixturePic(f, null);
     const before = {
       decisions: await tableCount('handyman_quotation_decisions'),
       scopes: await tableCount('handyman_execution_scopes'),
       events: await tableCount('operational_events'),
     };
     await assert.rejects(
-      decideHandymanQuotation(
+      decideFixturePic(
+        picSession.workspaceToken,
         f.version.id,
         { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
         adminUserId,
@@ -690,6 +754,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
   it('10: zero FM work_order/crew/schedule/arrival/payment/BAST side effects', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
+    const picSession = await bindFixturePic(f);
     const before = {
       workOrders: await tableCount('work_orders'),
       vendorQuotations: await tableCount('vendor_quotations'),
@@ -697,7 +762,8 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
       crews: await tableCount('handyman_work_crews'),
       moves: await tableCount('inventory_stock_movements'),
     };
-    const decision = await decideHandymanQuotation(
+    const decision = await decideFixturePic(
+      picSession.workspaceToken,
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
       adminUserId,
