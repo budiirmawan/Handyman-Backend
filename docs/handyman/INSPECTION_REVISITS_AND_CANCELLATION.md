@@ -166,8 +166,39 @@ corrective forward migration, never delete authoritative history.
   in this task: **2 PASS / 0 FAIL / 0 SKIP**, 37.05 seconds.
 - Latest production `npm run typecheck`: **PASS**. OpenAPI YAML parse: **PASS**.
 
-A final bounded combined run is recorded below after execution. Earlier test
-failures exposed a fixture without a Building timezone, cancellation error-order
+### Final bounded validation — 2026-10-11
+
+Runtime/test checkpoint `d93b752` was pushed **before** this combined run.
+
+```sh
+ASENTRA_USE_EMBEDDED_POSTGRES=true NODE_ENV=test LOG_LEVEL=error \
+  npx tsx --test --test-concurrency=1 \
+  tests/handyman-inspection-revisit.test.ts \
+  tests/handyman-inspection-revisit-journey.test.ts \
+  tests/handyman-inspection-prerequisite.test.ts \
+  tests/handyman-inspection-integrated-journey.test.ts \
+  tests/handyman-direct-quotation-policy.test.ts \
+  tests/handyman-direct-quotation-journey.test.ts
+```
+
+**26 PASS / 0 FAIL / 0 SKIP / 0 CANCELLED**, exit 0, **128.63 seconds**.
+
+| Focused file | Passed |
+|---|---:|
+| Cancellation/revisit PostgreSQL denial, SQL and concurrency cases | 8 |
+| New signed-PIC revisit E2E | 1 |
+| Existing inspection prerequisite / historical provenance | 8 |
+| Existing signed-PIC inspection journey | 1 |
+| Existing direct quotation policy | 7 |
+| Existing signed-PIC direct quotation journey | 1 |
+
+Production `npm run typecheck` also **PASS**, exit 0, **34.59 seconds**, on this
+same runtime checkpoint. OpenAPI YAML parses successfully; `git diff --check`
+passes. Only migrations 0449, 0450 and the migration registry changed from the
+saved baseline: 0441–0448 remain untouched. The final documentation checkpoint
+adds this validation record without modifying runtime or tests.
+
+Earlier test failures exposed a fixture without a Building timezone, cancellation error-order
 inconsistency, a PL/pgSQL `OLD` alias collision, and the existing assignment
 trigger's restriction on subsequent supersessions. They were corrected, not
 bypassed. Test-only historical prerequisite fixtures temporarily disable the new
