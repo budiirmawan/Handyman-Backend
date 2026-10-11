@@ -1,3 +1,5 @@
+import { assertAssistedHandoff } from '../handyman-care-workspace/care-quotation-pic.service';
+import { recordOperationalEvent } from '../operational-events';
 import { AppError } from '../../shared/errors';
 import {
   handymanQuotationApprovalBindingRepository as bindings,
@@ -265,6 +267,7 @@ export async function submitPicQuotationDecision(
   quotationVersionIdInput: unknown,
   body: unknown,
   idempotencyKeyHeader: string | undefined,
+  assistedHandoffId?: string,
 ): Promise<PublicPicPortalDecisionWrite> {
   const quotationVersionId = assertVersionId(quotationVersionIdInput);
   const parsed = parsePicDecisionBody(body);
@@ -293,6 +296,9 @@ export async function submitPicQuotationDecision(
     // guard then evaluates the INSERT's decided_at, not transaction-start time.
     const pre = await loadAuthorityFacts(tx, principal, version);
     const existing = await findDecisionByVersion(tx, version.quotationVersionId);
+    if (assistedHandoffId !== undefined) {
+      await assertAssistedHandoff(tx, principal, assistedHandoffId, quotationVersionId, true, existing !== null);
+    }
 
     // Item 6's first half, and note WHERE it runs: after the version is already
     // locked `FOR UPDATE` by the read above, so nothing a writer could change
@@ -377,6 +383,13 @@ export async function submitPicQuotationDecision(
       );
     }
 
+    if (assistedHandoffId !== undefined && !replayed) {
+      await recordOperationalEvent({clientId:version.clientId,buildingId:version.buildingId,
+        entityType:'HANDYMAN_QUOTATION_VERSION',entityId:version.quotationVersionId,
+        eventType:'HANDYMAN_CARE_HANDOFF_PIC_DECIDED',summary:'Tenant PIC decided the Customer Care-assisted quotation.',
+        metadata:{handoffId:assistedHandoffId,quotationVersionId:version.quotationVersionId,quotationDecisionId:result.id,
+          actorType:'TENANT_PIC',tenantPicId:principal.tenantPicId,picSessionId:principal.sessionId,decision}},tx);
+    }
     return {
       decision: projectDecision(result),
       executionScope: projectExecutionScope(result.executionScope),

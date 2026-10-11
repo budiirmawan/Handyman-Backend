@@ -1,3 +1,4 @@
+import { deliverQuotationToCare } from '../handyman-care-workspace/care-quotation.service';
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
@@ -177,6 +178,7 @@ export async function issueHandymanQuotationVersion(
       },
       tx,
     );
+    await deliverQuotationToCare(tx, version.id, actorUserId, quotation.clientId);
     return toPublicVersion(issued);
   });
 }

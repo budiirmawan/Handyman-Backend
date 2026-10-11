@@ -347,8 +347,9 @@ async function listWorkspaceProjectionsScoped(principal: CareWorkspacePrincipal,
  * never authenticates a request: match scope/occupancy and project together,
  * without an unscoped existence lookup or the local admin historical wall. */
 async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, requestId: string,
-  selection: Pick<WorkspaceRequestSelection, 'propertyId' | 'tenantCompanyId' | 'buildingId' | 'spaceId'>) {
-  const result = await getPool().query<{
+  selection: Pick<WorkspaceRequestSelection, 'propertyId' | 'tenantCompanyId' | 'buildingId' | 'spaceId'>,
+  executor: Pick<PoolClient, 'query'> = getPool()) {
+  const result = await executor.query<{
     authenticated: boolean; item: Omit<JsonWorkspaceRequestRow, 'cursorCreatedAt'> | null;
   }>(`
     ${WORKSPACE_OCCUPANCY_CTES}, matched AS (

@@ -1,3 +1,5 @@
+import { residentChannel, type ResidentChannel } from '../handyman-care-workspace/care-quotation.validation';
+import { recordOperationalEvent } from '../operational-events';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { recordHandymanEvent } from '../handyman-audit';
@@ -323,6 +325,7 @@ export async function createHandymanServiceRequest(
  */
 export async function createCareHandymanServiceRequest(
   input: { exchangeToken: string } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'> & {
+    residentIntakeChannel?: ResidentChannel;
     reporter?: HandymanRequestContactInput;
     contactPerson?: HandymanRequestContactInput;
   },
@@ -341,6 +344,15 @@ export async function createCareHandymanServiceRequest(
       throw handoffExchangeInvalidError();
     }
     const created = await createFromAuthorizedAttribution(input, attribution, client);
+    if (input.residentIntakeChannel !== undefined) {
+      const channel = residentChannel(input.residentIntakeChannel);
+      await client.query('INSERT INTO handyman_care_intake_channels(handyman_request_id,channel,care_actor_id) VALUES ($1,$2,$3)',
+        [created.id,channel,attribution.careActorId]);
+      await recordOperationalEvent({clientId:attribution.clientId,buildingId:attribution.buildingId,
+        entityType:'HANDYMAN_SERVICE_REQUEST',entityId:created.id,eventType:'HANDYMAN_CARE_RESIDENT_CHANNEL_RECORDED',
+        summary:'Customer Care recorded the resident intake channel.',
+        metadata:{actorType:'CUSTOMER_CARE',careActorId:attribution.careActorId,residentIntakeChannel:channel}},client);
+    }
     // W02 PART 03: the reporter/contact snapshot is recorded in the same
     // transaction as the exchange consumption, attribution and request. It is
     // data only: no PIC link, no User, no permission and no approval authority.

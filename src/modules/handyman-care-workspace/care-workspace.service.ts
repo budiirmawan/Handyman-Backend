@@ -128,9 +128,8 @@ export async function admitCareWorkspace(body: unknown, signature: string | unde
   }
 }
 
-async function useSession(token: string, revoke: boolean): Promise<CareWorkspacePrincipal> {
+async function authenticateCareInTransaction(tx: PoolClient, token: string, revoke: boolean): Promise<CareWorkspacePrincipal> {
   if (typeof token !== 'string' || !/^hcw_[A-Za-z0-9_-]{43}$/.test(token)) throw workspaceUnauthorized();
-  return withTransaction(async tx => {
     // Lock authority first (not the session), matching invalidation triggers'
     // authority -> session order. The later session lock sees committed revoke.
     const authority = await tx.query(
@@ -161,6 +160,21 @@ async function useSession(token: string, revoke: boolean): Promise<CareWorkspace
     return Object.freeze({ actorType: 'CUSTOMER_CARE' as const, sessionId: session.id,
       careActorId: session.careActorId, integrationId: session.integrationId,
       expiresAt: session.expiresAt.toISOString() });
+}
+
+async function useSession(token: string, revoke: boolean): Promise<CareWorkspacePrincipal> {
+  return withTransaction(tx => authenticateCareInTransaction(tx, token, revoke));
+}
+
+/** Same authentication, held through the resource operation and final expiry check. */
+export async function withCareWorkspaceSession<T>(token: string,
+  work: (tx: PoolClient, principal: CareWorkspacePrincipal) => Promise<T>): Promise<T> {
+  return withTransaction(async tx => {
+    const principal = await authenticateCareInTransaction(tx, token, false);
+    const result = await work(tx, principal);
+    const valid = await tx.query('SELECT 1 FROM handyman_care_workspace_sessions WHERE id=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()', [principal.sessionId]);
+    if (!valid.rowCount) throw workspaceUnauthorized();
+    return result;
   });
 }
 

@@ -1,3 +1,4 @@
+import { createCareQuotationHandoff, getCareQuotation, listCareQuotationInbox, presentCareQuotation } from './care-quotation.service';
 import { getCareWorkspaceRequestDetail } from './care-workspace-request-detail.service';
 import { listCareWorkspaceRequests } from './care-workspace-requests.service';
 import { issueCareCreateExchange } from './care-create-exchange.service';
@@ -133,6 +134,34 @@ export function createCareWorkspaceRouter(): Router {
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await reportCareWorkspacePayment(match[1], req.params.requestId, req.query, req.body));
     } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/quotation-inbox', async (req,res,next) => {
+    res.setHeader('Cache-Control','no-store');
+    try {
+      const match=/^Bearer\s+(\S+)$/i.exec(req.header('authorization')??'');
+      if(!match) throw workspaceUnauthorized();
+      sendSuccess(res,await listCareQuotationInbox(match[1],req.query,req.body));
+    } catch(error) {next(error);}
+  });
+  const quotationPath='/handyman/care/requests/:requestId/quotations/:versionId';
+  router.get(quotationPath,async(req,res,next)=>{
+    res.setHeader('Cache-Control','no-store');
+    try {
+      const match=/^Bearer\s+(\S+)$/i.exec(req.header('authorization')??'');
+      if(!match) throw workspaceUnauthorized();
+      sendSuccess(res,await getCareQuotation(match[1],req.params.requestId,req.params.versionId,req.query,req.body));
+    } catch(error) {next(error);}
+  });
+  for(const action of ['presentations','pic-handoffs'] as const) router.post(`${quotationPath}/${action}`,async(req,res,next)=>{
+    res.setHeader('Cache-Control','no-store');
+    try {
+      const match=/^Bearer\s+(\S+)$/i.exec(req.header('authorization')??'');
+      if(!match) throw workspaceUnauthorized();
+      const result=action==='presentations'
+        ? await presentCareQuotation(match[1],req.params.requestId,req.params.versionId,req.query,req.body,req.header('Idempotency-Key'))
+        : await createCareQuotationHandoff(match[1],req.params.requestId,req.params.versionId,req.query,req.body);
+      sendSuccess(res,result,201);
+    } catch(error) {next(error);}
   });
   return router;
 }

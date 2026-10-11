@@ -1,3 +1,5 @@
+import { claimCareQuotationHandoff, resolveAssistedQuotationVersion } from '../handyman-care-workspace/care-quotation-pic.service';
+import { assistanceObject } from '../handyman-care-workspace/care-quotation.validation';
 import { Router } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { readPicWorkspaceBearer } from '../handyman-pic-session';
@@ -121,5 +123,21 @@ export function createPicPortalRouter(): Router {
     },
   );
 
+  router.post('/handyman/pic/quotation-handoffs/:handoffId/claim',async(req,res,next)=>{
+    res.setHeader('Cache-Control','no-store');
+    try {
+      const {token}=readPicWorkspaceBearer(req.header('authorization'),req.query,undefined);
+      assistanceObject(req.body??{},[]);
+      sendSuccess(res,await claimCareQuotationHandoff(token,req.params.handoffId),201);
+    } catch(error) {next(error);}
+  });
+  router.post('/handyman/pic/quotation-handoffs/:handoffId/decision',async(req,res,next)=>{
+    res.setHeader('Cache-Control','no-store');
+    try {
+      const {token}=readPicWorkspaceBearer(req.header('authorization'),req.query,undefined);
+      const versionId=await resolveAssistedQuotationVersion(token,req.params.handoffId);
+      sendSuccess(res,await submitPicQuotationDecision(token,versionId,req.body,req.header('Idempotency-Key'),String(req.params.handoffId)),201);
+    } catch(error) {next(error);}
+  });
   return router;
 }

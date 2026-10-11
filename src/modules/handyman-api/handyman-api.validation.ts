@@ -1,3 +1,4 @@
+import { residentChannel, type ResidentChannel } from '../handyman-care-workspace/care-quotation.validation';
 import type { HandymanRequestContactInput } from '../handyman-requests/handyman-service-request.types';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
@@ -152,6 +153,7 @@ export type CreateCareHandymanServiceRequestInput = {
   serviceCatalogId: string;
   serviceVariantId?: string;
   description?: string;
+  residentIntakeChannel?: ResidentChannel;
   reporter?: HandymanRequestContactInput;
   contactPerson?: HandymanRequestContactInput;
 };
@@ -238,7 +240,7 @@ export function parseCreateCareHandymanServiceRequestBody(
   if (!isRecord(body)) {
     fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
   }
-  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'reporter', 'contactPerson'];
+  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'reporter', 'contactPerson', 'residentIntakeChannel'];
   const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
     fail([{ field: 'body', message: 'Unexpected care request context field.' }]);
@@ -268,6 +270,7 @@ export function parseCreateCareHandymanServiceRequestBody(
     serviceCatalogId,
     ...(serviceVariantId ? { serviceVariantId } : {}),
     ...(description ? { description } : {}),
+    ...(body.residentIntakeChannel !== undefined ? { residentIntakeChannel: residentChannel(body.residentIntakeChannel) } : {}),
     ...contacts,
   };
 }
