@@ -29,7 +29,7 @@ export const migration0448HandymanDirectQuotationPolicy: Migration = {
           OR s.inspection_policy <> 'DIRECT_ALLOWED'
           OR NEW.service_inspection_policy IS DISTINCT FROM 'DIRECT_ALLOWED'
           OR NEW.policy_service_catalog_id IS DISTINCT FROM s.id
-          OR NEW.policy_catalog_updated_at IS DISTINCT FROM s.updated_at
+          OR date_trunc('milliseconds', NEW.policy_catalog_updated_at) IS DISTINCT FROM date_trunc('milliseconds', s.updated_at)
           OR NEW.scope_clarity_confirmed IS DISTINCT FROM TRUE
           OR NEW.direct_quotation_reason IS NULL
           OR char_length(btrim(NEW.direct_quotation_reason)) NOT BETWEEN 20 AND 500
@@ -38,6 +38,9 @@ export const migration0448HandymanDirectQuotationPolicy: Migration = {
           RAISE EXCEPTION 'Direct triage requires an allowed service, explicit scope clarity and reason.'
             USING ERRCODE = '23514', CONSTRAINT = 'handyman_direct_triage_policy_required';
         END IF;
+        -- pg maps timestamps to JS millisecond Dates. Store the server's full
+        -- precision value after checking the locked catalog snapshot.
+        NEW.policy_catalog_updated_at := s.updated_at;
         RETURN NEW;
       END; $$ LANGUAGE plpgsql;
       CREATE TRIGGER handyman_direct_triage_policy_insert BEFORE INSERT ON handyman_request_triage_decisions

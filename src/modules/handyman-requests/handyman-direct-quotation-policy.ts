@@ -39,7 +39,7 @@ export async function resolveTriagePolicy(
   const usable = service?.status === 'ACTIVE' && service.client_id === request.clientId;
   // Missing, inactive, foreign or unconfigured services never imply permission.
   const policy = usable ? service.inspection_policy : 'INSPECTION_REQUIRED';
-  const reason = typeof input.directQuotationReason === 'string' ? input.directQuotationReason.trim() : '';
+  const reason = typeof input.directQuotationReason === 'string' ? input.directQuotationReason.replace(/\s+/gu, ' ').trim() : '';
   if (direct && (policy !== 'DIRECT_ALLOWED' || !usable)) throw directQuotationPolicyRequired();
   if (direct && (input.scopeClarityConfirmed !== true || reason.length < 20 || reason.length > 500 || reason.split(/\s+/u).length < 3)) {
     throw AppError.validation('Direct quotation requires explicit scope clarity and a meaningful exception reason.', [
