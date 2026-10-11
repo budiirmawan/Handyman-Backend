@@ -31,7 +31,6 @@ import {
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
-  decideHandymanQuotation,
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import { assignHandymanExecutionScopeCrew }
@@ -66,6 +65,7 @@ import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { vendorService } from '../src/modules/vendors';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -461,7 +461,17 @@ async function scopeFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
-  const decision = await decideHandymanQuotation(version.id, {
+  // S1: the staff decide path is closed (403). Approval is the real Tenant PIC
+  // path: explicit staff binding, signed PIC admission, then the PIC decision.
+  const picSession = await bindAndAdmitFixturePic({
+    quotationId: bundle.quotation.id,
+    tenantCompanyId: company.id,
+    tenantPicId: pic.id,
+    buildingId: realm.buildingA1.id,
+    spaceId: space.id,
+    granterUserId: adminUserId,
+  });
+  const decision = await decideFixturePic(picSession.workspaceToken, version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
   }, adminUserId);
   const scope = decision.executionScope!;
@@ -550,7 +560,12 @@ async function approvedClaimFixture(
     decisionNote: 'Approved for free rework.',
   });
   assert.equal(approved.claim.status, 'CLAIM_APPROVED');
-  return { warranty: started.warranty, claim: approved.claim, claimEvidence };
+  return {
+    warranty: started.warranty,
+    claim: approved.claim,
+    claimEvidence,
+    leadUserId: crew.leadUser.id,
+  };
 }
 
 describe('CR-HM-SEC-01 PART 06D-3 — rework commands building-scope guard', () => {
@@ -559,12 +574,12 @@ describe('CR-HM-SEC-01 PART 06D-3 — rework commands building-scope guard', () 
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
-    const { claim, claimEvidence } =
+    const { claim, claimEvidence, leadUserId } =
       await approvedClaimFixture(realm, scope.id, staff);
 
     // PROPOSE — the SINGLE free rework of the APPROVED claim.
     const proposeKey = `rework-propose-${randomUUID()}`;
-    const proposed = await proposeHandymanServiceWarrantyRework(staff, {
+    const proposed = await proposeHandymanServiceWarrantyRework(leadUserId, {
       claimId: claim.id,
       idempotencyKey: proposeKey,
       scopeNote: 'Free rework scope.',
@@ -577,7 +592,7 @@ describe('CR-HM-SEC-01 PART 06D-3 — rework commands building-scope guard', () 
 
     // Per-key idempotent replay of PROPOSE returns the SAME rework.
     const replayedPropose = await proposeHandymanServiceWarrantyRework(
-      staff,
+      leadUserId,
       {
         claimId: claim.id,
         idempotencyKey: proposeKey,
@@ -598,7 +613,7 @@ describe('CR-HM-SEC-01 PART 06D-3 — rework commands building-scope guard', () 
     assert.equal(authorized.event.eventType, 'ACCEPT');
 
     // START — REWORK_AUTHORIZED -> REWORK_IN_PROGRESS (head moves).
-    const startedRework = await startHandymanServiceWarrantyRework(staff, {
+    const startedRework = await startHandymanServiceWarrantyRework(leadUserId, {
       reworkId: proposed.rework.id,
       idempotencyKey: `rework-start-${randomUUID()}`,
     });
@@ -607,7 +622,7 @@ describe('CR-HM-SEC-01 PART 06D-3 — rework commands building-scope guard', () 
     assert.equal(startedRework.event.eventType, 'START');
 
     // COMPLETE — REWORK_IN_PROGRESS -> REWORK_COMPLETE (head moves).
-    const completed = await completeHandymanServiceWarrantyRework(staff, {
+    const completed = await completeHandymanServiceWarrantyRework(leadUserId, {
       reworkId: proposed.rework.id,
       idempotencyKey: `rework-complete-${randomUUID()}`,
       completionNote: 'Rework executed.',
@@ -618,7 +633,7 @@ describe('CR-HM-SEC-01 PART 06D-3 — rework commands building-scope guard', () 
 
     // VERIFY — REWORK_COMPLETE -> REWORK_VERIFIED; binds the same-scope
     // verification evidence (a consumed QC run is optional).
-    const verified = await verifyHandymanServiceWarrantyRework(staff, {
+    const verified = await verifyHandymanServiceWarrantyRework(leadUserId, {
       reworkId: proposed.rework.id,
       idempotencyKey: `rework-verify-${randomUUID()}`,
       evidenceRecordId: claimEvidence.record.id,
@@ -648,11 +663,11 @@ describe('CR-HM-SEC-01 PART 06D-3 — rework commands building-scope guard', () 
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
-    const { claim, claimEvidence } =
+    const { claim, claimEvidence, leadUserId } =
       await approvedClaimFixture(realm, scope.id, staff);
     // Seed a lawful PROPOSED rework so the denial is provably the
     // access wall, not an empty projection.
-    const proposed = await proposeHandymanServiceWarrantyRework(staff, {
+    const proposed = await proposeHandymanServiceWarrantyRework(leadUserId, {
       claimId: claim.id,
       idempotencyKey: `seed-${randomUUID()}`,
       scopeNote: 'Seeded free rework.',

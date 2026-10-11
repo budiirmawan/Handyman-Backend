@@ -97,15 +97,13 @@ import { ensureTestDatabase } from './helpers/postgres';
  * HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_AUTHORIZED. Error
  * precedence unchanged: resource 404 precedes the access wall.
  *
- * Actor contract (retained, unchanged): one uniform local-staff
- * actor (`actorUserId`) for all chargeable commands — the
- * customer-side accept/reject are wired behind
- * `tenant_company.manage` (local Customer Care staff), and propose
- * takes the same plain local userId with no Lead chain inside this
- * module (the building guard is the data-scope wall applied to any
- * actor). No BM SSO / customer principal reaches this module. No
- * Lead/action authority was added in this PART — see the final-review
- * finding in the PART report.
+ * Actor contract (current, CR-HM-SEC-01 PART 07B-2B): PROPOSE is a Lead
+ * command — the actor must be the scope's CURRENT ACTIVE assignment Lead
+ * (`resolveHandymanAssignmentLead`), behind the building wall. ACCEPT and
+ * REJECT are customer-side and stay behind the building wall only. This
+ * fixture therefore proposes as the REAL assigned Lead Worker of the crew
+ * it assigns to the scope (no bypass). No BM SSO / customer principal
+ * reaches this module.
  *
  * Preserved: preflight and in-transaction authorization before
  * replay/mutation, CLAIM_APPROVED/CLAIM_REJECTED intake eligibility
@@ -566,20 +564,20 @@ async function approvedClaimFixture(
     decisionNote: 'Approved for chargeable additional work.',
   });
   assert.equal(approved.claim.status, 'CLAIM_APPROVED');
-  return { warranty: started.warranty, claim: approved.claim };
+  return { warranty: started.warranty, claim: approved.claim, leadUserId: crew.leadUser.id };
 }
 
 describe('CR-HM-SEC-01 PART 06D-4B — chargeable additional work building-scope guard', () => {
-  it('1: authorized propose + accept — staff actor (exact Building) proposes, accepts with payment trigger, both idempotent', async (t) => {
+  it('1: authorized propose + accept — the assigned Lead proposes; staff (exact Building) accepts with payment trigger, both idempotent', async (t) => {
     if (!requireDatabase(t)) return;
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
-    const { claim } = await approvedClaimFixture(realm, scope.id, staff);
+    const { claim, leadUserId } = await approvedClaimFixture(realm, scope.id, staff);
 
     // PROPOSE — the SINGLE separated chargeable referral of the claim.
     const proposeKey = `work-propose-${randomUUID()}`;
-    const proposed = await proposeHandymanChargeableAdditionalWork(staff, {
+    const proposed = await proposeHandymanChargeableAdditionalWork(leadUserId, {
       claimId: claim.id,
       idempotencyKey: proposeKey,
       scopeNote: 'Chargeable additional work.',
@@ -593,7 +591,7 @@ describe('CR-HM-SEC-01 PART 06D-4B — chargeable additional work building-scope
 
     // Per-key idempotent replay of PROPOSE returns the SAME work.
     const replayedPropose = await proposeHandymanChargeableAdditionalWork(
-      staff,
+      leadUserId,
       {
         claimId: claim.id,
         idempotencyKey: proposeKey,
@@ -657,10 +655,10 @@ describe('CR-HM-SEC-01 PART 06D-4B — chargeable additional work building-scope
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
-    const { claim } = await approvedClaimFixture(realm, scope.id, staff);
+    const { claim, leadUserId } = await approvedClaimFixture(realm, scope.id, staff);
     // Seed a lawful PROPOSED work so the denial is provably the
     // access wall, not an empty projection.
-    const proposed = await proposeHandymanChargeableAdditionalWork(staff, {
+    const proposed = await proposeHandymanChargeableAdditionalWork(leadUserId, {
       claimId: claim.id,
       idempotencyKey: `seed-${randomUUID()}`,
       scopeNote: 'Seeded chargeable work.',

@@ -32,7 +32,6 @@ import {
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
-  decideHandymanQuotation,
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import { assignHandymanExecutionScopeCrew }
@@ -52,6 +51,7 @@ import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { vendorService } from '../src/modules/vendors';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -420,7 +420,17 @@ async function scopeFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
-  const decision = await decideHandymanQuotation(version.id, {
+  // S1: the staff decide path is closed (403). Approval is the real Tenant PIC
+  // path: explicit staff binding, signed PIC admission, then the PIC decision.
+  const picSession = await bindAndAdmitFixturePic({
+    quotationId: bundle.quotation.id,
+    tenantCompanyId: company.id,
+    tenantPicId: pic.id,
+    buildingId: realm.buildingA1.id,
+    spaceId: space.id,
+    granterUserId: adminUserId,
+  });
+  const decision = await decideFixturePic(picSession.workspaceToken, version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
   }, adminUserId);
   const scope = decision.executionScope!;
