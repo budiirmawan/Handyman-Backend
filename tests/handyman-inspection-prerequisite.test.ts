@@ -166,8 +166,8 @@ const draft = (requestId: string, token = adminToken) =>
   api().post(`${HM}/${requestId}/quotation`).set(auth(token)).send({});
 const revise = (quotationId: string, token = adminToken) =>
   api().post(`${HQ}/${quotationId}/versions`).set(auth(token)).send({});
-function conflict(response: { status: number; body: any }, code: string) {
-  assert.equal(response.status, 409, JSON.stringify(response.body));
+function conflict(response: { status: number; body: any }, code: string, status = 409) {
+  assert.equal(response.status, status, JSON.stringify(response.body));
   assert.equal(response.body.error.code, code);
 }
 const ACCEPTED_REQUIRED = 'HANDYMAN_INSPECTION_ACCEPTED_REPORT_REQUIRED';
@@ -225,6 +225,22 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
     conflict(await revise(thread), SOURCE_REQUIRED);
     assert.deepEqual((await q('SELECT * FROM handyman_quotation_versions WHERE quotation_id = $1', [thread])).rows, snapshot);
     assert.equal((await q('SELECT source_inspection_report_id FROM handyman_request_diagnoses WHERE handyman_request_id = $1', [f.request.id])).rows[0].source_inspection_report_id, null);
+    // Historical DRAFT can still be issued: PART C is not an issue-time gate,
+    // and B12 stays OFF (no PIC approval binding is manufactured or required).
+    const versionId = snapshot[0].id;
+    const uomId = randomUUID();
+    await q(`INSERT INTO units_of_measure (id, client_id, code, name, symbol, category)
+      VALUES ($1, $2, $3, 'Hours', 'h', 'TIME')`, [uomId, f.client.id, `U_${suffix()}`]);
+    const line = await api().post(`/api/v1/handyman/quotation-versions/${versionId}/lines`).set(auth())
+      .send({ lineType: 'LABOR', description: 'Historical work', quantity: 1, uomId,
+        currency: 'IDR', finalQuotedUnitAmount: 100 });
+    assert.equal(line.status, 201, JSON.stringify(line.body));
+    assert.equal((await q('SELECT * FROM handyman_quotation_approval_bindings WHERE quotation_id = $1', [thread])).rowCount, 0);
+    const issued = await api().post(`/api/v1/handyman/quotation-versions/${versionId}/issue`).set(auth())
+      .send({ validUntil: new Date(Date.now() + 3_600_000).toISOString() });
+    assert.equal(issued.status, 200, JSON.stringify(issued.body));
+    assert.equal(issued.body.data.status, 'ISSUED');
+
   });
 
   it('missing, pending, returned and pending-correction reports block diagnosis and both DRAFT writers', async () => {
@@ -264,7 +280,8 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
       sourceInspectionReportId: randomUUID(), diagnosedByUserId: fieldUserId,
       scopeClassification: 'OUT_OF_HANDYMAN_SCOPE',
     }), diagnose(f.request.id)]);
-    assert.deepEqual(responses.map(r => r.status).sort(), [201, 409]);
+    assert.deepEqual(responses.map(r => r.status).sort(), [201, 400]);
+    assert.equal(responses.find(r => r.status === 400)!.body.error.code, 'HANDYMAN_SERVICE_REQUEST_NOT_IN_DIAGNOSIS');
     const diagnosis = responses.find(r => r.status === 201)!.body.data;
     assert.equal(diagnosis.sourceInspectionReportId, accepted.id);
     assert.equal(diagnosis.diagnosedByUserId, adminUserId);
@@ -282,7 +299,7 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
     assert.deepEqual(revisions.map(r => r.body.data.versionNumber).sort(), [2, 3]);
     assert.equal((await q('SELECT * FROM handyman_execution_scopes WHERE handyman_request_id = $1', [f.request.id])).rowCount, 0);
     const staff = await api().post(`/api/v1/handyman/quotation-versions/${created.body.data.versions[0].id}/decision`)
-      .set(auth()).send({ decision: 'APPROVED' });
+      .set(auth()).set('Idempotency-Key', randomUUID()).send({ decision: 'APPROVE' });
     assert.equal(staff.status, 403, JSON.stringify(staff.body));
   });
 
@@ -299,15 +316,15 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
 
   it('accepted reports do not override F9 non-quoteable diagnosis, including revisions', async () => {
     const f = await fixture();
-    const out = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'OUT_OF_HANDYMAN_SCOPE');
+    const out = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'FM_COMMON_BUILDING');
     assert.ok(out);
     const accepted = await report(f.request.id, out.id);
     await review(f.request.id, accepted.id);
     const diagnosis = await diagnose(f.request.id, { disciplineId: out.id });
     assert.equal(diagnosis.status, 201, JSON.stringify(diagnosis.body));
-    conflict(await draft(f.request.id), 'HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT');
+    conflict(await draft(f.request.id), 'HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT', 400);
     const thread = await historicalThread(f.request.id);
-    conflict(await revise(thread), 'HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT');
+    conflict(await revise(thread), 'HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT', 400);
   });
 
   it('direct DIAGNOSIS retains null provenance and existing draft/revision behavior; policy remains deferred', async () => {
