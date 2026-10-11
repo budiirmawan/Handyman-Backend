@@ -3570,6 +3570,142 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Storage failure; no successful revocation claimed.
+  /handyman/pic/session:
+    post:
+      operationId: admitPicWorkspace
+      summary: Admit an attested Tenant PIC to a bounded workspace session
+      tags: [Handoff]
+      description: >-
+        W03 PART 03C, the session foundation A01 §13 assigns to "03B". Purpose-specific
+        HMAC-SHA256 admission over canonical stable JSON (recursively sorted object keys,
+        signed over the exact bytes the caller sent), keyed by the existing per-integration
+        HANDYMAN_HANDOFF_SECRET_<NORMALIZED_CODE> secret. Requires an ACTIVE handoff
+        integration whose actor capability is TENANT_PIC. The four representation fields are
+        a RESOLUTION REQUEST, never an authorization claim: tenant, PIC, Building and Space
+        are re-resolved server-side through the same occupancy master the handoff exchange
+        uses, so a caller cannot name a tenant, a PIC, a Building or a Space it is not
+        entitled to - a cross-tenant, cross-Building, inactive-PIC, lapsed-occupancy or
+        out-of-window assertion is refused with the same uniform 401 as a bad signature, and
+        no reason detail is disclosed. `requestId` is not a field of this contract: the
+        server correlates by its own request id. Assertion validity is at most five minutes
+        with no clock-skew allowance; the assertion id is single-use per integration (an
+        append-only replay tombstone written in the SAME transaction as the session row, so a
+        replayed admission can never mint a second credential). Returns one opaque
+        `hpw_` credential, shown once, stored only as its SHA-256 hash, with a fixed absolute
+        15-minute lifetime, no refresh and no sliding renewal. An admission WITHOUT
+        `tenantPicId` yields a read-capable session (`canDecide: false`) that can never
+        underwrite a quotation decision. This credential is NOT a Care Workspace session, NOT
+        a local User session, and NOT an RBAC grant: no staff middleware, permission code or
+        fallback between credential kinds is consulted anywhere on this path. Quotation
+        decisioning is 03E and is deliberately absent here. Responses use Cache-Control
+        no-store. HOST RELAY CONTRACT: BM server to Handyman only; the secret never reaches a
+        browser, and the token travels only in this Authorization header - never in a URL,
+        query parameter, fragment, referrer or log.
+      security:
+        - handoffAssertionSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PicWorkspaceAssertion' }
+      responses:
+        '201':
+          description: PIC credential issued once; no local User session created.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PicWorkspaceAdmission' }
+        '400':
+          description: Invalid JSON or unexpected query parameters; existing validation envelope.
+        '401':
+          description: Uniform HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED; no identity enumeration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429':
+          description: AUTH_RATE_LIMITED; too many admission attempts from this address.
+          headers:
+            Retry-After:
+              schema: { type: integer, minimum: 1 }
+        '500':
+          description: Authority/storage unavailable; no credential issued and no stale fallback.
+    get:
+      operationId: readPicWorkspaceSession
+      summary: Introspect the presented PIC workspace credential
+      tags: [Handoff]
+      description: >-
+        Session introspection (A01 §13 "03B — session foundation"). Re-reads the CURRENT
+        authority on every call - integration ACTIVE and TENANT_PIC-capable, tenant ACTIVE,
+        PIC ACTIVE and still a member of that tenant, PIC user link unchanged, occupancy and
+        Space authority still covering the snapshot - and re-resolves the stored identity
+        through the same master used at admission. Any drift revokes the session and answers
+        with the uniform 401; nothing is cached, and expiry is evaluated against the database
+        clock, not the caller's. Returns identity and window only: ids, the Space and
+        Building snapshot, `canDecide`, `issuedAt`, `expiresAt`. Never a token, a token hash,
+        an assertion id or PII. No query parameter is accepted.
+      security:
+        - picWorkspaceSession: []
+      responses:
+        '200':
+          description: The credential's current, revalidated view.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PicWorkspaceSession' }
+        '400':
+          description: Unexpected query parameter.
+        '401':
+          description: Uniform HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Storage failure; no view is claimed.
+    delete:
+      operationId: revokePicWorkspaceSession
+      summary: Revoke the presented PIC workspace credential
+      tags: [Handoff]
+      description: >-
+        Logout for the presented credential only: no context field, no body vocabulary
+        beyond the Bearer token, and no administration of another PIC's session. Revocation
+        stamps `revoked_at` exactly once; the row is never deleted, because the replay
+        tombstone and the ledger's trust in a recorded decision both depend on the session
+        row persisting. Logout stays idempotent while the credential remains resolvable and
+        unexpired; once the underlying authority has been removed the credential is not
+        usable for anything, including a courtesy logout, and the uniform 401 answers. Use
+        of a revoked credential is always refused. Admission and revocation are journalled
+        with ids only (no name, no email, no token material).
+      security:
+        - picWorkspaceSession: []
+      responses:
+        '204':
+          description: Presented session revoked (including repeated logout).
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+        '400':
+          description: Unexpected query parameter or body field.
+        '401':
+          description: Uniform HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Storage failure; no successful revocation claimed.
   /handoff/assertions:
     post:
       operationId: acceptHandoffAssertion
@@ -73601,6 +73737,20 @@ components:
         log. There is no refresh token or renewal, so any 401 on a care route
         requires the BM host to perform a fresh signed admission and relay a new
         token.
+    picWorkspaceSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque Tenant PIC workspace credential
+      description: >-
+        Distinct integration-bound credential from POST /handyman/pic/session, carried as
+        `Authorization: Bearer <token>`. Maximum 15-minute absolute lifetime; revocable,
+        reusable within its window, no refresh and no sliding renewal. It is NOT a local
+        User session, NOT a Care Workspace credential, NOT an RBAC grant, and NOT a
+        represented-context create exchange - no route falls back from one kind to another,
+        so a PIC credential never reaches staff middleware and a staff or care credential
+        never reaches a PIC route. The raw token is never logged and never placed in a URL,
+        query parameter, fragment, referrer or cursor; the only browser-visible value in the
+        whole flow, and only by relay from the BM server to its own authenticated user.
     bearerAuth:
       type: http
       scheme: bearer
@@ -76365,6 +76515,77 @@ components:
           type: string
           format: date-time
           description: Fixed absolute expiry, 15 minutes from issuance; never extended on use.
+    PicWorkspaceAssertion:
+      type: object
+      additionalProperties: false
+      required: [purpose, integrationCode, assertionId, issuedAt, expiresAt, representation]
+      properties:
+        purpose: { type: string, enum: [HANDYMAN_PIC_WORKSPACE] }
+        integrationCode: { type: string, minLength: 1, maxLength: 128 }
+        assertionId: { type: string, minLength: 1, maxLength: 128 }
+        issuedAt:
+          type: string
+          format: date-time
+          description: UTC ISO-8601 ending in Z; not in the future, no offset form accepted.
+        expiresAt:
+          type: string
+          format: date-time
+          description: After issuedAt, at most five minutes later, strictly after current server time.
+        representation:
+          $ref: '#/components/schemas/PicWorkspaceRepresentation'
+    PicWorkspaceRepresentation:
+      type: object
+      additionalProperties: false
+      required: [tenantCompanyId, buildingId]
+      description: >-
+        The context to resolve, not the context to trust: unknown keys are refused, and every
+        value is re-derived server-side before anything is issued.
+      properties:
+        tenantCompanyId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        tenantPicId:
+          type: string
+          format: uuid
+          description: Absent yields a read-capable session that can never underwrite a decision.
+        spaceId: { type: string, format: uuid }
+    PicWorkspaceAdmission:
+      type: object
+      additionalProperties: false
+      required: [workspaceToken, expiresAt]
+      properties:
+        workspaceToken:
+          type: string
+          pattern: '^hpw_[A-Za-z0-9_-]{43}$'
+          description: Returned once; 256-bit random opaque credential stored hash-only.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Fixed absolute expiry, 15 minutes from issuance; never extended on use.
+    PicWorkspaceSession:
+      type: object
+      additionalProperties: false
+      required: [sessionId, tenantCompanyId, tenantPicId, buildingId, spaceId, canDecide, issuedAt, expiresAt]
+      description: >
+        Introspection view: identifiers and window only. It carries no credential material,
+        no assertion id, and no person data - the PIC's name, email and phone are never read
+        by this path.
+      properties:
+        sessionId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        tenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        buildingId: { type: string, format: uuid }
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+        canDecide:
+          type: boolean
+          description: False for a read-capable admission; the ledger refuses such a session.
+        issuedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
     # ------------------------------------------------------------------
     # CR-BE-UTL-01 PART 13 — Utility domain
     # ------------------------------------------------------------------

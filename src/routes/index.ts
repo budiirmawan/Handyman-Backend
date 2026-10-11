@@ -1,4 +1,5 @@
 import { createCareWorkspaceRouter } from '../modules/handyman-care-workspace/care-workspace.routes';
+import { createPicWorkspaceRouter } from '../modules/handyman-pic-session';
 import { createCareActorPermissionAdminRouter } from '../modules/handyman-care-actors';
 import { Router } from 'express';
 import { createAreaRouter } from '../modules/areas/area.routes';
@@ -800,6 +801,14 @@ export function createApiRouter(): Router {
   // session is not a substitute, and none is created).
   router.use(createHandoffHandymanRouter());
   router.use(createCareWorkspaceRouter());
+
+  // W03 PART 03C — bounded, BM-attested Tenant PIC session (CR-HM-06/A01 §4–§5).
+  // Its own router, its own credential store, its own token kind: it is mounted
+  // beside the two above, never merged into them, so a staff bearer token, a
+  // care workspace token, and a PIC session token each authenticate only their
+  // own surface (A01 §5.3 rule 19). No PIC business route exists here yet —
+  // 03D owns the bounded read and 03E owns the decide path.
+  router.use(createPicWorkspaceRouter());
   // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
   // attribution-bound request intake, and bounded INTAKE evidence upload
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface

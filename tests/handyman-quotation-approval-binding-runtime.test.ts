@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { mkdir, rm } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool, PoolClient } from 'pg';
 import type { DatabaseConfig } from '../src/config';
@@ -33,6 +33,15 @@ import {
   getHandymanQuotationApprovalBinding,
   revokeHandymanQuotationApprovalBinding,
 } from '../src/modules/handyman-quotation-approval-bindings';
+import {
+  admitPicWorkspace,
+  signPicWorkspaceAssertion,
+} from '../src/modules/handyman-pic-session';
+import {
+  handoffIntegrationSecretEnvName,
+  handoffRuntimeRepository,
+} from '../src/modules/handyman-handoff';
+import { handymanCareActorService } from '../src/modules/handyman-care-actors';
 import { propertyService } from '../src/modules/properties';
 import { roomService } from '../src/modules/rooms';
 import { serviceCatalogService } from '../src/modules/service-catalog';
@@ -538,16 +547,73 @@ async function journalRows(quotationId: string): Promise<Values[]> {
   return result.rows as Values[];
 }
 
+/**
+ * D1 is closed by 0442: a PIC decision must name the PIC session that admitted
+ * the signer, so this suite mints a REAL session through the PIC service. The
+ * attesting integration is created once per suite and cached; the session is
+ * cached per (tenant, PIC) because the ledger only reads its identity columns.
+ */
+const PIC_SESSION_SECRET = 'w03-part-03b2-pic-session-attestation-secret';
+let picIntegrationCode: string | null = null;
+const picSessions = new Map<string, string>();
+
+async function mintPicSessionId(thread: Thread): Promise<string> {
+  const key = `${thread.tenantCompanyId}:${thread.picId}`;
+  const cached = picSessions.get(key);
+  if (cached) return cached;
+  if (!picIntegrationCode) {
+    const code = `PIC03B2${suffix()}`;
+    const created = await handoffRuntimeRepository.createIntegration({
+      integrationCode: code,
+      displayName: '03B2 PIC attesting integration',
+    });
+    await handymanCareActorService.setIntegrationActorCapability({
+      integrationId: created.id,
+      capability: 'TENANT_PIC',
+    });
+    process.env[handoffIntegrationSecretEnvName(code)] = PIC_SESSION_SECRET;
+    picIntegrationCode = code;
+  }
+  const now = Date.now();
+  const body = {
+    purpose: 'HANDYMAN_PIC_WORKSPACE' as const,
+    integrationCode: picIntegrationCode,
+    assertionId: randomUUID(),
+    issuedAt: new Date(now - 2_000).toISOString(),
+    expiresAt: new Date(now + 120_000).toISOString(),
+    representation: {
+      tenantCompanyId: thread.tenantCompanyId,
+      buildingId: thread.buildingId,
+      tenantPicId: thread.picId,
+      spaceId: thread.spaceId ?? null,
+    },
+  };
+  const admitted = await admitPicWorkspace(
+    body,
+    signPicWorkspaceAssertion(body as any, PIC_SESSION_SECRET),
+  );
+  const found = await q(
+    `SELECT id FROM handyman_pic_workspace_sessions WHERE token_hash = $1`,
+    [createHash('sha256').update(admitted.workspaceToken).digest('hex')],
+  );
+  if (found.rows.length !== 1) throw new Error('PIC session mint produced no row');
+  const id = found.rows[0].id as string;
+  picSessions.set(key, id);
+  return id;
+}
+
 /** A decided thread: the binding ledger is frozen (B18) and no service can
  *  produce that state yet, so the decision row is planted as raw SQL. */
 async function plantDecision(thread: Thread, bindingId: string): Promise<void> {
+  const sessionId = await mintPicSessionId(thread);
   await q(
     `INSERT INTO ${DECISION_TABLE}
        (id, client_id, quotation_id, quotation_version_id, decision,
         tenant_company_id, tenant_pic_id, decided_by_user_id,
         idempotency_key, request_fingerprint, decision_actor_type,
-        decided_by_tenant_pic_id, approval_binding_id)
-     VALUES ($1,$2,$3,$4,'APPROVE',$5,$6,NULL,$7,$8,'TENANT_PIC',$9,$10)`,
+        decided_by_tenant_pic_id, approval_binding_id,
+        decided_by_pic_session_id)
+     VALUES ($1,$2,$3,$4,'APPROVE',$5,$6,NULL,$7,$8,'TENANT_PIC',$9,$10,$11)`,
     [
       randomUUID(),
       thread.clientId,
@@ -559,6 +625,7 @@ async function plantDecision(thread: Thread, bindingId: string): Promise<void> {
       'a'.repeat(64),
       thread.picId,
       bindingId,
+      sessionId,
     ],
   );
 }

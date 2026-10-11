@@ -1,6 +1,13 @@
 export const ERROR_CODES = {
   HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND: 'HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND',
   HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED: 'HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED',
+  // W03 PART 03C (A01 §10 C15): additive codes for the bounded PIC session.
+  // UNAUTHORIZED is the uniform 401 of admission and of every rejected use of a
+  // credential; RESOURCE_NOT_FOUND is reserved for the bounded PIC read surface
+  // (03D) so that read does not invent a third shape. Neither code may carry a
+  // reason detail: a uniform refusal is the enumeration defence.
+  HANDYMAN_PIC_WORKSPACE_RESOURCE_NOT_FOUND: 'HANDYMAN_PIC_WORKSPACE_RESOURCE_NOT_FOUND',
+  HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED: 'HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED',
   BAD_REQUEST: 'BAD_REQUEST',
   NOT_FOUND: 'NOT_FOUND',
   USER_NOT_FOUND: 'USER_NOT_FOUND',

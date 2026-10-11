@@ -38,6 +38,16 @@ import { ensureTestDatabase } from './helpers/postgres';
 import { migration0437HandymanQuotationApprovalBindings } from '../src/database/migrations/0437_handyman_quotation_approval_bindings';
 import { migration0438HandymanQuotationDecisionActorIdentity } from '../src/database/migrations/0438_handyman_quotation_decision_actor_identity';
 import { migration0439HandymanExecutionScopeActorIdentity } from '../src/database/migrations/0439_handyman_execution_scope_actor_identity';
+import {
+  PIC_WORKSPACE_PURPOSE,
+  admitPicWorkspace,
+  signPicWorkspaceAssertion,
+} from '../src/modules/handyman-pic-session';
+import {
+  handoffIntegrationSecretEnvName,
+  handoffRuntimeRepository,
+} from '../src/modules/handyman-handoff';
+import { handymanCareActorService } from '../src/modules/handyman-care-actors';
 
 /**
  * W03 PART 03B — focused tests for the quotation PIC approval SCHEMA
@@ -152,6 +162,62 @@ const q: Runner = (text, params = []) => {
   if (!pool) throw new Error('database pool is not initialized');
   return pool.query(text, params);
 };
+
+/**
+ * D1 (A01 6.1/7.1) is closed by migration 0442: a PIC decision and a PIC
+ * execution scope must name the PIC session that admitted the signer. These
+ * tests plant rows directly, so they mint a REAL session through the PIC
+ * service rather than faking one — a dangling id would be refused by the
+ * guard's lookup, which is a different fact from the one under test.
+ */
+let picIntegrationCode: string | null = null;
+const picSessions = new Map<string, string>();
+
+async function mintPicSessionId(thread: Thread): Promise<string> {
+  const key = `${thread.tenantCompanyId}:${thread.picId}`;
+  const cached = picSessions.get(key);
+  if (cached) return cached;
+  if (!picIntegrationCode) {
+    const code = `P03B${suffix()}`;
+    const created = await handoffRuntimeRepository.createIntegration({
+      integrationCode: code,
+      displayName: '03B PIC attesting integration',
+    });
+    await handymanCareActorService.setIntegrationActorCapability({
+      integrationId: created.id,
+      capability: 'TENANT_PIC',
+    });
+    process.env[handoffIntegrationSecretEnvName(code)] =
+      'w03-part-03b-pic-session-attestation-secret';
+    picIntegrationCode = code;
+  }
+  const now = Date.now();
+  const body = {
+    purpose: PIC_WORKSPACE_PURPOSE,
+    integrationCode: picIntegrationCode,
+    assertionId: randomUUID(),
+    issuedAt: new Date(now - 2_000).toISOString(),
+    expiresAt: new Date(now + 120_000).toISOString(),
+    representation: {
+      tenantCompanyId: thread.tenantCompanyId,
+      buildingId: thread.buildingId,
+      tenantPicId: thread.picId,
+      spaceId: thread.spaceId ?? null,
+    },
+  };
+  const admitted = await admitPicWorkspace(
+    body,
+    signPicWorkspaceAssertion(body as any, 'w03-part-03b-pic-session-attestation-secret'),
+  );
+  const found = await q(
+    `SELECT id FROM handyman_pic_workspace_sessions WHERE token_hash = $1`,
+    [fingerprint(admitted.workspaceToken)],
+  );
+  if (found.rows.length !== 1) throw new Error('PIC session mint produced no row');
+  const id = found.rows[0].id as string;
+  picSessions.set(key, id);
+  return id;
+}
 
 function assertRefusal(
   failure: DbError | null,
@@ -476,7 +542,7 @@ async function insertDecision(
   bindingId: string | null,
   overrides: Values = {},
 ): Promise<string> {
-  return insertRow(run, DECISION_TABLE, {
+  const values: Values = {
     id: randomUUID(),
     client_id: thread.clientId,
     quotation_id: thread.quotationId,
@@ -491,7 +557,14 @@ async function insertDecision(
     decided_by_tenant_pic_id: thread.picId,
     approval_binding_id: bindingId,
     ...overrides,
-  });
+  };
+  if (
+    values.decision_actor_type === 'TENANT_PIC' &&
+    values.decided_by_pic_session_id === undefined
+  ) {
+    values.decided_by_pic_session_id = await mintPicSessionId(thread);
+  }
+  return insertRow(run, DECISION_TABLE, values);
 }
 
 async function insertScope(
@@ -500,7 +573,7 @@ async function insertScope(
   decisionId: string,
   overrides: Values = {},
 ): Promise<string> {
-  return insertRow(run, SCOPE_TABLE, {
+  const values: Values = {
     id: randomUUID(),
     client_id: thread.clientId,
     handyman_request_id: thread.requestId,
@@ -516,7 +589,14 @@ async function insertScope(
     created_by_actor_type: 'TENANT_PIC',
     created_by_tenant_pic_id: thread.picId,
     ...overrides,
-  });
+  };
+  if (
+    values.created_by_actor_type === 'TENANT_PIC' &&
+    values.created_by_pic_session_id === undefined
+  ) {
+    values.created_by_pic_session_id = await mintPicSessionId(thread);
+  }
+  return insertRow(run, SCOPE_TABLE, values);
 }
 
 async function revokeBinding(
@@ -567,9 +647,10 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
     ]) {
       assert.ok(present.has(`${BINDING_TABLE}.${column}`), `missing ${column}`);
     }
-    // A01 6.1 / 7.1 actor identity on both ledgers. The session column is
-    // deferred together with the session table it must reference (a
-    // documented deviation, see the PART record).
+    // A01 6.1 / 7.1 actor identity on both ledgers. 03B deferred the session
+    // columns because the table they must reference did not exist yet (deviation
+    // D1); PART 03C created it in 0441 and 0442 closed the deferral, so the
+    // columns are now REQUIRED to be present and to carry the real FK.
     for (const column of [
       'decision_actor_type', 'decided_by_tenant_pic_id', 'approval_binding_id',
     ]) {
@@ -578,8 +659,25 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
         `decision ledger missing ${column}`,
       );
     }
-    assert.ok(present.has('handyman_quotation_decisions.decided_by_pic_session_id') === false);
-    assert.ok(present.has('handyman_execution_scopes.created_by_pic_session_id') === false);
+    for (const [table, column] of [
+      [DECISION_TABLE, 'decided_by_pic_session_id'],
+      [SCOPE_TABLE, 'created_by_pic_session_id'],
+    ] as const) {
+      assert.ok(present.has(`${table}.${column}`), `${table} missing ${column}`);
+      const fk = await q(
+        `SELECT tc.confrelid::regclass::text AS target
+           FROM pg_constraint tc
+           JOIN pg_attribute a ON a.attrelid = tc.conrelid
+            AND a.attname = $2 AND a.attnum = ANY (tc.conkey)
+          WHERE tc.conrelid = $1::regclass AND tc.contype = 'f'`,
+        [table, column],
+      );
+      assert.deepEqual(
+        fk.rows.map((row) => row.target).sort(),
+        ['handyman_pic_workspace_sessions'],
+        `${table}.${column} must be an FK to the session store, not a bare UUID`,
+      );
+    }
     for (const column of ['created_by_actor_type', 'created_by_tenant_pic_id']) {
       assert.ok(
         present.has(`${SCOPE_TABLE}.${column}`),
@@ -703,6 +801,19 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
       at('0439_handyman_execution_scope_actor_identity') + 1,
       '03B2\'s permission migration must land directly after this PART',
     );
+    // 03C's session foundation and the D1 closure it owes the ledger: the FK
+    // migration may not precede the table, and nothing else may ride between
+    // them. A later PART stacking on top must extend this list deliberately.
+    assert.equal(
+      at('0441_handyman_pic_workspace_sessions'),
+      at('0440_handyman_quotation_approval_binding_permission') + 1,
+      'the session store must land directly after 0440',
+    );
+    assert.equal(
+      at('0442_handyman_quotation_pic_session_ledger_link'),
+      at('0441_handyman_pic_workspace_sessions') + 1,
+      'the ledger session link must land directly after the table it references',
+    );
   });
 
   it('is rerun-safe and re-entrant', async (t) => {
@@ -747,9 +858,41 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
     if (!requireDatabase(t)) return;
     // Declared before any PIC-attributed row exists: this is the empty-state
     // path an operator would actually take.
-    // LIFO first peels 0440 (W03 PART 03B2's catalogue row) off the top, which
-    // doubles as evidence for that migration's own down(): an UNASSIGNED code is
-    // removed with its migration and comes back on the way up.
+    // LIFO peels 0442 and 0441 (W03 PART 03C) off the top first, each with its
+    // own evidence, before reaching 0440 — the whole point of pinning the order
+    // is that 0442's FK may only be dropped while the table it points at still
+    // exists, and 0441's down() is a no-op-able drop precisely because no
+    // admission ever happened on this schema-only suite.
+    assert.equal(
+      await migrateDown(pool!),
+      '0442_handyman_quotation_pic_session_ledger_link',
+    );
+    const linkGone = await q(
+      `SELECT count(*)::int AS n FROM information_schema.columns
+        WHERE (table_name, column_name) IN
+          (('handyman_quotation_decisions','decided_by_pic_session_id'),
+           ('handyman_execution_scopes','created_by_pic_session_id'))`,
+    );
+    assert.equal(linkGone.rows[0].n, 0, '0442.down() removes both session columns');
+    assert.equal(
+      await migrateDown(pool!),
+      '0441_handyman_pic_workspace_sessions',
+    );
+    const storeGone = await q(
+      `SELECT count(*)::int AS n FROM information_schema.tables
+        WHERE table_name = 'handyman_pic_workspace_sessions'`,
+    );
+    assert.equal(storeGone.rows[0].n, 0);
+    const capability = await q(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+        WHERE conname = 'handyman_handoff_integrations_actor_capability_check'`,
+    );
+    assert.ok(
+      !capability.rows[0].def.includes('TENANT_PIC'),
+      '0441.down() must restore the narrower capability list',
+    );
+    // 0440 (W03 PART 03B2's catalogue row) doubles as evidence for that
+    // migration's own down(): an UNASSIGNED code is removed with its migration.
     const revertedPermission = await migrateDown(pool!);
     assert.equal(
       revertedPermission,
@@ -781,8 +924,10 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
       [
         '0439_handyman_execution_scope_actor_identity',
         '0440_handyman_quotation_approval_binding_permission',
+        '0441_handyman_pic_workspace_sessions',
+        '0442_handyman_quotation_pic_session_ledger_link',
       ],
-      'the re-apply must be exactly the two migrations that were reverted, in order',
+      'the re-apply must be exactly the four reverted migrations, in order',
     );
     const restoredPermission = await q(
       `SELECT count(*)::int AS n FROM permissions
@@ -1246,6 +1391,74 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
         'Handyman execution scopes are immutable authority records',
       );
     });
+  });
+
+  it('refuses a PIC decision that does not name the session that admitted its signer (D1)', async (t) => {
+    if (!requireDatabase(t)) return;
+    const thread = await buildThread({ issue: true });
+    // The positive half is part of the contract: with a minted session the
+    // legal row lands through the LIVE guard — no trigger is disabled anywhere
+    // in this case, which is what separates it from the CHECK-level proofs.
+    const landed = await inRollbackTx(async (_client, run) => {
+      const bindingId = await insertBinding(run, thread);
+      const decisionId = await insertDecision(run, thread, bindingId);
+      const row = await run(
+        `SELECT d.decided_by_pic_session_id = s.id AS session_matches,
+                s.tenant_pic_id = d.decided_by_tenant_pic_id AS pic_matches,
+                s.space_id IS NOT NULL AS space_snapshot
+           FROM ${DECISION_TABLE} d
+           JOIN handyman_pic_workspace_sessions s ON s.id = d.decided_by_pic_session_id
+          WHERE d.id = $1`,
+        [decisionId],
+      );
+      return row.rows[0] as Record<string, unknown>;
+    });
+    assert.deepEqual(landed, {
+      session_matches: true,
+      pic_matches: true,
+      space_snapshot: true,
+    });
+    // Without a session the row is refused, and by the guard's own voice:
+    // 0438's checks all pass for this shape, so a green run here could not be
+    // attributed to anything else.
+    await expectRefusal(
+      () => inRollbackTx(async (_client, run) => {
+        const bindingId = await insertBinding(run, thread);
+        await insertDecision(run, thread, bindingId, {
+          decided_by_pic_session_id: null,
+        });
+      }),
+      'A PIC decision must name the PIC session that admitted the signer.',
+      { code: '23514' },
+    );
+    // Another PIC's live session is not a substitute: the clause compares the
+    // session's OWN identity columns, so the binding half can be perfectly
+    // satisfied and the row still must be refused.
+    await expectRefusal(
+      () => inRollbackTx(async (_client, run) => {
+        const foreign = await buildThread();
+        const bindingId = await insertBinding(run, thread);
+        await insertDecision(run, thread, bindingId, {
+          decided_by_pic_session_id: await mintPicSessionId(foreign),
+        });
+      }),
+      'A PIC decision must be carried by that PIC',
+      { code: '23514' },
+    );
+    // The execution scope half of D1 is CHECK-level (0439's guard is not
+    // rewritten by this PART): a PIC scope without a session is a plain
+    // constraint violation on both sides of the pair.
+    await expectRefusal(
+      () => inRollbackTx(async (_client, run) => {
+        const bindingId = await insertBinding(run, thread);
+        const decisionId = await insertDecision(run, thread, bindingId);
+        await insertScope(run, thread, decisionId, {
+          created_by_pic_session_id: null,
+        });
+      }),
+      'handyman_execution_scopes_actor_identity_check',
+      { constraint: 'handyman_execution_scopes_actor_identity_check' },
+    );
   });
 
   it('authorises a PIC decision only through a live, coherent binding', async (t) => {

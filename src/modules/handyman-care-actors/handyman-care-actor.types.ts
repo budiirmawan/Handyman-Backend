@@ -15,6 +15,13 @@
 export const HANDYMAN_HANDOFF_INTEGRATION_ACTOR_CAPABILITIES = [
   'NONE',
   'CUSTOMER_CARE',
+  // W03 PART 03C (A01 §5.4 rule 20): the right to ATTEST a Tenant PIC
+  // representation and have a bounded PIC session minted from it. It is an
+  // attestation right, never a business permission: it grants no care actor,
+  // no property grant, and no ability to create, price, issue, supersede or
+  // expire anything (rule 21). The DB CHECK in 0441 is the authority; this
+  // allowlist only mirrors it.
+  'TENANT_PIC',
 ] as const;
 export type HandymanHandoffIntegrationActorCapability =
   (typeof HANDYMAN_HANDOFF_INTEGRATION_ACTOR_CAPABILITIES)[number];

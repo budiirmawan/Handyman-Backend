@@ -473,6 +473,8 @@ import type { Migration } from './types';
 
 export type { Migration } from './types';
 
+import { migration0441HandymanPicWorkspaceSessions } from './0441_handyman_pic_workspace_sessions';
+import { migration0442HandymanQuotationPicSessionLedgerLink } from './0442_handyman_quotation_pic_session_ledger_link';
 export const migrations: readonly Migration[] = [
   migration0001InitialFoundation,
   migration0002CreateUsers,
@@ -914,4 +916,6 @@ export const migrations: readonly Migration[] = [
   migration0438HandymanQuotationDecisionActorIdentity,
   migration0439HandymanExecutionScopeActorIdentity,
   migration0440HandymanQuotationApprovalBindingPermission,
+  migration0441HandymanPicWorkspaceSessions,
+  migration0442HandymanQuotationPicSessionLedgerLink,
 ];

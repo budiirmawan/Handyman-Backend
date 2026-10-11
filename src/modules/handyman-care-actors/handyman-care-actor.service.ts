@@ -95,7 +95,7 @@ export async function setIntegrationActorCapability(input: {
     throw AppError.validation('Actor capability validation failed.', [
       {
         field: 'capability',
-        message: 'capability must be NONE or CUSTOMER_CARE.',
+        message: 'capability must be NONE, CUSTOMER_CARE, or TENANT_PIC.',
       },
     ]);
   }
