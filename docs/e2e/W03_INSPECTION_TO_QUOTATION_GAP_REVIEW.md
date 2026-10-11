@@ -156,6 +156,14 @@ This addendum records implementation after the read-only baseline review above; 
 
 Until those decisions authorize a lifecycle model, the requested new tests (assigned Field submit, same-building unassigned Field denial, wrong-building denial, report submission, Operations accept, and return/correction) have no valid persistence/authority contract to assert. Existing authority-only tests were run instead: inspection record `10/10` and Execution Scope assignment API `10/10`. Production `npm run typecheck` passed. No full suite was run.
 
+## Owner direction follow-up — CR-HM-INSPECTION-01 design (2026-10-11; baseline `65c3ea0`)
+
+The Part 02 STOP above remains an accurate record of the earlier review. The owner has since approved the pre-quotation business direction for **design**: Operations assigns an individual Field Worker/Surveyor before quotation, independently of CR-HM-04; Field reports are immutable and versioned; Operations accepts or returns each version; a returned report is corrected by a new version; accepted reports are required before quotation DRAFT preparation for inspection-required requests; and dedicated assignment, submit, and review permissions use existing RBAC. Direct-quotation service eligibility remains pending. This direction does not authorize production code or migrations in this follow-up.
+
+The detailed additive contract, proposed persistence/lifecycle, idempotency and audit rules, quotation DRAFT boundary, focused test matrix, and remaining freeze decisions are in [`CR-HM-INSPECTION-01_PRE_QUOTATION_FIELD_INSPECTION_AUTHORITY.md`](../handyman/CR-HM-INSPECTION-01_PRE_QUOTATION_FIELD_INSPECTION_AUTHORITY.md). That contract is **design proposed, not frozen**. Its §12 lists remaining authority/compatibility decisions, including 0382 diagnosis provenance, the legacy inspection route, historical cutover, `NOT_INSPECTABLE`, reassignment, separation of duties, and the roadmap/F8 amendment.
+
+Accordingly, the old STOP is superseded only as to the business direction needed to design the lifecycle. Implementation remains unauthorized until the new contract is frozen. No code, migration, permission seed, or test was added by this owner-direction follow-up.
+
 ## Guardrails and disposition
 
 - CR-HM-03 F1/F3 and the frozen roadmap remain authoritative. Evidence and reinspection are not silently added to CR-HM-03; evidence stays with CR-HM-10.
