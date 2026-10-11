@@ -156,7 +156,7 @@ Legenda kategori:
 | G17 | **E1–E3 DB-level guard** (03F exit gate: ratified atau waived). Guard DB ada di `0443`. Status ratifikasi tidak tercatat. | Architecture | **VERIFICATION DEBT** | Perlu pointer ratifikasi. Belum diverifikasi ulang pada turn ini. |
 | G18 | **Flakiness `handyman-pic-workspace-session`** (kasus 4 margin waktu; kasus 5 isolasi DB). | QA | **VERIFICATION DEBT** | Perbaikan disarankan di §5.1. Belum diterapkan. |
 | G19 | **Test belum dijalankan pada turn ini:** `pic-portal-read`, `execution-scope-approval-gate`, `intake-triage-journey`, `operations-queue`, `quotation-lifecycle`, `quotation-pic-binding-migration`, dan 33 file legacy lainnya. | QA | **VERIFICATION DEBT** | Sengaja tidak dijalankan (validasi ringan saja). |
-| G20 | **Debt lama (baseline `3332a92`, terbukti bukan regresi 03G):** `handyman-scope-assignments-api` 9/10 gagal; `handyman-material-execution-api` test 6 (`9 !== 8`). | Owner modul masing-masing | **VERIFICATION DEBT** | Dicatat, tidak diperbaiki. |
+| G20 | `handyman-scope-assignments-api` 9/10 gagal dan `handyman-material-execution-api` test 6 (`9 !== 8`). **Koreksi 03H-02:** `scope-assignments-api` ternyata **bukan** debt lama, melainkan S1 (9× `PERMISSION_DENIED`). Lihat `W03_PART03H-02_VERIFICATION_FOUNDATION_RECONCILIATION.md`. `material-execution-api` belum diklasifikasi ulang. | QA + owner modul | **VERIFICATION DEBT** | Dikoreksi di 03H-02. |
 
 ### 7.2 Ringkasan per kategori
 

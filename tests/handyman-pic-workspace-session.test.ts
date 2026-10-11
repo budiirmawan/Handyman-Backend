@@ -650,8 +650,11 @@ describe('W03 PART 03C — uniform structural refusal', () => {
       });
     }
     // Exactly at the cap is inside the contract (`<= 300s`), which keeps the
-    // boundary a measured fact instead of an off-by-one assumption.
-    const base = secondFloor(Date.now() - 299_000);
+    // boundary a measured fact instead of an off-by-one assumption. The window
+    // is anchored 2s in the past so the session still has ~298s of life left:
+    // the boundary is measured on the window length, not on a ~1s race with the
+    // database round-trips of the preceding admissions.
+    const base = secondFloor(Date.now()) - 2_000;
     const edge = assertion(repr, { issuedAt: isoAt(base), expiresAt: isoAt(base + 300_000) });
     assert.equal((await admission(edge, sign(edge))).status, 201);
     const overCap = assertion(repr, { issuedAt: isoAt(base), expiresAt: isoAt(base + 301_000) });
@@ -695,10 +698,14 @@ describe('W03 PART 03C — uniform structural refusal', () => {
     }
     // Rule 18: re-activating never resurrects the credential the transition killed.
     assertUniform401(await introspect(token), 'no resurrection after reactivation');
+    // Scoped to THIS fixture's integration: other files and fixtures sharing the
+    // database legitimately create their own TENANT_PIC integrations.
     const counts = await q(
-      `SELECT count(*)::int AS n FROM handyman_handoff_integrations WHERE actor_capability = 'TENANT_PIC'`,
+      `SELECT count(*)::int AS n FROM handyman_handoff_integrations
+        WHERE actor_capability = 'TENANT_PIC' AND integration_code = $1`,
+      [integrationCode],
     );
-    assert.equal(counts.rows[0].n, 1, 'exactly one PIC-capable integration exists here');
+    assert.equal(counts.rows[0].n, 1, 'exactly one PIC-capable integration exists for this fixture');
   });
 });
 
