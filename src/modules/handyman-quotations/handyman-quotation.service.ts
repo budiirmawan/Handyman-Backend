@@ -1,3 +1,4 @@
+import { assertInspectionQuotationPrerequisite } from '../handyman-requests/handyman-inspection-prerequisite';
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
@@ -123,6 +124,7 @@ export async function createHandymanQuotation(
     //    record must exist and be quotable (server-derived snapshot).
     const diagnosis = await handymanRequestDiagnosisRepository
       .findByRequest(tx, request.id);
+    await assertInspectionQuotationPrerequisite(tx, request.id, diagnosis);
     if (!diagnosis) throw handymanQuotationDiagnosisRequiredError();
     if (!QUOTABLE_SCOPE_CLASSES.has(diagnosis.scopeClassification)) {
       throw handymanQuotationScopeInsufficientError();
@@ -187,14 +189,24 @@ export async function createHandymanQuotationRevision(
   assertUuid(actorUserId, 'actorUserId');
 
   return withTransaction(async (tx) => {
-    const quotation = await handymanQuotationRepository.lockQuotationById(
-      tx,
-      quotationId,
-    );
+    const parent = await handymanQuotationRepository.findQuotationById(tx, quotationId);
+    if (!parent) throw handymanQuotationNotFoundError();
+    // Request first, then quotation: serialize with report/review/diagnosis
+    // and initial DRAFT creation without reversing the aggregate lock order.
+    const request = await handymanServiceRequestRepository.lockById(tx, parent.handymanRequestId);
+    if (!request) throw handymanServiceRequestNotFoundError();
+    const quotation = await handymanQuotationRepository.lockQuotationById(tx, quotationId);
     if (!quotation) throw handymanQuotationNotFoundError();
     // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
     // request's building_id (BE-02G; no same-Client shortcut).
     await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+
+    const diagnosis = await handymanRequestDiagnosisRepository.findByRequest(tx, request.id);
+    const inspectionRequired = await assertInspectionQuotationPrerequisite(tx, request.id, diagnosis);
+    // Preserve direct-path revision behavior; add only the inspection gate.
+    if (inspectionRequired && diagnosis && !QUOTABLE_SCOPE_CLASSES.has(diagnosis.scopeClassification)) {
+      throw handymanQuotationScopeInsufficientError();
+    }
 
     const nextNumber =
       (await handymanQuotationRepository.maxVersionNumber(tx, quotation.id))

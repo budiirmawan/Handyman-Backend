@@ -24,6 +24,7 @@ type Row = {
   diagnosis: string;
   scope_classification: HandymanRequestDiagnosisRecord['scopeClassification'];
   recommended_service_catalog_id: string | null;
+  source_inspection_report_id: string | null;
   diagnosed_by_user_id: string;
   diagnosed_at: Date;
 };
@@ -32,7 +33,7 @@ const DIAGNOSIS_SELECT = `
   SELECT id, client_id, handyman_request_id, channel_attribution_id,
          building_id, handyman_discipline_id, discipline_code, diagnosis,
          scope_classification, recommended_service_catalog_id,
-         diagnosed_by_user_id, diagnosed_at
+         source_inspection_report_id, diagnosed_by_user_id, diagnosed_at
     FROM handyman_request_diagnoses`;
 
 function map(row: Row): HandymanRequestDiagnosisRecord {
@@ -47,6 +48,7 @@ function map(row: Row): HandymanRequestDiagnosisRecord {
     diagnosis: row.diagnosis,
     scopeClassification: row.scope_classification,
     recommendedServiceCatalogId: row.recommended_service_catalog_id,
+    sourceInspectionReportId: row.source_inspection_report_id,
     diagnosedByUserId: row.diagnosed_by_user_id,
     diagnosedAt: row.diagnosed_at,
   };
@@ -61,12 +63,12 @@ async function insertDiagnosis(
        id, client_id, handyman_request_id, channel_attribution_id,
        building_id, handyman_discipline_id, discipline_code, diagnosis,
        scope_classification, recommended_service_catalog_id,
-       diagnosed_by_user_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       diagnosed_by_user_id, source_inspection_report_id
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING id, client_id, handyman_request_id, channel_attribution_id,
                building_id, handyman_discipline_id, discipline_code,
                diagnosis, scope_classification, recommended_service_catalog_id,
-               diagnosed_by_user_id, diagnosed_at`,
+               source_inspection_report_id, diagnosed_by_user_id, diagnosed_at`,
     [
       randomUUID(),
       record.clientId,
@@ -79,6 +81,7 @@ async function insertDiagnosis(
       record.scopeClassification,
       record.recommendedServiceCatalogId,
       record.diagnosedByUserId,
+      record.sourceInspectionReportId,
     ],
   );
   return map(result.rows[0]);

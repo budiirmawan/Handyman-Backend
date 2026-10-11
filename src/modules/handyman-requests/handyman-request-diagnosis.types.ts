@@ -56,6 +56,8 @@ export type HandymanRequestDiagnosisRecord = {
   /** Server-derived snapshot — NEVER caller-supplied. */
   scopeClassification: HandymanScopeClassification;
   recommendedServiceCatalogId: string | null;
+  /** Server-resolved accepted report; null for historical/direct diagnoses. */
+  sourceInspectionReportId: string | null;
   diagnosedByUserId: string;
   diagnosedAt: Date;
 };

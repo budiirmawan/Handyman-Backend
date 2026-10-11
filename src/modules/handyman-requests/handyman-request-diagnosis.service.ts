@@ -1,3 +1,4 @@
+import { resolveAcceptedInspectionReport } from './handyman-inspection-prerequisite';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
@@ -122,6 +123,8 @@ export async function recordHandymanDiagnosis(
         buildingId: request.buildingId,
       });
 
+      const acceptedReport = await resolveAcceptedInspectionReport(tx, request.id);
+
       // 4) F9 authority check: the referenced discipline is the scope root.
       const discipline = await handymanDisciplineRepository.findDisciplineById(
         tx,
@@ -180,6 +183,7 @@ export async function recordHandymanDiagnosis(
           scopeClassification,
           recommendedServiceCatalogId:
             input.recommendedServiceCatalogId ?? null,
+          sourceInspectionReportId: acceptedReport?.id ?? null,
           diagnosedByUserId: actorUserId,
         },
       );
@@ -204,6 +208,7 @@ export async function recordHandymanDiagnosis(
           summary: `Handyman diagnosis recorded: ${scopeClassification} (${discipline.code}).`,
           metadata: {
             diagnosisId: record.id,
+            sourceInspectionReportId: record.sourceInspectionReportId,
             disciplineCode: discipline.code,
             scopeClassification,
             ...(input.recommendedServiceCatalogId != null
