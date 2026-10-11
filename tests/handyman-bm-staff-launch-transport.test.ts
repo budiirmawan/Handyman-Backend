@@ -122,9 +122,9 @@ it('allows opaque reference cancellation, prevents revival and never accepts ref
   await assert.rejects(f.q('UPDATE handyman_bm_staff_launch_receipts SET revoked_at=NULL WHERE id=$1',[(await receipt(ref)).id]),/irreversible/);
   const fresh=await launch();
   status(await api().get('/api/v1/handyman/care/properties').set(auth(fresh)),401,'not a Care credential');
-  status(await api().get('/api/v1/handyman/pic/requests').set(auth(fresh)),401,'not a PIC credential');
+  status(await api().get('/api/v1/handyman/pic/session').set(auth(fresh)),401,'not a PIC credential');
   status(await api().get('/api/v1/handyman/requests').set(auth(fresh)),401,'not a local User credential');
-  status(await api().post('/api/v1/handyman/requests/care').send({exchangeToken:fresh}),401,'not a request-create credential');
+  status(await api().post('/api/v1/handyman/requests/care').send({exchangeToken:fresh,serviceCatalogId:f.catalogId,description:'Invalid launch reference must never create a request',reporter:{name:'Test reporter',phone:'+628111222333'}}),401,'not a request-create credential');
   for(const token of [f.ops.token,await f.careSession()]) denied(await exchange(token),401,UNAUTHORIZED,'legacy credential is not launch reference');
 });
 

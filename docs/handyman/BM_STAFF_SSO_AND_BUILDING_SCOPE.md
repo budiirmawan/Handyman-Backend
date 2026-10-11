@@ -157,7 +157,9 @@ unchanged.
 
 ## Validation
 
-Initial production typecheck: PASS. New transport PostgreSQL/HTTP tests and
-bounded existing Care/PIC regressions: pending at the first source checkpoint.
+Initial production typecheck: PASS. Focused transport PostgreSQL/HTTP tests:
+12 PASS / 0 FAIL / 0 SKIP after correcting a test to use the registered PIC
+session endpoint (initial run: 11 PASS / 1 FAIL due to that test URL). No runtime
+guard was relaxed. Bounded existing Care/PIC regressions: pending final run.
 Successful local staff admission and per-operation Building enforcement:
 BLOCKED / NOT RUN (missing production identity and entitlement authority).

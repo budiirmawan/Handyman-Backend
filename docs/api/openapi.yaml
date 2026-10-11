@@ -3760,6 +3760,121 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Infrastructure/configuration failure; no partial or stale scope data.
+  /handyman/care/staff-sso/launches:
+    post:
+      operationId: issueBmStaffLaunchTransport
+      summary: Accept signed BM staff transport only — staff SSO remains blocked
+      tags: [Handoff]
+      description: >-
+        Server-to-server only. NOT staff admission. HMAC over stableJson with the
+        existing per-integration environment secret (at least 32 bytes); fixed
+        purpose/audience and issuer equal to integrationCode. Requires ACTIVE
+        CUSTOMER_CARE integration, registered ACTIVE non-User Care actor, live
+        property grant and active requested Building hierarchy. Property eligibility
+        is not local User exact-Building authorization. Strict UTC millisecond
+        timestamps, no future skew, positive assertion lifetime at most 60 seconds.
+        Durable per-integration assertion replay barrier. Only an opaque one-time
+        reference and expiry are returned; no cookie/session/User/grants are created.
+        No query parameters. Cache-Control no-store, Referrer-Policy no-referrer,
+        X-Handyman-Staff-SSO blocked-staff-authority. Do not enable a login WebView.
+        Missing production subject-to-User binding and staff CUSTOMER_CARE
+        entitlement prevent any successful exchange. See BM_STAFF_SSO_AND_BUILDING_SCOPE.md.
+      security: [{ handoffAssertionSignature: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BmStaffLaunchAssertion' }
+      responses:
+        '202':
+          description: Transport receipt only, NOT staff admission. Reference expires no later than assertion expiry or 60 seconds.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+            X-Handyman-Staff-SSO:
+              schema: { type: string, enum: [blocked-staff-authority] }
+            Referrer-Policy:
+              schema: { type: string, enum: [no-referrer] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        additionalProperties: false
+                        required: [launchReference, expiresAt]
+                        properties:
+                          launchReference: { type: string, pattern: '^hbsl_[A-Za-z0-9_-]{43}$' }
+                          expiresAt: { type: string, format: date-time }
+        '400': { description: Invalid JSON or unexpected query parameters. }
+        '401':
+          description: Uniform HANDYMAN_BM_STAFF_HANDOFF_UNAUTHORIZED for invalid assertions, unavailable transport scope, replay or credentials.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Existing process-local failure throttle; Retry-After header. }
+        '500': { description: Storage/audit failure rolls back receipt; no session created. }
+  /handyman/care/staff-sso/exchange:
+    post:
+      operationId: exchangeBmStaffLaunchBlocked
+      summary: Consume a transport reference and refuse staff admission — no success response
+      tags: [Handoff]
+      description: >-
+        Only the one-time reference is accepted in the POST body, never query parameters.
+        Rechecks current transport identity/scope, original grant, credential binding,
+        expiry and irrevocable consumption/revocation. A valid reference is consumed
+        exactly once and audited, then returns 409 HANDYMAN_BM_STAFF_AUTHORITY_UNAVAILABLE.
+        There is intentionally no successful admission, cookie or session while the
+        production staff identity and entitlement bridge is missing. Retry returns 401.
+        Concurrent exchange has one blocked consumer. Cache-Control no-store,
+        Referrer-Policy no-referrer, X-Handyman-Staff-SSO blocked-staff-authority.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BmStaffLaunchReferenceInput' }
+      responses:
+        '400': { description: Unexpected body fields, query parameters or malformed JSON. }
+        '401':
+          description: HANDYMAN_BM_STAFF_HANDOFF_UNAUTHORIZED — invalid, expired, replayed, revoked or wrong-key reference, or lost transport scope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: HANDYMAN_BM_STAFF_AUTHORITY_UNAVAILABLE — reference consumed, NO staff session created. Production User binding and Care/Building authority missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { description: Existing process-local failure throttle; Retry-After header. }
+        '500': { description: Storage/audit failure rolls back consumption; no session created. }
+  /handyman/care/staff-sso/revoke:
+    post:
+      operationId: revokeBmStaffLaunchTransport
+      summary: Cancel a pending transport reference — NOT staff-session logout
+      tags: [Handoff]
+      description: >-
+        Body only; no query parameters. A reference holder may irrevocably discard a
+        pending transport receipt. Unknown or previously consumed/revoked well-formed
+        references also return 204. No User/Care/PIC session is affected.
+        Cache-Control no-store, Referrer-Policy no-referrer,
+        X-Handyman-Staff-SSO blocked-staff-authority. Integration/actor deactivation
+        also revokes pending receipts irreversibly; reactivation never revives them.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BmStaffLaunchReferenceInput' }
+      responses:
+        '204': { description: Pending transport cancelled or no pending reference found; empty body. }
+        '400': { description: Unexpected fields/query parameters or malformed JSON. }
+        '401': { description: HANDYMAN_BM_STAFF_HANDOFF_UNAUTHORIZED — malformed reference. }
+        '429': { description: Existing process-local failure throttle; Retry-After header. }
+        '500': { description: Storage/audit failure rolls back cancellation. }
   /handyman/care/session:
     post:
       operationId: admitCareWorkspace
@@ -120978,3 +121093,42 @@ components:
       required: [status]
       properties:
         status: { $ref: "#/components/schemas/ModuleStatus" }
+
+    BmStaffLaunchAssertion:
+      type: object
+      additionalProperties: false
+      required: [purpose, integrationCode, issuer, audience, assertionId, staffReference, buildingId, issuedAt, expiresAt]
+      properties:
+        purpose: { type: string, enum: [HANDYMAN_BM_STAFF_LAUNCH] }
+        integrationCode: { type: string, pattern: '^[A-Z0-9_]{1,128}$' }
+        issuer:
+          type: string
+          description: Must equal the registered integrationCode, not a caller-chosen identity provider.
+        audience: { type: string, enum: [HANDYMAN_BM_STAFF_SSO] }
+        assertionId: { type: string, format: uuid }
+        staffReference:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Existing integration-scoped non-User Care actor reference; no leading/trailing whitespace. Never resolves a local User/email/PIC.
+        buildingId:
+          type: string
+          format: uuid
+          description: Requested transport context only; not an exact local staff Building grant.
+        issuedAt:
+          type: string
+          format: date-time
+          description: Canonical UTC ISO timestamp to milliseconds; not in the future.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Canonical UTC ISO timestamp to milliseconds; positive lifetime at most 60 seconds, not elapsed.
+    BmStaffLaunchReferenceInput:
+      type: object
+      additionalProperties: false
+      required: [launchReference]
+      properties:
+        launchReference:
+          type: string
+          pattern: '^hbsl_[A-Za-z0-9_-]{43}$'
+          description: One-time short-lived transport reference only; never a Care/PIC/User credential.
