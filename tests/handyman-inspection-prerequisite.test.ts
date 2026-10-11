@@ -124,6 +124,7 @@ async function fixture(options: { direct?: boolean; notInspectable?: boolean } =
     code: `HM${suffix()}`,
     name: 'Handyman Service',
     category: 'HANDYMAN',
+    ...(options.direct ? { inspectionPolicy: 'DIRECT_ALLOWED' as const } : {}),
   }, adminUserId);
   const request = await handymanServiceRequestService
     .createHandymanServiceRequest(
@@ -133,10 +134,15 @@ async function fixture(options: { direct?: boolean; notInspectable?: boolean } =
       },
       adminUserId,
     );
+  if (options.direct) {
+    await grantPermissionToUser(adminUserId, 'handyman.operations.request.triage', 'Operations triage');
+  }
   await handymanServiceRequestTriageService.recordHandymanRequestTriage({
     handymanRequestId: request.id,
     triageDisposition: options.direct ? 'DIAGNOSIS' : 'INSPECTION_REQUIRED',
-    triageNote: options.direct ? 'Existing direct path; eligibility policy deferred.' : 'Inspect on site.',
+    triageNote: options.direct ? 'Authorized direct scope exception.' : 'Inspect on site.',
+    ...(options.direct ? { scopeClarityConfirmed: true,
+      directQuotationReason: 'Known unit dimensions and fixed replacement specification make the scope clear.' } : {}),
   }, adminUserId);
   if (!options.direct) {
     await buildingAssignmentService.createAssignment(fieldUserId, { buildingId: building.id });
@@ -327,7 +333,7 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
     conflict(await revise(thread), 'HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT', 400);
   });
 
-  it('direct DIAGNOSIS retains null provenance and existing draft/revision behavior; policy remains deferred', async () => {
+  it('authorized direct DIAGNOSIS retains null report provenance and draft/revision behavior', async () => {
     const f = await fixture({ direct: true });
     const diagnosis = await diagnose(f.request.id, { sourceInspectionReportId: randomUUID() });
     assert.equal(diagnosis.status, 201, JSON.stringify(diagnosis.body));

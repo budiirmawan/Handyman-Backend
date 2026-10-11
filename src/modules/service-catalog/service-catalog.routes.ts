@@ -18,7 +18,7 @@ import {
  *   GET /service-catalog/entries/:id
  * Management (`service_catalog.manage`):
  *   POST   /service-catalog/entries
- *   PATCH  /service-catalog/entries/:id     (name / description / category only)
+ *   PATCH  /service-catalog/entries/:id     (name / description / category / inspectionPolicy)
  *   POST   /service-catalog/entries/:id/deactivate
  *
  * Client isolation is enforced in the service via `contextAccessService`

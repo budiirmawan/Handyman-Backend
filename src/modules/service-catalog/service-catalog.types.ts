@@ -91,7 +91,7 @@ export type NewServiceCatalogEntry = {
 /**
  * Partial update input (PATCH). Identity (`code`, `clientId`) is immutable;
  * `status` is not editable here — deactivation is the governed lifecycle
- * transition (governance §11/§16). Only `name`, `description`, `category`
+ * transition (governance §11/§16). Only `name`, `description`, `category`, `inspectionPolicy`
  * are editable.
  */
 export type UpdateServiceCatalogEntryInput = {

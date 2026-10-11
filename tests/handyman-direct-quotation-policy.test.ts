@@ -41,6 +41,7 @@ it('defaults existing/unconfigured services to inspection; note-only and caller-
   assert.equal(inspected.body.data.scopeClarityConfirmed, null);
   denied(await draft(r.id), 409, 'HANDYMAN_INSPECTION_ACCEPTED_REPORT_REQUIRED', 'inspection gate survives');
   status(await f.configure('DIRECT_ALLOWED'), 200, 'explicit configuration');
+  denied(await draft(r.id), 409, 'HANDYMAN_INSPECTION_ACCEPTED_REPORT_REQUIRED', 'enabling direct policy cannot alter an existing inspection decision');
   const another = await f.createRequest();
   for (const extra of [
     { scopeClarityConfirmed: undefined, directQuotationReason: undefined },
@@ -78,6 +79,7 @@ it('snapshots policy/service/actor/time/clarity/reason; later restriction affect
   assert.equal(snapshot.directQuotationReason, REASON);
   assert.equal(snapshot.actorUserId, f.ops.userId);
   assert.ok(snapshot.policyCatalogUpdatedAt);
+  assert.equal((await f.q('SELECT t.policy_catalog_updated_at = s.updated_at AS exact FROM handyman_request_triage_decisions t JOIN service_catalog s ON s.id=t.policy_service_catalog_id WHERE t.handyman_request_id=$1', [r.id])).rows[0].exact, true, 'full database timestamp precision is retained');
   status(await f.configure('INSPECTION_REQUIRED'), 200, 'restrict future triage');
   const dx = await diagnose(r.id);
   status(dx, 201, 'saved authorization survives policy edit');

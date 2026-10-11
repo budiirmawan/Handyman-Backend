@@ -16,7 +16,8 @@ function acceptedReportRequired(): AppError {
 /**
  * PART C: callers hold the parent request lock and have checked Building access.
  * Persisted triage, not the mutable request status or caller input, selects the
- * inspection path. No missing-data grandfathering or direct-service policy.
+ * inspection path. Direct policy is enforced separately by the direct-policy
+ * prerequisite; no missing-data grandfathering.
  */
 export async function resolveAcceptedInspectionReport(
   tx: Pick<PoolClient, 'query'>,

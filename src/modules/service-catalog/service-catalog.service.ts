@@ -216,7 +216,7 @@ export async function listServiceCatalogEntries(
 }
 
 /**
- * Updates editable, non-identity fields (`name`, `description`, `category`).
+ * Updates editable, non-identity fields (`name`, `description`, `category`, `inspectionPolicy`).
  * `code` and `clientId` are immutable (governance §5/§11); `status` is not
  * editable here — deactivation is the governed lifecycle transition.
  */

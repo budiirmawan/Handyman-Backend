@@ -68,7 +68,6 @@ it('direct quotation: signed Care intake → explicit authorized scope → diagn
   step('explicit service permission and Operations decision persist; direct diagnosis and issue require no inspection');
   // A staff credential, like Care, is not a PIC credential. The shared fixture's
   // Care session is intentionally not exposed after intake.
-  const careToken = ops.token;
   const picAssertion: PicWorkspaceAssertion = {
     purpose: 'HANDYMAN_PIC_WORKSPACE', integrationCode: picCode, assertionId: randomUUID(),
     issuedAt: new Date(Date.now() - 1000).toISOString(), expiresAt: new Date(Date.now() + 240_000).toISOString(),
@@ -90,7 +89,7 @@ it('direct quotation: signed Care intake → explicit authorized scope → diagn
   const decisionKey = randomUUID();
   const decide = (token: string, body: object = { decision: 'APPROVE' }, key = decisionKey) =>
     api().post(`${PIC}/quotation-versions/${versionId}/decision`).set(auth(token)).set('Idempotency-Key', key).send(body);
-  denied(await decide(careToken), 401, 'HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED', 'staff token is not PIC session authority');
+  denied(await decide(ops.token), 401, 'HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED', 'staff token is not PIC session authority');
   denied(await decide(picToken), 409, 'HANDYMAN_QUOTATION_DECISION_CONFLICT', 'PIC cannot approve without explicit binding');
   const staff = await api().post(`${HV}/${versionId}/decision`).set(auth(ops.token))
     .set('Idempotency-Key', randomUUID()).send({ decision: 'APPROVE' });

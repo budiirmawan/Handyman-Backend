@@ -4,8 +4,9 @@ import type { ServiceInspectionPolicy } from '../service-catalog/service-catalog
  *
  * The triage decision record carries ONLY the F2-minimum facts — request
  * reference, disposition, concise note, authenticated actor, server
- * timestamp. The note is the durable decision rationale; for DIAGNOSIS it
- * records the reason for choosing the direct-to-diagnosis exception. No
+ * timestamp, plus the owner-authorized service-policy provenance. The note
+ * alone is not direct authorization: explicit clarity and a separate reason
+ * are required for DIAGNOSIS. No
  * diagnosis content, scope classification, specialist target, provider, or
  * quotation lives on this record. Service-specific direct-quotation
  * eligibility is now snapshotted alongside explicit Operations confirmation.
@@ -56,7 +57,7 @@ export type CreateHandymanRequestTriageInput = {
   handymanRequestId: string;
   /** Omitted means inspection-first; DIAGNOSIS must be an explicit choice. */
   triageDisposition?: HandymanTriageDisposition;
-  /** Required rationale; for DIAGNOSIS, this is the exception reason. */
+  /** Required triage note; never sufficient direct-quotation authority. */
   triageNote: string;
   scopeClarityConfirmed?: boolean;
   directQuotationReason?: string;
