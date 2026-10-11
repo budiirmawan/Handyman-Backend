@@ -1,3 +1,4 @@
+import { openHandymanCustomerTransaction } from '../src/modules/handyman-customer-transactions';
 import assert from 'node:assert/strict';
 import { randomBytes,randomUUID,createHash } from 'node:crypto';
 import { before,after,beforeEach,it } from 'node:test';
@@ -6,7 +7,7 @@ import { startCareQuotationFixture,closeDirectQuotationFixture,auth,status,denie
 import { createSessionWithPermissions } from './helpers/access';
 import { api } from './helpers/http';
 import { roleService } from '../src/modules/roles';
-import { handymanCareActorService,grantCareActorProperty } from '../src/modules/handyman-care-actors';
+import { handymanCareActorService,grantCareActorProperty,grantCareActorPermission } from '../src/modules/handyman-care-actors';
 import { sessionService } from '../src/modules/auth/session.service';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { tenantCompanyService } from '../src/modules/tenant-companies';
@@ -116,6 +117,22 @@ it('staff uses actual Care quotation reads/presentation/handoff and intake witho
   const ex=await api().post(`${CARE}/properties/${f.propertyId}/create-exchanges`).set(auth(token)).send({tenantCompanyId:f.tenantCompanyId,buildingId:f.buildingId,spaceId:f.spaceId});status(ex,201,'staff intake exchange');
   status(await api().post('/api/v1/handyman/requests/care').send({exchangeToken:ex.body.data.exchangeToken,serviceCatalogId:f.catalogId,description:'Staff-created scoped request',residentIntakeChannel:'PHONE',reporter:{name:'Resident',phone:'+628111222333'}}),201,'actual staff intake');
   assert.equal((await f.q('SELECT id FROM handyman_execution_scopes WHERE handyman_request_id=$1',[x.requestId])).rowCount,0);
+});
+it('staff payment reporting retains separate report permission and exact tenant/Building ledger boundaries',async()=>{
+  const token=await login(),x=await f.preparedHandoff(),pic=await f.admitPic();status(pic,201,'independent PIC admission');
+  status(await f.claim(x.handoff.id,pic.body.data.workspaceToken),201,'independent PIC claim');
+  const decision=await f.decide(x.handoff.id,pic.body.data.workspaceToken);status(decision,201,'only PIC authorizes scope');
+  const executionScopeId=(await f.q('SELECT id FROM handyman_execution_scopes WHERE handyman_request_id=$1',[x.requestId])).rows[0].id;
+  await openHandymanCustomerTransaction({executionScopeId,idempotencyKey:randomUUID()},f.ops.userId);
+  const report=(credential=token,scope:object=f.selection)=>api().post(`${CARE}/requests/${x.requestId}/payments`).set(auth(credential)).query(scope).send({amount:'75.00',channel:'BANK_TRANSFER',idempotencyKey:randomUUID()});
+  status(await report(),403,'staff entitlement alone does not grant payment report');
+  const grantor=await local(['permission.manage','handyman.payment.report'],[f.buildingId]);
+  await grantCareActorPermission({careActorId:f.careActorId,permissionCode:'handyman.payment.report'},grantor.userId);
+  const r=await report();status(r,200,'explicitly permitted staff payment report');assert.equal(r.body.data.status,'PENDING');
+  status(await report(token,{...f.selection,tenantCompanyId:otherTenantId,spaceId:undefined}),404,'cross tenant payment denied');
+  status(await report(token,{...f.selection,buildingId:f.otherBuildingId,spaceId:undefined}),404,'cross Building payment denied');
+  status(await report(f.careToken),200,'existing non-User Care payment still works');
+  status(await api().delete(`${SSO}/session`).set(auth(token)),204,'staff report session logout');status(await report(),401,'logged-out staff cannot report');
 });
 it('missing local entitlement or inactive User blocks both exchange and every existing session; restoration cannot revive',async()=>{
   for(const kind of ['entitlement','user']) {

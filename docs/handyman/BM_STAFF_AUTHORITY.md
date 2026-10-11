@@ -48,7 +48,10 @@ not a new bootstrap. Global binding withdrawal requires access to all its scopes
   invalidate linked staff sessions; 204. No body/query fields.
 - DELETE `/sessions/:id`: explicitly revoke a bounded staff session; 204.
 
-Every effective provisioning/revocation is audited atomically. Unauthorized
+Every effective provisioning/revocation is audited atomically. Migration 0454
+also records SYSTEM invalidation events for every first staff-session revocation,
+including User/RBAC/hierarchy and integration lifecycle transitions. Explicit
+HTTP revocations additionally preserve the authenticated administrator/logout actor. Unauthorized
 provisioning returns 403, invalid credentials 401, malformed fields 400.
 
 ## Admission and lifecycle
@@ -125,5 +128,9 @@ integration checks, not something backend PostgreSQL/HTTP tests can certify.
 
 Production typecheck: PASS. Existing 0452 transport tests: 12 PASS.
 Initial actual staff admission/API tests: 15 PASS / 0 FAIL / 0 SKIP at `a2e7b1b`.
-Expanded tests (issuer isolation, complete RBAC withdrawal, automatic revocation
-audit and catalogue filtering) plus bounded Care/PIC regressions pending final run.
+Expanded focused run: **18 PASS / 0 FAIL / 0 SKIP**, including issuer isolation,
+complete RBAC withdrawal, automatic revocation audit, catalogue filtering and real
+staff/legacy payment reporting after independently signed PIC approval. The first
+expanded run was 17 PASS / 1 FAIL due to a test reading a nonexistent scope ID
+field from the decision response; corrected to query the actual PIC-created
+Execution Scope. No authority guard was relaxed. Bounded final regressions pending.

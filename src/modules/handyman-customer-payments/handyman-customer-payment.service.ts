@@ -1,3 +1,4 @@
+import { lockBmStaffSession } from '../handyman-care-workspace/bm-staff-authority.service';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
@@ -302,6 +303,7 @@ export async function recordHandymanCustomerPayment(
             'idempotency-key-bound-to-unknown-payment',
           );
         }
+        if(recordedBy.actorType==='CARE_ACTOR') await lockBmStaffSession(tx,recordedBy.workspaceSessionId);
         return { payment: replayed, event: replayEvent, replayed: true };
       }
       // The payment currency is the ledger transaction's own; the
@@ -328,6 +330,7 @@ export async function recordHandymanCustomerPayment(
           idempotencyKey: key,
           actor: recordedBy,
         });
+      if(recordedBy.actorType==='CARE_ACTOR') await lockBmStaffSession(tx,recordedBy.workspaceSessionId);
       return { payment, event, replayed: false };
     });
   } catch (error) {
