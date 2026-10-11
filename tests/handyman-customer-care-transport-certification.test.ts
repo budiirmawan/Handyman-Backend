@@ -345,12 +345,16 @@ after(async () => {
 });
 
 /**
- * CR-HM-17 PART 06: the certified historical baseline commits are not present
- * in this repository (shallow clone, not reachable from origin). Assertions that
- * compare against them are isolated into explicitly SKIPPED tests with a reason;
- * all structural checks run unconditionally.
+ * The historical PART 08 certification commit is 388e817, whose parent is
+ * the PART 07 route baseline b87d72f. Those snapshots are not ancestors of the
+ * current W03 line, so compare their trees directly rather than comparing an
+ * old baseline with today's intentionally extended API/migration tree.
+ * Separately, enforce this PART's no-route/runtime/migration-change boundary
+ * against the explicitly expected starting HEAD.
  */
-const HISTORICAL_BASELINE_SHAS = ['b87d72f', '2fcfad9'] as const;
+const HISTORICAL_BASELINE_SHAS = ['b87d72f', '2fcfad9', '388e817'] as const;
+const W03_PART_03H_04B_BASELINE_SHA =
+  'd1cf9ee8db1d9159cd16f4f4bde38e7bba407f02';
 const historicalBaselineAvailable = HISTORICAL_BASELINE_SHAS.every((sha) => {
   try {
     execSync(`git cat-file -e ${sha}^{commit}`, { stdio: 'ignore' });
@@ -360,7 +364,7 @@ const historicalBaselineAvailable = HISTORICAL_BASELINE_SHAS.every((sha) => {
   }
 });
 const HISTORICAL_SKIP_REASON =
-  'historical baseline commits b87d72f/2fcfad9 are not in this repository; historical freeze assertion skipped explicitly';
+  'historical PART 00/PART 07/PART 08 snapshot commits are absent from this repository; historical freeze comparison skipped explicitly';
 
 describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certification', () => {
   it('certifies end-to-end Customer Care journey across B3, B4, PART03, B5, B6, B7, and B8 with Backend-resolved represented context and Customer Care != represented tenant', async () => {
@@ -1422,42 +1426,62 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
 
   });
 
-  it('certifies no API path or method added since the certified baseline b87d72f', { skip: historicalBaselineAvailable ? false : HISTORICAL_SKIP_REASON }, async () => {
+  it('certifies historical PART 08 added no API path or method (b87d72f → 388e817)', { skip: historicalBaselineAvailable ? false : HISTORICAL_SKIP_REASON }, async () => {
     const baseline = parseYaml(execSync('git show b87d72f:docs/api/openapi.yaml', { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })) as ApiSpec;
-    assert.deepEqual(Object.keys(spec.paths), Object.keys(baseline.paths), 'certification adds no API paths');
-    for (const url of Object.keys(spec.paths)) {
-      assert.deepEqual(Object.keys(spec.paths[url]), Object.keys(baseline.paths[url]),
-        `certification adds no methods on ${url}`);
+    const certified = parseYaml(execSync('git show 388e817:docs/api/openapi.yaml', { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })) as ApiSpec;
+    assert.deepEqual(Object.keys(certified.paths), Object.keys(baseline.paths), 'historical PART 08 adds no API paths');
+    for (const url of Object.keys(baseline.paths)) {
+      assert.deepEqual(Object.keys(certified.paths[url]), Object.keys(baseline.paths[url]),
+        `historical PART 08 adds no methods on ${url}`);
     }
   });
 
-  it('certifies CR-HM-17 governance, migration and runtime freeze against historical commits 2fcfad9/b87d72f', { skip: historicalBaselineAvailable ? false : HISTORICAL_SKIP_REASON }, async () => {
-    // Governance baseline untouched since PART 00 (2fcfad9)
+  it('certifies CR-HM-17 historical governance, migration and runtime freeze at PART 08 (2fcfad9/b87d72f → 388e817)', { skip: historicalBaselineAvailable ? false : HISTORICAL_SKIP_REASON }, async () => {
+    // The certified PART 08 tree is 388e817; do not diff the historical
+    // PART 00 baseline against today's W03 tree, which has later authorized work.
     const govDiff = execSync(
-      'git diff 2fcfad9..HEAD -- docs/handyman/CR-HM-17_CUSTOMER_CARE_TRANSPORT_GAP_GOVERNANCE.md',
+      'git diff 2fcfad9 388e817 -- docs/handyman/CR-HM-17_CUSTOMER_CARE_TRANSPORT_GAP_GOVERNANCE.md',
       { encoding: 'utf8' },
     );
     assert.equal(
       govDiff.trim(),
       '',
-      'PART 00 governance document must remain unmodified across PART 01–08',
+      'PART 00 governance document remains unchanged in the historical PART 08 tree',
     );
 
-    // Zero new migrations across PART 01–08 (no duplicate lifecycle authority)
     const migrationDiff = execSync(
-      'git diff 2fcfad9..HEAD -- src/database/migrations/',
+      'git diff 2fcfad9 388e817 -- src/database/migrations/',
       { encoding: 'utf8' },
     );
     assert.equal(
       migrationDiff.trim(),
       '',
-      'CR-HM-17 transport gap must not add or modify database migrations',
+      'historical CR-HM-17 PART 01–08 tree adds or modifies no database migrations',
     );
 
-    assert.equal(execSync('git diff b87d72f -- src package.json package-lock.json', { encoding: 'utf8' }).trim(), '',
-      'certification must not change runtime/dependencies');
-    assert.equal(execSync("git diff 2fcfad9..b87d72f -- 'src/modules/handyman-*/*.lifecycle.ts' src/modules/applied-slas src/modules/sla-definitions src/modules/handyman-provider-performance src/modules/handyman-financial-entitlements src/modules/handyman-settlement src/modules/handyman-financial-read src/modules/work-orders src/modules/work-order-sla-register src/modules/asset-warranties src/modules/subscriptions src/modules/entitlements src/modules/due-job-scheduler src/modules/request-idempotency", { encoding: 'utf8' }).trim(), '',
-      'frozen lifecycle/SLA/financial/FM/SaaS authorities remain unchanged');
+    assert.equal(execSync('git diff b87d72f 388e817 -- src package.json package-lock.json', { encoding: 'utf8' }).trim(), '',
+      'historical PART 08 certification does not change runtime/dependencies');
+    assert.equal(execSync("git diff 2fcfad9 b87d72f -- 'src/modules/handyman-*/*.lifecycle.ts' src/modules/applied-slas src/modules/sla-definitions src/modules/handyman-provider-performance src/modules/handyman-financial-entitlements src/modules/handyman-settlement src/modules/handyman-financial-read src/modules/work-orders src/modules/work-order-sla-register src/modules/asset-warranties src/modules/subscriptions src/modules/entitlements src/modules/due-job-scheduler src/modules/request-idempotency", { encoding: 'utf8' }).trim(), '',
+      'historical frozen lifecycle/SLA/financial/FM/SaaS authorities remain unchanged');
+  });
+
+  it('certifies current PART 03H-04B adds no route, runtime, or migration changes since expected HEAD d1cf9ee', async () => {
+    const baseline = parseYaml(execSync(
+      `git show ${W03_PART_03H_04B_BASELINE_SHA}:docs/api/openapi.yaml`,
+      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    )) as ApiSpec;
+    assert.deepEqual(Object.keys(spec.paths), Object.keys(baseline.paths),
+      'PART 03H-04B adds no API paths');
+    for (const url of Object.keys(baseline.paths)) {
+      assert.deepEqual(Object.keys(spec.paths[url]), Object.keys(baseline.paths[url]),
+        `PART 03H-04B adds no methods on ${url}`);
+    }
+    const implementationDiff = execSync(
+      `git diff ${W03_PART_03H_04B_BASELINE_SHA} -- docs/api/openapi.yaml src package.json package-lock.json`,
+      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    );
+    assert.equal(implementationDiff.trim(), '',
+      'PART 03H-04B changes no API contract, runtime, or migration authority');
   });
 
   it('certifies frozen governance, runtime/lifecycle authority preservation, and static FM/SaaS/CR-HM-14 isolation', async () => {

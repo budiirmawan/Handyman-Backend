@@ -343,19 +343,29 @@ async function insertActivePriceEntry(
 }
 const FUTURE = () => new Date(Date.now() + 3_600_000).toISOString();
 
-async function issuedFixture() {
+async function draftFixture() {
   const f = await diagnosedFixture();
   const bundle = await createHandymanQuotation(
     { handymanRequestId: f.request.id }, adminUserId,
   );
-  const version = bundle.versions[0];
+  return { ...f, bundle, version: bundle.versions[0] };
+}
+
+async function issuedFixture(validForMs = 3_600_000) {
+  const f = await diagnosedFixture();
+  const bundle = await createHandymanQuotation(
+    { handymanRequestId: f.request.id }, adminUserId,
+  );
+  const draft = bundle.versions[0];
   const uomId = await insertUom(f.client.id);
-  await addHandymanQuotationLine(version.id, {
+  await addHandymanQuotationLine(draft.id, {
     lineType: 'LABOR', description: 'L1', quantity: 2, uomId,
     currency: 'IDR', finalQuotedUnitAmount: 100,
   }, adminUserId);
-  await issueHandymanQuotationVersion(
-    version.id, { validUntil: FUTURE() }, adminUserId,
+  const version = await issueHandymanQuotationVersion(
+    draft.id,
+    { validUntil: new Date(Date.now() + validForMs).toISOString() },
+    adminUserId,
   );
   return { ...f, bundle, version, uomId };
 }
@@ -615,27 +625,49 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
 
   it('6: non-approved quotation version cannot create scope directly', async (t) => {
     if (!requireDatabase(t)) return;
-    const f = await issuedFixture();
-    const picSession = await bindFixturePic(f);
-    for (const status of ['DRAFT', 'SUPERSEDED', 'EXPIRED'] as const) {
-      await q(`UPDATE handyman_quotation_versions SET status = $2
-                WHERE id = $1`, [f.version.id, status]);
+
+    // Exercise each ineligible lifecycle state from a legal fixture. EXPIRED
+    // must be reached through the server-authoritative expiry transition, not
+    // by rewriting a terminal projection in SQL.
+    const draft = await draftFixture();
+    assert.equal(draft.version.status, 'DRAFT');
+
+    const superseded = await issuedFixture();
+    const supersededVersion = await supersedeHandymanQuotationVersion(
+      superseded.version.id, adminUserId,
+    );
+    assert.equal(supersededVersion.status, 'SUPERSEDED');
+
+    const expiring = await issuedFixture(2_000);
+    assert.ok(expiring.version.validUntil);
+    const expiryDelay = Date.parse(expiring.version.validUntil!) - Date.now();
+    if (expiryDelay > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, expiryDelay + 1));
+    }
+    const expiredVersion = await expireHandymanQuotationVersion(
+      expiring.version.id, adminUserId,
+    );
+    assert.equal(expiredVersion.status, 'EXPIRED');
+
+    for (const fixture of [draft, superseded, expiring]) {
+      const picSession = await bindFixturePic(fixture);
       await assert.rejects(
         decideFixturePic(
           picSession.workspaceToken,
-          f.version.id,
+          fixture.version.id,
           { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
           adminUserId,
         ),
         (e: unknown) =>
           errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
       );
+      assert.equal(await scopeCount(fixture.version.id), 0);
     }
-    assert.equal(await scopeCount(f.version.id), 0);
-    // Direct scope read against an unapproved version → 404.
+
+    // Direct scope read against the expired, unapproved version → 404.
     await assert.rejects(
       getHandymanExecutionScopeByQuotationVersion(
-        f.version.id, adminUserId,
+        expiring.version.id, adminUserId,
       ),
       (e: unknown) =>
         errorCode(e) === 'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND',
@@ -776,17 +808,23 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
       moves: await tableCount('inventory_stock_movements'),
     };
     assert.deepEqual(after, before);
-    // Scope row: no FM/binding/arrival/payment columns ever.
+    // Scope row: no FM/binding/arrival/payment or operational-session columns.
+    // The PIC approval provenance FK is intentionally retained for authority
+    // lineage; it is distinct from execution/work-session state.
     const cols = await q(
       `SELECT column_name FROM information_schema.columns
         WHERE table_name = 'handyman_execution_scopes'`,
     );
     for (const row of cols.rows) {
+      const columnName = String(row.column_name);
+      const isPicApprovalProvenance =
+        columnName === 'created_by_pic_session_id';
       assert.ok(
-        !/work_?order|vendor|crew|provider|schedul|arrival|qr|geofence|payment|bast|session/i.test(
-          String(row.column_name),
-        ),
-        `forbidden scope column ${row.column_name}`,
+        isPicApprovalProvenance
+          || !/work_?order|vendor|crew|provider|schedul|arrival|qr|geofence|payment|bast|session/i.test(
+            columnName,
+          ),
+        `forbidden scope column ${columnName}`,
       );
     }
     // Oracle: scope is exactly what PART 04 decision + PART 02/03 says.
