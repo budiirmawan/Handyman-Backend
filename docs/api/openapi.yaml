@@ -3763,7 +3763,7 @@ paths:
   /handyman/care/staff-sso/launches:
     post:
       operationId: issueBmStaffLaunchTransport
-      summary: Accept signed BM staff transport only — staff SSO remains blocked
+      summary: Accept signed BM staff transport — explicit local authority required at exchange
       tags: [Handoff]
       description: >-
         Server-to-server only. NOT staff admission. HMAC over stableJson with the
@@ -3776,9 +3776,9 @@ paths:
         Durable per-integration assertion replay barrier. Only an opaque one-time
         reference and expiry are returned; no cookie/session/User/grants are created.
         No query parameters. Cache-Control no-store, Referrer-Policy no-referrer,
-        X-Handyman-Staff-SSO blocked-staff-authority. Do not enable a login WebView.
-        Missing production subject-to-User binding and staff CUSTOMER_CARE
-        entitlement prevent any successful exchange. See BM_STAFF_SSO_AND_BUILDING_SCOPE.md.
+        X-Handyman-Staff-SSO explicit-authority-required.
+        Transport is unchanged by 0453/0454; exchange separately checks approved local
+        User binding, entitlement and exact tenant/Building grant. See BM_STAFF_AUTHORITY.md.
       security: [{ handoffAssertionSignature: [] }]
       requestBody:
         required: true
@@ -3792,7 +3792,7 @@ paths:
             Cache-Control:
               schema: { type: string, enum: [no-store] }
             X-Handyman-Staff-SSO:
-              schema: { type: string, enum: [blocked-staff-authority] }
+              schema: { type: string, enum: [explicit-authority-required] }
             Referrer-Policy:
               schema: { type: string, enum: [no-referrer] }
           content:
@@ -3819,25 +3819,42 @@ paths:
         '500': { description: Storage/audit failure rolls back receipt; no session created. }
   /handyman/care/staff-sso/exchange:
     post:
-      operationId: exchangeBmStaffLaunchBlocked
-      summary: Consume a transport reference and refuse staff admission — no success response
+      operationId: exchangeBmStaffLaunch
+      summary: Redeem once for a bounded local-User-backed Customer Care staff session
       tags: [Handoff]
       description: >-
-        Only the one-time reference is accepted in the POST body, never query parameters.
-        Rechecks current transport identity/scope, original grant, credential binding,
-        expiry and irrevocable consumption/revocation. A valid reference is consumed
-        exactly once and audited, then returns 409 HANDYMAN_BM_STAFF_AUTHORITY_UNAVAILABLE.
-        There is intentionally no successful admission, cookie or session while the
-        production staff identity and entitlement bridge is missing. Retry returns 401.
-        Concurrent exchange has one blocked consumer. Cache-Control no-store,
-        Referrer-Policy no-referrer, X-Handyman-Staff-SSO blocked-staff-authority.
+        POST body only: launchReference and tenantCompanyId. The tenant is an
+        untrusted selector checked against an explicit grant; Building comes from
+        the signed receipt. Revalidates transport scope/key/expiry plus issuer/subject
+        binding, ACTIVE local User, live handyman.care.staff.access entitlement,
+        active exact User Building assignment, tenant grant and current tenant context.
+        Atomically consumes the receipt and creates a 15-minute absolute bounded staff
+        Care session. No automatic User/role/permission/Building provisioning.
+        Only a token hash is stored. Send hbs_ workspaceToken in Authorization Bearer
+        on existing Care endpoints, never URLs/logs. It is not a generic Operations
+        User or PIC session. Every protected Care read/write revalidates and restricts
+        to the session's original tenant/Building grant. Missing authority or tenant
+        selector consumes a valid receipt and returns 409, with no session.
+        Concurrent redemption admits at most once; replay returns 401. Audit failure
+        rolls back redemption and session creation. Cache-Control no-store,
+        Referrer-Policy no-referrer, X-Handyman-Staff-SSO explicit-authority-required.
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/BmStaffLaunchReferenceInput' }
+            schema: { $ref: '#/components/schemas/BmStaffExchangeInput' }
       responses:
+        '201':
+          description: Genuine bounded local staff session admitted; no privileges auto-granted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BmStaffAdmission' }
         '400': { description: Unexpected body fields, query parameters or malformed JSON. }
         '401':
           description: HANDYMAN_BM_STAFF_HANDOFF_UNAUTHORIZED — invalid, expired, replayed, revoked or wrong-key reference, or lost transport scope.
@@ -3845,7 +3862,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '409':
-          description: HANDYMAN_BM_STAFF_AUTHORITY_UNAVAILABLE — reference consumed, NO staff session created. Production User binding and Care/Building authority missing.
+          description: HANDYMAN_BM_STAFF_AUTHORITY_UNAVAILABLE — reference consumed, NO staff session created. An active binding, User, local CUSTOMER_CARE entitlement or explicit tenant/Building authority is missing.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -3861,7 +3878,7 @@ paths:
         pending transport receipt. Unknown or previously consumed/revoked well-formed
         references also return 204. No User/Care/PIC session is affected.
         Cache-Control no-store, Referrer-Policy no-referrer,
-        X-Handyman-Staff-SSO blocked-staff-authority. Integration/actor deactivation
+        X-Handyman-Staff-SSO explicit-authority-required. Integration/actor deactivation
         also revokes pending receipts irreversibly; reactivation never revives them.
       security: []
       requestBody:
@@ -3875,6 +3892,131 @@ paths:
         '401': { description: HANDYMAN_BM_STAFF_HANDOFF_UNAUTHORIZED — malformed reference. }
         '429': { description: Existing process-local failure throttle; Retry-After header. }
         '500': { description: Storage/audit failure rolls back cancellation. }
+  /handyman/care/staff-sso/session:
+    get:
+      operationId: getBmStaffSession
+      summary: Revalidate current staff identity, entitlement and exact tenant/Building session
+      tags: [Handoff]
+      security: [{ careWorkspaceSession: [] }]
+      description: Only hbs_ staff bearer tokens. No body/query context overrides. No-store response. Live current key and all staff authorities required.
+      responses:
+        '200':
+          description: Local staff context and absolute expiry; no token reissued.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BmStaffSessionContext' }
+        '400': { description: Unexpected context fields. }
+        '401': { description: Invalid/expired/revoked credential or withdrawn live staff authority. }
+    delete:
+      operationId: logoutBmStaffSession
+      summary: Idempotently revoke exactly this bounded staff session
+      tags: [Handoff]
+      security: [{ careWorkspaceSession: [] }]
+      description: Only hbs_ bearer tokens. No body/query fields. Can log out after expiry or authority loss. No-store. Atomic audit. Existing DELETE /handyman/care/session also accepts staff logout.
+      responses:
+        '204': { description: Session revoked or already inactive/unknown well-formed token. }
+        '400': { description: Unexpected fields. }
+        '401': { description: Missing or malformed staff token. }
+        '500': { description: Audit/storage failure rolls back revocation. }
+  /handyman/care/staff-authority/bindings:
+    post:
+      operationId: provisionBmStaffBinding
+      summary: Explicitly bind registered BM issuer/subject to an existing User and initial tenant/Building grant
+      tags: [Handoff]
+      security: [{ bearerAuth: [] }]
+      description: >-
+        Local User administrator only, not staff SSO/Care/PIC. Requires ACTIVE User,
+        user.manage, permission.manage, tenant_company.manage and delegated
+        handyman.care.staff.access, with exact Building assignment. Subject must be
+        an existing ACTIVE Care actor in the integration. Target User must be ACTIVE
+        and already have exact Building assignment. Tenant must belong to the same
+        Client and have active effective Building context. Creates no Users, role
+        assignments or Building assignments. Atomic binding/grant/audit; no query fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BmStaffBindingInput' }
+      responses:
+        '201':
+          description: Explicit binding and first scope grant provisioned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '400': { description: Invalid or extra fields. }
+        '401': { description: Not a local User session. }
+        '403': { description: Missing delegation, exact Building access or target authority/context. }
+        '409': { description: Active binding already exists; no implicit rebinding. }
+  /handyman/care/staff-authority/bindings/{bindingId}/grants:
+    post:
+      operationId: grantBmStaffScope
+      summary: Add an explicit tenant-company and exact Building grant to an existing binding
+      tags: [Handoff]
+      security: [{ bearerAuth: [] }]
+      description: Same local administrator/delegation checks as binding provisioning, including exact Building assignment. Requires existing active target User Building assignment and effective tenant context. Never widens previously issued sessions.
+      parameters:
+        - { name: bindingId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BmStaffScopeInput' }
+      responses:
+        '201': { description: New immutable grant with id, bindingId, tenantCompanyId and buildingId in success envelope. }
+        '400': { description: Invalid or extra fields. }
+        '401': { description: Not a local User session. }
+        '403': { description: Missing delegation/scope, inactive binding or invalid target authority/context. }
+        '409': { description: Duplicate active grant. }
+  /handyman/care/staff-authority/bindings/{id}:
+    delete:
+      operationId: revokeBmStaffBinding
+      summary: Irreversibly revoke staff binding and linked sessions
+      tags: [Handoff]
+      security: [{ bearerAuth: [] }]
+      description: Local User administrator with user.manage, permission.manage, tenant_company.manage, delegated handyman.care.staff.access and exact Building assignment. Binding revocation requires access to ALL historical scopes and serializes against new grants. Idempotent for an existing revoked record. No body/query fields; no-store; atomic audit.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Authority/session revoked or already revoked. }
+        '400': { description: Invalid or extra fields. }
+        '401': { description: Not a local User session. }
+        '403': { description: Missing delegation/scope or unknown authority. }
+        '500': { description: Storage/audit failure rolls back revocation. }
+  /handyman/care/staff-authority/grants/{id}:
+    delete:
+      operationId: revokeBmStaffScope
+      summary: Irreversibly revoke explicit scope grant and linked sessions
+      tags: [Handoff]
+      security: [{ bearerAuth: [] }]
+      description: Local User administrator with user.manage, permission.manage, tenant_company.manage, delegated handyman.care.staff.access and exact Building assignment. Binding revocation requires access to ALL historical scopes and serializes against new grants. Idempotent for an existing revoked record. No body/query fields; no-store; atomic audit.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Authority/session revoked or already revoked. }
+        '400': { description: Invalid or extra fields. }
+        '401': { description: Not a local User session. }
+        '403': { description: Missing delegation/scope or unknown authority. }
+        '500': { description: Storage/audit failure rolls back revocation. }
+  /handyman/care/staff-authority/sessions/{id}:
+    delete:
+      operationId: revokeBmStaffSession
+      summary: Revoke a bounded staff session by administrative authority
+      tags: [Handoff]
+      security: [{ bearerAuth: [] }]
+      description: Local User administrator with user.manage, permission.manage, tenant_company.manage, delegated handyman.care.staff.access and exact Building assignment. Binding revocation requires access to ALL historical scopes and serializes against new grants. Idempotent for an existing revoked record. No body/query fields; no-store; atomic audit.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Authority/session revoked or already revoked. }
+        '400': { description: Invalid or extra fields. }
+        '401': { description: Not a local User session. }
+        '403': { description: Missing delegation/scope or unknown authority. }
+        '500': { description: Storage/audit failure rolls back revocation. }
   /handyman/care/session:
     post:
       operationId: admitCareWorkspace
@@ -75047,9 +75189,14 @@ components:
     careWorkspaceSession:
       type: http
       scheme: bearer
-      bearerFormat: opaque care workspace credential
+      bearerFormat: opaque Care workspace credential (hcw_ legacy non-User or hbs_ bound staff)
       description: >-
-        Distinct actor/integration-bound credential from POST /handyman/care/session.
+        Legacy hcw_ is an actor/integration-bound non-User credential from
+        POST /handyman/care/session. Additive hbs_ is a local-User-backed bounded
+        staff credential from POST /handyman/care/staff-sso/exchange, revalidated
+        for local entitlement and exact tenant/Building grant on every protected
+        Care operation. It never becomes generic User or PIC authority. The
+        following host relay constraints apply to both; legacy scope is unchanged.
         Maximum 15-minute absolute lifetime; revocable, reusable, no refresh.
         Never a local User/PIC session, RBAC grant, or represented-context create
         exchange. The raw token must never be logged or placed in URLs.
@@ -121132,3 +121279,45 @@ components:
           type: string
           pattern: '^hbsl_[A-Za-z0-9_-]{43}$'
           description: One-time short-lived transport reference only; never a Care/PIC/User credential.
+
+    BmStaffExchangeInput:
+      type: object
+      additionalProperties: false
+      required: [launchReference, tenantCompanyId]
+      properties:
+        launchReference: { type: string, pattern: '^hbsl_[A-Za-z0-9_-]{43}$' }
+        tenantCompanyId: { type: string, format: uuid, description: Selector only; explicit grant is server authority. }
+    BmStaffSessionContext:
+      type: object
+      required: [principalType, userId, buildingId, tenantCompanyId, expiresAt]
+      properties:
+        principalType: { type: string, enum: [BM_STAFF] }
+        sessionId: { type: string, format: uuid, description: Present on GET session, not on admission. }
+        userId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+    BmStaffAdmission:
+      allOf:
+        - $ref: '#/components/schemas/BmStaffSessionContext'
+        - type: object
+          required: [workspaceToken]
+          properties:
+            workspaceToken: { type: string, pattern: '^hbs_[A-Za-z0-9_-]{43}$', description: Hash-only stored bounded staff bearer token; never generic User or PIC authority. }
+    BmStaffScopeInput:
+      type: object
+      additionalProperties: false
+      required: [buildingId, tenantCompanyId]
+      properties:
+        buildingId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+    BmStaffBindingInput:
+      type: object
+      additionalProperties: false
+      required: [integrationId, subject, userId, buildingId, tenantCompanyId]
+      properties:
+        integrationId: { type: string, format: uuid }
+        subject: { type: string, minLength: 1, maxLength: 128, description: Exact pre-registered opaque actor reference; never inferred email/User identity. }
+        userId: { type: string, format: uuid, description: Explicit administrator-selected existing ACTIVE local User. }
+        buildingId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }

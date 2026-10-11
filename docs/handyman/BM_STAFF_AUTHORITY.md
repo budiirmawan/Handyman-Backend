@@ -5,8 +5,9 @@ Baseline: `c578a9969024ca6db388d45d54c5de5e79f256e3`.
 This supersedes the missing-authority blocker recorded in
 `BM_STAFF_SSO_AND_BUILDING_SCOPE.md`. Migration 0452 and its cryptography,
 60-second receipt, durable nonce/replay store and revocation guards are unchanged.
-New migration 0453 defines explicit local staff authority. Validation is pending
-at the first implementation checkpoint; this is not yet production certification.
+Migration 0453 defines explicit local staff authority; additive 0454 audits
+every staff session invalidation, including automatic authority transitions.
+Initial focused admission/API tests passed; final expanded validation is pending.
 
 ## Authority contract
 
@@ -122,5 +123,7 @@ integration checks, not something backend PostgreSQL/HTTP tests can certify.
 
 ## Validation
 
-Initial production typecheck: PASS. Existing 0452 focused transport tests: 12 PASS.
-New staff admission/API tests and expanded Care/PIC regressions pending execution.
+Production typecheck: PASS. Existing 0452 transport tests: 12 PASS.
+Initial actual staff admission/API tests: 15 PASS / 0 FAIL / 0 SKIP at `a2e7b1b`.
+Expanded tests (issuer isolation, complete RBAC withdrawal, automatic revocation
+audit and catalogue filtering) plus bounded Care/PIC regressions pending final run.

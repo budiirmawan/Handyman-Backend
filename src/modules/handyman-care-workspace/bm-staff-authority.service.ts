@@ -118,6 +118,7 @@ export async function provisionBmStaffBinding(adminId:string,input:unknown) {
     const actor=(await tx.query(`SELECT a.id FROM handyman_handoff_care_actors a JOIN handyman_handoff_integrations i ON i.id=a.integration_id
       WHERE a.integration_id=$1 AND a.actor_reference=$2 AND a.status='ACTIVE' AND i.status='ACTIVE' AND i.actor_capability='CUSTOMER_CARE' FOR SHARE OF a,i`,[integrationId,b.subject])).rows[0];
     if(!actor) throw forbidden();
+    if(!(await tx.query("SELECT id FROM users WHERE id=$1 AND status='ACTIVE' FOR SHARE",[userId])).rowCount) throw forbidden();
     const id=randomUUID();
     await tx.query(`INSERT INTO handyman_bm_staff_bindings(id,integration_id,subject,care_actor_id,user_id,provisioned_by_user_id) VALUES($1,$2,$3,$4,$5,$6)`,[id,integrationId,b.subject,actor.id,userId,adminId]);
     const scope=await grant(tx,adminId,id,buildingId,tenantCompanyId);
@@ -133,6 +134,8 @@ export async function grantBmStaffScope(adminId:string,binding:unknown,input:unk
 export async function revokeBmStaffAuthority(adminId:string,kind:'bindings'|'grants',value:unknown) {
   const id=staffUuid(value),table=kind==='bindings'?'handyman_bm_staff_bindings':'handyman_bm_staff_scope_grants';
   return withTransaction(async tx=>{
+    // Serialize global binding withdrawal against concurrent scope additions.
+    if(!(await tx.query(`SELECT id FROM ${table} WHERE id=$1 FOR UPDATE`,[id])).rowCount) throw forbidden();
     const scopes=(await tx.query(`SELECT * FROM handyman_bm_staff_scope_grants WHERE ${kind==='bindings'?'binding_id':'id'}=$1 ORDER BY building_id`,[id])).rows;
     if(!scopes.length) throw forbidden();
     let clientId='';for(const scope of scopes) clientId=await administrator(tx,adminId,scope.building_id,scope.tenant_company_id);

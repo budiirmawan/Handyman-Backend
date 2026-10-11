@@ -115,7 +115,7 @@ export async function presentCareQuotation(token: string,requestInput: unknown,v
     const id=randomUUID();
     const result=await tx.query(`INSERT INTO handyman_care_quotation_presentations(id,quotation_version_id,care_actor_id,care_session_id,channel,idempotency_key)
       VALUES ($1,$2,$3,$4,$5,$6) RETURNING presented_at AS "presentedAt"`,[id,versionId,principal.careActorId,principal.sessionId,channel,idempotencyKey]);
-    await recordOperationalEvent({clientId:request.clientId,buildingId:request.buildingId,entityType:'HANDYMAN_QUOTATION_VERSION',entityId:versionId,
+    await recordOperationalEvent({actorUserId:principal.staffUserId,clientId:request.clientId,buildingId:request.buildingId,entityType:'HANDYMAN_QUOTATION_VERSION',entityId:versionId,
       eventType:'HANDYMAN_CARE_QUOTATION_PRESENTED',summary:'Customer Care recorded resident presentation of the issued quotation.',
       metadata:{presentationId:id,quotationVersionId:versionId,actorType:'CUSTOMER_CARE',careActorId:principal.careActorId,careSessionId:principal.sessionId,channel}},tx);
     return {id,quotationVersionId:versionId,status:'PRESENTED',channel,careActorId:principal.careActorId,...result.rows[0]};
@@ -136,7 +136,7 @@ export async function createCareQuotationHandoff(token: string,requestInput: unk
     const result=await tx.query(`INSERT INTO handyman_care_quotation_handoffs(id,presentation_id,quotation_version_id,approval_binding_id,care_actor_id,care_session_id,expires_at)
       VALUES ($1,$2,$3,$4,$5,$6,LEAST($7::timestamptz,clock_timestamp()+INTERVAL '10 minutes'))
       RETURNING created_at AS "createdAt",expires_at AS "expiresAt"`,[id,presentationId,versionId,binding.id,principal.careActorId,principal.sessionId,version.valid_until]);
-    await recordOperationalEvent({clientId:request.clientId,buildingId:request.buildingId,entityType:'HANDYMAN_QUOTATION_VERSION',entityId:versionId,
+    await recordOperationalEvent({actorUserId:principal.staffUserId,clientId:request.clientId,buildingId:request.buildingId,entityType:'HANDYMAN_QUOTATION_VERSION',entityId:versionId,
       eventType:'HANDYMAN_CARE_PIC_HANDOFF_CREATED',summary:'Customer Care prepared a version-bound handoff requiring independent signed PIC authentication.',
       metadata:{handoffId:id,presentationId,quotationVersionId:versionId,approvalBindingId:binding.id,actorType:'CUSTOMER_CARE',careActorId:principal.careActorId,careSessionId:principal.sessionId,channel:p.channel}},tx);
     return {id,quotationVersionId:versionId,approvalBindingId:binding.id,status:'PENDING_PIC_AUTHENTICATION',channel:p.channel,

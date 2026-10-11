@@ -1,3 +1,7 @@
+> Historical transport checkpoint. The approved authority implementation in
+> [BM_STAFF_AUTHORITY.md](BM_STAFF_AUTHORITY.md) supersedes the blocker and
+> blocked-exchange/API status below. Migration 0452 itself remains unchanged.
+
 # BM staff SSO and Building scope — BLOCKED / transport only
 
 Baseline: `8e078d0b75c1d113cfebd84d283a186bb8243395`.

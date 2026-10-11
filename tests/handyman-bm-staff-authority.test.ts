@@ -5,6 +5,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startCareQuotationFixture,closeDirectQuotationFixture,auth,status,denied,CARE,PIC } from './helpers/handyman-care-quotation';
 import { createSessionWithPermissions } from './helpers/access';
 import { api } from './helpers/http';
+import { roleService } from '../src/modules/roles';
+import { handymanCareActorService,grantCareActorProperty } from '../src/modules/handyman-care-actors';
 import { sessionService } from '../src/modules/auth/session.service';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { tenantCompanyService } from '../src/modules/tenant-companies';
@@ -15,7 +17,7 @@ import { areaService } from '../src/modules/areas';
 import { roomService } from '../src/modules/rooms';
 import { spaceService } from '../src/modules/spaces';
 import { clearLoginRateLimits } from '../src/modules/auth/login-rate-limit';
-import { handoffIntegrationSecretEnvName } from '../src/modules/handyman-handoff';
+import { handoffIntegrationSecretEnvName,handoffRuntimeRepository } from '../src/modules/handyman-handoff';
 import { signBmStaffLaunch,type BmStaffLaunchAssertion } from '../src/modules/handyman-care-workspace/bm-staff-launch.service';
 import { STAFF_CARE_PERMISSION } from '../src/modules/handyman-care-workspace/bm-staff-authority.service';
 
@@ -36,7 +38,9 @@ before(async()=>{
   f=await startCareQuotationFixture(55516);
   const identity=(await f.q(`SELECT i.integration_code,a.actor_reference FROM handyman_handoff_integrations i JOIN handyman_handoff_care_actors a ON a.integration_id=i.id WHERE a.id=$1`,[f.careActorId])).rows[0];
   code=identity.integration_code;subject=identity.actor_reference;secret=process.env[handoffIntegrationSecretEnvName(code)]!;
-  staff=await local([STAFF_CARE_PERMISSION],[f.buildingId]);
+  staff=await local([],[f.buildingId]);
+  const roleId=(await f.q("SELECT id FROM roles WHERE code='HANDYMAN_CUSTOMER_CARE'")).rows[0].id;
+  await roleService.assignRoleToUser(staff.userId,roleId);
   admin=await local(['user.manage','permission.manage','tenant_company.manage',STAFF_CARE_PERMISSION],[f.buildingId,f.otherBuildingId]);
   staffBuildingAssignmentId=(await f.q('SELECT id FROM user_building_assignments WHERE user_id=$1 AND building_id=$2 AND status=\'ACTIVE\'',[staff.userId,f.buildingId])).rows[0].id;
   otherTenantId=(await tenantCompanyService.createTenantCompany({clientId:f.clientId,tenantCode:'OTHER_STAFF_TENANT',tenantName:'Other tenant'},f.master.userId)).id;
@@ -98,11 +102,15 @@ it('protected discovery filters exact Building, tenant and tenant spaces, includ
     status(await api().post(`${CARE}/properties/${f.propertyId}/create-exchanges`).set(auth(token)).send({tenantCompanyId:selection.tenantCompanyId,buildingId:selection.buildingId}),401,'cross scope create');
   }
   status(await api().get(`${CARE}/properties/${f.propertyId}/tenant-companies`).set(auth(token)).query({buildingId:f.otherBuildingId}),404,'explicit other Building');
+  status(await api().get(`${CARE}/properties/${f.propertyId}/catalogue/services`).set(auth(token)).query({buildingId:f.buildingId}),200,'scoped catalogue');
+  status(await api().get(`${CARE}/properties/${f.propertyId}/catalogue/services`).set(auth(token)).query({buildingId:f.otherBuildingId}),404,'cross-Building catalogue');
 });
 it('staff uses actual Care quotation reads/presentation/handoff and intake without receiving PIC approval authority',async()=>{
   const token=await login(),x=await f.prepare();status(await inbox(token),200,'authorized quotation inbox');
   status(await api().get(f.base(x.requestId,x.versionId)).set(auth(token)).query(f.selection),200,'authorized quotation detail');
+  status(await f.present(x,'PHONE',randomUUID(),token,{...f.selection,tenantCompanyId:otherTenantId,spaceId:undefined}),404,'wrong tenant cannot present quotation');
   const p=await f.present(x,'PHONE',randomUUID(),token);status(p,201,'staff resident communication');
+  assert.equal((await f.q("SELECT actor_user_id FROM operational_events WHERE entity_id=$1 AND event_type='HANDYMAN_CARE_QUOTATION_PRESENTED'",[x.versionId])).rows[0].actor_user_id,staff.userId);
   const h=await api().post(`${f.base(x.requestId,x.versionId)}/pic-handoffs`).set(auth(token)).query(f.selection).send({presentationId:p.body.data.id});status(h,201,'staff may facilitate only');
   status(await f.claim(h.body.data.id,token),401,'staff cannot claim as PIC');status(await f.decide(h.body.data.id,token),401,'staff cannot approve');
   const ex=await api().post(`${CARE}/properties/${f.propertyId}/create-exchanges`).set(auth(token)).send({tenantCompanyId:f.tenantCompanyId,buildingId:f.buildingId,spaceId:f.spaceId});status(ex,201,'staff intake exchange');
@@ -181,6 +189,32 @@ it('admission audit failure rolls back both reference redemption and staff sessi
   try {status(await exchange(ref),500,'audit fails closed');assert.equal(await noSessionCount(),before);}
   finally {await f.q('DROP TRIGGER test_staff_admission_audit_fail ON operational_events;DROP FUNCTION test_staff_admission_audit_fail()');}
   status(await exchange(ref),201,'atomic retry after rollback');
+});
+it('issuer/subject namespace cannot reuse a binding from another otherwise-eligible BM integration',async()=>{
+  const otherCode='BM_STAFF_OTHER_'+randomUUID().slice(0,8).toUpperCase(),env=handoffIntegrationSecretEnvName(otherCode);
+  const i=await handoffRuntimeRepository.createIntegration({integrationCode:otherCode,displayName:'Test-only other staff issuer'});
+  await handymanCareActorService.setIntegrationActorCapability({integrationId:i.id,capability:'CUSTOMER_CARE'});
+  const actor=await handymanCareActorService.createCareActor({integrationId:i.id,actorReference:subject,displayName:'Same opaque subject, different issuer'});
+  await grantCareActorProperty({careActorId:actor.id,propertyId:f.propertyId,clientId:f.clientId},f.master.userId);
+  // Even identical test keys cannot collapse the authoritative issuer namespace.
+  process.env[env]=secret;
+  try {
+    const a:BmStaffLaunchAssertion={purpose:'HANDYMAN_BM_STAFF_LAUNCH',integrationCode:otherCode,issuer:otherCode,audience:'HANDYMAN_BM_STAFF_SSO',assertionId:randomUUID(),staffReference:subject,buildingId:f.buildingId,issuedAt:new Date(Date.now()-1000).toISOString(),expiresAt:new Date(Date.now()+55000).toISOString()};
+    const launch=await api().post(`${SSO}/launches`).set('x-hub-signature-256',signBmStaffLaunch(a,secret)).send(a);status(launch,202,'other issuer transport eligible');
+    status(await exchange(launch.body.data.launchReference),409,'other issuer lacks its own explicit binding');
+  } finally {delete process.env[env];}
+});
+it('role, role-permission, permission, tenant and hierarchy revocation are live and generate durable session audit',async()=>{
+  const role=(await f.q("SELECT r.id,rp.id AS rp,p.id AS permission FROM roles r JOIN role_permission_assignments rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE r.code='HANDYMAN_CUSTOMER_CARE' AND p.code=$1",[STAFF_CARE_PERMISSION])).rows[0];
+  for(const [table,id,inactive] of [['roles',role.id,'INACTIVE'],['role_permission_assignments',role.rp,'REVOKED'],['permissions',role.permission,'INACTIVE'],['tenant_companies',f.tenantCompanyId,'INACTIVE'],['buildings',f.buildingId,'INACTIVE']]) {
+    const token=await login(),sessionId=(await me(token)).body.data.sessionId;
+    await f.q(`UPDATE ${table} SET status=$2 WHERE id=$1`,[id,inactive]);
+    try {status(await inbox(token),401,`${table} rechecked`);}
+    finally {await f.q(`UPDATE ${table} SET status='ACTIVE' WHERE id=$1`,[id]);}
+    status(await me(token),401,`${table} restoration cannot revive`);
+    const events=(await f.q("SELECT * FROM operational_events WHERE entity_id=$1 AND event_type='HANDYMAN_BM_STAFF_SESSION_INVALIDATED'",[sessionId])).rows;
+    assert.equal(events.length,1);assert.equal(events[0].source,'SYSTEM');assert.equal(events[0].metadata.userId,staff.userId);assert.ok(!JSON.stringify(events).includes(token));
+  }
 });
 it('explicit scope revocation invalidates sessions and immutable grant history cannot be revived',async()=>{
   const token=await login();status(await api().delete(`${ADMIN}/grants/${grantId}`).set(auth(admin.token)),204,'scope revoke');

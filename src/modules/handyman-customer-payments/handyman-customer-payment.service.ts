@@ -206,6 +206,12 @@ async function assertCareRecorderAuthorityTx(
     // The workspace projected a request in one Building; its scope must agree.
     throw handymanCustomerTransactionNotAuthorizedError();
   }
+  // Staff sessions remain tenant/exact-Building scoped inside the payment write,
+  // even if an internal caller supplied a different otherwise-valid execution scope.
+  if (!(await tx.query('SELECT 1 WHERE handyman_bm_staff_scope($1,$2,$3)',
+    [recordedBy.workspaceSessionId,scope.buildingId,scope.tenantCompanyId])).rowCount) {
+    throw handymanCustomerTransactionNotAuthorizedError();
+  }
   const grant = await resolveActiveCareActorPropertyScope({
     careActorId: recordedBy.careActorId,
     buildingId: scope.buildingId,
