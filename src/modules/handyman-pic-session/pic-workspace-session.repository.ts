@@ -99,11 +99,18 @@ export async function insertPicWorkspaceSession(
  * when the session names a PIC — that PIC ACTIVE and belonging to the session's
  * own tenant. A read-capable session (no PIC) is legitimate for reads, so the
  * PIC join is outer and its predicate is conditional rather than assumed.
+ *
+ * `lookup` is a fixed column choice, never a caller-supplied string: the token
+ * hash is what an HTTP caller can name, and the session id is what a caller who
+ * already authenticated may re-name to re-check itself inside its own
+ * transaction (03D/03E). Both take exactly the same locks.
  */
-export async function findPicWorkspaceSessionByTokenHash(
+async function findAuthority(
   tx: PoolClient,
-  tokenHash: string,
+  lookup: 'token_hash' | 'id',
+  value: string,
 ): Promise<PicWorkspaceAuthorityRow | null> {
+  const column = lookup === 'token_hash' ? 's.token_hash' : 's.id';
   const result = await tx.query<PicWorkspaceAuthorityRow>(
     `SELECT s.id AS "sessionId", s.integration_id AS "integrationId",
             s.tenant_company_id AS "tenantCompanyId",
@@ -120,14 +127,31 @@ export async function findPicWorkspaceSessionByTokenHash(
          ON tc.id = s.tenant_company_id AND tc.status = 'ACTIVE'
        LEFT JOIN tenant_pics p
          ON p.id = s.tenant_pic_id
-      WHERE s.token_hash = $1
+      WHERE ${column} = $1
         AND (s.tenant_pic_id IS NULL
              OR (p.status = 'ACTIVE'
                  AND p.tenant_company_id = s.tenant_company_id))
       FOR SHARE OF i, tc`,
-    [tokenHash],
+    [value],
   );
   return result.rows[0] ?? null;
+}
+
+export function findPicWorkspaceSessionByTokenHash(
+  tx: PoolClient,
+  tokenHash: string,
+): Promise<PicWorkspaceAuthorityRow | null> {
+  return findAuthority(tx, 'token_hash', tokenHash);
+}
+
+/** Same authority read keyed by the session row, for in-transaction
+ * revalidation by a surface that already holds a principal (03D rule: the
+ * credential must be re-checked AFTER the business row locks). */
+export function findPicWorkspaceSessionById(
+  tx: PoolClient,
+  sessionId: string,
+): Promise<PicWorkspaceAuthorityRow | null> {
+  return findAuthority(tx, 'id', sessionId);
 }
 
 /** Session lock. The expiry predicate is re-evaluated against
@@ -221,6 +245,7 @@ export const handymanPicWorkspaceSessionRepository = {
   lockAttestingIntegration,
   insertPicWorkspaceSession,
   findPicWorkspaceSessionByTokenHash,
+  findPicWorkspaceSessionById,
   lockPicWorkspaceSession,
   lockCurrentRepresentation,
   revokePicWorkspaceSessionRow,

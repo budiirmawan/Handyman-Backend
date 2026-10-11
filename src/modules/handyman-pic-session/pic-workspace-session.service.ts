@@ -12,6 +12,7 @@ import {
   picWorkspaceUnauthorized,
 } from './pic-workspace-session.errors';
 import { handymanPicWorkspaceSessionRepository as repo } from './pic-workspace-session.repository';
+import type { PicWorkspaceAuthorityRow } from './pic-workspace-session.repository';
 import {
   PIC_WORKSPACE_ASSERTION_KEYS,
   PIC_WORKSPACE_ASSERTION_MAX_WINDOW_MS,
@@ -358,82 +359,122 @@ export async function admitPicWorkspace(
  * context that simply went out of effect (no status change, so no trigger) is
  * caught here by re-resolution and the FOR SHARE locks.
  */
+/**
+ * One verified use of a credential, executed inside a caller-supplied
+ * transaction. This is the whole rule-17 sequence and it exists exactly once:
+ * the HTTP session surface (`useSession`) and the business surfaces
+ * (`withPicWorkspaceSession`) cannot drift apart, because there is no second
+ * implementation to drift to.
+ */
+export type AuthenticatedPicWorkspaceSession = {
+  principal: PicWorkspacePrincipal;
+  /** The lineage Client the resolved context belongs to (audit only). */
+  clientId: string;
+  expiresAt: Date;
+  alreadyRevoked: boolean;
+};
+
+async function authenticateInTx(
+  tx: PoolClient,
+  find: (tx: PoolClient) => Promise<PicWorkspaceAuthorityRow | null>,
+  mode: 'use' | 'revoke',
+): Promise<AuthenticatedPicWorkspaceSession> {
+  const row = await find(tx);
+  if (!row) throw picWorkspaceUnauthorized();
+  const locked = await repo.lockPicWorkspaceSession(tx, row.sessionId);
+  if (!locked) throw picWorkspaceUnauthorized();
+  // A logout stays idempotent for an already-revoked, still-unexpired token;
+  // any other use of a revoked credential is refused.
+  if (locked.revokedAt !== null && mode !== 'revoke') {
+    throw picWorkspaceUnauthorized();
+  }
+  const clock = await tx.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+  if (locked.expiresAt.getTime() <= clock.rows[0].now.getTime()) {
+    throw picWorkspaceUnauthorized();
+  }
+
+  // The snapshot's NULLs are "absent by resolution", not claims, so the
+  // re-entry into the resolver uses the conditional form it accepts (the same
+  // shape `isCurrentCareRepresentation` builds).
+  const claims = {
+    tenantCompanyId: row.tenantCompanyId,
+    buildingId: row.buildingId,
+    ...(row.tenantPicId ? { tenantPicId: row.tenantPicId } : {}),
+    ...(row.spaceId ? { spaceId: row.spaceId } : {}),
+  };
+  let current: ResolvedHandoffContext;
+  try {
+    current = await resolveHandoffContext(claims);
+  } catch (error) {
+    if (error instanceof AppError) throw picWorkspaceUnauthorized();
+    throw error;
+  }
+  if (current.tenantCompanyId !== row.tenantCompanyId ||
+      current.buildingId !== row.buildingId ||
+      current.tenantPicId !== row.tenantPicId ||
+      current.spaceId !== row.spaceId ||
+      current.tenantBuildingContextId !== row.tenantBuildingContextId) {
+    throw picWorkspaceUnauthorized();
+  }
+  if (
+    !(await repo.lockCurrentRepresentation(tx, {
+      tenantCompanyId: row.tenantCompanyId,
+      buildingId: row.buildingId,
+      spaceId: row.spaceId,
+      tenantBuildingContextId: row.tenantBuildingContextId,
+    }))
+  ) {
+    throw picWorkspaceUnauthorized();
+  }
+  return {
+    principal: principalOf({
+      ...row,
+      createdAt: locked.createdAt,
+      expiresAt: locked.expiresAt,
+    }),
+    clientId: current.clientId,
+    expiresAt: locked.expiresAt,
+    alreadyRevoked: locked.revokedAt !== null,
+  };
+}
+
+/** The only place the token-to-hash step lives, so no surface can skip it. */
+function tokenHashOf(token: string): string {
+  if (typeof token !== 'string' || !PIC_WORKSPACE_TOKEN_PATTERN.test(token)) {
+    throw picWorkspaceUnauthorized();
+  }
+  return hashToken(token);
+}
+
 async function useSession(
   token: string,
   mode: 'use' | 'revoke',
 ): Promise<{ principal: PicWorkspacePrincipal; revoked: boolean }> {
-  if (typeof token !== 'string' || !PIC_WORKSPACE_TOKEN_PATTERN.test(token)) {
-    throw picWorkspaceUnauthorized();
-  }
-  const tokenHash = hashToken(token);
+  const tokenHash = tokenHashOf(token);
   return withTransaction(async tx => {
-    const row = await repo.findPicWorkspaceSessionByTokenHash(tx, tokenHash);
-    if (!row) throw picWorkspaceUnauthorized();
-    const locked = await repo.lockPicWorkspaceSession(tx, row.sessionId);
-    if (!locked) throw picWorkspaceUnauthorized();
-    // A logout stays idempotent for an already-revoked, still-unexpired token;
-    // any other use of a revoked credential is refused.
-    if (locked.revokedAt !== null && mode !== 'revoke') {
-      throw picWorkspaceUnauthorized();
-    }
-    const clock = await tx.query<{ now: Date }>('SELECT clock_timestamp() AS now');
-    if (locked.expiresAt.getTime() <= clock.rows[0].now.getTime()) {
-      throw picWorkspaceUnauthorized();
-    }
-
-    // The snapshot's NULLs are "absent by resolution", not claims, so the
-    // re-entry into the resolver uses the conditional form it accepts (the same
-    // shape `isCurrentCareRepresentation` builds).
-    const claims = {
-      tenantCompanyId: row.tenantCompanyId,
-      buildingId: row.buildingId,
-      ...(row.tenantPicId ? { tenantPicId: row.tenantPicId } : {}),
-      ...(row.spaceId ? { spaceId: row.spaceId } : {}),
-    };
-    let current: ResolvedHandoffContext;
-    try {
-      current = await resolveHandoffContext(claims);
-    } catch (error) {
-      if (error instanceof AppError) throw picWorkspaceUnauthorized();
-      throw error;
-    }
-    if (current.tenantCompanyId !== row.tenantCompanyId ||
-        current.buildingId !== row.buildingId ||
-        current.tenantPicId !== row.tenantPicId ||
-        current.spaceId !== row.spaceId ||
-        current.tenantBuildingContextId !== row.tenantBuildingContextId) {
-      throw picWorkspaceUnauthorized();
-    }
-    if (
-      !(await repo.lockCurrentRepresentation(tx, {
-        tenantCompanyId: row.tenantCompanyId,
-        buildingId: row.buildingId,
-        spaceId: row.spaceId,
-        tenantBuildingContextId: row.tenantBuildingContextId,
-      }))
-    ) {
-      throw picWorkspaceUnauthorized();
-    }
-
-    const principal = principalOf({ ...row, createdAt: locked.createdAt, expiresAt: locked.expiresAt });
+    const auth = await authenticateInTx(
+      tx,
+      finder => repo.findPicWorkspaceSessionByTokenHash(finder, tokenHash),
+      mode,
+    );
     let revoked = false;
-    if (mode === 'revoke' && !locked.revokedAt) {
-      revoked = await repo.revokePicWorkspaceSessionRow(tx, row.sessionId);
+    if (mode === 'revoke' && !auth.alreadyRevoked) {
+      revoked = await repo.revokePicWorkspaceSessionRow(tx, auth.principal.sessionId);
       if (revoked) {
         await journalSession(tx, 'REVOKED', {
-          sessionId: row.sessionId,
-          clientId: current.clientId,
-          integrationId: row.integrationId,
-          tenantCompanyId: row.tenantCompanyId,
-          tenantPicId: row.tenantPicId,
-          buildingId: row.buildingId,
-          spaceId: row.spaceId,
-          canDecide: principal.canDecide,
-          expiresAt: locked.expiresAt,
+          sessionId: auth.principal.sessionId,
+          clientId: auth.clientId,
+          integrationId: auth.principal.integrationId,
+          tenantCompanyId: auth.principal.tenantCompanyId,
+          tenantPicId: auth.principal.tenantPicId,
+          buildingId: auth.principal.buildingId,
+          spaceId: auth.principal.spaceId,
+          canDecide: auth.principal.canDecide,
+          expiresAt: auth.expiresAt,
         });
       }
     }
-    return { principal, revoked };
+    return { principal: auth.principal, revoked };
   });
 }
 
@@ -455,6 +496,58 @@ export async function readPicWorkspaceSession(
 /** Rule 18 — 204 idempotent for an unexpired revoked token; nothing else. */
 export async function revokePicWorkspaceSession(token: string): Promise<void> {
   await useSession(token, 'revoke');
+}
+
+/**
+ * Re-run the full rule-17 sequence for a principal this transaction already
+ * authenticated, keyed by session row instead of token hash. Business surfaces
+ * call it AFTER they have taken their own row locks, so a lock wait can never
+ * turn an expired, revoked or authority-lapsed credential into an authorized
+ * read (rule 17, last sentence — the same property 03C proves for admission).
+ */
+export async function assertPicWorkspaceSessionCurrent(
+  tx: PoolClient,
+  principal: PicWorkspacePrincipal,
+): Promise<void> {
+  await authenticateInTx(
+    tx,
+    finder => repo.findPicWorkspaceSessionById(finder, principal.sessionId),
+    'use',
+  );
+}
+
+/**
+ * The shared seam for PIC business routes (03D read, 03E decide): the credential
+ * is verified, `work` runs in the SAME transaction while the session row lock is
+ * held, and the credential is verified again afterwards. Two properties follow
+ * and both are load-bearing:
+ *
+ * - no business surface can implement "authenticated" more weakly than the
+ *   session endpoint itself, because it is the same function on the same locks;
+ * - nothing the caller read is reported as authorized if the authority lapsed
+ *   while the caller was waiting on a lock inside `work`.
+ *
+ * It grants nothing: `work` still owns resource authorization, and a principal
+ * is a resolved identity, not a permission.
+ */
+export async function withPicWorkspaceSession<T>(
+  token: string,
+  work: (
+    tx: PoolClient,
+    principal: PicWorkspacePrincipal,
+  ) => Promise<T>,
+): Promise<T> {
+  const tokenHash = tokenHashOf(token);
+  return withTransaction(async tx => {
+    const { principal } = await authenticateInTx(
+      tx,
+      finder => repo.findPicWorkspaceSessionByTokenHash(finder, tokenHash),
+      'use',
+    );
+    const result = await work(tx, principal);
+    await assertPicWorkspaceSessionCurrent(tx, principal);
+    return result;
+  });
 }
 
 /** Route-level guard shared with the routers of the other credential kinds. */

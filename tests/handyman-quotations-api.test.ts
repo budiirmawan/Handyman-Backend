@@ -721,8 +721,19 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     // only (no list/search/dashboard).
     const forbiddenPath =
       /crew|schedul|arriv|qr|geofence|session|payment|settle|settlement|bast|work-?order|fm[-_]/i;
+    // CR-HM-06/A01 PART 03D adds the Tenant PIC portal's own version-keyed
+    // decision read (`/handyman/pic/quotation-versions/{id}/decision`). It is a
+    // credential-scoped PIC surface under a separately governed contract, not a
+    // staff quotation API, so this census of the STAFF surface excludes the
+    // `/handyman/pic/` paths rather than pretending the path does not exist.
+    // The `missing path` / `operationId` / per-path operation-count checks above
+    // still pin the staff surface exactly as PART 07A certified it, and
+    // `/handyman/pic/` has its own route-census test (03D) that counts 3 GETs
+    // and refuses any mutation.
     const quotationPaths = Object.keys(doc.paths).filter((p) =>
-      p.startsWith('/handyman') && p.includes('quotation'),
+      p.startsWith('/handyman') &&
+      p.includes('quotation') &&
+      !p.startsWith('/handyman/pic/'),
     );
     assert.equal(quotationPaths.length, 10);
     assert.deepEqual(

@@ -3570,6 +3570,193 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Storage failure; no successful revocation claimed.
+  /handyman/pic/quotation-versions/{quotationVersionId}/decision:
+    get:
+      operationId: readPicPortalOwnDecision
+      summary: Read the decision this PIC signed on a presented quotation version
+      tags: [Handoff]
+      description: >-
+        W03 PART 03D. A Tenant PIC's own recorded decision on one quotation version - the
+        receipt a PIC is entitled to keep after it decides, and the only decision view this
+        surface offers. The version is resolved THROUGH the credential: one statement joins
+        version to quotation to request and applies the same predicate the request read uses,
+        so a version belonging to another tenant's thread fails in exactly the same query as a
+        version that does not exist, and answers the same uniform 404. A decision recorded by a
+        DIFFERENT PIC of the same tenant is likewise a 404, never a 403 and never an
+        explanation: `decided_by_tenant_pic_id` is not the caller's, so the row is not the
+        caller's to read. `decidedByCaller` is returned as a boolean precisely so the client
+        never has to compare another PIC's identity to work out whether a decision was its own.
+        Nothing staff-side is exposed: no `decided_by_user_id`, no amendment columns' provenance,
+        no idempotency key, no request fingerprint, no internal audit read of the ledger. A
+        read-capable session (admitted without `tenantPicId`) has no identity for a decision to
+        match and therefore always receives the 404. Responses use Cache-Control no-store.
+      security:
+        - picWorkspaceSession: []
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The decision this credential's PIC signed, verbatim from the ledger.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PicPortalDecision' }
+        '400':
+          description: >-
+            Malformed identifier, or a query parameter or request body present on a GET;
+            existing validation envelope.
+        '401':
+          description: >-
+            Uniform HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED: absent, malformed, expired or revoked
+            credential, or an authority that lapsed between verification and read.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: >-
+            Uniform HANDYMAN_PIC_WORKSPACE_RESOURCE_NOT_FOUND for an unknown version, a foreign
+            tenant's version, and another PIC's decision alike.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Storage failure; no decision is claimed.
+  /handyman/pic/requests/{handymanRequestId}:
+    get:
+      operationId: readPicPortalQuotation
+      summary: Read the PIC's own Handyman thread and the version presented to it
+      tags: [Handoff]
+      description: >-
+        W03 PART 03D - the bounded read a PIC needs to answer a quotation at all: the thread,
+        the single version currently presented to the tenant, its lines and server-derived
+        totals, the decision if one exists, the approval binding that confers it, and the
+        window of the credential doing the reading. Authentication is the PIC workspace
+        credential and nothing else: `tenant_company.read`, `tenant_company.manage`, staff
+        permission codes and `user_building_assignments` are never consulted, because none of
+        them describes a PIC (A01 §8). Tenant, Building, Space, request, quotation thread,
+        presented version, occupancy and binding are ALL resolved server-side from the session
+        row; the caller supplies one path parameter and no scope field, and no input can widen
+        or shift the scope the credential already carries (rule 13). Only the ISSUED version is
+        described - never a DRAFT, never a SUPERSEDED revision, and never the revision history -
+        so a tenant sees what it was asked to approve and nothing else. A thread with no
+        presented version is a 200 with `quotation: null` or `presentedVersion: null`, not a
+        404: the absence of a quotation is a state of the caller's own thread, and inventing a
+        not-found for it would make "nothing yet" indistinguishable from "not yours". Any thread
+        that is not the caller's is the uniform 404. `requestStatus` is echoed for context and
+        gates nothing (B7). Minimization is structural rather than a redaction list: person
+        data, staff actor ids, origin-channel provenance, idempotency and fingerprint internals,
+        authority-snapshot ids and reference-price lineage fields have no key in this projection
+        at all. Responses use Cache-Control no-store.
+      security:
+        - picWorkspaceSession: []
+      parameters:
+        - name: handymanRequestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The caller's own thread, as far as a PIC is entitled to see it.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PicPortalQuotationRead' }
+        '400':
+          description: Malformed identifier, or a query parameter or request body present on a GET.
+        '401':
+          description: >-
+            Uniform HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED. A lapsed PIC, a lapsed occupancy or a
+            changed user link revokes the credential outright, so those states are a 401 here and
+            never a reason code on an otherwise successful read.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: >-
+            Uniform HANDYMAN_PIC_WORKSPACE_RESOURCE_NOT_FOUND: unknown id, another tenant's
+            thread, the same tenant's other Building, or a Space the credential does not cover.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Storage failure; no state is claimed.
+  /handyman/pic/requests/{handymanRequestId}/approval-eligibility:
+    get:
+      operationId: readPicPortalApprovalEligibility
+      summary: Preview whether this PIC could decide the presented version right now
+      tags: [Handoff]
+      description: >-
+        W03 PART 03D - read-only approval eligibility: the same guard set the quotation ledger
+        enforces at decision time, evaluated against the current instant and reported as
+        non-sensitive reasons. It exists so the BM Super App can render an honest state
+        (enable, or explain) instead of letting a PIC discover the refusal by trying. Every
+        check mirrors the DB floor rather than a re-derivation of it: session ACTIVE and
+        unexpired, revocation, binding ACTIVE and inside its effective window, target-PIC and
+        request-lineage agreement, tenant and client ACTIVE, occupancy still current, version
+        ISSUED with a `validUntil` that has not passed, no decision already recorded, and MC1
+        maker-checker against the root and version author plus the binding granter. Reasons are
+        code-and-sentence only: never an id, never an amount, never a name - which is why a
+        tenant can be told "already decided" without being shown who decided it. The answer is
+        a STATE, never a reservation: it holds nothing, writes nothing, and `guaranteesDecision`
+        is the literal `false`. A read is not a decision and is not a promise that a later
+        decision will be accepted; the session and the eligibility facts are re-verified inside
+        the same transaction AFTER the row lock is taken, so a read that waited on a lock can
+        expire out from under itself and answer 401 rather than authorize a stale view. Staff
+        principals get nothing from this surface: there is no staff variant of it, no
+        `tenant_company.read` path to the same facts, and no APPROVE/REJECT endpoint in this
+        PART - decisioning is 03E, behind B12. Responses use Cache-Control no-store.
+      security:
+        - picWorkspaceSession: []
+      parameters:
+        - name: handymanRequestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: An eligibility state for this instant, with reasons when ineligible.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PicPortalApprovalEligibility' }
+        '400':
+          description: Malformed identifier, or a query parameter or request body present on a GET.
+        '401':
+          description: Uniform HANDYMAN_PIC_WORKSPACE_UNAUTHORIZED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_PIC_WORKSPACE_RESOURCE_NOT_FOUND; non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Storage failure; no eligibility is claimed.
   /handyman/pic/session:
     post:
       operationId: admitPicWorkspace
@@ -76589,6 +76776,387 @@ components:
     # ------------------------------------------------------------------
     # CR-BE-UTL-01 PART 13 — Utility domain
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # W03 PART 03D — bounded PIC portal read (CR-HM-06/A01 §9 + §13)
+    # ------------------------------------------------------------------
+    PicPortalQuotationRead:
+      type: object
+      additionalProperties: false
+      required:
+        - handymanRequestId
+        - tenantCompanyId
+        - buildingId
+        - spaceId
+        - requestStatus
+        - serviceCatalogId
+        - serviceVariantId
+        - description
+        - quotation
+        - decision
+        - approvalBinding
+        - session
+      description: >
+        Everything a Tenant PIC may see of its own thread. The key set IS the contract:
+        `additionalProperties: false` is not decoration - there is no staff field to redact
+        because no staff field is selected. Person data (PIC name, email, phone), staff actor
+        ids, origin-channel provenance, idempotency keys and request fingerprints,
+        authority-snapshot ids and reference-price lineage fields are absent by construction.
+      properties:
+        handymanRequestId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The Space the thread sits in, when the occupancy model names one.
+        requestStatus:
+          type: string
+          description: >
+            Echoed for context only. A request-status gate does not exist in this contract
+            (F6 B7): approval eligibility never consults it.
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId:
+          type: string
+          format: uuid
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        quotation:
+          nullable: true
+          description: >
+            Null when the thread has no quotation yet - a 200 with nothing presented, never a
+            404, so "not yet" stays distinguishable from "not yours".
+          allOf:
+            - type: object
+              additionalProperties: false
+              required: [quotationId, presentedVersion]
+              properties:
+                quotationId: { type: string, format: uuid }
+                presentedVersion:
+                  nullable: true
+                  description: The single ISSUED version, or null while none is presented.
+                  allOf:
+                    - $ref: '#/components/schemas/PicPortalVersion'
+        decision:
+          nullable: true
+          description: >
+            The recorded decision on the presented version, if any - with the same projection
+            the own-decision read returns, so a PIC never has to make a second call to learn
+            that its thread is frozen.
+          allOf:
+            - $ref: '#/components/schemas/PicPortalDecision'
+        approvalBinding:
+          nullable: true
+          description: >
+            The ACTIVE binding in force for this thread, or null. Superseded and revoked rows
+            are not described here: they are staff-side history, and 03D has no history view.
+          allOf:
+            - $ref: '#/components/schemas/PicPortalBinding'
+        session:
+          type: object
+          additionalProperties: false
+          required: [sessionId, canDecide, expiresAt]
+          description: >
+            The credential doing the reading, so a client can show an honest countdown. Never
+            the token itself.
+          properties:
+            sessionId: { type: string, format: uuid }
+            canDecide:
+              type: boolean
+              description: False for a read-capable admission; the ledger refuses such a session.
+            expiresAt: { type: string, format: date-time }
+    PicPortalVersion:
+      type: object
+      additionalProperties: false
+      required: [quotationVersionId, versionNumber, status, validUntil, lines, totals]
+      description: >
+        The version presented to the tenant, priced. `validUntil` is the PIC-facing expiry: the
+        ledger refuses a decision on a version past it, so the same instant is shown here.
+      properties:
+        quotationVersionId: { type: string, format: uuid }
+        versionNumber: { type: integer, minimum: 1 }
+        status:
+          type: string
+          description: Always ISSUED on this surface; no other status is ever presented.
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Null is a defect, not an open-ended window: it is reported as
+            `VERSION_VALID_UNTIL_MISSING` and the ledger would refuse the decision.
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/PicPortalLine' }
+        totals: { $ref: '#/components/schemas/PicPortalTotals' }
+    PicPortalLine:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - lineType
+        - description
+        - quantity
+        - uomId
+        - finalQuotedUnitAmount
+        - lineTotal
+        - currency
+      description: >
+        The commercial fact as presented. `finalQuotedUnitAmount` is what the tenant is being
+        asked to accept; `referenceUnitAmount` and `sourceItemId` are deliberately absent - a
+        PIC has no need of where the price came from, and exposing it would leak vendor-side
+        procurement data across the boundary.
+      properties:
+        id: { type: string, format: uuid }
+        lineType: { type: string, enum: [LABOR, MATERIAL] }
+        description: { type: string }
+        quantity: { type: number }
+        uomId: { type: string, format: uuid }
+        finalQuotedUnitAmount: { type: number }
+        lineTotal:
+          type: number
+          description: Server-calculated quantity x unit amount; never taken from a client.
+        currency: { type: string, minLength: 3, maxLength: 3 }
+    PicPortalTotals:
+      type: object
+      additionalProperties: false
+      required: [laborSubtotal, materialSubtotal, total, currency, lineCount]
+      description: >
+        Derived in the same statement set as the lines, so a client cannot be shown a total the
+        ledger would not honor. A client that recomputes will agree; that agreement is a check,
+        not the source of truth.
+      properties:
+        laborSubtotal: { type: number }
+        materialSubtotal: { type: number }
+        total: { type: number }
+        currency:
+          type: string
+          nullable: true
+          pattern: '^[A-Z]{3}$'
+        lineCount: { type: integer, minimum: 0 }
+    PicPortalBinding:
+      type: object
+      additionalProperties: false
+      required:
+        - approvalBindingId
+        - status
+        - tenantPicId
+        - bindingVersion
+        - effectiveFrom
+        - effectiveUntil
+        - grantedByUserId
+      description: >
+        Who this tenant's authority currently confers, and for how long. A PIC sees the window
+        because a decision outside it is refused; it sees no supersession chain, no revocation
+        actor and no revocation reason, which are staff-side facts.
+      properties:
+        approvalBindingId: { type: string, format: uuid }
+        status:
+          type: string
+          description: ACTIVE only - a binding is described while it is in force, or not at all.
+        tenantPicId: { type: string, format: uuid }
+        bindingVersion: { type: integer, minimum: 1 }
+        effectiveFrom:
+          type: string
+          format: date-time
+          nullable: true
+        effectiveUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null means open-ended.
+        grantedByUserId:
+          type: string
+          format: uuid
+          description: >
+            The staff grant, shown so a PIC can ask the right person about it. It is never a
+            name, an email or a role.
+    PicPortalDecision:
+      type: object
+      additionalProperties: false
+      required:
+        - quotationDecisionId
+        - decision
+        - decisionActorType
+        - decidedByTenantPicId
+        - decidedByPicSessionId
+        - approvalBindingId
+        - decidedAt
+        - decidedByCaller
+      description: >
+        The ledger row as a PIC is entitled to see it. `decisionActorType` is the durable
+        actor-domain fact (03A/A3): a PIC decision carries no staff user id, so none appears
+        here either - not as a value and not as a null placeholder key. Idempotency keys and
+        request fingerprints are internal replay machinery and are never part of this view.
+      properties:
+        quotationDecisionId: { type: string, format: uuid }
+        decision: { type: string, enum: [APPROVE, REJECT] }
+        decisionActorType: { type: string, enum: [TENANT_PIC, USER, SYSTEM] }
+        decidedByTenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        decidedByPicSessionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The credential that signed it - proof of which session, never the token.
+        approvalBindingId:
+          type: string
+          format: uuid
+          nullable: true
+        decidedAt: { type: string, format: date-time }
+        decidedByCaller:
+          type: boolean
+          description: >
+            "Was it me", answered server-side so the question never requires exposing another
+            PIC's identity to resolve.
+    PicPortalApprovalEligibility:
+      type: object
+      additionalProperties: false
+      required:
+        - handymanRequestId
+        - quotationId
+        - quotationVersionId
+        - versionNumber
+        - versionStatus
+        - validUntil
+        - decisionRecorded
+        - lineageMatchesCaller
+        - canDecide
+        - binding
+        - eligible
+        - reasons
+        - evaluatedAt
+        - guaranteesDecision
+      description: >
+        A STATE snapshot of this instant, never a lease. Nothing here reserves a decision:
+        between this read and a later write the binding can lapse, the occupancy can change,
+        the session can expire, and someone else can decide first. `guaranteesDecision` is a
+        literal `false` so the contract cannot be misread as a promise even in a generated
+        client, and a frontend must not treat `eligible: true` as a reserved outcome.
+      properties:
+        handymanRequestId: { type: string, format: uuid }
+        quotationId:
+          type: string
+          format: uuid
+          nullable: true
+        quotationVersionId:
+          type: string
+          format: uuid
+          nullable: true
+        versionNumber:
+          type: integer
+          nullable: true
+          minimum: 1
+        versionStatus:
+          type: string
+          nullable: true
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+        decisionRecorded:
+          type: boolean
+          description: >
+            True once the ledger holds a decision for the presented version, whichever PIC
+            signed it. The thread is then frozen (F6 B18) and the fact is reported without
+            naming the decider.
+        lineageMatchesCaller:
+          type: boolean
+          description: >
+            Whether the PIC attested on the thread's BM lineage agrees with the caller. A
+            boolean rather than the comparison itself, because the comparison is the sensitive
+            part.
+        canDecide:
+          type: boolean
+          description: Capability of the credential, derived server-side from its own row.
+        binding:
+          type: object
+          additionalProperties: false
+          required: [approvalBindingId, status, effectiveFrom, effectiveUntil]
+          nullable: true
+          description: >
+            The binding the evaluation used, narrowed to the window. Narrower than the
+            thread read's `approvalBinding` on purpose: eligibility is about whether the
+            caller may act, not about who granted what.
+          properties:
+            approvalBindingId: { type: string, format: uuid }
+            status: { type: string }
+            effectiveFrom:
+              type: string
+              format: date-time
+              nullable: true
+            effectiveUntil:
+              type: string
+              format: date-time
+              nullable: true
+        eligible:
+          type: boolean
+          description: Exactly `reasons.length === 0`, computed together so the two cannot drift.
+        reasons:
+          type: array
+          description: >
+            Empty when eligible. Fixed order: credential, then binding, then lineage and
+            master data, then version state, then maker-checker - so a client can render the
+            first entry as the headline without sorting.
+          items: { $ref: '#/components/schemas/PicPortalEligibilityReason' }
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: >
+            The single database instant the window math used. Two reads never share one,
+            because a cached eligibility answer is exactly the promise this contract refuses
+            to make.
+        guaranteesDecision:
+          type: boolean
+          enum: [false]
+          description: Constant `false`. See the schema description.
+    PicPortalEligibilityReason:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      description: >
+        Code plus a fixed sentence. Messages are constants, not interpolations: an
+        interpolated message would put an identifier on the wire, which is the leak this
+        projection exists to avoid.
+      properties:
+        code: { $ref: '#/components/schemas/PicPortalEligibilityCode' }
+        message: { type: string }
+    PicPortalEligibilityCode:
+      type: string
+      description: >
+        The refusal vocabulary of 03D, one per guard the ledger enforces at decision time.
+        Codes, not identifiers: the reason a decision would be refused is a fact about the
+        tenant's own authority, and it is safe to say; who else was involved is not.
+      enum:
+        - SESSION_READ_ONLY
+        - NO_ACTIVE_APPROVAL_BINDING
+        - BINDING_WINDOW_LAPSED
+        - BINDING_TARGET_DIFFERS
+        - LINEAGE_PIC_DIFFERS
+        - TENANT_OR_CLIENT_NOT_ACTIVE
+        - OCCUPANCY_NOT_CURRENT
+        - VERSION_NOT_ISSUED
+        - VERSION_VALID_UNTIL_MISSING
+        - VERSION_EXPIRED
+        - ALREADY_DECIDED
+        - MAKER_CHECKER_CONFLICT
+      x-code-meanings:
+        SESSION_READ_ONLY: The credential carries no PIC identity, so it can never underwrite a decision.
+        NO_ACTIVE_APPROVAL_BINDING: No ACTIVE binding confers approval on this thread (B12's rail).
+        BINDING_WINDOW_LAPSED: A binding exists but its effective window does not cover now.
+        BINDING_TARGET_DIFFERS: The binding confers a different PIC of this tenant than the caller.
+        LINEAGE_PIC_DIFFERS: The PIC attested on the thread disagrees with the caller.
+        TENANT_OR_CLIENT_NOT_ACTIVE: The tenant company or its client is not ACTIVE.
+        OCCUPANCY_NOT_CURRENT: The tenant-Building occupancy no longer covers now.
+        VERSION_NOT_ISSUED: No ISSUED version is presented to this tenant.
+        VERSION_VALID_UNTIL_MISSING: The presented version has no expiry, which the ledger refuses.
+        VERSION_EXPIRED: The presented version's `validUntil` has passed.
+        ALREADY_DECIDED: A decision is recorded on the presented version; the thread is frozen.
+        MAKER_CHECKER_CONFLICT: The caller's linked user wrote the root or the version, or granted the binding (MC1').
     UtilityType:
       type: string
       enum: [ELECTRICITY, WATER, GAS]

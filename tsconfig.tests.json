@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "tests/types/*.d.ts",
+    "tests/handyman-quotation-pic-binding-migration.test.ts",
+    "tests/handyman-quotation-approval-binding-runtime.test.ts",
+    "tests/handyman-pic-workspace-session.test.ts",
+    "tests/handyman-pic-portal-read.test.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

@@ -1,5 +1,6 @@
 import { createCareWorkspaceRouter } from '../modules/handyman-care-workspace/care-workspace.routes';
 import { createPicWorkspaceRouter } from '../modules/handyman-pic-session';
+import { createPicPortalRouter } from '../modules/handyman-pic-portal';
 import { createCareActorPermissionAdminRouter } from '../modules/handyman-care-actors';
 import { Router } from 'express';
 import { createAreaRouter } from '../modules/areas/area.routes';
@@ -809,6 +810,12 @@ export function createApiRouter(): Router {
   // own surface (A01 §5.3 rule 19). No PIC business route exists here yet —
   // 03D owns the bounded read and 03E owns the decide path.
   router.use(createPicWorkspaceRouter());
+  // W03 PART 03D — the bounded PIC portal READ (A01 §13 `03D`): the credential
+  // from above selects the scope, and the thread's own lineage decides what is
+  // visible. No staff predicate, no permission code, and no write: the decide
+  // path is 03E, which is why the eligibility read reports refusals instead of
+  // reserving them.
+  router.use(createPicPortalRouter());
   // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
   // attribution-bound request intake, and bounded INTAKE evidence upload
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface

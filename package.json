@@ -19,7 +19,8 @@
     "db:migrate:status": "tsx src/database/cli.ts status",
     "db:migrate:down": "tsx src/database/cli.ts down",
     "db:seed": "tsx src/database/cli.ts seed",
-    "db:migrate:prod": "node dist/database/cli.js migrate"
+    "db:migrate:prod": "node dist/database/cli.js migrate",
+    "typecheck:tests": "tsc -p tsconfig.tests.json"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
