@@ -92,7 +92,6 @@ export async function recordHandymanReferral(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      assertRequestOpen(request);
 
       // 2) Realm authority: BE-02G exact-Building check on the
       //    locked request's authoritative {clientId, buildingId}
@@ -107,6 +106,7 @@ export async function recordHandymanReferral(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+      assertRequestOpen(request);
 
       // 3) F5/F9 eligibility: the immutable diagnosis is the ONLY source.
       const diagnosis = await handymanRequestDiagnosisRepository.findByRequest(

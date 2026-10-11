@@ -120,12 +120,9 @@ export async function recordHandymanInspection(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      assertRequestOpen(request);
 
       // 2) Frozen F1 source-state gate: inspection only from INSPECTION_REQUIRED.
-      if (request.status !== 'INSPECTION_REQUIRED') {
-        throw handymanServiceRequestNotInspectionRequiredError();
-      }
+
 
       // 3) Realm authority (CR-HM-SEC-01 PART 02): BE-02G building-scope
       //    guard over the request's own building_id (never caller-shaped
@@ -134,6 +131,10 @@ export async function recordHandymanInspection(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+      assertRequestOpen(request);
+      if (request.status !== 'INSPECTION_REQUIRED') {
+        throw handymanServiceRequestNotInspectionRequiredError();
+      }
 
       // 3b) CR-HM-INSPECTION-01 PART A — single-writer binding. For the
       //     in-scope inspection path the authenticated actor must BE the

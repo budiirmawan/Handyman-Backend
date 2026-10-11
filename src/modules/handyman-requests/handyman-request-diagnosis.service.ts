@@ -111,12 +111,9 @@ export async function recordHandymanDiagnosis(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      assertRequestOpen(request);
 
       // 2) Frozen F1 source-state gate.
-      if (request.status !== 'DIAGNOSIS') {
-        throw handymanServiceRequestNotInDiagnosisError();
-      }
+
 
       // 3) Realm authority (CR-HM-SEC-01 PART 02): BE-02G building-scope
       //    guard over the request's own building_id (never caller-shaped
@@ -125,6 +122,10 @@ export async function recordHandymanDiagnosis(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+      assertRequestOpen(request);
+      if (request.status !== 'DIAGNOSIS') {
+        throw handymanServiceRequestNotInDiagnosisError();
+      }
 
       await assertDirectQuotationAuthorization(tx, request.id, actorUserId);
       const acceptedReport = await resolveAcceptedInspectionReport(tx, request.id);

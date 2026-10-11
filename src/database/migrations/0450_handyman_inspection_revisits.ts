@@ -5,6 +5,35 @@ export const migration0450HandymanInspectionRevisits: Migration = {
   id: '0450_handyman_inspection_revisits',
   async up(client) {
     await client.query(`
+      -- Preserve the backward link when superseding second and later assignments.
+      CREATE OR REPLACE FUNCTION handyman_request_inspection_assignment_guard()
+      RETURNS trigger AS $$
+      BEGIN
+        IF TG_OP = 'DELETE' THEN
+          RAISE EXCEPTION
+            'Handyman inspection assignments are append-only.';
+        END IF;
+        IF OLD.status <> 'ACTIVE' THEN
+          RAISE EXCEPTION
+            'A superseded Handyman inspection assignment is immutable.';
+        END IF;
+        IF NEW.id <> OLD.id
+           OR NEW.client_id <> OLD.client_id
+           OR NEW.handyman_request_id <> OLD.handyman_request_id
+           OR NEW.channel_attribution_id <> OLD.channel_attribution_id
+           OR NEW.building_id <> OLD.building_id
+           OR NEW.assigned_field_user_id <> OLD.assigned_field_user_id
+           OR NEW.assigned_by_user_id <> OLD.assigned_by_user_id
+           OR NEW.assigned_at <> OLD.assigned_at
+           OR NEW.status <> 'SUPERSEDED'
+           OR NEW.supersedes_assignment_id IS DISTINCT FROM OLD.supersedes_assignment_id THEN
+          RAISE EXCEPTION
+            'Only the supersession of an active Handyman inspection assignment may be written.';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+;
       CREATE TABLE handyman_inspection_revisit_attempts (
         id UUID PRIMARY KEY,
         handyman_request_id UUID NOT NULL REFERENCES handyman_service_requests(id),
@@ -50,9 +79,9 @@ export const migration0450HandymanInspectionRevisits: Migration = {
           OR NOT EXISTS(SELECT 1 FROM handyman_scheduling_readiness sr WHERE sr.id=NEW.scheduling_readiness_id
             AND sr.handyman_request_id=r.id AND sr.client_id=r.client_id AND sr.status='ACTIVE')
           OR NOT EXISTS(SELECT 1 FROM handyman_request_inspection_assignments a
-            JOIN handyman_request_inspection_assignments old ON old.id=a.supersedes_assignment_id
+            JOIN handyman_request_inspection_assignments predecessor ON predecessor.id=a.supersedes_assignment_id
             WHERE a.id=NEW.inspection_assignment_id AND a.handyman_request_id=r.id AND a.building_id=r.building_id
-              AND a.status='ACTIVE' AND old.status='SUPERSEDED' AND old.superseded_by_assignment_id=a.id
+              AND a.status='ACTIVE' AND predecessor.status='SUPERSEDED' AND predecessor.superseded_by_assignment_id=a.id AND predecessor.handyman_request_id=r.id
               AND a.assigned_by_user_id=NEW.planned_by_user_id) THEN
           RAISE EXCEPTION 'Revisit requires an accepted failed attempt, fresh assignment and active same-request readiness.'
             USING ERRCODE='23514', CONSTRAINT='handyman_revisit_not_eligible';

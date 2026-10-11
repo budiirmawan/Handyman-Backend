@@ -128,12 +128,9 @@ export async function recordHandymanRequestTriage(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      assertRequestOpen(request);
 
       // 2) Frozen F1 source-state gate: a triage decision only from INTAKE.
-      if (request.status !== 'INTAKE') {
-        throw handymanServiceRequestNotIntakeError();
-      }
+
 
       // 3) Realm authority (CR-HM-SEC-01 PART 02): BE-02G building-scope
       //    guard over the request's own building_id (the request snapshot —
@@ -142,6 +139,10 @@ export async function recordHandymanRequestTriage(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+      assertRequestOpen(request);
+      if (request.status !== 'INTAKE') {
+        throw handymanServiceRequestNotIntakeError();
+      }
 
       const policy = await resolveTriagePolicy(tx, request, input, actorUserId);
 

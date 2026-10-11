@@ -159,7 +159,6 @@ export async function assignHandymanInspectionField(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      assertRequestOpen(request);
 
       await assertInspectionPath(tx, request.id);
 
@@ -169,6 +168,7 @@ export async function assignHandymanInspectionField(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+      assertRequestOpen(request);
 
       // Target authority (FROZEN F7 + dedicated code): ACTIVE local user,
       // reporting permission held, exact-Building access already granted.
@@ -345,7 +345,9 @@ export async function assertAssignedFieldInspector(
     tx,
     handymanRequestId,
   );
-  if (current.assignedFieldUserId !== actorUserId) {
+  if (current.assignedFieldUserId !== actorUserId ||
+      !(await repository.isActiveUser(tx, actorUserId)) ||
+      !(await repository.hasActivePermission(tx, actorUserId, HANDYMAN_FIELD_REPORT_PERMISSION))) {
     throw handymanInspectionFieldDeniedError();
   }
   return current;

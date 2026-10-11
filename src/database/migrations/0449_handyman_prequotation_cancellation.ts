@@ -7,7 +7,7 @@ const guardedTables = [
   'handyman_request_inspection_report_reviews', 'handyman_request_diagnoses',
   'handyman_request_referrals', 'handyman_quotations', 'handyman_quotation_versions',
   'handyman_request_inspection_report_estimates', 'handyman_scheduling_readiness',
-  'handyman_unit_access_readiness', 'handyman_permit_readiness',
+  'handyman_unit_access_readiness', 'handyman_permit_readiness', 'handyman_service_request_contacts',
 ];
 
 /** Owner-authorized terminal pre-quotation disposition. Never a PIC decision. */
@@ -77,7 +77,10 @@ export const migration0449HandymanPrequotationCancellation: Migration = {
       CREATE FUNCTION handyman_cancelled_request_write_guard() RETURNS trigger AS $$
       DECLARE request_id UUID; request_status TEXT;
       BEGIN
-        IF TG_TABLE_NAME='handyman_quotation_versions' THEN
+        IF TG_TABLE_NAME='evidence_submissions' THEN
+          IF NEW.execution_type <> 'HANDYMAN_REQUEST' THEN RETURN NEW; END IF;
+          request_id := NEW.execution_id;
+        ELSIF TG_TABLE_NAME='handyman_quotation_versions' THEN
           SELECT handyman_request_id INTO request_id FROM handyman_quotations WHERE id=NEW.quotation_id;
         ELSIF TG_TABLE_NAME='handyman_request_inspection_report_estimates' THEN
           SELECT handyman_request_id INTO request_id FROM handyman_request_inspection_reports WHERE id=NEW.report_id;
@@ -91,6 +94,8 @@ export const migration0449HandymanPrequotationCancellation: Migration = {
         END IF;
         RETURN NEW;
       END; $$ LANGUAGE plpgsql;
+      CREATE TRIGGER prequotation_cancelled_evidence_guard BEFORE INSERT ON evidence_submissions
+        FOR EACH ROW EXECUTE FUNCTION handyman_cancelled_request_write_guard();
       CREATE FUNCTION handyman_cancelled_predecessor_guard() RETURNS trigger AS $$
       DECLARE r handyman_service_requests%ROWTYPE; previous handyman_service_requests%ROWTYPE;
       BEGIN
@@ -120,6 +125,7 @@ export const migration0449HandymanPrequotationCancellation: Migration = {
       DROP FUNCTION handyman_cancellation_projection_guard();
       DROP FUNCTION handyman_cancellation_project();
       DROP FUNCTION handyman_cancelled_predecessor_guard();
+      DROP TRIGGER prequotation_cancelled_evidence_guard ON evidence_submissions;
       DROP FUNCTION handyman_cancelled_request_write_guard();
       DROP FUNCTION handyman_cancellation_insert_guard();
       DROP FUNCTION handyman_prequotation_history_immutable();

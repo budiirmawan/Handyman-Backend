@@ -1,3 +1,4 @@
+import { assertRequestOpen } from '../handyman-requests/handyman-prequotation-operations.service';
 import { assertDirectQuotationAuthorization } from '../handyman-requests/handyman-direct-quotation-policy';
 import { assertInspectionQuotationPrerequisite } from '../handyman-requests/handyman-inspection-prerequisite';
 import { AppError } from '../../shared/errors';
@@ -121,6 +122,7 @@ export async function createHandymanQuotation(
       buildingId: request.buildingId,
     });
 
+    assertRequestOpen(request);
     await assertDirectQuotationAuthorization(tx, request.id, actorUserId);
 
     // 3) CR-HM-03 sufficiency gate: an authoritative diagnosis/scope

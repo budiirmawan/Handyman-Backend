@@ -113,7 +113,7 @@ export async function startDirectQuotationFixture(port: number) {
   clientId = client.id;
   const property = await propertyService.createProperty({ clientId, code: `P_${suffix()}`, name: 'Direct policy property' });
   propertyId = property.id;
-  const building = await buildingService.createBuilding({ propertyId, code: `B_${suffix()}`, name: 'Journey building' });
+  const building = await buildingService.createBuilding({ propertyId, code: `B_${suffix()}`, name: 'Journey building', timezone: 'Asia/Jakarta' });
   buildingId = building.id;
   const other = await buildingService.createBuilding({ propertyId, code: `B_${suffix()}`, name: 'Other building, same client' });
   ops = await operator(OPS_CODES, [buildingId]);

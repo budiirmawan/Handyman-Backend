@@ -263,14 +263,14 @@ export async function submitHandymanInspectionReport(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      assertRequestOpen(request);
-      if (request.status === 'INSPECTION_REQUIRED') throw handymanInspectionReportInspectionRequiredError();
 
       // Realm authority first (BE-02G exact Building; no same-Client shortcut).
       await assertBuildingScopedResourceAccess(actorUserId, {
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+      assertRequestOpen(request);
+      if (request.status === 'INSPECTION_REQUIRED') throw handymanInspectionReportInspectionRequiredError();
 
       // Single writer: the actor must be the ACTIVE assigned Field inspector.
       const assignment = await assertAssignedFieldInspector(
@@ -455,13 +455,13 @@ export async function reviewHandymanInspectionReport(
         input.handymanRequestId,
       );
       if (!request) throw handymanServiceRequestNotFoundError();
-      assertRequestOpen(request);
-      if (request.status === 'INSPECTION_REQUIRED') throw handymanInspectionReportInspectionRequiredError();
 
       await assertBuildingScopedResourceAccess(actorUserId, {
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+      assertRequestOpen(request);
+      if (request.status === 'INSPECTION_REQUIRED') throw handymanInspectionReportInspectionRequiredError();
 
       const report = await repository.findByRequestAndId(
         tx,
