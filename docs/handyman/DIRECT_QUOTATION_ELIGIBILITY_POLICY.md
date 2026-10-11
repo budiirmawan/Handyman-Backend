@@ -168,3 +168,26 @@ replay/constraint rejection logs are not skipped or suppressed assertions.
   confirmation contract; they were not broadly audited in this task.
 - Historical null-provenance remediation and NOT_INSPECTABLE revisit/disposition
   authority remain separate. No new tenant provisioning or Platform Admin path.
+
+## Recovery check and bounded revalidation — 2026-10-11
+
+The follow-up named `481e9ff` as the last confirmed push. Local and remote
+verification instead found `3332e654bf44967c42768730bcc0f7ccdda042f9` on the same
+`arena/d04dc185-handyman-backend` branch, with a clean worktree. `481e9ff` is an
+ancestor; the policy-validation and direct-E2E commits survived and were already
+pushed. No restoration, rewrite or new recovery checkpoint was necessary.
+
+Re-ran only these two files against isolated embedded PostgreSQL using the same
+`NODE_ENV=test LOG_LEVEL=error ASENTRA_USE_EMBEDDED_POSTGRES=true` environment and
+`tsx --test --test-concurrency=1` runner:
+
+- `tests/handyman-direct-quotation-journey.test.ts` — **PASS**.
+- `tests/handyman-inspection-integrated-journey.test.ts` — **PASS**.
+
+Actual aggregate: **2 PASS / 0 FAIL / 0 SKIP / 0 CANCELLED**, exit code 0,
+approximately 46.7 seconds. `npm run typecheck` also **PASS**, exit code 0.
+The seven policy tests were not repeated. No implementation/test correction was
+needed; this follow-up changes only the validation record. No runtime blocker was
+encountered. Production provisioning, secret delivery, live BM/frontend and broad
+regression/deployment certification limits above remain unchanged. No full suite,
+repo-wide audit, PR or deploy.
