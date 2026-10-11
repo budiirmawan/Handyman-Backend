@@ -7,7 +7,8 @@ This supersedes the missing-authority blocker recorded in
 60-second receipt, durable nonce/replay store and revocation guards are unchanged.
 Migration 0453 defines explicit local staff authority; additive 0454 audits
 every staff session invalidation, including automatic authority transitions.
-Initial focused admission/API tests passed; final expanded validation is pending.
+Actual staff admission and protected-API authorization tests passed, as did
+the final bounded regressions below. Production BM/WebView deployment is not certified.
 
 ## Authority contract
 
@@ -154,4 +155,74 @@ Real signed PIC fixture approval remains required. Focused retry: **11 PASS / 0 
 `NODE_ENV=test LOG_LEVEL=error npx tsx tests/helpers/run-staff-payment-regression.ts`;
 it propagates the test exit code after PostgreSQL teardown.
 
-Final combined rerun pending at this checkpoint.
+Final combined rerun: all checks below passed after those fixture/contract corrections.
+
+
+## Final validation — 2026-10-12 (Asia/Jakarta)
+
+Validated implementation checkpoint:
+`ed1cec8cc889cc6306adfd31c9575dae0bf83d8a`.
+
+| Check | Actual result |
+| --- | --- |
+| New staff authority/admission/protected API tests | **18 PASS** (included in bounded run) |
+| Existing 0452 transport tests | **12 PASS** (included in bounded run) |
+| 17-file bounded PostgreSQL/HTTP run | **196 PASS / 0 FAIL / 0 CANCELLED / 0 SKIP**, 367.15 seconds |
+| Isolated existing Care payment regression | **11 PASS / 0 FAIL / 0 CANCELLED / 0 SKIP**, 26.27 seconds test time |
+| Combined executed tests | **207 PASS / 0 FAIL / 0 CANCELLED / 0 SKIP** |
+| Production `npm run typecheck` | **PASS**, exit 0, 39.50 seconds |
+| OpenAPI YAML, nine registered staff paths, local schema references and successful exchange contract | **PASS** |
+| `git diff --check` | **PASS** |
+| Historical migrations 0441–0452 | **UNCHANGED**; only additive 0453/0454 and registry entries |
+| Real BM WebView/production infrastructure deployment, all-replica rotation | **NOT RUN**, no deployment requested |
+
+Actual 201 staff admission and successful protected Care reads/mutations were
+executed, not simulated by a transport-acceptance check. Negative controls cover
+missing/revoked binding, local User and every RBAC layer, exact Building and
+cross-tenant grants, issuer isolation, privilege-smuggling rejection, replay,
+expiry, concurrent redemption, logout, administrative/session/authority revocation,
+key rotation, immutable history, credential separation and transactional audit
+rollback. Staff actions remain incapable of authenticating as PIC.
+
+Passing existing journeys preserve non-User Care, signed Tenant PIC decisions,
+explicit quotation-version/PIC binding, S1 staff403, B12 OFF, prequotation/direct
+and inspection/revisit guards, and one authorized Execution Scope only after PIC
+approval. No full suite, force push, PR, merge or deployment was performed.
+
+Reproduce the bounded run (from repository root):
+
+```sh
+ASENTRA_USE_EMBEDDED_POSTGRES=true NODE_ENV=test LOG_LEVEL=error npx tsx --test --test-concurrency=1 \
+  tests/handyman-bm-staff-authority.test.ts \
+  tests/handyman-bm-staff-launch-transport.test.ts \
+  tests/handyman-care-workspace-admission.test.ts \
+  tests/handyman-care-workspace-scope.test.ts \
+  tests/handyman-care-workspace-tenants.test.ts \
+  tests/handyman-care-workspace-spaces.test.ts \
+  tests/handyman-care-workspace-occupancies.test.ts \
+  tests/handyman-care-workspace-catalogue.test.ts \
+  tests/handyman-care-workspace-create-exchange.test.ts \
+  tests/handyman-care-workspace-requests.test.ts \
+  tests/handyman-care-workspace-request-detail.test.ts \
+  tests/handyman-care-quotation-assistance.test.ts \
+  tests/handyman-care-assisted-quotation-journey.test.ts \
+  tests/handyman-pic-workspace-session.test.ts \
+  tests/handyman-direct-quotation-journey.test.ts \
+  tests/handyman-inspection-integrated-journey.test.ts \
+  tests/handyman-inspection-revisit-journey.test.ts
+NODE_ENV=test LOG_LEVEL=error npx tsx tests/helpers/run-staff-payment-regression.ts
+npm run typecheck
+```
+
+Pushed checkpoints:
+
+- `a2e7b1b7393bc65a215e36b9f768f894252f92f5`: identity, entitlement, grants,
+  bounded staff sessions and initial actual admission/API tests.
+- `e59831e531bd20a100c08ff6813f905fc01d267c`: revocation audit, administrative
+  serialization, per-operation scope hardening and API contracts.
+- `877c6665a78e76b10f74d07f1640e996d90034d2`: actual staff payment reporting
+  scope tests and final in-transaction staff authority check.
+- `ed1cec8cc889cc6306adfd31c9575dae0bf83d8a`: exact contract expectation and
+  explicitly authorized regression fixture corrections, pushed before final rerun.
+
+This results record is a documentation-only follow-up to the validated checkpoint.
