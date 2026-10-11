@@ -1,108 +1,133 @@
-# W03 G9 — Authority Contract Review
+# W03 G9 — Authority Contract Freeze & Implementation Readiness
 
 | Field | Value |
 |---|---|
-| Status | **REVIEWED — proposed contract is partly consistent; not frozen pending the approvals in §6.** |
-| Expected / verified baseline | `9f80e97e5ecf28c61f25d5cdd2a0c9866a5114ba` |
+| Authority status | **OWNER APPROVED — architectural decisions frozen** |
+| Implementation readiness | **BLOCKED** — initial RBAC grant path and secure Operations secret delivery are not established in this repository; see §8. |
+| Owner approval recorded | 2026-10-11: existing authenticated Operations identity; dedicated explicit RBAC permission; integration-wide BM/PIC attestation; Operations-controlled secret injection. |
+| Permission identifier | `integration.capability.provision` — carried forward from the prior G9 proposal as the dedicated permission name. It is not yet registered or granted. |
+| Baseline verified before edits | Local HEAD and `origin/arena/b4a8612c-handyman-backend` both `2f7103dcb41cef8f981bc588564c31ba4ed4ec6c`; clean worktree. |
 | Branch | `arena/b4a8612c-handyman-backend` |
-| Date | 2026-10-11 (Asia/Jakarta) |
-| Scope | Architecture review/documentation only; no production code, tests, typecheck, migration, or authority grant. |
+| Scope | Documentation only. No production code, migration, test, typecheck, deployment, or authority grant. |
 
-## 1. Decision status: owner proposals vs verified existing
+## 1. Owner-approved architectural freeze
 
-The earlier owner authorization permits a controlled server-side Operations bootstrap in principle. The seven items below are the **current owner proposals**, not all verified or ratified contracts. Evidence is listed separately so that proposed policy is not mistaken for shipped behavior.
+The following are now **OWNER APPROVED**, not merely proposed. Approval freezes the authority design; it does not establish that the mechanisms are already implemented or operationally provisioned.
 
-| # | OWNER PROPOSED | VERIFIED EXISTING / review |
+1. **Identity:** use an existing authenticated Operations identity. Do not create a new authentication system or service identity for G9.
+2. **Authorization:** require the dedicated explicit permission `integration.capability.provision`. It is an exceptional authority and must not be automatically granted. It gates the integration capability lifecycle, including the operational downgrade to `NONE` needed for revocation/rollback; no second G9 permission is introduced by this contract.
+3. **Attestation scope:** `TENANT_PIC` is integration-wide for the BM/PIC channel, not per company. Company/building/business authority remains downstream in PIC context resolution and existing binding/decision checks.
+4. **Secret boundary:** Operations controls secret injection into the Handyman runtime environment. Plaintext secret material must never be persisted in the database or emitted in CLI/API output, logs, audit metadata, or shell arguments/history.
+5. **Provisioning surface and roles:** no G9 HTTP provisioning endpoint; no Handyman Platform Admin dependency; do not create a new Operations role unless an existing suitable role is proven absent and a separate role change is strictly necessary and authorized.
+6. **Non-effects:** no automatic RBAC grants, PIC bindings, or quotation approvals. B12 remains OFF. S1 staff decision remains 403.
+7. **Migration posture:** preserve migration 0441's forward-fix-only behavior after it has recorded PIC-session history; do not use migration rollback as operational revocation.
+
+**Freeze boundary:** the decisions above are frozen. The concrete initial permission grantor, non-HTTP credential ingress, secret provider/deployment workflow, and audit null-client classification below are **not** verified by the approval statement or by this checkout. They are not to be invented as implementation details.
+
+## 2. Verified existing application primitives
+
+- `sessionService.resolveSessionContext(rawToken)` hashes and resolves the existing local bearer session, checks session status/expiry, and revalidates the user's login-eligible state (`src/modules/auth/session.service.ts:49-85`).
+- `permissionService.resolvePermissionsForUser(userId)` resolves active role/permission assignments; `requirePermission(code)` is the existing HTTP default-deny gate (`src/modules/permissions/permission.service.ts:113-126`; `src/modules/auth/rbac.middleware.ts:14-47`). These are usable primitives, not a G9 caller.
+- `setIntegrationActorCapability()` currently accepts only `{ integrationId, capability }`; it does not authenticate an operator, authorize a permission, or write an audit event (`src/modules/handyman-care-actors/handyman-care-actor.service.ts:89-108`).
+- W03 03C specifies one integration row for the BM PIC channel (`docs/e2e/W03_PART03C_PIC_SESSION_SECURE_HANDOFF.md:117-120`). The integration schema has no `client_id` or `tenant_company_id` (`src/database/migrations/0375_create_handyman_handoff_runtime.ts:24-38`).
+- PIC admission requires an ACTIVE integration with `TENANT_PIC`; subsequent session authority checks the integration, tenant, PIC membership, and represented context. The quotation binding separately validates the tenant/PIC lineage and business basis (`src/modules/handyman-pic-session/pic-workspace-session.repository.ts:49-64,96-133`; `src/modules/handyman-quotation-approval-bindings/handyman-quotation-approval-binding.service.ts:313-404`).
+- `withTransaction()` exists. Operational events are append-only and accept a caller executor. The capability repository setter accepts an optional `PoolClient`, but the exported service does not expose it and `handoffRuntimeRepository.createIntegration()` does not accept one (`src/database/transaction.ts:8-23`; `src/modules/handyman-care-actors/handyman-care-actor.repository.ts:129-143`; `src/modules/handyman-handoff/handoff-runtime.repository.ts:28-40`).
+- Migration 0441 invalidates all live PIC workspace sessions when an integration loses `TENANT_PIC`; PIC-session history cannot be deleted or restored by re-enabling the capability. Its `down` refuses when any session history exists or an integration still holds the capability (`src/database/migrations/0441_handyman_pic_workspace_sessions.ts:130-167,171-195`).
+
+## 3. Frozen bootstrap authentication, authorization, and scope
+
+### Authentication and authorization contract
+
+A future **non-HTTP Operations command** must act for an existing authenticated local user:
+
+1. Resolve the operator from an existing session using `sessionService.resolveSessionContext`; derive `actorUserId` only from that authenticated context. A caller-supplied user ID is not proof of identity.
+2. Resolve current effective permissions and require exactly `integration.capability.provision`. Missing, inactive, expired, or unauthorized identity fails closed before mutation.
+3. Use the same dedicated permission for the controlled capability transition to `TENANT_PIC` and its rollback transition to `NONE`. This permission grants no PIC binding, quotation-decision, tenant-management, or role-assignment authority.
+4. No new HTTP endpoint, Platform Admin check, local bypass, or automatic grant is allowed.
+
+**Not an existing implementation:** the repository has no G9 command and no approved secure way for a non-HTTP process to receive an existing session context. Existing local-session resolution is verified; a CLI credential-ingress adapter is not. Do not put a bearer token in argv, shell history, logs, or an unprotected environment variable. The invocation must use an already-approved Operations credential channel; until that channel is identified, no implementation is ready.
+
+### Integration-wide scope contract
+
+- The integration-level capability is BM/PIC-channel-wide. The provisioning command carries no tenant-company or building scope, and no per-company integration row is created.
+- A signed representation still resolves to Handyman-owned tenant/PIC/building/space authority at admission and use. Quotation binding remains a separate, explicit business-authority action over its own tenant/building/request lineage.
+- G9 cannot create or alter a PIC binding, approve a quotation, or grant an application-user permission. The owner-approved integration-wide decision supersedes the earlier direct per-company integration-scope concern; no company-scope schema change is required by this contract.
+- For first activation, the integration record must not become PIC-capable before the secret is available to the runtime. The current schema defaults the actor capability to `NONE` (`src/database/migrations/0425_add_handyman_care_actor_registry.ts:32`); future implementation must create/resolve the integration, transition it to `TENANT_PIC`, and record the audit in one transaction. The current create/service seams do not yet provide that atomic path (§7).
+
+## 4. Initial RBAC grant path — verified mechanism, **not authorized end-to-end**
+
+### Existing generic mechanism
+
+The application has role-based, not direct user-permission, authorization; effective permissions resolve through user → active roles → active role-permission assignments (`src/modules/permissions/permission.service.ts:113-125`). The verified generic administration paths are:
+
+| Operation | Existing route path | Required permission |
 |---|---|---|
-| 1 | An authenticated Operations Security Administrator provisions integrations. | The session and RBAC primitives exist, but no Operations Security Administrator role/caller is established in the foundation seed or handoff module. The service primitive itself has no operator identity/authentication. |
-| 2 | Add `integration.capability.provision`, subject to RBAC architecture review. | RBAC supports dedicated permission codes and deliberately unassigned exceptional permissions. This code does not exist. The foundation seed creates `PLATFORM_ADMIN_ROLE`; no Operations Security Administrator role is seeded. |
-| 3 | `TENANT_PIC` is integration-wide for the BM/PIC channel, not per-company. | Consistent with 03C's documented **one integration row for the BM PIC channel** and the current integration schema, which has no client or tenant-company column. |
-| 4 | Company/building access remains enforced by existing PIC binding and business authority. | PIC session admission/use resolves an active tenant/PIC/building representation; the quotation binding records the request's tenant/building/space and checks PIC-company eligibility. No integration-wide company scope is currently modeled. |
-| 5 | Secret delivery uses an approved Operations runtime environment/secret-manager workflow; never plaintext DB. | Verified code reads `HANDYMAN_HANDOFF_SECRET_<NORMALIZED_INTEGRATION_CODE>` from process environment and does not store it in the integration table. The approved secret manager and deployment workflow are external to this checkout and remain unverified. |
-| 6 | No HTTP endpoint and no Platform Admin dependency. | PART 07 explicitly says server-side Operations provisioning and no HTTP surface. No endpoint is needed for this proposal. Initial RBAC grant/role provisioning still has an unresolved Platform Admin dependency risk (see §6.1). |
-| 7 | B12 OFF, S1 staff decision 403, no auto-binding or auto-grant. | These controls are unchanged by G9. The capability service only changes integration actor capability; it does not bind a PIC, decide a quotation, or grant an RBAC permission. |
+| Register a permission at runtime | `POST /permissions` | `permission.manage` |
+| Assign a permission to an existing role | `POST /roles/:roleId/permissions` | `permission.manage` |
+| Create a role | `POST /roles` | `role.manage` |
+| Assign an existing role to a user | `POST /users/:userId/roles` | `role.manage` |
 
-**Consistency conclusion:** proposals 3, 4, 6, and 7 fit the current BM-wide attestation model and downstream PIC/business guards. Proposals 1, 2, and 5 need concrete caller, grant, and secret-delivery arrangements before implementation. The current RBAC assignment path also needs review to satisfy “no Platform Admin dependency.”
+Route evidence: `src/modules/permissions/permission.routes.ts:14-47` and `src/modules/roles/role.routes.ts:18-45`. These are general RBAC administration routes, not a G9 provisioning endpoint. The source-controlled permission-catalogue path is `FOUNDATION_PERMISSIONS` plus `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES`; the new code must be registered and deliberately excluded from default grants. The seed grants default, non-exceptional permissions to its seeded role.
 
-## 2. Proposed authorization contract (NOT YET IMPLEMENTED)
+### Why the exact authorized Operations grant path is **not verified**
 
-### Verified primitives
+- The foundation seed explicitly says it is the only RBAC bootstrap data, seeds only `PLATFORM_ADMIN`, and seeds no user, credential, or password (`src/database/seeds/foundation-access.seed.ts:5-13,836-890`). `permission.manage` and `role.manage` are in the catalogue and are not in the unassigned-by-default set, so the seeded `PLATFORM_ADMIN` role receives them by default.
+- No Operations role or Operations user-role assignment is created by the seed. Existing exceptional Operations permissions such as `handyman.operations.request.read` and `.triage` are intentionally unassigned by default.
+- The Operations production-role grant is already documented as open: W02 says the role is not defined in this repository and no grant is made by code (`docs/e2e/W02_OPERATIONS_QUEUE_HANDOFF.md:23-35,124`; `docs/e2e/W02_VERIFICATION_DEBT.md:69-75,358`).
+- Therefore, the **technical route sequence** exists, but the **authorized non-Platform-Admin grantor and target Operations role/user are not established**. Using the only seeded role's `permission.manage`/`role.manage` authority would violate the owner-approved no-Platform-Admin dependency. A deployment may have additional role/user grants, but no evidence for them is available in this checkout.
 
-- `sessionService.resolveSessionContext(rawToken)` verifies the existing local bearer session, expiry, and active user (`src/modules/auth/session.service.ts:49-69`). `authenticationMiddleware` uses this mechanism for HTTP.
-- `permissionService.resolvePermissionsForUser(userId)` resolves current active RBAC permissions; `requirePermission(code)` is the existing HTTP default-deny gate (`src/modules/permissions/permission.service.ts:113-126`; `src/modules/auth/rbac.middleware.ts:14-44`).
-- The existing `setIntegrationActorCapability()` service accepts only `{ integrationId, capability }`; it performs no caller authentication/authorization (`src/modules/handyman-care-actors/handyman-care-actor.service.ts:89-108`).
-- `integration.capability.provision` is **not** registered. `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES` and the seed's “skip default role grant” loop are the existing pattern for exceptional Ops authorities (`src/database/seeds/foundation-access.seed.ts:773-794,851-889`).
+**Grant contract:** register `integration.capability.provision` as a dedicated, unassigned-by-default permission, then assign it only to an already-approved Operations role through an authorized Operations grant path. Do not auto-grant it to `PLATFORM_ADMIN`, another tenant-facing role, or every Operations user. Do not create a new Operations role unless the existing deployed role inventory proves none is suitable; if none exists, that role and its non-Platform-Admin grant path require explicit authorization before implementation.
 
-### Proposed CLI authorization flow
+**RBAC readiness: BLOCKED.** Missing evidence is the approved existing Operations role code/assignment and an authorized non-Platform-Admin principal or already-approved Operations provisioning mechanism able to register/assign the permission. The generic routes alone do not satisfy this requirement.
 
-1. Consume an **existing** local bearer session through `sessionService.resolveSessionContext`; derive the operator ID only from the resolved context. Never accept a free-form `operatorUserId` as proof of identity.
-2. Require the dedicated `integration.capability.provision` permission through `permissionService.resolvePermissionsForUser`. Unknown, expired, inactive, or unauthorized operators fail closed before any write.
-3. The permission is global to the BM/PIC-channel integration. There is no `tenantCompanyId` or `buildingId` argument to this bootstrap. Company/building boundaries continue to be checked when the signed PIC representation is admitted and when a PIC uses the workspace/quotation binding.
-4. No call to binding APIs, quotation decision APIs, or role-permission assignment APIs is part of bootstrap. Granting the bootstrap permission to the operator is a separate, explicit RBAC administration action.
+## 5. Operations secret injection — reader verified, delivery path **not established**
 
-**Not verified:** a CLI does not currently exist and no approved token-ingress convention exists for it. The CLI must not accept bearer tokens in argv, shell history, or logs. Operations Security must approve a safe way to supply an existing session credential (or identify an existing trusted invocation boundary); do not create a new machine identity/authentication scheme here.
+### Verified runtime boundary
 
-**RBAC review required:** if approved, register the permission and add it to `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES`, so it is not automatically inherited by `PLATFORM_ADMIN` or any tenant-facing role. Assign it only to the approved Operations Security Administrator role. The foundation seed creates `PLATFORM_ADMIN_ROLE` and default `permission.manage` authority; it does not define the proposed Operations Security Administrator role. The existing role-permission assignment API is gated by `permission.manage`; creating/assigning the role or assigning it to a user separately requires `role.manage`. Both are in the foundation permission catalogue and are default-granted to `PLATFORM_ADMIN` by the seed. The initial Operations-owned grant path must therefore be explicitly resolved without violating the proposed “no Platform Admin dependency.”
+- The only code-level contract is `HANDYMAN_HANDOFF_SECRET_<NORMALIZED_INTEGRATION_CODE>`: uppercase the integration code and replace non-alphanumeric characters with `_` (`src/modules/handyman-handoff/handoff-runtime.config.ts:20-25`). `readHandoffIntegrationSecret()` reads that name from `process.env` and returns `null` if absent (`src/modules/handyman-handoff/handoff-runtime.config.ts:59-66`).
+- The integration table stores trust metadata only; it has no secret column (`src/database/migrations/0375_create_handyman_handoff_runtime.ts:5-17,24-38`).
+- Repository searches found no handoff-secret reference or secret-manager integration in `Dockerfile`/`docker-compose.yml`, no tracked deployment/CI secret-provider configuration, and no Operations delivery runbook. Tests setting `process.env` are fixtures, not a production secret-delivery mechanism.
 
-## 3. Company/building scope contract
+### Owner-approved boundary vs missing mechanism
 
-The proposals are internally consistent **if “scope” means the downstream PIC/business representation, not a tenant-scoped integration**:
+**OWNER APPROVED:** Operations, not Handyman Platform Admin or an HTTP endpoint, controls injection of the per-integration secret into the application runtime.
 
-- One active BM integration with `TENANT_PIC` can attest PIC representations across the BM/PIC channel. The integration record itself is not company-bound; that is both the current schema and the 03C “one integration row” design.
-- Admission checks `ACTIVE + TENANT_PIC`; the session service resolves the tenant company, PIC, building and optional space against Handyman-owned active records. Every session use rechecks integration capability, tenant status, PIC-to-tenant membership, and current session authority (`src/modules/handyman-pic-session/pic-workspace-session.repository.ts:49-64,96-133`).
-- A quotation binding remains separate: it is an explicit, auditable decision over a particular quotation/request and tenant/building lineage. The bootstrap does not bind the PIC or expand the binding caller's authority.
+**NOT VERIFIED:** this checkout identifies no secret manager/provider, Operations access policy, deploy/injection command, target runtime configuration, propagation/rotation/revocation workflow, or audit evidence. Reading an environment variable is not evidence that Operations can securely install it. The exact secure delivery path cannot be named from the available artifacts.
 
-Therefore do **not** add a company field to the integration row or claim that the provisioning command itself is company-scoped under proposal 3. This owner proposal supersedes the earlier direct per-company-scope concern in the G9 stop report; no company-scope schema change is justified if it is ratified. The BM integration attests; Handyman resolves the represented PIC/context and enforces downstream binding and business scope.
+**Secret readiness: BLOCKED.** Before implementation, evidence must identify the already-approved Operations-controlled mechanism and show how it injects the named variable into every runtime that verifies PIC assertions (and any bootstrap process that performs a presence check), how access and changes are audited, and how rotation/removal is performed. Do not substitute `.env`, Docker Compose literals, shell arguments, database storage, or a newly invented secret-manager integration. Never display or log a secret value.
 
-## 4. Proposed audit contract (event names/scope still need approval)
+## 6. Audit contract and remaining audit-scope decision
 
-### Verified existing audit support
+### Required implementation audit behavior (design contract; no G9 event is implemented)
 
-`recordOperationalEvent()` inserts an operational event with `actorUserId`, `clientId`, `buildingId`, entity identity, metadata and request/source correlation. It accepts a transaction executor and an explicit `SYSTEM`/`SCHEDULER` correlation override outside HTTP; its metadata scrubber removes selected top-level sensitive keys. The capability setter currently emits no event. `withTransaction()` is available (`src/database/transaction.ts:8-23`), and existing Handyman binding writes record their operational event in the same transaction as the binding.
+- Record every effective capability transition append-only with the authenticated `actorUserId`, integration ID/code, previous and new capability, and operation correlation ID.
+- Never record the secret, signature, bearer token, raw environment value, or other credential material. The Handyman event and the Operations secret-system audit are distinct records; correlate them only with nonsecret integration/operation identifiers.
+- Capability state and its Handyman audit event must commit or roll back together. An audit insert failure must not leave an unaudited grant. The current repository/service seams need transaction plumbing before a single atomic create/grant/audit flow is possible.
 
-### Proposed event shape
+These are the reviewed G9 implementation requirements, not evidence of an existing G9 audit event or an additional owner approval of its taxonomy.
 
-For a BM-wide capability change, record one append-only event in the same transaction as the database state change:
+### Proposed event shape — event taxonomy/scope not yet verified
 
-| Field | Proposed value |
-|---|---|
-| `eventType` | `HANDOFF_INTEGRATION_CAPABILITY_PROVISIONED` for `NONE → TENANT_PIC`; `HANDOFF_INTEGRATION_CAPABILITY_REVOKED` for `TENANT_PIC → NONE` (**new event names; proposed**) |
-| `entityType` / `entityId` | `HANDOFF_INTEGRATION` / integration UUID |
-| `actorUserId` | User ID from the resolved authenticated Operations session |
-| `clientId` / `buildingId` | `NULL` / `NULL`, because the capability is BM/channel-wide and the integration has no single customer/building |
-| `source` / `requestId` | `SYSTEM` / generated operation correlation UUID for the non-HTTP command |
-| Metadata allowlist | `integrationCode`, `previousCapability`, `newCapability`; no secret, token, HMAC, or raw environment data |
+Use `recordOperationalEvent()` with `entityType = HANDOFF_INTEGRATION`, the integration UUID as `entityId`, and the authenticated operator as `actorUserId`. Proposed new event types are `HANDOFF_INTEGRATION_CAPABILITY_PROVISIONED` (`NONE → TENANT_PIC`) and `HANDOFF_INTEGRATION_CAPABILITY_REVOKED` (`TENANT_PIC → NONE`). Proposed safe metadata is limited to `integrationCode`, `previousCapability`, and `newCapability`; use `source = SYSTEM` plus a generated UUID request/correlation ID for a non-HTTP invocation.
 
-The global `clientId = NULL` classification must be confirmed with the Operational Events/audit owner: existing comments explicitly discuss null-client events for SaaS Control Plane activity, not this Handyman Operations event. Do not invent a customer ID or building to make the event appear scoped. The event itself is not an authorization check. Audit insert failure should abort the capability transaction; whether emergency revocation must be allowed during audit-store failure is an explicit policy decision (§6.3).
+`clientId = NULL` and `buildingId = NULL` are the natural values for this integration-wide operation, but the shared helper's frozen contract says null-client events are for SaaS Control Plane events, not this Handyman Operations event (`src/modules/operational-events/index.ts:26-45,175-181`). Do not fabricate a customer/building scope. The Operational Events owner must explicitly confirm that a global Handyman Operations event may use this null-client classification (or specify an existing approved global audit classification) before implementation. Event names and this scope are **not** represented as existing events.
 
-## 5. Secret delivery and rollback contracts
+## 7. Revocation, rotation, and rollback contract
 
-### Secret-delivery contract
+1. **Normal revocation:** an operator holding `integration.capability.provision` transitions the integration to `NONE`; persist the matching event in the same transaction. Migration 0441's trigger revokes all live PIC sessions when `TENANT_PIC` is removed. Keep the integration row and immutable session history.
+2. **No resurrection:** later re-enabling `TENANT_PIC` does not restore revoked sessions; new admission requires a new valid assertion/session.
+3. **Secret removal order:** after a successful `NONE` commit, Operations removes/rotates the runtime secret. Removing the HMAC secret alone blocks new signed admissions but does not invalidate already-issued PIC sessions. For a compromised key, `NONE` is required to revoke current sessions before/while rotating; do not rely on key rotation alone.
+4. **Pre-commit failure:** stage the secret only through the approved external Operations mechanism. If the database transaction fails, no grant/event commits; the external process must remove the staged secret. Because current integration creation and capability service are not both transaction-aware, later implementation must add the smallest `PoolClient` plumbing needed to make create/change/audit atomic.
+5. **Migration rollback:** migration 0441 `down` refuses if any PIC session history exists or an integration still holds `TENANT_PIC`. Once session history exists, use a forward fix; never delete the session evidence or weaken the guard to make rollback pass.
+6. **Audit outage:** no unaudited capability change is approved. The proposed fail-closed transaction means an audit write failure aborts the transition. A break-glass revoke that bypasses audit is not part of this freeze and would require separate authority approval; secret removal alone is not equivalent to revoking current sessions.
 
-**OWNER PROPOSED:** Operations' approved runtime secret manager creates/stores the HMAC secret and deploys it as `HANDYMAN_HANDOFF_SECRET_<NORMALIZED_INTEGRATION_CODE>` to the bootstrap process and every runtime that admits PIC sessions. The CLI accepts only nonsecret integration fields (such as the code and display name), never the secret; it fails before database mutation if the configured secret is absent, and never emits the value in output, logs, audit metadata, database columns, or argv. The secret-manager's own audit is separate from the Handyman operational event.
+## 8. Implementation readiness decision
 
-**VERIFIED EXISTING:** `handoffIntegrationSecretEnvName()` and `readHandoffIntegrationSecret()` implement the environment-variable convention (`src/modules/handyman-handoff/handoff-runtime.config.ts:20-65`); migration 0375 stores integration trust metadata, not secret material. No secret-manager client, approved workflow, or test-environment equivalent is present in this checkout. Name/approve that external workflow before enabling the CLI. Never substitute a test-only `process.env` assignment as production provisioning.
+**IMPLEMENTATION BLOCKED — do not implement or provision yet.** The owner-approved design is frozen, but approval does not establish the following operational evidence:
 
-### Database transaction and rollback contract
+1. **Initial RBAC grant path (authority blocker):** provide/verify an existing suitable Operations role and the authorized non-Platform-Admin grantor/path that can register and assign `integration.capability.provision`. If the deployed system has no suitable Operations role, explicitly authorize the minimal new role and its Operations-controlled bootstrap path first. Do not use `PLATFORM_ADMIN` as a workaround.
+2. **Secret delivery path (security blocker):** identify the existing Operations-controlled secret manager/runtime injection workflow for `HANDYMAN_HANDOFF_SECRET_<NORMALIZED_INTEGRATION_CODE>`, including deployment to all verifying instances and rotation/revocation evidence. The code only reads `process.env`; no provider or delivery mechanism is verified.
+3. **Non-HTTP authenticated invocation:** identify the already-approved way the existing authenticated Operations session reaches the server-side command without introducing a new auth mechanism or exposing a bearer token. A session resolver exists; the command/credential channel does not.
+4. **Audit classification:** obtain Operational Events approval for the global null-client classification and confirm the proposed event taxonomy/correlation fields. The helper's transaction support is verified; this G9 event/scope is not.
 
-Proposed sequence: pre-provision the secret through the approved Operations secret manager; then run one database transaction that creates/loads the integration, changes its capability, and writes the audit event. No PIC session can be admitted until the integration has `TENANT_PIC`; integration creation currently defaults to ACTIVE with capability `NONE`.
-
-`withTransaction()` and transaction-aware audit/capability repository methods exist, but `handoffRuntimeRepository.createIntegration()` has no `PoolClient` parameter and the exported capability service does not expose one. A later implementation must add the smallest transaction plumbing needed so integration creation, capability change, and mandatory audit commit/rollback together. If the transaction fails, no capability grant or audit event commits; Operations must remove the already-staged secret version. No plaintext secret is written to a transaction or database.
-
-For post-provision revocation/rollback, set the integration capability to `NONE` and write its audit event atomically. Migration 0441's trigger immediately revokes every live PIC workspace session when the integration loses `TENANT_PIC`; revoked session history is immutable and re-enabling the capability never resurrects those sessions (`0441_handyman_pic_workspace_sessions.ts:130-153`). Remove the runtime secret only after the `NONE` transaction commits. Removing the secret alone blocks new signed admissions but does **not** revoke already-issued PIC sessions, which are checked against integration status/capability, not the HMAC secret.
-
-Do not delete integration or PIC session history as rollback. Migration 0441 `down` refuses if any PIC session rows exist or any integration still holds `TENANT_PIC`; after session history exists the migration is forward-fix-only (`0441_handyman_pic_workspace_sessions.ts:180-193`). Operational revocation is capability downgrade, not migration rollback.
-
-## 6. Explicit approvals still required before implementation
-
-1. **RBAC/role assignment:** ratify `integration.capability.provision`, whether it authorizes both provision and `NONE` revocation (or whether a separate revoke permission is needed), and the named Operations Security Administrator role/grant path. Resolve how the initial grant happens without a Platform Admin dependency; no such role or initial grant path is verified in this repository.
-2. **CLI operator credential ingress:** approve the safe mechanism for the CLI to consume an existing session credential without argv/history/log exposure, or identify an already-controlled invocation boundary. The existing session resolver is verified; a CLI authentication adapter is not.
-3. **Audit taxonomy and failure posture:** approve the proposed event names and global null-client classification, and decide whether an emergency `TENANT_PIC → NONE` revoke must be possible if the operational audit store is unavailable. Default proposed behavior is atomic state+audit and fail closed.
-4. **Secret-management workflow:** identify the approved Operations runtime secret manager, deployment ordering/propagation to all instances, audit link, and isolated-test equivalent. The env-var read contract is verified; provisioning/rotation tooling is not.
-5. **Permission removal and key compromise:** confirm whether removing the operator permission affects only future bootstrap actions (proposed; existing integrations remain until explicitly downgraded), and ratify the emergency key-compromise sequence. Existing behavior requires capability `NONE` to revoke active PIC sessions before/while rotating a compromised secret.
-
-After these approvals, implementation can remain a no-HTTP server-side Operations command using the existing integration, capability, session/RBAC, transaction, audit, and secret-config primitives. No permission auto-grant, PIC auto-binding, quotation approval, or B12 enablement is part of it.
-
-## 7. Guardrails
-
-No implementation or tests were run for this review. B12 remains OFF; S1 staff decision remains 403; PIC binding authority is unchanged. This document distinguishes owner proposals from verified behavior and is **not** a ratification of the remaining items in §6.
+No production code or migrations were changed. No tests, typecheck, full suite, PR, or deploy were run. B12 remains OFF, S1 staff decision remains 403, and no automatic grant, PIC binding, or quotation approval is introduced.
