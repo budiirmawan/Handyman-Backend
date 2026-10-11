@@ -19,6 +19,7 @@
     "tests/handyman-work-sessions.test.ts",
     "tests/handyman-inspection-assignment.test.ts",
     "tests/handyman-inspection-report.test.ts",
+    "tests/handyman-inspection-prerequisite.test.ts",
     "tests/handyman-quotation-lifecycle.test.ts",
     "tests/handyman-quotation-decision.test.ts",
     "tests/handyman-quotations-api.test.ts"

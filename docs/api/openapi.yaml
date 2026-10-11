@@ -5152,7 +5152,14 @@ paths:
       description: >
         CR-HM-03 PART 05A (frozen F1/F2/F4/F9) — valid only while the
         request is in DIAGNOSIS (reachable through either the direct
-        triage path or the inspection path). The scope classification is
+        triage path or the inspection path). CR-HM-INSPECTION-01 PART C:
+        persisted INSPECTION_REQUIRED triage additionally requires the latest
+        accepted Field report. Its id is server-resolved and persisted as
+        sourceInspectionReportId; caller-supplied provenance is ignored.
+        Pending, returned or absent acceptance returns 409
+        HANDYMAN_INSPECTION_ACCEPTED_REPORT_REQUIRED. The separate authenticated
+        diagnosis writer and server timestamp are preserved. Direct DIAGNOSIS
+        eligibility policy remains deferred. The scope classification is
         SERVER-DERIVED from the referenced F9 discipline's scopeClass and
         is never accepted as input; the projection is derived
         (GENERAL_HANDYMAN → READY_FOR_NEXT_STEP, SPECIALIST →
@@ -6198,7 +6205,7 @@ paths:
       tags: [Handyman Quotations]
       operationId: createHandymanQuotation
       summary: Create a Handyman quotation thread (initial DRAFT version 1) for a diagnosed request
-      description: "Quotation creation is request-bound: client, customer and location lineage are derived server-side from the CR-HM-02 request and its CR-HM-03 diagnosis/scope authority; the caller supplies IDs only through the URL. DRAFT is not customer-presented."
+      description: "Quotation creation is request-bound: client, customer and location lineage are derived server-side from the CR-HM-02 request and its CR-HM-03 diagnosis/scope authority; the caller supplies IDs only through the URL. DRAFT is not customer-presented. For persisted INSPECTION_REQUIRED triage, the latest accepted report, a matching diagnosis sourceInspectionReportId and an INSPECTED physical result are required. Missing acceptance, missing/mismatched diagnosis provenance or NOT_INSPECTABLE returns 409 (HANDYMAN_INSPECTION_ACCEPTED_REPORT_REQUIRED, HANDYMAN_INSPECTION_DIAGNOSIS_SOURCE_REQUIRED or HANDYMAN_INSPECTION_NOT_QUOTABLE). Historical rows are not rewritten or synthetically accepted; direct-path policy remains deferred."
       parameters:
         - $ref: '#/components/parameters/HandymanRequestIdPath'
       responses:
@@ -6396,6 +6403,12 @@ paths:
       tags: [Handyman Quotations]
       operationId: createHandymanQuotationRevision
       summary: Create a new immutable DRAFT revision (version number monotonic; lines are never copied)
+      description: >-
+        CR-HM-INSPECTION-01 PART C applies the same accepted-report, matching
+        diagnosis-source, INSPECTED-result and quoteable-scope prerequisites as
+        initial DRAFT creation for persisted INSPECTION_REQUIRED triage.
+        Existing versions and direct-path behavior are unchanged. This is not
+        an issue, PIC approval or Execution Scope gate.
       parameters:
         - name: quotationId
           in: path
@@ -6412,6 +6425,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /handyman/quotation-versions/{quotationVersionId}/lines:
     post:
       tags: [Handyman Quotations]
@@ -84449,7 +84463,7 @@ components:
       required:
         [id, clientId, handymanRequestId, channelAttributionId, buildingId,
          handymanDisciplineId, disciplineCode, diagnosis, scopeClassification,
-         recommendedServiceCatalogId, diagnosedByUserId, diagnosedAt]
+         recommendedServiceCatalogId, sourceInspectionReportId, diagnosedByUserId, diagnosedAt]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
         clientId: { $ref: "#/components/schemas/Uuid" }
@@ -84463,6 +84477,12 @@ components:
           { $ref: "#/components/schemas/HandymanScopeClassification" }
         recommendedServiceCatalogId:
           { $ref: "#/components/schemas/Uuid", nullable: true }
+        sourceInspectionReportId:
+          type: string
+          format: uuid
+          nullable: true
+          readOnly: true
+          description: Server-resolved accepted inspection report; null for historical and direct diagnoses. No backfill.
         diagnosedByUserId: { $ref: "#/components/schemas/Uuid" }
         diagnosedAt: { type: string, format: date-time }
     HandymanReferralRecord:
