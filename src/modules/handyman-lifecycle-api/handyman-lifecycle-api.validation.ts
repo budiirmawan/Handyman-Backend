@@ -143,7 +143,9 @@ export function parseLifecycleInspectionBody(
   );
   const notes = readText(source.notes, 'notes', true, details, 1000);
   if (!result || details.length) fail(details);
-  return { inspectionResult: result, inspectionNotes: notes };
+  return { inspectionResult: result, inspectionNotes: notes,
+    unsuccessfulReason: source.unsuccessfulReason as CreateHandymanInspectionInput['unsuccessfulReason'],
+    evidenceSubmissionId: source.evidenceSubmissionId as string | undefined };
 }
 
 export function parseLifecycleDiagnosisBody(

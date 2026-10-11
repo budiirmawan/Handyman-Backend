@@ -295,7 +295,10 @@ async function findAcceptedReviewByRequest(
 ): Promise<HandymanInspectionReportReviewRecord | null> {
   const result = await executor.query<ReviewRow>(
     `${REVIEW_SELECT}
-      WHERE handyman_request_id = $1 AND decision = 'ACCEPTED'`,
+      WHERE handyman_request_id = $1 AND decision = 'ACCEPTED'
+        AND report_id IN (SELECT id FROM handyman_request_inspection_reports
+          WHERE handyman_request_inspection_id=(SELECT id FROM handyman_request_inspections
+            WHERE handyman_request_id=$1 ORDER BY attempt_number DESC LIMIT 1))`,
     [handymanRequestId],
   );
   return result.rows[0] ? mapReview(result.rows[0]) : null;

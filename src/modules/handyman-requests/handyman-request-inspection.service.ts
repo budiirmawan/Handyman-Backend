@@ -14,6 +14,7 @@ import {
 import { handymanServiceRequestNotFoundError } from './handyman-request-triage.errors';
 import {
   isHandymanInspectionResult,
+  UNSUCCESSFUL_INSPECTION_REASONS,
   type CreateHandymanInspectionInput,
   type HandymanRequestInspectionRecord,
   type PublicHandymanRequestInspection,
@@ -103,6 +104,13 @@ export async function recordHandymanInspection(
     ]);
   }
 
+  if ((input.inspectionResult === 'NOT_INSPECTABLE' && !UNSUCCESSFUL_INSPECTION_REASONS.includes(input.unsuccessfulReason!)) ||
+      (input.inspectionResult === 'INSPECTED' && input.unsuccessfulReason != null)) {
+    throw AppError.validation('Request validation failed.', [{ field: 'unsuccessfulReason', message: 'NOT_INSPECTABLE requires a structured reason; INSPECTED must not supply one.' }]);
+  }
+  if (input.evidenceSubmissionId != null && !isValidUuid(input.evidenceSubmissionId)) {
+    throw AppError.validation('Request validation failed.', [{ field: 'evidenceSubmissionId', message: 'Must be a valid UUID.' }]);
+  }
   try {
     return await withTransaction(async (tx) => {
       // 1) Lock the parent for the decision chain (atomic series with
@@ -132,13 +140,22 @@ export async function recordHandymanInspection(
       //     request's ACTIVE assigned Field inspector; the legacy generic
       //     `tenant_company.manage` route permission is no longer an
       //     alternative writer (fail closed when nothing is assigned).
-      await assertAssignedFieldInspector(tx, request.id, actorUserId);
+      const assignment = await assertAssignedFieldInspector(tx, request.id, actorUserId);
 
       // 4) F2 pre-check inside the transaction; UNIQUE constrains races to
       //    the SAME 409 contract.
       const existing = await handymanRequestInspectionRepository
         .findByRequest(tx, request.id);
-      if (existing) throw handymanServiceRequestAlreadyInspectedError();
+      const planned = (await tx.query<{ id: string; attempt_number: number; inspection_assignment_id: string }>(
+        'SELECT id,attempt_number,inspection_assignment_id FROM handyman_inspection_revisit_attempts WHERE handyman_request_id=$1 ORDER BY attempt_number DESC LIMIT 1', [request.id])).rows[0];
+      if (existing && (!planned || planned.attempt_number !== existing.attemptNumber+1 || planned.inspection_assignment_id !== assignment.id)) {
+        throw handymanServiceRequestAlreadyInspectedError();
+      }
+      if (input.evidenceSubmissionId != null) {
+        const evidence = await tx.query(`SELECT 1 FROM evidence_submissions WHERE id=$1 AND client_id=$2
+          AND execution_type='HANDYMAN_REQUEST' AND execution_id=$3`, [input.evidenceSubmissionId, request.clientId, request.id]);
+        if (!evidence.rowCount) throw AppError.validation('Request validation failed.', [{ field: 'evidenceSubmissionId', message: 'Evidence must belong to this exact request.' }]);
+      }
 
       // 5) Append the minimum structured inspection record (0378-style
       //    verbatim context snapshot; the row IS the authoritative record).
@@ -151,6 +168,11 @@ export async function recordHandymanInspection(
           inspectionResult: input.inspectionResult,
           inspectionNotes,
           inspectedByUserId: actorUserId,
+          attemptNumber: existing ? existing.attemptNumber+1 : 1,
+          revisitAttemptId: existing ? planned.id : null,
+          inspectionAssignmentId: assignment.id,
+          unsuccessfulReason: input.unsuccessfulReason ?? null,
+          evidenceSubmissionId: input.evidenceSubmissionId ?? null,
         });
 
       // 6) Bounded F1 projection: INSPECTION_REQUIRED → DIAGNOSIS.
@@ -174,6 +196,9 @@ export async function recordHandymanInspection(
           summary: `Handyman inspection recorded: ${input.inspectionResult}.`,
           metadata: {
             inspectionId: record.id,
+            attemptNumber: record.attemptNumber,
+            revisitAttemptId: record.revisitAttemptId,
+            inspectionAssignmentId: assignment.id,
             inspectionResult: input.inspectionResult,
           },
         },

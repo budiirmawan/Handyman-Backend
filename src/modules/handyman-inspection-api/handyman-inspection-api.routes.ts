@@ -1,3 +1,4 @@
+import { planHandymanInspectionRevisit, getHandymanInspectionAttempts } from '../handyman-requests/handyman-inspection-revisit.service';
 import { sendSuccess } from '../../shared/api-response';
 import { cancelHandymanPrequotation, linkCancelledPredecessor, getHandymanPrequotationHistory } from '../handyman-requests/handyman-prequotation-operations.service';
 import { Router } from 'express';
@@ -108,6 +109,18 @@ export function createHandymanInspectionApiRouter(): Router {
     postHandymanInspectionReportReviewHandler,
   );
 
+  router.post('/handyman/requests/:handymanRequestId/inspection-revisits', auth, assignWrite, reportReview,
+    async (req, res, next) => { try {
+      const body = req.body ?? {};
+      sendSuccess(res, await planHandymanInspectionRevisit({ handymanRequestId: String(req.params.handymanRequestId),
+        precedingInspectionId: body.precedingInspectionId, precedingReportId: body.precedingReportId,
+        assignedFieldUserId: body.assignedFieldUserId, schedulingReadinessId: body.schedulingReadinessId,
+        reason: body.reason }, req.auth.userId), 201);
+    } catch (error) { next(error); } });
+  router.get('/handyman/requests/:handymanRequestId/inspection-attempts', auth, read,
+    async (req, res, next) => { try {
+      sendSuccess(res, await getHandymanInspectionAttempts(String(req.params.handymanRequestId), req.auth.userId));
+    } catch (error) { next(error); } });
   const operationsTriage = requirePermission('handyman.operations.request.triage');
   router.post('/handyman/requests/:handymanRequestId/prequotation-cancellation', auth, operationsTriage,
     async (req, res, next) => { try {

@@ -28,6 +28,9 @@ export function isHandymanInspectionResult(
   );
 }
 
+export const UNSUCCESSFUL_INSPECTION_REASONS = ['ACCESS_DENIED', 'CUSTOMER_UNAVAILABLE', 'UNSAFE_SITE', 'SITE_NOT_READY', 'OTHER'] as const;
+export type UnsuccessfulInspectionReason = (typeof UNSUCCESSFUL_INSPECTION_REASONS)[number];
+
 /** FROZEN F2 inspection record (immutable/append-oriented; minimum fields). */
 export type HandymanRequestInspectionRecord = {
   id: string;
@@ -40,9 +43,14 @@ export type HandymanRequestInspectionRecord = {
   buildingId: string;
   inspectionResult: HandymanInspectionResult;
   inspectionNotes: string;
+  unsuccessfulReason?: UnsuccessfulInspectionReason | null;
+  evidenceSubmissionId?: string | null;
   /** Local authenticated actor ONLY (FROZEN F7 — never PIC/attribution-derived). */
   inspectedByUserId: string;
   inspectedAt: Date;
+  attemptNumber: number;
+  revisitAttemptId: string | null;
+  inspectionAssignmentId: string | null;
 };
 
 /** Caller input — context/snapshot fields are NEVER input. */
@@ -50,6 +58,8 @@ export type CreateHandymanInspectionInput = {
   handymanRequestId: string;
   inspectionResult: HandymanInspectionResult;
   inspectionNotes: string;
+  unsuccessfulReason?: UnsuccessfulInspectionReason | null;
+  evidenceSubmissionId?: string | null;
 };
 
 /** Fully-resolved data ready for persistence (snapshot + actor applied). */

@@ -264,6 +264,7 @@ export async function submitHandymanInspectionReport(
       );
       if (!request) throw handymanServiceRequestNotFoundError();
       assertRequestOpen(request);
+      if (request.status === 'INSPECTION_REQUIRED') throw handymanInspectionReportInspectionRequiredError();
 
       // Realm authority first (BE-02G exact Building; no same-Client shortcut).
       await assertBuildingScopedResourceAccess(actorUserId, {
@@ -300,7 +301,8 @@ export async function submitHandymanInspectionReport(
         if (!latestReview) throw handymanInspectionReportPendingReviewError();
         versionNumber = latest.versionNumber + 1;
         supersedesReportId = latest.id;
-      } else if (inspection.inspectedByUserId !== actorUserId) {
+      }
+      if ((!latest || latest.handymanRequestInspectionId !== inspection.id) && inspection.inspectedByUserId !== actorUserId) {
         // Version 1 must come from the recorded physical inspector; a later
         // version may come from a replacement assignee without rewriting 0381.
         throw handymanInspectionFieldDeniedError();
@@ -454,6 +456,7 @@ export async function reviewHandymanInspectionReport(
       );
       if (!request) throw handymanServiceRequestNotFoundError();
       assertRequestOpen(request);
+      if (request.status === 'INSPECTION_REQUIRED') throw handymanInspectionReportInspectionRequiredError();
 
       await assertBuildingScopedResourceAccess(actorUserId, {
         clientId: request.clientId,

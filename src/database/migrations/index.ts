@@ -1,3 +1,4 @@
+import { migration0450HandymanInspectionRevisits } from './0450_handyman_inspection_revisits';
 import { migration0449HandymanPrequotationCancellation } from './0449_handyman_prequotation_cancellation';
 import { migration0430BindCareCreateExchangePurpose } from './0430_bind_care_create_exchange_purpose';
 import { migration0431HandymanPaymentActorIdentity } from './0431_handyman_payment_actor_identity';
@@ -930,4 +931,5 @@ export const migrations: readonly Migration[] = [
   migration0447HandymanDiagnosisInspectionSource,
   migration0448HandymanDirectQuotationPolicy,
   migration0449HandymanPrequotationCancellation,
+  migration0450HandymanInspectionRevisits,
 ];

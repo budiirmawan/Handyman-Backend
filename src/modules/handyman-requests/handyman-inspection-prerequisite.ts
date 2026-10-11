@@ -31,6 +31,13 @@ export async function resolveAcceptedInspectionReport(
   if (!accepted || !latest || accepted.reportId !== latest.id) {
     throw acceptedReportRequired();
   }
+  const inspection = await handymanRequestInspectionRepository.findByRequest(tx, requestId);
+  if (!inspection || inspection.id !== latest.handymanRequestInspectionId || inspection.inspectionResult !== 'INSPECTED') {
+    throw new AppError({ code: ERROR_CODES.HANDYMAN_INSPECTION_NOT_QUOTABLE, statusCode: 409,
+      message: 'An unsuccessful inspection cannot authorize diagnosis or quotation.' });
+  }
+  const pending = await tx.query('SELECT 1 FROM handyman_inspection_revisit_attempts WHERE handyman_request_id=$1 AND attempt_number>$2', [requestId, inspection.attemptNumber]);
+  if (pending.rowCount) throw acceptedReportRequired();
   return latest;
 }
 
