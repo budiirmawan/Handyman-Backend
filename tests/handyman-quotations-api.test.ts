@@ -731,6 +731,13 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       ],
       '/handyman/quotation-versions/{quotationVersionId}/execution-scope':
         [['get', 'getHandymanExecutionScopeByQuotationVersion']],
+      // W03 PART 03B2 staff binding operations (shipped; documented by 03G).
+      '/handyman/quotations/{quotationId}/approval-binding': [
+        ['post', 'bindHandymanQuotationApprovalBinding'],
+        ['get', 'getHandymanQuotationApprovalBinding'],
+      ],
+      '/handyman/quotations/{quotationId}/approval-binding/revoke':
+        [['post', 'revokeHandymanQuotationApprovalBinding']],
     };
     let operationCount = 0;
     for (const [path, ops] of Object.entries(surface)) {
@@ -749,7 +756,8 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
         `${path} must expose exactly ${ops.length} operation(s)`,
       );
     }
-    assert.equal(operationCount, 13);
+    // 13 PART 07A operations + 3 W03 PART 03B2 binding operations (03G census).
+    assert.equal(operationCount, 16);
     // ZERO crew/scheduling/arrival/QR/geofence/work-session/payment/
     // settlement/BAST/FM quotation APIs; the scope read is version-keyed
     // only (no list/search/dashboard).
@@ -769,7 +777,8 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       p.includes('quotation') &&
       !p.startsWith('/handyman/pic/'),
     );
-    assert.equal(quotationPaths.length, 10);
+    // 10 PART 07A quotation paths + 2 W03 PART 03B2 binding paths (03G census).
+    assert.equal(quotationPaths.length, 12);
     assert.deepEqual(
       quotationPaths.filter((p) => forbiddenPath.test(p)),
       [],

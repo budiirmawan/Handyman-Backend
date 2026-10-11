@@ -6000,6 +6000,148 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotations/{quotationId}/approval-binding:
+    post:
+      tags: [Handyman Quotations]
+      operationId: bindHandymanQuotationApprovalBinding
+      summary: Bind the Tenant PIC entitled to approve a quotation thread (staff)
+      description: >-
+        W03 PART 03B2 (CR-HM-06/A01 v1.1, ADD-A B1-B5, B8, B13-B16, B18, C21/C22). Staff binding
+        write. A binding is authority, not approval: it writes no quotation decision and creates no
+        PIC session. Requires `tenant_company.manage` plus the dedicated permission
+        `handyman.quotation.approval.binding.manage`, and BE-02G building scope. The actor is the
+        authenticated session user. Any other field in the body, including any actor, tenant, client
+        or building identifier, is ignored: the caller cannot supply a granting identity or lineage.
+        The named PIC must be ACTIVE and belong to the same tenant, with live occupancy (and Space,
+        when the request carries one) and an ACTIVE tenant and client. An ineligible PIC receives the
+        same uniform 404 as an unknown one, so the response cannot be used to probe PIC identifiers.
+        Re-binding is refused with 409 while a version is ISSUED and undecided (B13). Every binding
+        write is refused with 409 once any version of the thread has a decision (B18). Naming the PIC
+        who is already bound and live mints no new version and returns 201 with `alreadyBound: true`
+        (B14). The `Idempotency-Key` header is required. A replay with the same key returns the
+        ORIGINAL stored response with `replayed: true`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: quotationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanQuotationApprovalBindRequest' }
+      responses:
+        '201':
+          description: >-
+            Binding created, or the already-live binding restated (`alreadyBound: true`), or the
+            original response of a replayed key (`replayed: true`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanQuotationApprovalBindResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: >-
+            `PERMISSION_DENIED`: the caller lacks `tenant_company.manage` or the binding permission, or
+            names a Tenant PIC linked to the caller themselves (MC1').
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Quotations]
+      operationId: getHandymanQuotationApprovalBinding
+      summary: Read the thread's Tenant PIC binding, live approval status and bounded history (staff)
+      description: >-
+        W03 PART 03B2 (ADD-A C22). Requires `tenant_company.read`. Returns the current binding, or
+        null; the live authority verdict in `approvalStatus` (occupancy, Space, PIC, pinned, frozen,
+        eligibleForApproval), re-evaluated at read time; and up to 20 history rows. Ids and windows
+        only: no PIC name, e-mail or phone is returned. The Tenant PIC reads the same binding through
+        the PIC portal read, which is a separate surface with a narrower projection.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: quotationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Binding read (binding may be null when the thread was never bound).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanQuotationApprovalBindingRead' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/quotations/{quotationId}/approval-binding/revoke:
+    post:
+      tags: [Handyman Quotations]
+      operationId: revokeHandymanQuotationApprovalBinding
+      summary: Revoke the thread's live Tenant PIC binding (staff)
+      description: >-
+        W03 PART 03B2 (ADD-A B15, B18, C22). Same permissions as the bind operation. Revocation is
+        always permitted while no decision exists (B15: safety outranks the pin). Once any version of
+        the thread has a decision, the thread is frozen and the revoke is refused with 409 (B18).
+        `reason` is required (1-500 characters) and is recorded in the audit journal, not in the
+        ledger. `effectiveUntil` may only tighten the window; it is journal-recorded and the ledger's
+        `revokedAt` stays authoritative. Revoking an already revoked binding returns 200 with
+        `alreadyRevoked: true`. A thread that was never bound returns the uniform 404.
+        VERB DIVERGENCE (B2-D2, OPEN, owner ratification required): A01 section 9 lists
+        `DELETE /handyman/quotations/{quotationId}/approval-binding` (204). The shipped operation is
+        this POST with a body, which ADD-A C22 names explicitly and which carries `reason` and the
+        cutoff. This document describes the shipped verb. No DELETE alias is published.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: quotationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanQuotationApprovalRevokeRequest' }
+      responses:
+        '200':
+          description: >-
+            Binding revoked, or the already-revoked binding restated (`alreadyRevoked: true`), or the
+            original response of a replayed key (`replayed: true`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanQuotationApprovalRevokeResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: >-
+            `PERMISSION_DENIED`: the caller lacks `tenant_company.manage` or the binding permission.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /handyman/quotations/{quotationId}/versions:
     post:
       tags: [Handyman Quotations]
@@ -6203,7 +6345,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQuotationDecisionResult'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanQuotationDecisionResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403':
@@ -6244,7 +6390,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQuotationDecisionRecord'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanQuotationDecisionRecord' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -77066,6 +77216,124 @@ components:
           nullable: true
           pattern: '^[A-Z]{3}$'
         lineCount: { type: integer, minimum: 0 }
+    HandymanQuotationApprovalBinding:
+      type: object
+      description: Public projection of one binding row. Ids and window only; no person's name, e-mail or phone.
+      required: [id, quotationId, handymanRequestId, clientId, tenantCompanyId, buildingId, spaceId, tenantPicId, bindingVersion, supersedesBindingId, status, effectiveFrom, effectiveUntil, authorityEndsAt, grantedByUserId, grantedAt, revokedByUserId, revokedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: string, format: uuid, nullable: true }
+        tenantPicId: { type: string, format: uuid }
+        bindingVersion: { type: integer, minimum: 1 }
+        supersedesBindingId: { type: string, format: uuid, nullable: true }
+        status: { type: string, enum: [ACTIVE, REVOKED] }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveUntil: { type: string, format: date-time, nullable: true }
+        authorityEndsAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: The instant the conferred authority actually ends - the stated window end, or the revocation instant when that came first. Server-derived, never caller-set.
+        grantedByUserId: { type: string, format: uuid }
+        grantedAt: { type: string, format: date-time }
+        revokedByUserId: { type: string, format: uuid, nullable: true }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationApprovalBindingHistoryEntry:
+      type: object
+      required: [id, bindingVersion, status, tenantPicId, grantedAt, revokedAt]
+      properties:
+        id: { type: string, format: uuid }
+        bindingVersion: { type: integer, minimum: 1 }
+        status: { type: string, enum: [ACTIVE, REVOKED] }
+        tenantPicId: { type: string, format: uuid }
+        grantedAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time, nullable: true }
+    HandymanQuotationApprovalStatus:
+      type: object
+      description: Live authorization verdict for the thread. Every field is re-evaluated at read time; eligibleForApproval is the conjunction the PIC decision path re-checks.
+      required: [bindingStatus, bindingId, bindingVersion, tenantPicId, grantedAt, effectiveFrom, effectiveUntil, occupancyStatus, spaceStatus, picStatus, pinned, frozen, eligibleForApproval]
+      properties:
+        bindingStatus: { type: string, enum: [ACTIVE, REVOKED, NONE], description: NONE when the thread was never bound. }
+        bindingId: { type: string, format: uuid, nullable: true }
+        bindingVersion: { type: integer, minimum: 1, nullable: true }
+        tenantPicId: { type: string, format: uuid, nullable: true }
+        grantedAt: { type: string, format: date-time, nullable: true }
+        effectiveFrom: { type: string, format: date-time, nullable: true }
+        effectiveUntil: { type: string, format: date-time, nullable: true }
+        occupancyStatus: { type: string, enum: [ACTIVE, INACTIVE, EXPIRED, MISSING, NOT_APPLICABLE] }
+        spaceStatus: { type: string, enum: [ACTIVE, INACTIVE, EXPIRED, MISSING, NOT_APPLICABLE], description: NOT_APPLICABLE when the request carries no Space. }
+        picStatus: { type: string, enum: [ACTIVE, INACTIVE, EXPIRED, MISSING, NOT_APPLICABLE] }
+        pinned: { type: boolean, description: A version is ISSUED and undecided (B13). }
+        frozen: { type: boolean, description: Any decision exists for the thread (B18). }
+        eligibleForApproval: { type: boolean }
+    HandymanQuotationApprovalBindingRead:
+      type: object
+      required: [quotationId, binding, approvalStatus, history]
+      properties:
+        quotationId: { type: string, format: uuid }
+        binding:
+          type: object
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/HandymanQuotationApprovalBinding'
+        approvalStatus: { $ref: '#/components/schemas/HandymanQuotationApprovalStatus' }
+        history:
+          type: array
+          maxItems: 20
+          description: Newest first, bounded by the repository.
+          items: { $ref: '#/components/schemas/HandymanQuotationApprovalBindingHistoryEntry' }
+    HandymanQuotationApprovalBindRequest:
+      type: object
+      description: Only these three fields are read. Any other field is ignored, including any actor, tenant, client or building identifier.
+      required: [tenantPicId]
+      properties:
+        tenantPicId: { type: string, format: uuid }
+        effectiveUntil:
+          type: string
+          format: date-time
+          maxLength: 64
+          description: Optional window end, strictly after the binding start.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Optional narrative. Recorded in the audit journal, not in the ledger.
+    HandymanQuotationApprovalBindResult:
+      type: object
+      required: [binding, alreadyBound, replayed]
+      properties:
+        binding: { $ref: '#/components/schemas/HandymanQuotationApprovalBinding' }
+        alreadyBound: { type: boolean, description: True when the PIC named is already the live binding; no new version minted. }
+        replayed: { type: boolean, description: True when the response is the original stored response of the same Idempotency-Key. }
+    HandymanQuotationApprovalRevokeRequest:
+      type: object
+      description: Only reason and effectiveUntil are read. Any other field is ignored.
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Required. Recorded in the audit journal, not in the ledger.
+        effectiveUntil:
+          type: string
+          format: date-time
+          maxLength: 64
+          description: Optional cutoff. May only tighten the window; journal-recorded, never written to the ledger.
+    HandymanQuotationApprovalRevokeResult:
+      type: object
+      required: [binding, alreadyRevoked, replayed]
+      properties:
+        binding: { $ref: '#/components/schemas/HandymanQuotationApprovalBinding' }
+        alreadyRevoked: { type: boolean, description: True when the binding was already revoked; nothing was written. }
+        replayed: { type: boolean }
     PicPortalBinding:
       type: object
       additionalProperties: false
@@ -77123,7 +77391,7 @@ components:
       properties:
         quotationDecisionId: { type: string, format: uuid }
         decision: { type: string, enum: [APPROVE, REJECT] }
-        decisionActorType: { type: string, enum: [TENANT_PIC, USER, SYSTEM] }
+        decisionActorType: { type: string, enum: [TENANT_PIC, USER] }
         decidedByTenantPicId:
           type: string
           format: uuid
