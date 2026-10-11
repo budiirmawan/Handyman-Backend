@@ -148,7 +148,7 @@ async function fixture(options: { direct?: boolean; notInspectable?: boolean } =
     await buildingAssignmentService.createAssignment(fieldUserId, { buildingId: building.id });
     await assignFieldInspectorFixture(request.id, fieldUserId, adminUserId);
     const inspected = await api().post(`${HM}/${request.id}/inspection`).set(auth(fieldToken))
-      .send({ result: options.notInspectable ? 'NOT_INSPECTABLE' : 'INSPECTED', notes: 'Physical inspection fact.' });
+      .send({ result: options.notInspectable ? 'NOT_INSPECTABLE' : 'INSPECTED', notes: 'Physical inspection fact.', ...(options.notInspectable ? { unsuccessfulReason: 'ACCESS_DENIED' } : {}) });
     assert.equal(inspected.status, 201, JSON.stringify(inspected.body));
   }
   return { request, client, building };
@@ -181,11 +181,22 @@ const SOURCE_REQUIRED = 'HANDYMAN_INSPECTION_DIAGNOSIS_SOURCE_REQUIRED';
 
 /** Historical thread fixture only: deliberately no new service gate involved. */
 async function historicalThread(requestId: string) {
+  // Historical fixture only: emulate a row predating 0450 inside one isolated
+  // transaction. Production guards are restored before commit, never bypassed
+  // by the HTTP flows under test.
   const id = randomUUID();
-  await q(`INSERT INTO handyman_quotations (id, client_id, handyman_request_id, created_by_user_id)
-    SELECT $1, client_id, id, $3 FROM handyman_service_requests WHERE id = $2`, [id, requestId, adminUserId]);
-  await q(`INSERT INTO handyman_quotation_versions (id, quotation_id, version_number, status, created_by_user_id)
-    VALUES ($1, $2, 1, 'DRAFT', $3)`, [randomUUID(), id, adminUserId]);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('ALTER TABLE handyman_quotation_versions DISABLE TRIGGER successful_inspection_insert');
+    await client.query(`INSERT INTO handyman_quotations (id, client_id, handyman_request_id, created_by_user_id)
+      SELECT $1, client_id, id, $3 FROM handyman_service_requests WHERE id = $2`, [id, requestId, adminUserId]);
+    await client.query(`INSERT INTO handyman_quotation_versions (id, quotation_id, version_number, status, created_by_user_id)
+      VALUES ($1, $2, 1, 'DRAFT', $3)`, [randomUUID(), id, adminUserId]);
+    await client.query('ALTER TABLE handyman_quotation_versions ENABLE TRIGGER successful_inspection_insert');
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
   return id;
 }
 
@@ -198,6 +209,7 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query('ALTER TABLE handyman_request_diagnoses DISABLE TRIGGER successful_inspection_insert');
       await migration.down(client);
       await client.query(`INSERT INTO handyman_request_diagnoses
         (id, client_id, handyman_request_id, channel_attribution_id, building_id,
@@ -208,6 +220,7 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
         WHERE r.id = $2 AND d.id = $4`, [randomUUID(), f.request.id, adminUserId, disciplineId]);
       const before = (await client.query('SELECT * FROM handyman_request_diagnoses WHERE handyman_request_id = $1', [f.request.id])).rows[0];
       await migration.up(client);
+      await client.query('ALTER TABLE handyman_request_diagnoses ENABLE TRIGGER successful_inspection_insert');
       const after = (await client.query('SELECT * FROM handyman_request_diagnoses WHERE handyman_request_id = $1', [f.request.id])).rows[0];
       assert.deepEqual(after, { ...before, source_inspection_report_id: null });
       const fk = await client.query(`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
@@ -309,11 +322,11 @@ describe('CR-HM-INSPECTION-01 PART C — diagnosis and DRAFT prerequisite', () =
     assert.equal(staff.status, 403, JSON.stringify(staff.body));
   });
 
-  it('accepted NOT_INSPECTABLE cannot authorize initial or revision DRAFT', async () => {
+  it('accepted NOT_INSPECTABLE cannot authorize diagnosis, initial or revision DRAFT', async () => {
     const f = await fixture({ notInspectable: true });
     const accepted = await report(f.request.id);
     await review(f.request.id, accepted.id);
-    assert.equal((await diagnose(f.request.id)).status, 201);
+    conflict(await diagnose(f.request.id), 'HANDYMAN_INSPECTION_NOT_QUOTABLE');
     conflict(await draft(f.request.id), 'HANDYMAN_INSPECTION_NOT_QUOTABLE');
     const thread = await historicalThread(f.request.id);
     conflict(await revise(thread), 'HANDYMAN_INSPECTION_NOT_QUOTABLE');
