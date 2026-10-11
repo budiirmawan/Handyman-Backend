@@ -12,7 +12,14 @@
     "tests/handyman-quotation-approval-binding-runtime.test.ts",
     "tests/handyman-pic-workspace-session.test.ts",
     "tests/handyman-pic-portal-read.test.ts",
-    "tests/handyman-pic-portal-decide.test.ts"
+    "tests/handyman-pic-portal-decide.test.ts",
+    "tests/handyman-execution-scope-approval-gate.test.ts",
+    "tests/handyman-execution-scope-assignment-service.test.ts",
+    "tests/handyman-arrival-results.test.ts",
+    "tests/handyman-work-sessions.test.ts",
+    "tests/handyman-quotation-lifecycle.test.ts",
+    "tests/handyman-quotation-decision.test.ts",
+    "tests/handyman-quotations-api.test.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

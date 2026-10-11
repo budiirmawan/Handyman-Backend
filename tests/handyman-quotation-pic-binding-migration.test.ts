@@ -38,6 +38,7 @@ import { ensureTestDatabase } from './helpers/postgres';
 import { migration0437HandymanQuotationApprovalBindings } from '../src/database/migrations/0437_handyman_quotation_approval_bindings';
 import { migration0438HandymanQuotationDecisionActorIdentity } from '../src/database/migrations/0438_handyman_quotation_decision_actor_identity';
 import { migration0439HandymanExecutionScopeActorIdentity } from '../src/database/migrations/0439_handyman_execution_scope_actor_identity';
+import { migration0443HandymanExecutionScopeApprovalGate } from '../src/database/migrations/0443_handyman_execution_scope_approval_gate';
 import {
   PIC_WORKSPACE_PURPOSE,
   admitPicWorkspace,
@@ -564,6 +565,12 @@ async function insertDecision(
   ) {
     values.decided_by_pic_session_id = await mintPicSessionId(thread);
   }
+  // Admission may occur after this transaction began. Match the real engine's
+  // wall clock, not NOW(), so the 03F scope floor sees a decision inside its
+  // actual credential window.
+  if (values.decided_at === undefined) {
+    values.decided_at = (await run('SELECT clock_timestamp() AS at')).rows[0].at;
+  }
   return insertRow(run, DECISION_TABLE, values);
 }
 
@@ -573,6 +580,14 @@ async function insertScope(
   decisionId: string,
   overrides: Values = {},
 ): Promise<string> {
+  // 03F closes the deferred INSERT gate: even a schema fixture now follows
+  // decision -> lifecycle -> scope, with complete server-derived location and
+  // the original (possibly NULL) lineage PIC. No production guard is bypassed.
+  await run(`UPDATE handyman_quotation_versions SET status = 'APPROVED'
+    WHERE id = $1 AND status = 'ISSUED'`, [thread.versionId]);
+  const location = await run(`SELECT s.room_id, r.area_id, a.floor_id
+    FROM spaces s JOIN rooms r ON r.id = s.room_id
+    JOIN areas a ON a.id = r.area_id WHERE s.id = $1`, [thread.spaceId]);
   const values: Values = {
     id: randomUUID(),
     client_id: thread.clientId,
@@ -582,9 +597,12 @@ async function insertScope(
     approved_quotation_version_id: thread.versionId,
     quotation_decision_id: decisionId,
     tenant_company_id: thread.tenantCompanyId,
-    tenant_pic_id: thread.picId,
+    tenant_pic_id: thread.lineagePicId,
     building_id: thread.buildingId,
     space_id: thread.spaceId,
+    floor_id: location.rows[0]?.floor_id,
+    area_id: location.rows[0]?.area_id,
+    room_id: location.rows[0]?.room_id,
     created_by_user_id: null,
     created_by_actor_type: 'TENANT_PIC',
     created_by_tenant_pic_id: thread.picId,
@@ -863,6 +881,9 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
     // is that 0442's FK may only be dropped while the table it points at still
     // exists, and 0441's down() is a no-op-able drop precisely because no
     // admission ever happened on this schema-only suite.
+    // 03F's prospective gate depends on the session-linked scope row type.
+    // Peel it first; reapply it last below. No live guard is disabled for a write.
+    assert.equal(await migrateDown(pool!), '0443_handyman_execution_scope_approval_gate');
     assert.equal(
       await migrateDown(pool!),
       '0442_handyman_quotation_pic_session_ledger_link',
@@ -926,8 +947,9 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
         '0440_handyman_quotation_approval_binding_permission',
         '0441_handyman_pic_workspace_sessions',
         '0442_handyman_quotation_pic_session_ledger_link',
+        '0443_handyman_execution_scope_approval_gate',
       ],
-      'the re-apply must be exactly the four reverted migrations, in order',
+      'the re-apply must be exactly the five reverted migrations, in order',
     );
     const restoredPermission = await q(
       `SELECT count(*)::int AS n FROM permissions
@@ -937,6 +959,7 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
     // 0438 and 0437 roll back too while unpopulated (rolled back again so the
     // remaining tests keep a fully migrated schema).
     await inRollbackTx(async (client, run) => {
+      await migration0443HandymanExecutionScopeApprovalGate.down(client);
       await migration0438HandymanQuotationDecisionActorIdentity.down(client);
       await migration0437HandymanQuotationApprovalBindings.down(client);
       const tables = await run(
@@ -1141,11 +1164,14 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
         constraint: 'handyman_quotation_decisions_binding_check',
       },
     );
-    // Scope ledger: the CHECK stands on its own, and it is the ONLY scope-side
-    // rule in this PART (the TENANT_PIC-only creation guard is 03F's step), so
-    // a coherent-but-for-actor-type row would otherwise have been accepted.
+    // Component-level CHECK proof at the pre-03F schema, restored by the real
+    // empty down() in this rolled-back transaction. All positive scope cases
+    // below run through the live 03F floor; none disables that floor to approve.
     await expectRefusal(
-      () => bindAndApprove(thread, async ({ decisionId, run }) => {
+      () => inRollbackTx(async (client, run) => {
+        await migration0443HandymanExecutionScopeApprovalGate.down(client);
+        const bindingId = await insertBinding(run, thread);
+        const decisionId = await insertDecision(run, thread, bindingId);
         await insertScope(run, thread, decisionId, {
           created_by_user_id: adminUserId,
           created_by_actor_type: 'TENANT_PIC',
@@ -1450,9 +1476,8 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
       'A PIC decision must be carried by that PIC',
       { code: '23514' },
     );
-    // The execution scope half of D1 is CHECK-level (0439's guard is not
-    // rewritten by this PART): a PIC scope without a session is a plain
-    // constraint violation on both sides of the pair.
+    // 03F now refuses the missing credential in its BEFORE INSERT floor,
+    // before 0442's still-present actor CHECK can run.
     await expectRefusal(
       () => inRollbackTx(async (_client, run) => {
         const bindingId = await insertBinding(run, thread);
@@ -1461,8 +1486,8 @@ describe('W03 PART 03B — quotation PIC approval schema foundation', () => {
           created_by_pic_session_id: null,
         });
       }),
-      'handyman_execution_scopes_actor_identity_check',
-      { constraint: 'handyman_execution_scopes_actor_identity_check' },
+      'Execution scope requires this transaction',
+      { code: '23514' },
     );
   });
 

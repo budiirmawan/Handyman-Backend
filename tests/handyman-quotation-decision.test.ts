@@ -487,10 +487,12 @@ describe('CR-HM-06 PART 04 / W03 PART 03E — the staff decision arm is closed, 
   it('3: DRAFT/SUPERSEDED/EXPIRED are refused for the same reason as an ISSUED version', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const v2 = await createHandymanQuotationRevision(
-      f.bundle.quotation.id, adminUserId,
-    );
     for (const status of ['DRAFT', 'SUPERSEDED', 'EXPIRED'] as const) {
+      // 03F preserves F2 terminal facts: do not recycle one terminal fixture
+      // through another status just to exercise the staff-first refusal.
+      const v2 = await createHandymanQuotationRevision(
+        f.bundle.quotation.id, adminUserId,
+      );
       await q(`UPDATE handyman_quotation_versions SET status = $2
                 WHERE id = $1`, [v2.id, status]);
       await assert.rejects(

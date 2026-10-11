@@ -47,6 +47,7 @@ import { clientMonetaryContextService } from '../src/modules/client-monetary-con
 import { inventoryItemService } from '../src/modules/inventory-items';
 import { priceCatalogEntryService } from '../src/modules/price-catalog-entries';
 import { ensureTestDatabase } from './helpers/postgres';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 
 /**
  * CR-HM-06 PART 03 — focused tests for quotation version lifecycle
@@ -553,14 +554,29 @@ describe('CR-HM-06 PART 03 — quotation lifecycle', () => {
 
   it('8: APPROVED/REJECTED/EXPIRED cannot be superseded by PART 03', async (t) => {
     if (!requireDatabase(t)) return;
-    const f = await lineFixture();
-    await issueHandymanQuotationVersion(
-      f.version.id, { validUntil: FUTURE() }, adminUserId,
-    );
-    // Seed the vocabulary-only states directly (projection columns).
+    let approved: Awaited<ReturnType<typeof lineFixture>> | undefined;
     for (const seed of ['APPROVED', 'EXPIRED', 'REJECTED'] as const) {
-      await q(`UPDATE handyman_quotation_versions SET status = $2
-                WHERE id = $1`, [f.version.id, seed]);
+      // 03F: each terminal state is a separate fact. APPROVED/REJECTED come
+      // from actual PIC decisions, never an unsupported raw projection.
+      const f = await lineFixture();
+      await issueHandymanQuotationVersion(
+        f.version.id, { validUntil: FUTURE() }, adminUserId,
+      );
+      if (seed === 'EXPIRED') {
+        await q(`UPDATE handyman_quotation_versions
+          SET valid_until = clock_timestamp() - interval '1 second' WHERE id = $1`, [f.version.id]);
+        await expireHandymanQuotationVersion(f.version.id, adminUserId);
+      } else {
+        const session = await bindAndAdmitFixturePic({
+          quotationId: f.bundle.quotation.id, tenantCompanyId: f.company.id,
+          tenantPicId: f.pic.id, buildingId: f.building.id,
+          spaceId: f.space.id, granterUserId: adminUserId,
+        });
+        await decideFixturePic(session.workspaceToken, f.version.id, {
+          decision: seed === 'APPROVED' ? 'APPROVE' : 'REJECT', idempotencyKey: randomUUID(),
+        }, adminUserId);
+        if (seed === 'APPROVED') approved = f;
+      }
       await assert.rejects(
         supersedeHandymanQuotationVersion(f.version.id, adminUserId),
         (e: unknown) =>
@@ -574,9 +590,9 @@ describe('CR-HM-06 PART 03 — quotation lifecycle', () => {
         `expire ${seed}`,
       );
     }
-    // Issuing a replacement never rewrites an APPROVED row.
-    await q(`UPDATE handyman_quotation_versions SET status = 'APPROVED'
-              WHERE id = $1`, [f.version.id]);
+    // Issuing a replacement never rewrites the real APPROVED fact.
+    assert.ok(approved);
+    const f = approved;
     const v2 = await createHandymanQuotationRevision(
       f.bundle.quotation.id, adminUserId,
     );

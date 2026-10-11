@@ -1,9 +1,7 @@
+import type { PoolClient } from 'pg';
+import { getPool } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
-import { areaRepository } from '../areas';
-import { floorRepository } from '../floors';
-import { roomRepository } from '../rooms';
-import { spaceRepository } from '../spaces';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanExecutionScopeRepository }
   from './handyman-execution-scope.repository';
@@ -22,13 +20,11 @@ import type {
  * location derivation (fail-closed) and the bounded read seams.
  * No assignment/scheduling/arrival/session/payment/BAST surface.
  *
- * W03 PART 03E (A01 §7.1/§7.2 E1–E3, §10.3 C6/C7): creation is now actor-aware —
- * `buildExecutionScopeInput` takes the deciding actor rather than a staff user id,
- * checks the scope PIC against the decision PIC (E2), and the read seam projects
- * the actor class. There is still exactly one call site of `insertScope` in this
- * repository (the APPROVE branch of the decision engine), which is what makes E1
- * structural rather than a convention; the matching DB-side guard on the scope row
- * is the ratified 03F row and is NOT implemented here.
+ * W03 PART 03F (A01 E1–E3): creation is PIC-only and independently re-reads
+ * the exact APPROVE decision, binding, session, lifecycle and lineage through
+ * 0443's predicate before INSERT. Location and eligibility share the approval's
+ * transaction. 0443 repeats the check at INSERT even if a future writer skips
+ * this helper. USER rows remain a historical read shape only (A9/E4).
  */
 
 function assertUuid(value: string | undefined, field: string): void {
@@ -90,7 +86,7 @@ export function handymanExecutionScopeActorMismatchError(): AppError {
 export async function deriveExecutionScopeLocation(request: {
   buildingId: string;
   spaceId: string | null;
-}): Promise<{
+}, executor: Pick<PoolClient, 'query'> = getPool()): Promise<{
   buildingId: string;
   floorId: string | null;
   areaId: string | null;
@@ -100,28 +96,15 @@ export async function deriveExecutionScopeLocation(request: {
   if (!request.spaceId) {
     throw handymanExecutionScopeLocationInconsistentError();
   }
-  const space = await spaceRepository.findById(request.spaceId);
-  if (!space) throw handymanExecutionScopeLocationInconsistentError();
-  const room = await roomRepository.findById(space.roomId);
-  if (!room) throw handymanExecutionScopeLocationInconsistentError();
-  const area = await areaRepository.findById(room.areaId);
-  if (!area) throw handymanExecutionScopeLocationInconsistentError();
-  const floor = await floorRepository.findById(area.floorId);
-  if (!floor) throw handymanExecutionScopeLocationInconsistentError();
-  if (floor.buildingId !== request.buildingId) {
-    throw handymanExecutionScopeLocationInconsistentError();
-  }
-  return {
-    buildingId: floor.buildingId,
-    floorId: floor.id,
-    areaId: area.id,
-    roomId: room.id,
-    spaceId: space.id,
-  };
+  const location = await handymanExecutionScopeRepository.resolveScopeLocation(
+    executor, request.buildingId, request.spaceId,
+  );
+  if (!location) throw handymanExecutionScopeLocationInconsistentError();
+  return location;
 }
 
 /** Server-derived New-row input for the approval transaction (F8/F9). */
-export async function buildExecutionScopeInput(args: {
+export async function buildExecutionScopeInput(tx: PoolClient, args: {
   clientId: string;
   handymanRequestId: string;
   channelAttributionId: string;
@@ -142,24 +125,17 @@ export async function buildExecutionScopeInput(args: {
   /** E2: the PIC recorded on the APPROVE decision itself. */
   decisionTenantPicId: string | null;
 }): Promise<NewHandymanExecutionScope> {
+  // E1/E2: a historical USER shape is never a creation capability. The supplied
+  // PIC comparison is only an early refusal; the stored decision is re-read below.
+  if (args.actor.kind !== 'TENANT_PIC' ||
+      args.decisionTenantPicId !== args.actor.tenantPicId) {
+    throw handymanExecutionScopeActorMismatchError();
+  }
   const location = await deriveExecutionScopeLocation({
     buildingId: args.derivedBuildingId,
     spaceId: args.derivedSpaceId,
-  });
-  if (args.actor.kind === 'TENANT_PIC') {
-    // E2, service-side half. The DB guard independently requires the same PIC to
-    // be ACTIVE in this tenant and the session to belong to it, so a stale or
-    // borrowed id cannot ride a correct binding; this check exists so the caller
-    // gets a typed conflict instead of a rolled-back insert.
-    if (args.decisionTenantPicId !== args.actor.tenantPicId) {
-      throw handymanExecutionScopeActorMismatchError();
-    }
-  } else if (args.decisionTenantPicId !== null) {
-    // A USER decision never carries a PIC attribution, so this combination means
-    // the decision and the scope were assembled from different rows.
-    throw handymanExecutionScopeActorMismatchError();
-  }
-  return {
+  }, tx);
+  const input: NewHandymanExecutionScope = {
     clientId: args.clientId,
     handymanRequestId: args.handymanRequestId,
     channelAttributionId: args.channelAttributionId,
@@ -171,6 +147,10 @@ export async function buildExecutionScopeInput(args: {
     ...location,
     actor: args.actor,
   };
+  if (!(await handymanExecutionScopeRepository.isNewScopeApprovalValid(tx, input))) {
+    throw handymanExecutionScopeActorMismatchError();
+  }
+  return input;
 }
 
 export function toPublicExecutionScope(

@@ -587,14 +587,17 @@ describe('CR-HM-07 PART 04A — arrival result persistence', () => {
       'arrivalResultConflictError',
       'evaluateHandymanArrivalVerification',
       'findHandymanArrivalResultByChallengeId',
+      'getHandymanArrivalVerificationByScope',
       'handymanArrivalResultRepository',
       'handymanArrivalResultService',
       'insertHandymanArrivalVerificationResult',
-    ], 'module exports exactly the PART 04A persistence surface plus the PART 04B atomic evaluator');
+      'listHandymanArrivalResultsByExecutionScope',
+    ], 'exact persistence/evaluator surface plus the bounded reads already present before W03 03F');
     assert.deepEqual(
       Object.keys(mod.handymanArrivalResultRepository).sort(), [
         'findHandymanArrivalResultByChallengeId',
         'insertHandymanArrivalVerificationResult',
+        'listHandymanArrivalResultsByExecutionScope',
       ],
     );
   });

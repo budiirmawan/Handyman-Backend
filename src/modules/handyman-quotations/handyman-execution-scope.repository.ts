@@ -12,13 +12,11 @@ import type {
  * Executor-first; INSERT + bounded reads ONLY. No UPDATE/DELETE —
  * the 0395 trigger refuses them; CR-HM-06 owns no further lifecycle.
  *
- * W03 PART 03E (A01 §10.3 C7): the column lists carry the actor columns
- * `0439`/`0442` added, and `insertScope` stays INSERT-only — widening the list
- * is not the same thing as widening the write vocabulary. Note what is NOT here:
- * no scope-side INSERT eligibility guard. §7.2 E1-E3's DB-level floor is
- * `03F`'s ratified row, and `0395`'s trigger remains `BEFORE UPDATE OR DELETE`
- * for now, so the service layer is the enforcing layer in this PART and the DB
- * CHECK is the coherence floor.
+ * W03 PART 03F: 0443 supplies the independent INSERT floor (A01 E1–E3).
+ * Service preflight uses its predicate in the SAME approval transaction; replay
+ * validates stored provenance without renewing expired approval credentials.
+ * Historical USER scope reads remain unchanged (A9/E4). No downstream writer
+ * or alternate scope-creation path is introduced.
  */
 
 type Row = {
@@ -145,8 +143,84 @@ async function findScopeById(
   return result.rows[0] ? map(result.rows[0]) : null;
 }
 
+/** One coherent location snapshot, on the approval's connection (F8/F9). */
+async function resolveScopeLocation(
+  executor: Pick<PoolClient, 'query'>,
+  buildingId: string,
+  spaceId: string,
+): Promise<Pick<NewHandymanExecutionScope,
+  'buildingId' | 'floorId' | 'areaId' | 'roomId' | 'spaceId'> | null> {
+  const result = await executor.query<{
+    building_id: string; floor_id: string; area_id: string; room_id: string; space_id: string;
+  }>(
+    `SELECT f.building_id, f.id AS floor_id, a.id AS area_id,
+            r.id AS room_id, s.id AS space_id
+       FROM spaces s JOIN rooms r ON r.id = s.room_id
+       JOIN areas a ON a.id = r.area_id JOIN floors f ON f.id = a.floor_id
+      WHERE s.id = $1 AND f.building_id = $2`,
+    [spaceId, buildingId],
+  );
+  const row = result.rows[0];
+  return row ? {
+    buildingId: row.building_id, floorId: row.floor_id, areaId: row.area_id,
+    roomId: row.room_id, spaceId: row.space_id,
+  } : null;
+}
+
+/** E3 service preflight; the INSERT trigger independently runs this again. */
+async function isNewScopeApprovalValid(
+  executor: Pick<PoolClient, 'query'>,
+  input: NewHandymanExecutionScope,
+): Promise<boolean> {
+  const actor = input.actor;
+  const result = await executor.query<{ allowed: boolean }>(
+    `SELECT handyman_execution_scope_approval_valid(
+       jsonb_populate_record(NULL::handyman_execution_scopes, $1::jsonb), true
+     ) AS allowed`,
+    [{
+      client_id: input.clientId,
+      handyman_request_id: input.handymanRequestId,
+      channel_attribution_id: input.channelAttributionId,
+      quotation_id: input.quotationId,
+      approved_quotation_version_id: input.approvedQuotationVersionId,
+      quotation_decision_id: input.quotationDecisionId,
+      tenant_company_id: input.tenantCompanyId,
+      tenant_pic_id: input.tenantPicId,
+      building_id: input.buildingId,
+      floor_id: input.floorId,
+      area_id: input.areaId,
+      room_id: input.roomId,
+      space_id: input.spaceId,
+      status: 'AUTHORIZED',
+      created_by_actor_type: actor.kind,
+      created_by_user_id: actor.kind === 'USER' ? actor.userId : null,
+      created_by_tenant_pic_id: actor.kind === 'TENANT_PIC' ? actor.tenantPicId : null,
+      created_by_pic_session_id: actor.kind === 'TENANT_PIC' ? actor.picSessionId : null,
+    }],
+  );
+  return result.rows[0]?.allowed === true;
+}
+
+/** No scope is created/repaired on replay; an orphan is a cutover blocker. */
+async function hasValidScopeApproval(
+  executor: Pick<PoolClient, 'query'>,
+  scopeId: string,
+  decisionId: string,
+): Promise<boolean> {
+  const result = await executor.query<{ allowed: boolean }>(
+    `SELECT handyman_execution_scope_approval_valid(s, false) AS allowed
+       FROM handyman_execution_scopes s
+      WHERE s.id = $1 AND s.quotation_decision_id = $2`,
+    [scopeId, decisionId],
+  );
+  return result.rows[0]?.allowed === true;
+}
+
 export const handymanExecutionScopeRepository = {
   insertScope,
   findScopeByApprovedVersion,
   findScopeById,
+  resolveScopeLocation,
+  isNewScopeApprovalValid,
+  hasValidScopeApproval,
 };

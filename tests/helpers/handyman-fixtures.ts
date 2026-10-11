@@ -20,7 +20,6 @@ import {
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
-  decideHandymanQuotation,
   issueHandymanQuotationVersion,
 } from '../../src/modules/handyman-quotations';
 import { organizationService } from '../../src/modules/organizations';
@@ -38,6 +37,7 @@ import { userService } from '../../src/modules/users';
 import { vendorWorkforceService } from '../../src/modules/vendor-workforce';
 import { vendorService } from '../../src/modules/vendors';
 import { workforceService } from '../../src/modules/workforce';
+import { bindAndAdmitFixturePic, decideFixturePic } from './handyman-pic-fixtures';
 
 /**
  * Shared CR-HM-07 fixture builder (PART 01–04 test suites). A kit is
@@ -185,7 +185,8 @@ export async function crewFixture(
   };
 }
 
-export async function scopeFixture(
+/** Issued quotation, deliberately still unbound: B12 remains OFF. */
+export async function quotationFixture(
   realm: Awaited<ReturnType<typeof realmFixture>>,
   chain: Awaited<ReturnType<typeof locationChain>>,
 ) {
@@ -272,9 +273,27 @@ export async function scopeFixture(
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
-  const decision = await decideHandymanQuotation(version.id, {
+  return { realm, chain, company, pic, attribution, request, bundle, version };
+}
+
+/** 03F cutover: downstream tests consume the real, PIC-authorized scope. */
+export async function scopeFixture(
+  realm: Awaited<ReturnType<typeof realmFixture>>,
+  chain: Awaited<ReturnType<typeof locationChain>>,
+) {
+  const f = await quotationFixture(realm, chain);
+  const picSession = await bindAndAdmitFixturePic({
+    quotationId: f.bundle.quotation.id,
+    tenantCompanyId: f.company.id,
+    tenantPicId: f.pic.id,
+    buildingId: realm.building.id,
+    spaceId: chain.space.id,
+    granterUserId: adminUserId,
+  });
+  const decision = await decideFixturePic(picSession.workspaceToken, f.version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
   }, adminUserId);
+  if (!decision.executionScope) throw new Error('PIC approval did not create a scope');
   return { scope: decision.executionScope };
 }
 

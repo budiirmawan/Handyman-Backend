@@ -26,7 +26,6 @@ import {
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
-  decideHandymanQuotation,
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import {
@@ -52,6 +51,7 @@ import { vendorService } from '../src/modules/vendors';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
 import { ensureTestDatabase } from './helpers/postgres';
+import { bindAndAdmitFixturePic, decideFixturePic } from './helpers/handyman-pic-fixtures';
 
 /**
  * CR-HM-04 Execution Scope Assignment Activation PART B — assignment /
@@ -365,7 +365,13 @@ async function scopeFixture(
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
-  const decision = await decideHandymanQuotation(version.id, {
+  // W03 03F: consume a real PIC-created scope; staff binds but never approves.
+  const picSession = await bindAndAdmitFixturePic({
+    quotationId: bundle.quotation.id, tenantCompanyId: company.id,
+    tenantPicId: pic.id, buildingId: realm.building.id,
+    spaceId: space.id, granterUserId: adminUserId,
+  });
+  const decision = await decideFixturePic(picSession.workspaceToken, version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
   }, adminUserId);
   const scope = decision.executionScope!;
@@ -681,6 +687,14 @@ describe('CR-HM-04 activation PART B — scope crew assignment', () => {
       'vendor_quotations',
       'bast_documents',
     ];
+    // PIC admission has its own SESSION audit before assignment begins. The
+    // operational boundary is no NEW QR/arrival/work-session/FM event, not an
+    // empty global history that would forbid the real PIC fixture itself.
+    const operationalEventSql = `SELECT id, event_type FROM operational_events
+      WHERE event_type ILIKE '%ARRIVAL%' OR event_type ILIKE '%QR%'
+        OR event_type ILIKE '%GEOFENCE%' OR event_type ILIKE '%SESSION%'
+        OR event_type ILIKE '%WORK_ORDER%' ORDER BY id`;
+    const eventsBefore = (await q(operationalEventSql)).rows;
     const before: Record<string, number> = {};
     for (const table of sideEffectTables) {
       const r = await q(`SELECT count(*)::int AS n FROM ${table}`);
@@ -705,13 +719,7 @@ describe('CR-HM-04 activation PART B — scope crew assignment', () => {
       const r = await q(`SELECT count(*)::int AS n FROM ${table}`);
       assert.equal(r.rows[0].n, before[table], table);
     }
-    // Assignment runtime carries no QR/GPS/schedule/session evidence.
-    const ops = await q(
-      `SELECT event_type FROM operational_events
-        WHERE event_type ILIKE '%ARRIVAL%'
-           OR event_type ILIKE '%QR%' OR event_type ILIKE '%GEOFENCE%'
-           OR event_type ILIKE '%SESSION%' OR event_type ILIKE '%WORK_ORDER%'`,
-    );
-    assert.equal(ops.rows.length, 0);
+    // Assignment runtime carries no new QR/GPS/schedule/session evidence.
+    assert.deepEqual((await q(operationalEventSql)).rows, eventsBefore);
   });
 });

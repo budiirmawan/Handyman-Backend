@@ -507,7 +507,7 @@ export async function revokePicWorkspaceSession(token: string): Promise<void> {
  */
 export async function assertPicWorkspaceSessionCurrent(
   tx: PoolClient,
-  principal: PicWorkspacePrincipal,
+  principal: Pick<PicWorkspacePrincipal, 'sessionId'>,
 ): Promise<void> {
   await authenticateInTx(
     tx,

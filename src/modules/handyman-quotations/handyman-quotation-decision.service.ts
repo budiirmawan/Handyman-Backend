@@ -5,6 +5,7 @@ import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from '../handyman-requests';
+import { assertPicWorkspaceSessionCurrent } from '../handyman-pic-session';
 import { assertQuotationThreadBuildingAccess }
   from './handyman-quotation-access';
 import { handymanExecutionScopeRepository }
@@ -190,6 +191,7 @@ function asDecisionRefusal(error: unknown): unknown {
   if (
     code === '23514' ||
     code === '23503' ||
+    code === ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_CONFLICT ||
     code === '40P01' ||
     code === '40001'
   ) {
@@ -383,6 +385,17 @@ async function writeQuotationDecision(
       // Replay-safe: the ORIGINAL authoritative facts, nothing new.
       const priorScope = await handymanExecutionScopeRepository
         .findScopeByApprovedVersion(tx, version.id);
+      // 03F: replay returns the original atomic fact, never a missing-scope
+      // repair. An orphan or mismatched provenance is a cutover blocker. Do not
+      // reapply today's binding/session windows to an already valid approval.
+      if (existing.decision === 'APPROVE') {
+        if (!priorScope || !(await handymanExecutionScopeRepository
+          .hasValidScopeApproval(tx, priorScope.id, existing.id))) {
+          throw picDecisionRefusedError();
+        }
+      } else if (priorScope) {
+        throw picDecisionRefusedError();
+      }
       return {
         ...toPublicDecision(existing),
         executionScope: priorScope
@@ -439,6 +452,13 @@ async function writeQuotationDecision(
     }
   }
 
+  // 03F: the version/binding waits above may have outlived the credential.
+  // Reuse the original seam, on its ALREADY HELD authority/session locks, before
+  // writing an approval whose scope floor checks credential validity as well.
+  // The seam still revalidates after all writes; this is not a new lock order.
+  if (args.actor.kind !== 'TENANT_PIC') throw staffApprovalForbiddenError();
+  await assertPicWorkspaceSessionCurrent(tx, { sessionId: args.actor.picSessionId });
+
   // 6) Immutable decision insert.
   let record: HandymanQuotationDecisionRecord;
   try {
@@ -477,15 +497,12 @@ async function writeQuotationDecision(
   // no other code path may call `insertScope` at all.
   let scope: PublicHandymanExecutionScope | null = null;
   if (args.decision === 'APPROVE') {
-    const scopeActor: HandymanExecutionScopeActor =
-      args.actor.kind === 'USER'
-        ? { kind: 'USER', userId: args.actor.userId }
-        : {
-            kind: 'TENANT_PIC',
-            tenantPicId: args.actor.tenantPicId,
-            picSessionId: args.actor.picSessionId,
-          };
-    const scopeInput = await buildExecutionScopeInput({
+    const scopeActor: HandymanExecutionScopeActor = {
+      kind: 'TENANT_PIC',
+      tenantPicId: args.actor.tenantPicId,
+      picSessionId: args.actor.picSessionId,
+    };
+    const scopeInput = await buildExecutionScopeInput(tx, {
       clientId: quotation.clientId,
       handymanRequestId: request.id,
       channelAttributionId: request.channelAttributionId,
@@ -521,7 +538,7 @@ async function writeQuotationDecision(
         // C12: a PIC approval journals with `actor_user_id = NULL`. Inventing a
         // staff actor to fill that column is the leak this amendment exists to
         // close, so the id is recorded in metadata instead.
-        actorUserId: args.actor.kind === 'USER' ? args.actor.userId : null,
+        actorUserId: null,
         summary: `Handyman execution scope created for quotation version ${version.versionNumber}.`,
         metadata: {
           executionScopeId: scopeRow.id,
@@ -556,7 +573,7 @@ async function writeQuotationDecision(
           : 'HANDYMAN_QUOTATION_REJECTED',
       entityType: 'HANDYMAN_QUOTATION_VERSION',
       entityId: version.id,
-      actorUserId: args.actor.kind === 'USER' ? args.actor.userId : null,
+      actorUserId: null,
       summary: `Handyman quotation version ${version.versionNumber} ${status.toLowerCase()} by customer decision.`,
       metadata: {
         quotationId: quotation.id,
@@ -639,6 +656,9 @@ export async function recordPicQuotationDecision(
       picSessionId: args.picSessionId,
       approvalBindingId: args.approvalBindingId,
     },
+  }).catch(error => {
+    // Preflight refusals use the same PIC envelope as INSERT-floor refusals.
+    throw asDecisionRefusal(error);
   });
 }
 
