@@ -1,0 +1,62 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { before,after,it } from 'node:test';
+import { api } from './helpers/http';
+import { startCareQuotationFixture,closeDirectQuotationFixture,auth,status,HV,HQ } from './helpers/handyman-care-quotation';
+let f:Awaited<ReturnType<typeof startCareQuotationFixture>>;
+before(async()=>{f=await startCareQuotationFixture(55514);});
+after(closeDirectQuotationFixture);
+
+it('BM Care intake → Operations quotation → Care inbox/presentation → independent signed PIC handoff → approval → one Execution Scope',async(t)=>{
+  const tables=['notifications','notification_email_deliveries','notification_whatsapp_deliveries','notification_secure_links','notification_outbound_deliveries','notification_push_deliveries'];
+  const before=await Promise.all(tables.map(table=>f.q(`SELECT count(*)::int AS n FROM ${table}`).then(r=>r.rows[0].n)));
+  const x=await f.prepare({channel:'WHATSAPP',bind:false});
+  const noScope=async()=>assert.equal((await f.q('SELECT * FROM handyman_execution_scopes WHERE handyman_request_id=$1',[x.requestId])).rowCount,0);
+  const inbox=await f.inbox();status(inbox,200,'Care receives issued quotation');
+  const item=inbox.body.data.items.find((v:any)=>v.quotationVersionId===x.versionId);assert.ok(item);
+  assert.equal(item.residentIntakeChannel,'WHATSAPP');assert.equal(item.presentationStatus,'AVAILABLE_TO_CARE');
+  const read=await f.detail(x);status(read,200,'Care reads commercial snapshot');assert.equal(read.body.data.totals.total,300000);
+  const presentation=await f.present(x,'WALK_IN');status(presentation,201,'Care presents quotation to resident');
+  assert.equal(presentation.body.data.careActorId,f.careActorId);assert.ok(presentation.body.data.presentedAt);
+  status(await f.handoff(x,presentation.body.data.id),409,'B12 OFF issue is not PIC authorization');
+  await noScope();t.diagnostic('PASS: signed Care intake, distinct resident/presentation channels, Operations-only commercial preparation and Care workspace delivery');
+
+  const binding=await api().post(`${HQ}/${x.quotationId}/approval-binding`).set(auth(f.ops.token))
+    .set('Idempotency-Key',randomUUID()).send({tenantPicId:f.tenantPicId});status(binding,201,'explicit Operations binding');
+  const handoff=await f.handoff(x,presentation.body.data.id);status(handoff,201,'Care-assisted authentication handoff');
+  const h=handoff.body.data;assert.equal(h.quotationVersionId,x.versionId);assert.equal(h.approvalBindingId,binding.body.data.binding.id);
+  assert.equal(h.directResidentMessaging,false);assert.equal(h.workspaceToken,undefined);
+  for(const token of [f.careToken,f.ops.token]) status(await f.decide(h.id,token),401,'staff credentials never approve');
+  const staff=await api().post(`${HV}/${x.versionId}/decision`).set(auth(f.ops.token)).set('Idempotency-Key',randomUUID()).send({decision:'APPROVE'});
+  status(staff,403,'S1 closed');assert.equal(staff.headers.deprecation,'true');
+  const assertion=f.picAssertion();const admission=await f.admitPic(assertion);status(admission,201,'BM independently authenticates PIC with signed assertion');
+  status(await f.admitPic(assertion),401,'assertion anti-replay');
+  const token=admission.body.data.workspaceToken;
+  const claimed=await f.claim(h.id,token);status(claimed,201,'PIC claims exact handoff');
+  assert.equal(claimed.body.data.quotationVersionId,x.versionId);
+  status(await f.claim(h.id,token),409,'handoff claim is single use');
+  const authenticated=await f.detail(x);assert.equal(authenticated.body.data.handoffs[0].status,'PIC_AUTHENTICATED');
+  await noScope();t.diagnostic('PASS: explicit version/binding linkage, signed PIC admission, anti-replay and staff/PIC credential separation');
+
+  const key=randomUUID();const approvals=await Promise.all([f.decide(h.id,token,key),f.decide(h.id,token,key)]);
+  for(const r of approvals) status(r,201,'PIC decision/retry');
+  assert.deepEqual(approvals[0].body.data,approvals[1].body.data,'existing idempotent PIC decision contract retained');
+  const result=approvals[0].body.data;
+  assert.equal(result.decision.decision,'APPROVE');assert.equal(result.decision.decidedByTenantPicId,f.tenantPicId);
+  assert.equal(result.decision.approvalBindingId,h.approvalBindingId);assert.equal(result.executionScope.status,'AUTHORIZED');
+  assert.equal(result.executionScope.handymanRequestId,x.requestId);assert.equal(result.executionScope.approvedQuotationVersionId,x.versionId);
+  const scope=(await f.q('SELECT * FROM handyman_execution_scopes WHERE handyman_request_id=$1',[x.requestId])).rows;
+  assert.equal(scope.length,1);assert.equal(scope[0].created_by_actor_type,'TENANT_PIC');assert.equal(scope[0].created_by_user_id,null);
+  assert.equal(scope[0].created_by_pic_session_id,result.decision.decidedByPicSessionId);
+  const claims=(await f.q('SELECT * FROM handyman_care_quotation_pic_claims WHERE handoff_id=$1',[h.id])).rows;
+  assert.equal(claims.length,1);assert.equal(claims[0].pic_session_id,result.decision.decidedByPicSessionId);
+  status(await f.decide(h.id,token,key,'REJECT'),409,'changed-body replay denied');
+  const final=await f.detail(x);status(final,200,'Care sees actual PIC decision');assert.equal(final.body.data.handoffs[0].status,'APPROVE');
+  assert.equal(final.body.data.presentations[0].id,presentation.body.data.id);
+  const events=(await f.q("SELECT * FROM operational_events WHERE entity_id=$1 AND event_type='HANDYMAN_CARE_HANDOFF_PIC_DECIDED'",[x.versionId])).rows;
+  assert.equal(events.length,1);assert.equal(events[0].actor_user_id,null);assert.equal(events[0].metadata.actorType,'TENANT_PIC');
+  assert.equal(events[0].metadata.handoffId,h.id);assert.equal(events[0].metadata.tenantPicId,f.tenantPicId);
+  const after=await Promise.all(tables.map(table=>f.q(`SELECT count(*)::int AS n FROM ${table}`).then(r=>r.rows[0].n)));
+  assert.deepEqual(after,before,'no automatic resident email/WhatsApp/push/links/notification enqueue');
+  t.diagnostic('PASS: one PIC-attributed decision and Execution Scope, atomic assistance audit, safe decision replay and zero direct resident messaging');
+});

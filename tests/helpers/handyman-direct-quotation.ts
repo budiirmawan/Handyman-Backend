@@ -166,7 +166,7 @@ export async function startDirectQuotationFixture(port: number) {
   careActorId = (await handymanCareActorService.createCareActor({ integrationId: careIntegration.id,
     actorReference, displayName: 'Direct policy Customer Care' })).id;
   await grantCareActorProperty({ careActorId, propertyId, clientId }, master.userId);
-  const intake = async (extra: Record<string, unknown> = {}) => {
+  const careSession = async () => {
     const assertion: CareWorkspaceAssertion = {
       purpose: 'HANDYMAN_CARE_WORKSPACE', integrationCode: careCode, assertionId: randomUUID(),
       issuedAt: new Date(Date.now() - 1000).toISOString(), expiresAt: new Date(Date.now() + 240_000).toISOString(),
@@ -175,8 +175,12 @@ export async function startDirectQuotationFixture(port: number) {
     const session = await api().post(`${CARE}/session`)
       .set('x-hub-signature-256', signCareWorkspaceAssertion(assertion, secrets.care)).send(assertion);
     status(session, 201, 'Care fixture session');
+    return session.body.data.workspaceToken as string;
+  };
+  const intake = async (extra: Record<string, unknown> = {}) => {
+    const token = await careSession();
     const exchange = await api().post(`${CARE}/properties/${propertyId}/create-exchanges`)
-      .set(auth(session.body.data.workspaceToken)).send({ tenantCompanyId, buildingId, spaceId });
+      .set(auth(token)).send({ tenantCompanyId, buildingId, spaceId });
     status(exchange, 201, 'Care fixture exchange');
     return api().post(`${HM}/care`).send({ exchangeToken: exchange.body.data.exchangeToken,
       serviceCatalogId: catalogId, description: 'Explicit direct-scope service request',
@@ -184,6 +188,7 @@ export async function startDirectQuotationFixture(port: number) {
   };
   return { q, close: closeDirectQuotationFixture, ops, otherOps, field, master, clientId, propertyId, buildingId, spaceId,
     tenantCompanyId, tenantPicId, catalogId, disciplineId, uomId, picCode, picIntegrationId,
+    careSession, careActorId, careIntegrationId: careIntegration.id, otherBuildingId: other.id,
     signPic: (assertion: PicWorkspaceAssertion) => signPicWorkspaceAssertion(assertion, secrets.pic),
     intake,
     createRequest: async () => { const r = await intake(); status(r, 201, 'Care intake'); return r.body.data; },
