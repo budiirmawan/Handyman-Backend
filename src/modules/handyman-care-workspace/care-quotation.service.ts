@@ -21,7 +21,7 @@ export async function listCareQuotationInbox(token: string, query: unknown, body
   return withCareWorkspaceSession(token, async (tx, principal) => {
     const result = await tx.query(`${WORKSPACE_OCCUPANCY_CTES}, page AS (
       SELECT v.id AS "quotationVersionId",q.handyman_request_id AS "handymanRequestId",v.version_number AS "versionNumber",
-        v.valid_until AS "validUntil",d.delivered_at AS "deliveredAt",d.delivered_by_user_id AS "deliveredByUserId",
+        'BM_CARE_WORKSPACE' AS "deliveryChannel",v.valid_until AS "validUntil",d.delivered_at AS "deliveredAt",d.delivered_by_user_id AS "deliveredByUserId",
         ic.channel AS "residentIntakeChannel",
         CASE WHEN EXISTS(SELECT 1 FROM handyman_care_quotation_presentations p WHERE p.quotation_version_id=v.id)
           THEN 'PRESENTED' ELSE 'AVAILABLE_TO_CARE' END AS "presentationStatus"
@@ -59,6 +59,13 @@ async function scopedVersion(tx: PoolClient, principal: CareWorkspacePrincipal, 
   const projection=await requests.findWorkspaceProjectionById(principal,requestId,selection,tx);
   if (!projection.authenticated) throw workspaceUnauthorized();
   if (!projection.item) throw careQuoteNotFound();
+  if (projection.item.spaceId) {
+    await tx.query(`SELECT s.id FROM spaces s JOIN rooms r ON r.id=s.room_id JOIN areas a ON a.id=r.area_id
+      JOIN floors f ON f.id=a.floor_id WHERE s.id=$1 FOR SHARE OF s,r,a,f`,[projection.item.spaceId]);
+    // The hierarchy could have changed while the lock was being acquired.
+    const current=await requests.findWorkspaceProjectionById(principal,requestId,selection,tx);
+    if (!current.item) throw careQuoteNotFound();
+  }
   const result=await tx.query(`SELECT v.*, q.client_id, q.handyman_request_id FROM handyman_quotation_versions v
     JOIN handyman_quotations q ON q.id=v.quotation_id WHERE v.id=$1 AND q.handyman_request_id=$2 FOR SHARE OF v`,[versionId,requestId]);
   const v=result.rows[0];

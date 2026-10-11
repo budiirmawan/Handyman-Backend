@@ -37,6 +37,7 @@ it('inbox exposes issued commercial snapshots only under current Care workspace/
   assert.equal(row.residentIntakeChannel,'EMAIL');assert.equal(row.deliveredByUserId,f.ops.userId);assert.ok(row.deliveredAt);
   assert.ok(!inbox.body.data.items.some((r:any)=>r.quotationVersionId===draft.versionId));
   const detail=await f.detail(x);status(detail,200,'commercial detail');assert.equal(detail.body.data.totals.total,300000);
+  status(await api().post(`${HV}/${x.versionId}/lines`).set(auth(f.careToken)).send({lineType:'LABOR',description:'Unauthorized edit',quantity:1,uomId:f.uomId,currency:'IDR',finalQuotedUnitAmount:1}),401,'Care cannot prepare or edit commercial quotation');
   assert.equal(detail.body.data.directResidentMessaging,false);
   denied(await f.inbox(f.ops.token),401,'HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED','staff credential is not Care workspace');
   status(await f.inbox(f.careToken,{...f.selection,propertyId:randomUUID()}),404,'wrong property');
@@ -111,6 +112,45 @@ it('expired version cannot be presented or handed to PIC',async()=>{
   await delay(750);
   status(await f.present(x),409,'elapsed validity, even without EXPIRED projection');
   assert.ok(!(await f.inbox()).body.data.items.some((r:any)=>r.quotationVersionId===x.versionId));await noScope(x.requestId);
+});
+
+it('revoked binding and elapsed handoff fail independently of a still-issued quotation',async()=>{
+  const x=await f.preparedHandoff();const pic=await f.admitPic();status(pic,201,'PIC');
+  status(await api().post(`${HQ}/${x.quotationId}/approval-binding/revoke`).set(auth(f.ops.token)).set('Idempotency-Key',randomUUID())
+    .send({reason:'PIC representation changed before approval.'}),200,'revoke binding');
+  status(await f.claim(x.handoff.id,pic.body.data.workspaceToken),409,'old binding cannot authenticate handoff');
+  const next=await f.prepare();const p=await f.present(next);status(p,201,'presentation');
+  // Test-only short-lived handoff inserted through all production constraints.
+  // No immutable fact is edited to simulate expiration.
+  const id=randomUUID();
+  await f.q(`INSERT INTO handyman_care_quotation_handoffs
+    (id,presentation_id,quotation_version_id,approval_binding_id,care_actor_id,care_session_id,expires_at)
+    SELECT $1,p.id,p.quotation_version_id,b.id,p.care_actor_id,p.care_session_id,clock_timestamp()+INTERVAL '300 milliseconds'
+    FROM handyman_care_quotation_presentations p JOIN handyman_quotation_versions v ON v.id=p.quotation_version_id
+    JOIN handyman_quotation_approval_bindings b ON b.quotation_id=v.quotation_id AND b.status='ACTIVE' WHERE p.id=$2`,[id,p.body.data.id]);
+  await delay(350);status(await f.claim(id,pic.body.data.workspaceToken),409,'expired handoff');
+  assert.equal((await f.q('SELECT status FROM handyman_quotation_versions WHERE id=$1',[next.versionId])).rows[0].status,'ISSUED');
+  await noScope(next.requestId);
+});
+
+it('audit failure rolls back issue/delivery and presentation, and retry records exactly once',async()=>{
+  const x=await f.prepare({issue:false});
+  await f.q(`CREATE FUNCTION test_fail_care_audit() RETURNS trigger AS $$ BEGIN
+    IF NEW.event_type IN ('HANDYMAN_QUOTATION_DELIVERED_TO_CARE','HANDYMAN_CARE_QUOTATION_PRESENTED') THEN
+      RAISE EXCEPTION 'test-only assistance audit failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
+  const trigger=()=>f.q('CREATE TRIGGER test_care_audit BEFORE INSERT ON operational_events FOR EACH ROW EXECUTE FUNCTION test_fail_care_audit()');
+  try {
+    await trigger();status(await f.issue(x.versionId),500,'injected delivery audit failure');
+    assert.equal((await f.q('SELECT status FROM handyman_quotation_versions WHERE id=$1',[x.versionId])).rows[0].status,'DRAFT');
+    assert.equal((await f.q('SELECT * FROM handyman_care_quotation_deliveries WHERE quotation_version_id=$1',[x.versionId])).rowCount,0);
+    await f.q('DROP TRIGGER test_care_audit ON operational_events');status(await f.issue(x.versionId),200,'retry issue');
+    await trigger();const key=randomUUID();status(await f.present(x,'PHONE',key),500,'injected presentation audit failure');
+    assert.equal((await f.q('SELECT * FROM handyman_care_quotation_presentations WHERE quotation_version_id=$1',[x.versionId])).rowCount,0);
+    await f.q('DROP TRIGGER test_care_audit ON operational_events');status(await f.present(x,'PHONE',key),201,'retry exact presentation key');
+    assert.equal((await f.q('SELECT * FROM handyman_care_quotation_presentations WHERE quotation_version_id=$1',[x.versionId])).rowCount,1);
+  } finally {
+    await f.q('DROP TRIGGER IF EXISTS test_care_audit ON operational_events');await f.q('DROP FUNCTION test_fail_care_audit()');
+  }
 });
 
 it('live grant revocation and session revocation prevent new Care facts',async()=>{

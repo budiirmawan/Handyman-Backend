@@ -3206,6 +3206,305 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/care/quotation-inbox:
+    get:
+      operationId: listCareQuotationInbox
+      summary: Read current issued quotations in the BM Care workspace
+      tags: [Handoff]
+      description: >-
+        Customer Care workspace credential only. Reuses current property grant, effective tenant/Building/Space occupancy and active hierarchy before pagination. Requires propertyId, tenantCompanyId and buildingId; optional spaceId narrows only. DRAFT and expired/superseded quotations are excluded. Availability is not resident delivery. No resident messaging or approval links are sent.
+      security: [{ careWorkspaceSession: [] }]
+      parameters:
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: afterVersionId
+          in: query
+          description: Exclusive UUID keyset boundary, not an authorization credential; rows are reauthorized before pagination.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        '200':
+          description: Authenticated scoped result or recorded assistance fact. Does not substitute Care authority for PIC authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareQuotationInbox' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /handyman/care/requests/{requestId}/quotations/{versionId}:
+    get:
+      operationId: getCareQuotation
+      summary: Read an issued commercial snapshot and Care assistance history
+      tags: [Handoff]
+      description: >-
+        Same live Care scope as the inbox. DRAFT is never exposed. Issued and historical non-DRAFT versions remain scoped reads with presentation/handoff history; mutation of stale versions is refused. Internal reference pricing, PIC contact data and credentials are not returned.
+      security: [{ careWorkspaceSession: [] }]
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: versionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Authenticated scoped result or recorded assistance fact. Does not substitute Care authority for PIC authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareQuotationDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /handyman/care/requests/{requestId}/quotations/{versionId}/presentations:
+    post:
+      operationId: presentCareQuotation
+      summary: Record Care presentation of an exact quotation version
+      tags: [Handoff]
+      description: >-
+        Care records that it presented the quotation to the resident over the selected channel. Actor, Care session and timestamp are server-derived. Current unexpired ISSUED version required. Idempotency-Key is a UUID; any reuse by the same Care actor is 409, including identical replay. Facts and audit are atomic and append-only. This records staff presentation, not proof of resident receipt or PIC approval.
+      security: [{ careWorkspaceSession: [] }]
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: versionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanCareQuotationPresentationInput' }
+      responses:
+        '201':
+          description: Authenticated scoped result or recorded assistance fact. Does not substitute Care authority for PIC authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareQuotationPresentation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /handyman/care/requests/{requestId}/quotations/{versionId}/pic-handoffs:
+    post:
+      operationId: createCareQuotationHandoff
+      summary: Prepare a version-bound reference for independent BM PIC authentication
+      tags: [Handoff]
+      description: >-
+        Requires a recorded presentation of this version and an effective explicit quotation approval binding. One handoff per presentation; duplicate is 409. Handoff expires at the earlier of quotation validity or ten minutes. Response contains relative API paths and an identifier, never a PIC credential, signature, resident delivery address or automatically dispatched link. BM authenticates the actual Tenant PIC through the unchanged signed PIC admission contract. Care staff alone cannot authenticate as PIC.
+      security: [{ careWorkspaceSession: [] }]
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: versionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanCareQuotationHandoffInput' }
+      responses:
+        '201':
+          description: Authenticated scoped result or recorded assistance fact. Does not substitute Care authority for PIC authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareQuotationHandoff' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /handyman/pic/quotation-handoffs/{handoffId}/claim:
+    post:
+      operationId: claimCareQuotationHandoff
+      summary: Claim the Care handoff with an independently signed-in Tenant PIC
+      tags: [Handoff]
+      description: >-
+        Requires a valid signed PIC workspace session with canDecide=true, the exact bound Tenant PIC, credential-derived tenant/Building/Space, current issued version, live explicit binding and unexpired handoff. Hand-off ID is only a reference, not bearer authority. Claim is single-use and session-bound; duplicate/replay is 409. Query context, actor/context body fields and staff/Care credentials are rejected. No decision or Execution Scope is created by authentication.
+      security: [{ picWorkspaceSession: [] }]
+      parameters:
+        - name: handoffId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanCareEmptyBody' }
+      responses:
+        '201':
+          description: Authenticated scoped result or recorded assistance fact. Does not substitute Care authority for PIC authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareQuotationPicClaim' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /handyman/pic/quotation-handoffs/{handoffId}/decision:
+    post:
+      operationId: decideCareAssistedQuotation
+      summary: Record the actual Tenant PIC decision through the existing decision engine
+      tags: [Handoff]
+      description: >-
+        The claimed handoff server-resolves the quotation version and pins the same independently authenticated PIC session and explicit binding. Delegates to the existing PIC decision engine, preserving maker/checker separation, live authorization, quotation validity, audit and atomic Execution Scope creation. Before a first decision, expired/stale/revoked handoffs are 409 HANDYMAN_CARE_QUOTATION_CONFLICT. Existing same-key/same-decision PIC retry returns the original result; changed-body or different-session retry is refused. No staff impersonation, rebinding or new approval authority.
+      security: [{ picWorkspaceSession: [] }]
+      parameters:
+        - name: handoffId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PicPortalDecisionBody' }
+      responses:
+        '201':
+          description: Authenticated scoped result or recorded assistance fact. Does not substitute Care authority for PIC authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PicPortalDecisionWrite' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /handyman/care/requests:
     get:
       operationId: listCareWorkspaceRequests
@@ -81479,6 +81778,139 @@ components:
         serviceVariantId: { $ref: "#/components/schemas/Uuid" }
         description: { type: string, minLength: 1, maxLength: 1000 }
 
+    HandymanResidentCommunicationChannel:
+      type: string
+      enum: [WALK_IN, WHATSAPP, EMAIL, PHONE, OTHER]
+      description: Resident-to-BM intake or Care-recorded presentation channel; never Handyman transport, PIC identity or permission.
+    HandymanCareEmptyBody:
+      type: object
+      additionalProperties: false
+    HandymanCareQuotationPresentationInput:
+      type: object
+      additionalProperties: false
+      required: [channel]
+      properties:
+        channel: { $ref: '#/components/schemas/HandymanResidentCommunicationChannel' }
+    HandymanCareQuotationHandoffInput:
+      type: object
+      additionalProperties: false
+      required: [presentationId]
+      properties:
+        presentationId: { type: string, format: uuid }
+    HandymanCareQuotationPresentation:
+      type: object
+      required: [id, quotationVersionId, status, channel, careActorId, presentedAt]
+      properties:
+        id: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        status: { type: string, enum: [PRESENTED] }
+        channel: { $ref: '#/components/schemas/HandymanResidentCommunicationChannel' }
+        careActorId: { type: string, format: uuid }
+        presentedAt: { type: string, format: date-time }
+    HandymanCareQuotationHandoff:
+      type: object
+      required: [id, quotationVersionId, approvalBindingId, status, channel, careActorId, createdAt, expiresAt, authenticationRequired, picAdmissionPath, picClaimPath, communicationAuthority, directResidentMessaging]
+      properties:
+        id: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        approvalBindingId: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING_PIC_AUTHENTICATION] }
+        channel: { $ref: '#/components/schemas/HandymanResidentCommunicationChannel' }
+        careActorId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        authenticationRequired: { type: string, enum: [SIGNED_TENANT_PIC_SESSION] }
+        picAdmissionPath: { type: string, example: /api/v1/handyman/pic/session }
+        picClaimPath: { type: string }
+        communicationAuthority: { type: string, enum: [BM_CUSTOMER_CARE] }
+        directResidentMessaging: { type: boolean, enum: [false] }
+    HandymanCareQuotationPicClaim:
+      type: object
+      required: [handoffId, quotationVersionId, status, authenticatedAt, decisionPath]
+      properties:
+        handoffId: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        status: { type: string, enum: [PIC_AUTHENTICATED] }
+        authenticatedAt: { type: string, format: date-time }
+        decisionPath: { type: string }
+    HandymanCareQuotationInbox:
+      type: object
+      required: [items, nextAfterVersionId, communicationAuthority, directResidentMessaging]
+      properties:
+        communicationAuthority: { type: string, enum: [BM_CUSTOMER_CARE] }
+        directResidentMessaging: { type: boolean, enum: [false] }
+        nextAfterVersionId: { type: string, format: uuid, nullable: true }
+        items:
+          type: array
+          items:
+            type: object
+            required: [quotationVersionId, handymanRequestId, versionNumber, validUntil, deliveredAt, deliveredByUserId, deliveryChannel, residentIntakeChannel, presentationStatus]
+            properties:
+              quotationVersionId: { type: string, format: uuid }
+              handymanRequestId: { type: string, format: uuid }
+              versionNumber: { type: integer }
+              validUntil: { type: string, format: date-time }
+              deliveredAt: { type: string, format: date-time, nullable: true, description: Null for historical issued versions lacking a new delivery fact. }
+              deliveredByUserId: { type: string, format: uuid, nullable: true }
+              deliveryChannel: { type: string, enum: [BM_CARE_WORKSPACE] }
+              residentIntakeChannel: { type: string, nullable: true, enum: [WALK_IN, WHATSAPP, EMAIL, PHONE, OTHER] }
+              presentationStatus: { type: string, enum: [AVAILABLE_TO_CARE, PRESENTED] }
+    HandymanCareQuotationDetail:
+      type: object
+      required: [handymanRequestId, quotationVersionId, versionNumber, status, validUntil, lines, totals, presentations, handoffs, communicationAuthority, directResidentMessaging]
+      properties:
+        handymanRequestId: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        versionNumber: { type: integer }
+        status: { type: string, enum: [ISSUED, APPROVED, REJECTED, EXPIRED, SUPERSEDED] }
+        validUntil: { type: string, format: date-time, nullable: true }
+        communicationAuthority: { type: string, enum: [BM_CUSTOMER_CARE] }
+        directResidentMessaging: { type: boolean, enum: [false] }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              lineType: { type: string, enum: [LABOR, MATERIAL] }
+              description: { type: string }
+              quantity: { type: number }
+              uomId: { type: string, format: uuid }
+              finalQuotedUnitAmount: { type: number }
+              lineTotal: { type: number }
+              currency: { type: string }
+        totals:
+          type: object
+          properties:
+            laborSubtotal: { type: number }
+            materialSubtotal: { type: number }
+            total: { type: number }
+            currency: { type: string, nullable: true }
+        presentations:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              channel: { $ref: '#/components/schemas/HandymanResidentCommunicationChannel' }
+              careActorId: { type: string, format: uuid }
+              presentedAt: { type: string, format: date-time }
+        handoffs:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              presentationId: { type: string, format: uuid }
+              approvalBindingId: { type: string, format: uuid }
+              careActorId: { type: string, format: uuid }
+              channel: { $ref: '#/components/schemas/HandymanResidentCommunicationChannel' }
+              createdAt: { type: string, format: date-time }
+              expiresAt: { type: string, format: date-time }
+              picAuthenticatedAt: { type: string, format: date-time, nullable: true }
+              decision: { type: string, nullable: true, enum: [APPROVE, REJECT] }
+              status: { type: string, enum: [PENDING_PIC_AUTHENTICATION, PIC_AUTHENTICATED, APPROVE, REJECT, STALE] }
+
     CreateCareHandymanServiceRequest:
       type: object
       additionalProperties: false
@@ -81488,7 +81920,10 @@ components:
         Optional reporter and contactPerson are recorded as an append-only
         snapshot with the request (W02 PART 03). They are data only and never
         grant permission, PIC link, or approval authority. Omitting reporter
-        keeps the previous behaviour (no snapshot is stored).
+        keeps the previous behaviour (no snapshot is stored). Optional residentIntakeChannel
+        records how the resident contacted BM Customer Care; it does not replace the
+        BM_SUPER_APP origin attribution or confer approval authority. Existing clients
+        may omit it; no channel is fabricated for omitted or historical input.
       required: [exchangeToken, serviceCatalogId]
       properties:
         exchangeToken:
@@ -81499,6 +81934,8 @@ components:
         serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
         serviceVariantId: { $ref: "#/components/schemas/Uuid" }
         description: { type: string, minLength: 1, maxLength: 1000 }
+        residentIntakeChannel:
+          $ref: '#/components/schemas/HandymanResidentCommunicationChannel'
         reporter:
           $ref: "#/components/schemas/HandymanRequestContactInput"
         contactPerson:

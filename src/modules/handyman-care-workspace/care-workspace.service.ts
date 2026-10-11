@@ -130,36 +130,36 @@ export async function admitCareWorkspace(body: unknown, signature: string | unde
 
 async function authenticateCareInTransaction(tx: PoolClient, token: string, revoke: boolean): Promise<CareWorkspacePrincipal> {
   if (typeof token !== 'string' || !/^hcw_[A-Za-z0-9_-]{43}$/.test(token)) throw workspaceUnauthorized();
-    // Lock authority first (not the session), matching invalidation triggers'
-    // authority -> session order. The later session lock sees committed revoke.
-    const authority = await tx.query(
-      `SELECT a.id FROM handyman_care_workspace_sessions s
-       JOIN handyman_handoff_integrations i ON i.id = s.integration_id
-       JOIN handyman_handoff_care_actors a ON a.id = s.care_actor_id AND a.integration_id = i.id
-       WHERE s.token_hash = $1 AND a.status = 'ACTIVE'
-         AND i.status = 'ACTIVE' AND i.actor_capability = 'CUSTOMER_CARE'
-       FOR SHARE OF i, a`, [hashToken(token)],
-    );
-    if (authority.rowCount !== 1) throw workspaceUnauthorized();
-    const result = await tx.query<{
-      id: string; careActorId: string; integrationId: string; expiresAt: Date; revokedAt: Date | null;
-    }>(
-      `SELECT id, care_actor_id AS "careActorId", integration_id AS "integrationId",
-        expires_at AS "expiresAt", revoked_at AS "revokedAt"
-       FROM handyman_care_workspace_sessions
-       WHERE token_hash = $1 AND expires_at > clock_timestamp() FOR UPDATE`, [hashToken(token)],
-    );
-    const session = result.rows[0];
-    if (!session || (!revoke && session.revokedAt)) throw workspaceUnauthorized();
-    // A row-lock wait must not authorize a token that expired while waiting.
-    const clock = await tx.query<{ now: Date }>('SELECT clock_timestamp() AS now');
-    if (session.expiresAt.getTime() <= clock.rows[0].now.getTime()) throw workspaceUnauthorized();
-    if (revoke && !session.revokedAt) {
-      await tx.query('UPDATE handyman_care_workspace_sessions SET revoked_at = clock_timestamp() WHERE id = $1', [session.id]);
-    }
-    return Object.freeze({ actorType: 'CUSTOMER_CARE' as const, sessionId: session.id,
-      careActorId: session.careActorId, integrationId: session.integrationId,
-      expiresAt: session.expiresAt.toISOString() });
+  // Lock authority first (not the session), matching invalidation triggers'
+  // authority -> session order. The later session lock sees committed revoke.
+  const authority = await tx.query(
+    `SELECT a.id FROM handyman_care_workspace_sessions s
+     JOIN handyman_handoff_integrations i ON i.id = s.integration_id
+     JOIN handyman_handoff_care_actors a ON a.id = s.care_actor_id AND a.integration_id = i.id
+     WHERE s.token_hash = $1 AND a.status = 'ACTIVE'
+       AND i.status = 'ACTIVE' AND i.actor_capability = 'CUSTOMER_CARE'
+     FOR SHARE OF i, a`, [hashToken(token)],
+  );
+  if (authority.rowCount !== 1) throw workspaceUnauthorized();
+  const result = await tx.query<{
+    id: string; careActorId: string; integrationId: string; expiresAt: Date; revokedAt: Date | null;
+  }>(
+    `SELECT id, care_actor_id AS "careActorId", integration_id AS "integrationId",
+      expires_at AS "expiresAt", revoked_at AS "revokedAt"
+     FROM handyman_care_workspace_sessions
+     WHERE token_hash = $1 AND expires_at > clock_timestamp() FOR UPDATE`, [hashToken(token)],
+  );
+  const session = result.rows[0];
+  if (!session || (!revoke && session.revokedAt)) throw workspaceUnauthorized();
+  // A row-lock wait must not authorize a token that expired while waiting.
+  const clock = await tx.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+  if (session.expiresAt.getTime() <= clock.rows[0].now.getTime()) throw workspaceUnauthorized();
+  if (revoke && !session.revokedAt) {
+    await tx.query('UPDATE handyman_care_workspace_sessions SET revoked_at = clock_timestamp() WHERE id = $1', [session.id]);
+  }
+  return Object.freeze({ actorType: 'CUSTOMER_CARE' as const, sessionId: session.id,
+    careActorId: session.careActorId, integrationId: session.integrationId,
+    expiresAt: session.expiresAt.toISOString() });
 }
 
 async function useSession(token: string, revoke: boolean): Promise<CareWorkspacePrincipal> {
