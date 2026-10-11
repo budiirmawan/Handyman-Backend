@@ -125,6 +125,37 @@ This addendum records implementation after the read-only baseline review above; 
 - No field assignment, Operations report acceptance, quotation issue gate, evidence expansion, new RBAC, or change to PIC approval, Execution Scope, S1, B12, migration 0441, or integration ownership was made.
 - Validation on this follow-up: production `npm run typecheck` passed. Focused tests passed: `handyman-request-triage.test.ts` (10), `handyman-lifecycle-api.test.ts` (10), `handyman-quotation.test.ts` (11), and `handyman-intake-triage-journey.test.ts` (27). The test databases were temporary embedded PostgreSQL instances; the full suite was not run.
 
+## Implementation follow-up — Part 02 STOP: pre-quotation Field report lifecycle (2026-10-11; baseline `66a0421`)
+
+**Baseline:** branch `arena/b4a8612c-handyman-backend`; local and remote HEAD both `66a0421a1cdf76ce5ccea457f4f1708f66aa1900`; worktree clean.
+
+**Outcome: no Part 02 runtime, migration, or new lifecycle tests were added.** The owner rule requires a new pre-quotation assignment/report/review lifecycle, but current authoritative persistence and assignment contracts cannot represent it. The requested stop rule is therefore triggered; implementation is paused for the owner decisions below. This is a boundary finding, not a test failure.
+
+### Existing authorities verified
+
+- **Inspection capture:** Migration `0381_create_handyman_request_inspections.ts` stores one immutable row per request (`UNIQUE(handyman_request_id)`): `inspection_result`, bounded `inspection_notes`, `inspected_by_user_id`, `inspected_at`, and the request-derived client/building/channel snapshot. Its trigger prohibits update/delete. `recordHandymanInspection()` accepts only `INSPECTION_REQUIRED`, checks the actor's request-building access, inserts the record, and immediately projects the request to `DIAGNOSIS`; it does not verify a request-specific Field assignment. The HTTP write uses `tenant_company.manage`. F3 still prohibits adding evidence here.
+- **Diagnosis/scope:** Migration `0382_create_handyman_diagnosis_scope_authority.ts` stores one immutable diagnosis per request: diagnosis text, F9 discipline/classification, optional recommended `service_catalog` item, diagnosing user and timestamp. It has no assignment, inspection-report version or review reference. The service accepts only request status `DIAGNOSIS`; the inspection service has already projected to that status before any review step exists.
+- **Assignment:** CR-HM-04 PART 04 explicitly deferred target binding until an authoritative operational target existed. The implemented CR-HM-04 assignment targets only a `HANDYMAN_EXECUTION_SCOPE` in `AUTHORIZED` status and binds a provider crew; that scope is created after PIC approval. It is not a pre-quotation request assignment, and does not implement the new owner rule that Operations assigns a Field Worker/Surveyor. Building assignment is resource-access scope, not work-item assignment.
+- **Commercial amounts:** Existing quotation lines are immutable operator-authored commercial facts. CR-HM-12 labor basis consumes approved LABOR lines and governed time/crew inputs; material basis consumes approved MATERIAL snapshots and CR-HM-09 quantities. Neither is a pre-quotation Field estimate authority. No estimate was written into quotation lines or pricing-basis records.
+- **Review authority and audit:** `handyman.operations.request.triage` authorizes triage, not inspection-report acceptance/return. The current inspection event (`HANDYMAN_INSPECTION_RECORDED`) links the inspection id/result and actor but is F6 audit history, not a review-state source. Reusing triage or generic `tenant_company.manage` for acceptance would extend authority without an explicit contract.
+
+### Exact persistence and authority gap
+
+1. **No pre-quotation assignment record:** there is no request-targeted row binding the inspection-required request to an assigned Field identity (local user/worker context versus provider crew/Lead is itself undecided), with assigner, timestamp, active/reassignment history, and an enforceable link checked by submission. The only implemented crew assignment is post-PIC-approval Execution Scope assignment.
+2. **No versioned report/review lifecycle:** the one-per-request 0381 inspection row is immutable and cannot be returned then corrected/resubmitted. It has no assignment id, report version, structured technical findings/estimates, reviewer, review timestamp, accept/return disposition or return reason. The frozen F1 request status set has no report-submitted/accepted/returned states. Operational events cannot substitute for this business state.
+3. **No supported pre-quotation estimate model:** the diagnosis record can hold a diagnosis and optional recommended service, but not Field-authored report revisions or itemized labor/material estimates. CR-HM-12 and quotation-line models are downstream commercial/pricing authorities, not a valid place to store unapproved inspection estimates.
+4. **No actor contract for the two new actions:** inspection currently permits a building-scoped `tenant_company.manage` actor, not only the assigned Field Worker. No existing permission is defined for Operations report acceptance/return. The triage permission cannot be presumed to grant that new decision.
+
+### Minimum owner decisions before implementation
+
+- Amend/confirm the assignment boundary: is Operations the assigner of an individual local user/worker context, or does Operations select a provider crew whose current Lead is the Field submitter? Approve the pre-quotation Handyman request as an assignment target without creating an Execution Scope before Tenant/PIC approval.
+- Define the actor authority for report submission and for Operations acceptance/return, including whether any existing permission is explicitly extended. Do not infer this from building access, `tenant_company.manage`, or triage permission.
+- Approve additive, append-only persistence that preserves all 0381/0382 history: a request-scoped assignment fact; versioned report submissions tied to that assignment; and an immutable review decision per submission with `ACCEPTED`/`RETURNED`, reviewer, timestamp and correction reason. Decide how the current report state is projected/derived without expanding frozen F1 request statuses.
+- Define how report submission carries technical findings, the diagnosis/recommended F9 scope, and indicative labor/material estimates (including units/currencies and whether values are informational or priced). Decide whether the canonical diagnosis row is created only after acceptance or is itself part of the Field report; it cannot be overwritten on return.
+- Make the accepted-report prerequisite explicit at quotation **draft preparation** for inspection-required requests. No quotation issue gate is proposed or implemented in this PART; PIC approval and the post-approval Execution Scope gate remain unchanged.
+
+Until those decisions authorize a lifecycle model, the requested new tests (assigned Field submit, same-building unassigned Field denial, wrong-building denial, report submission, Operations accept, and return/correction) have no valid persistence/authority contract to assert. Existing authority-only tests were run instead: inspection record `10/10` and Execution Scope assignment API `10/10`. Production `npm run typecheck` passed. No full suite was run.
+
 ## Guardrails and disposition
 
 - CR-HM-03 F1/F3 and the frozen roadmap remain authoritative. Evidence and reinspection are not silently added to CR-HM-03; evidence stays with CR-HM-10.
@@ -135,7 +166,7 @@ This addendum records implementation after the read-only baseline review above; 
 ## Recommended order if follow-up is authorized
 
 1. Confirm the existing direct-to-diagnosis policy: what “scope sufficiently clear” means and whether the immutable Operations triage note is the approved exception reason.
-2. Confirm whether pre-quotation field-worker assignment and a separate Operations acceptance are actually required. If yes, resolve the conflict with the frozen CR-HM-03/CR-HM-04 boundary before implementation.
+2. The Part 02 owner rule now requires pre-quotation Field assignment and Operations report acceptance/return. Resolve its conflict with the frozen CR-HM-03/CR-HM-04 boundary by approving the assignment target/author, actor permissions, report version/review persistence, and quote-draft prerequisite before implementation.
 3. Confirm whether `SPECIALIST_REQUIRED` is an allowed quotation scope; then align the existing token/check and add a focused regression.
 4. Build an API-level two-path E2E using only the approved test fixture setup and real protected routes; retain the staff 403 and verify no Execution Scope exists before PIC approval.
 5. Only after explicit approval, address inspection provenance/reinspection within the authority that owns it. Do not modify immutable history or enable B12 as part of this work.
