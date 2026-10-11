@@ -4836,6 +4836,171 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /handyman/requests/{handymanRequestId}/prequotation-cancellation:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: cancelHandymanPrequotation
+      summary: Irreversibly cancel a request before quotation
+      description: >-
+        Requires handyman.operations.request.triage and exact Building scope, enforced in service and HTTP. Any quotation, Execution Scope or REFERRED disposition prevents cancellation. Persists Operations actor, normalized reason and server time, projects CANCELLED_PRE_QUOTATION and journals atomically. No reopening, PIC decision or Execution Scope. Concurrent/terminal ineligibility returns 409 HANDYMAN_PREQUOTATION_CONFLICT.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanPrequotationCancellationInput" }
+      responses:
+        "201":
+          description: Scoped Operations history or newly recorded immutable fact.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanPrequotationCancellation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/requests/{handymanRequestId}/cancelled-predecessor:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: linkHandymanCancelledPredecessor
+      summary: Reference a cancelled predecessor from a new intake
+      description: >-
+        Requires handyman.operations.request.triage and exact Building scope. Current request must be INTAKE and predecessor must be CANCELLED_PRE_QUOTATION in the same Client and Building. The immutable reference never copies triage, inspections, approval or scope. Duplicate/ineligible linkage returns 409.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanCancelledPredecessorInput" }
+      responses:
+        "201":
+          description: Scoped Operations history or newly recorded immutable fact.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanCancelledPredecessorLink" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/requests/{handymanRequestId}/prequotation-history:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanPrequotationHistory
+      summary: Read cancellation and cancelled predecessor history
+      description: >-
+        Uses existing inspection/request read permissions plus exact Building scope. Read remains available after cancellation. No status transition.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Scoped Operations history or newly recorded immutable fact.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanPrequotationHistory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/requests/{handymanRequestId}/inspection-revisits:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: planHandymanInspectionRevisit
+      summary: Plan a separately traceable physical inspection revisit
+      description: >-
+        Requires BOTH handyman.operations.inspection.assign and handyman.operations.inspection.report.review, active local actor and exact Building scope. Latest physical result must be NOT_INSPECTABLE with its latest report ACCEPTED, before diagnosis/quotation. RETURNED uses existing correction flow. Caller pins preceding inspection/report and active same-request scheduling readiness IDs. Every revisit creates a NEW assignment even for the same Field user. The target must be active, Field-authorized and assigned to the exact Building. Preferred-window readiness only; never a confirmed booking, PIC decision or Execution Scope. Duplicate/stale/ineligible planning returns 409 HANDYMAN_PREQUOTATION_CONFLICT.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanInspectionRevisitInput" }
+      responses:
+        "201":
+          description: Scoped Operations history or newly recorded immutable fact.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspectionRevisit" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/requests/{handymanRequestId}/inspection-attempts:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanInspectionAttempts
+      summary: Read all physical attempts and preferred-window revisit history
+      description: >-
+        Uses existing inspection/request read permissions and exact Building scope. Returns immutable physical records and planned revisit records in attempt order, including the pinned preferred-window snapshot. Reports/reviews remain readable through existing report endpoints.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Scoped Operations history or newly recorded immutable fact.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspectionAttemptHistory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /handyman/requests/{handymanRequestId}/inspection-reports:
     parameters:
       - name: handymanRequestId
@@ -4847,10 +5012,9 @@ paths:
       summary: Submit the next immutable Field inspection report version
       description: >
         CR-HM-INSPECTION-01 PART B — the request's ACTIVE assigned Field
-        inspector submits a report version for the request's ONE recorded
-        physical inspection (0381). Requires the dedicated
+        inspector submits a report version for the latest recorded physical attempt. Requires the dedicated
         `handyman.field.inspection.report.submit` authority AND the active
-        assignment; version 1 must come from the recorded inspector. Version
+        assignment; the first report of each physical attempt must come from its recorded inspector. Version
         numbers are per-request and monotonic: a correction is a NEW version
         that links back to its returned predecessor. Lines carry LABOR|
         MATERIAL technical quantities against an existing unit of measure —
@@ -4962,9 +5126,10 @@ paths:
         Building scope derived from the request. Only the LATEST version may
         be decided, the reviewer must differ from that version's submitter
         (enforced in the database as well as the service), `RETURNED` requires
-        a bounded reason, and at most one version per request may be ACCEPTED.
-        Acceptance is terminal for the report chain; it does not approve a
-        quotation and changes no request status.
+        a bounded reason, and at most one version per PHYSICAL ATTEMPT may be ACCEPTED.
+        Acceptance ends corrections for that physical attempt; Operations may plan a
+        distinct revisit after an accepted NOT_INSPECTABLE report. Acceptance of
+        failure does not authorize diagnosis or quotation. No PIC decision or scope is created.
       tags: [Handyman Inspection]
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -5093,9 +5258,11 @@ paths:
         must be the request's ACTIVE assigned Field inspector (409
         HANDYMAN_INSPECTION_ASSIGNMENT_REQUIRED / 403
         HANDYMAN_INSPECTION_FIELD_DENIED). A generic `tenant_company.manage`
-        grant can no longer create an in-scope 0381 row. FROZEN F3: no
-        inspection evidence exists (evidence defers to CR-HM-10; PHOTO/VIDEO
-        intake semantics are untouched).
+        grant can no longer create an in-scope 0381 row. NOT_INSPECTABLE requires
+        unsuccessfulReason; notes explain the failure. Optional evidenceSubmissionId
+        references existing same-request intake evidence only, never post-PIC QC.
+        A later physical record requires an Operations-planned revisit and its new assignment.
+        GET returns the latest physical attempt; inspection-attempts preserves full history.
       tags: [Handyman Lifecycle]
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -5160,7 +5327,9 @@ paths:
         request is in DIAGNOSIS (reachable through either the direct
         triage path or the inspection path). CR-HM-INSPECTION-01 PART C:
         persisted INSPECTION_REQUIRED triage additionally requires the latest
-        accepted Field report. Its id is server-resolved and persisted as
+        accepted Field report for the latest INSPECTED physical attempt. An accepted
+        NOT_INSPECTABLE result returns 409 HANDYMAN_INSPECTION_NOT_QUOTABLE.
+        Its id is server-resolved and persisted as
         sourceInspectionReportId; caller-supplied provenance is ignored.
         Pending, returned or absent acceptance returns 409
         HANDYMAN_INSPECTION_ACCEPTED_REPORT_REQUIRED. The separate authenticated
@@ -81374,13 +81543,114 @@ components:
             phone: { type: string, nullable: true }
             email: { type: string, nullable: true }
 
+    HandymanPrequotationCancellationInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 10, maxLength: 500, description: Whitespace is normalized before validation and persistence. }
+    HandymanPrequotationCancellation:
+      type: object
+      required: [handymanRequestId, status, reason, cancelledByUserId, cancelledAt]
+      properties:
+        handymanRequestId: { type: string, format: uuid }
+        status: { type: string, enum: [CANCELLED_PRE_QUOTATION] }
+        reason: { type: string }
+        cancelledByUserId: { type: string, format: uuid }
+        cancelledAt: { type: string, format: date-time }
+    HandymanCancelledPredecessorInput:
+      type: object
+      required: [cancelledRequestId]
+      properties:
+        cancelledRequestId: { type: string, format: uuid }
+    HandymanCancelledPredecessorLink:
+      type: object
+      required: [handymanRequestId, cancelledRequestId]
+      properties:
+        handymanRequestId: { type: string, format: uuid }
+        cancelledRequestId: { type: string, format: uuid }
+    HandymanPrequotationHistory:
+      type: object
+      required: [cancellation, predecessor]
+      properties:
+        cancellation:
+          type: object
+          nullable: true
+          properties:
+            handyman_request_id: { type: string, format: uuid }
+            reason: { type: string }
+            cancelled_by_user_id: { type: string, format: uuid }
+            cancelled_at: { type: string, format: date-time }
+        predecessor:
+          type: object
+          nullable: true
+          properties:
+            handyman_request_id: { type: string, format: uuid }
+            cancelled_request_id: { type: string, format: uuid }
+            linked_by_user_id: { type: string, format: uuid }
+            linked_at: { type: string, format: date-time }
+    HandymanInspectionRevisitInput:
+      type: object
+      required: [precedingInspectionId, precedingReportId, assignedFieldUserId, schedulingReadinessId, reason]
+      properties:
+        precedingInspectionId: { type: string, format: uuid }
+        precedingReportId: { type: string, format: uuid }
+        assignedFieldUserId: { type: string, format: uuid }
+        schedulingReadinessId: { type: string, format: uuid }
+        reason: { type: string, minLength: 10, maxLength: 500 }
+    HandymanInspectionRevisit:
+      type: object
+      required: [id, handymanRequestId, attemptNumber, precedingInspectionId, precedingReportId, inspectionAssignmentId, schedulingReadinessId, reason, plannedByUserId, plannedAt, schedulingAuthority]
+      properties:
+        id: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        attemptNumber: { type: integer, minimum: 2 }
+        precedingInspectionId: { type: string, format: uuid }
+        precedingReportId: { type: string, format: uuid }
+        inspectionAssignmentId: { type: string, format: uuid }
+        schedulingReadinessId: { type: string, format: uuid }
+        reason: { type: string }
+        plannedByUserId: { type: string, format: uuid }
+        plannedAt: { type: string, format: date-time }
+        schedulingAuthority: { type: string, enum: [PREFERRED_WINDOW_ONLY] }
+    HandymanInspectionAttemptHistory:
+      type: object
+      required: [schedulingAuthority, revisits, inspections]
+      properties:
+        schedulingAuthority: { type: string, enum: [PREFERRED_WINDOW_ONLY] }
+        revisits:
+          type: array
+          description: Persisted snake_case revisit records ordered by attempt_number, joined to preferred_window_start, preferred_window_end and timezone of the pinned readiness version.
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              handyman_request_id: { type: string, format: uuid }
+              attempt_number: { type: integer }
+              preceding_inspection_id: { type: string, format: uuid }
+              preceding_report_id: { type: string, format: uuid }
+              inspection_assignment_id: { type: string, format: uuid }
+              scheduling_readiness_id: { type: string, format: uuid }
+              reason: { type: string }
+              planned_by_user_id: { type: string, format: uuid }
+              planned_at: { type: string, format: date-time }
+              preferred_window_start: { type: string, format: date-time }
+              preferred_window_end: { type: string, format: date-time }
+              timezone: { type: string }
+        inspections:
+          type: array
+          description: Original immutable physical records in snake_case, ordered by attempt_number. GET inspection returns the latest record in the existing camelCase representation.
+          items:
+            type: object
+            additionalProperties: true
+
     HandymanServiceRequestStatus:
       type: string
       enum:
         [INTAKE, TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS,
-         READY_FOR_NEXT_STEP, REFERRED]
+         READY_FOR_NEXT_STEP, REFERRED, CANCELLED_PRE_QUOTATION]
       description: >-
-        CR-HM-03 FROZEN F1 vocabulary. REFERRED is terminal; no
+        REFERRED and owner-authorized CANCELLED_PRE_QUOTATION are terminal.
+        Cancellation is Operations-only, pre-quotation and irreversible; no
         execution/quotation/provider/work-order vocabulary exists.
     HandymanTriageDisposition:
       type: string
@@ -81436,11 +81706,21 @@ components:
       type: object
       required: [result, notes]
       description: >-
-        Caller-owned inputs only (F3: no inspection evidence in CR-HM-03 —
-        evidence defers to CR-HM-10).
+        Caller-owned inputs only. NOT_INSPECTABLE requires unsuccessfulReason and
+        explanatory notes. Optional evidenceSubmissionId must reference existing
+        same-request intake evidence. Attempt and assignment IDs are server-derived.
       properties:
         result: { $ref: "#/components/schemas/HandymanInspectionResult" }
         notes: { type: string, minLength: 1, maxLength: 1000 }
+        unsuccessfulReason:
+          type: string
+          enum: [ACCESS_DENIED, CUSTOMER_UNAVAILABLE, UNSAFE_SITE, SITE_NOT_READY, OTHER]
+          description: Required for NOT_INSPECTABLE; must be omitted or null for INSPECTED.
+          nullable: true
+        evidenceSubmissionId:
+          type: string
+          format: uuid
+          nullable: true
     RecordHandymanDiagnosisRequest:
       type: object
       required: [disciplineId, diagnosis]
@@ -84310,7 +84590,7 @@ components:
     HandymanInspectionRecord:
       type: object
       description: >-
-        CR-HM-03 PART 02 (F2 immutable; F3 evidence-free).
+        Immutable physical attempt with server-derived assignment and optional intake-evidence provenance. Legacy attempt-one rows retain null provenance rather than invented history.
       required:
         [id, clientId, handymanRequestId, channelAttributionId, buildingId,
          inspectionResult, inspectionNotes, inspectedByUserId, inspectedAt]
@@ -84325,6 +84605,11 @@ components:
         inspectionNotes: { type: string }
         inspectedByUserId: { $ref: "#/components/schemas/Uuid" }
         inspectedAt: { type: string, format: date-time }
+        attemptNumber: { type: integer, minimum: 1 }
+        revisitAttemptId: { type: string, format: uuid, nullable: true }
+        inspectionAssignmentId: { type: string, format: uuid, nullable: true }
+        unsuccessfulReason: { type: string, nullable: true, enum: [ACCESS_DENIED, CUSTOMER_UNAVAILABLE, UNSAFE_SITE, SITE_NOT_READY, OTHER] }
+        evidenceSubmissionId: { type: string, format: uuid, nullable: true }
     AssignHandymanInspectionFieldRequest:
       type: object
       description: >

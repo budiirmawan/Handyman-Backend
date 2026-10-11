@@ -25,7 +25,7 @@ import {
  * (FROZEN F1/F2/F3/F6/F7).
  *
  * Bounded transition: INSPECTION_REQUIRED → DIAGNOSIS. Exactly one
- * inspection record may exist per request (UNIQUE + pre-check, race-safe
+ * inspection record may exist per request/attempt (UNIQUE + pre-check, race-safe
  * 409; immutable/append-oriented trigger-enforced; no update/delete path).
  *
  * Authority (FROZEN F7): the explicit authenticated local user id is the
@@ -38,7 +38,8 @@ import {
  *
  * FROZEN F3: this service creates NO evidence row, touches no evidence
  * vocabulary and leaves CR-HM-02 PART 04 PHOTO/VIDEO intake semantics
- * untouched (inspection evidence defers to CR-HM-10).
+ * untouched. A same-request intake evidence reference does not create a new
+ * evidence submission or borrow post-PIC evidence-QC authority.
  *
  * NOT here (explicit FROZEN F1/governance): no diagnosis, no
  * classification, no specialist target/referral, no provider, no

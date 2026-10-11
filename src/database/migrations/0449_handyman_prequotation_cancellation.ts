@@ -81,17 +81,23 @@ export const migration0449HandymanPrequotationCancellation: Migration = {
           IF NEW.execution_type <> 'HANDYMAN_REQUEST' THEN RETURN NEW; END IF;
           request_id := NEW.execution_id;
         ELSIF TG_TABLE_NAME='handyman_quotation_versions' THEN
-          SELECT handyman_request_id INTO request_id FROM handyman_quotations WHERE id=NEW.quotation_id;
+          SELECT handyman_request_id INTO request_id FROM handyman_quotations WHERE id=CASE WHEN TG_OP='DELETE' THEN OLD.quotation_id ELSE NEW.quotation_id END;
         ELSIF TG_TABLE_NAME='handyman_request_inspection_report_estimates' THEN
-          SELECT handyman_request_id INTO request_id FROM handyman_request_inspection_reports WHERE id=NEW.report_id;
-        ELSE request_id := NEW.handyman_request_id;
+          SELECT handyman_request_id INTO request_id FROM handyman_request_inspection_reports WHERE id=CASE WHEN TG_OP='DELETE' THEN OLD.report_id ELSE NEW.report_id END;
+        ELSE request_id := CASE WHEN TG_OP='DELETE' THEN OLD.handyman_request_id ELSE NEW.handyman_request_id END;
         END IF;
+        IF TG_OP='UPDATE' AND (
+          (to_jsonb(NEW)->>'handyman_request_id') IS DISTINCT FROM (to_jsonb(OLD)->>'handyman_request_id') OR
+          (to_jsonb(NEW)->>'quotation_id') IS DISTINCT FROM (to_jsonb(OLD)->>'quotation_id') OR
+          (to_jsonb(NEW)->>'report_id') IS DISTINCT FROM (to_jsonb(OLD)->>'report_id')
+        ) THEN RAISE EXCEPTION 'Pre-quotation facts cannot be reparented.' USING ERRCODE='23514'; END IF;
         SELECT status INTO request_status FROM handyman_service_requests WHERE id=request_id FOR UPDATE;
         IF request_status='CANCELLED_PRE_QUOTATION' OR EXISTS (
           SELECT 1 FROM handyman_prequotation_cancellations WHERE handyman_request_id=request_id
         ) THEN
           RAISE EXCEPTION 'Handyman request is cancelled before quotation.' USING ERRCODE='23514', CONSTRAINT='handyman_prequotation_cancelled';
         END IF;
+        IF TG_OP='DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;
       END; $$ LANGUAGE plpgsql;
       CREATE TRIGGER prequotation_cancelled_evidence_guard BEFORE INSERT ON evidence_submissions
@@ -111,7 +117,7 @@ export const migration0449HandymanPrequotationCancellation: Migration = {
         FOR EACH ROW EXECUTE FUNCTION handyman_cancelled_predecessor_guard();
     `);
     for (const table of guardedTables) await client.query(`CREATE TRIGGER prequotation_cancelled_guard
-      BEFORE INSERT OR UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION handyman_cancelled_request_write_guard()`);
+      BEFORE INSERT OR UPDATE OR DELETE ON ${table} FOR EACH ROW EXECUTE FUNCTION handyman_cancelled_request_write_guard()`);
   },
   async down(client: PoolClient): Promise<void> {
     // Never erase authoritative cancellation history to make rollback possible.

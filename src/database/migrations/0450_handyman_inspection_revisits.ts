@@ -97,6 +97,17 @@ export const migration0450HandymanInspectionRevisits: Migration = {
       CREATE TRIGGER revisit_project AFTER INSERT ON handyman_inspection_revisit_attempts
         FOR EACH ROW EXECUTE FUNCTION handyman_revisit_project();
 
+      CREATE FUNCTION handyman_revisit_readiness_history_guard() RETURNS trigger AS $$ BEGIN
+        IF EXISTS(SELECT 1 FROM handyman_inspection_revisit_attempts WHERE scheduling_readiness_id=OLD.id)
+          AND ((to_jsonb(NEW)-'status'-'updated_at') IS DISTINCT FROM (to_jsonb(OLD)-'status'-'updated_at')
+            OR OLD.status<>'ACTIVE' OR NEW.status<>'INACTIVE') THEN
+          RAISE EXCEPTION 'A revisit preferred-window version may only be deactivated, never rewritten.' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+      END; $$ LANGUAGE plpgsql;
+      CREATE TRIGGER revisit_readiness_history BEFORE UPDATE ON handyman_scheduling_readiness
+        FOR EACH ROW EXECUTE FUNCTION handyman_revisit_readiness_history_guard();
+
       CREATE FUNCTION handyman_physical_attempt_guard() RETURNS trigger AS $$
       DECLARE r handyman_service_requests%ROWTYPE; a handyman_request_inspection_assignments%ROWTYPE; previous_number INTEGER;
       BEGIN

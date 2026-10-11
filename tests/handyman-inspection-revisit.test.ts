@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, it } from 'node:test';
+import { withTransaction } from '../src/database';
 import { cancelHandymanPrequotation } from '../src/modules/handyman-requests/handyman-prequotation-operations.service';
 import { planHandymanInspectionRevisit } from '../src/modules/handyman-requests/handyman-inspection-revisit.service';
 import { createFieldInspectorSession } from './helpers/access';
@@ -38,6 +39,7 @@ it('Operations-only cancellation is scoped, audited, terminal, and permits only 
   status(await f.post(next.id, 'cancelled-predecessor', { cancelledRequestId: r.id }), 409, 'immutable reference');
   assert.equal((await f.q('SELECT status FROM handyman_service_requests WHERE id=$1', [next.id])).rows[0].status, 'INTAKE');
   assert.equal((await f.q("SELECT * FROM operational_events WHERE entity_id=$1 AND event_type='HANDYMAN_PREQUOTATION_CANCELLED'", [r.id])).rowCount, 1);
+  denied(await api().get(`${HM}/${r.id}/prequotation-history`).set(auth(f.otherOps.token)),403,'BUILDING_ACCESS_DENIED','cancelled history stays scoped');
   await noCommercialAuthority(r.id); await noCommercialAuthority(next.id);
 });
 
@@ -87,6 +89,12 @@ it('NOT_INSPECTABLE requires structured reason and exact-request evidence; accep
     (id,client_id,handyman_request_id,channel_attribution_id,building_id,handyman_discipline_id,discipline_code,diagnosis,scope_classification,diagnosed_by_user_id,source_inspection_report_id)
     SELECT $1,client_id,id,channel_attribution_id,building_id,$3,'GENERAL_HANDYMAN','Raw failed diagnosis','GENERAL_HANDYMAN',$4,$5
     FROM handyman_service_requests WHERE id=$2`, [randomUUID(),id,f.disciplineId,f.ops.userId,report.body.data.id]), { constraint:'handyman_successful_inspection_required' });
+  await assert.rejects(withTransaction(async tx => {
+    const quotationId=randomUUID();
+    await tx.query('INSERT INTO handyman_quotations(id,client_id,handyman_request_id,created_by_user_id) VALUES ($1,$2,$3,$4)',[quotationId,f.clientId,id,f.ops.userId]);
+    await tx.query(`INSERT INTO handyman_quotation_versions(id,quotation_id,version_number,status,created_by_user_id)
+      VALUES ($1,$2,1,'DRAFT',$3)`,[randomUUID(),quotationId,f.ops.userId]);
+  }),{constraint:'handyman_successful_inspection_required'});
   assert.equal(await count('handyman_request_diagnoses',id),0); await noCommercialAuthority(id);
 });
 
@@ -117,6 +125,12 @@ it('revisit authority requires latest accepted failure, exact active readiness a
   assert.equal(planned.body.data.schedulingAuthority,'PREFERRED_WINDOW_ONLY');
   status(await f.submit(id),409,'correction cannot impersonate pending visit');
   await assert.rejects(f.q('DELETE FROM handyman_inspection_revisit_attempts WHERE handyman_request_id=$1',[id]),/append-only/);
+  await assert.rejects(f.q("UPDATE handyman_scheduling_readiness SET preferred_window_end=preferred_window_end+INTERVAL '1 hour' WHERE id=$1",[active]),/never rewritten/);
+  await assert.rejects(f.q(`INSERT INTO handyman_request_inspections
+    (id,client_id,handyman_request_id,channel_attribution_id,building_id,inspection_result,inspection_notes,inspected_by_user_id,attempt_number)
+    SELECT $1,client_id,id,channel_attribution_id,building_id,'INSPECTED','Forged unplanned capture',$3,2
+    FROM handyman_service_requests WHERE id=$2`,[randomUUID(),id,f.field.userId]),{constraint:'handyman_physical_attempt_invalid'});
+  assert.equal(await count('handyman_request_inspections',id),1);
   await noCommercialAuthority(id);
 });
 
@@ -180,4 +194,16 @@ it('cancellation versus first DRAFT is serialized; any existing quotation preven
   status(await f.diagnose(next.request.id),201,'diagnose'); status(await f.draft(next.request.id),201,'draft');
   status(await f.cancel(next.request.id),409,'existing quotation explicitly blocks cancellation');
   assert.equal(await count('handyman_prequotation_cancellations',next.request.id),0);
+});
+
+it('concurrent cancellations record one immutable decision and block raw readiness deletion/reparenting and quotation insertion', async () => {
+  const x=await f.failed(); const id=x.request.id;
+  const responses=await Promise.all([f.cancel(id),f.cancel(id)]);
+  assert.deepEqual(responses.map(r=>r.status).sort(),[201,409]);
+  assert.equal(await count('handyman_prequotation_cancellations',id),1);
+  await assert.rejects(f.q('DELETE FROM handyman_scheduling_readiness WHERE id=$1',[x.readiness.id]),{constraint:'handyman_prequotation_cancelled'});
+  const other=await f.createRequest();
+  await assert.rejects(f.q('UPDATE handyman_scheduling_readiness SET handyman_request_id=$2 WHERE id=$1',[x.readiness.id,other.id]),/cannot be reparented/);
+  await assert.rejects(f.q('INSERT INTO handyman_quotations(id,client_id,handyman_request_id,created_by_user_id) VALUES ($1,$2,$3,$4)',[randomUUID(),f.clientId,id,f.ops.userId]),{constraint:'handyman_prequotation_cancelled'});
+  await noCommercialAuthority(id);
 });

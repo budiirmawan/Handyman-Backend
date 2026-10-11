@@ -38,9 +38,9 @@ import {
  * authority AND the active assignment enforced by the service (one writer,
  * no `tenant_company.manage` bypass).
  *
- * Writes here are strictly additive to the frozen F8 boundary: no request
- * status changes, no Execution Scope, no provider/crew identity, no
- * quotation, price or PIC authority. Reads reuse the existing scoped
+ * Owner-authorized cancellation/revisit additions project only terminal
+ * CANCELLED_PRE_QUOTATION or INSPECTION_REQUIRED. No Execution Scope,
+ * provider/crew identity, quotation, price or PIC authority. Reads reuse the existing scoped
  * request-read admission and the service applies the exact-Building guard.
  */
 export function createHandymanInspectionApiRouter(): Router {

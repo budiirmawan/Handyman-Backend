@@ -279,7 +279,7 @@ export async function submitHandymanInspectionReport(
         actorUserId,
       );
 
-      // The version documents the request's ONE recorded physical inspection.
+      // A version documents the latest physical attempt, never another visit.
       const inspection = await handymanRequestInspectionRepository
         .findByRequest(tx, request.id);
       if (!inspection) throw handymanInspectionReportInspectionRequiredError();

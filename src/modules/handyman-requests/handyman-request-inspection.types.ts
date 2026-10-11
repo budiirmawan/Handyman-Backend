@@ -3,8 +3,9 @@
  *
  * The inspection row carries the minimum structured record of ONE
  * inspection of ONE request: outcome + notes + actor + server timestamp.
- * It carries NO diagnosis, NO classification, NO specialist target, no
- * evidence references (FROZEN F3 — evidence defers to CR-HM-10).
+ * Owner-approved revisit extension: immutable numbered physical attempts,
+ * assignment provenance, structured unsuccessful reason and an optional
+ * same-request intake evidence reference. No diagnosis or classification.
  */
 
 /**

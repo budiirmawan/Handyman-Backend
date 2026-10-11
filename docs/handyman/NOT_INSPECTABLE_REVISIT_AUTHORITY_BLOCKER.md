@@ -1,4 +1,12 @@
-# NOT_INSPECTABLE / controlled revisit — authority blocker
+# NOT_INSPECTABLE / controlled revisit — historical authority blocker (RESOLVED)
+
+> **Resolved by the owner on 2026-10-11.** The owner authorized Operations-only
+> `CANCELLED_PRE_QUOTATION`, no reopening, separate physical attempts and
+> assignments, preferred/readiness-only revisit windows, and unsuccessful-result
+> preparation denial. This document records the earlier review only; its
+> “blocked” outcome and approval questions below are **superseded**, not current
+> runtime restrictions. See [implemented contract and validation](INSPECTION_REVISITS_AND_CANCELLATION.md).
+
 
 ## Verified baseline
 
