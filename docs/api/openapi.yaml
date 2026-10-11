@@ -4830,6 +4830,160 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /handyman/requests/{handymanRequestId}/inspection-reports:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: submitHandymanInspectionReport
+      summary: Submit the next immutable Field inspection report version
+      description: >
+        CR-HM-INSPECTION-01 PART B — the request's ACTIVE assigned Field
+        inspector submits a report version for the request's ONE recorded
+        physical inspection (0381). Requires the dedicated
+        `handyman.field.inspection.report.submit` authority AND the active
+        assignment; version 1 must come from the recorded inspector. Version
+        numbers are per-request and monotonic: a correction is a NEW version
+        that links back to its returned predecessor. Lines carry LABOR|
+        MATERIAL technical quantities against an existing unit of measure —
+        never a price, amount or currency. No request status changes.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitHandymanInspectionReportRequest"
+      responses:
+        "201":
+          description: Immutable report version created (PENDING_REVIEW).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInspectionReport"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      operationId: listHandymanInspectionReports
+      summary: List the Field inspection report version thread of one request
+      description: >
+        CR-HM-INSPECTION-01 PART B — bounded read of every immutable version,
+        oldest first, each with its derived state (PENDING_REVIEW / ACCEPTED /
+        RETURNED), its technical estimate lines and its decision.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Version thread.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [reports]
+                        properties:
+                          reports:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/HandymanInspectionReport"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/requests/{handymanRequestId}/inspection-reports/{reportId}:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: reportId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanInspectionReport
+      summary: Read one Field inspection report version
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Report version with its lines and decision.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInspectionReport"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/requests/{handymanRequestId}/inspection-reports/{reportId}/review:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: reportId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: reviewHandymanInspectionReport
+      summary: Record the ONE ACCEPTED/RETURNED decision for the latest version
+      description: >
+        CR-HM-INSPECTION-01 PART B — Operations records exactly one immutable
+        decision per report version. Requires the dedicated
+        `handyman.operations.inspection.report.review` authority and the exact
+        Building scope derived from the request. Only the LATEST version may
+        be decided, the reviewer must differ from that version's submitter
+        (enforced in the database as well as the service), `RETURNED` requires
+        a bounded reason, and at most one version per request may be ACCEPTED.
+        Acceptance is terminal for the report chain; it does not approve a
+        quotation and changes no request status.
+      tags: [Handyman Inspection]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewHandymanInspectionReportRequest"
+      responses:
+        "201":
+          description: Decision recorded (immutable).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInspectionReport"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /handyman/requests/{handymanRequestId}/inspection-assignment:
     parameters:
       - name: handymanRequestId
@@ -84162,6 +84316,117 @@ components:
         supersedesAssignmentId:
           { $ref: "#/components/schemas/Uuid", nullable: true }
         supersessionReason: { type: string, nullable: true }
+    SubmitHandymanInspectionReportRequest:
+      type: object
+      description: >
+        CR-HM-INSPECTION-01 PART B — technical scope only. Actor, client,
+        building, assignment, version, status and every commercial field are
+        never inputs (the parser never spreads the body).
+      required: [disciplineId, technicalFindings, proposedDiagnosis]
+      properties:
+        disciplineId: { $ref: "#/components/schemas/Uuid" }
+        technicalFindings: { type: string, maxLength: 2000 }
+        proposedDiagnosis: { type: string, maxLength: 1000 }
+        recommendedServiceCatalogId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        estimates:
+          type: array
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/HandymanInspectionEstimateLineInput"
+    HandymanInspectionEstimateLineInput:
+      type: object
+      required: [lineType, description, quantity, uomId]
+      properties:
+        lineType: { type: string, enum: [LABOR, MATERIAL] }
+        description: { type: string, maxLength: 500 }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        uomId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          description: Existing units_of_measure reference (never free text).
+    ReviewHandymanInspectionReportRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [ACCEPTED, RETURNED] }
+        returnReason: { type: string, maxLength: 1000 }
+    HandymanInspectionEstimateLine:
+      type: object
+      required:
+        [id, clientId, reportId, lineType, description, quantity, uomId,
+         createdAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        reportId: { $ref: "#/components/schemas/Uuid" }
+        lineType: { type: string, enum: [LABOR, MATERIAL] }
+        description: { type: string }
+        quantity: { type: number }
+        uomId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+    HandymanInspectionReportReview:
+      type: object
+      required:
+        [id, clientId, handymanRequestId, buildingId, reportId,
+         reportSubmittedByUserId, decision, returnReason, reviewedByUserId,
+         reviewedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        reportId: { $ref: "#/components/schemas/Uuid" }
+        reportSubmittedByUserId: { $ref: "#/components/schemas/Uuid" }
+        decision: { type: string, enum: [ACCEPTED, RETURNED] }
+        returnReason: { type: string, nullable: true }
+        reviewedByUserId: { $ref: "#/components/schemas/Uuid" }
+        reviewedAt: { type: string, format: date-time }
+    HandymanInspectionReport:
+      type: object
+      description: >
+        CR-HM-INSPECTION-01 PART B — one immutable Field report version with
+        its derived state (PENDING_REVIEW / ACCEPTED / RETURNED), its
+        technical quantity lines and its single decision. No commercial field
+        exists in this model.
+      required:
+        [id, clientId, handymanRequestId, channelAttributionId, buildingId,
+         handymanRequestInspectionId, inspectionAssignmentId, versionNumber,
+         supersedesReportId, submittedByUserId, submittedAt,
+         technicalFindings, proposedDiagnosis, handymanDisciplineId,
+         disciplineCode, scopeClassification, recommendedServiceCatalogId,
+         status, estimates, review]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestInspectionId: { $ref: "#/components/schemas/Uuid" }
+        inspectionAssignmentId: { $ref: "#/components/schemas/Uuid" }
+        versionNumber: { type: integer, minimum: 1 }
+        supersedesReportId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        submittedByUserId: { $ref: "#/components/schemas/Uuid" }
+        submittedAt: { type: string, format: date-time }
+        technicalFindings: { type: string }
+        proposedDiagnosis: { type: string }
+        handymanDisciplineId: { $ref: "#/components/schemas/Uuid" }
+        disciplineCode: { type: string }
+        scopeClassification:
+          { $ref: "#/components/schemas/HandymanScopeClassification" }
+        recommendedServiceCatalogId:
+          { $ref: "#/components/schemas/Uuid", nullable: true }
+        status:
+          type: string
+          enum: [PENDING_REVIEW, ACCEPTED, RETURNED]
+        estimates:
+          type: array
+          items:
+            $ref: "#/components/schemas/HandymanInspectionEstimateLine"
+        review:
+          allOf:
+            - $ref: "#/components/schemas/HandymanInspectionReportReview"
+          nullable: true
     HandymanInspectionAssignmentState:
       type: object
       required: [current, history, changed]

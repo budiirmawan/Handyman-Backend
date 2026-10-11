@@ -17,6 +17,7 @@ import {
   handymanInspectionReassignmentReasonRequiredError,
 } from './handyman-request-inspection-assignment.errors';
 import { handymanServiceRequestNotFoundError } from './handyman-request-triage.errors';
+import { isHandymanInspectionReassignmentAllowed } from './handyman-request-inspection-report.service';
 import type {
   AssignHandymanInspectionFieldInput,
   HandymanInspectionAssignmentRecord,
@@ -281,19 +282,15 @@ export async function assignHandymanInspectionField(
  * reconciliation): allowed before a report version exists and after a
  * `RETURNED` decision (so a correction may be produced by a replacement
  * Field user); refused while the latest version is pending review and after
- * any version has been accepted.
- *
- * PART A ships the assignment fact before the versioned report authority
- * exists, so at this baseline no report version can reference a request and
- * the bound is satisfied by construction. PART B replaces this body with the
- * report/review query (same call site, same contract).
+ * ANY version has been accepted. The report chain belongs to the assignment
+ * that produced it, and acceptance is terminal.
  */
 async function isReassignmentAllowed(
-  _tx: PoolClient,
-  _handymanRequestId: string,
+  tx: PoolClient,
+  handymanRequestId: string,
   _currentAssignmentId: string,
 ): Promise<boolean> {
-  return true;
+  return isHandymanInspectionReassignmentAllowed(tx, handymanRequestId);
 }
 
 /** Bounded read: current assignment + immutable supersession history. */

@@ -556,8 +556,11 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
       lifecyclePaths.sort(),
       [
         ...lifecycles.map((step) => `/handyman/requests/{handymanRequestId}/${step}`),
-        // CR-HM-INSPECTION-01 PART A — separate Field authority surface.
+        // CR-HM-INSPECTION-01 PART A/B — separate Field authority surface.
         '/handyman/requests/{handymanRequestId}/inspection-assignment',
+        '/handyman/requests/{handymanRequestId}/inspection-reports',
+        '/handyman/requests/{handymanRequestId}/inspection-reports/{reportId}',
+        '/handyman/requests/{handymanRequestId}/inspection-reports/{reportId}/review',
         '/handyman/requests/{handymanRequestId}/scheduling-readiness',
         '/handyman/requests/{handymanRequestId}/scheduling-readiness/history',
         '/handyman/requests/{handymanRequestId}/unit-access-readiness',
@@ -595,6 +598,37 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
           .properties as Record<string, unknown>) ?? {},
       ).sort(),
       ['assignedFieldUserId', 'reassignmentReason'],
+    );
+    const reportPath = doc.paths[
+      '/handyman/requests/{handymanRequestId}/inspection-reports'
+    ];
+    assert.equal(
+      reportPath.post.operationId,
+      'submitHandymanInspectionReport',
+    );
+    assert.equal(
+      reportPath.get.operationId,
+      'listHandymanInspectionReports',
+    );
+    assert.deepEqual(
+      Object.keys(
+        (schemas.SubmitHandymanInspectionReportRequest
+          .properties as Record<string, unknown>) ?? {},
+      ).sort(),
+      [
+        'disciplineId',
+        'estimates',
+        'proposedDiagnosis',
+        'recommendedServiceCatalogId',
+        'technicalFindings',
+      ],
+    );
+    assert.deepEqual(
+      Object.keys(
+        (schemas.ReviewHandymanInspectionReportRequest
+          .properties as Record<string, unknown>) ?? {},
+      ).sort(),
+      ['decision', 'returnReason'],
     );
 
     for (const [name, keys] of [

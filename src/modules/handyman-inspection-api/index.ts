@@ -8,9 +8,16 @@
 export { createHandymanInspectionApiRouter } from './handyman-inspection-api.routes';
 export {
   getHandymanInspectionAssignmentHandler,
+  getHandymanInspectionReportHandler,
+  getHandymanInspectionReportsHandler,
   postHandymanInspectionAssignmentHandler,
+  postHandymanInspectionReportHandler,
+  postHandymanInspectionReportReviewHandler,
 } from './handyman-inspection-api.controller';
 export {
   parseInspectionAssignmentBody,
   parseInspectionHandymanRequestIdParam,
+  parseInspectionReportBody,
+  parseInspectionReportIdParam,
+  parseInspectionReviewBody,
 } from './handyman-inspection-api.validation';

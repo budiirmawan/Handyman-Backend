@@ -184,3 +184,54 @@ export type {
   PublicHandymanInspectionAssignment,
   PublicHandymanInspectionAssignmentState,
 } from './handyman-request-inspection-assignment.types';
+/**
+ * CR-HM-INSPECTION-01 PART B — versioned Field report + Operations review
+ * exports (immutable versions, one decision per version, reviewer ≠
+ * submitter; technical quantities only — no commercial authority).
+ */
+export {
+  handymanRequestInspectionReportRepository,
+} from './handyman-request-inspection-report.repository';
+export {
+  getHandymanInspectionReport,
+  isHandymanInspectionReassignmentAllowed,
+  listHandymanInspectionReports,
+  reviewHandymanInspectionReport,
+  submitHandymanInspectionReport,
+  handymanRequestInspectionReportService,
+} from './handyman-request-inspection-report.service';
+export {
+  handymanInspectionReportAlreadyAcceptedError,
+  handymanInspectionReportAlreadyReviewedError,
+  handymanInspectionReportEstimateInvalidError,
+  handymanInspectionReportInspectionRequiredError,
+  handymanInspectionReportNotLatestError,
+  handymanInspectionReportNotFoundError,
+  handymanInspectionReportPendingReviewError,
+  handymanInspectionReportRecommendationInvalidError,
+  handymanInspectionReportReturnReasonRequiredError,
+  handymanInspectionReportSelfReviewDeniedError,
+  handymanInspectionReportVersionConflictError,
+} from './handyman-request-inspection-report.errors';
+export {
+  HANDYMAN_INSPECTION_ESTIMATE_LINE_TYPES,
+  HANDYMAN_INSPECTION_REVIEW_DECISIONS,
+  isHandymanInspectionEstimateLineType,
+} from './handyman-request-inspection-report.types';
+export type {
+  HandymanInspectionEstimateLineType,
+  HandymanInspectionReportEstimateRecord,
+  HandymanInspectionReportRecord,
+  HandymanInspectionReportReviewRecord,
+  HandymanInspectionReportStatus,
+  HandymanInspectionReviewDecision,
+  NewHandymanInspectionReportEstimateRecord,
+  NewHandymanInspectionReportRecord,
+  NewHandymanInspectionReportReviewRecord,
+  PublicHandymanInspectionReport,
+  PublicHandymanInspectionReportEstimate,
+  PublicHandymanInspectionReportReview,
+  PublicHandymanInspectionReportThread,
+  ReviewHandymanInspectionReportInput,
+  SubmitHandymanInspectionReportInput,
+} from './handyman-request-inspection-report.types';
