@@ -63,7 +63,7 @@ async function readCatalogue(principal: CareWorkspacePrincipal, propertyId: stri
       (EXISTS(SELECT 1 FROM granted)
         AND ($8::uuid IS NULL OR EXISTS(SELECT 1 FROM services WHERE id = $8))
         AND ($9::uuid IS NULL OR EXISTS(SELECT 1 FROM variants WHERE id = $9 AND ($8::uuid IS NULL OR service_catalog_id = $8)))
-        AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM buildings b JOIN granted p ON p.id = b.property_id WHERE b.id = $10 AND b.status = 'ACTIVE'))
+        AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM buildings b JOIN granted p ON p.id = b.property_id WHERE b.id = $10 AND b.status = 'ACTIVE' AND handyman_bm_staff_scope($1,b.id)))
         AND ($11::uuid IS NULL OR EXISTS(SELECT 1 FROM profiles))) AS accessible,
       (SELECT client_id FROM granted LIMIT 1) AS "clientId", statement_timestamp() AS "evaluatedAt",
       COALESCE((SELECT jsonb_agg(to_jsonb(page) ORDER BY page.id) FROM page), '[]'::jsonb) AS items`,

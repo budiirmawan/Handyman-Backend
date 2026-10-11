@@ -1,3 +1,4 @@
+import { lockBmStaffSession } from './bm-staff-authority.service';
 import type { PoolClient } from 'pg';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { workspaceUnauthorized } from './care-workspace.service';
@@ -14,6 +15,7 @@ export async function lockCareCreateWorkspaceScope(tx: PoolClient, input: {
   sessionId: string; careActorId: string; integrationId: string;
   propertyId: string; tenantCompanyId: string; buildingId: string; spaceId: string | null;
 }) {
+  await lockBmStaffSession(tx,input.sessionId,input);
   const identity = await tx.query<{ actorReference: string; integrationCode: string }>(`
     SELECT a.actor_reference AS "actorReference", i.integration_code AS "integrationCode"
     FROM handyman_care_workspace_sessions s

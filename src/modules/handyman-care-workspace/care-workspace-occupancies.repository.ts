@@ -32,7 +32,7 @@ export const WORKSPACE_OCCUPANCY_CTES = `
       JOIN tenant_building_contexts tbc ON tbc.building_id = b.id AND tbc.status = 'ACTIVE'
       JOIN tenant_companies tc ON tc.id = tbc.tenant_company_id
         AND tc.client_id = p.client_id AND tc.status = 'ACTIVE'
-      WHERE ($7::uuid IS NULL OR tc.id = $7) AND ($8::uuid IS NULL OR b.id = $8)
+      WHERE handyman_bm_staff_scope($1,b.id,tc.id) AND ($7::uuid IS NULL OR tc.id = $7) AND ($8::uuid IS NULL OR b.id = $8)
         AND (tbc.effective_from IS NULL OR tbc.effective_from <= statement_timestamp())
         AND (tbc.effective_until IS NULL OR tbc.effective_until >= statement_timestamp())
     ), records AS (

@@ -19,6 +19,7 @@ export const WORKSPACE_GRANTED_SCOPE_CTE = `    WITH authority AS (
       JOIN handyman_handoff_integrations i ON i.id = s.integration_id AND i.id = a.integration_id
       WHERE s.id = $1 AND s.care_actor_id = $2 AND s.integration_id = $3
         AND s.revoked_at IS NULL AND s.expires_at > statement_timestamp()
+        AND handyman_bm_staff_scope(s.id)
         AND a.status = 'ACTIVE' AND i.status = 'ACTIVE' AND i.actor_capability = 'CUSTOMER_CARE'
     ), granted AS (
       SELECT p.id, p.client_id, p.code, p.name
@@ -26,7 +27,7 @@ export const WORKSPACE_GRANTED_SCOPE_CTE = `    WITH authority AS (
       JOIN handyman_care_property_grants g ON g.care_actor_id = a.actor_id AND g.status = 'ACTIVE'
       JOIN properties p ON p.id = g.property_id AND p.status = 'ACTIVE'
       JOIN clients c ON c.id = p.client_id AND c.status = 'ACTIVE'
-      WHERE ($4::uuid IS NULL OR p.id = $4)
+      WHERE ($4::uuid IS NULL OR p.id = $4) AND handyman_bm_staff_scope($1,NULL,NULL,p.id)
     )`;
 
 /** One statement snapshot: revalidate session + actor + integration alongside
@@ -45,7 +46,7 @@ async function readScope(
       ${building
         ? `SELECT b.id, b.property_id AS "propertyId", b.code, b.name
            FROM granted p JOIN buildings b ON b.property_id = p.id AND b.status = 'ACTIVE'
-           WHERE ($5::uuid IS NULL OR b.id > $5) ORDER BY b.id ASC LIMIT $6`
+           WHERE handyman_bm_staff_scope($1,b.id) AND ($5::uuid IS NULL OR b.id > $5) ORDER BY b.id ASC LIMIT $6`
         : `SELECT p.id, p.client_id AS "clientId", p.code, p.name FROM granted p
            WHERE ($5::uuid IS NULL OR p.id > $5) ORDER BY p.id ASC LIMIT $6`}
     )

@@ -1,3 +1,4 @@
+import { lockBmStaffSession } from '../handyman-care-workspace/bm-staff-authority.service';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
@@ -274,6 +275,7 @@ export async function isCareWorkspaceSessionActive(
   tx: Executor,
   input: { sessionId: string; careActorId: string },
 ): Promise<boolean> {
+  await lockBmStaffSession(tx,input.sessionId);
   const result = await tx.query(
     `SELECT 1
        FROM handyman_care_workspace_sessions s

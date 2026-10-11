@@ -46,7 +46,7 @@ const authorityCounts=async()=>{
 it('accepts signed transport, commits one-use blocked exchange, creates no identity/grant/session and audits no credentials',async()=>{
   const before=await authorityCounts(), a=assertion(), r=await issue(a);status(r,202,'transport');
   assert.equal(r.headers['cache-control'],'no-store');assert.equal(r.headers['referrer-policy'],'no-referrer');
-  assert.equal(r.headers['x-handyman-staff-sso'],'blocked-staff-authority');assert.equal(r.headers['set-cookie'],undefined);
+  assert.equal(r.headers['x-handyman-staff-sso'],'explicit-authority-required');assert.equal(r.headers['set-cookie'],undefined);
   assert.deepEqual(Object.keys(r.body.data).sort(),['expiresAt','launchReference']);
   const ref=r.body.data.launchReference;assert.match(ref,/^hbsl_[A-Za-z0-9_-]{43}$/);
   assert.ok(Date.parse(r.body.data.expiresAt)<=Date.parse(a.expiresAt));

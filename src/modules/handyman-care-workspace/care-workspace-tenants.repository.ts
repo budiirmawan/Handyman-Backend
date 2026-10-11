@@ -15,11 +15,11 @@ async function readTenants(principal: CareWorkspacePrincipal, propertyId: string
     ${WORKSPACE_GRANTED_SCOPE_CTE}, selected_buildings AS (
       SELECT b.id, p.client_id FROM granted p
       JOIN buildings b ON b.property_id = p.id AND b.status = 'ACTIVE'
-      WHERE ($8::uuid IS NULL OR b.id = $8)
+      WHERE handyman_bm_staff_scope($1,b.id) AND ($8::uuid IS NULL OR b.id = $8)
     ), page AS (
       SELECT tc.id, tc.tenant_code AS "tenantCode", tc.tenant_name AS "tenantName"
       FROM tenant_companies tc
-      WHERE tc.status = 'ACTIVE'
+      WHERE tc.status = 'ACTIVE' AND handyman_bm_staff_scope($1,NULL,tc.id)
         AND ($5::uuid IS NULL OR tc.id > $5)
         AND ($7::text IS NULL OR strpos(lower(tc.tenant_code), lower($7)) > 0
           OR strpos(lower(tc.tenant_name), lower($7)) > 0)

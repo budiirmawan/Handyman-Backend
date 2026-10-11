@@ -1,3 +1,4 @@
+import { mintBmStaffSession, staffUuid } from './bm-staff-authority.service';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
@@ -24,7 +25,7 @@ export type BmStaffLaunchAssertion = {
 const deny = () => new AppError({ code: ERROR_CODES.HANDYMAN_BM_STAFF_HANDOFF_UNAUTHORIZED,
   statusCode: 401, message: 'BM staff handoff authentication failed.' });
 const blocked = () => new AppError({ code: ERROR_CODES.HANDYMAN_BM_STAFF_AUTHORITY_UNAVAILABLE,
-  statusCode: 409, message: 'Staff SSO is not enabled: a production BM-staff-to-User binding and explicit staff Care/Building authority are required. No session was created.' });
+  statusCode: 409, message: 'An active staff identity binding, User, Customer Care entitlement and explicit tenant/Building grant are required. No session was created.' });
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 function keyFor(code: string): string {
   const secret = readHandoffIntegrationSecret(code);
@@ -77,9 +78,9 @@ async function transportIdentity(tx: PoolClient, code: string, reference: string
 }
 async function audit(tx: PoolClient, row: TransportIdentity, receiptId: string, buildingId: string, eventType: string) {
   await recordOperationalEvent({ clientId:row.clientId, buildingId, entityType:'HANDYMAN_BM_STAFF_LAUNCH', entityId:receiptId,
-    eventType, summary:'BM staff launch transport fact; staff session authority remains unresolved.',
+    eventType, summary:'BM staff launch transport fact; no session is created by transport alone.',
     metadata:{integrationId:row.integrationId,careActorId:row.careActorId,requestedBuildingId:buildingId,
-      staffSessionCreated:false,authorityStatus:'BLOCKED_STAFF_AUTHORITY'} },tx);
+      staffSessionCreated:false,authorityStatus:'TRANSPORT_ONLY'} },tx);
 }
 
 /** Authenticated S2S transport only. 202 does NOT mean staff admission. */
@@ -112,13 +113,12 @@ export async function issueBmStaffLaunch(body: unknown, signature: string | unde
   }
 }
 
-/** Consume exactly once, committing the replay barrier, then refuse admission.
- * There is intentionally NO call to createSessionForUser/admitCareWorkspace.
- * Do not replace this refusal with a claim-based identity/permission fallback.
- */
-export async function exchangeBmStaffLaunch(reference: unknown): Promise<never> {
+/** Redeem the unchanged 0452 transport only against pre-provisioned authority.
+ * Failed authority consumes the receipt without minting any session. */
+export async function exchangeBmStaffLaunch(reference: unknown, tenantInput?: unknown) {
+  const tenantCompanyId=tenantInput===undefined ? null : staffUuid(tenantInput);
   if (typeof reference!=='string' || !REFERENCE.test(reference)) throw deny();
-  await withTransaction(async tx=>{
+  const admitted=await withTransaction(async tx=>{
     const found=await tx.query(`SELECT l.*,i.integration_code,a.actor_reference
       FROM handyman_bm_staff_launch_receipts l JOIN handyman_handoff_integrations i ON i.id=l.integration_id
       JOIN handyman_handoff_care_actors a ON a.id=l.care_actor_id WHERE l.reference_hash=$1`,[hash(reference)]);
@@ -133,9 +133,12 @@ export async function exchangeBmStaffLaunch(reference: unknown): Promise<never> 
     const consumed=await tx.query(`UPDATE handyman_bm_staff_launch_receipts SET consumed_at=clock_timestamp()
       WHERE id=$1 AND expires_at>clock_timestamp() AND consumed_at IS NULL AND revoked_at IS NULL RETURNING id`,[row.id]);
     if(!consumed.rowCount) throw deny();
-    await audit(tx,identity,row.id,row.requested_building_id,'HANDYMAN_BM_STAFF_LAUNCH_BLOCKED');
+    const session=await mintBmStaffSession(tx,row,tenantCompanyId);
+    if(!session) await audit(tx,identity,row.id,row.requested_building_id,'HANDYMAN_BM_STAFF_LAUNCH_BLOCKED');
+    return session;
   });
-  throw blocked();
+  if(!admitted) throw blocked();
+  return admitted;
 }
 
 /** A reference holder can discard a pending transport receipt, never revoke

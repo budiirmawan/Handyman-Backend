@@ -5,13 +5,13 @@ import { getAppConfig } from '../../config';
 import { isLoginRateLimited, recordLoginFailure, recordLoginSuccess } from '../auth/login-rate-limit';
 import { issueBmStaffLaunch, exchangeBmStaffLaunch, revokeBmStaffLaunch } from './bm-staff-launch.service';
 
-/** Transport is usable; staff session admission is deliberately fail-closed. */
+/** Transport and explicitly provisioned staff admission; default deny. */
 export function mountBmStaffLaunchRoutes(router: Router) {
   for (const action of ['launches','exchange','revoke'] as const) {
     router.post(`/handyman/care/staff-sso/${action}`,async(req,res,next)=>{
       res.setHeader('Cache-Control','no-store');
       res.setHeader('Referrer-Policy','no-referrer');
-      res.setHeader('X-Handyman-Staff-SSO','blocked-staff-authority');
+      res.setHeader('X-Handyman-Staff-SSO','explicit-authority-required');
       const key=`handyman-bm-staff-${action}:${req.socket.remoteAddress??'unknown'}`;
       try {
         if(isLoginRateLimited(key)) {
@@ -25,8 +25,8 @@ export function mountBmStaffLaunchRoutes(router: Router) {
           sendSuccess(res,result,202);
         } else {
           if(!req.body || typeof req.body!=='object' || Array.isArray(req.body) ||
-             Object.keys(req.body).length!==1 || !('launchReference' in req.body)) throw AppError.validation('Only launchReference is accepted.');
-          if(action==='exchange') await exchangeBmStaffLaunch(req.body.launchReference);
+             Object.keys(req.body).some(k=>!(action==='exchange'?['launchReference','tenantCompanyId']:['launchReference']).includes(k)) || !('launchReference' in req.body)) throw AppError.validation('Only launchReference is accepted.');
+          if(action==='exchange') { const session=await exchangeBmStaffLaunch(req.body.launchReference,req.body.tenantCompanyId); recordLoginSuccess(key); sendSuccess(res,session,201); }
           else { await revokeBmStaffLaunch(req.body.launchReference); recordLoginSuccess(key); res.status(204).end(); }
         }
       } catch(error) {

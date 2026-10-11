@@ -1,3 +1,4 @@
+import { migration0453HandymanBmStaffAuthority } from './0453_handyman_bm_staff_authority';
 import { migration0452HandymanBmStaffLaunchTransport } from './0452_handyman_bm_staff_launch_transport';
 import { migration0451HandymanCareQuotationAssistance } from './0451_handyman_care_quotation_assistance';
 import { migration0450HandymanInspectionRevisits } from './0450_handyman_inspection_revisits';
@@ -936,4 +937,5 @@ export const migrations: readonly Migration[] = [
   migration0450HandymanInspectionRevisits,
   migration0451HandymanCareQuotationAssistance,
   migration0452HandymanBmStaffLaunchTransport,
+  migration0453HandymanBmStaffAuthority,
 ];

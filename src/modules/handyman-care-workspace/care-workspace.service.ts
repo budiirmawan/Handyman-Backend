@@ -1,3 +1,4 @@
+import { lockBmStaffSession, logoutBmStaffSession } from './bm-staff-authority.service';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
@@ -17,9 +18,12 @@ export type CareWorkspaceAssertion = {
   expiresAt: string;
   actor: HandoffCareActorClaim;
 };
-/** Deliberately has no userId/PIC, represented tenant, or property grants. */
+/** Legacy non-User Care remains unchanged; only explicitly linked staff has User context. Never a PIC. */
 export type CareWorkspacePrincipal = Readonly<{
   actorType: 'CUSTOMER_CARE';
+  staffUserId?: string;
+  staffBuildingId?: string;
+  staffTenantCompanyId?: string;
   sessionId: string;
   careActorId: string;
   integrationId: string;
@@ -129,11 +133,11 @@ export async function admitCareWorkspace(body: unknown, signature: string | unde
 }
 
 async function authenticateCareInTransaction(tx: PoolClient, token: string, revoke: boolean): Promise<CareWorkspacePrincipal> {
-  if (typeof token !== 'string' || !/^hcw_[A-Za-z0-9_-]{43}$/.test(token)) throw workspaceUnauthorized();
+  if (typeof token !== 'string' || ! /^(?:hcw|hbs)_[A-Za-z0-9_-]{43}$/.test(token)) throw workspaceUnauthorized();
   // Lock authority first (not the session), matching invalidation triggers'
   // authority -> session order. The later session lock sees committed revoke.
   const authority = await tx.query(
-    `SELECT a.id FROM handyman_care_workspace_sessions s
+    `SELECT a.id, s.id AS session_id FROM handyman_care_workspace_sessions s
      JOIN handyman_handoff_integrations i ON i.id = s.integration_id
      JOIN handyman_handoff_care_actors a ON a.id = s.care_actor_id AND a.integration_id = i.id
      WHERE s.token_hash = $1 AND a.status = 'ACTIVE'
@@ -141,6 +145,8 @@ async function authenticateCareInTransaction(tx: PoolClient, token: string, revo
      FOR SHARE OF i, a`, [hashToken(token)],
   );
   if (authority.rowCount !== 1) throw workspaceUnauthorized();
+  const staff = await lockBmStaffSession(tx, authority.rows[0].session_id);
+  if (token.startsWith('hbs_') !== !!staff) throw workspaceUnauthorized();
   const result = await tx.query<{
     id: string; careActorId: string; integrationId: string; expiresAt: Date; revokedAt: Date | null;
   }>(
@@ -157,7 +163,7 @@ async function authenticateCareInTransaction(tx: PoolClient, token: string, revo
   if (revoke && !session.revokedAt) {
     await tx.query('UPDATE handyman_care_workspace_sessions SET revoked_at = clock_timestamp() WHERE id = $1', [session.id]);
   }
-  return Object.freeze({ actorType: 'CUSTOMER_CARE' as const, sessionId: session.id,
+  return Object.freeze({ ...(staff ? {staffUserId:staff.user_id,staffBuildingId:staff.building_id,staffTenantCompanyId:staff.tenant_company_id} : {}), actorType: 'CUSTOMER_CARE' as const, sessionId: session.id,
     careActorId: session.careActorId, integrationId: session.integrationId,
     expiresAt: session.expiresAt.toISOString() });
 }
@@ -172,6 +178,7 @@ export async function withCareWorkspaceSession<T>(token: string,
   return withTransaction(async tx => {
     const principal = await authenticateCareInTransaction(tx, token, false);
     const result = await work(tx, principal);
+    await lockBmStaffSession(tx,principal.sessionId);
     const valid = await tx.query('SELECT 1 FROM handyman_care_workspace_sessions WHERE id=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()', [principal.sessionId]);
     if (!valid.rowCount) throw workspaceUnauthorized();
     return result;
@@ -185,5 +192,6 @@ export function resolveCareWorkspacePrincipal(token: string): Promise<CareWorksp
 
 /** Logout is idempotent for an unexpired revoked token with active identity. */
 export async function revokeCareWorkspaceSession(token: string): Promise<void> {
+  if(token.startsWith('hbs_')) { await logoutBmStaffSession(token); return; }
   await useSession(token, true);
 }

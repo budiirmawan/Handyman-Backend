@@ -15,7 +15,7 @@ async function readSpaces(principal: CareWorkspacePrincipal, propertyId: string,
     ${WORKSPACE_GRANTED_SCOPE_CTE}, selected_buildings AS (
       SELECT b.id FROM granted p
       JOIN buildings b ON b.property_id = p.id AND b.status = 'ACTIVE'
-      WHERE ($8::uuid IS NULL OR b.id = $8)
+      WHERE handyman_bm_staff_scope($1,b.id) AND ($8::uuid IS NULL OR b.id = $8)
     ), page AS (
       SELECT s.id, s.code, s.name, s.room_id AS "roomId", b.id AS "buildingId"
       FROM selected_buildings b
@@ -23,7 +23,7 @@ async function readSpaces(principal: CareWorkspacePrincipal, propertyId: string,
       JOIN areas a ON a.floor_id = f.id AND a.status = 'ACTIVE'
       JOIN rooms r ON r.area_id = a.id AND r.status = 'ACTIVE'
       JOIN spaces s ON s.room_id = r.id AND s.status = 'ACTIVE'
-      WHERE ($5::uuid IS NULL OR s.id > $5)
+      WHERE handyman_bm_staff_space($1,s.id,b.id) AND ($5::uuid IS NULL OR s.id > $5)
         AND ($7::text IS NULL OR strpos(lower(s.code), lower($7)) > 0
           OR strpos(lower(s.name), lower($7)) > 0)
       ORDER BY s.id ASC LIMIT $6
