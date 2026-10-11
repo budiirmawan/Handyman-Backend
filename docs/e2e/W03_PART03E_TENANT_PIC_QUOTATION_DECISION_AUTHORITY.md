@@ -1,6 +1,6 @@
 # W03 PART 03E — Otoritas keputusan Tenant PIC: jalur tulis ke ledger yang sudah ada, tanpa fallback staf
 
-**Status:** IMPLEMENTED + VALIDATED (lihat §10). Tidak ada deploy, tidak ada PR, **W03 E2E TIDAK dinyatakan tersertifikasi**.
+**Status:** IMPLEMENTED + VALIDATED (bukti awal §10; recovery dan koreksi terverifikasi pada 2026-10-11 di §14). Tidak ada deploy, tidak ada PR, **W03 E2E TIDAK dinyatakan tersertifikasi**.
 **Parent authority:** `CR-HM-06_AMENDMENT_01_TENANT_PIC_APPROVAL_ACTOR.md` (`CR-HM-06/A01` v1.1, RATIFIED) — §6.2/§6.3 (ledger & actor identity), §8 MC0–MC5 + F7, §9 (kontrak route PIC), §10.3 C1–C16, §10.4 (disposisi jalur staf), §12 BLK-4, §13 baris **03E**.
 **Addendum:** `CR-HM-06_ADDENDUM_A_TENANT_PIC_BINDING_AUTHORITY.md` — B7 (tidak ada gerbang status permintaan), B11 (body keputusan = `{decision}` saja), B12 (gerbang ISSUE: tetap OFF), B16/B17 (okupansi dievaluasi ulang, snapshot bukan otoritas), B18 (thread membeku setelah ada keputusan), C17/C21–C24, §8 BLK-GAP-1 + BLK-BIND-BACKFILL.
 **Freeze:** `CR-HM-06_DECISION_FREEZE.md` F6 v1.1 (revisi 03E atas F6 tidak mengubah teks normatifnya), F7 (satu keputusan otoritatif per versi, replay via idempotency), F8/F9 (atomicitas keputusan + Execution Scope), F10/F11 tidak disentuh.
@@ -78,26 +78,31 @@ Yang **tidak** ada di respons PIC: `decidedByUserId` (nol kunci, bukan `null`), 
 
 **Satu transaksi.** `withPicWorkspaceSession` memverifikasi kredensial → menjalankan pekerjaan → memverifikasi ulang sesi, semuanya di transaksi yang sama; karena keputusan berjalan di `tx` pinjaman seam, sebuah revoke atau binding yang jatuh di tengah tidak bisa menyelinap di antara otorisasi dan tulis (butir 6 sekaligus jawaban R7 dari seam).
 
-**Urutan lock yang dipakai jalur ini:**
+**Urutan explicit lock yang diverifikasi ulang saat recovery (§14):** diagram awal salah menamai tabel/kekuatan lock sesi dan menghilangkan pre-lock otoritas 03C. Diagram berikut mengoreksi penjelasan, bukan mengubah seam atau aturan R7.
 
 ```
-tenant_pic_sessions (FOR NO KEY UPDATE, oleh seam)
-  → handyman_quotation_versions (FOR UPDATE, lewat predikat kredensial)
-    → handyman_quotation_approval_bindings (FOR SHARE, oleh mesin)
-      → INSERT decision (guard 0442 membaca ulang semuanya, tanpa lock)
-      → UPDATE version lifecycle → INSERT scope → INSERT events
+handyman_handoff_integrations + tenant_companies (FOR SHARE OF i, tc)
+  → handyman_pic_workspace_sessions (FOR UPDATE)
+    → current credential representation (FOR SHARE: occupancy + optional Space)
+      → handyman_quotation_versions (FOR UPDATE OF v, predikat kredensial)
+        → current request Space (FOR SHARE OF tsr, keputusan baru saja)
+          → handyman_quotation_approval_bindings (FOR SHARE OF b, oleh mesin)
+            → INSERT decision → UPDATE version → INSERT scope → INSERT events
+              → revalidasi otoritas bisnis dan sesi sebelum COMMIT
 ```
+
+Replay mengunci keputusan yang sudah ada, memeriksa PIC+tenant+key+fingerprint, lalu mengembalikan fakta asli; ia tidak menulis atau memvalidasi ulang window binding historis.
 
 Empat konsekuensi yang sengaja dirancang, bukan kebetulan:
 
 1. **`FOR UPDATE` di bacaan kredensial, bukan `FOR SHARE`.** Mesin sudah mengunci versi `FOR UPDATE`; bila portal lebih dulu mengambil `FOR SHARE` pada baris yang sama, dua sesi PIC yang memutuskan versi yang sama akan saling tunggu saat upgrade ( SHARE → UPDATE = deadlock klasik `40P01`). Satu kunci eksklusif melalui predikat kredensial membuat re-lock mesin menjadi no-op. Ditegaskan secara statis di tes 03E (`findVersionForCredential( … lock: 'update'`).
-2. **Binding di-share setelah versi, tidak pernah sebelumnya.** `03B` revoke memakai `session → binding`; path kita juga `session → … → binding`, jadi keduanya searah. Bila binding di-lock sebelum versi, ia berlawanan dengan `createApprovalBinding` (`binding → session`) dan menciptakan siklus. Lihat **03E-D6** untuk residu deadlock yang tetap ada dan bagaimana ia dipetakan ke 409.
-3. **Tidak ada satu pun lock pada `tenant_pics` / `tenant_companies`.** `findTenantPicFacts` dan `findTenantCompanyAndClientStatuses` adalah SELECT polos, dan guard ledger juga membaca ulang tanpa lock. Ini yang membuat urutan seam tidak berbenturan dengan trigger revocation (`tenant_pics` → session). Aturan ini **statis**: tes census memecah tiap statement di jalur tulis dan menuntut agar tidak ada `FOR UPDATE`/`FOR SHARE`/`pg_advisory` yang menyasar tabel aktor (alias-target diperiksa, bukan cuma kata kuncinya).
+2. **Binding di-share setelah versi.** Lock ini menserialisasi pembacaan otoritas terhadap revoke. Koreksi recovery: layanan bind/revoke staf sebenarnya memakai `quotation → binding` dan **tidak menyentuh sesi PIC**; klaim awal tentang `session → binding` versus `binding → session` pada layanan binding tidak didukung kode. Pemetaan abort konkurensi di mesin tetap pertahanan error, bukan pengganti R7 atau bukti bebas seluruh deadlock.
+3. **Tidak ada lock aktor BARU di pekerjaan bisnis sesudah sesi.** Seam 03C sudah mengambil `FOR SHARE OF i, tc` **sebelum** lock sesi. Pembacaan PIC/tenant di mesin keputusan adalah SELECT polos; FK tetap memiliki lock internal PostgreSQL sebagaimana lazimnya. Recovery menambahkan tes race nyata tenant-authority→session: trigger invalidasi menyelesaikan revoke tanpa siklus, keputusan menjawab 401 dan tidak menulis fakta. Census bisnis juga diperbaiki agar regex benar-benar mengenali tabel/alias dan seluruh daftar `OF`, bukan lulus kosong (lihat §14).
 4. **`FOR SHARE OF b`-lah yang menutup ras revoke (B11).** Tanpa lock bersama itu, revoke yang commit setelah bacaan kelayakan kita tapi sebelum insert bisa kalah dari snapshot kita dan keputusan tetap tercatat; dengan share-lock, UPDATE revoke menunggu, dan `0437` B18 menolak revocation tersebut begitu baris keputusan kita ada. Jadi keputusannya: serialize lewat share-lock, dan kalau Postgres yang memutuskan siapa yang kalah (`40P01`), jawabannya 409 + rollback penuh, bukan 500.
 
 **Maker-checker (MC1′) dua lapis.** Layanan memuat `M = pembuat root ∪ pembuat versi ∪ pemberi binding` dan `C = PIC penandatangan + user tertautnya` dalam transaksi yang sama, setelah kunci versi; guard INSERT `0442` mengevaluasi ulang hal yang sama pada saat tulis. Keduanya sengaja ada: layanan untuk menghasilkan error yang benar, guard agar tidak ada pemanggil masa depan yang bisa melewatinya (MC2). Perbandingan hanya lewat `tenant_pics.user_id` — dua namespace id tidak pernah dibandingkan langsung, dan PIC tanpa user link tidak ditolak karena "bukti tidak ada" (MC4 adalah residu, bukan bug di sini).
 
-**Konsistensi jam.** `now` untuk `validUntil` dan window binding diambil dari `clock_timestamp()` di awal pekerjaan; `decided_at` adalah `NOW()` transaksi, dan guard menilai window terhadap `NEW.decided_at`. Perbedaan submilidetik di detik terakhir sebuah window dimenangkan guard (409 via `asDecisionRefusal`) — bukan 500, dan bukan keputusan yang lolos.
+**Konsistensi jam — dikoreksi saat recovery.** Jam awal pekerjaan tidak cukup setelah menunggu binding lock: dua tes baru membuktikan versi/binding yang kedaluwarsa di tengah wait masih mendapat 201 pada `968995b`. Mesin kini mengambil `clock_timestamp()` dalam statement **sesudah** binding lock dan mengevaluasi ulang kedua window. INSERT mengisi `decided_at = clock_timestamp()` (bukan default `NOW()`/awal transaksi); guard 0442 menggunakan instant keputusan itu. Revalidasi pascatulis juga memeriksa `decided_at < validUntil` dan Space request yang masih berlaku. Seluruh penolakan membatalkan ledger + lifecycle + scope + jurnal bersama; replay tetap mengembalikan timestamp asli.
 
 ## 7. Jalur staf: penutupan terkendali dan standstill yang disepakati
 
@@ -127,7 +132,7 @@ Empat konsekuensi yang sengaja dirancang, bukan kebetulan:
 - **03E-D3** — `readPicWorkspaceBearer` menolak **semua** body, yang benar untuk tiga GET dan mustahil untuk POST. Jalur tulis therefore: argumen body di slot bearer diisi `undefined` (aturan query-string tetap ditegakkan penuh) dan `parsePicDecisionBody` memegang whitelist satu kunci — kunci asing dijawab 400 `VALIDATION_ERROR` dengan kelas yang sama seperti penolakan konteks di bacaan.
 - **03E-D4** — Revalidasi **setelah** kunci mengulang separuh **otoritas** (binding ACTIVE + window vs `decided_at`, PIC ACTIVE di tenant yang sama, tenant/client ACTIVE, okupansi CURRENT, MC1′, dan bahwa baris yang tercatat benar-benar milik PIC+sesi+binding ini). Separuh **keadaan versi** sengaja tidak diulang setelah write: kita sendiri yang mengubahnya (`ISSUED → APPROVED`), dan menilai proyeksi kita dengan aturan pra-keputusan akan menolak setiap keputusan. Butir 6 tetap terpenuhi karena kelima kondisi yang disebutnya dibaca ulang setelah lock.
 - **03E-D5** — Replay **melewati** veto kelayakan pra-tulis (kalau tidak, `ALREADY_DECIDED` mengubah retry setelah respons hilang menjadi 409) dan melewati revalidasi pasca-tulis (F7 mengembalikan fakta asli, dan faktanya window binding lama boleh sudah tertutup). Yang tetap berlaku untuk replay: uji aktor C2 dan larangan satu-baris-per-versi.
-- **03E-D6** — R7 menyebut urutan "**authority row → session row**". Jalur tulis PIC memegang sesi lebih dulu (seam 03C tidak bisa dipisah) dan baru mengunci binding. Ini disengaja dan diamankan dengan cara lain: tidak ada lock pada tabel aktor (dipaksa tes census), share-lock binding mengikuti versi, dan `40P01`/`40001` dipetakan ke 409 dengan rollback penuh. Residunya dinyatakan apa adanya: sebuah `createApprovalBinding` yang berlari bersamaan dengan keputusan pada thread yang sama dapat menjadi korban deadlock dan menerima 409 + ulangi. Tidak ada pelonggaran MC1–MC5' yang dibayar untuk itu, dan tidak ada bypass yang terbuka.
+- **03E-D6 — penjelasan awal dikoreksi oleh recovery (§14).** R7 **authority row → session row** tidak diganti dengan penanganan 409. Seam 03C benar-benar memegang otoritas integrasi/tenant sebelum sesi; pekerjaan bisnis tidak menambah lock pada tabel aktor. Bind/revoke staf tidak mengunci atau mencabut sesi PIC, sehingga alasan siklus sesi/binding yang dahulu ditulis di sini keliru. Lihat census lock aktual dan batas klaim di §6. Tidak ada perubahan pada seam sesi, trigger invalidasi, atau teks normatif R7 dalam recovery ini.
 - **03E-D7** — Suite beku 06 (`handyman-quotation-decision`) dan 07A (`handyman-quotations-api`) tidak dibiarkan merah maupun mengunci era-500: harapan **keputusannya** di-retarget ke S1 (refusal terkendali, tanpa scope, header deprekasi) atas direktif owner, dan invarian mesin yang sebelumnya diuji lewat staf (replay, atomisitas, E5, census tanpa efek samping) **dipindahkan** ke suite PIC — bukan dihapus. Dua error tipe pra-existing di 06 (baris 218/236, `fixture.service` — berasal dari HEAD, bukan dari 03E) **tidak** dikerjakan: file itu tidak dimasukkan ke `tsconfig.tests.json`, dan dua error itu tetap milik baseline program lain.
 
 ## 10. Bukti perintah
@@ -189,3 +194,85 @@ Kesimpulan yang bisa dibaca dari tabel ini: **tidak ada jalur kedua menuju appro
 - Sandbox **membuang variabel berawalan `ASENTRA_*` dan `DB_*` saat exec**. Yang dipakai: `NODE_OPTIONS="--require /tmp/embedded-flag.cjs"` untuk suite yang punya bootstrap sendiri (03B/03B2/03C/03D/03E), dan satu PostgreSQL embedded bersama di port **55555** (`/tmp/boot-pg.mjs`) untuk suite CR-HM-06 yang tidak punya bootstrap (06/07A/lifecycle). Suite yang "hijau" di bawah 30 detik berarti **skip**, bukan hasil.
 - `node_modules` bisa kosong setelah re-clone: `npm ci --no-audit --no-fund` (307 paket, ±8 detik) sebelum `npx tsc`/`npx tsx`; tanpa itu `npx` mencoba memasang paket `tsc@2.0.4` yang bukan compiler.
 - Fixture yang perlu diingat: link `tenant_pics.user_id` untuk uji MC1′ baru boleh dibuat **setelah** baris binding ada (guard `0437` menolak binding yang pemberinya = user PIC tertaut), dan sesi harus di-admit **setelah** link dibuat (03C mencabut kredensial saat user-link bergerak; kalau tidak, yang teruji adalah 401, bukan maker-checker). Binding kedaluwarsa dibuat dengan `effective_until` di masa depan lalu `sleep` — `0437` menolak UPDATE.
+
+## 14. Recovery verification — 2026-10-11 (current session)
+
+### Recovery state, dilaporkan sebelum coding
+
+| Pemeriksaan | Hasil terukur |
+|---|---|
+| Branch sesi | `arena/e9915f51-handyman-backend` — tetap dipakai, tidak checkout cabang sumber |
+| HEAD awal | `9602991c7d820a7a51257dad036bd6051b4161b2`; working tree bersih, termasuk untracked |
+| Remote | `origin` = `https://github.com/budiirmawan/Handyman-Backend.git` |
+| Sumber yang diminta | `arena/44e8ce22-handyman-backend`; last-confirmed 03D = `dbb76f94974d172e6364c5a5cb7f2abb039d2bae` |
+| Hasil fetch | **03E sudah pushed** sebagai `968995bff69a4c58c2cd280755bbf0e37e9023a1`, langsung sesudah `dbb76f9` |
+| Ancestry | Checkout shallow di-unshallow; `merge-base --is-ancestor` membuktikan HEAD awal dan `dbb76f9` adalah ancestor tip sumber |
+| Pemulihan | `git merge --ff-only origin/arena/44e8ce22-handyman-backend` pada branch sesi, setelah pemeriksaan ulang tree bersih; tidak ada reset, force-push, cherry-pick, atau perubahan valid yang dibuang |
+| Authority dibaca ulang | F6 v1.1; A01 §4–§13 termasuk S1; Addendum A; record 03B, 03B2, 03C, 03D, dan 03E |
+
+### Temuan dan patch kecil
+
+Suite 03E asli **23/23** dan regresi 03B–03D **74/74** lulus lebih dulu.
+Enam tes tambahan pertama menghasilkan **26 pass / 3 fail / 0 skip** terhadap
+runtime `968995b`: dua window expiry saat binding-lock wait dan relasi Space
+request nonaktif dengan kredensial Building-wide ternyata masih mendapat **201**.
+Ini **temuan recovery**, bukan kegagalan baseline yang dibiarkan atau disebut PASS.
+
+Perbaikan terbatas pada jalur 03E:
+
+1. Setelah memperoleh binding lock, mesin membaca clock DB baru dan memeriksa
+   kembali `validUntil` serta window binding. Clock sebelum wait bukan authority.
+2. Repository INSERT memakai `decided_at = clock_timestamp()`, tanpa migrasi,
+   perubahan default skema, atau UPDATE terhadap fakta historis. Tes sukses sesudah
+   lock-wait juga mem-pin bahwa timestamp keputusan tidak mundur ke waktu BEGIN.
+3. Keputusan baru mengunci dan memvalidasi relasi **Space request** yang hidup,
+   termasuk ketika kredensial tidak membawa `spaceId`; pascatulis mengecek ulang
+   Space dan `decided_at < validUntil`. Replay fakta lama tetap pada jalur semula.
+4. R7 seam 03C **tidak diubah**. Tes konkurensi memegang tenant authority, membuat
+   request keputusan menunggu, lalu menjalankan trigger invalidasi sesi: revoke
+   selesai tanpa deadlock, request 401, nol decision/scope/journal tertinggal.
+5. Tes expiry sesi saat version-lock wait dan kegagalan yang diinjeksi **sesudah
+   INSERT scope** membuktikan rollback ledger + lifecycle + scope + jurnal. Retry
+   setelah kegagalan dengan key yang sama berhasil, bukan kehilangan idempotensi.
+6. Census R7 diperbaiki: template regex lama mengubah `\b`/`\s`, dan parser target
+   lock membaca grup `OF` yang salah. `String.raw`, pembacaan seluruh daftar target,
+   serta probe positif/negatif membuat assertion sungguh mendeteksi actor lock.
+   Assertion `RETURNING *` yang sebelumnya bertaut `|| true` juga dibuat mengikat.
+
+Penjelasan lock awal yang keliru dikoreksi secara eksplisit di §6/03E-D6 dan pointer
+A01 §11. **Tidak ada perubahan ratifikasi S1, teks normatif R7, atau keputusan owner.**
+Census dan race ini bukan klaim bahwa seluruh kombinasi deadlock repository sudah
+tersertifikasi. Eligibility read 03D tetap advisory (`guaranteesDecision: false`);
+keputusan tetap memverifikasi otoritas request sendiri, bukan mempercayai bacaan itu.
+
+### Exit gates recovery
+
+| Gate | Hasil akhir |
+|---|---|
+| `npm run typecheck` | PASS, exit 0 |
+| `npm run typecheck:tests` (program terfokus, bukan semua `tests/**`) | PASS, exit 0 |
+| `handyman-pic-portal-decide.test.ts` | **30/30** (23 tes DB/HTTP + 7 struktural), 0 fail/skip |
+| `handyman-pic-portal-read.test.ts` | **25/25**, 0 fail/skip |
+| `handyman-pic-workspace-session.test.ts` | **25/25**, 0 fail/skip |
+| `handyman-quotation-approval-binding-runtime.test.ts` | **10/10**, 0 fail/skip |
+| `handyman-quotation-pic-binding-migration.test.ts` | **14/14**, 0 fail/skip |
+| `handyman-quotation-lifecycle.test.ts` | **10/10**, 0 fail/skip |
+| `handyman-quotation-decision.test.ts` (S1) | **10/10**, 0 fail/skip |
+| `handyman-quotations-api.test.ts` (S1) | **10/10**, 0 fail/skip |
+| Total suite terpilih | **134 pass / 0 fail / 0 skip**; PostgreSQL embedded nyata |
+
+Lima suite program dijalankan bersama melalui `node --import tsx --test
+--test-concurrency=1` dengan daftar lima file di atas (**104/104**). Flag
+`ASENTRA_USE_EMBEDDED_POSTGRES=true`, `NODE_ENV=test`, dan `LOG_LEVEL=error` diberikan
+melalui `spawnSync` env **di dalam proses Node** agar bootstrap tidak silent-skip.
+Tiga suite legacy dijalankan serial terhadap satu PostgreSQL embedded terisolasi,
+`127.0.0.1:55555/asentra_test` (**30/30**); server ditutup sesudah tes. Harness/log
+lokal disimpan di `.data/w03-03e-recovery/` yang di-ignore, bukan dalam commit.
+
+**Batas recovery:** B12 tetap OFF; staff APPROVE/REJECT tetap 403
+`PERMISSION_DENIED`, tidak ada fallback; maker-checker, session-kind isolation,
+replay actor check, dan satu transaksi ledger + scope dipertahankan. Tidak ada
+migrasi baru, auto-binding, backfill, perluasan C6, atau pekerjaan 03F/03G/03H.
+Full suite dan baseline debt lintas-program **tidak dijalankan/diselesaikan**;
+W03 E2E/production readiness tidak diklaim. Target commit/push hanya branch sesi
+`arena/e9915f51-handyman-backend`; **tidak ada PR atau deploy; STOP sesudah push**.

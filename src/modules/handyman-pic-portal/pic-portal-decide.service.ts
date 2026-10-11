@@ -25,6 +25,7 @@ import {
   findCurrentOccupancyStatus,
   findDecisionByVersion,
   findVersionForCredential,
+  lockCurrentRequestSpace,
   type PicPortalDecisionRow,
   type PicPortalVersionRow,
 } from './pic-portal.repository';
@@ -212,6 +213,7 @@ async function assertRecordedDecisionIsCurrent(
     tx,
     version.quotationVersionId,
   );
+  const spaceCurrent = await lockCurrentRequestSpace(tx, version);
   const decidedAt = Date.parse(result.decidedAt);
   const windowFrom = facts.binding?.effectiveFrom?.getTime() ?? null;
   const windowUntil = facts.binding?.effectiveUntil?.getTime() ?? null;
@@ -240,6 +242,8 @@ async function assertRecordedDecisionIsCurrent(
     facts.statuses.tenantStatus !== 'ACTIVE' ||
     facts.statuses.clientStatus !== 'ACTIVE' ||
     facts.occupancyStatus !== 'ACTIVE' ||
+    !spaceCurrent ||
+    !version.validUntil || decidedAt >= version.validUntil.getTime() ||
     makerConflict
   ) {
     throw picDecisionRefusedError();
@@ -284,11 +288,9 @@ export async function submitPicQuotationDecision(
     });
     if (!version) throw picWorkspaceResourceNotFound();
 
-    // The binding is READ here, not locked: the decision engine takes
-    // `FOR SHARE OF b` after it holds the version lock, which is the same
-    // session → binding order 03B's revoke uses. Locking the binding before the
-    // version would invert that order for no additional safety, because the
-    // ledger guard re-reads the binding at INSERT time anyway.
+    // Preflight only: the engine takes FOR SHARE OF b under the version lock
+    // and checks both windows against a fresh DB clock AFTER that lock. The
+    // guard then evaluates the INSERT's decided_at, not transaction-start time.
     const pre = await loadAuthorityFacts(tx, principal, version);
     const existing = await findDecisionByVersion(tx, version.quotationVersionId);
 
@@ -301,6 +303,7 @@ export async function submitPicQuotationDecision(
     // still valid after the window closes. Refusing here would turn a retry over
     // a lost response into a 409 for a decision the caller itself recorded.
     if (!existing) {
+      if (!(await lockCurrentRequestSpace(tx, version))) throw picDecisionRefusedError();
       const reasons: PicPortalEligibilityCode[] = evaluatePicApprovalEligibility({
         now: pre.now,
         canDecide: principal.canDecide,

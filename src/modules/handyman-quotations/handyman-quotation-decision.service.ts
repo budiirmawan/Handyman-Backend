@@ -178,27 +178,12 @@ function toPublicDecision(
  * tell that apart from an outage — which is the whole of 03E item 10, applied to
  * both surfaces. The DB text is deliberately not copied into the response.
  */
-/**
- * Lock contention with a concurrent binding act is answered the same way, and
- * that needs its own sentence because it is the one place where two documented
- * lock orders meet.
- *
- * 03B's bind path locks the thread's ACTIVE binding BEFORE the PIC workspace
- * sessions it must revoke; the decide path runs inside the session seam, so it
- * holds the session lock and then takes `FOR SHARE` on that same binding (the
- * share lock is what closes ADD-A B11's revoke-race: without it, a revoke and a
- * decision could each commit against the other's stale read). Session → binding
- * against binding → session is a cycle, and Postgres resolves a cycle by
- * aborting one side with `40P01`.
- *
- * The resolution chosen is neither to drop the share lock (that would reopen the
- * race B11 names) nor to invert the seam (the session lock is what makes the
- * credential's authority stable across the write). A deadlock here means exactly
- * one thing to a caller — "a concurrent act on this thread's authority made this
- * decision unrecordable" — which is the conflict this route already answers, so it
- * is mapped to 409 and the transaction rolls back whole. The retry is safe by
- * construction: same key, same decision, and the version lock means only one of
- * the two racing submits can ever write.
+/** Concurrency aborts caught here remain controlled conflicts with full rollback;
+ * this mapping is not a substitute for R7 lock ordering. The session seam locks
+ * integration/tenant authority BEFORE the session. Business work introduces no
+ * new actor-table locks; the binding is shared to serialize against revocation.
+ * The staff bind/revoke services lock quotation → binding and do NOT touch PIC
+ * sessions (ADD-A M5 leaves bindings as history when a PIC session is revoked).
  */
 function asDecisionRefusal(error: unknown): unknown {
   const code = (error as { code?: string }).code;
@@ -269,16 +254,12 @@ async function loadPicDecisionAuthority(
     tenantCompanyId: string;
     quotationId: string;
     quotationVersionId: string;
-    now: Date;
+    validUntil: Date;
   },
 ): Promise<void> {
-  // The version row is already locked FOR UPDATE by the caller; this reads the
-  // authorship half of MC1' from it rather than re-locking. `FOR SHARE OF b`
-  // serializes against 03B's revoke (which takes the session lock and then the
-  // binding FOR UPDATE), and that shared order is why no cycle exists: nothing
-  // in this path takes a row lock on `tenant_pics` or `tenant_companies`, whose
-  // own revocation triggers lock session rows and could otherwise meet this one
-  // in the opposite direction.
+  // The version row is already locked FOR UPDATE; read its authorship without
+  // upgrading a shared version lock. Lock ONLY b to serialize binding revocation:
+  // no new tenant/PIC authority lock may be acquired after the session (R7).
   const result = await tx.query<
     Record<string, string | null> & {
       effective_from: Date | string | null;
@@ -304,10 +285,15 @@ async function loadPicDecisionAuthority(
   // Any lock wait inside this statement is resolved by `asDecisionRefusal` at the
   // caller: see the note there for why a `40P01` against a concurrent bind or
   // revoke is a conflict on this route and never a 500.
-  const at = args.now.getTime();
+  // A binding-lock wait can outlive either window. Read the clock in a NEW
+  // statement after acquiring the lock: NOW() is transaction-start time, and a
+  // clock_timestamp() projected by the locking SELECT can precede its wait.
+  const clock = await tx.query<{ now: Date }>('SELECT clock_timestamp() AS now');
+  const at = clock.rows[0].now.getTime();
   const from = toEpochMs(row.effective_from);
   const until = toEpochMs(row.effective_until);
-  if ((from !== null && from > at) || (until !== null && until <= at)) {
+  if (args.validUntil.getTime() <= at ||
+      (from !== null && from > at) || (until !== null && until <= at)) {
     throw picDecisionRefusedError();
   }
   if (
@@ -446,7 +432,7 @@ async function writeQuotationDecision(
         tenantCompanyId: args.tenantCompanyId as string,
         quotationId: quotation.id,
         quotationVersionId: version.id,
-        now: args.now,
+        validUntil: version.validUntil,
       });
     } catch (error) {
       throw asDecisionRefusal(error);
@@ -614,12 +600,11 @@ export type HandymanQuotationDecisionResult =
  * W03 PART 03E — the PIC decision write, run inside the credential's own
  * transaction (`withPicWorkspaceSession` in `handyman-pic-portal`).
  *
- * Taking the caller's `tx` rather than opening one is deliberate: the session
- * verification, the version lock, the eligibility revalidation and the ledger
- * write then share a single snapshot, so a revocation or a lapsed binding that
- * lands mid-flight cannot slip between them. The seam re-verifies the session
- * AFTER this function returns, still in the same transaction, which is R7's
- * authority-then-session ordering and 03E item 6 in one shape.
+ * Taking the caller's `tx` keeps verification, version/binding locks, the ledger,
+ * scope and journal in one transaction. The seam already acquired actor authority
+ * locks before the session (R7); revalidation AFTER work checks liveness again.
+ * READ COMMITTED statements need fresh clock checks after waits, not an assumption
+ * that one transaction means one unchanging snapshot.
  */
 export async function recordPicQuotationDecision(
   tx: PoolClient,

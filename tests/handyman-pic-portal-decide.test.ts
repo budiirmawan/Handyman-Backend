@@ -46,6 +46,7 @@ import {
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
+import { handymanExecutionScopeRepository } from '../src/modules/handyman-quotations/handyman-execution-scope.repository';
 import {
   handymanServiceRequestDiagnosisService,
   handymanServiceRequestService,
@@ -779,6 +780,35 @@ const counts = async () =>
     )
   ).rows[0] as { decisions: number; scopes: number; bindings: number };
 
+/** Observe the real PostgreSQL wait, rather than guessing when HTTP reached it. */
+async function waitForDecisionLock(blockerPid: number, queryFragment: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  do {
+    const waiting = await q(
+      `SELECT 1 FROM pg_stat_activity
+        WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE $2`,
+      [blockerPid, `%${queryFragment}%`],
+    );
+    if (waiting.rowCount) return;
+    await sleep(10);
+  } while (Date.now() < deadline);
+  assert.fail(`decision did not reach the expected lock: ${queryFragment}`);
+}
+
+async function assertNoDecisionEffects(thread: Thread): Promise<void> {
+  assert.equal(await ledgerRowOf(thread.versionId), undefined);
+  assert.equal(await scopeRowOf(thread.versionId), undefined);
+  assert.equal(await versionStatusOf(thread.versionId), 'ISSUED');
+  const events = await q(
+    `SELECT event_type FROM operational_events
+      WHERE metadata->>'quotationVersionId' = $1
+        AND event_type IN ('HANDYMAN_QUOTATION_APPROVED',
+                           'HANDYMAN_QUOTATION_REJECTED', 'HANDYMAN_EXECUTION_SCOPE_CREATED')`,
+    [thread.versionId],
+  );
+  assert.equal(events.rowCount, 0, 'a refusal leaves no decision or scope journal');
+}
+
 describe('W03 PART 03E — the Tenant PIC decision write', () => {
   it('records an APPROVE as a TENANT_PIC decision and creates the scope in the same transaction', async (t) => {
     if (!requireDatabase(t)) return;
@@ -1043,6 +1073,92 @@ describe('W03 PART 03E — the Tenant PIC decision write', () => {
     assert.equal(await versionStatusOf(thread.versionId), 'ISSUED');
   });
 
+  for (const expiring of ['binding', 'version'] as const) {
+    it(`rechecks the ${expiring} clock after a binding-lock wait`, async (t) => {
+      if (!requireDatabase(t)) return;
+      const thread = await buildThread({
+        issue: true, bind: true,
+        ...(expiring === 'binding' ? { bindingUntilSeconds: 3 } : {}),
+      });
+      if (expiring === 'version') {
+        await q(`UPDATE handyman_quotation_versions
+                   SET valid_until = clock_timestamp() + interval '3 seconds' WHERE id = $1`,
+                [thread.versionId]);
+      }
+      const token = await admit(thread);
+      const blocker = await pool!.connect();
+      let pending: Promise<Awaited<ReturnType<typeof decide>>> | undefined;
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query(`SELECT 1 FROM handyman_quotation_approval_bindings
+                              WHERE id = $1 FOR UPDATE`, [thread.bindingId]);
+        const { rows: [{ pid }] } = await blocker.query('SELECT pg_backend_pid() AS pid');
+        pending = decide(token, thread.versionId, { decision: 'APPROVE' }, randomUUID())
+          .timeout(10_000).then(response => response);
+        await waitForDecisionLock(pid, 'FOR SHARE OF b');
+        // The decision passed preflight while effective, then waited past expiry.
+        const table = expiring === 'binding'
+          ? 'handyman_quotation_approval_bindings' : 'handyman_quotation_versions';
+        const column = expiring === 'binding' ? 'effective_until' : 'valid_until';
+        const id = expiring === 'binding' ? thread.bindingId : thread.versionId;
+        const live = await blocker.query(`SELECT ${column} > clock_timestamp() AS live
+                                           FROM ${table} WHERE id = $1`, [id]);
+        assert.equal(live.rows[0].live, true, 'fixture must reach the lock before expiry');
+        await blocker.query(`SELECT pg_sleep(GREATEST(0,
+          EXTRACT(EPOCH FROM (${column} - clock_timestamp()))) + 0.05)
+          FROM ${table} WHERE id = $1`, [id]);
+        await blocker.query('COMMIT');
+        const response = await pending;
+        assert.equal(response.status, 409, JSON.stringify(response.body));
+        assert.equal(response.body.error.code, 'HANDYMAN_QUOTATION_DECISION_CONFLICT');
+        await assertNoDecisionEffects(thread);
+      } finally {
+        await blocker.query('ROLLBACK');
+        blocker.release();
+        await pending;
+      }
+    });
+  }
+
+  it('timestamps a successful decision after the binding-lock wait, not at transaction start', async (t) => {
+    if (!requireDatabase(t)) return;
+    const thread = await buildThread({ issue: true, bind: true });
+    const token = await admit(thread);
+    const blocker = await pool!.connect();
+    let pending: Promise<Awaited<ReturnType<typeof decide>>> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query(`SELECT 1 FROM handyman_quotation_approval_bindings
+                            WHERE id = $1 FOR UPDATE`, [thread.bindingId]);
+      const { rows: [{ pid }] } = await blocker.query('SELECT pg_backend_pid() AS pid');
+      pending = decide(token, thread.versionId, { decision: 'APPROVE' }, randomUUID())
+        .timeout(10_000).then(response => response);
+      await waitForDecisionLock(pid, 'FOR SHARE OF b');
+      const { rows: [{ releasedAt }] } = await blocker.query('SELECT clock_timestamp() AS "releasedAt"');
+      await blocker.query('COMMIT');
+      const response = await pending;
+      assert.equal(response.status, 201, JSON.stringify(response.body));
+      assert.ok(Date.parse(response.body.data.decision.decidedAt) >= releasedAt.getTime(),
+                'decided_at must describe the actual decision, not a stale pre-wait instant');
+    } finally {
+      await blocker.query('ROLLBACK');
+      blocker.release();
+      await pending;
+    }
+  });
+
+  it('rechecks the request space even when the credential is building-wide (B4/B16)', async (t) => {
+    if (!requireDatabase(t)) return;
+    const thread = await buildThread({ issue: true, bind: true });
+    const token = await admit(thread, { spaceId: undefined });
+    await q("UPDATE tenant_space_relationships SET status = 'INACTIVE' WHERE id = $1",
+            [thread.spaceAuthorityId]);
+    const response = await decide(token, thread.versionId, { decision: 'APPROVE' }, randomUUID());
+    assert.equal(response.status, 409, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, 'HANDYMAN_QUOTATION_DECISION_CONFLICT');
+    await assertNoDecisionEffects(thread);
+  });
+
   it('refuses a read-only credential with the conflict, not a permission 403', async (t) => {
     if (!requireDatabase(t)) return;
     const thread = await buildThread({ issue: true, bind: true });
@@ -1071,6 +1187,96 @@ describe('W03 PART 03E — the Tenant PIC decision write', () => {
     assert.equal(response.status, 401, JSON.stringify(response.body));
     assert.equal(response.body.error.code, UNAUTHORIZED);
     assert.equal(await ledgerRowOf(thread.versionId), undefined, 'a revoked credential decides nothing');
+  });
+
+  it('locks tenant authority before the session and serializes revocation (R7)', async (t) => {
+    if (!requireDatabase(t)) return;
+    const thread = await buildThread({ issue: true, bind: true });
+    const token = await admit(thread);
+    const blocker = await pool!.connect();
+    let pending: Promise<Awaited<ReturnType<typeof decide>>> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query("SET LOCAL lock_timeout = '3s'");
+      await blocker.query('SELECT 1 FROM tenant_companies WHERE id = $1 FOR UPDATE',
+                          [thread.tenantCompanyId]);
+      const { rows: [{ pid }] } = await blocker.query('SELECT pg_backend_pid() AS pid');
+      pending = decide(token, thread.versionId, { decision: 'APPROVE' }, randomUUID())
+        .timeout(10_000).then(response => response);
+      await waitForDecisionLock(pid, 'FROM handyman_pic_workspace_sessions s');
+      // This trigger needs the session row. Session-first would form a cycle.
+      await blocker.query("UPDATE tenant_companies SET status = 'INACTIVE' WHERE id = $1",
+                          [thread.tenantCompanyId]);
+      await blocker.query('COMMIT');
+      const response = await pending;
+      assert.equal(response.status, 401, JSON.stringify(response.body));
+      assert.equal(response.body.error.code, UNAUTHORIZED);
+      await assertNoDecisionEffects(thread);
+    } finally {
+      await blocker.query('ROLLBACK');
+      blocker.release();
+      await pending;
+    }
+  });
+
+  it('rolls back all decision effects when the session expires during a version-lock wait', async (t) => {
+    if (!requireDatabase(t)) return;
+    const thread = await buildThread({ issue: true, bind: true });
+    const priorTtl = process.env.HANDYMAN_PIC_WORKSPACE_TTL_SECONDS;
+    let token: string;
+    try {
+      process.env.HANDYMAN_PIC_WORKSPACE_TTL_SECONDS = '3';
+      token = await admit(thread);
+    } finally {
+      if (priorTtl === undefined) delete process.env.HANDYMAN_PIC_WORKSPACE_TTL_SECONDS;
+      else process.env.HANDYMAN_PIC_WORKSPACE_TTL_SECONDS = priorTtl;
+    }
+    const sessionId = await sessionIdOf(token);
+    const blocker = await pool!.connect();
+    let pending: Promise<Awaited<ReturnType<typeof decide>>> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT 1 FROM handyman_quotation_versions WHERE id = $1 FOR UPDATE',
+                          [thread.versionId]);
+      const { rows: [{ pid }] } = await blocker.query('SELECT pg_backend_pid() AS pid');
+      pending = decide(token, thread.versionId, { decision: 'APPROVE' }, randomUUID())
+        .timeout(10_000).then(response => response);
+      await waitForDecisionLock(pid, 'FOR UPDATE OF v');
+      await blocker.query(`SELECT pg_sleep(GREATEST(0,
+        EXTRACT(EPOCH FROM (expires_at - clock_timestamp()))) + 0.05)
+        FROM handyman_pic_workspace_sessions WHERE id = $1`, [sessionId]);
+      await blocker.query('COMMIT');
+      const response = await pending;
+      assert.equal(response.status, 401, JSON.stringify(response.body));
+      assert.equal(response.body.error.code, UNAUTHORIZED);
+      await assertNoDecisionEffects(thread);
+    } finally {
+      await blocker.query('ROLLBACK');
+      blocker.release();
+      await pending;
+    }
+  });
+
+  it('rolls back ledger, scope and lifecycle together on a scope failure, then safely retries', async (t) => {
+    if (!requireDatabase(t)) return;
+    const thread = await buildThread({ issue: true, bind: true });
+    const token = await admit(thread);
+    const key = randomUUID();
+    const original = handymanExecutionScopeRepository.insertScope;
+    const injected = t.mock.method(handymanExecutionScopeRepository, 'insertScope',
+      async (...args: Parameters<typeof original>) => {
+        await original(...args);
+        throw new Error('03E injected failure after scope insert');
+      });
+    const failed = await decide(token, thread.versionId, { decision: 'APPROVE' }, key);
+    injected.mock.restore();
+    assert.equal(injected.mock.callCount(), 1, 'failure occurs after the ledger and scope inserts');
+    assert.equal(failed.status, 500, 'infrastructure failure is not disguised as authorization');
+    await assertNoDecisionEffects(thread);
+    const retry = await decide(token, thread.versionId, { decision: 'APPROVE' }, key);
+    assert.equal(retry.status, 201, JSON.stringify(retry.body));
+    assert.equal((await scopeRowOf(thread.versionId))!.quotation_decision_id,
+                 (await ledgerRowOf(thread.versionId))!.id);
   });
 
   it("refuses self-approval by the thread's own author (MC1′)", async (t) => {
@@ -1302,7 +1508,7 @@ describe('W03 PART 03E — one authority, no bypass (static census)', () => {
       assert.ok(!/\bDELETE\s+FROM\b/i.test(text), `${file} must never DELETE`);
       assert.ok(!/ON CONFLICT/i.test(text), `${file} must not upsert over history`);
       assert.ok(!/\bTRUNCATE\b/i.test(text));
-      assert.ok(!/RETURNING\s+\*/i.test(text) || true);
+      assert.ok(!/RETURNING\s+\*/i.test(text), `${file} must project explicit columns`);
     }
     assert.equal(
       (code(read(quotationsDir, 'handyman-quotation-decision.repository.ts')).match(/FOR UPDATE/g) ?? []).length,
@@ -1317,31 +1523,38 @@ describe('W03 PART 03E — one authority, no bypass (static census)', () => {
   });
 
   it('takes no row lock on the actor tables inside the decide path (R7)', () => {
-    // The session seam holds `tenant_pic_sessions` while this runs, and the PIC /
-    // tenant revocation triggers lock those same sessions. If the decide path took
-    // a lock on `tenant_pics` or `tenant_companies` in between, the two orders
-    // could meet in opposite directions. They do not, and this pins why: every
-    // read of those tables on this path is a plain SELECT.
-    for (const file of [
-      [quotationsDir, 'handyman-quotation-decision.service.ts'],
-      [portalDir, 'pic-portal-decide.service.ts'],
-    ]) {
-      const text = code(read(...(file as [string, string])));
+    // The seam pre-locks integration/tenant authority BEFORE the workspace session.
+    // Business work must not introduce NEW actor-table locks after that point;
+    // the revocation triggers acquire authority → session, never the reverse.
+    const assertNoActorLocks = (text: string, label: string) => {
       for (const statement of text.split(';')) {
         for (const table of ['tenant_pics', 'tenant_companies']) {
-          const alias = new RegExp(`\b${table}\s+(?!ON\b)([a-z]+)\b`, 'i').exec(statement)?.[1];
-          if (!new RegExp(`\b${table}\b`, 'i').test(statement)) continue;
-          for (const lock of statement.matchAll(/FOR\s+(?:NO\s+KEY\s+)?(UPDATE|SHARE)(\s+OF\s+([^,;)]+))?/gi)) {
-            const targets = lock[2] ? lock[2].trim() : '';
-            const names = targets === '' ? null : targets.split(',').map(x => x.trim());
+          // String.raw preserves regex escapes; an ordinary template turns \b
+          // into backspace and drops \s, making the census silently match nothing.
+          const alias = new RegExp(String.raw`\b${table}\s+(?!ON\b)([a-z_]+)\b`, 'i').exec(statement)?.[1];
+          if (!new RegExp(String.raw`\b${table}\b`, 'i').test(statement)) continue;
+          for (const lock of statement.matchAll(/FOR\s+(?:(?:NO\s+KEY\s+)?UPDATE|(?:KEY\s+)?SHARE)(?:\s+OF\s+([a-z_][a-z_0-9]*(?:\s*,\s*[a-z_][a-z_0-9]*)*))?/gi)) {
+            const names = lock[1]?.split(',').map(x => x.trim()) ?? null;
             assert.ok(
               names !== null && !names.some(n => n === alias || n === table),
-              `${file[1]} locks ${table} (${lock[0].trim()}) — the seam order would be inverted`,
+              `${label} locks ${table} (${lock[0].trim()}) — the seam order would be inverted`,
             );
           }
         }
       }
-    }
+    };
+    // Prove the census detects bare locks, aliases, and a forbidden second OF target.
+    for (const sql of [
+      'SELECT p.id FROM tenant_pics p FOR UPDATE',
+      'SELECT p.id FROM tenant_pics p FOR SHARE OF p',
+      'SELECT p.id FROM tenant_pics p JOIN bindings b ON true FOR SHARE OF b, p',
+      'SELECT tc.id FROM tenant_companies tc FOR NO KEY UPDATE OF tc',
+    ]) assert.throws(() => assertNoActorLocks(sql, 'probe'), /seam order would be inverted/);
+    assertNoActorLocks('SELECT p.id FROM tenant_pics p JOIN bindings b ON true FOR SHARE OF b', 'allowed');
+    for (const file of [
+      [quotationsDir, 'handyman-quotation-decision.service.ts'],
+      [portalDir, 'pic-portal-decide.service.ts'],
+    ]) assertNoActorLocks(code(read(...file)), file[1]);
     // Including the helper the authority check borrows.
     const bindingsRepo = read(
       process.cwd(),

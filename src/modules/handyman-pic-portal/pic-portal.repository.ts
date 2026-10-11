@@ -218,6 +218,27 @@ export async function findVersionForCredential(
   };
 }
 
+/** B4/B16: a building-wide credential does not waive the request's own Space
+ * authority. Resolve it live, never from a binding's space_authority_id, and
+ * hold it through the decision transaction. These representation rows have no
+ * session-revocation trigger; the actor authority → session order is unchanged. */
+export async function lockCurrentRequestSpace(
+  tx: PoolClient,
+  version: Pick<PicPortalVersionRow, 'tenantCompanyId' | 'buildingId' | 'spaceId'>,
+): Promise<boolean> {
+  if (version.spaceId === null) return true;
+  const result = await tx.query(
+    `SELECT 1 FROM tenant_space_relationships tsr
+      WHERE tsr.tenant_company_id = $1 AND tsr.building_id = $2 AND tsr.space_id = $3
+        AND tsr.status = 'ACTIVE'
+        AND (tsr.effective_from IS NULL OR tsr.effective_from <= clock_timestamp())
+        AND (tsr.effective_until IS NULL OR tsr.effective_until >= clock_timestamp())
+      FOR SHARE OF tsr`,
+    [version.tenantCompanyId, version.buildingId, version.spaceId],
+  );
+  return result.rowCount === 1;
+}
+
 /**
  * The thread's decision on one version. `FOR SHARE` keeps the reported state
  * stable for the transaction that reads it, and the 0395/0438 ledger makes this

@@ -417,19 +417,18 @@ Either way the DB-level INSERT rule (§6.2) means **no** staff approval can be r
 | **R7** | Lock ordering is contractual: **authority row → session row** (mirrors `handyman_care_workspace_invalidate_actor` vs `resolveActor`/`useSession`, and `lockCareCreateWorkspaceScope`'s comment). Violating it risks a deadlock against the revocation triggers. |
 | **R8** | The session table's own guard must allow exactly one mutation (first revocation) and refuse DELETE, keeping replay tombstones forever (`0429` pattern) — otherwise revocation audits lose their evidence. |
 
-> **R7 as realized on the 03E decide path (recorded, not relaxed).** The decide path cannot lock the
-> binding before the session, because 03C's `withPicWorkspaceSession` holds the session lock across the
-> work by design — the whole point of that seam is that the credential and the write share one
-> transaction. The property R7 actually protects (no cycle against the revocation triggers, which lock
-> `tenant_pics` → session) is instead guaranteed by two facts that are asserted, not assumed: the
-> decide path takes **no row lock on `tenant_pics` or `tenant_companies` at all** (both are plain
-> SELECTs, and a census test splits every statement on the path and refuses a locking clause naming
-> those tables or their aliases), and the binding's `FOR SHARE` is taken **after** the version lock, so
-> it agrees with 03B's revoke order (session → binding) rather than inverting it. Residual risk and its
-> disposition — a concurrent `createApprovalBinding` (`binding → session`) can still be met by
-> `session → binding` and Postgres resolves that by aborting one side: the deadlock is mapped to the
-> route's own 409 with a full rollback, never a 500 — are deviations **03E-D6** in
-> `docs/e2e/W03_PART03E_TENANT_PIC_QUOTATION_DECISION_AUTHORITY.md` §6 and §9.
+> **R7 implementation note — corrected by 03E recovery, 2026-10-11; normative R7 unchanged.**
+> 03C's credential seam explicitly locks the attesting integration and tenant company
+> (`FOR SHARE OF i, tc`) **before** `handyman_pic_workspace_sessions` (`FOR UPDATE`).
+> The business callback introduces no new PIC/tenant actor-table locks. Staff binding
+> services lock quotation → binding and do **not** lock/revoke PIC sessions; the previous
+> explanation here of opposing session/binding orders was inaccurate, not an authorized
+> relaxation of R7. A real concurrent tenant invalidation now tests authority → session:
+> revocation completes, the decision answers 401, and ledger/scope/journal stay untouched.
+> The exact explicit-lock census, corrected static guard, clock-after-wait regressions,
+> and limits of this verification are recorded in
+> `docs/e2e/W03_PART03E_TENANT_PIC_QUOTATION_DECISION_AUTHORITY.md` §6, §9 (03E-D6), and §14.
+> Mapping concurrency aborts to 409 is defense in depth, never a substitute for lock ordering.
 
 ## 12. Ratification requirements (blocking, by authority)
 

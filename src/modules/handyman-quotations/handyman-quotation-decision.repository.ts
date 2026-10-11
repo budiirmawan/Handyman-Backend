@@ -79,14 +79,16 @@ async function insertDecision(
   input: NewHandymanQuotationDecision,
 ): Promise<HandymanQuotationDecisionRecord> {
   const actor = input.actor;
+  // The immutable fact is dated when it is written, not at BEGIN before a lock
+  // wait. 0442 evaluates binding windows against this server-owned decided_at.
   const result = await executor.query<Row>(
     `INSERT INTO handyman_quotation_decisions (
        id, client_id, quotation_id, quotation_version_id, decision,
        tenant_company_id, tenant_pic_id, decided_by_user_id,
        decision_actor_type, decided_by_tenant_pic_id,
        decided_by_pic_session_id, approval_binding_id,
-       idempotency_key, request_fingerprint
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       idempotency_key, request_fingerprint, decided_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,clock_timestamp())
      RETURNING ${DECISION_COLUMNS}`,
     [
       randomUUID(),
