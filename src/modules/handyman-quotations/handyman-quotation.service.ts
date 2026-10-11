@@ -8,6 +8,7 @@ import {
   handymanServiceRequestNotFoundError,
   handymanServiceRequestRepository,
 } from '../handyman-requests';
+import type { HandymanScopeClassification } from '../handyman-requests';
 import { assertQuotationThreadBuildingAccess }
   from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
@@ -50,8 +51,16 @@ function assertUuid(value: string | undefined, field: string): void {
   }
 }
 
-/** Scope classifications that support quotation preparation (CR-HM-03). */
-const QUOTABLE_SCOPE_CLASSES = new Set(['GENERAL_HANDYMAN', 'SPECIALIST']);
+/**
+ * Scope classifications that support quotation preparation (CR-HM-03).
+ * SPECIALIST_REQUIRED is the diagnosis token; SPECIALIST is only the derived
+ * referral type. Keeping the diagnosis union here makes that distinction
+ * compiler-checked.
+ */
+const QUOTABLE_SCOPE_CLASSES: ReadonlySet<HandymanScopeClassification> = new Set([
+  'GENERAL_HANDYMAN',
+  'SPECIALIST_REQUIRED',
+]);
 
 function toPublicQuotation(
   row: HandymanQuotationRecord,

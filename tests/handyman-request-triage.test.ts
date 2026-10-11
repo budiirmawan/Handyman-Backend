@@ -196,14 +196,13 @@ async function requestFixture() {
 }
 
 describe('CR-HM-03 PART 01 — triage foundation', () => {
-  it('1: INTAKE → INSPECTION_REQUIRED triage commits decision + projection', async (t) => {
+  it('1: omitted disposition defaults to INSPECTION_REQUIRED and is journaled', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await requestFixture();
     const record = await handymanServiceRequestTriageService
       .recordHandymanRequestTriage(
         {
           handymanRequestId: f.request.id,
-          triageDisposition: 'INSPECTION_REQUIRED',
           triageNote: 'Ceiling leak suggests roof penetration — needs visit.',
         },
         adminUserId,
@@ -222,9 +221,18 @@ describe('CR-HM-03 PART 01 — triage foundation', () => {
       [f.request.id],
     );
     assert.equal(rows.rows[0].status, 'INSPECTION_REQUIRED');
+    const journal = await q(
+      `SELECT actor_user_id, metadata FROM operational_events
+        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1
+          AND event_type = 'HANDYMAN_REQUEST_TRIAGED'`,
+      [f.request.id],
+    );
+    assert.equal(journal.rows[0].actor_user_id, adminUserId);
+    assert.equal(journal.rows[0].metadata.triageDecisionId, record.id);
+    assert.equal(journal.rows[0].metadata.triageDisposition, 'INSPECTION_REQUIRED');
   });
 
-  it('2: INTAKE → DIAGNOSIS triage commits decision + projection', async (t) => {
+  it('2: INTAKE → DIAGNOSIS stores its exception rationale in the audited decision', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await requestFixture();
     const record = await handymanServiceRequestTriageService
@@ -237,6 +245,23 @@ describe('CR-HM-03 PART 01 — triage foundation', () => {
         adminUserId,
       );
     assert.equal(record.triageDisposition, 'DIAGNOSIS');
+    assert.equal(record.triageNote, 'Photos show a worn faucet cartridge — no visit needed.');
+    const stored = await q(
+      `SELECT triage_note, actor_user_id FROM handyman_request_triage_decisions
+        WHERE id = $1`,
+      [record.id],
+    );
+    assert.equal(stored.rows[0].triage_note, record.triageNote);
+    assert.equal(stored.rows[0].actor_user_id, adminUserId);
+    const journal = await q(
+      `SELECT actor_user_id, metadata FROM operational_events
+        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1
+          AND event_type = 'HANDYMAN_REQUEST_TRIAGED'`,
+      [f.request.id],
+    );
+    assert.equal(journal.rows[0].actor_user_id, adminUserId);
+    assert.equal(journal.rows[0].metadata.triageDecisionId, record.id);
+    assert.equal(journal.rows[0].metadata.triageDisposition, 'DIAGNOSIS');
     const rows = await q(
       'SELECT status FROM handyman_service_requests WHERE id = $1',
       [f.request.id],
@@ -278,7 +303,7 @@ describe('CR-HM-03 PART 01 — triage foundation', () => {
     assert.equal(rows.rows[0].status, 'DIAGNOSIS');
   });
 
-  it('4: invalid disposition is rejected before any persistence', async (t) => {
+  it('4: invalid disposition or missing direct-exception reason is rejected before persistence', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await requestFixture();
     for (const bad of ['DIAGNOSED', 'SPECIALIST_REQUIRED', 'REFERRED', '']) {
@@ -294,7 +319,19 @@ describe('CR-HM-03 PART 01 — triage foundation', () => {
       await assert.rejects(attempt, (e: unknown) =>
         errorCode(e) === 'VALIDATION_ERROR');
     }
-    // the rejected dispositions never persisted any F2 record
+    // A DIAGNOSIS exception cannot be recorded without its durable rationale.
+    await assert.rejects(
+      handymanServiceRequestTriageService.recordHandymanRequestTriage(
+        {
+          handymanRequestId: f.request.id,
+          triageDisposition: 'DIAGNOSIS',
+          triageNote: '   ',
+        },
+        adminUserId,
+      ),
+      (e: unknown) => errorCode(e) === 'VALIDATION_ERROR',
+    );
+    // Rejected dispositions / missing exception reason never persist an F2 record.
     const leftover = await q(
       `SELECT count(*)::int AS n FROM handyman_request_triage_decisions
         WHERE handyman_request_id = $1`,
@@ -323,7 +360,8 @@ describe('CR-HM-03 PART 01 — triage foundation', () => {
     assert.equal(record.actorUserId, adminUserId);
     const journal = await q(
       `SELECT actor_user_id, event_type FROM operational_events
-        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1`,
+        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1
+          AND event_type = 'HANDYMAN_REQUEST_TRIAGED'`,
       [f.request.id],
     );
     assert.equal(journal.rowCount, 1);
@@ -352,7 +390,8 @@ describe('CR-HM-03 PART 01 — triage foundation', () => {
     assert.notEqual(record.actorUserId, f.pic.id);
     const journal = await q(
       `SELECT actor_user_id FROM operational_events
-        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1`,
+        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1
+          AND event_type = 'HANDYMAN_REQUEST_TRIAGED'`,
       [f.request.id],
     );
     assert.equal(journal.rowCount, 1);
@@ -475,7 +514,8 @@ describe('CR-HM-03 PART 01 — triage foundation', () => {
     // never exposes update/delete through any module)
     const journal = await q(
       `SELECT count(*)::int AS n FROM operational_events
-        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1`,
+        WHERE entity_type = 'HANDYMAN_SERVICE_REQUEST' AND entity_id = $1
+          AND event_type = 'HANDYMAN_REQUEST_TRIAGED'`,
       [f.request.id],
     );
     assert.equal(journal.rows[0].n, 1);

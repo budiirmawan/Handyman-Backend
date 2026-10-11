@@ -3,9 +3,11 @@
  *
  * The triage decision record carries ONLY the F2-minimum facts — request
  * reference, disposition, concise note, authenticated actor, server
- * timestamp. No diagnosis content, no scope classification, no specialist
- * target, no provider, no quotation — those arrive (or don't) in later
- * PARTs and never live on this record.
+ * timestamp. The note is the durable decision rationale; for DIAGNOSIS it
+ * records the reason for choosing the direct-to-diagnosis exception. No
+ * diagnosis content, scope classification, specialist target, provider, or
+ * quotation lives on this record. Service-specific direct-quotation
+ * eligibility remains deferred pending an authoritative policy.
  */
 
 /** FROZEN F1 triage dispositions: the ONLY bounded triage outcomes. */
@@ -45,7 +47,9 @@ export type HandymanRequestTriageDecisionRecord = {
 /** Input (client/context/PIC are NOT input — the request row is the authority). */
 export type CreateHandymanRequestTriageInput = {
   handymanRequestId: string;
-  triageDisposition: HandymanTriageDisposition;
+  /** Omitted means inspection-first; DIAGNOSIS must be an explicit choice. */
+  triageDisposition?: HandymanTriageDisposition;
+  /** Required rationale; for DIAGNOSIS, this is the exception reason. */
   triageNote: string;
 };
 

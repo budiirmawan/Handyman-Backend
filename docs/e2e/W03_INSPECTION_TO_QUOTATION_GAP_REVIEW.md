@@ -5,7 +5,9 @@
 | Date | 2026-10-11 (Asia/Jakarta) |
 | Branch / baseline | `arena/b4a8612c-handyman-backend` / `4cf29279b3bf8635a22e40f12327ac6f542c65fe` |
 | Scope | Read-only review of triage, inspection, assignment, diagnosis, quotation draft/issue, exception authority, persistence/provenance, transitions, and E2E coverage |
-| Changes | This report only. No production code, schema, migration, or tests changed/run. |
+| Changes | Report-only review at the baseline; see the dated implementation follow-up below for subsequent changes. |
+
+> Historical findings below describe the reviewed baseline, before the CR-HM Inspection-Quotation Part 01 follow-up.
 
 ## Executive finding
 
@@ -112,12 +114,23 @@ No tracked `03H-05B` file or exact identifier exists in this checkout. The track
 
 **Smallest follow-up:** add/restore an HTTP journey with two request threads (one inspection-required, one policy-approved direct path), then exercise diagnosis, quote draft, lines and issue through production routes. The owner clarification in `docs/e2e/W03_G9_SIMPLIFICATION_REVIEW.md:18-32` permits a test-only BM integration/ephemeral-secret fixture; admission and PIC decisions must still use actual routes. Do not call protected services/repositories or write PIC decisions/Execution Scopes directly. The existing 03H-05 skip is not a pass.
 
+## Implementation follow-up — CR-HM Inspection-Quotation Part 01 (2026-10-11)
+
+This addendum records implementation after the read-only baseline review above; the findings above are not rewritten.
+
+- Omitted triage disposition now defaults to `INSPECTION_REQUIRED` in both the HTTP parser and service. `DIAGNOSIS` remains an explicit direct-to-diagnosis exception.
+- The existing required `triageNote` is documented and tested as the durable rationale for `DIAGNOSIS`. The immutable decision record retains actor/time and reason; the existing journal event links the decision ID and records its disposition. No migration or new audit payload was added.
+- The requested direct-quotation clarity/service eligibility gate and its eligible/disallowed-service tests are **deferred** until authoritative service policy is supplied. This plumbing does not claim that a `DIAGNOSIS` decision alone establishes quotation eligibility.
+- The quotation scope allowlist now uses canonical `SPECIALIST_REQUIRED` (the diagnosis classification); `SPECIALIST` remains the derived referral type. A focused regression covers specialist quotation preparation.
+- No field assignment, Operations report acceptance, quotation issue gate, evidence expansion, new RBAC, or change to PIC approval, Execution Scope, S1, B12, migration 0441, or integration ownership was made.
+- Validation on this follow-up: production `npm run typecheck` passed. Focused tests passed: `handyman-request-triage.test.ts` (10), `handyman-lifecycle-api.test.ts` (10), `handyman-quotation.test.ts` (11), and `handyman-intake-triage-journey.test.ts` (27). The test databases were temporary embedded PostgreSQL instances; the full suite was not run.
+
 ## Guardrails and disposition
 
 - CR-HM-03 F1/F3 and the frozen roadmap remain authoritative. Evidence and reinspection are not silently added to CR-HM-03; evidence stays with CR-HM-10.
-- No new engine, schema, migration, production code, RBAC model or permission was created or requested by this review.
+- At the baseline review, no engine, schema, migration, production code, RBAC model or permission was created or requested; the implementation follow-up is scoped as described above.
 - No change to Handyman-owned integration configuration, BM channel attribution, Tenant/PIC quotation decision authority, session validation, binding/audit behavior, S1 staff 403, B12 OFF, migration 0441 behavior, or the 0443 Execution Scope gate.
-- No tests were run. No full suite, PR, or deploy was performed.
+- At the baseline review, no tests were run. For the later focused validation, see the dated addendum. No full suite, PR, or deploy was performed.
 
 ## Recommended order if follow-up is authorized
 

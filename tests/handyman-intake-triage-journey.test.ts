@@ -309,8 +309,8 @@ describe('W02 PART 04 — Customer Care intake → Operations triage journey', (
     assert.deepEqual(single.body.data.contact, row.contact);
   });
 
-  it('J3 Operations triage moves INTAKE to INSPECTION_REQUIRED, with one decision record and one audit event', async () => {
-    const response = await triage(triageA.token, requestId, decision);
+  it('J3 omitted disposition defaults to INSPECTION_REQUIRED, with one decision record and one audit event', async () => {
+    const response = await triage(triageA.token, requestId, { note: decision.note });
     assert.equal(response.status, 201, JSON.stringify(response.body));
     assert.equal(response.body.data.triageDisposition, 'INSPECTION_REQUIRED');
     assert.equal(response.body.data.buildingId, buildingA);
@@ -356,20 +356,30 @@ describe('W02 PART 04 — Customer Care intake → Operations triage journey', (
     assert.equal(read.body.data.triageDisposition, 'INSPECTION_REQUIRED');
   });
 
-  it('N1 Operations-only operator (queue permission, no triage authority) cannot triage: 403, no change', async () => {
+  it('N1 an actor without triage authority cannot choose inspection or the direct-to-diagnosis exception', async () => {
     const created = await intake('A', GOOD_REPORTER);
     const response = await triage(opsOnlyA.token, created.id, decision);
     assert.equal(response.status, 403, JSON.stringify(response.body));
+    const direct = await triage(opsOnlyA.token, created.id, {
+      disposition: 'DIAGNOSIS',
+      note: 'No authority to bypass inspection.',
+    });
+    assert.equal(direct.status, 403, JSON.stringify(direct.body));
     const after = await state(created.id);
     assert.equal(after.status, 'INTAKE');
     assert.equal(after.triage, 0);
     assert.equal(await triageEvents(created.id), 0);
   });
 
-  it('N2 cross-building: an operator assigned only to another Building cannot triage (403), and cannot see the request', async () => {
+  it('N2 cross-building scope denies both inspection default and direct-to-diagnosis exception', async () => {
     const created = await intake('A', GOOD_REPORTER);
     const response = await triage(triageA2.token, created.id, decision);
     assert.equal(response.status, 403, JSON.stringify(response.body));
+    const direct = await triage(triageA2.token, created.id, {
+      disposition: 'DIAGNOSIS',
+      note: 'Cross-building direct-to-diagnosis exception attempt.',
+    });
+    assert.equal(direct.status, 403, JSON.stringify(direct.body));
     assert.equal((await state(created.id)).status, 'INTAKE');
     assert.equal((await detail(queueA2.token, created.id)).status, 404, 'other Building queue detail is 404');
     assert.equal((await list(queueA2.token)).body.data.items.some((i: { id: string }) => i.id === created.id), false);
@@ -407,7 +417,7 @@ describe('W02 PART 04 — Customer Care intake → Operations triage journey', (
     assert.equal((await state(created.id)).status, 'INTAKE');
   });
 
-  it('N7 invalid disposition and invalid body are rejected; the request stays INTAKE with no decision', async () => {
+  it('N7 invalid disposition or missing direct-exception reason is rejected; the request stays INTAKE', async () => {
     const created = await intake('A', GOOD_REPORTER);
     for (const payload of [
       { disposition: 'READY_FOR_NEXT_STEP', note: 'not a triage disposition' },
@@ -417,6 +427,9 @@ describe('W02 PART 04 — Customer Care intake → Operations triage journey', (
     ]) {
       const response = await triage(triageA.token, created.id, payload);
       assert.equal(response.status, 400, JSON.stringify({ payload, body: response.body }));
+      if (payload.disposition === 'DIAGNOSIS' && !('note' in payload)) {
+        assert.match(JSON.stringify(response.body), /note/i, 'direct exception reason is required');
+      }
     }
     const after = await state(created.id);
     assert.equal(after.status, 'INTAKE');

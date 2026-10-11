@@ -27,6 +27,11 @@ import {
  * immutable, append-oriented; DB trigger + UNIQUE enforce this; no update
  * or delete pathway exists anywhere in this module).
  *
+ * Inspection is the default. DIAGNOSIS is an explicit direct-to-diagnosis
+ * exception, with its rationale stored in the immutable triage note. The
+ * exception does not itself establish service-specific direct-quotation
+ * eligibility; that gate is deferred until an authoritative policy exists.
+ *
  * Atomicity (test-proven): the request row is locked FOR UPDATE inside
  * ONE `withTransaction` executor; the triage record INSERT, the bounded F1
  * status projection UPDATE, and the append-only journal row
@@ -87,7 +92,10 @@ export async function recordHandymanRequestTriage(
       { field: 'actorUserId', message: 'actorUserId must be a valid local user UUID.' },
     ]);
   }
-  if (!isHandymanTriageDisposition(input.triageDisposition)) {
+  const triageDisposition = input.triageDisposition === undefined
+    ? 'INSPECTION_REQUIRED'
+    : input.triageDisposition;
+  if (!isHandymanTriageDisposition(triageDisposition)) {
     throw AppError.validation('Request validation failed.', [
       {
         field: 'triageDisposition',
@@ -146,7 +154,7 @@ export async function recordHandymanRequestTriage(
         handymanRequestId: request.id,
         channelAttributionId: request.channelAttributionId,
         buildingId: request.buildingId,
-        triageDisposition: input.triageDisposition,
+        triageDisposition,
         triageNote,
         actorUserId,
       });
@@ -155,7 +163,7 @@ export async function recordHandymanRequestTriage(
       const projected = await handymanServiceRequestRepository.updateStatus(
         tx,
         request.id,
-        input.triageDisposition,
+        triageDisposition,
       );
       if (!projected) throw handymanServiceRequestNotFoundError();
 
@@ -169,10 +177,10 @@ export async function recordHandymanRequestTriage(
           entityId: request.id,
           actorUserId,
           buildingId: request.buildingId,
-          summary: `Handyman request triage recorded: ${input.triageDisposition}.`,
+          summary: `Handyman request triage recorded: ${triageDisposition}.`,
           metadata: {
             triageDecisionId: record.id,
-            triageDisposition: input.triageDisposition,
+            triageDisposition,
           },
         },
         tx,

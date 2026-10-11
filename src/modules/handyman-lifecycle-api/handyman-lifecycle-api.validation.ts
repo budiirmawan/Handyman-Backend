@@ -110,12 +110,14 @@ export function parseLifecycleTriageBody(
 ): Omit<CreateHandymanRequestTriageInput, 'handymanRequestId'> {
   const source = isRecord(body) ? body : {};
   const details: Detail[] = [];
-  const disposition = readEnum(
-    source.disposition,
-    'disposition',
-    HANDYMAN_TRIAGE_DISPOSITIONS,
-    details,
-  );
+  const disposition = source.disposition === undefined
+    ? 'INSPECTION_REQUIRED'
+    : readEnum(
+      source.disposition,
+      'disposition',
+      HANDYMAN_TRIAGE_DISPOSITIONS,
+      details,
+    );
   const note = readText(source.note, 'note', true, details, 500);
   if (!disposition || details.length) fail(details);
   return { triageDisposition: disposition, triageNote: note };

@@ -256,10 +256,11 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     const f = await requestFixture();
     const res = await api().post(`${HM}/${f.request.id}/triage`)
       .set(triageAuth())
-      .send({ disposition: 'INSPECTION_REQUIRED', note: 'Needs site visit.' });
+      .send({ note: 'Needs site visit.' });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     assert.equal(res.body.data.handymanRequestId, f.request.id);
     assert.equal(res.body.data.triageDisposition, 'INSPECTION_REQUIRED');
+    assert.equal(res.body.data.triageNote, 'Needs site visit.');
     assert.equal(res.body.data.actorUserId, triageUserId);
     assert.equal(res.body.data.clientId, f.client.id);
 
@@ -551,6 +552,14 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
         `${name} properties`,
       );
     }
+    const triageSchema = schemas.RecordHandymanTriageRequest;
+    assert.deepEqual(triageSchema.required, ['note']);
+    assert.equal(
+      (triageSchema.properties as Record<string, Record<string, unknown>>)
+        .disposition.default,
+      'INSPECTION_REQUIRED',
+    );
+    assert.match(String(triageSchema.description ?? ''), /immutable rationale/i);
     assert.match(
       String(schemas.HandymanScopeClassification?.description ?? ''),
       /derived/i,

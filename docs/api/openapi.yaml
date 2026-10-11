@@ -4758,9 +4758,13 @@ paths:
       operationId: recordHandymanRequestTriage
       summary: Record the triage decision for one Handyman request
       description: >
-        CR-HM-03 PART 05A (frozen F1/F2/F7/F8) — INTAKE → TRIAGE with the
-        bounded disposition (INSPECTION_REQUIRED | DIAGNOSIS) in one
-        atomic decision record + status projection + journal event. Body
+        CR-HM-03 PART 05A (frozen F1/F2/F7/F8) — INTAKE → TRIAGE with an
+        atomic decision record + status projection + journal event. Omitting
+        disposition defaults to INSPECTION_REQUIRED. DIAGNOSIS is an explicit
+        direct-to-diagnosis exception; its required note is the immutable
+        rationale, and the event links to the decision record. This plumbing
+        does not establish service-specific direct-quotation eligibility;
+        those criteria remain deferred pending authoritative policy. Body
         inputs are caller-owned only (disposition, note); the actor is the
         authenticated session user and the request row is the only context
         authority — smuggled actor/client/building/space/channel keys are
@@ -81129,13 +81133,27 @@ components:
         never accepted as caller input.
     RecordHandymanTriageRequest:
       type: object
-      required: [disposition, note]
+      required: [note]
       description: >-
-        Caller-owned inputs only. Actor comes from the authenticated
-        context; smuggled actor/context keys are structurally ignored.
+        Caller-owned inputs only. Omitted disposition defaults to
+        INSPECTION_REQUIRED. For DIAGNOSIS, note is the required immutable
+        rationale for choosing the direct-to-diagnosis exception. Actor comes
+        from the authenticated context; smuggled actor/context keys are
+        structurally ignored.
       properties:
-        disposition: { $ref: "#/components/schemas/HandymanTriageDisposition" }
-        note: { type: string, minLength: 1, maxLength: 500 }
+        disposition:
+          allOf:
+            - $ref: "#/components/schemas/HandymanTriageDisposition"
+          default: INSPECTION_REQUIRED
+          description: Omit for the inspection-first default; DIAGNOSIS is an explicit exception.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: >-
+            Required triage rationale. When disposition is DIAGNOSIS, record
+            why inspection is being bypassed; the value is stored in the
+            immutable decision record.
     RecordHandymanInspectionRequest:
       type: object
       required: [result, notes]

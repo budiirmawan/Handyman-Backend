@@ -42,7 +42,7 @@ import { ensureTestDatabase } from './helpers/postgres';
  * CR-HM-06 PART 01 — focused tests for the Handyman quotation
  * foundation + immutable versions (FROZEN Decision Freeze F1-F5).
  *
- * Ten cases prove: a quotation thread can be created from a valid
+ * Focused cases prove: a quotation thread can be created from a valid
  * diagnosed request; the first version is 1/DRAFT; client/request
  * lineage is server-derived; caller smuggling cannot override lineage;
  * missing/invalid requests are rejected; requests without quotation-
@@ -268,8 +268,9 @@ async function _inspectedDiagnosisFixture() {
 }
 
 /** Full chain: request + diagnosis recorded -> READY_FOR_NEXT_STEP. */
-async function diagnosedFixture(code: 'GENERAL_HANDYMAN' | 'FM_COMMON_BUILDING' =
-  'GENERAL_HANDYMAN') {
+async function diagnosedFixture(
+  code: 'GENERAL_HANDYMAN' | 'ELECTRICAL' | 'FM_COMMON_BUILDING' = 'GENERAL_HANDYMAN',
+) {
   const f = await directDiagnosisFixture();
   const testDiagnosis = await handymanServiceRequestDiagnosisService
     .recordHandymanDiagnosis(
@@ -390,6 +391,18 @@ describe('CR-HM-06 PART 01 — quotation foundation + immutable versions', () =>
       (e: unknown) =>
         errorCode(e) === 'HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT',
     );
+  });
+
+  it('6a: canonical SPECIALIST_REQUIRED diagnosis remains quotable', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await diagnosedFixture('ELECTRICAL');
+    assert.equal(f.diagnosis.scopeClassification, 'SPECIALIST_REQUIRED');
+    const bundle = await createHandymanQuotation(
+      { handymanRequestId: f.request.id },
+      adminUserId,
+    );
+    assert.equal(bundle.quotation.handymanRequestId, f.request.id);
+    assert.equal(bundle.versions[0].status, 'DRAFT');
   });
 
   it('7: create revision produces version 2 DRAFT', async (t) => {
