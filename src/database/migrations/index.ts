@@ -477,6 +477,7 @@ import { migration0441HandymanPicWorkspaceSessions } from './0441_handyman_pic_w
 import { migration0442HandymanQuotationPicSessionLedgerLink } from './0442_handyman_quotation_pic_session_ledger_link';
 import { migration0443HandymanExecutionScopeApprovalGate } from './0443_handyman_execution_scope_approval_gate';
 import { migration0445HandymanInspectionAssignments } from './0445_handyman_inspection_assignments';
+import { migration0448HandymanDirectQuotationPolicy } from './0448_handyman_direct_quotation_policy';
 import { migration0447HandymanDiagnosisInspectionSource } from './0447_handyman_diagnosis_inspection_source';
 import { migration0446HandymanInspectionReports } from './0446_handyman_inspection_reports';
 export const migrations: readonly Migration[] = [
@@ -926,4 +927,5 @@ export const migrations: readonly Migration[] = [
   migration0445HandymanInspectionAssignments,
   migration0446HandymanInspectionReports,
   migration0447HandymanDiagnosisInspectionSource,
+  migration0448HandymanDirectQuotationPolicy,
 ];

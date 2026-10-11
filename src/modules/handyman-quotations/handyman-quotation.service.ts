@@ -1,3 +1,4 @@
+import { assertDirectQuotationAuthorization } from '../handyman-requests/handyman-direct-quotation-policy';
 import { assertInspectionQuotationPrerequisite } from '../handyman-requests/handyman-inspection-prerequisite';
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
@@ -120,6 +121,8 @@ export async function createHandymanQuotation(
       buildingId: request.buildingId,
     });
 
+    await assertDirectQuotationAuthorization(tx, request.id, actorUserId);
+
     // 3) CR-HM-03 sufficiency gate: an authoritative diagnosis/scope
     //    record must exist and be quotable (server-derived snapshot).
     const diagnosis = await handymanRequestDiagnosisRepository
@@ -202,9 +205,11 @@ export async function createHandymanQuotationRevision(
     await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
     const diagnosis = await handymanRequestDiagnosisRepository.findByRequest(tx, request.id);
+    const directAuthorized = await assertDirectQuotationAuthorization(tx, request.id, actorUserId);
     const inspectionRequired = await assertInspectionQuotationPrerequisite(tx, request.id, diagnosis);
-    // Preserve direct-path revision behavior; add only the inspection gate.
-    if (inspectionRequired && diagnosis && !QUOTABLE_SCOPE_CLASSES.has(diagnosis.scopeClassification)) {
+    // Both authorized paths retain the F9 quoteable-diagnosis requirement.
+    if (directAuthorized && !diagnosis) throw handymanQuotationDiagnosisRequiredError();
+    if ((inspectionRequired || directAuthorized) && diagnosis && !QUOTABLE_SCOPE_CLASSES.has(diagnosis.scopeClassification)) {
       throw handymanQuotationScopeInsufficientError();
     }
 

@@ -2,6 +2,8 @@ import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
   isServiceCatalogStatus,
+  SERVICE_INSPECTION_POLICIES,
+  type ServiceInspectionPolicy,
   SERVICE_CATALOG_CODE_MAX_LENGTH,
   SERVICE_CATALOG_CODE_MIN_LENGTH,
   SERVICE_CATALOG_CODE_PATTERN,
@@ -148,6 +150,15 @@ export function parseServiceCatalogIdParam(raw: string): string {
   return value.toLowerCase();
 }
 
+export function parseInspectionPolicy(value: unknown): ServiceInspectionPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!(SERVICE_INSPECTION_POLICIES as readonly unknown[]).includes(value)) {
+    throw AppError.validation('Invalid inspection policy.', [{ field: 'inspectionPolicy',
+      message: 'inspectionPolicy must be INSPECTION_REQUIRED or DIRECT_ALLOWED.' }]);
+  }
+  return value as ServiceInspectionPolicy;
+}
+
 export function parseCreateServiceCatalogEntryBody(
   body: unknown,
 ): Omit<CreateServiceCatalogEntryInput, 'createdByUserId'> {
@@ -158,6 +169,7 @@ export function parseCreateServiceCatalogEntryBody(
   }
 
   const details: ValidationDetail[] = [];
+  const inspectionPolicy = parseInspectionPolicy(body.inspectionPolicy);
 
   const clientId = readRequiredUuid(body.clientId, 'clientId', details);
   const code = readCode(body.code, details);
@@ -182,6 +194,7 @@ export function parseCreateServiceCatalogEntryBody(
   return {
     clientId,
     code,
+    ...(inspectionPolicy === undefined ? {} : { inspectionPolicy }),
     name,
     category,
     ...(description === undefined ? {} : { description }),
@@ -198,6 +211,8 @@ export function parseUpdateServiceCatalogEntryBody(
   }
 
   const details: ValidationDetail[] = [];
+
+  const inspectionPolicy = parseInspectionPolicy(body.inspectionPolicy);
 
   // `code` is immutable (governance §5/§11). If a caller supplies it, reject
   // explicitly so the immutability is a governed, messageable outcome rather
@@ -230,6 +245,7 @@ export function parseUpdateServiceCatalogEntryBody(
   }
 
   return {
+    ...(inspectionPolicy === undefined ? {} : { inspectionPolicy }),
     ...(name === undefined ? {} : { name }),
     ...(description === undefined ? {} : { description }),
     ...(category === undefined ? {} : { category }),

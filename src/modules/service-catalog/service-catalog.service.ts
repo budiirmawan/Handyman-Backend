@@ -1,3 +1,7 @@
+import { permissionService } from '../permissions';
+import { userRepository } from '../users';
+import { permissionDeniedError } from '../auth/auth.errors';
+import { parseInspectionPolicy } from './service-catalog.validation';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import {
@@ -41,6 +45,13 @@ import type {
  *     quantity, UOM, or SERVICE-pricing behavior. It is identity only.
  */
 
+async function assertPolicyManager(actorUserId: string): Promise<void> {
+  const user = await userRepository.findById(actorUserId);
+  if (user?.status !== 'ACTIVE' || !(await permissionService.resolvePermissionsForUser(actorUserId)).includes('service_catalog.manage')) {
+    throw permissionDeniedError();
+  }
+}
+
 const UNIQUE_VIOLATION = '23505';
 const SERVICE_CATALOG_CLIENT_CODE_CONSTRAINT =
   'service_catalog_client_code_unique';
@@ -54,6 +65,7 @@ function toPublic(record: ServiceCatalogRecord): PublicServiceCatalogEntry {
     description: record.description,
     category: record.category,
     status: record.status,
+    inspectionPolicy: record.inspectionPolicy,
     createdByUserId: record.createdByUserId,
     createdAt:
       record.createdAt instanceof Date
@@ -84,6 +96,7 @@ function entryMetadata(
     name: record.name,
     category: record.category,
     status: record.status,
+    inspectionPolicy: record.inspectionPolicy,
     clientId: record.clientId,
   };
 }
@@ -112,6 +125,8 @@ export async function createServiceCatalogEntry(
   input: CreateServiceCatalogEntryInput,
   actorUserId: string,
 ): Promise<PublicServiceCatalogEntry> {
+  const inspectionPolicy = parseInspectionPolicy(input.inspectionPolicy) ?? 'INSPECTION_REQUIRED';
+  if (input.inspectionPolicy !== undefined) await assertPolicyManager(actorUserId);
   const client = await clientRepository.findById(input.clientId);
   if (!client) {
     throw clientNotFoundError();
@@ -138,6 +153,7 @@ export async function createServiceCatalogEntry(
     category: input.category.trim(),
     description: input.description?.trim() || null,
     createdByUserId: actorUserId,
+    inspectionPolicy,
   };
 
   try {
@@ -209,6 +225,8 @@ export async function updateServiceCatalogEntry(
   input: UpdateServiceCatalogEntryInput,
   actorUserId: string,
 ): Promise<PublicServiceCatalogEntry> {
+  const inspectionPolicy = parseInspectionPolicy(input.inspectionPolicy);
+  if (inspectionPolicy !== undefined) await assertPolicyManager(actorUserId);
   const existing = await serviceCatalogRepository.findById(undefined, id);
   if (!existing) {
     throw serviceCatalogNotFoundError();
@@ -217,6 +235,7 @@ export async function updateServiceCatalogEntry(
 
   return withTransaction(async (tx) => {
     const updated = await serviceCatalogRepository.updateEntry(tx, id, {
+      inspectionPolicy,
       name: input.name?.trim(),
       category: input.category?.trim(),
       description:

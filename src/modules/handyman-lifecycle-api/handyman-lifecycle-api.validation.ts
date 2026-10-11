@@ -120,7 +120,14 @@ export function parseLifecycleTriageBody(
     );
   const note = readText(source.note, 'note', true, details, 500);
   if (!disposition || details.length) fail(details);
-  return { triageDisposition: disposition, triageNote: note };
+  if (source.scopeClarityConfirmed !== undefined && typeof source.scopeClarityConfirmed !== 'boolean') {
+    fail([{ field: 'scopeClarityConfirmed', message: 'Must be a boolean.' }]);
+  }
+  const directQuotationReason = source.directQuotationReason === undefined ? undefined
+    : readText(source.directQuotationReason, 'directQuotationReason', true, details, 500);
+  if (details.length) fail(details);
+  return { triageDisposition: disposition, triageNote: note,
+    scopeClarityConfirmed: source.scopeClarityConfirmed as boolean | undefined, directQuotationReason };
 }
 
 export function parseLifecycleInspectionBody(

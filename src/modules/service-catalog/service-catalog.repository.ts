@@ -6,6 +6,7 @@ import type {
   ServiceCatalogFilters,
   ServiceCatalogRecord,
   ServiceCatalogStatus,
+  ServiceInspectionPolicy,
   UpdateServiceCatalogEntryInput,
 } from './service-catalog.types';
 
@@ -17,6 +18,7 @@ type ServiceCatalogRow = {
   description: string | null;
   category: string;
   status: ServiceCatalogStatus;
+  inspectionPolicy: ServiceInspectionPolicy;
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -30,6 +32,7 @@ const ENTRY_SELECT = `
   description,
   category,
   status,
+  inspection_policy AS "inspectionPolicy",
   created_by_user_id AS "createdByUserId",
   created_at AS "createdAt",
   updated_at AS "updatedAt"
@@ -44,6 +47,7 @@ function mapRow(row: ServiceCatalogRow): ServiceCatalogRecord {
     description: row.description,
     category: row.category,
     status: row.status,
+    inspectionPolicy: row.inspectionPolicy,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -56,8 +60,8 @@ async function insertEntry(
 ): Promise<ServiceCatalogRecord> {
   const result = await executor.query<ServiceCatalogRow>(
     `INSERT INTO service_catalog
-       (id, client_id, code, name, description, category, status, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', $7)
+       (id, client_id, code, name, description, category, status, created_by_user_id, inspection_policy)
+     VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', $7, $8)
      RETURNING ${ENTRY_SELECT}`,
     [
       randomUUID(),
@@ -67,6 +71,7 @@ async function insertEntry(
       entry.description,
       entry.category,
       entry.createdByUserId,
+      entry.inspectionPolicy,
     ],
   );
   return mapRow(result.rows[0]);
@@ -170,6 +175,10 @@ async function updateEntry(
     values.push(input.category);
   }
 
+  if (input.inspectionPolicy !== undefined) {
+    sets.push(`inspection_policy = $${idx++}`);
+    values.push(input.inspectionPolicy);
+  }
   if (sets.length === 0) {
     return findById(executor, id);
   }

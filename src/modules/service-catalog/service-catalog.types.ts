@@ -1,3 +1,6 @@
+export const SERVICE_INSPECTION_POLICIES = ['INSPECTION_REQUIRED', 'DIRECT_ALLOWED'] as const;
+export type ServiceInspectionPolicy = (typeof SERVICE_INSPECTION_POLICIES)[number];
+
 /**
  * CR-BE-SVC-01 PART 01 — Service Catalog domain types.
  *
@@ -42,6 +45,7 @@ export type ServiceCatalogRecord = {
   name: string;
   description: string | null;
   category: string;
+  inspectionPolicy: ServiceInspectionPolicy;
   status: ServiceCatalogStatus;
   createdByUserId: string;
   createdAt: Date;
@@ -56,6 +60,7 @@ export type PublicServiceCatalogEntry = {
   name: string;
   description: string | null;
   category: string;
+  inspectionPolicy: ServiceInspectionPolicy;
   status: ServiceCatalogStatus;
   createdByUserId: string;
   createdAt: string;
@@ -69,6 +74,7 @@ export type CreateServiceCatalogEntryInput = {
   name: string;
   category: string;
   description?: string;
+  inspectionPolicy?: ServiceInspectionPolicy;
 };
 
 /** Fully-resolved data ready for persistence. Created ACTIVE (governance §11). */
@@ -79,6 +85,7 @@ export type NewServiceCatalogEntry = {
   category: string;
   description: string | null;
   createdByUserId: string;
+  inspectionPolicy: ServiceInspectionPolicy;
 };
 
 /**
@@ -91,6 +98,7 @@ export type UpdateServiceCatalogEntryInput = {
   name?: string;
   description?: string | null;
   category?: string;
+  inspectionPolicy?: ServiceInspectionPolicy;
 };
 
 /** List filters for GET /service-catalog/entries */

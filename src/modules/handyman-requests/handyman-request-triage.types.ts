@@ -1,3 +1,4 @@
+import type { ServiceInspectionPolicy } from '../service-catalog/service-catalog.types';
 /**
  * CR-HM-03 PART 01 — Handyman request triage types (FROZEN F1/F2/F6/F7).
  *
@@ -7,7 +8,7 @@
  * records the reason for choosing the direct-to-diagnosis exception. No
  * diagnosis content, scope classification, specialist target, provider, or
  * quotation lives on this record. Service-specific direct-quotation
- * eligibility remains deferred pending an authoritative policy.
+ * eligibility is now snapshotted alongside explicit Operations confirmation.
  */
 
 /** FROZEN F1 triage dispositions: the ONLY bounded triage outcomes. */
@@ -39,6 +40,12 @@ export type HandymanRequestTriageDecisionRecord = {
   buildingId: string;
   triageDisposition: HandymanTriageDisposition;
   triageNote: string;
+  /** Null on historical rows: no synthetic authorization/backfill. */
+  serviceInspectionPolicy: ServiceInspectionPolicy | null;
+  policyServiceCatalogId: string | null;
+  policyCatalogUpdatedAt: Date | null;
+  scopeClarityConfirmed: boolean | null;
+  directQuotationReason: string | null;
   /** Local authenticated actor ONLY (FROZEN F7 — never PIC/attribution-derived). */
   actorUserId: string;
   createdAt: Date;
@@ -51,6 +58,8 @@ export type CreateHandymanRequestTriageInput = {
   triageDisposition?: HandymanTriageDisposition;
   /** Required rationale; for DIAGNOSIS, this is the exception reason. */
   triageNote: string;
+  scopeClarityConfirmed?: boolean;
+  directQuotationReason?: string;
 };
 
 /** Fully-resolved data ready for persistence (snapshot + actor applied). */
@@ -62,7 +71,8 @@ export type NewHandymanRequestTriageRecord = Omit<
 /** Safe public representation (createdAt ISO). */
 export type PublicHandymanRequestTriage = Omit<
   HandymanRequestTriageDecisionRecord,
-  'createdAt'
+  'createdAt' | 'policyCatalogUpdatedAt'
 > & {
   createdAt: string;
+  policyCatalogUpdatedAt: string | null;
 };

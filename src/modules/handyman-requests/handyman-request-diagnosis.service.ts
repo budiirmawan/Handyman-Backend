@@ -1,3 +1,4 @@
+import { assertDirectQuotationAuthorization } from './handyman-direct-quotation-policy';
 import { resolveAcceptedInspectionReport } from './handyman-inspection-prerequisite';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
@@ -123,6 +124,7 @@ export async function recordHandymanDiagnosis(
         buildingId: request.buildingId,
       });
 
+      await assertDirectQuotationAuthorization(tx, request.id, actorUserId);
       const acceptedReport = await resolveAcceptedInspectionReport(tx, request.id);
 
       // 4) F9 authority check: the referenced discipline is the scope root.

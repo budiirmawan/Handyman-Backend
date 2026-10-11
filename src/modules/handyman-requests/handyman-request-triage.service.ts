@@ -1,3 +1,4 @@
+import { resolveTriagePolicy } from './handyman-direct-quotation-policy';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
@@ -28,9 +29,9 @@ import {
  * or delete pathway exists anywhere in this module).
  *
  * Inspection is the default. DIAGNOSIS is an explicit direct-to-diagnosis
- * exception, with its rationale stored in the immutable triage note. The
- * exception does not itself establish service-specific direct-quotation
- * eligibility; that gate is deferred until an authoritative policy exists.
+ * exception requiring DIRECT_ALLOWED service policy, explicit scope clarity
+ * and a separate meaningful exception reason. Immutable triage provenance
+ * records the sampled policy and catalog timestamp; a note alone cannot authorize it.
  *
  * Atomicity (test-proven): the request row is locked FOR UPDATE inside
  * ONE `withTransaction` executor; the triage record INSERT, the bounded F1
@@ -67,7 +68,8 @@ function isTriageUniqueViolation(error: unknown): boolean {
 function toPublic(
   record: HandymanRequestTriageDecisionRecord,
 ): PublicHandymanRequestTriage {
-  return { ...record, createdAt: record.createdAt.toISOString() };
+  return { ...record, createdAt: record.createdAt.toISOString(),
+    policyCatalogUpdatedAt: record.policyCatalogUpdatedAt?.toISOString() ?? null };
 }
 
 /**
@@ -139,6 +141,8 @@ export async function recordHandymanRequestTriage(
         buildingId: request.buildingId,
       });
 
+      const policy = await resolveTriagePolicy(tx, request, input, actorUserId);
+
       // 4) F2 pre-check inside the transaction (the UNIQUE constrains
       //    races); duplicates resolve to the SAME 409 contract.
       const existing = await handymanRequestTriageRepository.findByRequest(
@@ -156,6 +160,7 @@ export async function recordHandymanRequestTriage(
         buildingId: request.buildingId,
         triageDisposition,
         triageNote,
+        ...policy,
         actorUserId,
       });
 
@@ -181,6 +186,12 @@ export async function recordHandymanRequestTriage(
           metadata: {
             triageDecisionId: record.id,
             triageDisposition,
+            serviceInspectionPolicy: record.serviceInspectionPolicy,
+            policyServiceCatalogId: record.policyServiceCatalogId,
+            policyCatalogUpdatedAt: record.policyCatalogUpdatedAt?.toISOString() ?? null,
+            scopeClarityConfirmed: record.scopeClarityConfirmed,
+            // The reason is durable business data, not copied into the journal.
+            directQuotationAuthorized: triageDisposition === 'DIAGNOSIS',
           },
         },
         tx,
