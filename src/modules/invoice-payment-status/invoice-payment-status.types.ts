@@ -13,11 +13,12 @@ export type InvoicePaymentStatusRecord = {
   outstandingAmount: string; paidAt: Date | null; paymentReference: string | null;
   notes: string | null; recordedByUserId: string; createdAt: Date; updatedAt: Date;
   invoiceTotal: string; invoiceDueDate: string; invoiceStatus: TenantInvoiceStatus;
+  handymanExecutionScopeId: string | null;
 };
 export type PublicInvoicePaymentStatus = Omit<
   InvoicePaymentStatusRecord,
   'paidAmount' | 'outstandingAmount' | 'paidAt' | 'createdAt' | 'updatedAt' |
-  'invoiceTotal' | 'invoiceDueDate' | 'invoiceStatus'
+  'invoiceTotal' | 'invoiceDueDate' | 'invoiceStatus' | 'handymanExecutionScopeId'
 > & {
   paidAmount: number; outstandingAmount: number; paidAt: string | null;
   createdAt: string; updatedAt: string;

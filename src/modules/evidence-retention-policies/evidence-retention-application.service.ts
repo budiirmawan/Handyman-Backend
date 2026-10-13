@@ -41,6 +41,11 @@ const PARENT_BUILDING_SQL: Record<string, string> = {
   FINDING_VERIFICATION: `SELECT f.building_id FROM reviews r
      JOIN findings f ON f.id = r.target_id
     WHERE r.id = $1 AND r.target_type = 'FINDING'`,
+  HANDYMAN_CUSTOMER_PAYMENT: `SELECT es.building_id
+     FROM handyman_customer_payments p
+     JOIN handyman_customer_transactions tx ON tx.id = p.transaction_id
+     JOIN handyman_execution_scopes es ON es.id = tx.execution_scope_id
+    WHERE p.id = $1`,
   // FORM_INSTANCE / CHECKLIST_EXECUTION carry no building — client scope only.
 };
 

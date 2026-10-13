@@ -28,7 +28,7 @@ import type {
 function publicLine(line: TenantInvoiceLineRecord): PublicTenantInvoiceLine {
   return {
     ...line,
-    sourceId: (line.tenantChargeId ?? line.utilityBillId)!,
+    sourceId: (line.tenantChargeId ?? line.utilityBillId ?? line.handymanChargeLineId)!,
     amount: Number(line.amountSnapshot),
     createdAt: line.createdAt.toISOString(),
   };
@@ -78,6 +78,9 @@ async function resolveEligibleSource(
   if (!allowExisting && await tenantInvoiceRepository.findLineBySource(input.sourceType, input.sourceId)) {
     throw tenantInvoiceSourceDuplicateError();
   }
+  if (input.sourceType !== 'HANDYMAN_CHARGE' && invoice.handymanExecutionScopeId !== null) {
+    throw tenantInvoiceSourceInvalidError();
+  }
   /* CUR-02 PART 02: an Invoice must have one exact governed header currency,
      and every source currency must be known and exactly equal it. Unknown or
      mixed source currency fails closed; no substitution, conversion, or Client
@@ -96,8 +99,32 @@ async function resolveEligibleSource(
     if (charge.currencyCode !== invoice.currencyCode) throw tenantInvoiceCurrencyMismatchError();
     return {
       invoiceId: invoice.id, sourceType: input.sourceType,
-      tenantChargeId: charge.id, utilityBillId: null, amountSnapshot: charge.amount,
-      currencyCode: charge.currencyCode,
+      tenantChargeId: charge.id, utilityBillId: null, handymanChargeLineId: null,
+      amountSnapshot: charge.amount, currencyCode: charge.currencyCode,
+    };
+  }
+  if (input.sourceType === 'HANDYMAN_CHARGE') {
+    const charge = await tenantInvoiceRepository.findHandymanChargeLine(input.sourceId);
+    if (!charge || charge.clientId !== invoice.clientId ||
+        charge.tenantCompanyId !== invoice.tenantCompanyId ||
+        charge.buildingId !== invoice.buildingId || charge.spaceId !== invoice.spaceId ||
+        charge.currencyCode !== invoice.currencyCode ||
+        (invoice.handymanExecutionScopeId !== null &&
+          invoice.handymanExecutionScopeId !== charge.executionScopeId)) {
+      throw tenantInvoiceSourceInvalidError();
+    }
+    if (!allowExisting && invoice.handymanExecutionScopeId === null &&
+        (await tenantInvoiceRepository.listLines(invoice.id)).length !== 0) {
+      // The first Handyman line claims the invoice for exactly one scope;
+      // existing non-Handyman sources cannot be mixed into that invoice.
+      throw tenantInvoiceSourceInvalidError();
+    }
+    return {
+      invoiceId: invoice.id, sourceType: input.sourceType,
+      tenantChargeId: null, utilityBillId: null,
+      handymanChargeLineId: charge.id,
+      handymanExecutionScopeId: charge.executionScopeId,
+      amountSnapshot: charge.amount, currencyCode: charge.currencyCode,
     };
   }
   const bill = await utilityBillRepository.findById(input.sourceId);
@@ -115,8 +142,8 @@ async function resolveEligibleSource(
   if (bill.currency !== invoice.currencyCode) throw tenantInvoiceCurrencyMismatchError();
   return {
     invoiceId: invoice.id, sourceType: input.sourceType,
-    tenantChargeId: null, utilityBillId: bill.id, amountSnapshot: bill.billAmount,
-    currencyCode: bill.currency,
+    tenantChargeId: null, utilityBillId: bill.id, handymanChargeLineId: null,
+    amountSnapshot: bill.billAmount, currencyCode: bill.currency,
   };
 }
 
@@ -198,7 +225,7 @@ export async function finalizeTenantInvoice(id: string, actor: string): Promise<
   for (const line of lines) {
     await resolveEligibleSource(current, {
       sourceType: line.sourceType,
-      sourceId: (line.tenantChargeId ?? line.utilityBillId)!,
+      sourceId: (line.tenantChargeId ?? line.utilityBillId ?? line.handymanChargeLineId)!,
     }, true);
   }
   const finalized = await tenantInvoiceRepository.finalize(id, actor);

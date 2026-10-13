@@ -675,7 +675,7 @@ describe('INT-LC-19-BE PART 11 — Tenant Management & Commercial Billing OpenAP
     }
     assert.deepEqual(schemas.TenantCompanyStatus.enum, ['ACTIVE', 'INACTIVE']);
     assert.deepEqual(schemas.TenantInvoiceStatus.enum, ['DRAFT', 'FINALIZED', 'CANCELLED']);
-    assert.deepEqual(schemas.TenantInvoiceSourceType.enum, ['TENANT_CHARGE', 'UTILITY_BILL']);
+    assert.deepEqual(schemas.TenantInvoiceSourceType.enum, ['TENANT_CHARGE', 'UTILITY_BILL', 'HANDYMAN_CHARGE']);
     assert.deepEqual(schemas.InvoicePaymentStatusCode.enum, [
       'UNPAID',
       'PARTIALLY_PAID',
@@ -713,18 +713,18 @@ describe('INT-LC-19-BE PART 11 — Tenant Management & Commercial Billing OpenAP
   it('Census validation after PART 11', () => {
     const platformOpenApi = openapi.filter((o) => o.path.startsWith('/platform'));
     const operationalOpenApi = openapi.filter((o) => !o.path.startsWith('/platform'));
-    assert.equal(openapi.length, 1598, 'Total OpenAPI count must be 1,598 (1531 + 67)');
+    assert.equal(openapi.length, 1826, 'Total OpenAPI count must be 1,826 (1,824 at HEAD + 2 implemented Handyman Care operations)');
     assert.equal(platformOpenApi.length, 69);
-    assert.equal(operationalOpenApi.length, 1529, 'Operational OpenAPI count must be 1,529 (1462 + 67)');
+    assert.equal(operationalOpenApi.length, 1757, 'Operational OpenAPI count must be 1,757 (1,755 at HEAD + 2 implemented Handyman Care operations)');
     const inScopeOperational = runtime.filter(
       (r) => !r.path.startsWith('/platform') && r.path !== '/',
     );
-    assert.equal(inScopeOperational.length, 1617);
-    assert.equal(inScopeOperational.length - operationalOpenApi.length, 88);
+    assert.equal(inScopeOperational.length, 1761);
+    assert.equal(inScopeOperational.length - operationalOpenApi.length, 4);
     const documentedCanon = new Set(operationalOpenApi.map((o) => `${o.method} ${o.canon}`));
     const unmappedDistinct = inScopeOperational.filter(
       (r) => !documentedCanon.has(`${r.method} ${r.canon}`),
     );
-    assert.equal(unmappedDistinct.length, 87);
+    assert.equal(unmappedDistinct.length, 5);
   });
 });

@@ -3092,6 +3092,182 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           description: Authority/storage failure; no stale or broader fallback.
+  /handyman/care/requests/{requestId}/projection:
+    get:
+      operationId: getCareWorkspaceOperationalProjection
+      summary: Read selected-request Handyman operations within current Care occupancy
+      tags: [Handoff]
+      description: >-
+        Read-only CR-HM P0 projection for exactly one selected request. A live
+        CUSTOMER_CARE workspace credential, current property grant, and current
+        effective tenant/building/space occupancy are revalidated in the same SQL
+        statement as the request-bound data. Returns bounded Inspection,
+        Quotation, Scheduling, QC/evidence/defect, BAST, invoice/payment, Warranty,
+        and Activity Timeline projections. Every child collection is capped and
+        bound through the selected request's client and execution scope. Invoice
+        payment status is derived only from confirmed Handyman ledger allocations
+        on linked invoice charge lines; caller-supplied paidAmount and the manual
+        payment-status table are not used. This endpoint exposes no decision or
+        lifecycle command and does not authorize Finance Verify/Reject, quotation
+        decisions, BAST acceptance, warranty claim approval, free rework, or
+        Manager CLOSE. Cache-Control is no-store.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Exact selected space; omit for building-only requests.
+      responses:
+        '200':
+          description: Bounded selected-request projection; absent lifecycle sections are null or empty arrays.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareHandymanOperationalProjection' }
+        '400':
+          description: Invalid selectors, unknown query fields or a request body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED; no local User or PIC bearer is accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for missing request, revoked grant, turnover or context mismatch.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Authority or storage failure; no stale or broader fallback.
+  /handyman/care/requests/{requestId}/invoices/{invoiceId}/payments/{paymentId}/proof:
+    post:
+      operationId: uploadCareHandymanCustomerPaymentProof
+      summary: Upload one bound proof file for a pending Handyman payment claim
+      tags: [Handoff]
+      description: >-
+        Uploads a PHOTO or DOCUMENT through the shared evidence_submissions engine.
+        The payment must be PENDING and must resolve through its transaction and
+        execution scope to the same selected request, tenant, building, space,
+        currency, and finalized single-scope Handyman invoice. Current Care grant
+        and occupancy are checked before the multipart file is read and repeated
+        under the payment-row lock in the write transaction. The file is hashed,
+        stored, and linked as one non-reusable evidence row; identical content on
+        an identical retry returns the existing proof. A conflicting second proof
+        is rejected. Upload does not confirm funds, allocate a payment, alter
+        invoice PAID state, or create ledger settlement. Generic User evidence
+        upload/list cannot bypass this parent binding. Cache-Control is no-store.
+      security:
+        - careWorkspaceSession: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: invoiceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: '#/components/schemas/CareHandymanPaymentProofUploadRequest' }
+      responses:
+        '201':
+          description: New evidence proof stored; no funds or invoice status changed.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareHandymanPaymentProofUploadResult' }
+        '200':
+          description: Idempotent replay returned the exact existing proof for this payment.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CareHandymanPaymentProofUploadResult' }
+        '400':
+          description: Invalid selectors, evidence type, MIME type or file size.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401':
+          description: HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Uniform HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND for any absent or mismatched payment/invoice/request/scope/occupancy context.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: Payment is no longer pending or a different proof is already bound; no financial state is changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Evidence storage, retention or authority failure.
   /handyman/care/requests:
     get:
       operationId: listCareWorkspaceRequests
@@ -75789,6 +75965,110 @@ components:
           items: { $ref: '#/components/schemas/CareCatalogueProfile' }
         nextCursor: { type: string, nullable: true }
         evaluatedAt: { type: string, format: date-time }
+    CareHandymanOperationalProjection:
+      type: object
+      additionalProperties: false
+      required: [readOnly, request, inspection, quotation, scheduling, quality, bast, invoicePayment, warranty, activityTimeline, evaluatedAt]
+      description: >-
+        Selected-request-only and read-only. Nested history is capped at 50 rows
+        per collection (with smaller document/version limits); no decision command
+        or caller-derived payment amount is present.
+      properties:
+        readOnly: { type: boolean, const: true }
+        request:
+          type: object
+          additionalProperties: false
+          required: [id, clientId, tenantCompanyId, buildingId, spaceId, status, executionScopeId, createdAt, updatedAt]
+          properties:
+            id: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            tenantCompanyId: { type: string, format: uuid }
+            buildingId: { type: string, format: uuid }
+            spaceId: { type: string, format: uuid, nullable: true }
+            status: { type: string }
+            executionScopeId: { type: string, format: uuid, nullable: true }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+        inspection:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            result: { type: string }
+            notes: { type: string }
+            inspectedAt: { type: string, format: date-time }
+        quotation:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string, format: uuid }
+            createdAt: { type: string, format: date-time }
+            versions: { type: array, maxItems: 20, items: { type: object, additionalProperties: true } }
+        scheduling:
+          type: object
+          additionalProperties: false
+          properties:
+            readiness: { type: array, maxItems: 50, items: { type: object, additionalProperties: true } }
+            appointments: { type: array, maxItems: 50, items: { type: object, additionalProperties: true } }
+        quality:
+          type: object
+          additionalProperties: false
+          properties:
+            evidence: { type: array, maxItems: 50, items: { type: object, additionalProperties: true } }
+            qcRuns: { type: array, maxItems: 50, items: { type: object, additionalProperties: true } }
+            defects: { type: array, maxItems: 50, items: { type: object, additionalProperties: true } }
+        bast: { type: array, maxItems: 10, items: { type: object, additionalProperties: true } }
+        invoicePayment:
+          type: object
+          additionalProperties: false
+          properties:
+            invoice: { type: object, nullable: true, additionalProperties: true }
+            paymentStatus: { type: object, nullable: true, additionalProperties: true }
+            payments: { type: array, maxItems: 50, items: { type: object, additionalProperties: true } }
+        warranty:
+          type: object
+          nullable: true
+          additionalProperties: true
+        activityTimeline:
+          type: array
+          maxItems: 100
+          items: { type: object, additionalProperties: true }
+        evaluatedAt: { type: string, format: date-time }
+    CareHandymanPaymentProofUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [evidenceType, file]
+      properties:
+        evidenceType:
+          type: string
+          enum: [PHOTO, DOCUMENT]
+          description: No signature or other evidence execution type is accepted.
+        file:
+          type: string
+          format: binary
+          description: Successfully uploaded file, at most 50 MiB; allowed MIME types are checked against evidenceType.
+    CareHandymanPaymentProofUploadResult:
+      type: object
+      additionalProperties: false
+      required: [proof, replayed]
+      properties:
+        proof:
+          type: object
+          additionalProperties: false
+          required: [id, executionType, executionId, evidenceType, originalFileName, mimeType, fileSize, submittedByUserId, status, createdAt, contentSha256]
+          properties:
+            id: { type: string, format: uuid }
+            executionType: { type: string, enum: [HANDYMAN_CUSTOMER_PAYMENT] }
+            executionId: { type: string, format: uuid }
+            evidenceType: { type: string, enum: [PHOTO, DOCUMENT] }
+            originalFileName: { type: string }
+            mimeType: { type: string }
+            fileSize: { type: integer, minimum: 1, maximum: 52428800 }
+            submittedByUserId: { type: string, format: uuid, nullable: true, enum: [null] }
+            status: { type: string, enum: [ACTIVE] }
+            createdAt: { type: string, format: date-time }
+            contentSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        replayed: { type: boolean }
     CareWorkspaceRequestPage:
       type: object
       additionalProperties: false
@@ -117709,10 +117989,10 @@ components:
       enum: [DRAFT, FINALIZED, CANCELLED]
     TenantInvoiceSourceType:
       type: string
-      enum: [TENANT_CHARGE, UTILITY_BILL]
+      enum: [TENANT_CHARGE, UTILITY_BILL, HANDYMAN_CHARGE]
     PublicTenantInvoiceLine:
       type: object
-      required: [id, invoiceId, sourceType, tenantChargeId, utilityBillId, currencyCode, sourceId, amount, createdAt]
+      required: [id, invoiceId, sourceType, tenantChargeId, utilityBillId, handymanChargeLineId, currencyCode, sourceId, amount, createdAt]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
         invoiceId: { $ref: "#/components/schemas/Uuid" }
@@ -117723,19 +118003,26 @@ components:
         utilityBillId:
           allOf: [{ $ref: "#/components/schemas/Uuid" }]
           nullable: true
+        handymanChargeLineId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
         currencyCode: { type: string, nullable: true }
         sourceId: { $ref: "#/components/schemas/Uuid" }
         amount: { type: number }
         createdAt: { type: string, format: date-time }
     PublicTenantInvoice:
       type: object
-      required: [id, clientId, tenantCompanyId, buildingId, spaceId, invoiceNumber, invoiceDate, dueDate, status, subtotal, totalAmount, currencyCode, notes, createdByUserId, finalizedAt, finalizedByUserId, cancelledAt, cancelledByUserId, createdAt, updatedAt, lines]
+      required: [id, clientId, tenantCompanyId, buildingId, spaceId, handymanExecutionScopeId, invoiceNumber, invoiceDate, dueDate, status, subtotal, totalAmount, currencyCode, notes, createdByUserId, finalizedAt, finalizedByUserId, cancelledAt, cancelledByUserId, createdAt, updatedAt, lines]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
         clientId: { $ref: "#/components/schemas/Uuid" }
         tenantCompanyId: { $ref: "#/components/schemas/Uuid" }
         buildingId: { $ref: "#/components/schemas/Uuid" }
         spaceId: { $ref: "#/components/schemas/Uuid" }
+        handymanExecutionScopeId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+          description: Present only for a single-scope Handyman-only invoice.
         invoiceNumber: { type: string }
         invoiceDate: { type: string, format: date }
         dueDate: { type: string, format: date }

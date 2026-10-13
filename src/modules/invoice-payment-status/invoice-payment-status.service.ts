@@ -1,3 +1,4 @@
+import { AppError } from '../../shared/errors';
 import { contextAccessService } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { tenantInvoiceNotFoundError, tenantInvoiceRepository } from '../tenant-invoices';
@@ -15,7 +16,7 @@ import type {
 
 function toPublic(record: InvoicePaymentStatusRecord): PublicInvoicePaymentStatus {
   const { invoiceTotal: _invoiceTotal, invoiceDueDate: _invoiceDueDate,
-    invoiceStatus: _invoiceStatus, ...base } = record;
+    invoiceStatus: _invoiceStatus, handymanExecutionScopeId: _handymanExecutionScopeId, ...base } = record;
   return { ...base, paidAmount:Number(record.paidAmount),
     outstandingAmount:Number(record.outstandingAmount),
     paidAt:record.paidAt?.toISOString()??null,
@@ -44,6 +45,7 @@ async function loadAccessibleById(id:string,actor:string):Promise<InvoicePayment
 export async function recordInvoicePaymentStatus(input:RecordInvoicePaymentStatusInput,actor:string):Promise<PublicInvoicePaymentStatus>{
   const invoice=await tenantInvoiceRepository.findById(input.invoiceId);if(!invoice)throw tenantInvoiceNotFoundError();
   await contextAccessService.assertBuildingAccess(actor,invoice.buildingId);
+  if(invoice.handymanExecutionScopeId)throw AppError.badRequest('Handyman invoice payment status is derived from the authoritative ledger.');
   if(!['FINALIZED','CANCELLED'].includes(invoice.status))throw invoicePaymentStatusInvoiceInvalidError();
   if(await invoicePaymentStatusRepository.findByInvoiceId(invoice.id))throw invoicePaymentStatusAlreadyExistsError();
   const paidAt=input.paidAmount===0?null:(input.paidAt??null);assertPaidAt(input.paidAmount,paidAt);
@@ -73,7 +75,7 @@ export async function listInvoicePaymentStatuses(filters:InvoicePaymentStatusFil
   return(await invoicePaymentStatusRepository.list(filters,ids)).map(toPublic);
 }
 export async function updateInvoicePaymentStatus(id:string,input:UpdateInvoicePaymentStatusInput,actor:string):Promise<PublicInvoicePaymentStatus>{
-  const current=await loadAccessibleById(id,actor);if(current.invoiceStatus==='CANCELLED'||current.paymentStatus==='CANCELLED')throw invoicePaymentStatusCancelledError();
+  const current=await loadAccessibleById(id,actor);if(current.handymanExecutionScopeId)throw AppError.badRequest('Handyman invoice payment status is derived from the authoritative ledger.');if(current.invoiceStatus==='CANCELLED'||current.paymentStatus==='CANCELLED')throw invoicePaymentStatusCancelledError();
   const paidAmount=input.paidAmount??Number(current.paidAmount);
   const paidAt=paidAmount===0?null:(input.paidAt===undefined?current.paidAt:input.paidAt);
   assertPaidAt(paidAmount,paidAt);

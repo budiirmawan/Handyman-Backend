@@ -1,4 +1,7 @@
 import { getCareWorkspaceRequestDetail } from './care-workspace-request-detail.service';
+import { getCareWorkspaceOperationalProjection } from './care-workspace-operational.service';
+import multer from 'multer';
+import { HANDYMAN_PAYMENT_PROOF_MAX_BYTES, assertCareHandymanPaymentProofContext, parseCareHandymanPaymentProofSelection, uploadCareHandymanPaymentProof } from './care-workspace-payment-proof.service';
 import { listCareWorkspaceRequests } from './care-workspace-requests.service';
 import { issueCareCreateExchange } from './care-create-exchange.service';
 import { readCareWorkspaceCatalogue } from './care-workspace-catalogue.service';
@@ -8,11 +11,12 @@ import { getAppConfig } from '../../config';
 import { sendSuccess } from '../../shared/api-response';
 import { AppError } from '../../shared/errors';
 import { isLoginRateLimited, recordLoginFailure, recordLoginSuccess } from '../auth/login-rate-limit';
-import { admitCareWorkspace, revokeCareWorkspaceSession, workspaceUnauthorized } from './care-workspace.service';
+import { admitCareWorkspace, resolveCareWorkspacePrincipal, revokeCareWorkspaceSession, workspaceUnauthorized } from './care-workspace.service';
 
 /** Care-only credential surface; no local User middleware or grant administration. */
 export function createCareWorkspaceRouter(): Router {
   const router = Router();
+  const proofUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: HANDYMAN_PAYMENT_PROOF_MAX_BYTES, files: 1 } });
   router.post('/handyman/care/session', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     // Existing local login-throttle convention, isolated namespace and socket
@@ -122,6 +126,49 @@ export function createCareWorkspaceRouter(): Router {
       const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await getCareWorkspaceRequestDetail(match[1], req.params.requestId, req.query, req.body));
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/projection', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      sendSuccess(res, await getCareWorkspaceOperationalProjection(
+        match[1], req.params.requestId, req.query, req.body));
+    } catch (error) { next(error); }
+  });
+  router.post('/handyman/care/requests/:requestId/invoices/:invoiceId/payments/:paymentId/proof', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      const principal = await resolveCareWorkspacePrincipal(match[1]);
+      if (Object.keys(req.query).length === 0) throw AppError.validation('Selected Care workspace context is required.');
+      const selection = parseCareHandymanPaymentProofSelection(req.query);
+      await assertCareHandymanPaymentProofContext({ principal, selection,
+        requestId: req.params.requestId, invoiceId: req.params.invoiceId, paymentId: req.params.paymentId });
+      const file = await new Promise<Express.Multer.File>((resolve, reject) => {
+        proofUpload.single('file')(req, res, error => {
+          if (error) {
+            reject(error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
+              ? AppError.badRequest('Uploaded file exceeds the 50 MB limit.')
+              : AppError.badRequest('Payment proof upload failed.'));
+            return;
+          }
+          const uploaded = (req as typeof req & { file?: Express.Multer.File }).file;
+          if (!uploaded) { reject(AppError.validation('Multipart field \"file\" is required.')); return; }
+          resolve(uploaded);
+        });
+      });
+      const body = req.body as Record<string, unknown>;
+      if (!body || Object.keys(body).some(key => key !== 'evidenceType')) {
+        throw AppError.validation('Only evidenceType and the file field are accepted.');
+      }
+      const result = await uploadCareHandymanPaymentProof({ principal, selection,
+        requestId: req.params.requestId, invoiceId: req.params.invoiceId, paymentId: req.params.paymentId,
+        evidenceType: body.evidenceType,
+        file: { buffer: file.buffer, mimetype: file.mimetype, originalname: file.originalname, size: file.size } });
+      sendSuccess(res, result, result.replayed ? 200 : 201);
     } catch (error) { next(error); }
   });
   return router;

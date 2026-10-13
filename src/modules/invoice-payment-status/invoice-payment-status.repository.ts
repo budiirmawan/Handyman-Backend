@@ -13,7 +13,8 @@ const SELECT = `ps.id, ps.invoice_id AS "invoiceId", ps.client_id AS "clientId",
   ps.payment_reference AS "paymentReference", ps.notes,
   ps.recorded_by_user_id AS "recordedByUserId", ps.created_at AS "createdAt",
   ps.updated_at AS "updatedAt", i.total_amount::text AS "invoiceTotal",
-  i.due_date::text AS "invoiceDueDate", i.status AS "invoiceStatus"`;
+  i.due_date::text AS "invoiceDueDate", i.status AS "invoiceStatus",
+  i.handyman_execution_scope_id AS "handymanExecutionScopeId"`;
 const FROM = `invoice_payment_status ps JOIN tenant_invoices i ON i.id = ps.invoice_id`;
 type Action = 'RECORDED' | 'UPDATED';
 async function appendHistory(client: PoolClient, record: InvoicePaymentStatusRecord, action: Action, actor: string): Promise<void> {
