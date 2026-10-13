@@ -1,0 +1,283 @@
+{
+  "generatedAt": "2026-10-13T15:53:49.075Z",
+  "disclaimer": "LOCAL REHEARSAL on isolated scratch PostgreSQL 16 — NOT live Railway staging. Latency figures are local-only and NOT comparable to Railway staging or production.",
+  "topology": {
+    "services": "single Railway service (railway.json): node dist/server.js, healthcheckPath /api/v1/health, DueJobScheduler runs in-process",
+    "nodeImage": "node:22-bookworm-slim (Dockerfile); engines node >=20",
+    "migrations": "explicit one-shot: node dist/database/cli.js migrate (server never auto-migrates)"
+  },
+  "databaseConfigUsed": {
+    "host": "127.0.0.1",
+    "port": 55432,
+    "name": "asentra_fresh",
+    "ssl": false,
+    "pool": {
+      "max": 10,
+      "min": 0,
+      "connectionTimeoutMs": 5000,
+      "idleTimeoutMs": 30000,
+      "statementTimeoutMs": 0,
+      "idleInTransactionSessionTimeoutMs": 0
+    }
+  },
+  "fixtures": {
+    "clientA": "fee4c9ad-431d-46b1-8d25-200ab776790a",
+    "clientB": "5c5ccc3c-ad7f-4a50-903f-ca4a03698d88",
+    "task1": "e24d326f-03c5-4b73-978a-ea4ad80154ce",
+    "task2": "98804a50-463d-48d7-9470-530526a4641d",
+    "binding1": "6174926a-9574-4191-89e0-92942a90886f"
+  },
+  "checks": [
+    {
+      "id": "H1-health",
+      "status": "PASS",
+      "detail": "GET /api/v1/health → 200 (39.16 ms)"
+    },
+    {
+      "id": "H2-readiness",
+      "status": "PASS",
+      "detail": "GET /api/v1/health/database → 200 (4.36 ms)"
+    },
+    {
+      "id": "S1-feed-rbac-anon",
+      "status": "PASS",
+      "detail": "anonymous → 401"
+    },
+    {
+      "id": "S1-feed-scoped-200",
+      "status": "PASS",
+      "detail": "scoped feed → 200, 1 item(s), task1 present=true"
+    },
+    {
+      "id": "S1-feed-marker-semantics",
+      "status": "PASS",
+      "detail": "exactly one ACTIVE binding → marker=6174926a-9574-4191-89e0-92942a90886f"
+    },
+    {
+      "id": "S1-feed-isolation",
+      "status": "PASS",
+      "detail": "cross-company task2 absent from feed (company/property isolation)"
+    },
+    {
+      "id": "S1-feed-pagination",
+      "status": "PASS",
+      "detail": "?page=1&pageSize=1 → 200"
+    },
+    {
+      "id": "S1-feed-shift-current",
+      "status": "PASS",
+      "detail": "?shift=current → 200"
+    },
+    {
+      "id": "S1-feed-shift-invalid",
+      "status": "PASS",
+      "detail": "?shift=tomorrow → 400"
+    },
+    {
+      "id": "S1-feed-rbac-forbidden",
+      "status": "PASS",
+      "detail": "missing permissions → 403"
+    },
+    {
+      "id": "S1-feed-empty-case",
+      "status": "PASS",
+      "detail": "permissioned user with no assignments → 200, items=0"
+    },
+    {
+      "id": "S1-marker-empty-case-sql",
+      "status": "PASS",
+      "detail": "SQL-level marker cardinality verified (0/1/NULL cases pinned in regression suite)"
+    },
+    {
+      "id": "S2-operations-queue",
+      "status": "PASS",
+      "detail": "GET /api/v1/handyman/operations/queue?clientId=fee4c9ad-431d-46b1-8d25-200ab776790a&limit=20 → 200 (expected 200) (47.59 ms)"
+    },
+    {
+      "id": "S2-care-requests-session-contract",
+      "status": "PASS",
+      "detail": "GET /api/v1/handyman/care/requests → 401 (expected 401) (18.23 ms)"
+    },
+    {
+      "id": "S2-work-orders-team",
+      "status": "PASS",
+      "detail": "GET /api/v1/work-orders/team → 200 (expected 200) (15.11 ms)"
+    },
+    {
+      "id": "S2-audit-events",
+      "status": "PASS",
+      "detail": "GET /api/v1/auth/audit-events → 200 (expected 200) (7.85 ms)"
+    },
+    {
+      "id": "P1-workload-stability",
+      "status": "PASS",
+      "detail": "25 iterations × 5 endpoints, all 200=true"
+    },
+    {
+      "id": "P2-connection-hygiene",
+      "status": "PASS",
+      "detail": "pool total=4 idle=4 waiting=0 (max=10); pg_stat_activity total=4 active=1"
+    },
+    {
+      "id": "P3-q1-q2-plans",
+      "status": "PASS",
+      "detail": "Q1/Q2 shapes on rehearsal data use index access (no seq scan on empty client fixture)"
+    },
+    {
+      "id": "S1-no-min-uuid-errors",
+      "status": "PASS",
+      "detail": "PG16 still has no min(uuid) (server property) while every application path returned its expected status — no min(uuid) 500 occurred"
+    }
+  ],
+  "latencyLocalOnly": {
+    "H1-health": {
+      "n": 1,
+      "p50": 39.159,
+      "p95": 39.159,
+      "min": 39.159,
+      "max": 39.159
+    },
+    "H2-readiness": {
+      "n": 1,
+      "p50": 4.356,
+      "p95": 4.356,
+      "min": 4.356,
+      "max": 4.356
+    },
+    "S1-feed-anon": {
+      "n": 1,
+      "p50": 13.637,
+      "p95": 13.637,
+      "min": 13.637,
+      "max": 13.637
+    },
+    "S1-feed-scoped": {
+      "n": 1,
+      "p50": 45.434,
+      "p95": 45.434,
+      "min": 45.434,
+      "max": 45.434
+    },
+    "S1-feed-paged": {
+      "n": 1,
+      "p50": 36.543,
+      "p95": 36.543,
+      "min": 36.543,
+      "max": 36.543
+    },
+    "S1-feed-shift": {
+      "n": 1,
+      "p50": 19.64,
+      "p95": 19.64,
+      "min": 19.64,
+      "max": 19.64
+    },
+    "S1-feed-badshift": {
+      "n": 1,
+      "p50": 10.675,
+      "p95": 10.675,
+      "min": 10.675,
+      "max": 10.675
+    },
+    "S1-feed-forbidden": {
+      "n": 1,
+      "p50": 8.481,
+      "p95": 8.481,
+      "min": 8.481,
+      "max": 8.481
+    },
+    "S1-feed-empty": {
+      "n": 1,
+      "p50": 9.901,
+      "p95": 9.901,
+      "min": 9.901,
+      "max": 9.901
+    },
+    "S2-operations-queue": {
+      "n": 1,
+      "p50": 47.587,
+      "p95": 47.587,
+      "min": 47.587,
+      "max": 47.587
+    },
+    "S2-care-requests-session-contract": {
+      "n": 1,
+      "p50": 18.228,
+      "p95": 18.228,
+      "min": 18.228,
+      "max": 18.228
+    },
+    "S2-work-orders-team": {
+      "n": 1,
+      "p50": 15.107,
+      "p95": 15.107,
+      "min": 15.107,
+      "max": 15.107
+    },
+    "S2-audit-events": {
+      "n": 1,
+      "p50": 7.847,
+      "p95": 7.847,
+      "min": 7.847,
+      "max": 7.847
+    },
+    "P1-/api/v1/handyman/operations/queue?clientId=fee4c9ad-431d-46b1-8d25-200ab776790a&limit=20": {
+      "n": 25,
+      "p50": 11.743,
+      "p95": 20.727,
+      "min": 10.733,
+      "max": 20.811
+    },
+    "P1-/api/v1/work-orders/team": {
+      "n": 25,
+      "p50": 8.963,
+      "p95": 12.266,
+      "min": 8.056,
+      "max": 14.148
+    },
+    "P1-/api/v1/auth/audit-events": {
+      "n": 25,
+      "p50": 6.219,
+      "p95": 7.978,
+      "min": 5.531,
+      "max": 10.811
+    },
+    "P1-/api/v1/mobile/assignments": {
+      "n": 25,
+      "p50": 15.22,
+      "p95": 27.904,
+      "min": 13.784,
+      "max": 31.448
+    },
+    "P1-/api/v1/mobile/assignments?page=1&pageSize=5": {
+      "n": 25,
+      "p50": 16.121,
+      "p95": 22.394,
+      "min": 14.39,
+      "max": 23.337
+    }
+  },
+  "domainResults": {
+    "S2-operations-queue": {
+      "status": 200,
+      "ms": 47.59
+    },
+    "S2-care-requests-session-contract": {
+      "status": 401,
+      "ms": 18.23
+    },
+    "S2-work-orders-team": {
+      "status": 200,
+      "ms": 15.11
+    },
+    "S2-audit-events": {
+      "status": 200,
+      "ms": 7.85
+    }
+  },
+  "plans": {
+    "Q1": "Limit  (cost=0.42..13.31 rows=50 width=279) (actual time=0.011..0.022 rows=50 loops=1)\n  Buffers: shared hit=6\n  ->  Index Scan using handyman_service_requests_client_created_idx on handyman_service_requests  (cost=0.42..12928.55 rows=50137 width=279) (actual time=0.010..0.017 rows=50 loops=1)\n        Index Cond: (client_id = 'fee4c9ad-431d-46b1-8d25-200ab776790a'::uuid)\n        Buffers: shared hit=6\nPlanning:\n  Buffers: shared hit=112\nPlanning Time: 0.267 ms\nExecution Time: 0.038 ms",
+    "Q2": "Limit  (cost=0.42..13.44 rows=50 width=279) (actual time=0.010..0.019 rows=50 loops=1)\n  Buffers: shared hit=6\n  ->  Index Scan using handyman_service_requests_client_created_idx on handyman_service_requests  (cost=0.42..13053.79 rows=50132 width=279) (actual time=0.009..0.015 rows=50 loops=1)\n        Index Cond: ((client_id = 'fee4c9ad-431d-46b1-8d25-200ab776790a'::uuid) AND (ROW(created_at, id) > ROW('2000-01-01 00:00:00+00'::timestamp with time zone, '00000000-0000-4000-8000-000000000000'::uuid)))\n        Buffers: shared hit=6\nPlanning Time: 0.070 ms\nExecution Time: 0.046 ms"
+  },
+  "result": "PASS"
+}
