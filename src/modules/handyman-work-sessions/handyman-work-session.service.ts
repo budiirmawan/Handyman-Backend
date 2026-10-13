@@ -1,10 +1,7 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import {
@@ -153,11 +150,23 @@ async function listCurrentHelperRows(
 }
 
 /**
- * Shared authority preamble for PART 02 commands: scope exists +
- * AUTHORIZED, client context, CURRENT Lead resolution. Returns the
- * scope, resolution, and the actor's client id.
+ * CR-HM-SEC-01 PART 03C-1 + 03C-2 + 03C-3 + 03C-4 — CHECK_IN /
+ * START_WORK / PAUSE / RESUME / MATERIAL_RUN / COMPLETE / CHECK_OUT
+ * and the Lead reads (active session, time projection) authorization
+ * preamble. Same frozen worker
+ * contract — scope exists, CURRENT authoritative Lead resolved via
+ * the CR-HM-07 seam, actor IS that Lead — but the data-scope wall is
+ * the BE-02G building guard on the authoritative server-derived
+ * `executionScope.buildingId` (migration 0395): an explicit ACTIVE
+ * `user_building_assignment` to the scope's exact Building under its
+ * Client. The client-level `canAccessClient` wall is NOT sufficient
+ * here — a same-Client sibling Building assignment must not open the
+ * gate. The worker contract itself is unchanged: the Lead's action
+ * authority still derives from the assignment chain (never from an
+ * RBAC permission), and no admin-only rule is applied to the crew
+ * beyond this same per-Building data-scope guard.
  */
-async function authorityPreamble(
+async function commandAuthorityPreamble(
   scopeUuid: string,
   actorUserId: string,
 ) {
@@ -166,12 +175,13 @@ async function authorityPreamble(
     scopeUuid,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId,
-    scope.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 03C-1 — explicit ACTIVE building assignment to
+  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
+  // (no same-Client shortcut, no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   const resolution = await resolveHandymanAssignmentLead(
     scopeUuid,
     actorUserId,
@@ -200,7 +210,7 @@ export async function checkInHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  const { scope, resolution } = await authorityPreamble(
+  const { scope, resolution } = await commandAuthorityPreamble(
     scopeUuid,
     actorUuid,
   );
@@ -287,7 +297,7 @@ export async function startWorkHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  await authorityPreamble(scopeUuid, actorUuid);
+  await commandAuthorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     // Row lock first: transitions are single-threaded per session.
@@ -381,7 +391,7 @@ async function workClockTransition(
   const key = ensureKey(input.idempotencyKey);
   const rule = WORK_CLOCK_RULES[action];
 
-  await authorityPreamble(scopeUuid, actorUuid);
+  await commandAuthorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     const locked = await tx.query(
@@ -524,7 +534,7 @@ async function sessionCloseTransition(
   const key = ensureKey(input.idempotencyKey);
   const rule = SESSION_CLOSE_RULES[action];
 
-  const { resolution } = await authorityPreamble(scopeUuid, actorUuid);
+  const { resolution } = await commandAuthorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     const locked = await tx.query(
@@ -729,7 +739,7 @@ export async function getHandymanWorkSessionTimeProjection(
 ): Promise<HandymanWorkSessionTimeProjection> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await authorityPreamble(scopeUuid, actorUuid);
+  await commandAuthorityPreamble(scopeUuid, actorUuid);
 
   const latest = await getPool().query(
     `SELECT id, status, client_id FROM handyman_work_sessions
@@ -777,7 +787,7 @@ export async function getActiveHandymanWorkSession(
 ): Promise<HandymanWorkSessionActiveResult> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await authorityPreamble(scopeUuid, actorUuid);
+  await commandAuthorityPreamble(scopeUuid, actorUuid);
   const session = await handymanWorkSessionRepository
     .findActiveWorkSessionByExecutionScope(undefined, scopeUuid);
   if (!session) throw handymanWorkSessionNotFoundError();
@@ -813,8 +823,13 @@ export type HandymanCustomerCareWorkSessionsProjection = {
 /**
  * CR-HM-17 GAP PART 03 — Customer Care read projection for all work
  * sessions (active + CHECKED_OUT) on an execution scope. Enforces
- * `canAccessClient(actorUserId, scope.clientId)` without requiring
- * Crew Lead identity.
+ * the BE-02G building guard on the scope's authoritative
+ * `building_id` WITHOUT requiring Crew Lead identity: the actor is
+ * a local Customer Care staff user (route: `tenant_company.read`);
+ * BM SSO / care-workspace principals carry no userId and have no
+ * path to this projection, so the staff per-Building rule applies
+ * without touching the separate BM SSO represented-tenant/property
+ * scope model.
  */
 export async function getHandymanWorkSessionsCustomerCareView(
   executionScopeId: string,
@@ -829,11 +844,13 @@ export async function getHandymanWorkSessionsCustomerCareView(
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
 
-  const allowed = await contextAccessService.canAccessClient(
-    actorUuid,
-    scope.clientId,
-  );
-  if (!allowed) throw buildingAccessDeniedError();
+  // CR-HM-SEC-01 PART 03C-4 — Customer Care read authorization:
+  // explicit ACTIVE assignment to the scope's exact Building under
+  // its Client (no same-Client shortcut, no existence/content leak).
+  await assertBuildingScopedResourceAccess(actorUuid, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
 
   const nowRow = await getPool().query(`SELECT NOW() AS server_now`);
   const serverNow: Date = nowRow.rows[0].server_now;

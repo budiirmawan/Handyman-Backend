@@ -1,7 +1,7 @@
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
-import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
 import { handymanRequestDiagnosisRepository } from './handyman-request-diagnosis.repository';
@@ -92,15 +92,19 @@ export async function recordHandymanReferral(
       );
       if (!request) throw handymanServiceRequestNotFoundError();
 
-      // 2) Realm authority: existing accessible-Client convention.
-      if (
-        !(await contextAccessService.canAccessClient(
-          actorUserId,
-          request.clientId,
-        ))
-      ) {
-        throw buildingAccessDeniedError();
-      }
+      // 2) Realm authority: BE-02G exact-Building check on the
+      //    locked request's authoritative {clientId, buildingId}
+      //    (PART 06J), replacing the client-level canAccessClient
+      //    shortcut: a same-Client sibling Building assignment must
+      //    not record a referral. The denial vocabulary (403
+      //    BUILDING_ACCESS_DENIED — the guard's own thrower) and the
+      //    wall's position (after the request lock/404, before
+      //    eligibility, the uniqueness pre-check and mutation) are
+      //    unchanged.
+      await assertBuildingScopedResourceAccess(actorUserId, {
+        clientId: request.clientId,
+        buildingId: request.buildingId,
+      });
 
       // 3) F5/F9 eligibility: the immutable diagnosis is the ONLY source.
       const diagnosis = await handymanRequestDiagnosisRepository.findByRequest(
@@ -186,13 +190,19 @@ export async function recordHandymanReferral(
 
 /** Bounded read of the immutable F2 referral record for one request. */
 /**
- * Bounded read. CR-HM-03 PART 05A (FROZEN F8): with an authenticated
- * actor supplied (HTTP), the existing accessible-Client scope is enforced
- * server-side against the request-derived scope.
+ * Bounded read. CR-HM-03 PART 05A (FROZEN F8) + CR-HM-SEC-01
+ * PART 07C-2F (audit 07C-1, class C): the actor is MANDATORY — the
+ * actor-less bypass is removed, so EVERY read enforces the BE-02G
+ * exact-Building authorization against the persisted request's
+ * authoritative {clientId, buildingId} (PART 06J), in the wall's
+ * original position (after the request 404, before the referral
+ * lookup). Missing/invalid actor fails closed at validation; there
+ * is no internal bypass. The HTTP contract is unchanged: the
+ * lifecycle-api controller already passes req.auth.userId.
  */
 export async function getHandymanRequestReferral(
   handymanRequestId: string,
-  actorUserId?: string,
+  actorUserId: string,
 ): Promise<PublicHandymanRequestReferral> {
   if (!isValidUuid(handymanRequestId)) {
     throw AppError.validation('Request validation failed.', [
@@ -202,26 +212,27 @@ export async function getHandymanRequestReferral(
       },
     ]);
   }
-  if (actorUserId !== undefined) {
-    if (!isValidUuid(actorUserId)) {
-      throw AppError.validation('Request validation failed.', [
-        { field: 'actorUserId', message: 'actorUserId must be a valid UUID.' },
-      ]);
-    }
-    const request = await handymanServiceRequestRepository.findById(
-      undefined,
-      handymanRequestId,
-    );
-    if (!request) throw handymanServiceRequestNotFoundError();
-    if (
-      !(await contextAccessService.canAccessClient(
-        actorUserId,
-        request.clientId,
-      ))
-    ) {
-      throw buildingAccessDeniedError();
-    }
+  if (!isValidUuid(actorUserId)) {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'actorUserId', message: 'actorUserId must be a valid UUID.' },
+    ]);
   }
+  const request = await handymanServiceRequestRepository.findById(
+    undefined,
+    handymanRequestId,
+  );
+  if (!request) throw handymanServiceRequestNotFoundError();
+  // CR-HM-SEC-01 PART 06J — BE-02G exact-Building check on the
+  // request's authoritative {clientId, buildingId}, replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not read the referral record. The
+  // denial vocabulary (403 BUILDING_ACCESS_DENIED — the guard's
+  // own thrower) and the wall's position (after the request 404,
+  // before the referral lookup) are unchanged.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const record = await handymanRequestReferralRepository.findByRequest(
     undefined,
     handymanRequestId,

@@ -12,7 +12,9 @@ import { buildingService } from '../src/modules/buildings';
 import { clientService } from '../src/modules/clients';
 import { floorService } from '../src/modules/floors';
 import {
+  handymanCareActorRepository,
   handymanCareActorService,
+  grantCareActorProperty,
   type PublicHandymanCareActor,
 } from '../src/modules/handyman-care-actors';
 import { handymanChannelAttributionService } from '../src/modules/handyman-channel-attributions';
@@ -70,6 +72,7 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
 const secretEnvNames: string[] = [];
+const registeredCareActors: { id: string; integrationId: string }[] = [];
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 before(async () => {
@@ -165,11 +168,13 @@ async function integration(options: { careCapable?: boolean } = {}) {
 }
 
 async function registerActor(integrationId: string): Promise<PublicHandymanCareActor> {
-  return handymanCareActorService.createCareActor({
+  const actor = await handymanCareActorService.createCareActor({
     integrationId,
     actorReference: `CC_${suffix()}`,
     displayName: 'Customer Care Agent',
   });
+  registeredCareActors.push({ id: actor.id, integrationId });
+  return actor;
 }
 
 async function trustedFixture(options: { linkedPicUser?: boolean } = {}) {
@@ -242,6 +247,19 @@ async function trustedFixture(options: { linkedPicUser?: boolean } = {}) {
     tenantCompanyId: company.id,
     buildingId: building.id,
   }, adminUserId);
+  // PART 03: legacy actor fixtures explicitly provision the new property
+  // authority before exercising their pre-existing attestation/binding cases.
+  for (const registered of registeredCareActors) {
+    const actor = await handymanCareActorRepository.findById(registered.id);
+    const integrationScope = await handymanCareActorRepository
+      .findIntegrationActorScopeById(registered.integrationId);
+    if (actor?.status === 'ACTIVE' && integrationScope?.status === 'ACTIVE' &&
+        integrationScope.actorCapability === 'CUSTOMER_CARE') {
+      await grantCareActorProperty({
+        careActorId: actor.id, propertyId: property.id, clientId: client.id,
+      }, adminUserId);
+    }
+  }
   return { client, property, building, space, company, pic, linkedUser, context };
 }
 

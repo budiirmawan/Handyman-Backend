@@ -9,6 +9,7 @@ import type { Pool } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
+import { sessionService } from '../src/modules/auth';
 import { areaService } from '../src/modules/areas';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
@@ -32,6 +33,7 @@ import {
   listHandymanServiceRequests,
 } from '../src/modules/handyman-requests';
 import { propertyService } from '../src/modules/properties';
+import { roleRepository, roleService } from '../src/modules/roles';
 import { roomService } from '../src/modules/rooms';
 import { serviceCatalogService } from '../src/modules/service-catalog';
 import { spaceService } from '../src/modules/spaces';
@@ -57,7 +59,9 @@ import { ensureTestDatabase } from './helpers/postgres';
  *   - Bounded projection contains only governed request/status,
  *     Backend-resolved attribution/care-actor provenance, and
  *     execution-scope pointer (`executionScopeId`) where present
- *   - Requires `tenant_company.read` + `canAccessClient`
+ *   - Requires `tenant_company.read` + `canAccessClient`, with per-request
+ *     represented tenant/occupancy and assigned Building isolation (C6)
+ *   - Explicit PLATFORM_ADMIN + assigned Building can read historical rows
  *   - No lifecycle commands, no local status inference, no FM/SaaS fallback
  *   - OpenAPI contract alignment
  */
@@ -124,6 +128,11 @@ before(async () => {
   const admin = await createAdminUser();
   adminToken = admin.token;
   adminUserId = admin.userId;
+  // The production seed defines PLATFORM_ADMIN; the isolated migration-only
+  // test DB needs that existing role provisioned explicitly for ops reads.
+  const opsRole = await roleRepository.findByCode('PLATFORM_ADMIN') ??
+    await roleService.createRole({ code: 'PLATFORM_ADMIN', name: 'Platform Administrator' });
+  await roleService.assignRoleToUser(adminUserId, opsRole.id);
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(
     undefined,
     'GENERAL_HANDYMAN',
@@ -181,6 +190,7 @@ async function createCareActorFixture() {
 
 async function createTenantScopeFixture(options?: {
   careActor?: { id: string; actorReference: string };
+  buildingOnly?: boolean;
 }) {
   const client = await clientService.createClient({
     code: `C_${suffix()}`,
@@ -244,7 +254,7 @@ async function createTenantScopeFixture(options?: {
     },
     adminUserId,
   );
-  await tenantSpaceService.assignSpaceToTenant(
+  const occupancy = await tenantSpaceService.assignSpaceToTenant(
     {
       tenantCompanyId: company.id,
       buildingId: building.id,
@@ -252,7 +262,7 @@ async function createTenantScopeFixture(options?: {
     },
     adminUserId,
   );
-  await tenantBuildingContextService.createTenantBuildingContext(
+  const buildingContext = await tenantBuildingContextService.createTenantBuildingContext(
     {
       tenantCompanyId: company.id,
       buildingId: building.id,
@@ -263,7 +273,7 @@ async function createTenantScopeFixture(options?: {
     tenantCompanyId: company.id,
     buildingId: building.id,
     tenantPicId: pic.id,
-    spaceId: space.id,
+    ...(options?.buildingOnly ? {} : { spaceId: space.id }),
     originChannel: 'BM_SUPER_APP',
     originReference: `bm-handoff:BM_SUPER_APP:${randomUUID()}`,
     ...(options?.careActor
@@ -288,13 +298,29 @@ async function createTenantScopeFixture(options?: {
   return {
     client,
     building,
+    room,
     space,
     company,
+    occupancy,
+    buildingContext,
     pic,
     linkedUser,
     attribution,
     service,
   };
+}
+
+async function createCustomerReader(tenantCompanyId: string, buildingId: string) {
+  const token = await createSessionWithPermissions([
+    { code: 'tenant_company.read', name: 'Read Tenant Companies' },
+  ]);
+  const { userId } = await sessionService.resolveSessionContext(token);
+  await buildingAssignmentService.createAssignment(userId, { buildingId });
+  await tenantPicService.createTenantPic({
+    tenantCompanyId, userId, picName: 'Reader PIC',
+    email: `reader-${suffix().toLowerCase()}@example.com`,
+  }, adminUserId);
+  return { token, userId };
 }
 
 async function authorizeExecutionScopeForRequest(
@@ -459,7 +485,7 @@ describe('CR-HM-17 GAP PART 01 — B3 Customer Care request reads', () => {
     assert.equal(list[0].status, 'READY_FOR_NEXT_STEP');
   });
 
-  it('3: HTTP GET /handyman/requests and GET /handyman/requests/:handymanRequestId enforce tenant_company.read + canAccessClient', async (t) => {
+  it('3: HTTP GET request reads require permission, Client and represented-customer scope', async (t) => {
     if (!requireDatabase(t)) return;
     const { careActor } = await createCareActorFixture();
     const f = await createTenantScopeFixture({ careActor });
@@ -516,37 +542,40 @@ describe('CR-HM-17 GAP PART 01 — B3 Customer Care request reads', () => {
     assert.equal(crossClientDetail.status, 403);
     assert.equal(crossClientDetail.body.error.code, 'BUILDING_ACCESS_DENIED');
 
-    // Grant building assignment in f.client -> 200 OK
+    // A building assignment and tenant_company.read are not customer authority.
     const readOnlyToken = await createSessionWithPermissions([
       { code: 'tenant_company.read', name: 'Read Tenant Companies' },
     ]);
-    const readOnlyUserRow = await q(
-      'SELECT id FROM users ORDER BY created_at DESC LIMIT 1',
-    );
-    const readOnlyUserId = readOnlyUserRow.rows[0].id as string;
+    const readOnlyUserId = (await sessionService.resolveSessionContext(readOnlyToken)).userId;
     await buildingAssignmentService.createAssignment(readOnlyUserId, {
       buildingId: f.building.id,
     });
 
-    const okList = await api()
+    const isolatedList = await api()
       .get(HM_REQUESTS)
       .set({ Authorization: `Bearer ${readOnlyToken}` })
       .query({ clientId: f.client.id, status: 'INTAKE' });
-    assert.equal(okList.status, 200);
-    assert.equal(okList.body.data.length, 1);
-    assert.equal(okList.body.data[0].id, created.id);
-    assert.equal(okList.body.data[0].actorType, 'CUSTOMER_CARE');
-    assert.equal(okList.body.data[0].careActorId, careActor.id);
-    assert.equal(okList.body.data[0].actorReference, careActor.actorReference);
-    assert.equal(okList.body.data[0].executionScopeId, null);
+    assert.equal(isolatedList.status, 200);
+    assert.deepEqual(isolatedList.body.data, []);
 
-    const okDetail = await api()
+    const isolatedDetail = await api()
       .get(`${HM_REQUESTS}/${created.id}`)
       .set({ Authorization: `Bearer ${readOnlyToken}` });
-    assert.equal(okDetail.status, 200);
-    assert.equal(okDetail.body.data.id, created.id);
-    assert.equal(okDetail.body.data.status, 'INTAKE');
-    assert.equal(okDetail.body.data.attribution.careActorId, careActor.id);
+    assert.equal(isolatedDetail.status, 403);
+    assert.equal(isolatedDetail.body.error.code, 'BUILDING_ACCESS_DENIED');
+
+    // An explicit operational role, not the building grant, preserves read.
+    const opsList = await api()
+      .get(HM_REQUESTS)
+      .set({ Authorization: `Bearer ${adminToken}` })
+      .query({ clientId: f.client.id });
+    assert.equal(opsList.status, 200);
+    assert.equal(opsList.body.data.find((row: { id: string }) => row.id === created.id)?.careActorId, careActor.id);
+    const opsDetail = await api()
+      .get(`${HM_REQUESTS}/${created.id}`)
+      .set({ Authorization: `Bearer ${adminToken}` });
+    assert.equal(opsDetail.status, 200);
+    assert.equal(opsDetail.body.data.attribution.careActorId, careActor.id);
 
     // 404 for unknown request UUID
     const missingDetail = await api()
@@ -562,13 +591,137 @@ describe('CR-HM-17 GAP PART 01 — B3 Customer Care request reads', () => {
     assert.equal(invalidQuery.status, 400);
   });
 
+  it('C6: same-customer PIC reads, different customer in the same building cannot', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await createTenantScopeFixture();
+    const request = await handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: f.attribution.id, serviceCatalogId: f.service.id }, adminUserId,
+    );
+    const own = await createCustomerReader(f.company.id, f.building.id);
+    const otherCompany = await tenantCompanyService.createTenantCompany({
+      clientId: f.client.id, tenantCode: `TNT_${suffix()}`, tenantName: 'Different Customer',
+    }, adminUserId);
+    const otherSpace = await spaceService.createSpace({
+      roomId: f.room.id, code: `S_${suffix()}`, name: 'Different Unit',
+    });
+    await tenantSpaceService.assignSpaceToTenant({
+      tenantCompanyId: otherCompany.id, buildingId: f.building.id, spaceId: otherSpace.id,
+    }, adminUserId);
+    await tenantBuildingContextService.createTenantBuildingContext({
+      tenantCompanyId: otherCompany.id, buildingId: f.building.id,
+    }, adminUserId);
+    const other = await createCustomerReader(otherCompany.id, f.building.id);
+
+    assert.deepEqual((await listHandymanServiceRequests({ clientId: f.client.id }, own.userId)).map(r => r.id), [request.id]);
+    assert.equal((await getHandymanServiceRequestDetail(request.id, own.userId)).id, request.id);
+    assert.deepEqual(await listHandymanServiceRequests({ clientId: f.client.id }, other.userId), []);
+    await assert.rejects(getHandymanServiceRequestDetail(request.id, other.userId),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 403);
+    const denied = await api().get(`${HM_REQUESTS}/${request.id}`)
+      .set({ Authorization: `Bearer ${other.token}` });
+    assert.equal(denied.status, 403);
+    const allowed = await api().get(HM_REQUESTS)
+      .set({ Authorization: `Bearer ${own.token}` }).query({ clientId: f.client.id });
+    assert.deepEqual(allowed.body.data.map((row: { id: string }) => row.id), [request.id]);
+  });
+
+  it('C6: turnover never transfers a prior tenant request to its successor', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await createTenantScopeFixture();
+    const request = await handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: f.attribution.id, serviceCatalogId: f.service.id }, adminUserId,
+    );
+    const former = await createCustomerReader(f.company.id, f.building.id);
+    assert.equal((await getHandymanServiceRequestDetail(request.id, former.userId)).id, request.id);
+    await q("UPDATE tenant_space_relationships SET status='INACTIVE' WHERE id=$1", [f.occupancy.id]);
+    await q("UPDATE tenant_building_contexts SET status='INACTIVE' WHERE id=$1", [f.buildingContext.id]);
+    const successor = await tenantCompanyService.createTenantCompany({
+      clientId: f.client.id, tenantCode: `TNT_${suffix()}`, tenantName: 'Successor',
+    }, adminUserId);
+    await tenantSpaceService.assignSpaceToTenant({
+      tenantCompanyId: successor.id, buildingId: f.building.id, spaceId: f.space.id,
+    }, adminUserId);
+    await tenantBuildingContextService.createTenantBuildingContext({
+      tenantCompanyId: successor.id, buildingId: f.building.id,
+    }, adminUserId);
+    const next = await createCustomerReader(successor.id, f.building.id);
+    for (const reader of [former, next]) {
+      assert.deepEqual(await listHandymanServiceRequests({ clientId: f.client.id }, reader.userId), []);
+      const result = await api().get(`${HM_REQUESTS}/${request.id}`)
+        .set({ Authorization: `Bearer ${reader.token}` });
+      assert.equal(result.status, 403);
+    }
+    assert.equal((await q('SELECT tenant_company_id FROM handyman_service_requests WHERE id=$1', [request.id])).rows[0].tenant_company_id, f.company.id);
+  });
+
+  it('C6: building-only requests need represented tenant occupancy in that building', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await createTenantScopeFixture({ buildingOnly: true });
+    const request = await handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: f.attribution.id, serviceCatalogId: f.service.id }, adminUserId,
+    );
+    assert.equal(request.spaceId, null);
+    const unitAttribution = await createChannelAttribution({
+      tenantCompanyId: f.company.id, tenantPicId: f.pic.id,
+      buildingId: f.building.id, spaceId: f.space.id,
+      originChannel: 'BM_SUPER_APP', originReference: `bm-handoff:BM_SUPER_APP:${randomUUID()}`,
+      createdByUserId: f.linkedUser.id,
+    });
+    const unitRequest = await handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: unitAttribution.id, serviceCatalogId: f.service.id }, adminUserId,
+    );
+    const reader = await createCustomerReader(f.company.id, f.building.id);
+    assert.equal((await getHandymanServiceRequestDetail(request.id, reader.userId)).id, request.id);
+    assert.equal((await getHandymanServiceRequestDetail(unitRequest.id, reader.userId)).id, unitRequest.id);
+    const anotherSpace = await spaceService.createSpace({
+      roomId: f.room.id, code: `S_${suffix()}`, name: 'Another Unit',
+    });
+    const remaining = await tenantSpaceService.assignSpaceToTenant({
+      tenantCompanyId: f.company.id, buildingId: f.building.id, spaceId: anotherSpace.id,
+    }, adminUserId);
+    await q("UPDATE tenant_space_relationships SET status='INACTIVE' WHERE id=$1", [f.occupancy.id]);
+    assert.equal((await getHandymanServiceRequestDetail(request.id, reader.userId)).id, request.id);
+    assert.deepEqual((await listHandymanServiceRequests({ clientId: f.client.id }, reader.userId)).map(r => r.id), [request.id]);
+    await assert.rejects(getHandymanServiceRequestDetail(unitRequest.id, reader.userId),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 403);
+    await q("UPDATE tenant_space_relationships SET status='INACTIVE' WHERE id=$1", [remaining.id]);
+    assert.deepEqual(await listHandymanServiceRequests({ clientId: f.client.id }, reader.userId), []);
+    await assert.rejects(getHandymanServiceRequestDetail(request.id, reader.userId),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 403);
+  });
+
+  it('C6: explicitly assigned PLATFORM_ADMIN retains historical reads; tenant manage does not', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await createTenantScopeFixture();
+    const request = await handymanServiceRequestService.createHandymanServiceRequest(
+      { channelAttributionId: f.attribution.id, serviceCatalogId: f.service.id }, adminUserId,
+    );
+    const managerToken = await createSessionWithPermissions([
+      { code: 'tenant_company.read', name: 'Read Tenant Companies' },
+      { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
+    ]);
+    const managerId = (await sessionService.resolveSessionContext(managerToken)).userId;
+    await buildingAssignmentService.createAssignment(managerId, { buildingId: f.building.id });
+    await tenantPicService.createTenantPic({
+      tenantCompanyId: f.company.id, userId: managerId, picName: 'Manager PIC',
+    }, adminUserId);
+    await q("UPDATE tenant_space_relationships SET status='INACTIVE' WHERE id=$1", [f.occupancy.id]);
+    assert.deepEqual(await listHandymanServiceRequests({ clientId: f.client.id }, managerId), []);
+    assert.equal((await api().get(`${HM_REQUESTS}/${request.id}`)
+      .set({ Authorization: `Bearer ${managerToken}` })).status, 403);
+    const opsList = await api().get(HM_REQUESTS)
+      .set({ Authorization: `Bearer ${adminToken}` }).query({ clientId: f.client.id });
+    assert.ok(opsList.body.data.some((row: { id: string }) => row.id === request.id));
+    assert.equal((await getHandymanServiceRequestDetail(request.id, adminUserId)).id, request.id);
+  });
+
   it('4: OpenAPI documents GET /handyman/requests and GET /handyman/requests/{handymanRequestId} and HandymanCustomerCareServiceRequest', () => {
     const raw = readFileSync(
       join(process.cwd(), 'docs/api/openapi.yaml'),
       'utf8',
     );
     const doc = parseYaml(raw) as {
-      paths: Record<string, Record<string, { operationId?: string; security?: unknown }>>;
+      paths: Record<string, Record<string, { operationId?: string; security?: unknown; description?: string }>>;
       components: { schemas: Record<string, Record<string, unknown>> };
     };
 
@@ -576,6 +729,8 @@ describe('CR-HM-17 GAP PART 01 — B3 Customer Care request reads', () => {
     assert.ok(listOp, 'GET /handyman/requests documented');
     assert.equal(listOp.operationId, 'listHandymanServiceRequests');
     assert.deepEqual(listOp.security, [{ bearerAuth: [] }]);
+    assert.match(listOp.description ?? '', /ACTIVE PIC.*represented tenant/);
+    assert.match(listOp.description ?? '', /PLATFORM_ADMIN/);
 
     const detailOp =
       doc.paths['/handyman/requests/{handymanRequestId}']?.get;
@@ -585,6 +740,8 @@ describe('CR-HM-17 GAP PART 01 — B3 Customer Care request reads', () => {
     );
     assert.equal(detailOp.operationId, 'getHandymanServiceRequestDetail');
     assert.deepEqual(detailOp.security, [{ bearerAuth: [] }]);
+    assert.match(detailOp.description ?? '', /exact-unit occupancy/);
+    assert.match(detailOp.description ?? '', /PLATFORM_ADMIN/);
 
     assert.ok(
       doc.components.schemas.HandymanCustomerCareServiceRequest,

@@ -1,4 +1,4 @@
-import type { HandymanCareActorType } from '../handyman-channel-attributions';
+import type { HandymanCareActorType } from '../handyman-care-actors/handyman-care-actor.types';
 
 /**
  * CR-HM-02 PART 03 — Handyman request intake types (frozen D3).

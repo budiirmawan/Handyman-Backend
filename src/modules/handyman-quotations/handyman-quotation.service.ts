@@ -1,16 +1,15 @@
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import {
   handymanRequestDiagnosisRepository,
   handymanServiceRequestNotFoundError,
   handymanServiceRequestRepository,
 } from '../handyman-requests';
+import { assertQuotationThreadBuildingAccess }
+  from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import {
   handymanQuotationAlreadyExistsError,
@@ -99,16 +98,17 @@ export async function createHandymanQuotation(
     );
     if (!request) throw handymanServiceRequestNotFoundError();
 
-    // 2) Realm authority: existing accessible-Client convention over the
-    //    request-derived scope (never caller-shaped context).
-    if (
-      !(await contextAccessService.canAccessClient(
-        actorUserId,
-        request.clientId,
-      ))
-    ) {
-      throw buildingAccessDeniedError();
-    }
+    // 2) Realm authority (CR-HM-SEC-01 PART 01): the request is a
+    //    BUILDING-scoped resource (`handyman_service_requests.building_id
+    //    UUID NOT NULL`, server-derived). Per BE-02G, authority is the
+    //    actor's explicit ACTIVE assignment to the request's exact
+    //    Building — one assignment under the Client is NOT client-wide
+    //    privilege (no same-Client shortcut), and no existing role/scope
+    //    contract grants client-wide access. Never caller-shaped context.
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: request.clientId,
+      buildingId: request.buildingId,
+    });
 
     // 3) CR-HM-03 sufficiency gate: an authoritative diagnosis/scope
     //    record must exist and be quotable (server-derived snapshot).
@@ -183,14 +183,9 @@ export async function createHandymanQuotationRevision(
       quotationId,
     );
     if (!quotation) throw handymanQuotationNotFoundError();
-    if (
-      !(await contextAccessService.canAccessClient(
-        actorUserId,
-        quotation.clientId,
-      ))
-    ) {
-      throw buildingAccessDeniedError();
-    }
+    // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
+    // request's building_id (BE-02G; no same-Client shortcut).
+    await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
     const nextNumber =
       (await handymanQuotationRepository.maxVersionNumber(tx, quotation.id))
@@ -236,14 +231,13 @@ export async function getHandymanQuotation(
     handymanRequestId,
   );
   if (!quotation) throw handymanQuotationNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      quotation.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
+  // request's building_id (BE-02G; no same-Client shortcut).
+  await assertQuotationThreadBuildingAccess(
+    undefined as never,
+    quotation,
+    actorUserId,
+  );
   const versions = await handymanQuotationRepository.listVersions(
     undefined,
     quotation.id,

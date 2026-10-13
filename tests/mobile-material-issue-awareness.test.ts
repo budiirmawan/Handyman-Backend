@@ -562,8 +562,8 @@ describe('PART 02 — item discovery (35-42)', () => {
       .post(`/api/v1/mobile/work-orders/${f.wo.id}/material-requests`)
       .set(auth(f.worker.token)).set('Idempotency-Key', randomUUID())
       .send({ itemId: other.item.id, quantity: 1, uomId: other.uomId });
-    assert.equal(foreign.status, 400);
-    assert.equal(foreign.body.error.code, 'MATERIAL_REQUEST_ITEM_CLIENT_MISMATCH');
+    assert.equal(foreign.status, 404);
+    assert.equal(foreign.body.error.code, 'INVENTORY_ITEM_NOT_FOUND');
   });
 
   it('40-42. authority: field.read suffices (no inventory_item.read); building isolation; unknown WO; no auth', async (t) => {

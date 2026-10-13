@@ -1,10 +1,7 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { resolveHandymanExpectedArrivalLocation }
   from '../handyman-arrival-locations';
@@ -171,11 +168,18 @@ export async function saveHandymanBuildingGeospatialPolicy(
       { field: 'buildingId', message: 'Building must exist and be ACTIVE.' },
     ]);
   }
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId, building.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 05 (PART 00A frozen decision D5) — the policy is
+  // per-Building (`handyman_building_geospatial_policies.building_id`
+  // NOT NULL, migration 0399) and the authoritative Building is already
+  // resolved above, so the BE-02G exact-Building guard — not the
+  // client-level `canAccessClient` shortcut — is the authoritative wall.
+  // Ordering preserved: validation + building authority (400) →
+  // exact-building authorization (403) → transaction (no mutation
+  // before authorization).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: building.clientId,
+    buildingId,
+  });
   return withTransaction(async (tx) => {
     const existing = await handymanGeospatialPolicyRepository
       .lockActivePolicyByBuilding(tx, buildingId);
@@ -232,11 +236,15 @@ export async function getHandymanBuildingGeospatialPolicy(
   const record = await handymanGeospatialPolicyRepository
     .findActivePolicyByBuilding(undefined, buildingId);
   if (!record) return null;
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId, record.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 05 (PART 00A frozen decision D5) — the loaded
+  // policy's own clientId/buildingId are the authoritative scope; the
+  // BE-02G exact-Building guard replaces the client-level shortcut.
+  // Ordering preserved: a missing policy returns null (no existence
+  // leak) BEFORE authorization.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: record.clientId,
+    buildingId: record.buildingId,
+  });
   return toPublic(record);
 }
 

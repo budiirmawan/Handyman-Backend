@@ -481,7 +481,7 @@ describe('Client / Building isolation', () => {
     const read = await api()
       .get(`/api/v1/material-requests/${ctx.mrId}`)
       .set(auth(outsiderToken));
-    assert.equal(read.status, 403, JSON.stringify(read.body));
+    assert.equal(read.status, 404, JSON.stringify(read.body));
 
     const decide = await api()
       .post(`/api/v1/procurement-approvals/${bindingId}/approve`)

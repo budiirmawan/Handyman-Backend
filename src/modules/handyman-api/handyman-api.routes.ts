@@ -3,6 +3,7 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   createHandymanServiceRequestHandler,
+  createCareHandymanServiceRequestHandler,
   describeHandymanMaterialProfileHandler,
   getHandymanServiceRequestDetailHandler,
   listHandymanCatalogueServicesHandler,
@@ -20,7 +21,8 @@ import {
  *   GET  /handyman/catalogue/services                          read-only catalogue
  *   GET  /handyman/catalogue/material-profiles                 read-only catalogue
  *   GET  /handyman/catalogue/material-profiles/:profileId      profile + composed reference price
- *   POST /handyman/requests                                    attribution-bound intake
+ *   POST /handyman/requests                                    local-User attribution-bound intake
+ *   POST /handyman/requests/care                               care exchange-bound intake
  *   GET  /handyman/requests                                    bounded Customer Care request list
  *   GET  /handyman/requests/:handymanRequestId                 bounded Customer Care request detail
  *   GET  /handyman/requests/:handymanRequestId/intake-evidence bounded list
@@ -29,9 +31,10 @@ import {
  * Bearer-session convention: the nearest customer-facing intake sibling
  * (`tenant-service-requests` — a Tenant PIC's own intake surface) gates
  * reads with `tenant_company.read` and writes with `tenant_company.manage`;
- * the same customer-side permissions gate this surface, and the PART 01–04
- * services additionally enforce the accessible-Client scope server-side
- * (cross-Client authority can never be smuggled through a session).
+ * the same customer-side permissions gate the existing bearer-User surface.
+ * The care-only POST instead consumes a signed-handoff-issued single-use
+ * exchange and checks the attested actor/property/occupancy server-side;
+ * it never borrows the represented PIC's local session.
  *
  * Out of scope by frozen contract: catalogue/master mutation, request
  * lifecycle transitions (triage / diagnosis / quotation / work execution),
@@ -74,6 +77,9 @@ export function createHandymanApiRouter(): Router {
     manage,
     createHandymanServiceRequestHandler,
   );
+  // PART 04: care-specific, exchange-token-only authority. Never apply the
+  // local-User bearer/RBAC middleware here (no BM care User/session exists).
+  router.post('/handyman/requests/care', createCareHandymanServiceRequestHandler);
   router.get(
     '/handyman/requests/:handymanRequestId',
     auth,

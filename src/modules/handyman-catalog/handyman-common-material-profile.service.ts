@@ -1,3 +1,5 @@
+import type { PriceCatalogLookupResult } from '../price-catalog-entries/price-catalog-lookup.types';
+import type { HandymanMaterialReferencePrice } from './handyman-common-material-profile.types';
 import { AppError } from '../../shared/errors';
 import { buildingRepository } from '../buildings';
 import { isValidUuid } from '../clients';
@@ -339,19 +341,18 @@ export async function describeHandymanCommonMaterialProfile(
     actorUserId,
   );
 
-  if (result.resolution !== 'MATCHED' || !result.entry || !result.scopeTier) {
-    return { ...toPublic(record), referencePrice: null };
-  }
+  return { ...toPublic(record), referencePrice: projectHandymanMaterialReferencePrice(result) };
+}
 
+/** Shared minimized reference-price view. No ranking, conversion or arithmetic. */
+export function projectHandymanMaterialReferencePrice(result: PriceCatalogLookupResult): HandymanMaterialReferencePrice | null {
+  if (result.resolution !== 'MATCHED' || !result.entry || !result.scopeTier) return null;
   return {
-    ...toPublic(record),
-    referencePrice: {
-      unitPrice: Number(result.entry.unitPrice),
-      currency: result.entry.currency,
-      effectiveFrom: result.entry.effectiveFrom,
-      effectiveTo: result.entry.effectiveTo,
-      scopeTier: result.scopeTier,
-    },
+    unitPrice: Number(result.entry.unitPrice),
+    currency: result.entry.currency,
+    effectiveFrom: result.entry.effectiveFrom,
+    effectiveTo: result.entry.effectiveTo,
+    scopeTier: result.scopeTier,
   };
 }
 

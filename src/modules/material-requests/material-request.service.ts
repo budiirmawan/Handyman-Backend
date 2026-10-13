@@ -1,5 +1,7 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
+import { resolveBuildingsForUser } from '../building-assignments';
+import { buildingAccessDeniedError } from '../context-access';
 import { purchaseRequestRepository } from '../purchase-requests';
 import { purchaseRequestNotFoundError } from '../purchase-requests/purchase-request.errors';
 import { inventoryItemNotFoundError } from '../inventory-items/inventory-item.errors';
@@ -22,6 +24,7 @@ import { inventoryMaterialReservationRepository } from '../inventory-material-re
 import type {
   CreateMaterialRequestInput,
   MaterialRequestFilters,
+  MaterialRequestItemScope,
   MaterialRequestRecord,
   NewMaterialRequest,
   PublicMaterialRequest,
@@ -163,6 +166,10 @@ export async function getMaterialRequestById(
   if (!detailed) {
     throw materialRequestNotFoundError();
   }
+  return enrichDetail(detailed, id);
+}
+
+async function enrichDetail(detailed: Record<string, unknown>, id: string): Promise<PublicMaterialRequest> {
   const result = toPublicWithDetails(detailed);
   // CR-BE-MAT-01 PART 02 — derived fulfilment quantities (no separate
   // remaining-quantity table): allowed = approvedQuantity ?? quantity.
@@ -256,21 +263,34 @@ export async function listMaterialRequestsByPurchaseRequest(
 }
 
 /**
- * Lists Material Requests that reference one Item. An Item is Client-scoped,
- * not Building-scoped, so the caller (controller) is responsible for enforcing
- * a Building context on this route. The Item is validated first (unknown Item
- * → 404).
+ * Actor-facing item list. BE-02G is the sole assignment/hierarchy authority.
+ * Resolve it once before looking up the item, with no role or sibling bypass.
+ * Missing actor / zero contexts denies independently of item existence. Items
+ * outside reachable Clients are indistinguishable from nonexistent items;
+ * authorized items with zero visible requests return an empty list.
  */
 export async function listMaterialRequestsByItem(
   itemId: string,
   filters: MaterialRequestFilters,
+  actorUserId: string,
 ): Promise<PublicMaterialRequest[]> {
-  const item = await inventoryItemRepository.findById(itemId);
-  if (!item) {
+  if (!actorUserId) {
+    throw buildingAccessDeniedError();
+  }
+  const contexts = await resolveBuildingsForUser(actorUserId);
+  const scope: MaterialRequestItemScope = contexts.flatMap((context) =>
+    context.client
+      ? [{ clientId: context.client.id, buildingId: context.building.id }]
+      : [],
+  );
+  if (scope.length === 0) {
+    throw buildingAccessDeniedError();
+  }
+  if (!(await materialRequestRepository.itemExistsInScope(itemId, scope))) {
     throw inventoryItemNotFoundError();
   }
 
-  const records = await materialRequestRepository.listByItem(itemId, filters);
+  const records = await materialRequestRepository.listByItem(itemId, filters, scope);
   return records.map(toPublicMaterialRequest);
 }
 
@@ -289,7 +309,14 @@ export async function updateMaterialRequest(
   id: string,
   input: UpdateMaterialRequestInput,
 ): Promise<PublicMaterialRequest> {
-  const existing = await materialRequestRepository.findById(id);
+  return updateResolvedMaterialRequest(id, input);
+}
+
+async function updateResolvedMaterialRequest(
+  id: string, input: UpdateMaterialRequestInput,
+  resolved?: MaterialRequestRecord, executor?: PoolClient,
+): Promise<PublicMaterialRequest> {
+  const existing = resolved ?? await materialRequestRepository.findById(id);
   if (!existing) {
     throw materialRequestNotFoundError();
   }
@@ -337,7 +364,7 @@ export async function updateMaterialRequest(
     ...(input.warehouseId === undefined ? {} : { warehouseId }),
     ...(input.requiredDate === undefined ? {} : { requiredDate: input.requiredDate }),
     ...(input.notes === undefined ? {} : { notes: input.notes }),
-  });
+  }, executor);
 
   return toPublicMaterialRequest(record as MaterialRequestRecord);
 }
@@ -352,14 +379,17 @@ export async function updateMaterialRequest(
 export async function cancelMaterialRequest(
   id: string,
 ): Promise<PublicMaterialRequest> {
+  return cancelResolvedMaterialRequest(id);
+}
+
+async function cancelResolvedMaterialRequest(id: string, scope?: MaterialRequestItemScope): Promise<PublicMaterialRequest> {
   const record = await withTransaction(async (client) => {
     // Reservation creation, issue, release, and cancellation all lock this
     // source row first. The lock makes the active-allocation check and the
     // terminal state transition one serialized decision.
-    const existing = await materialRequestRepository.findByIdForUpdate(
-      client,
-      id,
-    );
+    const existing = scope
+      ? await materialRequestRepository.findByIdInScope(id, scope, client)
+      : await materialRequestRepository.findByIdForUpdate(client, id);
     if (!existing) {
       throw materialRequestNotFoundError();
     }
@@ -390,7 +420,84 @@ export async function cancelMaterialRequest(
   return toPublicMaterialRequest(record);
 }
 
+/** Canonical actor-facing APIs. Trusted internal APIs above retain their
+ * executor and lifecycle contracts (including uncommitted mobile PR creation).
+ * Empty/missing authority is never an unrestricted repository query.
+ */
+async function canonicalScope(actorUserId: string): Promise<MaterialRequestItemScope> {
+  if (!actorUserId) return [];
+  const contexts = await resolveBuildingsForUser(actorUserId);
+  return contexts.flatMap((context) => context.client
+    ? [{ clientId: context.client.id, buildingId: context.building.id }] : []);
+}
+
+async function requireScopedParent(id: string, scope: MaterialRequestItemScope, executor?: PoolClient): Promise<void> {
+  if (!(await materialRequestRepository.purchaseRequestExistsInScope(id, scope, executor))) {
+    throw purchaseRequestNotFoundError();
+  }
+}
+
+async function validateScopedReferences(
+  input: { itemId?: string; warehouseId?: string | null }, scope: MaterialRequestItemScope,
+): Promise<void> {
+  if (input.itemId && !(await materialRequestRepository.itemExistsInScope(input.itemId, scope))) {
+    throw inventoryItemNotFoundError();
+  }
+  if (input.warehouseId && !(await materialRequestRepository.warehouseExistsInScope(input.warehouseId, scope))) {
+    throw inventoryWarehouseNotFoundError();
+  }
+}
+
+async function createMaterialRequestForActor(input: CreateMaterialRequestInput, actorUserId: string): Promise<PublicMaterialRequest> {
+  const scope = await canonicalScope(actorUserId);
+  return withTransaction(async (executor) => {
+    await requireScopedParent(input.purchaseRequestId, scope, executor);
+    await validateScopedReferences(input, scope);
+    return createMaterialRequest({ ...input, requestedByUserId: actorUserId }, executor);
+  });
+}
+
+async function listMaterialRequestsByPurchaseRequestForActor(id: string, filters: MaterialRequestFilters, actorUserId: string): Promise<PublicMaterialRequest[]> {
+  const scope = await canonicalScope(actorUserId);
+  await requireScopedParent(id, scope);
+  return (await materialRequestRepository.listInScope('purchase_request_id', id, filters, scope)).map(toPublicMaterialRequest);
+}
+
+async function listMaterialRequestsByBuildingForActor(id: string, filters: MaterialRequestFilters, actorUserId: string): Promise<PublicMaterialRequest[]> {
+  const scope = (await canonicalScope(actorUserId)).filter((pair) => pair.buildingId === id);
+  if (!scope.length) throw buildingAccessDeniedError();
+  return (await materialRequestRepository.listInScope('building_id', id, filters, scope)).map(toPublicMaterialRequest);
+}
+
+async function getMaterialRequestByIdForActor(id: string, actorUserId: string): Promise<PublicMaterialRequest> {
+  const scope = await canonicalScope(actorUserId);
+  const detailed = await materialRequestRepository.findByIdWithDetailsInScope(id, scope);
+  if (!detailed) throw materialRequestNotFoundError();
+  return enrichDetail(detailed, id);
+}
+
+async function updateMaterialRequestForActor(id: string, input: UpdateMaterialRequestInput, actorUserId: string): Promise<PublicMaterialRequest> {
+  const scope = await canonicalScope(actorUserId);
+  return withTransaction(async (executor) => {
+    const existing = await materialRequestRepository.findByIdInScope(id, scope, executor);
+    if (!existing) throw materialRequestNotFoundError();
+    if (existing.status !== 'OPEN') throw materialRequestNotOpenError();
+    await validateScopedReferences(input, scope);
+    return updateResolvedMaterialRequest(id, input, existing, executor);
+  });
+}
+
+async function cancelMaterialRequestForActor(id: string, actorUserId: string): Promise<PublicMaterialRequest> {
+  return cancelResolvedMaterialRequest(id, await canonicalScope(actorUserId));
+}
+
 export const materialRequestService = {
+  createMaterialRequestForActor,
+  listMaterialRequestsByPurchaseRequestForActor,
+  listMaterialRequestsByBuildingForActor,
+  getMaterialRequestByIdForActor,
+  updateMaterialRequestForActor,
+  cancelMaterialRequestForActor,
   cancelMaterialRequest,
   createMaterialRequest,
   getMaterialRequestById,

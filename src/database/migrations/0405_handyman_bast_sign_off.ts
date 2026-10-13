@@ -123,4 +123,31 @@ export const migration0405HandymanBastSignOff: Migration = {
         EXECUTE FUNCTION handyman_bast_sign_off_no_write();
     `);
   },
+  async down(client: PoolClient): Promise<void> {
+    await client.query(`
+      DROP TRIGGER IF EXISTS handyman_bast_sign_offs_no_write
+        ON handyman_bast_sign_offs;
+      DROP TRIGGER IF EXISTS handyman_bast_sign_off_parent_check
+        ON handyman_bast_sign_offs;
+      DROP FUNCTION IF EXISTS handyman_bast_sign_off_no_write;
+      DROP FUNCTION IF EXISTS handyman_bast_sign_off_consistency;
+      DROP TABLE IF EXISTS handyman_bast_sign_offs;
+    `);
+    await client.query(`
+      ALTER TABLE handyman_bast_events
+        DROP CONSTRAINT IF EXISTS handyman_bast_events_type_check
+    `);
+    await client.query(`
+      ALTER TABLE handyman_bast_events
+        ADD CONSTRAINT handyman_bast_events_type_check
+          CHECK (event_type IN ('PREPARE', 'ISSUE', 'VOID'))
+    `);
+    await client.query(`
+      ALTER TABLE handyman_bast_documents
+        DROP CONSTRAINT IF EXISTS handyman_bast_rejected_at_check,
+        DROP CONSTRAINT IF EXISTS handyman_bast_accepted_at_check,
+        DROP COLUMN IF EXISTS rejected_at,
+        DROP COLUMN IF EXISTS accepted_at
+    `);
+  },
 };

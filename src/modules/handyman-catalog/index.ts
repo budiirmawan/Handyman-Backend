@@ -6,7 +6,6 @@
 export { handymanServiceVariantRepository } from './handyman-service-variant.repository';
 export {
   createHandymanServiceVariant,
-  getHandymanServiceVariant,
   handymanServiceVariantService,
   listHandymanServiceVariants,
 } from './handyman-service-variant.service';

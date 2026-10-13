@@ -12,6 +12,7 @@ import {
 } from '../handyman-evidence';
 import {
   parseCreateHandymanServiceRequestBody,
+  parseCreateCareHandymanServiceRequestBody,
   parseHandymanClientScopeQuery,
   parseHandymanIntakeEvidenceKindField,
   parseHandymanMaterialProfileDescribeQuery,
@@ -171,6 +172,25 @@ export async function createHandymanServiceRequestHandler(
     const input = parseCreateHandymanServiceRequestBody(req.body);
     const request = await handymanServiceRequestService
       .createHandymanServiceRequest(input, req.auth.userId);
+    sendSuccess(res, request, 201);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /handyman/requests/care — one-time, attested BM Customer Care intake.
+ * The exchange token, not a caller's User/PIC or attribution ID, authorizes
+ * this create. The service atomically binds provenance and creates INTAKE.
+ */
+export async function createCareHandymanServiceRequestHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const input = parseCreateCareHandymanServiceRequestBody(req.body);
+    const request = await handymanServiceRequestService.createCareHandymanServiceRequest(input);
     sendSuccess(res, request, 201);
   } catch (error) {
     next(error);

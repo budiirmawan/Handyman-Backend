@@ -1,12 +1,17 @@
+import { AppError } from '../../shared/errors';
+import { lockCareCreateWorkspaceScope } from '../handyman-care-workspace/care-create-exchange.scope';
+import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import type { HandymanCareActorType } from '../handyman-care-actors/handyman-care-actor.types';
 import {
   createChannelAttribution,
   type PublicHandymanChannelAttribution,
 } from '../handyman-channel-attributions';
+import { isCurrentCareRepresentation } from './care-representation.service';
 import { hashHandoffExchangeToken } from './handoff-runtime.crypto';
 import { handoffExchangeInvalidError } from './handoff-runtime.errors';
 import { handoffRuntimeRepository } from './handoff-runtime.repository';
+import type { HandoffExchangeContextSnapshot } from './handoff-runtime.types';
 
 /**
  * CR-HM-01 PART 04 — trusted exchange → channel attribution binding seam.
@@ -28,8 +33,10 @@ import { handoffRuntimeRepository } from './handoff-runtime.repository';
  *   consumed without its attribution;
  * - duplicate/retry: a rebound exchange fails closed at consume; the PART 01
  *   origin-reference conflict rules still apply for any direct re-creation;
- * - no standard user session is created, and no service request is created;
- *   attribution grants no financial or SaaS entitlement by itself.
+ * - the existing standalone binding creates no standard user session or
+ *   service request; PART 04 may compose this binding in its own atomic
+ *   request-create transaction. Attribution grants no financial or SaaS
+ *   entitlement by itself.
  *
  * PART 10 (AMENDMENT 01) — actor provenance:
  * - an attested Customer Care handoff records the actor columns
@@ -52,107 +59,167 @@ function handoffOriginReference(
   return `bm-handoff:${integrationCode}:${assertionId}`;
 }
 
-export async function bindHandoffExchangeToChannelAttribution(
+async function bindWithinTransaction(
   exchangeToken: string,
-): Promise<PublicHandymanChannelAttribution> {
+  client: PoolClient,
+  careOnly: boolean,
+): Promise<{
+  attribution: PublicHandymanChannelAttribution;
+  exchange: HandoffExchangeContextSnapshot;
+}> {
   if (typeof exchangeToken !== 'string' || exchangeToken.length === 0) {
     throw handoffExchangeInvalidError();
   }
   const tokenHash = hashHandoffExchangeToken(exchangeToken);
 
-  return withTransaction(async (client) => {
-    // 1) Locate and validate the single-use exchange (expiry fail-closed).
-    const exchange = await handoffRuntimeRepository.findExchangeByTokenHash(
-      tokenHash,
-      client,
-    );
-    if (
-      !exchange ||
-      exchange.status !== 'ACTIVE' ||
-      exchange.expiresAt.getTime() <= Date.now()
-    ) {
-      throw handoffExchangeInvalidError();
+  // 1) Locate and validate the single-use exchange (expiry fail-closed).
+  const exchange = await handoffRuntimeRepository.findExchangeByTokenHash(
+    tokenHash,
+    client,
+  );
+  if (
+    !exchange ||
+    exchange.status !== 'ACTIVE' ||
+    (!careOnly && exchange.purpose === 'CARE_CREATE') ||
+    exchange.expiresAt.getTime() <= Date.now() ||
+    (careOnly && (exchange.actorType !== 'CUSTOMER_CARE' ||
+      !exchange.careActorId || !exchange.actorReference))
+  ) {
+    throw handoffExchangeInvalidError();
+  }
+
+  // 2) Atomic consume first: race-safe ACTIVE → USED under this tx; a
+  //    concurrent consumer gets no row and fails closed.
+  const consumed = await handoffRuntimeRepository.consumeExchange(
+    exchange.id,
+    client,
+  );
+  if (!consumed) throw handoffExchangeInvalidError();
+
+  // PART 03: attested care authority is checked again at binding (grant
+  // might have been revoked since acceptance). The existing exchange
+  // snapshots the effective tenant-building and tenant-space relationship
+  // IDs: reject turnover/replacement, rather than silently binding a new
+  // occupant under an old assertion. A failure rolls back consumption.
+  // No new check is imposed on the no-actor legacy path.
+  if (consumed.actorType !== null &&
+      !(await isCurrentCareRepresentation(consumed, client))) {
+    throw handoffExchangeInvalidError();
+  }
+
+  // Workspace-issued credentials retain their original property/session and
+  // active physical scope. This gate is exclusive to the new CARE_CREATE
+  // purpose; existing HANDOFF exchanges and the care POST contract are unchanged.
+  if (consumed.purpose === 'CARE_CREATE') {
+    if (!consumed.workspaceSessionId || !consumed.carePropertyId || !consumed.careActorId) throw handoffExchangeInvalidError();
+    try {
+      const scope = await lockCareCreateWorkspaceScope(client, {
+        sessionId: consumed.workspaceSessionId, careActorId: consumed.careActorId,
+        integrationId: consumed.integrationId, propertyId: consumed.carePropertyId,
+        tenantCompanyId: consumed.tenantCompanyId, buildingId: consumed.buildingId, spaceId: consumed.spaceId,
+      });
+      if (scope.actorReference !== consumed.actorReference || scope.clientId !== consumed.clientId ||
+          consumed.expiresAt.getTime() <= Date.now()) throw handoffExchangeInvalidError();
+    } catch (error) {
+      if (error instanceof AppError) throw handoffExchangeInvalidError();
+      throw error;
     }
+  }
 
-    // 2) Atomic consume first: race-safe ACTIVE → USED under this tx; a
-    //    concurrent consumer gets no row and fails closed.
-    const consumed = await handoffRuntimeRepository.consumeExchange(
-      exchange.id,
-      client,
-    );
-    if (!consumed) throw handoffExchangeInvalidError();
+  // 3) Provenance from the trusted chain the exchange originated from.
+  //    Both rows are required by FK integrity; absence is a server defect,
+  //    which must roll back rather than produce an untraceable attribution.
+  const integration = await handoffRuntimeRepository.findIntegrationById(
+    consumed.integrationId,
+    client,
+  );
+  const assertion = await handoffRuntimeRepository.findAssertionById(
+    consumed.handoffAssertionId,
+    client,
+  );
+  if (!integration || !assertion) {
+    throw new Error('Handoff exchange provenance record is missing.');
+  }
 
-    // 3) Provenance from the trusted chain the exchange originated from.
-    //    Both rows are required by FK integrity; absence is a server defect,
-    //    which must roll back rather than produce an untraceable attribution.
-    const integration = await handoffRuntimeRepository.findIntegrationById(
-      consumed.integrationId,
-      client,
-    );
-    const assertion = await handoffRuntimeRepository.findAssertionById(
-      consumed.handoffAssertionId,
-      client,
-    );
-    if (!integration || !assertion) {
-      throw new Error('Handoff exchange provenance record is missing.');
+  // 4) PART 10 — attested Customer Care actor provenance, taken verbatim
+  //    from the consumed snapshot (server-derived in PART 08/09). The
+  //    storage coherence constraint guarantees all-or-nothing, but a
+  //    half-populated snapshot is a server defect, so it must roll back
+  //    rather than produce an untraceable attribution.
+  let actorInput: {
+    actorType: HandymanCareActorType;
+    careActorId: string;
+    actorReference: string;
+  } | null = null;
+  if (consumed.actorType !== null) {
+    if (consumed.careActorId === null || consumed.actorReference === null) {
+      throw new Error('Handoff exchange actor provenance is incomplete.');
     }
+    actorInput = {
+      actorType: consumed.actorType,
+      careActorId: consumed.careActorId,
+      actorReference: consumed.actorReference,
+    };
+  }
 
-    // 4) PART 10 — attested Customer Care actor provenance, taken verbatim
-    //    from the consumed snapshot (server-derived in PART 08/09). The
-    //    storage coherence constraint guarantees all-or-nothing, but a
-    //    half-populated snapshot is a server defect, so it must roll back
-    //    rather than produce an untraceable attribution.
-    let actorInput: {
-      actorType: HandymanCareActorType;
-      careActorId: string;
-      actorReference: string;
-    } | null = null;
-    if (consumed.actorType !== null) {
-      if (consumed.careActorId === null || consumed.actorReference === null) {
-        throw new Error('Handoff exchange actor provenance is incomplete.');
-      }
-      actorInput = {
-        actorType: consumed.actorType,
-        careActorId: consumed.careActorId,
-        actorReference: consumed.actorReference,
-      };
-    }
+  // 5) Create the immutable attribution from the consumed snapshot only.
+  //    PART 01 re-validates all references and derives tenant isolation
+  //    itself; its conflict rules are preserved unchanged. Any failure here
+  //    rolls back the exchange consumption with the transaction.
+  //
+  //    Represented context (tenant company/PIC, building, space) is always
+  //    attributed unchanged. The acting identity differs by flow:
+  //    - legacy handoff: the resolved customer user, exactly as before;
+  //    - attested Customer Care handoff: the care actor only — the
+  //      represented customer's linked user is deliberately NOT passed as
+  //      `createdByUserId`, so it can never be recorded as the acting user.
+  const attribution = await createChannelAttribution({
+    tenantCompanyId: consumed.tenantCompanyId,
+    buildingId: consumed.buildingId,
+    ...(consumed.tenantPicId !== null
+      ? { tenantPicId: consumed.tenantPicId }
+      : {}),
+    ...(consumed.spaceId !== null ? { spaceId: consumed.spaceId } : {}),
+    originChannel: 'BM_SUPER_APP',
+    originReference: handoffOriginReference(
+      integration.integrationCode,
+      assertion.assertionId,
+    ),
+    ...(actorInput !== null
+      ? {
+          actorType: actorInput.actorType,
+          careActorId: actorInput.careActorId,
+          actorReference: actorInput.actorReference,
+        }
+      : {}),
+    ...(actorInput === null && consumed.resolvedUserId !== null
+      ? { createdByUserId: consumed.resolvedUserId }
+      : {}),
+  }, client);
+  return { attribution, exchange: consumed };
+}
 
-    // 5) Create the immutable attribution from the consumed snapshot only.
-    //    PART 01 re-validates all references and derives tenant isolation
-    //    itself; its conflict rules are preserved unchanged. Any failure here
-    //    rolls back the exchange consumption with the transaction.
-    //
-    //    Represented context (tenant company/PIC, building, space) is always
-    //    attributed unchanged. The acting identity differs by flow:
-    //    - legacy handoff: the resolved customer user, exactly as before;
-    //    - attested Customer Care handoff: the care actor only — the
-    //      represented customer's linked user is deliberately NOT passed as
-    //      `createdByUserId`, so it can never be recorded as the acting user.
-    return createChannelAttribution({
-      tenantCompanyId: consumed.tenantCompanyId,
-      buildingId: consumed.buildingId,
-      ...(consumed.tenantPicId !== null
-        ? { tenantPicId: consumed.tenantPicId }
-        : {}),
-      ...(consumed.spaceId !== null ? { spaceId: consumed.spaceId } : {}),
-      originChannel: 'BM_SUPER_APP',
-      originReference: handoffOriginReference(
-        integration.integrationCode,
-        assertion.assertionId,
-      ),
-      ...(actorInput !== null
-        ? {
-            actorType: actorInput.actorType,
-            careActorId: actorInput.careActorId,
-            actorReference: actorInput.actorReference,
-          }
-        : {}),
-      ...(actorInput === null && consumed.resolvedUserId !== null
-        ? { createdByUserId: consumed.resolvedUserId }
-        : {}),
-    }, client);
-  });
+/** Existing one-time exchange → attribution path remains compatible. */
+export async function bindHandoffExchangeToChannelAttribution(
+  exchangeToken: string,
+): Promise<PublicHandymanChannelAttribution> {
+  return withTransaction(async (client) =>
+    (await bindWithinTransaction(exchangeToken, client, false)).attribution);
+}
+
+/**
+ * PART 04: care request intake consumes the SAME single-use exchange and
+ * creates its attribution inside the request transaction. A bare attribution
+ * UUID is never accepted as proof of an acting Customer Care identity.
+ */
+export function bindCareHandoffExchangeInTransaction(
+  exchangeToken: string,
+  client: PoolClient,
+): Promise<{
+  attribution: PublicHandymanChannelAttribution;
+  exchange: HandoffExchangeContextSnapshot;
+}> {
+  return bindWithinTransaction(exchangeToken, client, true);
 }
 
 export const handoffBindingService = {

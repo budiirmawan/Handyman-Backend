@@ -94,7 +94,8 @@ async function findAssertionById(
   return result.rows[0] ?? null;
 }
 
-const EXCHANGE_SELECT = `id, integration_id AS "integrationId",
+const EXCHANGE_SELECT = `purpose, workspace_session_id AS "workspaceSessionId",
+  care_property_id AS "carePropertyId", id, integration_id AS "integrationId",
   handoff_assertion_id AS "handoffAssertionId", token_hash AS "tokenHash",
   client_id AS "clientId", tenant_company_id AS "tenantCompanyId",
   tenant_pic_id AS "tenantPicId", building_id AS "buildingId",
@@ -119,15 +120,18 @@ async function createExchange(input: {
   context: HandoffExchangeContextInput;
   actor: ResolvedCareActorProvenance | null;
   expiresAt: Date;
-}): Promise<HandoffExchangeRecord> {
-  const result = await executor().query<HandoffExchangeRecord>(
+  purpose?: 'HANDOFF' | 'CARE_CREATE';
+  workspaceSessionId?: string;
+  carePropertyId?: string;
+}, client?: PoolClient): Promise<HandoffExchangeRecord> {
+  const result = await executor(client).query<HandoffExchangeRecord>(
     `INSERT INTO handyman_handoff_exchanges
        (id, integration_id, handoff_assertion_id, token_hash, client_id,
         tenant_company_id, tenant_pic_id, building_id, space_id,
         tenant_building_context_id, tenant_space_relationship_id,
         resolved_user_id, actor_type, care_actor_id, actor_reference,
-        expires_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        expires_at, purpose, workspace_session_id, care_property_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      RETURNING ${EXCHANGE_SELECT}`,
     [
       randomUUID(),
@@ -146,6 +150,9 @@ async function createExchange(input: {
       input.actor?.careActorId ?? null,
       input.actor?.actorReference ?? null,
       input.expiresAt,
+      input.purpose ?? 'HANDOFF',
+      input.workspaceSessionId ?? null,
+      input.carePropertyId ?? null,
     ],
   );
   return result.rows[0];

@@ -2,10 +2,7 @@ import type { PoolClient } from 'pg';
 import { timingSafeEqual } from 'node:crypto';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { generateSessionToken, hashSessionToken } from '../auth/session.token';
 import { handymanExecutionScopeNotFoundError } from '../handyman-quotations';
@@ -124,9 +121,10 @@ function isUniqueViolation(error: unknown): boolean {
  * once with the RAW token; only the SHA-256 hash is persisted.
  *
  * Precondition chain (all server-verified): scope exists → scope
- * AUTHORIZED → actor has Client access → ACTIVE assignment exists →
- * actor == authoritative Lead userId (CR-HM-04 resolver; a Lead that
- * went invalid after assignment fails closed via LEAD_INVALID).
+ * AUTHORIZED → actor has exact-Building access (BE-02G) → ACTIVE
+ * assignment exists → actor == authoritative Lead userId (CR-HM-04
+ * resolver; a Lead that went invalid after assignment fails closed
+ * via LEAD_INVALID).
  */
 export async function createHandymanArrivalChallenge(
   input: CreateHandymanArrivalChallengeInput,
@@ -146,11 +144,18 @@ export async function createHandymanArrivalChallenge(
   if (scope.status !== 'AUTHORIZED') {
     throw arrivalChallengeScopeNotAuthorizedError();
   }
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId, scope.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 06B-1 — BE-02G exact-Building check on the
+  // authoritative server-derived scope building (migration 0395),
+  // replacing the client-level canAccessClient shortcut: a same-Client
+  // sibling Building assignment must not create an arrival challenge.
+  // The denial vocabulary (403 BUILDING_ACCESS_DENIED — the guard's
+  // own thrower) and the wall's position (after the scope 404 +
+  // AUTHORIZED gate, before the Lead resolution and any mutation) are
+  // unchanged.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   // Sole authoritative Lead: CR-HM-04 bounded resolver (re-validates
   // the ACTIVE assignment and its CURRENT Lead validity chain).
   const resolution = await resolveHandymanAssignmentLead(

@@ -320,13 +320,13 @@ function readOptionalUuid(
   return raw.trim().toLowerCase();
 }
 
-function readOptionalEnum(
+function readOptionalEnum<T extends string>(
   value: unknown,
   field: string,
-  isValid: (candidate: unknown) => boolean,
+  isValid: (candidate: unknown) => candidate is T,
   message: string,
   details: ValidationDetail[],
-): string | undefined {
+): T | undefined {
   const raw = readSingleParam(value);
   if (raw === undefined || raw === '') {
     return undefined;

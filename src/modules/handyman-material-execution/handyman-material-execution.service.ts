@@ -1,6 +1,7 @@
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import {
+  assertBuildingScopedResourceAccess,
   buildingAccessDeniedError,
   contextAccessService,
 } from '../context-access';
@@ -628,8 +629,9 @@ export async function getHandymanMaterialFinalChargeReadyProjection(
 /**
  * CR-HM-17 GAP PART 03 — Customer Care material execution lines read
  * projection across all governed statuses on an execution scope.
- * Enforces `canAccessClient(actorUserId, scope.clientId)` without
- * requiring Crew Lead identity.
+ * Enforces the BE-02G exact-Building guard against the scope's building
+ * without requiring Crew Lead identity (Customer Care authority
+ * separation is preserved — this read never enters the Lead preamble).
  */
 export async function getHandymanMaterialLinesCustomerCareView(
   executionScopeId: string,
@@ -644,11 +646,17 @@ export async function getHandymanMaterialLinesCustomerCareView(
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
 
-  const allowed = await contextAccessService.canAccessClient(
-    actorUuid,
-    scope.clientId,
-  );
-  if (!allowed) throw buildingAccessDeniedError();
+  // CR-HM-SEC-02 PART 04 (PART 00A frozen decision D3) — the execution
+  // scope is building-scoped (`building_id UUID NOT NULL`, migration
+  // 0395), so the BE-02G exact-Building guard — not the client-level
+  // `canAccessClient` shortcut — is the authoritative wall. A
+  // same-Client SIBLING-building actor must not receive material lines
+  // or events. Ordering preserved: scope 404 → exact-building
+  // authorization → material/event projection.
+  await assertBuildingScopedResourceAccess(actorUuid, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
 
   const lineRecords = await handymanMaterialExecutionRepository
     .listMaterialExecutionLinesByScope(undefined, scopeUuid);

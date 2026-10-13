@@ -83,6 +83,9 @@ export type HandoffExchangeContextInput = Omit<
 >;
 
 export type HandoffExchangeRecord = {
+  purpose: 'HANDOFF' | 'CARE_CREATE';
+  workspaceSessionId: string | null;
+  carePropertyId: string | null;
   id: string;
   integrationId: string;
   handoffAssertionId: string;

@@ -170,6 +170,7 @@ export async function createHandymanWorkCrew(
           handymanProviderContextId: provider.id,
           code,
           name,
+          createdByUserId: actorUserId,
         },
         actorUserId,
       );
@@ -179,6 +180,7 @@ export async function createHandymanWorkCrew(
           clientId: provider.clientId,
           handymanCrewId: crew.id,
           handymanWorkerContextId: workerContext.id,
+          createdByUserId: actorUserId,
         },
         actorUserId,
       );
@@ -188,6 +190,7 @@ export async function createHandymanWorkCrew(
           clientId: provider.clientId,
           handymanCrewId: crew.id,
           handymanCrewMembershipId: membership.id,
+          designatedByUserId: actorUserId,
         },
         actorUserId,
       );
@@ -302,6 +305,7 @@ export async function addHandymanCrewMember(
           clientId: locked.clientId,
           handymanCrewId: locked.id,
           handymanWorkerContextId: workerContext.id,
+          createdByUserId: actorUserId,
         },
         actorUserId,
       );
@@ -441,6 +445,7 @@ export async function designateHandymanCrewLead(
         clientId: crew.clientId,
         handymanCrewId: crew.id,
         handymanCrewMembershipId: membership.id,
+        designatedByUserId: actorUserId,
       },
       actorUserId,
     );

@@ -1,3 +1,5 @@
+import type { MaterialRequestItemScope } from '../material-requests/material-request.types';
+import { materialScopePredicate, RESERVATION_CHAIN_PREDICATE } from '../material-requests/material-request.scope';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
@@ -137,6 +139,43 @@ async function createWithClient(
   return mapRow(result.rows[0]);
 }
 
+/** Scoped boundary read; executor locks only after the caller locks the MR. */
+async function findByIdInScope(id: string, scope: MaterialRequestItemScope, executor?: PoolClient): Promise<MaterialReservationRecord | null> {
+  if (!scope?.length) return null;
+  const result = await (executor ?? getPool()).query<ReservationRow>(
+    `SELECT ${SELECT} FROM inventory_material_reservations r
+     WHERE r.id = $1 AND ${materialScopePredicate('r', 2)} AND ${RESERVATION_CHAIN_PREDICATE}
+     ${executor ? 'FOR UPDATE OF r' : ''}`, [id, JSON.stringify(scope)],
+  );
+  return result.rows[0] ? mapRow(result.rows[0]) : null;
+}
+
+async function listByMaterialRequestInScope(filters: MaterialReservationFilters, scope: MaterialRequestItemScope): Promise<MaterialReservationRecord[]> {
+  if (!scope?.length) return [];
+  const result = await getPool().query<ReservationRow>(
+    `SELECT ${SELECT} FROM inventory_material_reservations r
+     WHERE r.material_request_id = $1 AND ${materialScopePredicate('r', 2)}
+       AND ${RESERVATION_CHAIN_PREDICATE} AND ($3::text IS NULL OR r.status = $3)
+     ORDER BY r.created_at DESC, r.id DESC`,
+    [filters.materialRequestId, JSON.stringify(scope), filters.status ?? null],
+  );
+  return result.rows.map(mapRow);
+}
+
+async function findByIdWithDetailsInScope(id: string, scope: MaterialRequestItemScope): Promise<Record<string, unknown> | null> {
+  if (!scope?.length) return null;
+  return findDetails(id, scope);
+}
+
+/** Invalid child rows must not reach mobile projections or demand summaries. */
+async function hasInconsistentReservations(id: string, executor: Pick<PoolClient, 'query'> = getPool()): Promise<boolean> {
+  const result = await executor.query(
+    `SELECT r.id FROM inventory_material_reservations r
+     WHERE r.material_request_id = $1 AND NOT (${RESERVATION_CHAIN_PREDICATE}) LIMIT 1`, [id],
+  );
+  return result.rows.length > 0;
+}
+
 async function findById(id: string): Promise<MaterialReservationRecord | null> {
   const result = await getPool().query<ReservationRow>(
     `SELECT ${SELECT}
@@ -165,6 +204,9 @@ async function findByIdForUpdate(
 async function findByIdWithDetails(
   id: string,
 ): Promise<Record<string, unknown> | null> {
+  return findDetails(id);
+}
+async function findDetails(id: string, scope?: MaterialRequestItemScope): Promise<Record<string, unknown> | null> {
   const result = await getPool().query(
     `SELECT
        r.id,
@@ -204,8 +246,8 @@ async function findByIdWithDetails(
      LEFT JOIN material_requests mr ON mr.id = r.material_request_id
      LEFT JOIN inventory_warehouses w ON w.id = r.warehouse_id
      LEFT JOIN inventory_items i ON i.id = r.item_id
-     WHERE r.id = $1`,
-    [id],
+     WHERE r.id = $1 ${scope ? `AND ${materialScopePredicate('r', 2)} AND ${RESERVATION_CHAIN_PREDICATE}` : ''}`,
+    scope ? [id, JSON.stringify(scope)] : [id],
   );
   return result.rows[0] ?? null;
 }
@@ -492,6 +534,10 @@ async function transitionWithClient(
 }
 
 export const inventoryMaterialReservationRepository = {
+  hasInconsistentReservations,
+  findByIdInScope,
+  findByIdWithDetailsInScope,
+  listByMaterialRequestInScope,
   consumeWithClient,
   countActiveByMaterialRequest,
   createWithClient,

@@ -1,6 +1,7 @@
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
+  assertBuildingScopedResourceAccess,
   buildingAccessDeniedError,
   contextAccessService,
 } from '../context-access';
@@ -46,7 +47,10 @@ import type {
  *     (`handyman_work_sessions` where `status <> 'CHECKED_OUT'`) occupancy
  *     facts per assignable crew
  *
- * Enforces `contextAccessService.canAccessClient(actorUserId, clientId)`.
+ * Enforces `contextAccessService.canAccessClient(actorUserId, clientId)`
+ * on the contractual clientId-only path; when `executionScopeId` is
+ * supplied, the BE-02G exact-Building guard against the loaded scope
+ * applies instead (CR-HM-SEC-02 PART 04, decision D4).
  * Does not create availability or lifecycle authority; no assignment commands;
  * no FM/SaaS fallback.
  */
@@ -240,6 +244,7 @@ export async function listHandymanProviderAvailability(
   }
 
   let resolvedClientId = clientId as string;
+  let scopeBuildingId: string | null = null;
   if (executionScopeId) {
     const scope = await handymanScopeAssignmentRepository.findScopeById(
       undefined,
@@ -250,9 +255,23 @@ export async function listHandymanProviderAvailability(
       throw handymanAssignmentContextMismatchError();
     }
     resolvedClientId = scope.clientId;
+    scopeBuildingId = scope.buildingId;
   }
 
-  if (
+  if (scopeBuildingId !== null) {
+    // CR-HM-SEC-02 PART 04 (PART 00A frozen decision D4) — the
+    // executionScopeId path resolves a building-scoped scope
+    // (`building_id UUID NOT NULL`, migration 0395), so the BE-02G
+    // exact-Building guard — not the client-level `canAccessClient`
+    // shortcut — is the authoritative wall, enforced BEFORE any
+    // occupancy projection. A same-Client SIBLING-building actor must
+    // not receive occupancy identifiers. The contractual clientId-only
+    // path below keeps its client-level authorization verbatim.
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: resolvedClientId,
+      buildingId: scopeBuildingId,
+    });
+  } else if (
     !(await contextAccessService.canAccessClient(actorUserId, resolvedClientId))
   ) {
     throw buildingAccessDeniedError();

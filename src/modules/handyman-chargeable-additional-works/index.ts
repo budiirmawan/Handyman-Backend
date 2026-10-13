@@ -61,8 +61,4 @@ export {
   proposeHandymanChargeableAdditionalWork,
   acceptHandymanChargeableAdditionalWork,
   rejectHandymanChargeableAdditionalWork,
-  getHandymanChargeableAdditionalWorkById,
-  findHandymanChargeableAdditionalWorkByClaimId,
-  listHandymanChargeableAdditionalWorks,
-  getHandymanChargeablePaymentTrigger,
 } from './handyman-chargeable-additional-work.service';

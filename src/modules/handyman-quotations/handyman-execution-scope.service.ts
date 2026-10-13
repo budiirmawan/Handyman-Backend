@@ -4,10 +4,7 @@ import { areaRepository } from '../areas';
 import { floorRepository } from '../floors';
 import { roomRepository } from '../rooms';
 import { spaceRepository } from '../spaces';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanExecutionScopeRepository }
   from './handyman-execution-scope.repository';
 import type {
@@ -166,10 +163,12 @@ export async function getHandymanExecutionScopeByQuotationVersion(
   const scope = await handymanExecutionScopeRepository
     .findScopeByApprovedVersion(undefined, quotationVersionId);
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(actorUserId, scope.clientId))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: the scope carries its own authoritative
+  // building_id location snapshot (server-derived from the request
+  // lineage) — enforce BE-02G directly (no same-Client shortcut).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
   return toPublicExecutionScope(scope);
 }

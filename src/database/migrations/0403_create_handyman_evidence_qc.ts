@@ -497,4 +497,49 @@ export const migration0403CreateHandymanEvidenceQc: Migration = {
       `.replace('%(table)s', table));
     }
   },
+  async down(client: PoolClient): Promise<void> {
+    await client.query(`
+      DROP TRIGGER IF EXISTS handyman_defect_events_no_write
+        ON handyman_defect_events;
+      DROP TRIGGER IF EXISTS handyman_qc_run_events_no_write
+        ON handyman_qc_run_events;
+      DROP TRIGGER IF EXISTS handyman_evidence_record_events_no_write
+        ON handyman_evidence_record_events;
+      DROP TRIGGER IF EXISTS handyman_evidence_record_files_no_write
+        ON handyman_evidence_record_files;
+      DROP TRIGGER IF EXISTS handyman_defect_records_identity_guard
+        ON handyman_defect_records;
+      DROP TRIGGER IF EXISTS handyman_qc_runs_identity_guard
+        ON handyman_qc_runs;
+      DROP TRIGGER IF EXISTS handyman_evidence_records_identity_guard
+        ON handyman_evidence_records;
+      DROP TRIGGER IF EXISTS handyman_defect_events_client_check
+        ON handyman_defect_events;
+      DROP TRIGGER IF EXISTS handyman_qc_run_events_client_check
+        ON handyman_qc_run_events;
+      DROP TRIGGER IF EXISTS handyman_evidence_record_events_client_check
+        ON handyman_evidence_record_events;
+      DROP TRIGGER IF EXISTS handyman_defect_records_provenance_check
+        ON handyman_defect_records;
+      DROP TRIGGER IF EXISTS handyman_defect_records_client_check
+        ON handyman_defect_records;
+      DROP TRIGGER IF EXISTS handyman_qc_runs_client_check
+        ON handyman_qc_runs;
+      DROP TRIGGER IF EXISTS handyman_evidence_records_client_check
+        ON handyman_evidence_records;
+      DROP FUNCTION IF EXISTS handyman_eqc_row_block_mutation;
+      DROP FUNCTION IF EXISTS handyman_eqc_head_block_identity_mutation;
+      DROP FUNCTION IF EXISTS handyman_eqc_event_client_consistency;
+      DROP FUNCTION IF EXISTS handyman_eqc_defect_provenance_consistency;
+      DROP FUNCTION IF EXISTS handyman_eqc_scope_client_consistency;
+      DROP TABLE IF EXISTS handyman_defect_events;
+      DROP TABLE IF EXISTS handyman_defect_records;
+      DROP TABLE IF EXISTS handyman_qc_run_events;
+      DROP TABLE IF EXISTS handyman_qc_run_items;
+      DROP TABLE IF EXISTS handyman_qc_runs;
+      DROP TABLE IF EXISTS handyman_evidence_record_events;
+      DROP TABLE IF EXISTS handyman_evidence_record_files;
+      DROP TABLE IF EXISTS handyman_evidence_records;
+    `);
+  },
 };

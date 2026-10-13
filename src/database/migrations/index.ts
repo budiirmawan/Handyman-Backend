@@ -1,3 +1,6 @@
+import { migration0431CreateHandymanVisitAppointments } from './0431_create_handyman_visit_appointments';
+import { migration0430BindCareCreateExchangePurpose } from './0430_bind_care_create_exchange_purpose';
+import { migration0429CreateHandymanCareWorkspaceSessions } from './0429_create_handyman_care_workspace_sessions';
 import { migration0001InitialFoundation } from './0001_initial_foundation';
 import { migration0002CreateUsers } from './0002_create_users';
 import { migration0003CreateUserCredentials } from './0003_create_user_credentials';
@@ -455,6 +458,8 @@ import { migration0426AddHandymanHandoffExchangeActorProvenance }
   from './0426_add_handyman_handoff_exchange_actor_provenance';
 import { migration0427HandymanAttributionActorProvenance }
   from './0427_handyman_attribution_actor_provenance';
+import { migration0428CreateHandymanCarePropertyGrants }
+  from './0428_create_handyman_care_property_grants';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -887,4 +892,8 @@ export const migrations: readonly Migration[] = [
   migration0425AddHandymanCareActorRegistry,
   migration0426AddHandymanHandoffExchangeActorProvenance,
   migration0427HandymanAttributionActorProvenance,
+  migration0428CreateHandymanCarePropertyGrants,
+  migration0429CreateHandymanCareWorkspaceSessions,
+  migration0430BindCareCreateExchangePurpose,
+  migration0431CreateHandymanVisitAppointments,
 ];

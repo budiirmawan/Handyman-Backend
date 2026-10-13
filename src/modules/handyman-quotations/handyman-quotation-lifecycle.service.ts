@@ -1,11 +1,9 @@
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
+import { assertQuotationThreadBuildingAccess }
+  from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import {
@@ -72,14 +70,10 @@ async function requireAccessibleQuotation(
     quotationId,
   );
   if (!quotation) throw handymanQuotationNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      quotation.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
+  // request's building_id (BE-02G; no same-Client shortcut). This helper
+  // guards issue / expire / supersede.
+  await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
   return quotation;
 }
 
@@ -297,14 +291,13 @@ export async function getCurrentHandymanIssuedQuotationVersion(
     handymanRequestId,
   );
   if (!quotation) throw handymanQuotationNotFoundError();
-  if (
-    !(await contextAccessService.canAccessClient(
-      actorUserId,
-      quotation.clientId,
-    ))
-  ) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
+  // request's building_id (BE-02G; no same-Client shortcut).
+  await assertQuotationThreadBuildingAccess(
+    undefined as never,
+    quotation,
+    actorUserId,
+  );
   const txless = undefined as never;
   const current = await handymanQuotationRepository.findCurrentIssued(
     txless,

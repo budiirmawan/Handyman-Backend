@@ -1,3 +1,5 @@
+import type { MaterialRequestItemScope } from '../material-requests/material-request.types';
+import { materialScopePredicate, MATERIAL_CHAIN_PREDICATE, RESERVATION_CHAIN_PREDICATE } from '../material-requests/material-request.scope';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type { MaterialRequestStatus } from '../material-requests/material-request.types';
@@ -68,6 +70,40 @@ const FROM = `
   JOIN inventory_items i ON i.id = mr.item_id
   LEFT JOIN units_of_measure u ON u.id = mr.uom_id
 `;
+
+const FIELD_CHAIN = `${MATERIAL_CHAIN_PREDICATE} AND EXISTS (
+  SELECT 1 FROM work_orders wo WHERE wo.id = pr.work_order_id
+    AND wo.client_id = mr.client_id AND wo.building_id = mr.building_id)`;
+
+async function workOrderExistsInScope(id: string, scope: MaterialRequestItemScope): Promise<boolean> {
+  if (!scope?.length) return false;
+  const result = await getPool().query(
+    `SELECT wo.id FROM work_orders wo WHERE wo.id = $1 AND ${materialScopePredicate('wo', 2)}`,
+    [id, JSON.stringify(scope)],
+  );
+  return result.rows.length > 0;
+}
+
+async function listByWorkOrderInScope(id: string, scope: MaterialRequestItemScope): Promise<MobileMaterialRequestRow[]> {
+  if (!scope?.length) return [];
+  const result = await getPool().query<MobileMaterialRequestRow>(
+    `SELECT ${SELECT} ${FROM} WHERE pr.work_order_id = $1
+      AND ${materialScopePredicate('mr', 2)} AND ${FIELD_CHAIN}
+      AND NOT EXISTS (SELECT 1 FROM inventory_material_reservations r
+        WHERE r.material_request_id = mr.id AND NOT (${RESERVATION_CHAIN_PREDICATE}))
+      ORDER BY mr.created_at ASC, mr.id ASC`, [id, JSON.stringify(scope)],
+  );
+  return result.rows;
+}
+
+async function findFieldByIdInScope(id: string, scope: MaterialRequestItemScope, executor: Pick<PoolClient, 'query'> = getPool()): Promise<MobileMaterialRequestRow | null> {
+  if (!scope?.length) return null;
+  const result = await executor.query<MobileMaterialRequestRow>(
+    `SELECT ${SELECT} ${FROM} WHERE mr.id = $1 AND pr.work_order_id IS NOT NULL
+      AND ${materialScopePredicate('mr', 2)} AND ${FIELD_CHAIN}`, [id, JSON.stringify(scope)],
+  );
+  return result.rows[0] ?? null;
+}
 
 async function listByWorkOrder(workOrderId: string): Promise<MobileMaterialRequestRow[]> {
   const result = await getPool().query<MobileMaterialRequestRow>(
@@ -257,6 +293,9 @@ async function findIssueById(
 }
 
 export const mobileMaterialRequestRepository = {
+  workOrderExistsInScope,
+  listByWorkOrderInScope,
+  findFieldByIdInScope,
   listActiveReservationIds,
   findIssueById,
   listByWorkOrder,

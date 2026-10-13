@@ -149,6 +149,7 @@ export async function createHandymanWorkerContext(
           clientId: providerContext.clientId,
           handymanProviderContextId: providerContext.id,
           workforceProfileId: input.workforceProfileId,
+          createdByUserId: actorUserId,
         },
         actorUserId,
       );

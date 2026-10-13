@@ -128,6 +128,13 @@ function addSummary(
     'unpaidAmount',
     'overdueAmount',
     'outstandingAmount',
+  ] as const) {
+    target.payments[key] = addNullableAmount(
+      target.payments[key],
+      source.payments[key],
+    );
+  }
+  for (const key of [
     'unpaidCount',
     'partiallyPaidCount',
     'paidCount',
@@ -148,7 +155,10 @@ function addSummary(
   target.basicExpenses.draftCount += source.basicExpenses.draftCount;
   target.basicExpenses.cancelledCount += source.basicExpenses.cancelledCount;
   target.outstandingBalance.invoiceCount += source.outstandingBalance.invoiceCount;
-  target.outstandingBalance.amount += source.outstandingBalance.amount;
+  target.outstandingBalance.amount = addNullableAmount(
+    target.outstandingBalance.amount,
+    source.outstandingBalance.amount,
+  );
 
   for (const key of [
     'billedIncome',
@@ -157,16 +167,30 @@ function addSummary(
     'netBilled',
     'netReceived',
   ] as const) {
-    target.incomeVsOperationalCost[key] += source.incomeVsOperationalCost[key];
+    target.incomeVsOperationalCost[key] = addNullableAmount(
+      target.incomeVsOperationalCost[key],
+      source.incomeVsOperationalCost[key],
+    );
   }
 }
 
 function addCountAmount(
-  target: { count: number; amount: number },
-  source: { count: number; amount: number },
+  target: { count: number; amount: number | null },
+  source: { count: number; amount: number | null },
 ): void {
   target.count += source.count;
-  target.amount += source.amount;
+  target.amount = addNullableAmount(target.amount, source.amount);
+}
+
+/**
+ * Null is the honest "not single-currency attributable" signal: a roll-up
+ * containing any null component is itself null. Never coerced to 0.
+ */
+function addNullableAmount(
+  left: number | null,
+  right: number | null,
+): number | null {
+  return left === null || right === null ? null : left + right;
 }
 
 function cloneSummary(

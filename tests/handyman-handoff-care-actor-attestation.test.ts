@@ -12,7 +12,9 @@ import { buildingService } from '../src/modules/buildings';
 import { clientService } from '../src/modules/clients';
 import { floorService } from '../src/modules/floors';
 import {
+  handymanCareActorRepository,
   handymanCareActorService,
+  grantCareActorProperty,
   type PublicHandymanCareActor,
 } from '../src/modules/handyman-care-actors';
 import { propertyService } from '../src/modules/properties';
@@ -100,6 +102,7 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let userId = '';
 const secretEnvNames: string[] = [];
+const registeredCareActors: { id: string; integrationId: string }[] = [];
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 before(async () => {
@@ -199,11 +202,13 @@ async function integration(options: { careCapable?: boolean } = {}) {
 }
 
 async function registerActor(integrationId: string): Promise<PublicHandymanCareActor> {
-  return handymanCareActorService.createCareActor({
+  const actor = await handymanCareActorService.createCareActor({
     integrationId,
     actorReference: `CC_${suffix()}`,
     displayName: 'Customer Care Agent',
   });
+  registeredCareActors.push({ id: actor.id, integrationId });
+  return actor;
 }
 
 async function trustedFixture() {
@@ -264,6 +269,19 @@ async function trustedFixture() {
     tenantCompanyId: company.id,
     buildingId: building.id,
   }, userId);
+  // PART 03: legacy actor fixtures explicitly provision the new property
+  // authority before exercising their pre-existing attestation/binding cases.
+  for (const registered of registeredCareActors) {
+    const actor = await handymanCareActorRepository.findById(registered.id);
+    const integrationScope = await handymanCareActorRepository
+      .findIntegrationActorScopeById(registered.integrationId);
+    if (actor?.status === 'ACTIVE' && integrationScope?.status === 'ACTIVE' &&
+        integrationScope.actorCapability === 'CUSTOMER_CARE') {
+      await grantCareActorProperty({
+        careActorId: actor.id, propertyId: property.id, clientId: client.id,
+      }, userId);
+    }
+  }
   return { client, property, building, space, company, pic, context };
 }
 
@@ -693,8 +711,12 @@ describe('CR-HM-01 A01 PART 09 — runtime Customer Care actor attestation', () 
       (error: unknown) => (error as { code?: string }).code === '23503',
     );
 
-    // Actor-bearing exchange: provenance present and coherent.
+    // Actor-bearing exchange: provenance present and coherent. This actor
+    // was registered after the fixture, so grant its property explicitly.
     const actor = await registerActor(integrationRecord.id);
+    await grantCareActorProperty({
+      careActorId: actor.id, propertyId: f.property.id, clientId: f.client.id,
+    }, userId);
     const actorAssertion = makeAssertion(f, integrationRecord.code, {
       actor: { type: 'CUSTOMER_CARE', actorReference: actor.actorReference },
     });

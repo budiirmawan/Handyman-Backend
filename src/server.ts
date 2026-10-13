@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { createApp } from './app';
 import { ConfigError, getAppConfig } from './config';
 import { DatabaseError, closePool, initDatabase } from './database';
+import { verifyEvidenceStorageReady } from './modules/evidence/storage';
 import { logger } from './shared/logger';
 import type { DueJobScheduler } from './modules/due-job-scheduler';
 import {
@@ -58,6 +59,11 @@ async function start(): Promise<void> {
   try {
     const config = getAppConfig();
     const pool = await initDatabase(config.database);
+
+    // D03 — fail fast when evidence storage is misconfigured or unwritable
+    // (missing volume mount, wrong ownership) instead of failing operations
+    // mid-request. ConfigError exits 1 via the existing startup-error path.
+    await verifyEvidenceStorageReady();
 
     const app = createApp();
     const server = app.listen(config.port, '0.0.0.0', () => {

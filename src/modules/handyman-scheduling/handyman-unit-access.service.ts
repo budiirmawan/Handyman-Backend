@@ -1,5 +1,5 @@
 import { withTransaction } from '../../database';
-import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { areaRepository } from '../areas';
 import { floorRepository } from '../floors';
@@ -162,9 +162,14 @@ export async function createHandymanUnitAccessReadiness(
     input.handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the
+  // authoritative parent request chain (migration 0378), replacing the
+  // client-level canAccessClient shortcut: a same-Client sibling
+  // Building assignment must not open the write.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const location = await deriveHandymanLocationChain(request);
 
   const journalBase = { clientId: request.clientId, actorUserId };
@@ -241,9 +246,14 @@ export async function supersedeHandymanUnitAccessReadiness(
         readinessId,
       );
       if (!current) throw handymanUnitAccessReadinessNotFoundError();
-      if (!(await contextAccessService.canAccessClient(actorUserId, current.clientId))) {
-        throw buildingAccessDeniedError();
-      }
+      // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the
+      // readiness row's OWN authoritative building_id (migration 0388),
+      // replacing the client-level canAccessClient shortcut (wall position
+      // preserved: after the readiness 404, before any mutation).
+      await assertBuildingScopedResourceAccess(actorUserId, {
+        clientId: current.clientId,
+        buildingId: current.buildingId,
+      });
       if (current.status !== 'ACTIVE') {
         throw handymanUnitAccessReadinessInvalidStatusError();
       }
@@ -332,11 +342,13 @@ export async function getHandymanUnitAccessReadiness(
     handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (
-    actorUserId !== undefined &&
-    !(await contextAccessService.canAccessClient(actorUserId, request.clientId))
-  ) {
-    throw buildingAccessDeniedError();
+  if (actorUserId !== undefined) {
+    // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the parent
+    // request chain, replacing the client-level canAccessClient shortcut.
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: request.clientId,
+      buildingId: request.buildingId,
+    });
   }
   const current = await handymanUnitAccessReadinessRepository
     .findActiveByRequest(undefined, request.id);
@@ -366,9 +378,12 @@ export async function listHandymanUnitAccessReadinessHistory(
     handymanRequestId,
   );
   if (!request) throw handymanServiceRequestNotFoundError();
-  if (!(await contextAccessService.canAccessClient(actorUserId, request.clientId))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-02 PART 01 — BE-02G exact-Building guard on the parent
+  // request chain, replacing the client-level canAccessClient shortcut.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: request.clientId,
+    buildingId: request.buildingId,
+  });
   const rows = await handymanUnitAccessReadinessRepository.listByRequest(
     undefined,
     request.id,

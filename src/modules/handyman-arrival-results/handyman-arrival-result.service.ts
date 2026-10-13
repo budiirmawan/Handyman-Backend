@@ -1,10 +1,7 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { hashSessionToken } from '../auth/session.token';
-import {
-  buildingAccessDeniedError,
-  contextAccessService,
-} from '../context-access';
+import { assertBuildingScopedResourceAccess } from '../context-access';
 import {
   arrivalChallengeInvalidError,
   arrivalChallengeNotAuthorizedError,
@@ -139,8 +136,8 @@ export async function evaluateHandymanArrivalVerification(
   const evaluateGeofence = options?.geofence
     ?? evaluateHandymanBuildingGeofenceSignal;
 
-  // 1+2: scope exists, Client access, AUTHORIZED gate (evaluation
-  // REJECTS; no result, no consume).
+  // 1+2: scope exists, exact-Building access (BE-02G), AUTHORIZED
+  // gate (evaluation REJECTS; no result, no consume).
   const scope = await handymanScopeAssignmentRepository.findScopeById(
     undefined, scopeUuid,
   );
@@ -148,11 +145,18 @@ export async function evaluateHandymanArrivalVerification(
   if (scope.status !== 'AUTHORIZED') {
     throw arrivalChallengeScopeNotAuthorizedError();
   }
-  if (!(await contextAccessService.canAccessClient(
-    actorUserId, scope.clientId,
-  ))) {
-    throw buildingAccessDeniedError();
-  }
+  // CR-HM-SEC-01 PART 06B-1 — BE-02G exact-Building check on the
+  // authoritative server-derived scope building (migration 0395),
+  // replacing the client-level canAccessClient shortcut: a same-Client
+  // sibling Building assignment must not evaluate an arrival
+  // verification. The denial vocabulary (403 BUILDING_ACCESS_DENIED —
+  // the guard's own thrower) and the wall's position (after the scope
+  // 404 + AUTHORIZED gate, BEFORE the replay short-circuit and any
+  // mutation) are unchanged.
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
 
   // REPLAY FIRST: challenge bound by scope + authenticated actor +
   // token. A stored result for it returns before ANY state lock.

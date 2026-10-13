@@ -1,3 +1,5 @@
+import { WORKSPACE_OCCUPANCY_CTES } from '../handyman-care-workspace/care-workspace-occupancies.repository';
+import type { CareWorkspacePrincipal } from '../handyman-care-workspace/care-workspace.service';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
@@ -167,16 +169,81 @@ async function updateStatus(
   return result.rows[0] ?? null;
 }
 
+/**
+ * C6 read wall, applied in SQL to both list and detail so filtering and the
+ * returned projection observe the same database statement. A Building/Client
+ * assignment alone is NOT customer authority. A linked ACTIVE PIC may read
+ * only its represented tenant's requests while the tenant still has effective
+ * building + (when selected) exact unit occupancy. Building-only requests
+ * require effective occupancy somewhere in the represented building.
+ *
+ * The existing PLATFORM_ADMIN role is the explicit operational exception:
+ * it may read historical requests, but only in its assigned Building and
+ * with the route's tenant_company.read permission. No new role/permission.
+ */
+function customerRequestReadScope(actorParam: number): string {
+  const actor = `$${actorParam}`;
+  return `EXISTS (
+    SELECT 1 FROM user_building_assignments uba
+      JOIN buildings b ON b.id = uba.building_id AND b.status = 'ACTIVE'
+      JOIN properties p ON p.id = b.property_id AND p.status = 'ACTIVE'
+      JOIN clients c ON c.id = p.client_id AND c.status = 'ACTIVE'
+      JOIN users u ON u.id = uba.user_id AND u.status = 'ACTIVE'
+    WHERE uba.user_id = ${actor} AND uba.status = 'ACTIVE'
+      AND b.id = r.building_id AND c.id = r.client_id
+      AND (
+        EXISTS (
+          SELECT 1 FROM user_role_assignments ura
+            JOIN roles role ON role.id = ura.role_id
+          WHERE ura.user_id = ${actor} AND ura.status = 'ACTIVE'
+            AND role.code = 'PLATFORM_ADMIN' AND role.status = 'ACTIVE'
+        )
+        OR (
+          EXISTS (
+            SELECT 1 FROM tenant_pics pic
+              JOIN tenant_companies tc ON tc.id = pic.tenant_company_id
+            WHERE pic.user_id = ${actor} AND pic.status = 'ACTIVE'
+              AND tc.id = r.tenant_company_id AND tc.client_id = r.client_id
+              AND tc.status = 'ACTIVE'
+          )
+          AND EXISTS (
+            SELECT 1 FROM tenant_building_contexts tbc
+            WHERE tbc.tenant_company_id = r.tenant_company_id
+              AND tbc.building_id = r.building_id AND tbc.status = 'ACTIVE'
+              AND (tbc.effective_from IS NULL OR tbc.effective_from <= statement_timestamp())
+              AND (tbc.effective_until IS NULL OR tbc.effective_until >= statement_timestamp())
+          )
+          AND EXISTS (
+            SELECT 1 FROM tenant_space_relationships tsr
+            WHERE tsr.tenant_company_id = r.tenant_company_id
+              AND tsr.building_id = r.building_id AND tsr.status = 'ACTIVE'
+              AND (tsr.effective_from IS NULL OR tsr.effective_from <= statement_timestamp())
+              AND (tsr.effective_until IS NULL OR tsr.effective_until >= statement_timestamp())
+              AND (r.space_id IS NULL OR tsr.space_id = r.space_id)
+          )
+          AND (r.space_id IS NULL OR EXISTS (
+            SELECT 1 FROM spaces s
+              JOIN rooms room ON room.id = s.room_id
+              JOIN areas a ON a.id = room.area_id
+              JOIN floors f ON f.id = a.floor_id
+            WHERE s.id = r.space_id AND f.building_id = r.building_id
+          ))
+        )
+      )
+  )`;
+}
+
 async function findCustomerCareProjectionById(
   executor: Pick<PoolClient, 'query'> = getPool(),
   id: string,
+  actorUserId: string,
 ): Promise<HandymanCustomerCareServiceRequestRecord | null> {
   const result =
     await executor.query<HandymanCustomerCareServiceRequestRecord>(
       `SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
          ${CUSTOMER_CARE_PROJECTION_FROM}
-        WHERE r.id = $1`,
-      [id],
+        WHERE r.id = $1 AND ${customerRequestReadScope(2)}`,
+      [id, actorUserId],
     );
   return result.rows[0] ?? null;
 }
@@ -184,6 +251,7 @@ async function findCustomerCareProjectionById(
 async function listCustomerCareProjectionsScoped(
   executor: Pick<PoolClient, 'query'> = getPool(),
   filters: HandymanServiceRequestListFilters,
+  actorUserId: string,
 ): Promise<HandymanCustomerCareServiceRequestRecord[]> {
   const conditions: string[] = ['r.client_id = $1'];
   const values: unknown[] = [filters.clientId];
@@ -209,6 +277,8 @@ async function listCustomerCareProjectionsScoped(
     conditions.push(`r.status = $${idx++}`);
     values.push(filters.status);
   }
+  conditions.push(customerRequestReadScope(idx));
+  values.push(actorUserId);
 
   const result =
     await executor.query<HandymanCustomerCareServiceRequestRecord>(
@@ -221,6 +291,86 @@ async function listCustomerCareProjectionsScoped(
   return result.rows;
 }
 
+export type WorkspaceRequestSelection = {
+  propertyId: string; tenantCompanyId: string; buildingId: string; spaceId: string | null;
+  status: HandymanServiceRequestListFilters['status'] | null;
+  channelAttributionId: string | null;
+  limit: number; afterId: string | null; afterCreatedAt: string | null;
+};
+
+type WorkspaceRequestRow = HandymanCustomerCareServiceRequestRecord & { cursorCreatedAt: string };
+type JsonWorkspaceRequestRow = Omit<WorkspaceRequestRow, 'createdAt' | 'updatedAt' | 'attributionCreatedAt'> & {
+  createdAt: string; updatedAt: string; attributionCreatedAt: string;
+};
+
+/** Workspace read adapter, NOT the local User/PIC/admin read wall. Reuse the
+ * exact existing request projection and current occupancy authority. Every row
+ * must match the selected tenant/building AND its applicable current occupancy,
+ * including when no space filter is provided. Authorization precedes keyset
+ * pagination, in the same statement snapshot; no post-page redaction/counts. */
+async function listWorkspaceProjectionsScoped(principal: CareWorkspacePrincipal, selection: WorkspaceRequestSelection) {
+  const result = await getPool().query<{
+    authenticated: boolean; accessible: boolean; evaluatedAt: Date; items: JsonWorkspaceRequestRow[];
+  }>(`
+    ${WORKSPACE_OCCUPANCY_CTES}, page AS (
+      SELECT ${CUSTOMER_CARE_PROJECTION_SELECT},
+        to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "cursorCreatedAt"
+      ${CUSTOMER_CARE_PROJECTION_FROM}
+      WHERE EXISTS (
+        SELECT 1 FROM records c WHERE c."clientId" = r.client_id
+          AND c."tenantCompanyId" = r.tenant_company_id AND c."buildingId" = r.building_id
+          AND c."spaceId" IS NOT DISTINCT FROM r.space_id
+      )
+        AND ($11::text IS NULL OR r.status = $11)
+        AND ($12::uuid IS NULL OR r.channel_attribution_id = $12)
+        AND ($5::uuid IS NULL OR (r.created_at, r.id) < ($10::timestamptz, $5::uuid))
+      ORDER BY r.created_at DESC, r.id DESC LIMIT $6
+    )
+    SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,
+      EXISTS(SELECT 1 FROM records) AS accessible,
+      statement_timestamp() AS "evaluatedAt",
+      COALESCE((SELECT jsonb_agg(to_jsonb(page) ORDER BY page."createdAt" DESC, page.id DESC)
+        FROM page), '[]'::jsonb) AS items`,
+    [principal.sessionId, principal.careActorId, principal.integrationId, selection.propertyId,
+      selection.afterId, selection.limit + 1, selection.tenantCompanyId, selection.buildingId,
+      selection.spaceId, selection.afterCreatedAt, selection.status, selection.channelAttributionId]);
+  const row = result.rows[0];
+  // Existing public projector consumes the domain's Date-valued record. The
+  // separate cursor key preserves PostgreSQL microseconds (JS Date cannot).
+  return { ...row, items: row.items.map(item => ({ ...item,
+    createdAt: new Date(item.createdAt), updatedAt: new Date(item.updatedAt),
+    attributionCreatedAt: new Date(item.attributionCreatedAt),
+  })) };
+}
+
+/** Detail uses the same represented-context authority as PART 06A. The ID
+ * never authenticates a request: match scope/occupancy and project together,
+ * without an unscoped existence lookup or the local admin historical wall. */
+async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, requestId: string,
+  selection: Pick<WorkspaceRequestSelection, 'propertyId' | 'tenantCompanyId' | 'buildingId' | 'spaceId'>) {
+  const result = await getPool().query<{
+    authenticated: boolean; item: Omit<JsonWorkspaceRequestRow, 'cursorCreatedAt'> | null;
+  }>(`
+    ${WORKSPACE_OCCUPANCY_CTES}, matched AS (
+      SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
+      ${CUSTOMER_CARE_PROJECTION_FROM}
+      WHERE r.id = $5 AND EXISTS (
+        SELECT 1 FROM records c WHERE c."clientId" = r.client_id
+          AND c."tenantCompanyId" = r.tenant_company_id AND c."buildingId" = r.building_id
+          AND c."spaceId" IS NOT DISTINCT FROM r.space_id
+      ) LIMIT $6
+    )
+    SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,
+      (SELECT to_jsonb(matched) FROM matched) AS item`,
+    [principal.sessionId, principal.careActorId, principal.integrationId, selection.propertyId,
+      requestId, 1, selection.tenantCompanyId, selection.buildingId, selection.spaceId]);
+  const { authenticated, item } = result.rows[0];
+  return { authenticated, item: item ? { ...item,
+    createdAt: new Date(item.createdAt), updatedAt: new Date(item.updatedAt),
+    attributionCreatedAt: new Date(item.attributionCreatedAt),
+  } : null };
+}
+
 export const handymanServiceRequestRepository = {
   insertRequest,
   findById,
@@ -229,4 +379,6 @@ export const handymanServiceRequestRepository = {
   updateStatus,
   findCustomerCareProjectionById,
   listCustomerCareProjectionsScoped,
+  listWorkspaceProjectionsScoped,
+  findWorkspaceProjectionById,
 };

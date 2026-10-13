@@ -3,8 +3,8 @@ import type { FinancialReportFilters } from './basic-financial-reporting.types';
 
 type Scope = { buildingId: string; filters: FinancialReportFilters };
 
-const params = (s: Scope) =>
-  [s.buildingId, s.filters.periodFrom ?? null, s.filters.periodTo ?? null, s.filters.tenantCompanyId ?? null] as const;
+const params = (s: Scope): Array<string | null> =>
+  [s.buildingId, s.filters.periodFrom ?? null, s.filters.periodTo ?? null, s.filters.tenantCompanyId ?? null];
 
 const n = (v: unknown) => Number(v ?? 0);
 
@@ -708,7 +708,7 @@ export const basicFinancialReportingRepository = {
       payments: {
         paidAmount: (() => {
           const knownCodes = Object.keys(pay.byCurrency);
-          if (pay.unknown.paidAmount !== 0 || pay.unknown.count !== 0) return null;
+          if (pay.unknown.paidAmount !== 0) return null;
           if (knownCodes.length === 1) return pay.byCurrency[knownCodes[0]].paidAmount;
           if (knownCodes.length === 0) return 0;
           return null;

@@ -629,7 +629,7 @@ describe('Material Reservation scope and concurrency', () => {
       { code: 'inventory_stock.read', name: 'Read Inventory Stock' },
     ]);
     const unauthorized = await reserve(f, 1, outsiderToken);
-    assert.equal(unauthorized.status, 403, JSON.stringify(unauthorized.body));
+    assert.equal(unauthorized.status, 404, JSON.stringify(unauthorized.body));
     assert.deepEqual(await balance(f), {
       quantityOnHand: 10,
       reservedQuantity: 0,

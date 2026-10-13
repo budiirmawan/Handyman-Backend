@@ -24,7 +24,7 @@ import {
   issueHandymanBast,
   prepareHandymanBast,
 } from '../src/modules/handyman-bast';
-import { handymanCareActorService } from '../src/modules/handyman-care-actors';
+import { handymanCareActorService, grantCareActorProperty } from '../src/modules/handyman-care-actors';
 import { proposeHandymanChargeableAdditionalWork } from '../src/modules/handyman-chargeable-additional-works';
 import {
   composeHandymanChargeLine,
@@ -381,6 +381,11 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
       actorReference: `CC_AGENT_${shortCode()}`,
       displayName: 'CC Agent Rina',
     });
+    await grantCareActorProperty({
+      careActorId: careActor.id,
+      propertyId: realm.property.id,
+      clientId: realm.client.id,
+    }, adminUserId);
 
     // Real signed BM handoff: backend resolves represented tenant context;
     // binding cannot fabricate a user/session or make the Care actor a tenant.

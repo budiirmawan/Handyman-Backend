@@ -1,7 +1,13 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
-import { contextAccessService } from '../context-access';
+import { canAccessBuildingScopedResource } from '../context-access';
+import { handymanExecutionScopeNotFoundError }
+  from '../handyman-quotations';
+import {
+  handymanScopeAssignmentRepository,
+  resolveHandymanAssignmentLead,
+} from '../handyman-scope-assignments';
 import { handymanServiceWarrantyClaimRepository }
   from '../handyman-service-warranty-claims';
 import type { HandymanServiceWarrantyClaimRecord }
@@ -87,11 +93,59 @@ function ensureNote(value: string | null | undefined, field: string): string {
   return raw;
 }
 
+/**
+ * CR-HM-SEC-01 PART 06D-4B — the chargeable commands' access wall
+ * (audited READ-ONLY in PART 06D-4A): the BE-02G exact-Building
+ * check on the authoritative server-derived scope building
+ * (migration 0395), resolved through the claim's ORIGINAL execution
+ * scope (the claim — and the work — carry the warranty's scope),
+ * replacing the client-level canAccessClient shortcut: a same-Client
+ * sibling Building assignment must not run any chargeable command.
+ * Fail-closed on a missing scope. The module's denial vocabulary
+ * (403 HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_AUTHORIZED) is
+ * unchanged, and the wall stays in its original authorization
+ * position (after the resource 404, before replay/mutation; the
+ * in-transaction re-proof keeps its slot too).
+ */
 async function assertChargeableAuthority(
   actorUserId: string,
-  clientId: string,
+  executionScopeId: string,
 ): Promise<void> {
-  if (!(await contextAccessService.canAccessClient(actorUserId, clientId))) {
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  if (!(await canAccessBuildingScopedResource(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  }))) {
+    throw handymanChargeableAdditionalWorkNotAuthorizedError();
+  }
+}
+
+/**
+ * CR-HM-SEC-01 PART 07B-2B — CR-HM-04 field-worker ACTION authority
+ * (audited in PART 07B-1; mirrors the implemented 07B-2A rework
+ * pattern): PROPOSE is a Lead/provider command — the actor must be
+ * the scope's CURRENT ACTIVE assignment's authoritative Crew Lead.
+ * `resolveHandymanAssignmentLead` re-validates the ACTIVE assignment
+ * and its CURRENT Lead validity chain (and re-proves the BE-02G
+ * building wall); a missing/invalid/mismatched current-assignment
+ * Lead fails CLOSED with the module's existing 403 vocabulary
+ * (HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_AUTHORIZED). Applies ONLY
+ * to PROPOSE; the customer-side ACCEPT/REJECT stay free of the Lead
+ * check — their action authority is the customer-side decision.
+ */
+async function assertChargeableLeadAction(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<void> {
+  const resolution = await resolveHandymanAssignmentLead(
+    executionScopeId,
+    actorUserId,
+  );
+  if (!resolution || resolution.leadUserId !== actorUserId) {
     throw handymanChargeableAdditionalWorkNotAuthorizedError();
   }
 }
@@ -119,7 +173,7 @@ async function lockClaimAndWarranty(
       `claim-not-found=${claimId}`,
     );
   }
-  await assertChargeableAuthority(actorUserId, claim.clientId);
+  await assertChargeableAuthority(actorUserId, claim.executionScopeId);
   const warranty = await handymanServiceWarrantyRepository.findWarrantyById(
     client,
     warrantyId,
@@ -154,7 +208,12 @@ export async function proposeHandymanChargeableAdditionalWork(
       `claim-not-found=${claimUuid}`,
     );
   }
-  await assertChargeableAuthority(actorUuid, claim.clientId);
+  await assertChargeableAuthority(actorUuid, claim.executionScopeId);
+  // CR-HM-SEC-01 PART 07B-2B — PROPOSE is a field-worker
+  // (Lead/provider) command: CR-HM-04 Lead action authority on the
+  // claim's ORIGINAL execution scope, after the resource 404 and the
+  // BE-02G building wall, before the idempotent replay and mutation.
+  await assertChargeableLeadAction(claim.executionScopeId, actorUuid);
 
   return withTransaction(async (client) => {
     const locked = await lockClaimAndWarranty(
@@ -364,54 +423,9 @@ export async function rejectHandymanChargeableAdditionalWork(
   return applyChargeableDecision(actorUserId, input, 'REJECT');
 }
 
-export async function getHandymanChargeableAdditionalWorkById(
-  workIdRaw: string,
-): Promise<HandymanChargeableAdditionalWorkRecord> {
-  const workId = ensureUuid(workIdRaw, 'workId');
-  const work = await handymanChargeableAdditionalWorkRepository.findWorkById(
-    getPool(),
-    workId,
-  );
-  if (!work) throw handymanChargeableAdditionalWorkNotFoundError();
-  return work;
-}
-
-export async function findHandymanChargeableAdditionalWorkByClaimId(
-  claimIdRaw: string,
-): Promise<HandymanChargeableAdditionalWorkRecord | null> {
-  const claimId = ensureUuid(claimIdRaw, 'claimId');
-  return handymanChargeableAdditionalWorkRepository.findWorkByClaimId(
-    getPool(),
-    claimId,
-  );
-}
-
-export async function listHandymanChargeableAdditionalWorks(
-  warrantyIdRaw: string,
-): Promise<HandymanChargeableAdditionalWorkRecord[]> {
-  const warrantyId = ensureUuid(warrantyIdRaw, 'warrantyId');
-  return handymanChargeableAdditionalWorkRepository.listWorksByWarrantyId(
-    getPool(),
-    warrantyId,
-  );
-}
-
 /**
- * The outbound CR-HM-13 seam, READ-ONLY: the emitted payment trigger fact
- * of an authorized chargeable scope, or null when the scope was never
- * authorized. CR-HM-13 owns pricing, ledger, payment and settlement.
+ * The frozen PART 01/04 read surface for the chargeable family is the
+ * guarded HTTP/API contract readers (06D-1) and the lifecycle
+ * commands; the former actor-less read helpers were removed in
+ * CR-HM-SEC-01 PART 07C-2D (dead/actor-less surface, 07C-1 class A).
  */
-export async function getHandymanChargeablePaymentTrigger(
-  workIdRaw: string,
-): Promise<HandymanChargeablePaymentTriggerFact | null> {
-  const workId = ensureUuid(workIdRaw, 'workId');
-  const work = await handymanChargeableAdditionalWorkRepository.findWorkById(
-    getPool(),
-    workId,
-  );
-  if (!work) throw handymanChargeableAdditionalWorkNotFoundError();
-  return handymanChargeableAdditionalWorkRepository.findPaymentTriggerForWork(
-    getPool(),
-    workId,
-  );
-}

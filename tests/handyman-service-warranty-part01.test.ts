@@ -21,7 +21,6 @@ import {
 import {
   startHandymanServiceWarranty,
   expireHandymanServiceWarranty,
-  findHandymanServiceWarrantyByScopeId,
   evaluateHandymanServiceWarrantyEligibility,
   HANDYMAN_NOT_SERVICE_WARRANTY_START,
   HANDYMAN_SERVICE_WARRANTY_START_SOURCES,
@@ -223,7 +222,9 @@ describe('CR-HM-15 PART 01 service warranty persistence', () => {
       assert.equal(result.event.eventType, 'START');
       // The original BAST / service history is untouched.
       assert.deepEqual(await bastRow(bast.id), before);
-      const reloaded = await findHandymanServiceWarrantyByScopeId(scope.id);
+      const reloaded = (await q(
+        `SELECT id FROM handyman_service_warranties
+          WHERE execution_scope_id=$1`, [scope.id])).rows[0];
       assert.equal(reloaded?.id, result.warranty.id);
     });
 
@@ -241,7 +242,10 @@ describe('CR-HM-15 PART 01 service warranty persistence', () => {
         (await q(`SELECT count(*)::int AS n FROM handyman_service_warranties
                    WHERE execution_scope_id=$1`, [scope.id])).rows[0].n, 0,
         `status=${status}`);
-      assert.equal(await findHandymanServiceWarrantyByScopeId(scope.id), null);
+      assert.equal(
+        (await q(`SELECT id FROM handyman_service_warranties
+                   WHERE execution_scope_id=$1`, [scope.id])).rows.length, 0,
+        `status=${status}`);
       assert.deepEqual(await bastRow(bast.id), before, `status=${status}`);
     }
   });
@@ -399,9 +403,11 @@ describe('CR-HM-15 PART 01 service warranty persistence', () => {
       await assert.rejects(expireHandymanServiceWarranty(
         { warrantyId: started.warranty.id, idempotencyKey: id() }, actor),
       hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_ILLEGAL_TRANSITION));
-      const reloaded = await findHandymanServiceWarrantyByScopeId(scope.id);
+      const reloaded = (await q(
+        `SELECT status, starts_at FROM handyman_service_warranties
+          WHERE execution_scope_id=$1`, [scope.id])).rows[0];
       assert.equal(reloaded?.status, 'EXPIRED');
-      assert.equal(reloaded?.startsAt.getTime(),
+      assert.equal(new Date(reloaded?.starts_at).getTime(),
         started.warranty.startsAt.getTime());
       assert.equal(
         (await q(`SELECT count(*)::int AS n FROM handyman_service_warranty_events

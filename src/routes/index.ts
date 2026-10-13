@@ -1,3 +1,6 @@
+import { createHandymanFieldFeedRouter } from '../modules/handyman-field-feed/handyman-field-feed.routes';
+import { createHandymanVisitApiRouter } from '../modules/handyman-appointment-contract/handyman-visit-api.routes';
+import { createCareWorkspaceRouter } from '../modules/handyman-care-workspace/care-workspace.routes';
 import { Router } from 'express';
 import { createAreaRouter } from '../modules/areas/area.routes';
 import { createBasicExpenseRouter } from '../modules/basic-expenses/basic-expense.routes';
@@ -797,12 +800,15 @@ export function createApiRouter(): Router {
   // /api/v1 only, never /webhooks; assertion signature auth — a Bearer user
   // session is not a substitute, and none is created).
   router.use(createHandoffHandymanRouter());
+  router.use(createCareWorkspaceRouter());
   // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
   // attribution-bound request intake, and bounded INTAKE evidence upload
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface
   // and no catalogue/master mutation is exposed.
   router.use(createHandymanApiRouter());
   router.use(createHandymanLifecycleApiRouter());
+  router.use(createHandymanVisitApiRouter()); // R1C — scoped appointment proposals only
+  router.use(createHandymanFieldFeedRouter()); // R1D — scoped, read-only Crew/Inspector feed
   // CR-HM-04 PART 05A — provider/worker/crew surface (frozen F9): exactly
   // the existing PART 01–03 service operations (create/exact read/status/
   // membership/Lead). NO assignment surface: PART 04 freezes assignment as

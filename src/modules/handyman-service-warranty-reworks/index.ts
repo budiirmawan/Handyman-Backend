@@ -63,7 +63,4 @@ export {
   startHandymanServiceWarrantyRework,
   completeHandymanServiceWarrantyRework,
   verifyHandymanServiceWarrantyRework,
-  getHandymanServiceWarrantyReworkById,
-  findHandymanServiceWarrantyReworkByClaimId,
-  listHandymanServiceWarrantyReworks,
 } from './handyman-service-warranty-rework.service';

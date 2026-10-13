@@ -61,6 +61,4 @@ export {
   approveHandymanServiceWarrantyClaim,
   rejectHandymanServiceWarrantyClaim,
   withdrawHandymanServiceWarrantyClaim,
-  getHandymanServiceWarrantyClaimById,
-  listHandymanServiceWarrantyClaims,
 } from './handyman-service-warranty-claim.service';
