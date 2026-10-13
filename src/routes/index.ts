@@ -36,6 +36,7 @@ import { createBastDocumentRouter } from '../modules/bast-documents/bast-documen
 import { createHandoverDocumentRouter } from '../modules/handover-documents/handover-document.routes';
 import { createHandoffHandymanRouter } from '../modules/handyman-handoff/handoff.routes';
 import { createHandymanApiRouter } from '../modules/handyman-api';
+import { createHandymanOperationsQueueRouter } from '../modules/handyman-operations-queue';
 import { createHandymanLifecycleApiRouter } from '../modules/handyman-lifecycle-api';
 import { createHandymanProviderApiRouter } from '../modules/handyman-provider-api';
 import { createHandymanReadinessApiRouter } from '../modules/handyman-readiness-api';
@@ -806,6 +807,7 @@ export function createApiRouter(): Router {
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface
   // and no catalogue/master mutation is exposed.
   router.use(createHandymanApiRouter());
+  router.use(createHandymanOperationsQueueRouter());
   router.use(createHandymanLifecycleApiRouter());
   router.use(createHandymanVisitApiRouter()); // R1C — scoped appointment proposals only
   router.use(createHandymanFieldFeedRouter()); // R1D — scoped, read-only Crew/Inspector feed

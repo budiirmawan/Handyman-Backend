@@ -3955,6 +3955,124 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /handyman/operations/queue:
+    get:
+      operationId: listHandymanOperationsQueue
+      x-required-permission: tenant_company.read
+      x-building-scoped: true
+      summary: Read a paginated production queue of Handyman Service Requests
+      description: >
+        Read-only Handyman Request queue; rows are keyed by the authoritative
+        `handymanRequestId` and include the existing request lifecycle,
+        execution-scope, assignment, readiness, and SLA visibility facts.
+        Requires the existing `tenant_company.read` authority. Reuses the
+        established Client/C6 read wall and exact assigned-Building isolation;
+        an explicit `buildingId` must be accessible under the supplied
+        `clientId`. This endpoint intentionally does not return a Work Order
+        id: `handyman_service_requests` / `handyman_execution_scopes` have no
+        authoritative relation to `work_orders`.
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: spaceId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: channelAttributionId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HandymanServiceRequestStatus" }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+      responses:
+        "200":
+          description: Paginated, scoped Handyman Operations queue.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, pagination]
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              type: object
+                              required:
+                                - handymanRequestId
+                                - clientId
+                                - buildingId
+                                - tenantCompanyId
+                                - createdAt
+                                - executionScopeId
+                                - lifecycle
+                                - assignment
+                                - readiness
+                                - slaMilestones
+                              properties:
+                                handymanRequestId: { type: string, format: uuid }
+                                clientId: { type: string, format: uuid }
+                                buildingId: { type: string, format: uuid }
+                                tenantCompanyId: { type: string, format: uuid }
+                                createdAt: { type: string, format: date-time }
+                                executionScopeId: { type: string, format: uuid, nullable: true }
+                                lifecycle:
+                                  type: object
+                                  properties:
+                                    requestStatus: { type: string }
+                                    triageOutcome: { type: string, nullable: true }
+                                    diagnosisStatus: { type: string, nullable: true }
+                                    referralType: { type: string, nullable: true }
+                                    executionScopeStatus: { type: string, nullable: true }
+                                assignment:
+                                  $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/assignment"
+                                readiness:
+                                  $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/readiness"
+                                slaMilestones:
+                                  $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/slaMilestones"
+                          pagination:
+                            type: object
+                            required: [limit, offset, nextOffset]
+                            properties:
+                              limit: { type: integer }
+                              offset: { type: integer }
+                              nextOffset: { type: integer, nullable: true }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /handyman/requests:
     get:
       operationId: listHandymanServiceRequests

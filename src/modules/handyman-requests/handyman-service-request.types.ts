@@ -133,6 +133,12 @@ export type HandymanServiceRequestListFilters = {
   status?: HandymanServiceRequestStatus;
 };
 
+/** Bounded offset page used by the read-only Operations queue adapter. */
+export type HandymanServiceRequestPageOptions = {
+  limit: number;
+  offset: number;
+};
+
 /**
  * Server-side intake input: attribution handle + catalogue selection +
  * free description ONLY. Authoritative context is always derived.

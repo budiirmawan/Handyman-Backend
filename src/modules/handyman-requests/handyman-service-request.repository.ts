@@ -252,6 +252,7 @@ async function listCustomerCareProjectionsScoped(
   executor: Pick<PoolClient, 'query'> = getPool(),
   filters: HandymanServiceRequestListFilters,
   actorUserId: string,
+  page?: { limit: number; offset: number },
 ): Promise<HandymanCustomerCareServiceRequestRecord[]> {
   const conditions: string[] = ['r.client_id = $1'];
   const values: unknown[] = [filters.clientId];
@@ -280,12 +281,20 @@ async function listCustomerCareProjectionsScoped(
   conditions.push(customerRequestReadScope(idx));
   values.push(actorUserId);
 
+  let pageClause = '';
+  if (page) {
+    const limitParameter = values.length + 1;
+    const offsetParameter = values.length + 2;
+    values.push(page.limit, page.offset);
+    pageClause = ` LIMIT $${limitParameter} OFFSET $${offsetParameter}`;
+  }
+
   const result =
     await executor.query<HandymanCustomerCareServiceRequestRecord>(
       `SELECT ${CUSTOMER_CARE_PROJECTION_SELECT}
          ${CUSTOMER_CARE_PROJECTION_FROM}
         WHERE ${conditions.join(' AND ')}
-        ORDER BY r.created_at ASC, r.id ASC`,
+        ORDER BY r.created_at ASC, r.id ASC${pageClause}`,
       values,
     );
   return result.rows;

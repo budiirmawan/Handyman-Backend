@@ -9,6 +9,7 @@ export {
   getHandymanServiceRequestDetail,
   handymanServiceRequestService,
   listHandymanServiceRequests,
+  listHandymanServiceRequestsPage,
 } from './handyman-service-request.service';
 export {
   handymanServiceRequestAlreadyExistsError,
@@ -23,6 +24,7 @@ export type {
   HandymanCustomerCareServiceRequestRecord,
   HandymanRequestAttributionProvenance,
   HandymanServiceRequestListFilters,
+  HandymanServiceRequestPageOptions,
   HandymanServiceRequestRecord,
   HandymanServiceRequestStatus,
   NewHandymanServiceRequest,
