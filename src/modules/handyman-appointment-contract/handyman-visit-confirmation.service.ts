@@ -34,10 +34,12 @@ export const HANDYMAN_VISIT_CONFIRMED = 'HANDYMAN_VISIT_CONFIRMED';
 export type VisitConfirmationPorts = {
   admitResource: (tx: PoolClient, req: Awaited<ReturnType<typeof requestScope>>, target: VisitResourceTarget) => Promise<void>;
   authorityConfigured: () => Promise<boolean>;
+  scope: (actorId: string, req: Awaited<ReturnType<typeof requestScope>>) => Promise<void>;
 };
 export const defaultVisitConfirmationPorts: VisitConfirmationPorts = {
   admitResource: assertVisitResourceAdmission,
   authorityConfigured: () => tenantSlotConsentAuthorityConfigured(getPool()),
+  scope: scoped,
 };
 
 type LockedAppointment = HandymanAppointmentRecord & { evidenceRef: string | null };
@@ -67,7 +69,7 @@ export async function confirmTenantSlotVisit(
 
   return withTransaction(async (tx: PoolClient) => {
     const req = await requestScope(tx, requestId, true);
-    await scoped(actorId, req);
+    await ports.scope(actorId, req);
 
     const locked = (await tx.query<LockedAppointment>(
       `SELECT ${LOCKED_COLUMNS} FROM handyman_visit_appointments a
@@ -95,10 +97,11 @@ export async function confirmTenantSlotVisit(
         message: 'The selected slot has already started and cannot be confirmed.', statusCode: 409});
     }
 
-    // Consent provenance must exist, be the exact referenced row and match the visit.
+    // Consent provenance must be the consent bound to this exact visit, at the PROPOSED version.
     const consent = (await tx.query<{ id: string }>(
-      `SELECT id FROM handyman_visit_tenant_slot_consents
-        WHERE appointment_id = $1 AND id::text = $2 AND appointment_version = $3`,
+      `SELECT c.id FROM handyman_visit_tenant_slot_bindings b
+         JOIN handyman_visit_tenant_slot_consents c ON c.id = b.consent_id
+        WHERE b.appointment_id = $1 AND c.id::text = $2 AND b.appointment_version = $3`,
       [locked.id, locked.evidenceRef, locked.version - 1],
     )).rows[0];
     if (!consent) {

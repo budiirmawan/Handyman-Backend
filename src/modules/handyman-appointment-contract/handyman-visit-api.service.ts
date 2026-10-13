@@ -6,6 +6,9 @@ import { insertHandymanVisitProposal, listHandymanVisitAppointments, type Handym
 import { findEligibleHandymanWorker, assertHandymanCrewWorkerEligibility } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { recordOperationalEvent } from '../operational-events';
 import { tenantSlotConsentAuthorityConfigured } from './handyman-tenant-slot-authority';
+import {
+  assertProposalMatchesPendingChoice, bindTenantSlotChoice, findPendingTenantSlotChoice,
+} from './handyman-tenant-slot-binding.repository';
 import type { VisitProposalBody } from './handyman-visit-api.validation';
 
 /**
@@ -99,17 +102,32 @@ export async function createVisitProposal(requestId: string, body: VisitProposal
       await assertVisitResourceAdmission(tx, req, {
         kind: body.kind, resourceId: body.resourceId, executionScopeId: body.executionScopeId,
       });
-      const created = await insertHandymanVisitProposal(tx, {handymanRequestId: requestId,
+      // A tenant-originated choice pending for this kind is authoritative for the time:
+      // Operations matches an eligible resource to it and cannot move it.
+      const pending = await findPendingTenantSlotChoice(tx, requestId, body.kind);
+      if (pending) assertProposalMatchesPendingChoice(pending, body.startAt, body.endAt);
+      const inserted = await insertHandymanVisitProposal(tx, {handymanRequestId: requestId,
         kind: body.kind, resourceId: body.resourceId, executionScopeId: body.executionScopeId,
         interval: {startAt: body.startAt, endAt: body.endAt, timezone: req.timezone}, createdByUserId: actorId});
+      // Bind in the same transaction: PROPOSED → TENANT_SELECTED under the 0431 rules.
+      let created: HandymanAppointmentRecord = inserted;
+      if (pending) {
+        const bound = await bindTenantSlotChoice(tx, {
+          consentId: pending.id, appointmentId: inserted.id, clientId: req.clientId, requestId,
+          kind: body.kind, appointmentVersion: inserted.version,
+        });
+        created = {...inserted, state: bound.state as HandymanAppointmentRecord['state'], version: bound.version};
+      }
       await recordOperationalEvent({
         clientId: req.clientId, buildingId: req.buildingId, eventType: HANDYMAN_VISIT_PROPOSED,
         entityType: 'HANDYMAN_VISIT_APPOINTMENT', entityId: created.id, actorUserId: actorId,
-        summary: `Handyman ${body.kind.toLowerCase()} visit proposed (PROPOSED only; not confirmed).`,
+        summary: pending
+          ? `Handyman ${body.kind.toLowerCase()} visit proposed at the tenant-selected slot (TENANT_SELECTED; not confirmed).`
+          : `Handyman ${body.kind.toLowerCase()} visit proposed (PROPOSED only; not confirmed).`,
         metadata: {handymanRequestId: requestId, kind: body.kind, resourceType: created.resourceType,
           resourceId: created.resourceId, executionScopeId: created.executionScopeId,
           startAt: created.startAt.toISOString(), endAt: created.endAt.toISOString(),
-          state: created.state, version: created.version},
+          state: created.state, version: created.version, tenantSlotConsentId: pending?.id ?? null},
       }, tx);
       return encode(created);
     });

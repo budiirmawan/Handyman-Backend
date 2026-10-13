@@ -26,7 +26,7 @@ function assertion(overrides: Partial<Record<string, unknown>> = {}): Record<str
     iss: 'BM_TENANT', aud: 'handyman-backend', purpose: 'TENANT_SLOT_CHOICE',
     jti: 'slot-jti-0000000000000001',
     iat: new Date(NOW).toISOString(), exp: new Date(NOW + 120_000).toISOString(),
-    handymanRequestId: uuid(1), appointmentId: uuid(2), appointmentVersion: 1,
+    handymanRequestId: uuid(1),
     kind: 'INSPECTION', tenantCompanyId: uuid(3), buildingId: uuid(4), tenantPicId: uuid(5),
     tenantUserReference: 'bm-user-ref-1',
     selectedStartAt: '2031-11-13T03:00:00.000Z', selectedEndAt: '2031-11-13T04:00:00.000Z',
@@ -46,7 +46,10 @@ test('parses a canonical assertion and rejects every closed-set violation', () =
   assert.equal(parseTenantSlotChoiceAssertion(assertion({purpose: 'HANDOFF'})), null, 'wrong purpose');
   assert.equal(parseTenantSlotChoiceAssertion(assertion({method: 'OPERATOR'})), null, 'wrong method');
   assert.equal(parseTenantSlotChoiceAssertion(assertion({kind: 'CANCELLED'})), null, 'wrong kind');
-  assert.equal(parseTenantSlotChoiceAssertion(assertion({appointmentVersion: 0})), null, 'version < 1');
+  assert.equal(parseTenantSlotChoiceAssertion({...assertion(), appointmentId: uuid(2)}), null,
+    'the tenant originates the slot; an assertion names no appointment');
+  assert.equal(parseTenantSlotChoiceAssertion({...assertion(), appointmentVersion: 1}), null,
+    'no appointment version either');
   assert.equal(parseTenantSlotChoiceAssertion(assertion({jti: 'short'})), null, 'short jti');
   assert.equal(parseTenantSlotChoiceAssertion(assertion({handymanRequestId: 'not-a-uuid'})), null, 'bad uuid');
   assert.equal(parseTenantSlotChoiceAssertion(assertion({tenantPicId: 'ABCDEF01-1111-4111-8111-111111111111'})), null,

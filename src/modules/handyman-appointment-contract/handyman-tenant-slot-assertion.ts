@@ -6,8 +6,10 @@ import { stableJson } from '../../shared/stable-json';
  *
  * Pure, dependency-free contract helpers (no DB, no clock side effects beyond
  * the explicit `nowMs` argument). The BM Backend signs an assertion that its
- * own authenticated tenant session selected an exact slot for an exact visit
- * version. Handyman verifies it here before any state change.
+ * own authenticated tenant session selected an exact slot for an exact request
+ * and visit kind. The tenant originates the slot; Operations later matches an
+ * eligible resource to it. Handyman verifies it here before any state change.
+ * The assertion names no appointment: a tenant choice may precede the proposal.
  *
  * Trust model (mirrors frozen D1 for handoff, with a SEPARATE purpose):
  * - issuer `iss` = the BM integration code; the HMAC secret is scoped to that
@@ -37,8 +39,6 @@ export type TenantSlotChoiceAssertion = {
   iat: string;
   exp: string;
   handymanRequestId: string;
-  appointmentId: string;
-  appointmentVersion: number;
   kind: 'INSPECTION' | 'EXECUTION';
   tenantCompanyId: string;
   buildingId: string;
@@ -51,8 +51,8 @@ export type TenantSlotChoiceAssertion = {
 };
 
 const FIELDS: readonly string[] = [
-  'iss', 'aud', 'purpose', 'jti', 'iat', 'exp', 'handymanRequestId', 'appointmentId',
-  'appointmentVersion', 'kind', 'tenantCompanyId', 'buildingId', 'tenantPicId',
+  'iss', 'aud', 'purpose', 'jti', 'iat', 'exp', 'handymanRequestId',
+  'kind', 'tenantCompanyId', 'buildingId', 'tenantPicId',
   'tenantUserReference', 'selectedStartAt', 'selectedEndAt', 'bmConsentEvidenceId', 'method',
 ];
 // Lowercase canonical UUIDs only: the signature covers the exact wire form, so no normalisation.
@@ -82,8 +82,7 @@ export function parseTenantSlotChoiceAssertion(value: unknown): TenantSlotChoice
   if (record.aud !== TENANT_SLOT_AUDIENCE || record.purpose !== TENANT_SLOT_PURPOSE ||
       record.method !== TENANT_SLOT_METHOD) return null;
   if (record.kind !== 'INSPECTION' && record.kind !== 'EXECUTION') return null;
-  if (!Number.isSafeInteger(record.appointmentVersion) || (record.appointmentVersion as number) < 1) return null;
-  for (const key of ['handymanRequestId', 'appointmentId', 'tenantCompanyId', 'buildingId', 'tenantPicId']) {
+  for (const key of ['handymanRequestId', 'tenantCompanyId', 'buildingId', 'tenantPicId']) {
     if (typeof record[key] !== 'string' || !UUID.test(record[key] as string)) return null;
   }
   if (!bounded(record.iss, 1, 64) || !bounded(record.jti, 16, 128) ||
