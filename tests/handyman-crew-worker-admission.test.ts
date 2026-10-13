@@ -47,6 +47,11 @@ before(async () => {
     CREATE TEMP TABLE buildings(id uuid, property_id uuid, status text, timezone text DEFAULT 'Asia/Jakarta');
     CREATE TEMP TABLE users(id uuid, status text);
     CREATE TEMP TABLE user_building_assignments(user_id uuid, building_id uuid, status text);
+    -- PART 01D-2A: the proposal path reads pending tenant slot choices. Empty here, so the
+    -- proposal behaves exactly as before (no pending choice to match).
+    CREATE TEMP TABLE handyman_visit_tenant_slot_consents(id uuid, handyman_request_id uuid, kind text,
+      selected_start_at timestamptz, selected_end_at timestamptz, tenant_company_id uuid, building_id uuid, accepted_at timestamptz);
+    CREATE TEMP TABLE handyman_visit_tenant_slot_bindings(consent_id uuid, appointment_id uuid);
     CREATE TEMP TABLE handyman_service_requests(id uuid, client_id uuid, status text, building_id uuid, tenant_company_id uuid);
     CREATE TEMP TABLE handyman_execution_scopes(id uuid, handyman_request_id uuid, client_id uuid, building_id uuid, status text);
     CREATE TEMP TABLE handyman_execution_scope_assignments(execution_scope_id uuid, client_id uuid, handyman_crew_id uuid, handyman_provider_context_id uuid, status text,
