@@ -154,7 +154,7 @@ Locks are always taken request-then-appointment in both ingest and confirm, so t
 
 ### Finding in migration 0431 (on `main`), corrected in 0434
 
-The capacity commit guard `handyman_visit_capacity_commit_guard()` in `0431` built `appointment_uuid` with one nested `CASE` expression that references `OLD.appointment_id`. That field exists only on `handyman_visit_capacity_reservations`. PL/pgSQL resolves `OLD` against the row type of the table the trigger is attached to, so the deferred trigger on `handyman_visit_appointments` failed with `42703` at COMMIT for **every committed appointment insert or update**. This was reproduced against real PostgreSQL during this PART. The affected proposal path is therefore not committable on `main`. `0431` is already on `main`, so it was not edited. Migration `0434` contains a `CREATE OR REPLACE FUNCTION` with the same invariant written as statement-level branches. Its `down()` restores the original body. This is a bounded correction to the appointment engine. It changes no state, transition or invariant. The fix ships in `0434` because `0434` is still unmerged on `main`.
+The capacity commit guard `handyman_visit_capacity_commit_guard()` in `0431` built `appointment_uuid` with one nested `CASE` expression that references `OLD.appointment_id`. That field exists only on `handyman_visit_capacity_reservations`. PL/pgSQL resolves `OLD` against the row type of the table the trigger is attached to, so the deferred trigger on `handyman_visit_appointments` failed with `42703` at COMMIT for **every committed appointment insert or update**. This was reproduced against real PostgreSQL during this PART. The affected proposal path is therefore not committable on `main`. `0431` is already on `main`, so it was not edited. Migration `0434` contains a `CREATE OR REPLACE FUNCTION` with the same invariant written as statement-level branches. Its `down()` does **not** restore the defective body (see §13). This is a bounded correction to the appointment engine. It changes no state, transition or invariant. The fix ships in `0434` because `0434` is still unmerged on `main`.
 
 ## 9. Activation gate (all required; none is provisioned here)
 
@@ -181,6 +181,12 @@ The R1C visit router is unchanged. It exposes no confirm or select path. `handym
 
 ## 11. Verification (this PART)
 
+Migration safety and the PR-level evidence are in §13. Focused suite results at the final commit:
+
+- `tests/handyman-tenant-slot-0434-safety.test.ts`: **9/9 pass** (migration safety, §13).
+- Combined focused run (7 files, 75 tests): **75/75 pass**. Includes the slot tests, `handyman-visit-booking-authority`, `handyman-appointment-persistence` and `handyman-crew-worker-admission`.
+- `npm run typecheck`: exit 0.
+
 - `npm run typecheck`: exit 0, after all edits.
 - `tests/handyman-tenant-slot-assertion.test.ts`: **6/6 pass** (closed set, v2 fields, HMAC, freshness).
 - `tests/handyman-tenant-slot-consent.test.ts`: **5/5 pass** (no DB). Ingest trust failures occur before any transaction. PIC mismatch returns 401. Migration DDL and router are checked. Confirm is disabled.
@@ -203,7 +209,44 @@ The R1C visit router is unchanged. It exposes no confirm or select path. `handym
 
 - **Real eligibility and scope are stubbed in the DB tests.** The positive confirm path uses stub admission and scope. The real `assertVisitResourceAdmission` fixtures are not exercised here.
 - **Proposals are not driven through `createVisitProposal`.** The DB tests use its exact sequence (lock, pending check, insert, bind) through the repository. Its own admission check is not rerun.
-- **The 0434 `down()` is not run.** Only the forward path is executed.
+- **Rollback is tested only on a disposable database.** Migration safety, including `down()`, is covered by `tests/handyman-tenant-slot-0434-safety.test.ts` (§13). Production rollback is still a human-approved operation.
 - **Neighbour suites.** `tests/handyman-customer-care-transport-certification.test.ts` and `tests/r11-part07-closure-guard.test.ts` fail 6/6 on this branch and on a clean export of the base commit. The cause is missing git commits `b87d72f` and `2fcfad9` in the clone, which is environmental and unrelated to this PART.
 - **Decline, alternative after unavailability, CONFIRMED cancellation and the Ops confirm permission** are open (§8).
 - **Availability contract** is not defined (§7 item 2).
+
+## 13. Migration safety and rollback strategy (PR gate)
+
+**Scope.** Migration `0434` is the only migration this PART adds. It is unmerged on `main` (main ends at `0433`). `0431` is historical and is not edited.
+
+**The 0431 correction.** `0434.up()` runs `CREATE OR REPLACE FUNCTION handyman_visit_capacity_commit_guard()` with the same invariant (a CONFIRMED or IN_PROGRESS visit must hold exactly one active reservation). The body uses statement-level `IF` branches, so `OLD.appointment_id` is evaluated only on the reservation table. The defective 0431 body is not restored by any path.
+
+**Rollback strategy.** `0434.down()` runs in this order:
+
+1. **Refuses** with `23514` if any `handyman_visit_tenant_slot_consents` row exists, or any appointment has a non-null `tenant_choice_evidence_ref`. Consent and binding rows are append-only evidence (UPDATE and DELETE are blocked by trigger), so dropping them would silently destroy BM evidence. The refusal rolls the whole rollback back.
+2. Keeps the **corrected** capacity commit guard. Restoring the 0431 body would reintroduce `42703` on every committed appointment write.
+3. Drops the consent commit guard, the binding guard, the insert guard, the append-only function, the binding and consent tables, and the `tenant_slot_choice_scope` column.
+
+Consequences:
+
+- Rollback is possible only **before any tenant slot choice is recorded**. After that, the migration is forward-only. A post-recording rollback would require a separately approved archival procedure outside this migration.
+- After a rollback, the schema has the 0431 invariants plus the corrected guard. There is no consent provenance and no integration grant.
+
+**Disposable-database proof (`tests/handyman-tenant-slot-0434-safety.test.ts`, 9/9).**
+
+| Step | Result |
+|---|---|
+| 1. Database migrated through `0433` only | `0434` and its tables absent; defective body present |
+| 2. Committed appointment proposal on `0433` | Fails with `42703`. This is the defect. No row is left behind |
+| 3. Apply `0434`, then commit a proposal | Succeeds (PROPOSED, version 1). The corrected body is installed |
+| 4. Roll back `0434` (no provenance) | Succeeds. Tables and column removed. The defective body is **not** restored. Proposal commit still succeeds |
+| 5. Reapply `0434` | Clean |
+| 6. CONFIRMED visit with a bound consent and no reservation | Refused at COMMIT with `23514` (`hold one active matching reservation`). Capacity invariant holds |
+| 7. Roll back `0434` with consent provenance present | Refused (`Refusing to roll back 0434`). History, consent and binding intact |
+| 8. BM ingest with the grant FALSE (secret present), with the secret absent (grant TRUE), and with a non-object body | Each returns 401 `HANDYMAN_VISIT_SLOT_ASSERTION_INVALID`. No consent row written |
+| 9. Operations confirm, unauthenticated | 401. Visit stays PROPOSED, no reservation |
+
+**Mutation check.** Replacing the `0434` `down()` with the committed `6760669` version (which restores the defective body) makes step 4 fail. The test detects the reintroduced defect. The working copy was restored byte-for-byte afterwards.
+
+**Test-fixture changes.** `handyman-visit-booking-authority.test.ts` and `handyman-crew-worker-admission.test.ts` build minimal temp-table schemas and call the real proposal path. The proposal path now reads pending tenant choices, so both fixtures gained two empty temp tables (`handyman_visit_tenant_slot_consents`, `handyman_visit_tenant_slot_bindings`) with the columns that path reads. The fixtures' expectations are unchanged. The fixtures had not been updated for the new read, which is why the suites failed before this fix.
+
+**Not verified here.** Production migration on a real environment; the 0434 `down()` on data created through the BM endpoint in a live environment; end-to-end BM integration (see the PR body).

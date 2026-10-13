@@ -15,7 +15,9 @@ import type { Migration } from './types';
  *    the tenant can choose before Operations matches a resource. One-time use via
  *    unique (integration, JTI) and (integration, BM evidence id).
  * 0. Corrects the 0431 capacity commit guard, which could not commit any appointment
- *    write (see the comment in up()). Same invariant, corrected evaluation.
+ *    write (see the comment in up()). Same invariant, corrected evaluation. down() keeps
+ *    the corrected function; it never restores the defective 0431 body. down() refuses to
+ *    run once any tenant-slot consent or tenant-choice reference exists (append-only evidence).
  * 3. Insert guard: the consent must be bound to the request's stored tenant
  *    company, building and tenant PIC; at most one pending (unbound) choice per
  *    request and kind; and no TENANT_SELECTED/CONFIRMED/IN_PROGRESS visit may
@@ -218,31 +220,25 @@ export const migration0434CreateHandymanTenantSlotConsents: Migration = {
   },
 
   async down(client: PoolClient): Promise<void> {
-    // Restore the 0431 commit guard exactly as it was on main.
+    // Refuse rollback once any tenant-slot provenance exists. Consent and binding rows are
+    // append-only evidence (UPDATE and DELETE are blocked by trigger), so dropping the tables
+    // would silently destroy BM evidence. A visit that cites a tenant-choice reference also
+    // depends on the consent commit guard that this rollback removes.
     await client.query(`
-      CREATE OR REPLACE FUNCTION handyman_visit_capacity_commit_guard() RETURNS trigger
-      LANGUAGE plpgsql AS $guard$
-      DECLARE appointment_uuid UUID; appointment_state TEXT; active_exists BOOLEAN;
+      DO $down$
       BEGIN
-        appointment_uuid := CASE WHEN TG_TABLE_NAME = 'handyman_visit_appointments'
-                                 THEN NEW.id
-                                 ELSE CASE WHEN TG_OP = 'DELETE' THEN OLD.appointment_id
-                                           ELSE NEW.appointment_id END END;
-        SELECT state INTO appointment_state
-          FROM handyman_visit_appointments WHERE id = appointment_uuid;
-        IF NOT FOUND THEN RETURN NULL; END IF;
-        SELECT EXISTS (
-          SELECT 1 FROM handyman_visit_capacity_reservations
-          WHERE appointment_id = appointment_uuid AND active
-        ) INTO active_exists;
-        IF active_exists IS DISTINCT FROM
-          (appointment_state IN ('CONFIRMED','IN_PROGRESS')) THEN
-          RAISE EXCEPTION 'Confirmed/in-progress visits must hold one active matching reservation'
+        IF EXISTS (SELECT 1 FROM handyman_visit_tenant_slot_consents)
+          OR EXISTS (SELECT 1 FROM handyman_visit_appointments
+                      WHERE tenant_choice_evidence_ref IS NOT NULL) THEN
+          RAISE EXCEPTION 'Refusing to roll back 0434: tenant slot consent provenance exists'
             USING ERRCODE = '23514';
         END IF;
-        RETURN NULL;
-      END $guard$;
+      END $down$;
     `);
+    // Deliberately does NOT restore the original 0431 capacity commit guard. Its body
+    // references OLD.appointment_id on handyman_visit_appointments and makes every committed
+    // appointment write fail with 42703. The corrected function keeps the same invariant
+    // (a CONFIRMED/IN_PROGRESS visit must hold exactly one active reservation), so it stays.
     await client.query(`
       DROP TRIGGER IF EXISTS handyman_visit_appointment_consent_commit_guard ON handyman_visit_appointments;
       DROP FUNCTION IF EXISTS handyman_visit_consent_commit_guard();
