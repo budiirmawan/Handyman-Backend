@@ -24,7 +24,7 @@ import {errorHandler} from '../src/middleware/error-handler';
 // Actual routers, session validation, RBAC, shared scope resolver and mutation
 // services. Isolated TEMP fixtures only; no production schema or migrations.
 const id = Object.fromEntries(['client','otherClient','building','sibling','property',
-  'request','tenant','attribution','operator','inspector'].map(key => [key,randomUUID()]));
+  'request','tenant','attribution','operator','inspector','provider','vendor','worker','profile','organization'].map(key => [key,randomUUID()]));
 const token = {operator:'operator-test-session',inspector:'inspector-test-session'};
 const permissions = new Map<string,string[]>();
 let resolvingUser = '';
@@ -68,6 +68,13 @@ before(async () => {
     CREATE TEMP TABLE handyman_request_inspections(id uuid, client_id uuid, handyman_request_id uuid UNIQUE,
       channel_attribution_id uuid, building_id uuid, inspection_result text, inspection_notes text,
       inspected_by_user_id uuid, inspected_at timestamptz DEFAULT NOW());
+    CREATE TEMP TABLE organizations(id uuid, client_id uuid);
+    CREATE TEMP TABLE vendors(id uuid, client_id uuid, status text);
+    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text);
+    CREATE TEMP TABLE handyman_worker_contexts(id uuid, client_id uuid, handyman_provider_context_id uuid, workforce_profile_id uuid, status text);
+    CREATE TEMP TABLE workforce_profiles(id uuid, organization_id uuid, user_id uuid, workforce_type text, status text);
+    CREATE TEMP TABLE vendor_workforce_bindings(vendor_id uuid, workforce_profile_id uuid, status text, effective_from timestamptz, effective_until timestamptz);
+    CREATE TEMP TABLE workforce_building_assignments(workforce_profile_id uuid, building_id uuid, status text, effective_from timestamptz, effective_until timestamptz);
     CREATE TEMP TABLE operational_events(id uuid, client_id uuid, event_type text, entity_type text,
       entity_id uuid, actor_user_id uuid, building_id uuid, vendor_work_id uuid, request_id uuid,
       source text, summary text, metadata jsonb);
@@ -119,12 +126,21 @@ beforeEach(async () => {
   permissions.clear();
   permissions.set(id.operator,['tenant_company.read','tenant_company.manage']);
   await db.query(`TRUNCATE clients,properties,buildings,users,user_building_assignments,
-    handyman_service_requests,handyman_visit_appointments,handyman_request_inspections,operational_events`);
+    handyman_service_requests,handyman_visit_appointments,handyman_request_inspections,operational_events,
+    organizations,vendors,handyman_provider_contexts,handyman_worker_contexts,workforce_profiles,
+    vendor_workforce_bindings,workforce_building_assignments`);
   await db.query('INSERT INTO clients VALUES ($1),($2)',[id.client,id.otherClient]);
   await db.query('INSERT INTO properties VALUES ($1,$2)',[id.property,id.client]);
   await db.query("INSERT INTO buildings VALUES ($1,$3,'ACTIVE','Asia/Jakarta'),($2,$3,'ACTIVE','Asia/Jakarta')",[id.building,id.sibling,id.property]);
   await db.query("INSERT INTO users VALUES ($1,'ACTIVE'),($2,'ACTIVE')",[id.operator,id.inspector]);
   await db.query("INSERT INTO user_building_assignments VALUES ($1,$3,'ACTIVE'),($2,$3,'ACTIVE')",[id.operator,id.inspector,id.building]);
+  await db.query('INSERT INTO organizations VALUES ($1,$2)',[id.organization,id.client]);
+  await db.query("INSERT INTO vendors VALUES ($1,$2,'ACTIVE')",[id.vendor,id.client]);
+  await db.query("INSERT INTO handyman_provider_contexts VALUES ($1,$2,$3,'ACTIVE')",[id.provider,id.client,id.vendor]);
+  await db.query("INSERT INTO handyman_worker_contexts VALUES ($1,$2,$3,$4,'ACTIVE')",[id.worker,id.client,id.provider,id.profile]);
+  await db.query("INSERT INTO workforce_profiles VALUES ($1,$2,$3,'EXTERNAL','ACTIVE')",[id.profile,id.organization,id.inspector]);
+  await db.query("INSERT INTO vendor_workforce_bindings VALUES ($1,$2,'ACTIVE',NULL,NULL)",[id.vendor,id.profile]);
+  await db.query("INSERT INTO workforce_building_assignments VALUES ($1,$2,'ACTIVE',NULL,NULL)",[id.profile,id.building]);
   await db.query(`INSERT INTO handyman_service_requests
     (id,client_id,channel_attribution_id,tenant_company_id,building_id,status,created_by_user_id)
     VALUES ($1,$2,$3,$4,$5,'INSPECTION_REQUIRED',$6)`,
@@ -251,4 +267,35 @@ test('Operations result actor need not equal proposed Inspector',async () => {
   assert.equal(response.status,201);
   assert.equal(response.body.data.inspectedByUserId,id.operator);
   assert.equal((await db.query('SELECT state FROM handyman_visit_appointments')).rows[0].state,'PROPOSED');
+});
+
+for (const [name,sql] of [
+  ['worker context',"UPDATE handyman_worker_contexts SET status='INACTIVE'"],
+  ['provider context',"UPDATE handyman_provider_contexts SET status='INACTIVE'"],
+  ['vendor',"UPDATE vendors SET status='INACTIVE'"],
+  ['workforce profile',"UPDATE workforce_profiles SET status='INACTIVE'"],
+  ['vendor registration',"UPDATE vendor_workforce_bindings SET status='INACTIVE'"],
+  ['operational placement',"UPDATE workforce_building_assignments SET status='INACTIVE'"],
+  ['non-external workforce',"UPDATE workforce_profiles SET workforce_type='INTERNAL'"],
+  ['expired vendor registration',"UPDATE vendor_workforce_bindings SET effective_until=NOW()-INTERVAL '1 day'"],
+  ['future vendor registration',"UPDATE vendor_workforce_bindings SET effective_from=NOW()+INTERVAL '1 day'"],
+  ['expired placement',"UPDATE workforce_building_assignments SET effective_until=NOW()-INTERVAL '1 day'"],
+  ['future placement',"UPDATE workforce_building_assignments SET effective_from=NOW()+INTERVAL '1 day'"],
+  ['missing Handyman registration','DELETE FROM handyman_worker_contexts'],
+] as const) {
+  test(`Inspector with invalid ${name} cannot be proposed despite ACTIVE user access`,async () => {
+    await db.query(sql);
+    assert.equal((await postProposal()).status,409);
+    await assertNoMutation();
+  });
+}
+test('Inspector needs workforce placement at exact Building, not merely user data access',async () => {
+  await db.query('UPDATE workforce_building_assignments SET building_id=$1',[id.sibling]);
+  assert.equal((await postProposal()).status,409);
+  await assertNoMutation();
+});
+test('Inspector organization must remain in request Client',async () => {
+  await db.query('UPDATE organizations SET client_id=$1',[id.otherClient]);
+  assert.equal((await postProposal()).status,409);
+  await assertNoMutation();
 });

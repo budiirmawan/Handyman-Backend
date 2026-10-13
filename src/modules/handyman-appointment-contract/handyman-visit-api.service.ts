@@ -3,6 +3,7 @@ import { getPool, withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess, canAccessBuildingScopedResource } from '../context-access';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { insertHandymanVisitProposal, listHandymanVisitAppointments, type HandymanAppointmentRecord } from './handyman-appointment.repository';
+import { findEligibleHandymanWorker, assertHandymanCrewWorkerEligibility } from '../handyman-providers/handyman-worker-eligibility.repository';
 import type { VisitProposalBody } from './handyman-visit-api.validation';
 
 /** R1C scoped operations proposal/read/cancel. No appointment confirmation or visit start here. */
@@ -47,15 +48,24 @@ export async function createVisitProposal(requestId: string, body: VisitProposal
         })) {
           throw conflict('Proposed inspector is not an active user assigned to this building.');
         }
+        if (!await findEligibleHandymanWorker(tx, {
+          clientId: req.clientId, buildingId: req.buildingId, userId: body.resourceId, requireLogin: true,
+        })) {
+          throw conflict('Proposed inspector lacks active Handyman worker registration or building placement.');
+        }
         // Inspector skill verification remains a confirmation prerequisite; this is only a proposal.
       } else {
         const target = await tx.query(`SELECT es.id FROM handyman_execution_scopes es
           JOIN handyman_execution_scope_assignments a ON a.execution_scope_id = es.id
-            AND a.status = 'ACTIVE' AND a.handyman_crew_id = $3
+            AND a.client_id=es.client_id AND a.status = 'ACTIVE' AND a.handyman_crew_id = $3
           JOIN handyman_work_crews c ON c.id = a.handyman_crew_id AND c.status = 'ACTIVE'
+            AND c.client_id=es.client_id AND c.handyman_provider_context_id=a.handyman_provider_context_id
           WHERE es.id=$1 AND es.handyman_request_id=$2 AND es.client_id=$4
             AND es.status='AUTHORIZED'`, [body.executionScopeId, requestId, body.resourceId, req.clientId]);
         if (!target.rows.length) throw conflict('No active authorized assignment for the proposed crew.');
+        await assertHandymanCrewWorkerEligibility(tx, {
+          clientId: req.clientId, buildingId: req.buildingId, crewId: body.resourceId,
+        });
       }
       const created = await insertHandymanVisitProposal(tx, {handymanRequestId: requestId,
         kind: body.kind, resourceId: body.resourceId, executionScopeId: body.executionScopeId,

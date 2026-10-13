@@ -9,6 +9,7 @@ import {
   handymanWorkCrewRepository,
 } from '../handyman-providers';
 import { handymanExecutionScopeNotFoundError } from '../handyman-quotations';
+import { assertHandymanCrewWorkerEligibility } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { workforceRepository } from '../workforce';
 import {
   handymanAssignmentAlreadyActiveError,
@@ -98,6 +99,7 @@ async function validateTarget(
   executor: Pick<PoolClient, 'query'> | undefined,
   input: { providerContextId: string; crewId: string },
   clientId: string,
+  buildingId: string,
 ): Promise<ValidatedTarget> {
   const providerContext = await handymanProviderContextRepository
     .findById(executor, input.providerContextId);
@@ -154,6 +156,7 @@ async function validateTarget(
   if (!profile || profile.userId === null) {
     throw handymanAssignmentLeadInvalidError();
   }
+  await assertHandymanCrewWorkerEligibility(executor, {clientId, buildingId, crewId: crew.id});
   return {
     clientId,
     providerContextId: providerContext.id,
@@ -230,6 +233,7 @@ export async function assignHandymanExecutionScopeCrew(
       tx,
       { providerContextId, crewId },
       scope.clientId,
+      scope.buildingId,
     );
     const record = await handymanScopeAssignmentRepository
       .insertAssignment(tx, {
@@ -293,6 +297,7 @@ export async function reassignHandymanExecutionScopeCrew(
       tx,
       { providerContextId, crewId },
       scope.clientId,
+      scope.buildingId,
     );
     const superseded = await handymanScopeAssignmentRepository
       .supersedeAssignment(tx, current.id);
@@ -385,6 +390,7 @@ export async function resolveHandymanAssignmentLead(
       crewId: current.handymanCrewId,
     },
     current.clientId,
+    scope.buildingId,
   );
   return {
     assignmentId: current.id,
