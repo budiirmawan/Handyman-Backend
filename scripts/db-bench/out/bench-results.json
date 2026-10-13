@@ -1,0 +1,145 @@
+{
+  "generatedAt": "2026-10-13T13:55:24.473Z",
+  "disclaimer": "SYNTHETIC fixture benchmark on an isolated scratch database — NOT a live production measurement.",
+  "postgresVersion": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+  "fixtureVolumes": {
+    "handyman_service_requests": 60000,
+    "handyman_visit_appointments": 40000,
+    "handyman_execution_scope_assignments": 40000,
+    "handyman_arrival_verification_results": 36000,
+    "handyman_service_warranty_claims": 36000,
+    "authentication_audit_events": 200000
+  },
+  "iterations": 10,
+  "warmups": 3,
+  "sizesBefore": {
+    "authentication_audit_events": "total=47 MB, indexes=17 MB",
+    "handyman_service_requests": "total=26 MB, indexes=12 MB",
+    "handyman_execution_scope_assignments": "total=12 MB, indexes=3928 kB",
+    "handyman_arrival_verification_results": "total=11 MB, indexes=3728 kB",
+    "handyman_service_warranty_claims": "total=24 MB, indexes=15 MB",
+    "handyman_visit_appointments": "total=24 MB, indexes=12 MB"
+  },
+  "sizesAfter": {
+    "authentication_audit_events": "total=66 MB, indexes=36 MB",
+    "handyman_service_requests": "total=30 MB, indexes=15 MB",
+    "handyman_execution_scope_assignments": "total=14 MB, indexes=6704 kB",
+    "handyman_arrival_verification_results": "total=13 MB, indexes=6128 kB",
+    "handyman_service_warranty_claims": "total=26 MB, indexes=17 MB",
+    "handyman_visit_appointments": "total=27 MB, indexes=15 MB"
+  },
+  "results": [
+    {
+      "name": "Q1 customer-care / queue list (client, created_at ASC)",
+      "evidence": "handyman-service-request.repository.ts listCustomerCareProjectionsScoped — WHERE r.client_id=$1 ORDER BY r.created_at ASC, r.id ASC LIMIT 50 OFFSET 0",
+      "before": {
+        "medianMs": 4.063,
+        "p95Ms": 4.713,
+        "plan": "Limit  (cost=2108.56..2108.69 rows=50 width=84) (actual time=3.557..3.564 rows=50 loops=1)\n  Buffers: shared hit=1823\n  ->  Sort  (cost=2108.56..2121.15 rows=5036 width=84) (actual time=3.556..3.560 rows=50 loops=1)\n        Sort Key: created_at, id\n        Sort Method: top-N heapsort  Memory: 36kB\n        Buffers: shared hit=1823\n        ->  Bitmap Heap Scan on handyman_service_requests r  (cost=59.32..1941.27 rows=5036 width=84) (actual time=0.676..2.577 rows=5000 loops=1)\n              Recheck Cond: (client_id = 'e5d1f5f3-88b5-c2dc-e3c4-504311e18093'::uuid)\n              Heap Blocks: exact=1818\n              Buffers: shared hit=1823\n              ->  Bitmap Index Scan on handyman_service_requests_client_idx  (cost=0.00..58.06 rows=5036 width=0) (actual time=0.497..0.497 rows=5000 loops=1)\n                    Index Cond: (client_id = 'e5d1f5f3-88b5-c2dc-e3c4-504311e18093'::uuid)\n                    Buffers: shared hit=5\nPlanning Time: 0.052 ms\nExecution Time: 3.580 ms"
+      },
+      "after": {
+        "medianMs": 0.513,
+        "p95Ms": 1.163,
+        "plan": "Limit  (cost=0.41..77.04 rows=50 width=84) (actual time=0.013..0.042 rows=50 loops=1)\n  Buffers: shared hit=53\n  ->  Index Scan using handyman_service_requests_client_created_idx on handyman_service_requests r  (cost=0.41..7472.83 rows=4876 width=84) (actual time=0.012..0.037 rows=50 loops=1)\n        Index Cond: (client_id = 'e5d1f5f3-88b5-c2dc-e3c4-504311e18093'::uuid)\n        Buffers: shared hit=53\nPlanning Time: 0.047 ms\nExecution Time: 0.052 ms"
+      }
+    },
+    {
+      "name": "Q2 workspace keyset page (client, created cursor)",
+      "evidence": "handyman-service-request.repository.ts listWorkspaceProjectionsScoped — keyset (created_at, id) pagination",
+      "before": {
+        "medianMs": 2.869,
+        "p95Ms": 3.201,
+        "plan": "Limit  (cost=2004.05..2004.11 rows=25 width=24) (actual time=2.406..2.410 rows=25 loops=1)\n  Buffers: shared hit=1823\n  ->  Sort  (cost=2004.05..2007.46 rows=1365 width=24) (actual time=2.405..2.407 rows=25 loops=1)\n        Sort Key: created_at, id\n        Sort Method: top-N heapsort  Memory: 28kB\n        Buffers: shared hit=1823\n        ->  Bitmap Heap Scan on handyman_service_requests r  (cost=58.40..1965.53 rows=1365 width=24) (actual time=0.662..2.227 rows=1364 loops=1)\n              Recheck Cond: (client_id = 'e5d1f5f3-88b5-c2dc-e3c4-504311e18093'::uuid)\n              Filter: (ROW(created_at, id) > ROW('2026-03-29 13:55:22.439+00'::timestamp with time zone, '7ddf32e1-7a6a-c5ce-04a8-ecbf782ca509'::uuid))\n              Rows Removed by Filter: 3636\n              Heap Blocks: exact=1818\n              Buffers: shared hit=1823\n              ->  Bitmap Index Scan on handyman_service_requests_client_idx  (cost=0.00..58.06 rows=5036 width=0) (actual time=0.476..0.476 rows=5000 loops=1)\n                    Index Cond: (client_id = 'e5d1f5f3-88b5-c2dc-e3c4-504311e18093'::uuid)\n                    Buffers: shared hit=5\nPlanning Time: 0.109 ms\nExecution Time: 2.427 ms"
+      },
+      "after": {
+        "medianMs": 0.406,
+        "p95Ms": 1.124,
+        "plan": "Limit  (cost=0.41..82.21 rows=25 width=24) (actual time=0.016..0.043 rows=25 loops=1)\n  Buffers: shared hit=27 read=1\n  ->  Index Only Scan using handyman_service_requests_client_created_idx on handyman_service_requests r  (cost=0.41..2836.94 rows=867 width=24) (actual time=0.016..0.041 rows=25 loops=1)\n        Index Cond: ((client_id = 'e5d1f5f3-88b5-c2dc-e3c4-504311e18093'::uuid) AND (ROW(created_at, id) > ROW('2026-06-06 13:55:24.347+00'::timestamp with time zone, '7ddf32e1-7a6a-c5ce-04a8-ecbf782ca509'::uuid)))\n        Heap Fetches: 25\n        Buffers: shared hit=27 read=1\nPlanning Time: 0.049 ms\nExecution Time: 0.053 ms"
+      }
+    },
+    {
+      "name": "Q3 audit list (time range, created_at DESC page)",
+      "evidence": "audit.repository.ts listAuditEvents — WHERE created_at range ORDER BY created_at DESC, id DESC LIMIT 50 OFFSET 0 with COUNT(*) OVER()",
+      "before": {
+        "medianMs": 6.762,
+        "p95Ms": 8.838,
+        "plan": "Limit  (cost=1.86..75.53 rows=50 width=70) (actual time=7.994..8.007 rows=50 loops=1)\n  Buffers: shared hit=11044\n  ->  Incremental Sort  (cost=1.86..15950.96 rows=10825 width=70) (actual time=7.993..8.003 rows=50 loops=1)\n        Sort Key: created_at DESC, id DESC\n        Presorted Key: created_at\n        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB\n        Buffers: shared hit=11044\n        ->  WindowAgg  (cost=0.42..15464.12 rows=10825 width=70) (actual time=7.976..7.986 rows=51 loops=1)\n              Buffers: shared hit=11044\n              ->  Index Scan Backward using authentication_audit_events_created_at_idx on authentication_audit_events  (cost=0.42..15328.81 rows=10825 width=62) (actual time=0.010..5.278 rows=10949 loops=1)\n                    Index Cond: ((created_at >= '2026-09-13 13:55:22.537+00'::timestamp with time zone) AND (created_at <= '2026-10-13 13:55:22.537+00'::timestamp with time zone))\n                    Buffers: shared hit=11044\nPlanning:\n  Buffers: shared hit=4\nPlanning Time: 0.077 ms\nExecution Time: 8.083 ms"
+      },
+      "after": {
+        "medianMs": 6.722,
+        "p95Ms": 7.019,
+        "plan": "Limit  (cost=0.42..72.87 rows=50 width=70) (actual time=7.803..7.815 rows=50 loops=1)\n  Buffers: shared hit=10998\n  ->  WindowAgg  (cost=0.42..15520.32 rows=10711 width=70) (actual time=7.802..7.810 rows=50 loops=1)\n        Buffers: shared hit=10998\n        ->  Index Scan using authentication_audit_events_created_at_id_idx on authentication_audit_events  (cost=0.42..15386.43 rows=10711 width=62) (actual time=0.008..5.136 rows=10949 loops=1)\n              Index Cond: ((created_at >= '2026-09-13 13:55:24.437+00'::timestamp with time zone) AND (created_at <= '2026-10-13 13:55:24.437+00'::timestamp with time zone))\n              Buffers: shared hit=10998\nPlanning:\n  Buffers: shared hit=4\nPlanning Time: 0.074 ms\nExecution Time: 7.884 ms"
+      }
+    },
+    {
+      "name": "Q4 audit list (user filter)",
+      "evidence": "audit.repository.ts listAuditEvents — WHERE user_id=$1 ORDER BY created_at DESC, id DESC",
+      "before": {
+        "medianMs": 4.992,
+        "p95Ms": 16.672,
+        "plan": "Limit  (cost=27.07..1359.65 rows=50 width=46) (actual time=2.640..4.064 rows=50 loops=1)\n  Buffers: shared hit=13061\n  ->  Incremental Sort  (cost=27.07..21348.33 rows=800 width=46) (actual time=2.639..4.059 rows=50 loops=1)\n        Sort Key: created_at DESC, id DESC\n        Presorted Key: created_at\n        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 27kB  Peak Memory: 27kB\n        Buffers: shared hit=13061\n        ->  Index Scan Backward using authentication_audit_events_created_at_idx on authentication_audit_events  (cost=0.42..21312.33 rows=800 width=46) (actual time=0.164..4.038 rows=51 loops=1)\n              Filter: (user_id = '03b39f7a-b9f3-c79f-e931-2517e9b69da3'::uuid)\n              Rows Removed by Filter: 12899\n              Buffers: shared hit=13061\nPlanning Time: 0.047 ms\nExecution Time: 4.078 ms"
+      },
+      "after": {
+        "medianMs": 0.535,
+        "p95Ms": 1.108,
+        "plan": "Limit  (cost=0.42..183.74 rows=50 width=46) (actual time=0.012..0.043 rows=50 loops=1)\n  Buffers: shared hit=53\n  ->  Index Scan using authentication_audit_events_user_created_at_id_idx on authentication_audit_events  (cost=0.42..2926.26 rows=798 width=46) (actual time=0.012..0.038 rows=50 loops=1)\n        Index Cond: (user_id = 'eb6fef7c-768a-a995-c815-2a1c8f55f501'::uuid)\n        Buffers: shared hit=53\nPlanning Time: 0.043 ms\nExecution Time: 0.052 ms"
+      }
+    },
+    {
+      "name": "Q5 appointment list per request",
+      "evidence": "handyman-appointment.repository.ts listHandymanVisitAppointments — WHERE client_id=$1 AND handyman_request_id=$2 ORDER BY created_at DESC, id DESC",
+      "before": {
+        "medianMs": 0.345,
+        "p95Ms": 0.361,
+        "plan": "Sort  (cost=8.44..8.45 rows=1 width=50) (actual time=0.031..0.032 rows=5 loops=1)\n  Sort Key: created_at DESC, id DESC\n  Sort Method: quicksort  Memory: 25kB\n  Buffers: shared hit=2 read=6\n  ->  Index Scan using handyman_visit_appointments_request_idx on handyman_visit_appointments  (cost=0.41..8.43 rows=1 width=50) (actual time=0.013..0.027 rows=5 loops=1)\n        Index Cond: ((client_id = '71201068-6990-e710-e15f-d48ef9652b04'::uuid) AND (handyman_request_id = '8d348902-13ba-5d43-d856-0f85315319fc'::uuid))\n        Buffers: shared hit=2 read=6\nPlanning Time: 0.044 ms\nExecution Time: 0.042 ms"
+      },
+      "after": {
+        "medianMs": 0.35,
+        "p95Ms": 0.753,
+        "plan": "Index Scan using handyman_visit_appointments_request_created_idx on handyman_visit_appointments  (cost=0.41..8.43 rows=1 width=50) (actual time=0.016..0.031 rows=5 loops=1)\n  Index Cond: ((client_id = '4befae00-646e-c002-c7fe-82b9f7ddf7b0'::uuid) AND (handyman_request_id = '336c3e6c-7e87-ef51-5f3b-2c9c5eed34f6'::uuid))\n  Buffers: shared hit=2 read=6\nPlanning Time: 0.054 ms\nExecution Time: 0.041 ms"
+      }
+    },
+    {
+      "name": "Q6 execution-scope assignment stage",
+      "evidence": "handyman-sla-status-api.service.ts composeStatusVisibility — WHERE execution_scope_id=$1 ORDER BY (status = 'ACTIVE') DESC, assigned_at DESC, id DESC",
+      "before": {
+        "medianMs": 4.073,
+        "p95Ms": 4.733,
+        "plan": "Sort  (cost=1611.05..1611.06 rows=4 width=66) (actual time=3.473..3.473 rows=4 loops=1)\n  Sort Key: ((status = 'ACTIVE'::text)) DESC, assigned_at DESC, id DESC\n  Sort Method: quicksort  Memory: 25kB\n  Buffers: shared hit=1011\n  ->  Seq Scan on handyman_execution_scope_assignments  (cost=0.00..1611.01 rows=4 width=66) (actual time=0.657..3.464 rows=4 loops=1)\n        Filter: (execution_scope_id = 'd826672d-b10e-b5ba-4785-7f3da9413436'::uuid)\n        Rows Removed by Filter: 47996\n        Buffers: shared hit=1011\nPlanning Time: 0.034 ms\nExecution Time: 3.487 ms"
+      },
+      "after": {
+        "medianMs": 0.257,
+        "p95Ms": 0.312,
+        "plan": "Sort  (cost=19.79..19.80 rows=4 width=66) (actual time=0.023..0.024 rows=4 loops=1)\n  Sort Key: ((status = 'ACTIVE'::text)) DESC, assigned_at DESC, id DESC\n  Sort Method: quicksort  Memory: 25kB\n  Buffers: shared hit=6 read=1\n  ->  Bitmap Heap Scan on handyman_execution_scope_assignments  (cost=4.45..19.75 rows=4 width=66) (actual time=0.015..0.019 rows=4 loops=1)\n        Recheck Cond: (execution_scope_id = '8a7e3719-a443-3a4e-1a7f-afefb78d82ab'::uuid)\n        Heap Blocks: exact=4\n        Buffers: shared hit=6 read=1\n        ->  Bitmap Index Scan on handyman_es_assignments_scope_assigned_idx  (cost=0.00..4.45 rows=4 width=0) (actual time=0.010..0.010 rows=4 loops=1)\n              Index Cond: (execution_scope_id = '8a7e3719-a443-3a4e-1a7f-afefb78d82ab'::uuid)\n              Buffers: shared hit=2 read=1\nPlanning Time: 0.031 ms\nExecution Time: 0.035 ms"
+      }
+    },
+    {
+      "name": "Q7 arrival stage latest",
+      "evidence": "handyman-sla-status-api.service.ts composeStatusVisibility — WHERE execution_scope_id=$1 ORDER BY evaluated_at DESC, created_at DESC, id DESC LIMIT 1",
+      "before": {
+        "medianMs": 0.254,
+        "p95Ms": 0.299,
+        "plan": "Limit  (cost=15.85..15.85 rows=1 width=58) (actual time=0.017..0.018 rows=1 loops=1)\n  Buffers: shared hit=5\n  ->  Sort  (cost=15.85..15.86 rows=3 width=58) (actual time=0.017..0.017 rows=1 loops=1)\n        Sort Key: evaluated_at DESC, created_at DESC, id DESC\n        Sort Method: top-N heapsort  Memory: 25kB\n        Buffers: shared hit=5\n        ->  Bitmap Heap Scan on handyman_arrival_verification_results  (cost=4.31..15.83 rows=3 width=58) (actual time=0.011..0.015 rows=3 loops=1)\n              Recheck Cond: (execution_scope_id = '86d77f67-d4b1-348b-dcb6-90519806f278'::uuid)\n              Heap Blocks: exact=3\n              Buffers: shared hit=5\n              ->  Bitmap Index Scan on handyman_arrival_results_scope_idx  (cost=0.00..4.31 rows=3 width=0) (actual time=0.007..0.007 rows=3 loops=1)\n                    Index Cond: (execution_scope_id = '86d77f67-d4b1-348b-dcb6-90519806f278'::uuid)\n                    Buffers: shared hit=2\nPlanning Time: 0.031 ms\nExecution Time: 0.028 ms"
+      },
+      "after": {
+        "medianMs": 0.222,
+        "p95Ms": 0.261,
+        "plan": "Limit  (cost=0.41..5.77 rows=1 width=59) (actual time=0.007..0.007 rows=1 loops=1)\n  Buffers: shared hit=4\n  ->  Index Scan using handyman_arrival_results_scope_evaluated_idx on handyman_arrival_verification_results  (cost=0.41..16.47 rows=3 width=59) (actual time=0.007..0.007 rows=1 loops=1)\n        Index Cond: (execution_scope_id = '058e6c8c-8151-2c67-ff2f-1b10de3adfdc'::uuid)\n        Buffers: shared hit=4\nPlanning Time: 0.031 ms\nExecution Time: 0.015 ms"
+      }
+    },
+    {
+      "name": "Q8 warranty claims stage",
+      "evidence": "handyman-sla-status-api.service.ts composeStatusVisibility — WHERE execution_scope_id=$1 ORDER BY created_at DESC, id DESC",
+      "before": {
+        "medianMs": 0.931,
+        "p95Ms": 0.991,
+        "plan": "Sort  (cost=1426.34..1426.35 rows=3 width=38) (actual time=0.676..0.677 rows=3 loops=1)\n  Sort Key: created_at DESC, id DESC\n  Sort Method: quicksort  Memory: 25kB\n  Buffers: shared hit=288\n  ->  Index Scan using handyman_service_warranty_claim_id_scope_unique on handyman_service_warranty_claims  (cost=0.29..1426.32 rows=3 width=38) (actual time=0.154..0.671 rows=3 loops=1)\n        Index Cond: (execution_scope_id = '8fa59bda-a771-72f3-f3b9-de5872ccaf52'::uuid)\n        Buffers: shared hit=288\nPlanning Time: 0.041 ms\nExecution Time: 0.686 ms"
+      },
+      "after": {
+        "medianMs": 0.261,
+        "p95Ms": 0.281,
+        "plan": "Sort  (cost=16.03..16.04 rows=3 width=38) (actual time=0.018..0.019 rows=3 loops=1)\n  Sort Key: created_at DESC, id DESC\n  Sort Method: quicksort  Memory: 25kB\n  Buffers: shared hit=6\n  ->  Bitmap Heap Scan on handyman_service_warranty_claims  (cost=4.44..16.01 rows=3 width=38) (actual time=0.011..0.015 rows=3 loops=1)\n        Recheck Cond: (execution_scope_id = '80c07a22-f9c0-2f07-3e7b-bd1c98ccd872'::uuid)\n        Heap Blocks: exact=3\n        Buffers: shared hit=6\n        ->  Bitmap Index Scan on handyman_service_warranty_claims_scope_created_idx  (cost=0.00..4.44 rows=3 width=0) (actual time=0.008..0.008 rows=3 loops=1)\n              Index Cond: (execution_scope_id = '80c07a22-f9c0-2f07-3e7b-bd1c98ccd872'::uuid)\n              Buffers: shared hit=3\nPlanning Time: 0.051 ms\nExecution Time: 0.029 ms"
+      }
+    }
+  ]
+}

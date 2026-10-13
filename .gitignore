@@ -1,0 +1,9 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Runtime data (evidence storage, local volumes)
+.data/
+
+# Benchmark scratch data (regenerable; committed results live in scripts/db-bench/out/bench-results.json)
+scripts/db-bench/out/pgdata/
