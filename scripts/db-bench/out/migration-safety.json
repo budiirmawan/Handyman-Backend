@@ -1,0 +1,45 @@
+{
+  "generatedAt": "2026-10-13T14:23:32.562Z",
+  "disclaimer": "Isolated scratch PostgreSQL verification (CR-HM-DB-OPT-02) — no production resources involved.",
+  "postgresVersion": "PostgreSQL 16.14 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+  "scenarios": {
+    "S1": {
+      "migrationsApplied": 434,
+      "indexCount": 7,
+      "allValid": true,
+      "definitionMismatches": [],
+      "ledgerCount": 434,
+      "registryCount": 434,
+      "ledgerMatchesRegistry": true,
+      "ledgerHead": [
+        "0432_handyman_charge_tenant_invoice_source",
+        "0433_handyman_customer_payment_proof",
+        "0434_handyman_db_opt_indexes"
+      ]
+    },
+    "S2": {
+      "interruptedBuildProducedInvalidIndex": true,
+      "migrateUpRefusedWith": "Migration failed: CR-HM-DB-OPT-01: index build left INVALID index(es): handyman_service_requests_client_created_idx. Drop them and re-run the migration (see DBA runbook §Rollback).",
+      "refusedWhenInvalidIndexPresent": true,
+      "historyRecordedDespiteInvalid": false,
+      "invalidIndexStillPresent": true,
+      "otherIndexesCreatedValid": true
+    },
+    "S3": {
+      "recoveryCommand": "DROP INDEX CONCURRENTLY IF EXISTS handyman_service_requests_client_created_idx",
+      "migrateUpAfterRecoveryApplied": [
+        "0434_handyman_db_opt_indexes"
+      ],
+      "allSevenPresent": true,
+      "allSevenValid": true
+    },
+    "S4": {
+      "ledgerMatchesRegistry": true,
+      "head": [
+        "0432_handyman_charge_tenant_invoice_source",
+        "0433_handyman_customer_payment_proof",
+        "0434_handyman_db_opt_indexes"
+      ]
+    }
+  }
+}
