@@ -4,7 +4,18 @@ import { assertBuildingScopedResourceAccess, canAccessBuildingScopedResource } f
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { insertHandymanVisitProposal, listHandymanVisitAppointments, type HandymanAppointmentRecord } from './handyman-appointment.repository';
 import { findEligibleHandymanWorker, assertHandymanCrewWorkerEligibility } from '../handyman-providers/handyman-worker-eligibility.repository';
+import { recordOperationalEvent } from '../operational-events';
 import type { VisitProposalBody } from './handyman-visit-api.validation';
+
+/**
+ * Audit-only journal for visit PROPOSAL mutations. Written in the SAME
+ * transaction as the mutation through the existing `recordOperationalEvent`
+ * authority, so a failed audit rolls the proposal back. Metadata carries
+ * Handyman identities and lifecycle facts only: no tenant consent, no
+ * caller-supplied context, and no booking/capacity claim.
+ */
+export const HANDYMAN_VISIT_PROPOSED = 'HANDYMAN_VISIT_PROPOSED';
+export const HANDYMAN_VISIT_PROPOSAL_CANCELLED = 'HANDYMAN_VISIT_PROPOSAL_CANCELLED';
 
 /** R1C scoped operations proposal/read/cancel. No appointment confirmation or visit start here. */
 const conflict = (message: string) => new AppError({code: ERROR_CODES.CONFLICT, message, statusCode: 409});
@@ -70,6 +81,15 @@ export async function createVisitProposal(requestId: string, body: VisitProposal
       const created = await insertHandymanVisitProposal(tx, {handymanRequestId: requestId,
         kind: body.kind, resourceId: body.resourceId, executionScopeId: body.executionScopeId,
         interval: {startAt: body.startAt, endAt: body.endAt, timezone: req.timezone}, createdByUserId: actorId});
+      await recordOperationalEvent({
+        clientId: req.clientId, buildingId: req.buildingId, eventType: HANDYMAN_VISIT_PROPOSED,
+        entityType: 'HANDYMAN_VISIT_APPOINTMENT', entityId: created.id, actorUserId: actorId,
+        summary: `Handyman ${body.kind.toLowerCase()} visit proposed (PROPOSED only; not confirmed).`,
+        metadata: {handymanRequestId: requestId, kind: body.kind, resourceType: created.resourceType,
+          resourceId: created.resourceId, executionScopeId: created.executionScopeId,
+          startAt: created.startAt.toISOString(), endAt: created.endAt.toISOString(),
+          state: created.state, version: created.version},
+      }, tx);
       return encode(created);
     });
   } catch(error) {
@@ -87,6 +107,12 @@ export async function cancelVisitProposal(requestId: string, appointmentId: stri
         AND state='PROPOSED' AND version=$5 RETURNING id, state, version`,
       [appointmentId, requestId, req.clientId, actorId, version]);
     if (!changed.rows.length) throw conflict('Only the current PROPOSED appointment can be cancelled. Reload before retry.');
+    await recordOperationalEvent({
+      clientId: req.clientId, buildingId: req.buildingId, eventType: HANDYMAN_VISIT_PROPOSAL_CANCELLED,
+      entityType: 'HANDYMAN_VISIT_APPOINTMENT', entityId: appointmentId, actorUserId: actorId,
+      summary: 'Handyman visit proposal cancelled before any tenant selection or confirmation.',
+      metadata: {handymanRequestId: requestId, state: 'CANCELLED', version: changed.rows[0].version},
+    }, tx);
     return changed.rows[0];
   });
 }
