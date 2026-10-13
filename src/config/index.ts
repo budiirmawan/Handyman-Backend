@@ -13,6 +13,7 @@ export {
 export type {
   AppConfig,
   DatabaseConfig,
+  DatabasePoolSettings,
   EmailConfig,
   InvitationConfig,
   LogLevel,

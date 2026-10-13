@@ -22,6 +22,10 @@ export function sanitizeDatabaseError(message: string, password: string): string
 }
 
 export function createPool(database: DatabaseConfig): Pool {
+  // CR-HM-DB-OPT-01 PART 02 — one bounded, process-level pool. Sizing and
+  // timeouts come from validated configuration (conservative defaults match
+  // the previously hard-coded values); `application_name` makes this pool
+  // identifiable in pg_stat_activity on Railway.
   const config: PoolConfig = {
     host: database.host,
     port: database.port,
@@ -29,9 +33,20 @@ export function createPool(database: DatabaseConfig): Pool {
     user: database.user,
     password: database.password,
     ssl: database.ssl ? { rejectUnauthorized: true } : false,
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
+    max: database.pool.max,
+    min: database.pool.min,
+    idleTimeoutMillis: database.pool.idleTimeoutMs,
+    connectionTimeoutMillis: database.pool.connectionTimeoutMs,
+    // 0 = disabled (pg expects `false` to mean "no statement_timeout").
+    statement_timeout:
+      database.pool.statementTimeoutMs > 0
+        ? database.pool.statementTimeoutMs
+        : false,
+    idle_in_transaction_session_timeout:
+      database.pool.idleInTransactionSessionTimeoutMs > 0
+        ? database.pool.idleInTransactionSessionTimeoutMs
+        : undefined,
+    application_name: 'asentra-backend',
   };
 
   const pool = new Pool(config);

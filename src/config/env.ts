@@ -4,6 +4,28 @@ import { resolve } from 'node:path';
 export type NodeEnv = 'development' | 'test' | 'production';
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 
+/**
+ * CR-HM-DB-OPT-01 PART 02 — process-level connection pool settings.
+ *
+ * Defaults are the historical hard-coded values (max 10, 5s acquisition,
+ * 30s idle) so existing deployments observe zero behavior change until an
+ * operator opts in via environment variables. Statement timeouts default to
+ * DISABLED (0): long maintenance DDL (e.g. CREATE INDEX CONCURRENTLY during
+ * migrations) must never be aborted by an application-side timeout, and
+ * enabling a statement timeout in production is an explicit operator
+ * decision documented in the DBA runbook.
+ */
+export type DatabasePoolSettings = {
+  max: number;
+  min: number;
+  connectionTimeoutMs: number;
+  idleTimeoutMs: number;
+  /** 0 disables the server-side statement_timeout for pooled sessions. */
+  statementTimeoutMs: number;
+  /** 0 disables idle_in_transaction_session_timeout for pooled sessions. */
+  idleInTransactionSessionTimeoutMs: number;
+};
+
 export type DatabaseConfig = {
   host: string;
   port: number;
@@ -11,6 +33,7 @@ export type DatabaseConfig = {
   user: string;
   password: string;
   ssl: boolean;
+  pool: DatabasePoolSettings;
 };
 
 export type SecurityConfig = {
@@ -104,6 +127,14 @@ const DEFAULTS = {
     name: 'asentra',
     user: 'postgres',
     ssl: false,
+    pool: {
+      max: 10,
+      min: 0,
+      connectionTimeoutMs: 5_000,
+      idleTimeoutMs: 30_000,
+      statementTimeoutMs: 0,
+      idleInTransactionSessionTimeoutMs: 0,
+    },
   },
   security: {
     corsOrigins: ['http://localhost:3000', 'http://localhost:5173'],
@@ -277,13 +308,190 @@ function readDatabase(
   const defaultName =
     environment === 'test' ? 'asentra_test' : DEFAULTS.database.name;
 
+  // CR-HM-DB-OPT-01 PART 02 — Railway injects a PRIVATE DATABASE_URL for
+  // same-environment Postgres traffic. It is accepted as the connection base;
+  // any explicitly-set DB_* variable still wins field-by-field so existing
+  // deployments (and tests) keep full control. Never fall back to
+  // DATABASE_PUBLIC_URL: application runtime must stay on the private
+  // endpoint (DBA runbook §"Railway networking").
+  const fromUrl = readDatabaseUrl(env.DATABASE_URL);
+
   return {
-    host: readRequiredText('DB_HOST', env.DB_HOST, DEFAULTS.database.host),
-    port: readPortValue('DB_PORT', env.DB_PORT, DEFAULTS.database.port),
-    name: readRequiredText('DB_NAME', env.DB_NAME, defaultName),
-    user: readRequiredText('DB_USER', env.DB_USER, DEFAULTS.database.user),
-    password: env.DB_PASSWORD ?? '',
-    ssl: readBoolean('DB_SSL', env.DB_SSL, DEFAULTS.database.ssl),
+    host: readRequiredText(
+      'DB_HOST',
+      env.DB_HOST,
+      fromUrl?.host ?? DEFAULTS.database.host,
+    ),
+    port: readPortValue(
+      'DB_PORT',
+      env.DB_PORT,
+      fromUrl?.port ?? DEFAULTS.database.port,
+    ),
+    name: readRequiredText(
+      'DB_NAME',
+      env.DB_NAME,
+      fromUrl?.name ?? defaultName,
+    ),
+    user: readRequiredText(
+      'DB_USER',
+      env.DB_USER,
+      fromUrl?.user ?? DEFAULTS.database.user,
+    ),
+    password: env.DB_PASSWORD ?? fromUrl?.password ?? '',
+    ssl: readBoolean('DB_SSL', env.DB_SSL, fromUrl?.ssl ?? DEFAULTS.database.ssl),
+    pool: readDatabasePool(env),
+  };
+}
+
+type DatabaseUrlParts = {
+  host: string;
+  port: number;
+  name: string;
+  user: string;
+  password: string;
+  ssl: boolean;
+};
+
+/**
+ * Parses a postgres:// or postgresql:// connection URI (RFC "authority" form,
+ * as produced by Railway). Returns null when unset. A malformed URI is a
+ * configuration error, never a silent fallback: the process must not boot with
+ * a connection it did not intend.
+ */
+function readDatabaseUrl(raw: string | undefined): DatabaseUrlParts | null {
+  if (raw === undefined || raw.trim() === '') {
+    return null;
+  }
+
+  const value = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new ConfigError(
+      'Invalid configuration: DATABASE_URL must be a valid postgres:// or postgresql:// URI',
+    );
+  }
+
+  const protocol = parsed.protocol.replace(/:$/, '');
+  if (protocol !== 'postgres' && protocol !== 'postgresql') {
+    throw new ConfigError(
+      `Invalid configuration: DATABASE_URL must use the postgres:// or postgresql:// scheme (received ${JSON.stringify(protocol)})`,
+    );
+  }
+
+  const host = parsed.hostname;
+  if (host === '') {
+    throw new ConfigError(
+      'Invalid configuration: DATABASE_URL must include a host',
+    );
+  }
+
+  // Path is "/dbname"; an empty path is not a usable default here because the
+  // URL was explicitly supplied — require the database name on the URL.
+  const name = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+  if (name === '') {
+    throw new ConfigError(
+      'Invalid configuration: DATABASE_URL must include a database name in its path',
+    );
+  }
+
+  const port =
+    parsed.port === ''
+      ? DEFAULTS.database.port
+      : Number.parseInt(parsed.port, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new ConfigError(
+      `Invalid configuration: DATABASE_URL port must be an integer between 1 and 65535 (received ${JSON.stringify(parsed.port)})`,
+    );
+  }
+
+  return {
+    host,
+    port,
+    name,
+    user: decodeURIComponent(parsed.username),
+    password: decodeURIComponent(parsed.password),
+    ssl: readUrlSslMode(parsed.searchParams.get('sslmode')),
+  };
+}
+
+/**
+ * Maps the libpq sslmode query parameter onto the boolean SSL flag the pg
+ * driver is configured with. Unknown values fail closed toward SSL enabled,
+ * but an explicitly unrecognized value is rejected so typos never silently
+ * downgrade transport security.
+ */
+function readUrlSslMode(raw: string | null): boolean {
+  if (raw === null || raw.trim() === '') {
+    return DEFAULTS.database.ssl;
+  }
+
+  const value = raw.trim().toLowerCase();
+  if (value === 'disable' || value === 'allow') {
+    return false;
+  }
+  if (value === 'require' || value === 'prefer' || value === 'verify-ca' || value === 'verify-full') {
+    return true;
+  }
+
+  throw new ConfigError(
+    `Invalid configuration: DATABASE_URL sslmode must be one of disable, allow, prefer, require, verify-ca, verify-full (received ${JSON.stringify(raw)})`,
+  );
+}
+
+function readDatabasePool(env: NodeJS.ProcessEnv): DatabasePoolSettings {
+  const max = readBoundedInt(
+    'DB_POOL_MAX',
+    env.DB_POOL_MAX,
+    DEFAULTS.database.pool.max,
+    1,
+    100,
+  );
+  const min = readBoundedInt(
+    'DB_POOL_MIN',
+    env.DB_POOL_MIN,
+    DEFAULTS.database.pool.min,
+    0,
+    100,
+  );
+  if (min > max) {
+    throw new ConfigError(
+      `Invalid configuration: DB_POOL_MIN (${min}) must not exceed DB_POOL_MAX (${max})`,
+    );
+  }
+
+  return {
+    max,
+    min,
+    connectionTimeoutMs: readBoundedInt(
+      'DB_CONNECTION_TIMEOUT_MS',
+      env.DB_CONNECTION_TIMEOUT_MS,
+      DEFAULTS.database.pool.connectionTimeoutMs,
+      100,
+      120_000,
+    ),
+    idleTimeoutMs: readBoundedInt(
+      'DB_IDLE_TIMEOUT_MS',
+      env.DB_IDLE_TIMEOUT_MS,
+      DEFAULTS.database.pool.idleTimeoutMs,
+      1_000,
+      600_000,
+    ),
+    statementTimeoutMs: readBoundedInt(
+      'DB_STATEMENT_TIMEOUT_MS',
+      env.DB_STATEMENT_TIMEOUT_MS,
+      DEFAULTS.database.pool.statementTimeoutMs,
+      0,
+      3_600_000,
+    ),
+    idleInTransactionSessionTimeoutMs: readBoundedInt(
+      'DB_IDLE_IN_TRANSACTION_TIMEOUT_MS',
+      env.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+      DEFAULTS.database.pool.idleInTransactionSessionTimeoutMs,
+      0,
+      3_600_000,
+    ),
   };
 }
 
@@ -504,6 +712,33 @@ function readPositiveInt(
   if (parsed < min) {
     throw new ConfigError(
       `Invalid configuration: ${name} must be at least ${min} (received ${JSON.stringify(raw)})`,
+    );
+  }
+
+  return parsed;
+}
+
+/** Inclusive [min, max] integer reader used for pool sizing and timeouts. */
+function readBoundedInt(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const value =
+    raw === undefined || raw.trim() === '' ? String(fallback) : raw.trim();
+
+  if (!/^\d+$/.test(value)) {
+    throw new ConfigError(
+      `Invalid configuration: ${name} must be an integer between ${min} and ${max} (received ${JSON.stringify(raw)})`,
+    );
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (parsed < min || parsed > max) {
+    throw new ConfigError(
+      `Invalid configuration: ${name} must be an integer between ${min} and ${max} (received ${JSON.stringify(raw)})`,
     );
   }
 
