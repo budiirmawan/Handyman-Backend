@@ -34,6 +34,7 @@ import {
   type CreateHandymanServiceRequestInput,
   type HandymanCustomerCareServiceRequestRecord,
   type HandymanServiceRequestListFilters,
+  type HandymanServiceRequestPageOptions,
   type HandymanServiceRequestRecord,
   type PublicHandymanCustomerCareServiceRequest,
   type PublicHandymanServiceRequest,
@@ -345,6 +346,80 @@ export async function listHandymanServiceRequests(
   return records.map(toCustomerCarePublic);
 }
 
+/**
+ * Read one bounded Customer Care page for the Operations queue adapter.
+ * This deliberately reuses the existing Client/tenant_company.read and
+ * per-row C6 occupancy/PLATFORM_ADMIN SQL wall. A supplied Building is
+ * additionally checked against the actor's exact Client + Building assignment
+ * before querying, so a same-Client sibling Building is denied (BE-02G).
+ */
+export async function listHandymanServiceRequestsPage(
+  filters: HandymanServiceRequestListFilters,
+  page: HandymanServiceRequestPageOptions,
+  actorUserId: string,
+): Promise<{
+  items: PublicHandymanCustomerCareServiceRequest[];
+  hasMore: boolean;
+}> {
+  assertUuid(filters.clientId, 'clientId');
+  if (filters.tenantCompanyId !== undefined) {
+    assertUuid(filters.tenantCompanyId, 'tenantCompanyId');
+  }
+  if (filters.buildingId !== undefined) {
+    assertUuid(filters.buildingId, 'buildingId');
+  }
+  if (filters.spaceId !== undefined) {
+    assertUuid(filters.spaceId, 'spaceId');
+  }
+  if (filters.channelAttributionId !== undefined) {
+    assertUuid(filters.channelAttributionId, 'channelAttributionId');
+  }
+  if (
+    filters.status !== undefined &&
+    !isHandymanServiceRequestStatus(filters.status)
+  ) {
+    throw AppError.validation('Request query validation failed.', [
+      {
+        field: 'status',
+        message: 'status is not a recognized Handyman request status.',
+      },
+    ]);
+  }
+  if (!Number.isInteger(page.limit) || page.limit < 1 || page.limit > 100) {
+    throw AppError.validation('Request query validation failed.', [
+      { field: 'limit', message: 'limit must be an integer between 1 and 100.' },
+    ]);
+  }
+  if (!Number.isInteger(page.offset) || page.offset < 0 || page.offset > 10000) {
+    throw AppError.validation('Request query validation failed.', [
+      { field: 'offset', message: 'offset must be an integer between 0 and 10000.' },
+    ]);
+  }
+
+  if (filters.buildingId !== undefined) {
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: filters.clientId,
+      buildingId: filters.buildingId,
+    });
+  }
+  if (!(await contextAccessService.canAccessClient(actorUserId, filters.clientId))) {
+    throw buildingAccessDeniedError();
+  }
+
+  const records =
+    await handymanServiceRequestRepository.listCustomerCareProjectionsScoped(
+      undefined,
+      filters,
+      actorUserId,
+      { limit: page.limit + 1, offset: page.offset },
+    );
+  const hasMore = records.length > page.limit;
+  return {
+    items: records.slice(0, page.limit).map(toCustomerCarePublic),
+    hasMore,
+  };
+}
+
 /** C6 detail read: check existence/Client as before, then perform the
  * authorized projection in one SQL statement with the occupancy/role wall. */
 export async function getHandymanServiceRequestDetail(
@@ -375,5 +450,6 @@ export const handymanServiceRequestService = {
   createHandymanServiceRequest,
   createCareHandymanServiceRequest,
   listHandymanServiceRequests,
+  listHandymanServiceRequestsPage,
   getHandymanServiceRequestDetail,
 };
