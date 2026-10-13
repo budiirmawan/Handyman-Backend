@@ -1,0 +1,45 @@
+{
+  "generatedAt": "2026-10-13T14:33:14.370Z",
+  "disclaimer": "Runtime verification against isolated scratch PostgreSQL — exercises the production DB runtime layer (src/database) under simulated concurrency; worker/HTTP processes themselves are not run here.",
+  "dbPoolSettingsUsed": {
+    "max": 4,
+    "min": 1,
+    "connectionTimeoutMs": 5000,
+    "idleTimeoutMs": 30000,
+    "statementTimeoutMs": 0,
+    "idleInTransactionSessionTimeoutMs": 0
+  },
+  "serverMaxConnections": 100,
+  "checks": [
+    {
+      "id": "R1-pool-config",
+      "status": "PASS",
+      "detail": "DB_POOL_MAX=4 DB_POOL_MIN=1 idleTimeoutMs=30000 connectionTimeoutMs=5000 statementTimeoutMs=0 idleInTransactionSessionTimeoutMs=0 (private DATABASE_URL honored; DATABASE_PUBLIC_URL is never consulted — see tests/config-db-pool.test.ts)"
+    },
+    {
+      "id": "R2-concurrent-release",
+      "status": "PASS",
+      "detail": "30 concurrent connects (max=4); peak pool.totalCount=4; after: waiting=0 idle=4 total=4; active backend sessions outside pool probe=0"
+    },
+    {
+      "id": "R3-transaction-failure",
+      "status": "PASS",
+      "detail": "4 concurrent transactions (2 succeed, 1 thrown, 1 constraint violation); rejected=2; surviving rows=2 (rolled-back rows absent); pool after: waiting=0 idle=4 total=4"
+    },
+    {
+      "id": "R4-error-release",
+      "status": "PASS",
+      "detail": "8 failing queries on checked-out clients; pool after: waiting=0 idle=4 total=4"
+    },
+    {
+      "id": "R6-connection-budget",
+      "status": "PASS",
+      "detail": "max_connections=100; formula: instances*DB_POOL_MAX + workers*1. 1 inst + 2 workers = 6 (headroom 94); 2 inst + 2 workers = 10 (headroom 90); 3 inst + 2 workers = 14 (headroom 86); 5 inst + 2 workers = 22 (headroom 78)"
+    },
+    {
+      "id": "R5-graceful-shutdown",
+      "status": "PASS",
+      "detail": "closePool() completed; subsequent query refused=true; server.ts wires SIGINT/SIGTERM -> requestShutdown -> server.close + closePool (src/server.ts). Workers call closePool via src/database/cli.ts paths."
+    }
+  ]
+}
