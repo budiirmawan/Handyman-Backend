@@ -156,10 +156,13 @@ const TASK_ASSIGNMENT_SELECT = `
   -- CR-BE-RN19-SAFETY-INSPECTION-01 — aggregate before projecting the marker.
   -- The count is the cardinality guard; the id is exposed only when exactly
   -- one ACTIVE binding exists. No LIMIT, rows[0], or winner ordering is used.
+  -- CR-HM-MOBILE-ASSIGN-UUID-01 — PostgreSQL has no min(uuid); aggregate over
+  -- text and cast back (MIN of a single-element set is that element, so the
+  -- cardinality guard keeps the value deterministic and NULL-safe).
   LEFT JOIN LATERAL (
     SELECT
       COUNT(*)::INTEGER AS active_safety_inspection_binding_count,
-      CASE WHEN COUNT(*) = 1 THEN MIN(sib_row.id) ELSE NULL END
+      CASE WHEN COUNT(*) = 1 THEN MIN(sib_row.id::text)::uuid ELSE NULL END
         AS active_safety_inspection_binding_id
       FROM safety_inspection_bindings sib_row
      WHERE sib_row.schedule_definition_id = t.schedule_definition_id
