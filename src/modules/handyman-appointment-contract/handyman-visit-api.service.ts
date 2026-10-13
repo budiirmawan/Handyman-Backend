@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
-import { assertBuildingScopedResourceAccess, canAccessBuilding } from '../context-access';
+import { assertBuildingScopedResourceAccess, canAccessBuildingScopedResource } from '../context-access';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { insertHandymanVisitProposal, listHandymanVisitAppointments, type HandymanAppointmentRecord } from './handyman-appointment.repository';
 import type { VisitProposalBody } from './handyman-visit-api.validation';
@@ -40,7 +40,11 @@ export async function createVisitProposal(requestId: string, body: VisitProposal
       if (body.kind === 'INSPECTION') {
         if (req.status !== 'INSPECTION_REQUIRED') throw conflict('Request is not awaiting onsite inspection.');
         const active = await tx.query(`SELECT id FROM users WHERE id=$1 AND status='ACTIVE'`, [body.resourceId]);
-        if (!active.rows.length || !await canAccessBuilding(body.resourceId, req.buildingId)) {
+        // Apply the same exact Building + Client authority to the proposed
+        // resource as to the operator; a Building-only match is insufficient.
+        if (!active.rows.length || !await canAccessBuildingScopedResource(body.resourceId, {
+          clientId: req.clientId, buildingId: req.buildingId,
+        })) {
           throw conflict('Proposed inspector is not an active user assigned to this building.');
         }
         // Inspector skill verification remains a confirmation prerequisite; this is only a proposal.
