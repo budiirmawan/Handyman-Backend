@@ -1,5 +1,6 @@
 import { createHandymanFieldFeedRouter } from '../modules/handyman-field-feed/handyman-field-feed.routes';
 import { createHandymanVisitApiRouter } from '../modules/handyman-appointment-contract/handyman-visit-api.routes';
+import { createHandymanTenantSlotConsentRouter } from '../modules/handyman-appointment-contract/handyman-tenant-slot-consent.routes';
 import { createCareWorkspaceRouter } from '../modules/handyman-care-workspace/care-workspace.routes';
 import { Router } from 'express';
 import { createAreaRouter } from '../modules/areas/area.routes';
@@ -810,6 +811,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanOperationsQueueRouter());
   router.use(createHandymanLifecycleApiRouter());
   router.use(createHandymanVisitApiRouter()); // R1C — scoped appointment proposals only
+  router.use(createHandymanTenantSlotConsentRouter()); // PART 01D-2 — BM-signed slot choice ingest + fail-closed Ops confirm
   router.use(createHandymanFieldFeedRouter()); // R1D — scoped, read-only Crew/Inspector feed
   // CR-HM-04 PART 05A — provider/worker/crew surface (frozen F9): exactly
   // the existing PART 01–03 service operations (create/exact read/status/
