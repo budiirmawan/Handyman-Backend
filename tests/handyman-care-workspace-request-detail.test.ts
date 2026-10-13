@@ -28,6 +28,7 @@ import { admitCareWorkspace, revokeCareWorkspaceSession, signCareWorkspaceAssert
   type CareWorkspaceAssertion } from '../src/modules/handyman-care-workspace/care-workspace.service';
 import { issueCareCreateExchange } from '../src/modules/handyman-care-workspace/care-create-exchange.service';
 import { getCareWorkspaceRequestDetail } from '../src/modules/handyman-care-workspace/care-workspace-request-detail.service';
+import { getCareWorkspaceOperationalProjection } from '../src/modules/handyman-care-workspace/care-workspace-operational.service';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 import { createAdminUser } from './helpers/access';
@@ -52,6 +53,8 @@ const selection = () => ({ propertyId: properties[0], tenantCompanyId: tenantId,
 const unit = () => ({ ...selection(), spaceId: chains[0].spaceId });
 const get = (id = unitRequests[0], query: Record<string, unknown> = selection(), credential = token) =>
   api().get(`${path}/${id}`).set('Authorization', `Bearer ${credential}`).query(query as any);
+const getProjection = (id = unitRequests[0], query: Record<string, unknown> = unit(), credential = token) =>
+  api().get(`${path}/${id}/projection`).set('Authorization', `Bearer ${credential}`).query(query as any);
 function notFound(response: any) {
   assert.equal(response.status, 404, JSON.stringify(response.body));
   assert.equal(response.headers['cache-control'], 'no-store');
@@ -172,6 +175,38 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.equal(care.createdByUserId, null); assert.equal(care.executionScopeId, null);
     assert.equal(care.status, 'TRIAGE'); assert.equal(care.attribution.careActorId, actorId);
     assert.equal((await get(unitRequests[0].toUpperCase(), { ...unit(), tenantCompanyId: tenantId.toUpperCase() })).status, 200);
+  });
+
+  it('returns one bounded read-only operational projection under the exact Care request occupancy', async () => {
+    const response = await getProjection();
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.equal(response.headers['cache-control'], 'no-store');
+    const data = response.body.data;
+    assert.equal(data.readOnly, true);
+    assert.equal(data.request.id, unitRequests[0]);
+    assert.equal(data.request.tenantCompanyId, tenantId);
+    assert.equal(data.request.spaceId, chains[0].spaceId);
+    assert.equal(data.inspection, null);
+    assert.equal(data.quotation, null);
+    assert.deepEqual(data.scheduling.readiness, []);
+    assert.deepEqual(data.scheduling.appointments, []);
+    assert.deepEqual(data.quality.evidence, []);
+    assert.deepEqual(data.quality.qcRuns, []);
+    assert.deepEqual(data.quality.defects, []);
+    assert.deepEqual(data.bast, []);
+    assert.equal(data.invoicePayment.invoice, null);
+    assert.equal(data.invoicePayment.paymentStatus, null);
+    assert.deepEqual(data.invoicePayment.payments, []);
+    assert.equal(data.warranty, null);
+    assert.ok(Array.isArray(data.activityTimeline));
+    assert.ok(data.activityTimeline.length <= 100);
+    assert.ok(data.evaluatedAt);
+    assert.ok(!JSON.stringify(data).includes('private@example.com'));
+    assert.equal((await getProjection(unitRequests[0], { ...unit(), tenantCompanyId: newTenant })).status, 404);
+    assert.equal((await getProjection(unitRequests[0], unit(), otherToken)).status, 404);
+    assert.equal((await getProjection(unitRequests[0], { ...unit(), unexpected: 'value' })).status, 400);
+    assert.equal((await getCareWorkspaceOperationalProjection(token, unitRequests[0], unit(), { write: true })
+      .then(() => false, () => true)), true);
   });
 
   it('supports building-only requests without requiring a space relationship, but rejects a mismatched space selector', async () => {
@@ -335,7 +370,21 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.deepEqual(await counts(), before);
   });
 
-  it('documents only GET detail with explicit context and existing safe projection; adds no mutation or nested reads', async () => {
+  it('documents the bounded operational projection and payment-proof upload only on the Care session surface', async () => {
+    const spec = parseYaml(readFileSync('docs/api/openapi.yaml', 'utf8'));
+    const projection = spec.paths['/handyman/care/requests/{requestId}/projection'];
+    const proof = spec.paths['/handyman/care/requests/{requestId}/invoices/{invoiceId}/payments/{paymentId}/proof'];
+    assert.deepEqual(Object.keys(projection), ['get']);
+    assert.deepEqual(projection.get.security, [{ careWorkspaceSession: [] }]);
+    assert.deepEqual(proof.post.security, [{ careWorkspaceSession: [] }]);
+    assert.equal(proof.post.requestBody.content['multipart/form-data'].schema.$ref,
+      '#/components/schemas/CareHandymanPaymentProofUploadRequest');
+    assert.equal(spec.components.schemas.CareHandymanOperationalProjection.properties.readOnly.const, true);
+    assert.equal(spec.components.schemas.CareHandymanOperationalProjection.properties.activityTimeline.maxItems, 100);
+    assert.equal(spec.components.schemas.CareHandymanPaymentProofUploadRequest.properties.file.format, 'binary');
+  });
+
+  it('keeps request detail read-only with explicit context and the existing safe projection; adds no mutation or nested reads', async () => {
     for (const verb of ['post', 'patch', 'delete'] as const) {
       assert.equal((await api()[verb](`${path}/${unitRequests[0]}`).set('Authorization', `Bearer ${token}`).send(selection())).status, 404);
     }

@@ -17,7 +17,7 @@ import {
   evidenceStorageKey,
   isEvidenceStorageKey,
 } from './storage';
-import { loadEvidenceExecution, toPublicEvidence } from './evidence.service';
+import { EVIDENCE_MIME_BY_TYPE, loadEvidenceExecution, toPublicEvidence } from './evidence.service';
 import { recordFindingEvent } from '../finding-history';
 import { recordOperationalEvent } from '../operational-events';
 import {
@@ -57,11 +57,7 @@ const upload = multer({
   limits: { fileSize: MAX_EVIDENCE_FILE_BYTES, files: 1 },
 });
 
-export const MIME_BY_EVIDENCE_TYPE: Record<string, readonly string[]> = {
-  PHOTO: ['image/jpeg', 'image/png', 'image/webp'],
-  SIGNATURE: ['image/png', 'image/svg+xml'],
-  DOCUMENT: ['application/pdf', 'image/jpeg', 'image/png'],
-};
+export const MIME_BY_EVIDENCE_TYPE = EVIDENCE_MIME_BY_TYPE;
 
 // CR-BE-DOC-CONTROL-01 PART 05: the shared BE-07 mapper is the single
 // public evidence shape (now including the additive integrity + retention
@@ -83,12 +79,18 @@ async function loadEvidence(evidenceId: string, userId: string) {
   }
 
   const row = result.rows[0];
+  // Payment proof is visible only through the selected Care workspace scope;
+  // the generic User evidence surface has no tenant-signatory authority.
+  if (row.execution_type === 'HANDYMAN_CUSTOMER_PAYMENT') {
+    throw AppError.notFound('Evidence not found.');
+  }
   const clientIds = await contextAccessService.getAccessibleClientIds(userId);
   if (!clientIds.includes(row.client_id as string)) {
     throw buildingAccessDeniedError();
   }
   if (['FINDING', 'FINDING_REWORK', 'FINDING_VERIFICATION'].includes(row.execution_type as string)) {
-    await loadEvidenceExecution(row.execution_type as string, row.execution_id as string, userId);
+    const execution = await loadEvidenceExecution(row.execution_type as string, row.execution_id as string, userId);
+    if (execution.client_id !== row.client_id) throw AppError.notFound('Evidence not found.');
   }
   // CR-HM-SEC-02 PART 03 (PART 00A frozen decision D7) — HANDYMAN_REQUEST
   // evidence inherits authorization from its parent Handyman request. The
@@ -166,6 +168,9 @@ export function createEvidenceFileRouter(): Router {
       try {
         const evidenceId = p(req.params.evidenceId);
         const row = await loadEvidence(evidenceId, req.auth.userId);
+        if (row.execution_type === 'HANDYMAN_CUSTOMER_PAYMENT') {
+          throw AppError.badRequest('Handyman payment proof must be uploaded through its bound Care workspace route.');
+        }
         // CR-BE-DOC-CONTROL-01 PART 04: a purged tombstone is terminal —
         // it can never regain a stored file.
         if (row.retention_state === 'PURGED') {

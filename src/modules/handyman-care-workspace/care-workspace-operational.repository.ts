@@ -1,0 +1,411 @@
+import { getPool } from '../../database';
+import type { CareWorkspacePrincipal } from './care-workspace.service';
+import { WORKSPACE_OCCUPANCY_CTES } from './care-workspace-occupancies.repository';
+
+export type CareOperationalSelection = {
+  propertyId: string;
+  tenantCompanyId: string;
+  buildingId: string;
+  spaceId: string | null;
+};
+
+/**
+ * One-statement, selected-request Care projection over existing Handyman
+ * authorities. Every child query binds to the matched request/client/scope;
+ * all collections are independently capped before JSON aggregation. It is a
+ * SELECT-only composition and contains no lifecycle commands or caller money.
+ */
+async function readOperationalProjection(
+  principal: CareWorkspacePrincipal,
+  requestId: string,
+  selection: CareOperationalSelection,
+) {
+  const result = await getPool().query<{
+    authenticated: boolean;
+    evaluatedAt: Date;
+    data: Record<string, unknown> | null;
+  }>(`
+    ${WORKSPACE_OCCUPANCY_CTES}, selected AS (
+      SELECT r.id AS "requestId", r.client_id AS "clientId",
+             r.tenant_company_id AS "tenantCompanyId",
+             r.building_id AS "buildingId", r.space_id AS "spaceId",
+             r.status AS "requestStatus", r.created_at AS "createdAt",
+             r.updated_at AS "updatedAt", es.id AS "executionScopeId"
+        FROM handyman_service_requests r
+        LEFT JOIN handyman_execution_scopes es
+          ON es.handyman_request_id = r.id AND es.client_id = r.client_id
+       WHERE $5::text IS NULL AND $6::integer = 1
+         AND r.id = $10
+         AND r.tenant_company_id = $7
+         AND r.building_id = $8
+         AND r.space_id IS NOT DISTINCT FROM $9::uuid
+         AND EXISTS (
+           SELECT 1 FROM records c
+            WHERE c."clientId" = r.client_id
+              AND c."tenantCompanyId" = r.tenant_company_id
+              AND c."buildingId" = r.building_id
+              AND c."spaceId" IS NOT DISTINCT FROM r.space_id
+         )
+       LIMIT 1
+    )
+    SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,
+      statement_timestamp() AS "evaluatedAt",
+      (SELECT jsonb_build_object(
+        'readOnly', TRUE,
+        'request', jsonb_build_object(
+          'id', s."requestId", 'clientId', s."clientId",
+          'tenantCompanyId', s."tenantCompanyId", 'buildingId', s."buildingId",
+          'spaceId', s."spaceId", 'status', s."requestStatus",
+          'executionScopeId', s."executionScopeId",
+          'createdAt', s."createdAt", 'updatedAt', s."updatedAt"),
+        'inspection', (
+          SELECT jsonb_build_object(
+            'id', x.id, 'result', x.inspection_result,
+            'notes', x.inspection_notes, 'inspectedAt', x.inspected_at)
+            FROM handyman_request_inspections x
+           WHERE x.handyman_request_id = s."requestId"
+             AND x.client_id = s."clientId"
+           LIMIT 1),
+        'quotation', (
+          SELECT jsonb_build_object(
+            'id', q.id, 'createdAt', q.created_at,
+            'versions', COALESCE((
+              SELECT jsonb_agg(v.item ORDER BY v.version_number DESC)
+                FROM (
+                  SELECT v.version_number,
+                    jsonb_build_object(
+                      'id', v.id, 'versionNumber', v.version_number,
+                      'status', v.status, 'validUntil', v.valid_until,
+                      'createdAt', v.created_at,
+                      'decision', d.decision, 'decidedAt', d.decided_at,
+                      'lines', COALESCE((
+                        SELECT jsonb_agg(l.item ORDER BY l.created_at, l.id)
+                          FROM (
+                            SELECT ql.id, ql.created_at,
+                              jsonb_build_object(
+                                'id', ql.id, 'lineType', ql.line_type,
+                                'description', ql.description,
+                                'quantity', ql.quantity::text, 'uomId', ql.uom_id,
+                                'unitAmount', ql.final_quoted_unit_amount::numeric(18,2)::text,
+                                'lineTotal', ql.line_total::numeric(18,2)::text,
+                                'currency', ql.currency) AS item
+                              FROM handyman_quotation_lines ql
+                             WHERE ql.quotation_version_id = v.id
+                             ORDER BY ql.created_at, ql.id LIMIT 100
+                          ) l), '[]'::jsonb)) AS item
+                    FROM handyman_quotation_versions v
+                    LEFT JOIN handyman_quotation_decisions d
+                      ON d.quotation_version_id = v.id
+                   WHERE v.quotation_id = q.id
+                   ORDER BY v.version_number DESC LIMIT 20
+                ) v), '[]'::jsonb))
+            FROM handyman_quotations q
+           WHERE q.handyman_request_id = s."requestId"
+             AND q.client_id = s."clientId"
+           LIMIT 1),
+        'scheduling', jsonb_build_object(
+          'readiness', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', sr.id, 'status', sr.status, 'timezone', sr.timezone,
+              'preferredWindowStart', sr.preferred_window_start,
+              'preferredWindowEnd', sr.preferred_window_end,
+              'changeReason', sr.change_reason, 'createdAt', sr.created_at,
+              'updatedAt', sr.updated_at)
+              ORDER BY sr.created_at DESC, sr.id DESC)
+              FROM (SELECT * FROM handyman_scheduling_readiness
+                     WHERE handyman_request_id = s."requestId"
+                       AND client_id = s."clientId"
+                     ORDER BY created_at DESC, id DESC LIMIT 50) sr
+          ), '[]'::jsonb),
+          'appointments', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', a.id, 'kind', a.kind, 'startAt', a.start_at,
+              'endAt', a.end_at, 'timezone', a.timezone, 'state', a.state,
+              'version', a.version, 'confirmedAt', a.confirmed_at,
+              'cancelledAt', a.cancelled_at, 'createdAt', a.created_at,
+              'updatedAt', a.updated_at)
+              ORDER BY a.created_at DESC, a.id DESC)
+              FROM (SELECT * FROM handyman_visit_appointments
+                     WHERE handyman_request_id = s."requestId"
+                       AND client_id = s."clientId"
+                       AND tenant_company_id = s."tenantCompanyId"
+                       AND building_id = s."buildingId"
+                       AND (execution_scope_id IS NULL
+                         OR execution_scope_id = s."executionScopeId")
+                     ORDER BY created_at DESC, id DESC LIMIT 50) a
+          ), '[]'::jsonb)),
+        'quality', jsonb_build_object(
+          'evidence', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', e.id, 'stage', e.stage, 'description', e.description,
+              'createdAt', e.created_at, 'files', COALESCE((
+                SELECT jsonb_agg(jsonb_build_object(
+                  'id', f.id, 'mediaKind', f.media_kind,
+                  'contentType', f.content_type, 'byteSize', f.byte_size,
+                  'sha256Digest', f.sha256_digest, 'captureTime', f.capture_time,
+                  'createdAt', f.created_at)
+                  ORDER BY f.created_at, f.id)
+                  FROM (SELECT * FROM handyman_evidence_record_files
+                         WHERE record_id = e.id
+                         ORDER BY created_at, id LIMIT 25) f), '[]'::jsonb))
+              ORDER BY e.created_at DESC, e.id DESC)
+              FROM (SELECT * FROM handyman_evidence_records
+                     WHERE execution_scope_id = s."executionScopeId"
+                       AND client_id = s."clientId"
+                     ORDER BY created_at DESC, id DESC LIMIT 50) e
+          ), '[]'::jsonb),
+          'qcRuns', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', qr.id, 'status', qr.status,
+              'checklistIdentity', qr.checklist_identity,
+              'createdAt', qr.created_at, 'updatedAt', qr.updated_at,
+              'items', COALESCE((
+                SELECT jsonb_agg(jsonb_build_object(
+                  'id', qi.id, 'itemKey', qi.item_key,
+                  'outcome', qi.outcome, 'note', qi.note,
+                  'createdAt', qi.created_at, 'updatedAt', qi.updated_at)
+                  ORDER BY qi.created_at, qi.id)
+                  FROM (SELECT * FROM handyman_qc_run_items
+                         WHERE run_id = qr.id
+                         ORDER BY created_at, id LIMIT 100) qi), '[]'::jsonb))
+              ORDER BY qr.created_at DESC, qr.id DESC)
+              FROM (SELECT * FROM handyman_qc_runs
+                     WHERE execution_scope_id = s."executionScopeId"
+                       AND client_id = s."clientId"
+                     ORDER BY created_at DESC, id DESC LIMIT 50) qr
+          ), '[]'::jsonb),
+          'defects', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', d.id, 'status', d.status, 'description', d.description,
+              'createdAt', d.created_at, 'updatedAt', d.updated_at)
+              ORDER BY d.created_at DESC, d.id DESC)
+              FROM (SELECT * FROM handyman_defect_records
+                     WHERE execution_scope_id = s."executionScopeId"
+                       AND client_id = s."clientId"
+                     ORDER BY created_at DESC, id DESC LIMIT 50) d
+          ), '[]'::jsonb)),
+        'bast', COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', b.id, 'status', b.status, 'issuedAt', b.issued_at,
+            'acceptedAt', b.accepted_at, 'rejectedAt', b.rejected_at,
+            'voidedAt', b.voided_at, 'createdAt', b.created_at,
+            'events', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'eventType', be.event_type, 'occurredAt', be.occurred_at)
+                ORDER BY be.occurred_at, be.id)
+                FROM (SELECT * FROM handyman_bast_events
+                       WHERE bast_id = b.id AND client_id = s."clientId"
+                       ORDER BY occurred_at, id LIMIT 50) be), '[]'::jsonb),
+            'signOffs', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'decision', so.decision, 'rejectReason', so.reject_reason,
+                'createdAt', so.created_at)
+                ORDER BY so.created_at, so.id)
+                FROM (SELECT * FROM handyman_bast_sign_offs
+                       WHERE bast_id = b.id AND client_id = s."clientId"
+                       ORDER BY created_at, id LIMIT 10) so), '[]'::jsonb))
+            ORDER BY b.created_at DESC, b.id DESC)
+            FROM (SELECT * FROM handyman_bast_documents
+                   WHERE execution_scope_id = s."executionScopeId"
+                     AND client_id = s."clientId"
+                   ORDER BY created_at DESC, id DESC LIMIT 10) b
+        ), '[]'::jsonb),
+        'invoicePayment', jsonb_build_object(
+          'invoice', (
+            SELECT jsonb_build_object(
+              'id', i.id, 'invoiceNumber', i.invoice_number,
+              'invoiceDate', i.invoice_date, 'dueDate', i.due_date,
+              'status', i.status,
+              'totalAmount', i.total_amount::numeric(18,2)::text,
+              'currencyCode', i.currency_code,
+              'createdAt', i.created_at, 'updatedAt', i.updated_at,
+              'lines', COALESCE((
+                SELECT jsonb_agg(jsonb_build_object(
+                  'id', il.id, 'sourceType', il.source_type,
+                  'handymanChargeLineId', il.handyman_charge_line_id,
+                  'amount', il.amount_snapshot::numeric(18,2)::text,
+                  'currencyCode', il.currency_code,
+                  'createdAt', il.created_at)
+                  ORDER BY il.created_at, il.id)
+                  FROM (SELECT * FROM tenant_invoice_lines
+                         WHERE invoice_id = i.id
+                         ORDER BY created_at, id LIMIT 100) il), '[]'::jsonb))
+              FROM tenant_invoices i
+             WHERE i.handyman_execution_scope_id = s."executionScopeId"
+               AND i.client_id = s."clientId"
+             LIMIT 1),
+          'paymentStatus', (
+            SELECT jsonb_build_object(
+              'status', CASE
+                WHEN i.status = 'CANCELLED' THEN 'CANCELLED'
+                WHEN i.status <> 'FINALIZED' THEN 'NOT_DERIVED'
+                WHEN GREATEST(i.total_amount - COALESCE(a.applied, 0), 0) = 0 THEN 'PAID'
+                WHEN i.due_date < (statement_timestamp() AT TIME ZONE 'UTC')::date THEN 'OVERDUE'
+                WHEN COALESCE(a.applied, 0) > 0 THEN 'PARTIALLY_PAID'
+                ELSE 'UNPAID' END,
+              'invoiceTotal', i.total_amount::numeric(18,2)::text,
+              'allocatedAmount', COALESCE(a.allocated, 0)::numeric(18,2)::text,
+              'reversedAllocationAmount', COALESCE(a.reversed, 0)::numeric(18,2)::text,
+              'appliedAmount', COALESCE(a.applied, 0)::numeric(18,2)::text,
+              'outstandingAmount', GREATEST(i.total_amount - COALESCE(a.applied, 0), 0)::numeric(18,2)::text,
+              'currencyCode', i.currency_code,
+              'evaluatedAt', statement_timestamp())
+              FROM tenant_invoices i
+              LEFT JOIN LATERAL (
+                SELECT COALESCE(SUM(a.amount), 0) AS allocated,
+                       COALESCE(SUM(a.amount) FILTER (WHERE rev.source_allocation_id IS NOT NULL), 0) AS reversed,
+                       COALESCE(SUM(a.amount) FILTER (WHERE rev.source_allocation_id IS NULL), 0) AS applied
+                  FROM tenant_invoice_lines il
+                  JOIN handyman_payment_allocations a
+                    ON a.charge_line_id = il.handyman_charge_line_id
+                  JOIN handyman_customer_payments p
+                    ON p.id = a.payment_id AND p.status = 'CONFIRMED'
+                  LEFT JOIN handyman_ledger_corrections rev
+                    ON rev.correction_kind = 'REVERSAL'
+                   AND rev.source_allocation_id = a.id
+                 WHERE il.invoice_id = i.id
+                   AND il.source_type = 'HANDYMAN_CHARGE'
+              ) a ON TRUE
+             WHERE i.handyman_execution_scope_id = s."executionScopeId"
+               AND i.client_id = s."clientId"
+             LIMIT 1),
+          'payments', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', p.id, 'status', p.status, 'amount', p.amount::numeric(18,2)::text,
+              'currency', p.currency, 'channel', p.channel, 'receivedAt', p.received_at,
+              'allocatedToInvoice', COALESCE(a.applied, 0)::numeric(18,2)::text,
+              'proofs', COALESCE((
+                SELECT jsonb_agg(jsonb_build_object(
+                  'id', e.id, 'evidenceType', e.evidence_type,
+                  'originalFileName', e.original_file_name, 'mimeType', e.mime_type,
+                  'fileSize', e.file_size, 'contentSha256', e.content_sha256,
+                  'status', e.status, 'createdAt', e.created_at)
+                  ORDER BY e.created_at, e.id)
+                  FROM (SELECT * FROM evidence_submissions
+                         WHERE execution_type = 'HANDYMAN_CUSTOMER_PAYMENT'
+                           AND execution_id = p.id AND status = 'ACTIVE'
+                           AND content_sha256 IS NOT NULL
+                         ORDER BY created_at, id LIMIT 1) e), '[]'::jsonb))
+              ORDER BY p.received_at DESC, p.id DESC)
+              FROM (SELECT * FROM handyman_customer_payments
+                     WHERE transaction_id = (
+                       SELECT tx.id FROM handyman_customer_transactions tx
+                        WHERE tx.execution_scope_id = s."executionScopeId"
+                          AND tx.client_id = s."clientId")
+                       AND client_id = s."clientId"
+                     ORDER BY received_at DESC, id DESC LIMIT 50) p
+              LEFT JOIN LATERAL (
+                SELECT COALESCE(SUM(a.amount) FILTER (WHERE rev.source_allocation_id IS NULL), 0) AS applied
+                  FROM handyman_payment_allocations a
+                  LEFT JOIN handyman_ledger_corrections rev
+                    ON rev.correction_kind = 'REVERSAL'
+                   AND rev.source_allocation_id = a.id
+                 WHERE a.payment_id = p.id
+                   AND a.charge_line_id IN (
+                     SELECT il.handyman_charge_line_id FROM tenant_invoice_lines il
+                      JOIN tenant_invoices i ON i.id = il.invoice_id
+                     WHERE i.handyman_execution_scope_id = s."executionScopeId"
+                       AND i.client_id = s."clientId"
+                       AND il.source_type = 'HANDYMAN_CHARGE')
+              ) a ON TRUE
+          ), '[]'::jsonb)),
+        'warranty', (
+          SELECT jsonb_build_object(
+            'id', w.id, 'status', w.status, 'startsAt', w.starts_at,
+            'expiredAt', w.expired_at, 'bastAcceptedAt', w.bast_accepted_at,
+            'coverages', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object('type', c.coverage_type)
+                ORDER BY c.coverage_type)
+                FROM (SELECT * FROM handyman_service_warranty_coverages
+                       WHERE warranty_id = w.id AND client_id = s."clientId"
+                       ORDER BY coverage_type LIMIT 10) c), '[]'::jsonb),
+            'claims', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'id', cl.id, 'status', cl.status, 'claimNote', cl.claim_note,
+                'submittedAt', cl.submitted_at, 'decidedAt', cl.decided_at,
+                'decisionNote', cl.decision_note, 'withdrawnAt', cl.withdrawn_at,
+                'createdAt', cl.created_at)
+                ORDER BY cl.created_at DESC, cl.id DESC)
+                FROM (SELECT * FROM handyman_service_warranty_claims
+                       WHERE warranty_id = w.id AND client_id = s."clientId"
+                       ORDER BY created_at DESC, id DESC LIMIT 50) cl), '[]'::jsonb),
+            'reworks', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'id', rw.id, 'status', rw.status, 'scopeNote', rw.scope_note,
+                'proposedAt', rw.proposed_at, 'authorizedAt', rw.authorized_at,
+                'startedAt', rw.started_at, 'completedAt', rw.completed_at,
+                'completionNote', rw.completion_note, 'verifiedAt', rw.verified_at)
+                ORDER BY rw.created_at DESC, rw.id DESC)
+                FROM (SELECT * FROM handyman_service_warranty_reworks
+                       WHERE warranty_id = w.id AND client_id = s."clientId"
+                       ORDER BY created_at DESC, id DESC LIMIT 50) rw), '[]'::jsonb))
+            FROM handyman_service_warranties w
+           WHERE w.execution_scope_id = s."executionScopeId"
+             AND w.client_id = s."clientId"
+           LIMIT 1),
+        'activityTimeline', COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', e.id, 'eventType', e.event_type,
+            'entityType', e.entity_type, 'entityId', e.entity_id,
+            'summary', e.summary, 'occurredAt', e.occurred_at)
+            ORDER BY e.occurred_at DESC, e.id DESC)
+            FROM (
+              SELECT oe.id, oe.event_type, oe.entity_type, oe.entity_id,
+                     oe.summary, oe.occurred_at
+                FROM operational_events oe
+               WHERE oe.client_id = s."clientId"
+                 AND oe.building_id = s."buildingId"
+                 AND (oe.entity_type LIKE 'HANDYMAN_%'
+                   OR oe.entity_type IN ('TENANT_INVOICE', 'EVIDENCE_SUBMISSION'))
+                 AND oe.entity_id IN (
+                   SELECT s."requestId"
+                   UNION SELECT s."executionScopeId" WHERE s."executionScopeId" IS NOT NULL
+                   UNION SELECT x.id FROM handyman_request_inspections x
+                    WHERE x.handyman_request_id = s."requestId" AND x.client_id = s."clientId"
+                   UNION SELECT q.id FROM handyman_quotations q WHERE q.handyman_request_id = s."requestId"
+                   UNION SELECT v.id FROM handyman_quotation_versions v
+                     JOIN handyman_quotations q ON q.id = v.quotation_id
+                    WHERE q.handyman_request_id = s."requestId"
+                   UNION SELECT sr.id FROM handyman_scheduling_readiness sr
+                    WHERE sr.handyman_request_id = s."requestId"
+                   UNION SELECT a.id FROM handyman_visit_appointments a
+                    WHERE a.handyman_request_id = s."requestId" AND a.client_id = s."clientId"
+                   UNION SELECT e.id FROM handyman_evidence_records e
+                    WHERE e.execution_scope_id = s."executionScopeId" AND e.client_id = s."clientId"
+                   UNION SELECT qr.id FROM handyman_qc_runs qr
+                    WHERE qr.execution_scope_id = s."executionScopeId" AND qr.client_id = s."clientId"
+                   UNION SELECT d.id FROM handyman_defect_records d
+                    WHERE d.execution_scope_id = s."executionScopeId" AND d.client_id = s."clientId"
+                   UNION SELECT b.id FROM handyman_bast_documents b
+                    WHERE b.execution_scope_id = s."executionScopeId" AND b.client_id = s."clientId"
+                   UNION SELECT i.id FROM tenant_invoices i
+                    WHERE i.handyman_execution_scope_id = s."executionScopeId"
+                   UNION SELECT w.id FROM handyman_service_warranties w
+                    WHERE w.execution_scope_id = s."executionScopeId"
+                   UNION SELECT wc.id FROM handyman_service_warranty_claims wc
+                    JOIN handyman_service_warranties w ON w.id = wc.warranty_id
+                    WHERE w.execution_scope_id = s."executionScopeId" AND wc.client_id = s."clientId"
+                   UNION SELECT rw.id FROM handyman_service_warranty_reworks rw
+                    JOIN handyman_service_warranties w ON w.id = rw.warranty_id
+                    WHERE w.execution_scope_id = s."executionScopeId" AND rw.client_id = s."clientId"
+                   UNION SELECT p.id FROM handyman_customer_payments p
+                     JOIN handyman_customer_transactions tx ON tx.id = p.transaction_id
+                    WHERE tx.execution_scope_id = s."executionScopeId"
+                   UNION SELECT e.id FROM evidence_submissions e
+                    WHERE e.execution_type = 'HANDYMAN_CUSTOMER_PAYMENT'
+                      AND e.execution_id IN (
+                        SELECT p.id FROM handyman_customer_payments p
+                          JOIN handyman_customer_transactions tx ON tx.id = p.transaction_id
+                         WHERE tx.execution_scope_id = s."executionScopeId")
+                 )
+               ORDER BY oe.occurred_at DESC, oe.id DESC LIMIT 100
+            ) e
+        ), '[]'::jsonb)
+      ) FROM selected s) AS data`,
+    [principal.sessionId, principal.careActorId, principal.integrationId,
+      selection.propertyId, null, 1, selection.tenantCompanyId,
+      selection.buildingId, selection.spaceId, requestId]);
+  return result.rows[0];
+}
+
+export const careWorkspaceOperationalRepository = { readOperationalProjection };

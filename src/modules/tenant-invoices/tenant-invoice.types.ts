@@ -3,7 +3,7 @@ export type TenantInvoiceStatus = (typeof TENANT_INVOICE_STATUSES)[number];
 export const isTenantInvoiceStatus = (value: unknown): value is TenantInvoiceStatus =>
   typeof value === 'string' && (TENANT_INVOICE_STATUSES as readonly string[]).includes(value);
 
-export const TENANT_INVOICE_SOURCE_TYPES = ['TENANT_CHARGE', 'UTILITY_BILL'] as const;
+export const TENANT_INVOICE_SOURCE_TYPES = ['TENANT_CHARGE', 'UTILITY_BILL', 'HANDYMAN_CHARGE'] as const;
 export type TenantInvoiceSourceType = (typeof TENANT_INVOICE_SOURCE_TYPES)[number];
 export const isTenantInvoiceSourceType = (value: unknown): value is TenantInvoiceSourceType =>
   typeof value === 'string' && (TENANT_INVOICE_SOURCE_TYPES as readonly string[]).includes(value);
@@ -12,6 +12,8 @@ export type TenantInvoiceRecord = {
   id: string; clientId: string; tenantCompanyId: string; buildingId: string;
   spaceId: string; invoiceNumber: string; invoiceDate: string; dueDate: string;
   status: TenantInvoiceStatus; subtotal: string; totalAmount: string;
+  /** Non-null only for a single-scope, Handyman-only invoice. */
+  handymanExecutionScopeId: string | null;
   /** One exact header currency; NULL remains UNKNOWN for legacy drafts. */
   currencyCode: string | null;
   notes: string | null; createdByUserId: string; finalizedAt: Date | null;
@@ -21,6 +23,7 @@ export type TenantInvoiceRecord = {
 export type TenantInvoiceLineRecord = {
   id: string; invoiceId: string; sourceType: TenantInvoiceSourceType;
   tenantChargeId: string | null; utilityBillId: string | null;
+  handymanChargeLineId: string | null;
   amountSnapshot: string; currencyCode: string | null; createdAt: Date;
 };
 export type PublicTenantInvoiceLine = Omit<TenantInvoiceLineRecord, 'amountSnapshot' | 'createdAt'> & {
@@ -47,8 +50,9 @@ export type AddTenantInvoiceLineInput = {
 };
 export type NewTenantInvoiceLine = {
   invoiceId: string; sourceType: TenantInvoiceSourceType;
-  tenantChargeId: string | null; utilityBillId: string | null; amountSnapshot: string;
-  currencyCode: string;
+  tenantChargeId: string | null; utilityBillId: string | null;
+  handymanChargeLineId: string | null; handymanExecutionScopeId?: string | null;
+  amountSnapshot: string; currencyCode: string;
 };
 export type UpdateTenantInvoiceInput = {
   invoiceDate?: string; dueDate?: string; notes?: string | null;

@@ -10,6 +10,7 @@ const SELECT = `id, client_id AS "clientId", tenant_company_id AS "tenantCompany
   building_id AS "buildingId", space_id AS "spaceId", invoice_number AS "invoiceNumber",
   invoice_date::text AS "invoiceDate", due_date::text AS "dueDate", status,
   subtotal::text AS subtotal, total_amount::text AS "totalAmount",
+  handyman_execution_scope_id AS "handymanExecutionScopeId",
   currency_code AS "currencyCode", notes,
   created_by_user_id AS "createdByUserId", finalized_at AS "finalizedAt",
   finalized_by_user_id AS "finalizedByUserId", cancelled_at AS "cancelledAt",
@@ -17,6 +18,7 @@ const SELECT = `id, client_id AS "clientId", tenant_company_id AS "tenantCompany
   updated_at AS "updatedAt"`;
 const LINE_SELECT = `id, invoice_id AS "invoiceId", source_type AS "sourceType",
   tenant_charge_id AS "tenantChargeId", utility_bill_id AS "utilityBillId",
+  handyman_charge_line_id AS "handymanChargeLineId",
   amount_snapshot::text AS "amountSnapshot", currency_code AS "currencyCode",
   created_at AS "createdAt"`;
 type HistoryAction = 'CREATED' | 'UPDATED' | 'LINE_LINKED' | 'FINALIZED' | 'CANCELLED';
@@ -108,17 +110,32 @@ async function update(id: string, input: UpdateTenantInvoiceInput, actor: string
 }
 async function addLine(input: NewTenantInvoiceLine, actor: string): Promise<TenantInvoiceRecord | null> {
   return withTransaction(async (client) => {
-    const locked = await client.query<{ status: string }>(
-      `SELECT status FROM tenant_invoices WHERE id = $1 FOR UPDATE`, [input.invoiceId],
+    const locked = await client.query<{ status: string; handyman_execution_scope_id: string | null }>(
+      `SELECT status, handyman_execution_scope_id FROM tenant_invoices WHERE id = $1 FOR UPDATE`, [input.invoiceId],
     );
     if (locked.rows[0]?.status !== 'DRAFT') return null;
+    const currentScopeId = locked.rows[0].handyman_execution_scope_id;
+    if (input.handymanExecutionScopeId) {
+      if (currentScopeId && currentScopeId !== input.handymanExecutionScopeId) return null;
+      if (!currentScopeId) {
+        const bound = await client.query(
+          `UPDATE tenant_invoices SET handyman_execution_scope_id = $2, updated_at = NOW()
+            WHERE id = $1 AND handyman_execution_scope_id IS NULL`,
+          [input.invoiceId, input.handymanExecutionScopeId],
+        );
+        if (bound.rowCount !== 1) return null;
+      }
+    } else if (currentScopeId !== null) {
+      return null;
+    }
     await client.query(
       `INSERT INTO tenant_invoice_lines
          (id, invoice_id, source_type, tenant_charge_id, utility_bill_id,
-          amount_snapshot, currency_code)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          handyman_charge_line_id, amount_snapshot, currency_code)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [randomUUID(), input.invoiceId, input.sourceType, input.tenantChargeId,
-        input.utilityBillId, input.amountSnapshot, input.currencyCode],
+        input.utilityBillId, input.handymanChargeLineId, input.amountSnapshot,
+        input.currencyCode],
     );
     const result = await client.query<TenantInvoiceRecord>(
       `UPDATE tenant_invoices SET
@@ -132,10 +149,33 @@ async function addLine(input: NewTenantInvoiceLine, actor: string): Promise<Tena
   });
 }
 async function findLineBySource(sourceType: string, sourceId: string): Promise<TenantInvoiceLineRecord | null> {
-  const column = sourceType === 'TENANT_CHARGE' ? 'tenant_charge_id' : 'utility_bill_id';
+  const column = sourceType === 'TENANT_CHARGE' ? 'tenant_charge_id'
+    : sourceType === 'UTILITY_BILL' ? 'utility_bill_id'
+    : sourceType === 'HANDYMAN_CHARGE' ? 'handyman_charge_line_id' : null;
+  if (!column) return null;
   const result = await getPool().query<TenantInvoiceLineRecord>(
     `SELECT ${LINE_SELECT} FROM tenant_invoice_lines WHERE ${column} = $1`, [sourceId],
   );
+  return result.rows[0] ?? null;
+}
+async function findHandymanChargeLine(id: string): Promise<{
+  id: string; clientId: string; transactionId: string; executionScopeId: string;
+  tenantCompanyId: string; buildingId: string; spaceId: string | null;
+  currencyCode: string; amount: string;
+} | null> {
+  const result = await getPool().query<{
+    id: string; clientId: string; transactionId: string; executionScopeId: string;
+    tenantCompanyId: string; buildingId: string; spaceId: string | null;
+    currencyCode: string; amount: string;
+  }>(`SELECT cl.id, cl.client_id AS "clientId", cl.transaction_id AS "transactionId",
+             tx.execution_scope_id AS "executionScopeId",
+             es.tenant_company_id AS "tenantCompanyId", es.building_id AS "buildingId",
+             es.space_id AS "spaceId", cl.currency AS "currencyCode",
+             cl.amount::text AS amount
+        FROM handyman_charge_lines cl
+        JOIN handyman_customer_transactions tx ON tx.id = cl.transaction_id
+        JOIN handyman_execution_scopes es ON es.id = tx.execution_scope_id
+       WHERE cl.id = $1`, [id]);
   return result.rows[0] ?? null;
 }
 async function serviceReadinessForCharge(chargeId: string): Promise<boolean | null> {
@@ -157,12 +197,16 @@ async function finalize(id: string, actor: string): Promise<TenantInvoiceRecord 
          amount_snapshot = CASE
            WHEN source_type = 'TENANT_CHARGE' THEN
              (SELECT amount FROM tenant_charges WHERE id = l.tenant_charge_id)
-           ELSE (SELECT bill_amount FROM utility_bills WHERE id = l.utility_bill_id)
+           WHEN source_type = 'UTILITY_BILL' THEN
+             (SELECT bill_amount FROM utility_bills WHERE id = l.utility_bill_id)
+           ELSE (SELECT amount FROM handyman_charge_lines WHERE id = l.handyman_charge_line_id)
          END,
          currency_code = CASE
            WHEN source_type = 'TENANT_CHARGE' THEN
              (SELECT currency_code FROM tenant_charges WHERE id = l.tenant_charge_id)
-           ELSE (SELECT currency FROM utility_bills WHERE id = l.utility_bill_id)
+           WHEN source_type = 'UTILITY_BILL' THEN
+             (SELECT currency FROM utility_bills WHERE id = l.utility_bill_id)
+           ELSE (SELECT currency FROM handyman_charge_lines WHERE id = l.handyman_charge_line_id)
          END
        WHERE invoice_id = $1`, [id],
     );
@@ -191,6 +235,6 @@ async function cancel(id: string, actor: string): Promise<TenantInvoiceRecord | 
   });
 }
 export const tenantInvoiceRepository = {
-  addLine, cancel, create, finalize, findById, findLineBySource, list,
+  addLine, cancel, create, finalize, findById, findHandymanChargeLine, findLineBySource, list,
   listLines, serviceReadinessForCharge, update,
 };

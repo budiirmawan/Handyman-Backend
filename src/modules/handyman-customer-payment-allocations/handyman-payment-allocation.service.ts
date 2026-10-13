@@ -246,6 +246,29 @@ export async function allocateHandymanCustomerPayment(
       };
     }
 
+    // New Handyman invoice-bound payments may be allocated only through
+    // a charge line on that exact finalized, single-scope invoice. Legacy
+    // ledgers with no invoice binding retain their historical allocation
+    // behavior; once the scope is invoiced this gate is mandatory.
+    const invoiceRows = await tx.query(
+      `SELECT i.id, i.status,
+              EXISTS (
+                SELECT 1 FROM tenant_invoice_lines il
+                 WHERE il.invoice_id = i.id
+                   AND il.handyman_charge_line_id = $2
+              ) AS line_linked
+         FROM tenant_invoices i
+        WHERE i.handyman_execution_scope_id = $1
+        FOR SHARE`,
+      [scopeUuid, chargeLineUuid],
+    );
+    const invoice = invoiceRows.rows[0];
+    if (invoice && (invoice.status !== 'FINALIZED' || invoice.line_linked !== true)) {
+      throw handymanPaymentAllocationConflictError(
+        'charge-line-not-linked-to-finalized-handyman-invoice',
+      );
+    }
+
     // -------- one currency, always (no FX, no implicit rate) ------
     if (
       String(payment.currency) !== transaction.currency ||

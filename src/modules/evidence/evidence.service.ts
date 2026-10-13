@@ -15,6 +15,11 @@ import { dailyCleaningRepository } from '../daily-cleaning';
  */
 
 const EVIDENCE_TYPES = ['PHOTO', 'DOCUMENT', 'SIGNATURE'] as const;
+export const EVIDENCE_MIME_BY_TYPE: Record<string, readonly string[]> = {
+  PHOTO: ['image/jpeg', 'image/png', 'image/webp'],
+  SIGNATURE: ['image/png', 'image/svg+xml'],
+  DOCUMENT: ['application/pdf', 'image/jpeg', 'image/png'],
+};
 const EXECUTION_TYPES = [
   'FORM_INSTANCE',
   'CHECKLIST_EXECUTION',
@@ -197,6 +202,20 @@ export async function loadEvidenceExecution(
     result = await getPool().query<{ client_id: string; status: string; building_id: string }>(
       `SELECT f.client_id, r.status, f.building_id
        FROM finding_rework_cycles r JOIN findings f ON f.id = r.finding_id WHERE r.id = $1`, [executionId]);
+  } else if (executionType === 'HANDYMAN_CUSTOMER_PAYMENT') {
+    // Payment-proof evidence inherits the exact Handyman execution-scope
+    // Building and Customer context. The evidence row itself never carries
+    // a caller-selected tenant, invoice or Building authority.
+    result = await getPool().query<{ client_id: string; status: string; building_id: string }>(
+      `SELECT es.client_id, p.status, es.building_id
+         FROM handyman_customer_payments p
+         JOIN handyman_customer_transactions tx
+           ON tx.id = p.transaction_id AND tx.client_id = p.client_id
+         JOIN handyman_execution_scopes es
+           ON es.id = tx.execution_scope_id AND es.client_id = p.client_id
+         JOIN tenant_invoices i
+           ON i.handyman_execution_scope_id = es.id AND i.client_id = es.client_id
+        WHERE p.id = $1`, [executionId]);
   } else if (executionType === 'UTILITY_METER_READING') {
     /**
      * CR-BE-RN12-METER-FIELD-01 PART 02 — the BE-18F Reading Evidence parent.
