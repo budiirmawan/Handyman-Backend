@@ -9,6 +9,11 @@ import {
 } from '../handyman-sla-status-api';
 import type { HandymanOperationsQueueQuery } from './handyman-operations-queue.validation';
 
+/** CR-HM-DB-OPT-01 — max queue items whose status projection is resolved
+ * concurrently. Kept small relative to the default pool size (10) because each
+ * item's projection itself fans out several parallel point lookups. */
+const VISIBILITY_BATCH_SIZE = 4;
+
 export type HandymanOperationsQueueItem = {
   /** The authoritative Handyman request id; this is not a Work Order id. */
   handymanRequestId: string;
@@ -89,15 +94,25 @@ export async function listHandymanOperationsQueue(
     actorUserId,
   );
 
-  const items = await Promise.all(
-    page.items.map(async (request) => {
-      const visibility = await readHandymanRequestStatusVisibility(
-        actorUserId,
-        request.id,
-      );
-      return toHandymanOperationsQueueItem(request, visibility);
-    }),
-  );
+  // CR-HM-DB-OPT-01 PART 01 — the per-item status projection fans out many
+  // small point lookups. Resolving every page item in one unbounded
+  // Promise.all can stampede the shared pool (limit ≤ 50 items × ~25 queries).
+  // Resolve in small concurrent batches instead: identical output and order,
+  // bounded pool pressure.
+  const items: HandymanOperationsQueueItem[] = [];
+  for (let i = 0; i < page.items.length; i += VISIBILITY_BATCH_SIZE) {
+    const batch = page.items.slice(i, i + VISIBILITY_BATCH_SIZE);
+    const resolved = await Promise.all(
+      batch.map(async (request) => {
+        const visibility = await readHandymanRequestStatusVisibility(
+          actorUserId,
+          request.id,
+        );
+        return toHandymanOperationsQueueItem(request, visibility);
+      }),
+    );
+    items.push(...resolved);
+  }
 
   return {
     items,

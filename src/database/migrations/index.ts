@@ -1,6 +1,7 @@
 import { migration0431CreateHandymanVisitAppointments } from './0431_create_handyman_visit_appointments';
 import { migration0432HandymanChargeTenantInvoiceSource } from './0432_handyman_charge_tenant_invoice_source';
 import { migration0433HandymanCustomerPaymentProof } from './0433_handyman_customer_payment_proof';
+import { migration0434HandymanDbOptIndexes } from './0434_handyman_db_opt_indexes';
 import { migration0430BindCareCreateExchangePurpose } from './0430_bind_care_create_exchange_purpose';
 import { migration0429CreateHandymanCareWorkspaceSessions } from './0429_create_handyman_care_workspace_sessions';
 import { migration0001InitialFoundation } from './0001_initial_foundation';
@@ -900,4 +901,5 @@ export const migrations: readonly Migration[] = [
   migration0431CreateHandymanVisitAppointments,
   migration0432HandymanChargeTenantInvoiceSource,
   migration0433HandymanCustomerPaymentProof,
+  migration0434HandymanDbOptIndexes,
 ];
