@@ -24,7 +24,9 @@ Per `toTaskItem` + the data-level guard `safety_inspection_bindings_schedule_act
 | exactly 1 | its id |
 | >1 | unreachable via SQL inserts (unique guard); the service's `SAFETY_INSPECTION_BINDING_AMBIGUOUS` **409** remains as defense-in-depth above it |
 
-Non-ACTIVE bindings never count. Only the task's own schedule definition is considered (strict company/property scope preserved). `MIN` over a single-element set is that element, so the projection is deterministic; for 0 and >1 rows the cardinality guard yields `NULL` — ordering never affects the outcome.
+Non-ACTIVE bindings never count. Only the task's own schedule definition is considered (strict company/property scope preserved).
+
+**Lexicographical UUID selection is NOT intended.** The CR-BE-RN19 contract is explicit: *"the id is exposed only when exactly one ACTIVE binding exists. No LIMIT, rows[0], or winner ordering is used"* — the selection is cardinality-driven, not winner-driven. `MIN(id::text)::uuid` is therefore correct **not** because lexicographical min is wanted, but because MIN over a single-element set returns that element regardless of ordering, and the `CASE` guard discards the aggregate for 0 and >1 rows (NULL). The regression suite pins this decision with a discriminating case: for a deliberately ordered 2-uuid set, unguarded `MIN(x::text)::uuid` provably returns the lexicographically smaller uuid, while the guarded contract expression returns `NULL` — the code never observes MIN's ordering. (For >1 rows the service would additionally surface 409 `SAFETY_INSPECTION_BINDING_AMBIGUOUS`; such rows are unreachable via inserts due to the partial unique guard.)
 
 ## 3. Fix (smallest correct change)
 
@@ -37,7 +39,7 @@ One expression changed (`MIN(sib_row.id)` → `MIN(sib_row.id::text)::uuid`), ma
 ## 4. Verification (isolated PostgreSQL 16.14)
 
 **Regression test** `tests/mobile-assign-uuid-01-min-uuid.test.ts` (6/6 green; red pre-fix):
-- reproduces `min(uuid)` parse error and pins the fixed form's NULL/id/NULL semantics for 0/1/2-row sets (VALUES-based) and on the real table (INACTIVE ignored; second ACTIVE rejected by the partial unique guard);
+- reproduces `min(uuid)` parse error and pins the fixed form's NULL/id/NULL semantics for 0/1/2-row sets (VALUES-based), including the **discriminating multi-row case** proving lexicographical min is never observed (unguarded MIN returns the smaller uuid; the guarded contract expression returns NULL), and on the real table (INACTIVE ignored; second ACTIVE rejected by the partial unique guard);
 - endpoint returns 200 with the marker per cardinality (was 500);
 - company/property isolation: cross-company task + its binding never leak and never break the feed;
 - empty case (scoped user, no assignments) → `200 []`;

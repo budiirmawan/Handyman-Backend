@@ -361,6 +361,36 @@ describe('CR-HM-MOBILE-ASSIGN-UUID-01 — min(uuid) regression', () => {
       'a two-element set must project NULL (guard keeps the id hidden)',
     );
 
+    // CR-HM-MOBILE-ASSIGN-UUID-01 semantics decision: lexicographical UUID
+    // selection is NOT intended (the CR-BE-RN19 contract exposes the id only
+    // for exactly one ACTIVE binding — "no winner ordering"). Demonstrate
+    // that MIN(x::text)::uuid by itself *would* select the lexicographically
+    // smaller uuid for a 2-row set, but the guarded contract expression never
+    // observes that ordering: it must project NULL instead of the min.
+    const lo = '00000000-0000-4000-8000-000000000001';
+    const hi = 'ffffffff-ffff-4fff-bfff-ffffffffffff';
+    const unguarded = await q<{ winner: string }>(
+      `SELECT MIN(x::text)::uuid AS winner
+         FROM (VALUES ($1::uuid), ($2::uuid)) AS t(x)`,
+      [hi, lo], // input order deliberately reversed
+    );
+    assert.equal(
+      unguarded.rows[0]!.winner,
+      lo,
+      'unguarded MIN(id::text)::uuid does lexicographical selection — this is NOT the contract',
+    );
+    projected = await q(
+      `SELECT COUNT(*)::INTEGER AS n,
+              CASE WHEN COUNT(*) = 1 THEN MIN(x::text)::uuid ELSE NULL END AS projected_id
+         FROM (VALUES ($1::uuid), ($2::uuid)) AS t(x)`,
+      [hi, lo],
+    );
+    assert.equal(
+      projected.rows[0]!.projected_id,
+      null,
+      'the contract expression must NOT return the lexicographical min for multi-row sets',
+    );
+
     // Real-table behavior: INACTIVE bindings never count, and the data-level
     // guard (partial unique) makes >1 ACTIVE bindings unreachable — the
     // 409 SAFETY_INSPECTION_BINDING_AMBIGUOUS path is defense-in-depth above it.
