@@ -25,6 +25,11 @@ export const migration0445BindHandymanBastToQcPass: Migration = {
             AND NEW.status IN ('ISSUED', 'ACCEPTED');
         END IF;
         IF needs_qc_guard THEN
+          -- Mirror the service's scope-row lock even for direct SQL writes.
+          -- An UPDATE does not take a scope FK lock; without this a new QC
+          -- OPEN could commit concurrently with ISSUE/ACCEPT verification.
+          PERFORM id FROM handyman_execution_scopes
+            WHERE id = NEW.execution_scope_id FOR UPDATE;
           IF NEW.qc_run_id IS NULL OR NOT EXISTS (
             SELECT 1 FROM handyman_qc_runs r
             JOIN handyman_qc_checklist_specs s

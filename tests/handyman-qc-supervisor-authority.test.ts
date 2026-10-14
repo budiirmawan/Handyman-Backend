@@ -1064,3 +1064,37 @@ describe('BAST QC byte integrity and migration compatibility', () => {
     }
   });
 });
+
+describe('database BAST QC gate serializes direct transitions', () => {
+  it('blocks an ISSUE UPDATE behind the QC scope lock and rejects a stale head', async () => {
+    const f = await fixture();
+    await passedRun(f);
+    const prepared = await prepareHandymanBast(adminId, {
+      executionScopeId: f.scope.id, idempotencyKey: key(),
+    });
+    const locker = await getPool().connect();
+    const writer = await getPool().connect();
+    try {
+      await locker.query('BEGIN');
+      await locker.query(`SELECT id FROM handyman_execution_scopes
+        WHERE id=$1 FOR UPDATE`, [f.scope.id]);
+      await writer.query('BEGIN');
+      await writer.query(`SET LOCAL lock_timeout = '150ms'`);
+      await assert.rejects(writer.query(`UPDATE handyman_bast_documents
+        SET status='ISSUED' WHERE id=$1`, [prepared.bast.id]),
+      (e) => code(e) === '55P03');
+    } finally {
+      await writer.query('ROLLBACK');
+      await locker.query('ROLLBACK');
+      writer.release();
+      locker.release();
+    }
+    await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    await assert.rejects(getPool().query(`UPDATE handyman_bast_documents
+      SET status='ISSUED' WHERE id=$1`, [prepared.bast.id]),
+    (e) => code(e) === '23514');
+    assert.equal((await getPool().query(`SELECT status
+      FROM handyman_bast_documents WHERE id=$1`,
+    [prepared.bast.id])).rows[0].status, 'DRAFT');
+  });
+});

@@ -23,4 +23,4 @@ Backend branch `arena/c4e0d6f4-handyman-backend`, based on `37e62ca` (P0-A, **no
 
 ## Validation and delivery
 
-Commits (in order): `37e62ca` preexisting P0-A, `f509ad1` QC authority/manifest baseline (`0442`), `597da9b` defects and variation consumption (`0443`), `d081b79` immutable version publishing/binding (`0444`), `1569675` latest QC PASS → BAST provenance and reinspection run binding (`0445`). Focused disposable embedded-PostgreSQL suite: **22/22 pass** (`tests/handyman-qc-supervisor-authority.test.ts`); `npm run typecheck` and `git diff --check` pass. No production migration/deployment or PR merge was performed in this work.
+Commits (in order): `37e62ca` preexisting P0-A, `f509ad1` QC authority/manifest baseline (`0442`), `597da9b` defects and variation consumption (`0443`), `d081b79` immutable version publishing/binding (`0444`), `1569675` latest QC PASS → BAST provenance and reinspection run binding (`0445`). Focused disposable embedded-PostgreSQL suite: **23/23 pass** (`tests/handyman-qc-supervisor-authority.test.ts`); `npm run typecheck` and `git diff --check` pass. No production migration/deployment or PR merge was performed in this work.
