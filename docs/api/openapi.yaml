@@ -6805,12 +6805,135 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/clients/{clientId}/qc-checklist-versions:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: publishHandymanQcChecklistVersion
+      summary: Publish an immutable, nonempty Client QC checklist version
+      description: "Requires handyman.qc.configure and Client access. Version numbers are sequential per Client/code; existing identical version replays, changing keys conflicts. Publishing never retroactively approves a run."
+      x-required-permission: handyman.qc.configure
+      parameters:
+        - $ref: '#/components/parameters/ClientIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanQcVersionPublishRequest'
+      responses:
+        '200':
+          description: Published version + replayed boolean
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          version: { $ref: '#/components/schemas/HandymanQcChecklistVersion' }
+                          replayed: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: listHandymanQcChecklistVersions
+      description: "List Client-owned immutable QC checklist versions; requires handyman.qc.configure and Client access."
+      x-required-permission: handyman.qc.configure
+      parameters:
+        - $ref: '#/components/parameters/ClientIdPath'
+      responses:
+        '200':
+          description: Published versions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          versions:
+                            type: array
+                            items: { $ref: '#/components/schemas/HandymanQcChecklistVersion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /handyman/execution-scopes/{executionScopeId}/qc-checklist:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: bindHandymanQcChecklistVersion
+      summary: Bind a published Client version to a scope before QC OPEN
+      description: "Requires handyman.qc.configure and exact Building access. Body is templateVersionId only, never caller-supplied required keys. A matching pre-version manifest may be explicitly bound between runs, not retroactively validated."
+      x-required-permission: handyman.qc.configure
+      x-building-scoped: true
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateVersionId]
+              properties:
+                templateVersionId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Bound checklist and replayed boolean
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          checklist: { $ref: '#/components/schemas/HandymanQcChecklistBinding' }
+                          replayed: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [Handyman Evidence QC]
+      operationId: getHandymanQcChecklistBinding
+      description: "Read the current explicit version binding on the exact Building; checklist is null when unbound."
+      x-building-scoped: true
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Bound checklist or null
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          checklist:
+                            nullable: true
+                            allOf:
+                              - $ref: '#/components/schemas/HandymanQcChecklistBinding'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /handyman/execution-scopes/{executionScopeId}/qc-runs:
     post:
       tags: [Handyman Evidence QC]
       operationId: openHandymanQcRun
       summary: Open a QC run — ONE OPEN run per execution scope (PART 04)
-      description: "CR-HM-10 PART 06 — authenticated OPEN command over the PART 04 QC service. ONE OPEN run per scope: a second OPEN (fresh key) while one is still OPEN = bounded 409 ALREADY_OPEN (DB partial-unique is the final wall). checklistIdentity is a bounded label value (the Handyman checklist identity — no FM engine coupling). Atomic: run + OPEN event + replay-safe idempotencyKey."
+      description: "Requires current assigned non-executor Supervisor, handyman.qc.manage and exact Building access. A published checklist version must have been bound before OPEN; checklistIdentity must match it. ONE OPEN run per scope (fresh key conflicts). A terminal FAILED or PASSED run is immutable; open a new run for reinspection. Atomic run + OPEN event + replay-safe key."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       requestBody:
@@ -6835,7 +6958,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: listHandymanQcRunsByScope
       summary: Customer Care per-scope QC run listing
-      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative QC runs and current statuses; no QC command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
+      description: "Read-only scope QC runs and current statuses; service enforces exact Building access and PIC/Supervisor or tenant_company.read. Reads do not confer Supervisor QC authority."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -6859,7 +6982,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: setHandymanQcRunItemOutcome
       summary: Set one checklist item outcome on an OPEN run (PART 04)
-      description: "CR-HM-10 PART 06 — authenticated ITEM_SET command over the PART 04 QC service. Outcome vocabulary is frozen (PASS/DEFECT/NA/NOT_CHECKED). The item row upserts per (run,itemKey) while the ITEM_SET event chain stays append-only (full set-history). Item writes on a terminal run = bounded 409 ILLEGAL_TRANSITION."
+      description: "Current assigned non-executor Supervisor + handyman.qc.manage + exact Building. Only required keys of the pre-bound immutable manifest are accepted. expectedVersion protects concurrent writes; runVersion in response is the next value. PASS FINISH requires PASS on EVERY required key (NA is not a pass)."
       parameters:
         - $ref: '#/components/parameters/QcRunIdPath'
       requestBody:
@@ -6880,12 +7003,12 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /handyman/qc-runs/{qcRunId}/finish:
+  /handyman/qc-runs/{qcRunId}/evidence:
     post:
       tags: [Handyman Evidence QC]
-      operationId: finishHandymanQcRun
-      summary: Finish the run — SERVER-evaluated PASSED/FAILED (PART 04)
-      description: "CR-HM-10 PART 06 — authenticated FINISH command over the PART 04 QC service. The terminal status is computed SERVER-SIDE from recorded items: PASSED iff every item outcome is PASS or NA; ANY DEFECT or remaining NOT_CHECKED → FAILED. The caller NEVER picks the result. Closed runs cannot be reopened — a fresh OPEN mints a NEW run row (additive history)."
+      operationId: bindHandymanQcRunEvidence
+      summary: Bind a verified QC_EVIDENCE upload to an OPEN QC run
+      description: "Current assigned non-executor Supervisor + handyman.qc.manage and exact Building. Upload must be verified on the same scope; bytes are re-hashed at bind and PASS FINISH. expectedVersion prevents conflicting concurrent writes."
       parameters:
         - $ref: '#/components/parameters/QcRunIdPath'
       requestBody:
@@ -6893,7 +7016,36 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HandymanKeyedRequest'
+              type: object
+              required: [evidenceReference, expectedVersion, idempotencyKey]
+              properties:
+                evidenceReference: { type: string, description: 'hm-ev://<verified upload UUID>' }
+                expectedVersion: { type: integer, minimum: 1 }
+                idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: QC evidence binding, runVersion and replayed boolean
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/qc-runs/{qcRunId}/finish:
+    post:
+      tags: [Handyman Evidence QC]
+      operationId: finishHandymanQcRun
+      summary: Finish the run — SERVER-evaluated PASSED/FAILED (PART 04)
+      description: "Current assigned non-executor Supervisor + handyman.qc.manage + exact Building. Caller requests PASSED or FAILED with expectedVersion; server alone adjudicates PASSED from a pre-run versioned nonempty checklist (EVERY key PASS), all Work Sessions complete, zero unresolved defects and verified bound QC_EVIDENCE with real bytes. FAILED requires reason and persists distinct history; reinspection opens a new QC run. Stale version or run and blocked PASS return 409."
+      parameters:
+        - $ref: '#/components/parameters/QcRunIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanQcFinishRequest'
       responses:
         '200':
           description: QC run + recorded FINISH event
@@ -6911,7 +7063,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: getHandymanQcRunDetail
       summary: Customer Care QC run detail
-      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative run, item outcomes and append-only QC event chain; no QC command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
+      description: "Read-only QC run, item outcomes, bound upload references and audit events; exact Building access and PIC/Supervisor or tenant_company.read. Reading does not grant inspection authority."
       parameters:
         - $ref: '#/components/parameters/QcRunIdPath'
       responses:
@@ -6935,7 +7087,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: openHandymanDefect
       summary: Open a defect record with optional run/item provenance (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated OPEN_DEFECT command over the PART 05 defect service. Provenance links are server-verified (run must be on the same scope; item resolves its own run). ZERO commercial coupling — a defect NEVER adjusts any settled amount (CR-HM-13 territory). Atomic: defect + OPEN_DEFECT event + replay-safe idempotencyKey."
+      description: "Assigned, permitted Supervisor on the exact Building opens a defect. Optional run/item links are server-verified on this scope; no commercial coupling. An unresolved defect blocks QC PASS."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       requestBody:
@@ -6984,7 +7136,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: startHandymanDefectRectification
       summary: START_RECTIFICATION — OPENED → RECTIFYING (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. Illegal transition from any other status = bounded 409; replay of the same key = SAME event."
+      description: "Assigned PIC only; expectedVersion + idempotencyKey. Begins a new corrective Work Session/proof cycle; PIC cannot decide or verify QC."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       requestBody:
@@ -6992,7 +7144,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HandymanKeyedRequest'
+              $ref: '#/components/schemas/HandymanDefectTransitionRequest'
       responses:
         '200':
           description: Defect + recorded START_RECTIFICATION event
@@ -7010,7 +7162,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: recordHandymanDefectRectification
       summary: RECORD_RECTIFICATION — RECTIFYING → RECTIFIED (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. Marks the rectification complete and moves to RECTIFIED (awaiting reinspection)."
+      description: "Assigned PIC only; expectedVersion, new completed corrective PIC Work Session, and byte-verified BEFORE_AFTER_WORK upload (after session completion) required. Moves to RECTIFIED pending a new Supervisor QC run."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       requestBody:
@@ -7018,7 +7170,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HandymanKeyedRequest'
+              $ref: '#/components/schemas/HandymanDefectRecordRectificationRequest'
       responses:
         '200':
           description: Defect + recorded RECORD_RECTIFICATION event
@@ -7036,7 +7188,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: requestHandymanDefectReinspection
       summary: REQUEST_REINSPECTION — RECTIFIED → RECTIFYING loop (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. A failed reinspection loops the defect back to RECTIFYING; the record can then be re-rectified."
+      description: "Supervisor with handyman.qc.manage only. Finish a NEW QC run FAILED (with reason) after the prior failure, then request another repair. The defect event records reinspectionRunId and preserves superseded proof; new PIC session + upload required before another check."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       requestBody:
@@ -7044,7 +7196,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HandymanKeyedRequest'
+              $ref: '#/components/schemas/HandymanDefectRequestReinspectionRequest'
       responses:
         '200':
           description: Defect + recorded REQUEST_REINSPECTION event
@@ -7062,7 +7214,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: passHandymanDefectReinspection
       summary: PASS_REINSPECTION — RECTIFIED → VERIFIED terminal (PART 05)
-      description: "CR-HM-10 PART 06 — authenticated ladder transition over the PART 05 defect service. VERIFIED is terminal and LOCKED: every further mutation key = bounded 409."
+      description: "Supervisor with handyman.qc.manage only. After a recorded FAILED run, open a NEW QC run; while it is OPEN, verify the fresh PIC-completed session and byte-verified rectification upload. Event records server-owned reinspectionRunId. VERIFIED is terminal; then complete checklist/evidence and explicitly FINISH PASSED."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       requestBody:
@@ -7070,7 +7222,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HandymanKeyedRequest'
+              $ref: '#/components/schemas/HandymanDefectTransitionRequest'
       responses:
         '200':
           description: Defect + recorded PASS_REINSPECTION event
@@ -7088,7 +7240,7 @@ paths:
       tags: [Handyman Evidence QC]
       operationId: getHandymanDefectDetail
       summary: Customer Care defect detail
-      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires tenant_company.read + canAccessClient. Authoritative defect head and append-only rectification/reinspection event chain; no defect command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
+      description: "Read-only defect and append-only rework/reinspection history. Exact Building access and PIC/Supervisor or tenant_company.read staff; read does not grant either PIC or Supervisor command authority."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
       responses:
@@ -7160,7 +7312,7 @@ paths:
       tags: [Handyman BAST]
       operationId: acceptHandymanBast
       summary: Customer ACCEPT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
-      description: "CR-HM-17 GAP PART 04 — governed customer acceptance sign-off (`tenant_company.manage` + `canAccessClient`) over `acceptHandymanBast`. Legal only from `ISSUED`; requires a non-empty `signatureDigest` and `idempotencyKey`. Worker/provider preparation, issuance, and voiding commands are not exposed."
+      description: "Governed customer sign-off requires tenant_company.manage and exact Building access, and is legal only from ISSUED with signatureDigest and idempotencyKey. A current guarded QC PASS for the PREPARE-anchored qcRunId is rechecked; otherwise 409 HANDYMAN_BAST_QC_NOT_READY. Worker/provider PREPARE/ISSUE/VOID are service-only, not HTTP routes."
       parameters:
         - $ref: '#/components/parameters/BastIdPath'
       requestBody:
@@ -80590,25 +80742,95 @@ components:
         sha256Digest: { type: string, minLength: 64, maxLength: 64 }
         captureTime: { type: string, format: date-time, nullable: true }
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanQcVersionPublishRequest:
+      type: object
+      required: [code, versionNumber, requiredItemKeys]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 128 }
+        versionNumber: { type: integer, minimum: 1 }
+        requiredItemKeys:
+          type: array
+          minItems: 1
+          maxItems: 64
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 128 }
+    HandymanQcChecklistVersion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        code: { type: string }
+        versionNumber: { type: integer, minimum: 1 }
+        requiredItemKeys:
+          type: array
+          minItems: 1
+          items: { type: string }
+        publishedByUserId: { type: string, format: uuid }
+        publishedAt: { type: string, format: date-time }
+    HandymanQcChecklistBinding:
+      type: object
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        checklistIdentity: { type: string }
+        requiredItemKeys:
+          type: array
+          minItems: 1
+          items: { type: string }
+        templateVersionId: { type: string, format: uuid, nullable: true }
+        templateCode: { type: string, nullable: true }
+        templateVersionNumber: { type: integer, minimum: 1, nullable: true }
+        configuredAt: { type: string, format: date-time }
+        boundAt: { type: string, format: date-time, nullable: true }
+    HandymanQcFinishRequest:
+      type: object
+      required: [outcome, expectedVersion, idempotencyKey]
+      description: "FAILED requires nonempty reason; PASSED is not honored unless all server-side gates pass."
+      properties:
+        outcome: { type: string, enum: [PASSED, FAILED] }
+        reason: { type: string, maxLength: 2000, nullable: true }
+        expectedVersion: { type: integer, minimum: 1 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
+    HandymanDefectTransitionRequest:
+      type: object
+      required: [expectedVersion, idempotencyKey]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
+    HandymanDefectRecordRectificationRequest:
+      allOf:
+        - $ref: '#/components/schemas/HandymanDefectTransitionRequest'
+        - type: object
+          required: [sessionId, evidenceReference]
+          properties:
+            sessionId: { type: string, format: uuid }
+            evidenceReference: { type: string, description: 'hm-ev://<verified RECTIFICATION upload UUID>' }
+    HandymanDefectRequestReinspectionRequest:
+      allOf:
+        - $ref: '#/components/schemas/HandymanDefectTransitionRequest'
+        - type: object
+          required: [reason]
+          properties:
+            reason: { type: string, minLength: 1, maxLength: 2000 }
     HandymanQcOpenRequest:
       type: object
       required: [checklistIdentity, idempotencyKey]
-      description: "Bounded OPEN input (PART 04): checklist identity value label (no FM engine reference). ONE OPEN run per scope — a second fresh-key attempt = 409."
+      description: "Bounded OPEN input: checklistIdentity must match an immutable published version bound to this scope before inspection. ONE OPEN per scope; no caller-supplied checklist keys."
       properties:
         checklistIdentity: { type: string, minLength: 1, maxLength: 200 }
         sessionId: { type: string, format: uuid, nullable: true }
-        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
     HandymanQcItemSetRequest:
       type: object
       required: [itemKey, outcome, idempotencyKey]
-      description: "Bounded ITEM_SET input (PART 04). Frozen outcome vocabulary PASS/DEFECT/NA/NOT_CHECKED."
+      description: "Only the pre-bound required keys may be set. Frozen vocabulary PASS/DEFECT/NA/NOT_CHECKED; expectedVersion is optional for items, but recommended for concurrent UI edits."
       properties:
         itemKey: { type: string, minLength: 1, maxLength: 128 }
         outcome:
           type: string
           enum: [PASS, DEFECT, NA, NOT_CHECKED]
         note: { type: string, nullable: true }
-        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        expectedVersion: { type: integer, minimum: 1 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
     HandymanDefectOpenRequest:
       type: object
       required: [description, idempotencyKey]
@@ -80658,7 +80880,7 @@ components:
         occurredAt: { type: string, format: date-time }
     HandymanQcRun:
       type: object
-      description: "QC run head (OPEN → PASSED | FAILED; one OPEN per scope at any time)."
+      description: "Versioned QC run head (OPEN → PASSED | FAILED); terminal runs preserve their decision/reason. Bound checklist version is recorded on OPEN and FINISH events."
       properties:
         id: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
@@ -80667,6 +80889,8 @@ components:
         status:
           type: string
           enum: [OPEN, PASSED, FAILED]
+        version: { type: integer, minimum: 1 }
+        failureReason: { type: string, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     HandymanQcRunItem:
@@ -80684,13 +80908,15 @@ components:
         updatedAt: { type: string, format: date-time }
     HandymanQcRunEvent:
       type: object
-      description: "Append-only QC run event (OPEN/ITEM_SET/FINISH)."
+      description: "Append-only QC run event (OPEN/ITEM_SET/FINISH); metadata includes version provenance and FINISH outcome/reason."
       properties:
         id: { type: string, format: uuid }
         runId: { type: string, format: uuid }
         eventType:
           type: string
           enum: [OPEN, ITEM_SET, FINISH]
+        idempotencyKey: { type: string }
+        metadata: { type: object, additionalProperties: true }
         occurredAt: { type: string, format: date-time }
     HandymanDefectRecord:
       type: object
@@ -80704,17 +80930,22 @@ components:
         status:
           type: string
           enum: [OPENED, RECTIFYING, RECTIFIED, VERIFIED]
+        version: { type: integer, minimum: 1 }
+        rectificationSessionId: { type: string, format: uuid, nullable: true }
+        rectificationEvidenceReference: { type: string, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     HandymanDefectEvent:
       type: object
-      description: "Append-only defect ladder event (OPEN_DEFECT → PASS_REINSPECTION)."
+      description: "Append-only defect ladder event; reinspection metadata includes the server-owned reinspectionRunId."
       properties:
         id: { type: string, format: uuid }
         defectId: { type: string, format: uuid }
         eventType:
           type: string
           enum: [OPEN_DEFECT, START_RECTIFICATION, RECORD_RECTIFICATION, REQUEST_REINSPECTION, PASS_REINSPECTION]
+        idempotencyKey: { type: string }
+        metadata: { type: object, additionalProperties: true }
         occurredAt: { type: string, format: date-time }
     HandymanEvidenceCommandResult:
       type: object
@@ -80787,6 +81018,7 @@ components:
           $ref: '#/components/schemas/HandymanQcRunItem'
         event:
           $ref: '#/components/schemas/HandymanQcRunEvent'
+        runVersion: { type: integer, minimum: 1 }
         replayed: { type: boolean }
     HandymanQcFinishResult:
       type: object
@@ -80810,6 +81042,14 @@ components:
                 type: array
                 items:
                   $ref: '#/components/schemas/HandymanQcRunItem'
+              evidence:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string, format: uuid }
+                    evidenceReference: { type: string }
+                    createdAt: { type: string, format: date-time }
     HandymanQcDetailView:
       type: object
       properties:
@@ -80819,6 +81059,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HandymanQcRunItem'
+        evidence:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              evidenceReference: { type: string }
+              createdAt: { type: string, format: date-time }
         events:
           type: array
           items:
@@ -80861,6 +81109,7 @@ components:
       required:
         - id
         - executionScopeId
+        - qcRunId
         - status
         - issuedAt
         - acceptedAt
@@ -80871,6 +81120,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
+        qcRunId: { type: string, format: uuid, nullable: true, description: 'Null only for historical pre-0445 documents; never inferred retroactively.' }
         status: { $ref: '#/components/schemas/HandymanBastStatus' }
         issuedAt: { type: string, format: date-time, nullable: true }
         acceptedAt: { type: string, format: date-time, nullable: true }
