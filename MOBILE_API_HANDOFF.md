@@ -209,7 +209,7 @@ Governed lifecycle:
 ### 2.3 Inspector Submits Technical Finding (`FIELD_FINDING`)
 - **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/findings`
 - **Alias**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/variations/findings`
-- **Authorized Persona**: Assigned `INSPECTOR` only (`PIC_PEKERJAAN` is rejected with `403 HANDYMAN_VARIATION_ROLE_FORBIDDEN`).
+- **Authorized Persona**: Assigned `INSPECTOR` or assigned `PIC_PEKERJAAN` (unassigned actors are rejected with `403 HANDYMAN_VARIATION_ROLE_FORBIDDEN`).
 - **Payload**:
 ```json
 {
@@ -274,7 +274,7 @@ Governed lifecycle:
 {
   "decision": "APPROVED",
   "revisedQuotationVersionId": "uuid",
-  "evidenceReference": "tenant-consent://uuid",
+  "evidenceReference": "hm-ev://uuid",
   "notes": "Approved by tenant PIC",
   "expectedVersion": 3,
   "idempotencyKey": "var-tdec-001"
@@ -322,16 +322,16 @@ Preserves 4-way separation between:
 4. Tenant invoice charge eligibility (`tenantChargeEligible`, `tenantChargeEligibleQty`, `tenantInvoiced: false`)
 
 ### 3.1 List Material Purchasing Records & Ledger Summary
-- **Endpoint**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing`
-- **Alias (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchasing`
+- **Endpoint**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases`
+- **Alias (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases`
 - **Authorized Personas**: Assigned `PIC_PEKERJAAN` (sees operational + own purchasing/reimbursement details), Assigned `INSPECTOR` (sees operational movement quantities only; all price/expense/reimbursement fields are `null`), or Operations (`tenant_company.read` / `tenant_company.manage`).
 
 ### 3.2 Read Single Material Purchase Record & Audit Event Trail
-- **Endpoint**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/:recordId`
-- **Alias (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchasing/:recordId`
+- **Endpoint**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId`
+- **Alias (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases/:recordId`
 
 ### 3.3 PIC Pekerjaan Requests Material (`REQUEST`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/requests` (or `/handyman/field/...`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/requests` (or `/handyman/field/...`)
 - **Authorized Persona**: Assigned `PIC_PEKERJAAN`
 - **Payload**:
 ```json
@@ -352,14 +352,13 @@ Preserves 4-way separation between:
 - **Allowed `fundingSource` values**: `'PETTY_CASH' | 'CASH_ADVANCE' | 'REIMBURSEMENT' | 'COMPANY_DIRECT' | 'WAREHOUSE_STOCK'`
 
 ### 3.4 Operations Approves Material Request (`APPROVAL`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/:recordId/approve`
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/approve`
 - **Authorized Persona**: Operations (`tenant_company.manage`)
 - **Payload**:
 ```json
 {
   "approvedQuantity": 4,
   "approvedMaxUnitPrice": 90000,
-  "fundingSource": "REIMBURSEMENT",
   "approvalReference": "APR-MAT-2026-001",
   "cashAdvanceReference": null,
   "evidenceReference": "hm-ev://uuid",
@@ -370,12 +369,12 @@ Preserves 4-way separation between:
 ```
 
 ### 3.5 Operations Issues Warehouse Stock (`ISSUED`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/:recordId/issue`
-- **Authorized Persona**: Operations (`tenant_company.manage`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/issue`
+- **Authorized Persona**: Assigned `PIC_PEKERJAAN` or Operations (`tenant_company.manage`)
 - **Payload**: `{ "issuedQuantity": 4, "evidenceReference": "hm-ev://uuid", "notes": "Issued from central store", "expectedVersion": 2, "idempotencyKey": "mat-iss-001" }`
 
 ### 3.6 PIC Pekerjaan / Operations Records Supplier Purchase (`PURCHASED`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/:recordId/purchase` (or `/handyman/field/...`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/purchase` (or `/handyman/field/...`)
 - **Authorized Persona**: Assigned `PIC_PEKERJAAN` or Operations (`tenant_company.manage`)
 - **Payload**:
 ```json
@@ -387,7 +386,6 @@ Preserves 4-way separation between:
   "supplierReference": "SUP-TBS-01",
   "purchaseReference": "INV-TBS-2026-889",
   "purchaseDate": "2026-10-14T03:00:00.000Z",
-  "fundingSource": "REIMBURSEMENT",
   "expenditureReference": "EXP-2026-004",
   "cashAdvanceReference": null,
   "receiptEvidenceReference": "hm-ev://uuid",
@@ -398,17 +396,17 @@ Preserves 4-way separation between:
 ```
 
 ### 3.7 PIC Pekerjaan Records Actual Material Usage (`USAGE`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/:recordId/usage` (or `/handyman/field/...`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/usage` (or `/handyman/field/...`)
 - **Authorized Persona**: Assigned `PIC_PEKERJAAN`
-- **Payload**: `{ "usedQuantityDelta": 3, "evidenceReference": "hm-ev://uuid", "notes": "Installed 3 valves on floor 12", "expectedVersion": 3, "idempotencyKey": "mat-use-001" }`
+- **Payload**: `{ "usedQuantity": 3, "evidenceReference": "hm-ev://uuid", "notes": "Installed 3 valves on floor 12", "expectedVersion": 3, "idempotencyKey": "mat-use-001" }`
 
 ### 3.8 PIC Pekerjaan / Operations Records Unused Material Return (`RETURN`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/:recordId/return` (or `/handyman/field/...`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/return` (or `/handyman/field/...`)
 - **Authorized Persona**: Assigned `PIC_PEKERJAAN` or Operations (`tenant_company.manage`)
 - **Payload**:
 ```json
 {
-  "returnedQuantityDelta": 1,
+  "returnedQuantity": 1,
   "returnDestination": "WAREHOUSE",
   "evidenceReference": "hm-ev://uuid",
   "notes": "Returned 1 unused valve to building store",
@@ -419,7 +417,7 @@ Preserves 4-way separation between:
 - **Allowed `returnDestination` values**: `'WAREHOUSE' | 'SUPPLIER_RETURN' | 'COMPANY_CUSTODY'`
 
 ### 3.9 Operations Reconciles Material & Purchasing Ledger (`RECONCILIATION`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchasing/:recordId/reconcile`
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/reconcile`
 - **Authorized Persona**: Operations (`tenant_company.manage`)
 - **Guard**: Requires `usedQuantity + returnedQuantity === issuedQuantity + purchasedQuantity`.
 - **Payload**:
@@ -652,3 +650,31 @@ Read-only projection of authoritative worker profile facts without fabricating u
   - Individual skill validity windows (`validFrom`, `validUntil` / `expiresAt`, `proficiencyLevel`) are projected from `workforce_skill_assignments` + `skills`.
   - Employer/provider licenses & certifications (`recordType`, `name`, `number`, `issuingAuthority`, `issueDate`, `expiryDate`, `status`) are projected from `vendor_licenses_certifications`.
   - Individual per-worker certificate serial numbers and star ratings are not separately modeled in the database schema (`individualCertificateNumberModeled: false`) and are never fabricated.
+
+
+---
+
+## 6. CR-HM-FIELD-EVIDENCE-HARDEN-01 — Evidence Contract Hardening
+
+### 6.1 Mandatory verified evidence (P0-A)
+- Every Variation and Material Purchasing command that accepts `evidenceReference` / `receiptEvidenceReference` requires a managed `hm-ev://<evidenceId>` reference to a **VERIFIED** field-evidence upload.
+- The referenced upload must belong to the same client, building, handyman request and (when set) execution scope; its stored bytes are re-read and must match the recorded SHA-256 and verified byte size on every bind.
+- Arbitrary strings, URLs and legacy schemes (e.g. `ev://...`, `tenant-consent://...`) are rejected with `400 HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED`. Unverified/metadata-only uploads are rejected with `409 HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED`; unknown references `404`; cross-tenant/scope references `403`.
+- There is no legacy free-text evidence authority: no non-managed reference is accepted as evidence on any of these commands.
+
+### 6.2 Immutable VERIFIED uploads (P0-B)
+- Once an upload is `VERIFIED`, re-uploading bytes (`PUT /handyman/field/evidence/:evidenceId/bytes`) with identical SHA-256/size is a safe idempotent no-op; conflicting bytes are rejected with `409 HANDYMAN_EVIDENCE_UPLOAD_IMMUTABLE` and the finalized bytes, SHA-256 and verified size are preserved.
+
+### 6.3 Versioned, audited binding (P0-C)
+- Uploading bytes with `variationId` / `materialPurchaseRecordId` (direct upload or staged confirm) binds the verified reference inside the same transaction: the owning aggregate `version` is incremented and an append-only `handyman_field_evidence.bound_to_variation` / `handyman_field_evidence.bound_to_material_purchase` operational event is recorded. Re-binding the identical reference is a no-op. There is no separate/competing evidence authority.
+
+### 6.4 Storage readiness on Railway (P0-D)
+- The only storage driver is local disk (`EVIDENCE_STORAGE_DRIVER=local`, `EVIDENCE_STORAGE_DIR`, default `.data/evidence`; image pins `/app/.data/evidence`).
+- **Railway's container filesystem is ephemeral**: evidence is durable only if a Railway Volume is mounted at `EVIDENCE_STORAGE_DIR`. Without a volume, verified evidence bytes are lost on redeploy/restart and binds will then fail integrity checks (`409 HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED`) rather than silently succeeding.
+- Boot fails fast via `verifyEvidenceStorageReady()` when the directory cannot be created/written (missing mount, wrong ownership/permissions). Runtime read-after-write + SHA-256 health is available via `checkEvidenceStorageHealth()`. Across a restart with a persistent volume, previously verified bytes remain readable and checksum-valid.
+
+### 6.5 Remaining gaps (not implemented in this CR)
+- Work Order evidence list endpoint for a whole work order/request (today evidence is read per record via `GET /handyman/field/evidence/:evidenceId` and `/content`).
+- Evidence-record compatibility with the generic `/evidence` module records (field-evidence uploads are a separate managed namespace, `hm-ev://`).
+- Material UOM catalog endpoint for mobile (commands accept an existing `uomId`/`uomCode`; no handyman-scoped UOM list is exposed here).
+- Cross-persona frontend handoffs beyond this document (Handyman-Mobile PR #9 consumption, operations web) remain with the respective frontend teams.

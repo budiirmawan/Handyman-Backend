@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { ConfigError, parseConfig, resetAppConfigCache } from '../src/config';
 import {
+  checkEvidenceStorageHealth,
   createEvidenceStorage,
   verifyEvidenceStorageReady,
   verifyLocalEvidenceStorageRoot,
@@ -225,5 +226,31 @@ describe('configured storage backend', () => {
       assert.equal((await storage.get(key)).buffer.toString(), 'via-factory');
       await storage.remove(key);
     });
+  });
+});
+
+describe('evidence storage health probe (P0-D)', () => {
+  it('verifies read-after-write checksum and survives a restart (new instance)', async () => {
+    const dir = await sandbox();
+    const first = createLocalEvidenceStorage(dir);
+    const health = await checkEvidenceStorageHealth(first);
+    assert.equal(health.readAfterWriteVerified, true);
+    // Restart simulation: a fresh storage instance over the same dir reads
+    // bytes written by the previous instance byte-for-byte.
+    const key = evidenceKey();
+    const bytes = Buffer.from('durable-evidence-bytes');
+    await first.put(key, { buffer: bytes, mimeType: 'image/png' });
+    const restarted = createLocalEvidenceStorage(dir);
+    const stored = await restarted.get(key);
+    assert.deepEqual(stored.buffer, bytes);
+    await restarted.remove(key);
+  });
+
+  it('rejects when the storage root is unavailable (blocked by a file)', async () => {
+    const dir = await sandbox();
+    const blocker = join(dir, 'blocker');
+    await writeFile(blocker, 'not-a-dir');
+    const storage = createLocalEvidenceStorage(join(blocker, 'child'));
+    await assert.rejects(checkEvidenceStorageHealth(storage));
   });
 });

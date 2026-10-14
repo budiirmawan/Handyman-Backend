@@ -411,6 +411,17 @@ async function assertDomainObjectOwnership(
   }
 }
 
+/**
+ * P0-C — evidence binding is an explicit, versioned, audited mutation of the
+ * owning aggregate, never a silent side effect of uploading bytes:
+ *  - the aggregate `version` is incremented (optimistic-concurrency visible),
+ *  - an append-only operational event records actor, previous and new
+ *    reference and the resulting version,
+ *  - re-binding the identical reference is an idempotent no-op (no version
+ *    bump, no duplicate audit event).
+ * The binding runs in the caller's transaction, so a failed bind rolls the
+ * evidence verification back with it.
+ */
 async function bindVerifiedAttachmentToDomainObjects(
   tx: PoolClient,
   target: EvidenceTargetContext,
@@ -418,6 +429,7 @@ async function bindVerifiedAttachmentToDomainObjects(
     variationId: string | null;
     materialPurchaseRecordId: string | null;
     attachmentReference: string;
+    actorUserId: string;
   },
 ): Promise<void> {
   await assertDomainObjectOwnership(tx, target, {
@@ -426,14 +438,17 @@ async function bindVerifiedAttachmentToDomainObjects(
   });
 
   if (input.variationId) {
-    await tx.query(
+    const res = await tx.query<{ version: number | string }>(
       `UPDATE handyman_scope_variations
           SET latest_evidence_reference = $5,
+              version = version + 1,
               updated_at = NOW()
         WHERE id = $1
           AND client_id = $2
           AND building_id = $3
-          AND handyman_request_id = $4`,
+          AND handyman_request_id = $4
+          AND latest_evidence_reference IS DISTINCT FROM $5
+        RETURNING version`,
       [
         input.variationId,
         target.clientId,
@@ -442,18 +457,41 @@ async function bindVerifiedAttachmentToDomainObjects(
         input.attachmentReference,
       ],
     );
+    if (res.rows[0]) {
+      await recordOperationalEvent(
+        {
+          clientId: target.clientId,
+          buildingId: target.buildingId,
+          actorUserId: input.actorUserId,
+          eventType: 'handyman_field_evidence.bound_to_variation',
+          entityType: 'handyman_scope_variation',
+          entityId: input.variationId,
+          summary: 'Verified field evidence bound to scope variation',
+          metadata: {
+            attachmentReference: input.attachmentReference,
+            executionScopeId: target.executionScopeId,
+            handymanRequestId: target.handymanRequestId,
+            aggregateVersion: Number(res.rows[0].version),
+          },
+        },
+        tx,
+      );
+    }
   }
 
   if (input.materialPurchaseRecordId) {
-    await tx.query(
+    const res = await tx.query<{ version: number | string }>(
       `UPDATE handyman_material_purchase_records
-          SET receipt_evidence_reference = COALESCE($5, receipt_evidence_reference),
+          SET receipt_evidence_reference = $5,
               latest_evidence_reference = $5,
+              version = version + 1,
               updated_at = NOW()
         WHERE id = $1
           AND client_id = $2
           AND building_id = $3
-          AND handyman_request_id = $4`,
+          AND handyman_request_id = $4
+          AND latest_evidence_reference IS DISTINCT FROM $5
+        RETURNING version`,
       [
         input.materialPurchaseRecordId,
         target.clientId,
@@ -462,6 +500,26 @@ async function bindVerifiedAttachmentToDomainObjects(
         input.attachmentReference,
       ],
     );
+    if (res.rows[0]) {
+      await recordOperationalEvent(
+        {
+          clientId: target.clientId,
+          buildingId: target.buildingId,
+          actorUserId: input.actorUserId,
+          eventType: 'handyman_field_evidence.bound_to_material_purchase',
+          entityType: 'handyman_material_purchase_record',
+          entityId: input.materialPurchaseRecordId,
+          summary: 'Verified field evidence bound to material purchase record',
+          metadata: {
+            attachmentReference: input.attachmentReference,
+            executionScopeId: target.executionScopeId,
+            handymanRequestId: target.handymanRequestId,
+            aggregateVersion: Number(res.rows[0].version),
+          },
+        },
+        tx,
+      );
+    }
   }
 }
 
@@ -480,8 +538,18 @@ export async function assertVerifiedManagedEvidenceReference(
   },
   reference: string | null | undefined,
 ): Promise<void> {
-  if (!reference || !reference.startsWith('hm-ev://')) {
+  if (!reference) {
     return;
+  }
+  // P0-A: unmanaged/legacy references (any non-hm-ev:// string) are rejected;
+  // there is no independently verifiable legacy authority for free-text refs.
+  if (!reference.startsWith('hm-ev://')) {
+    throw new AppError({
+      statusCode: 400,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED,
+      message:
+        'evidenceReference must be a managed hm-ev://<evidenceId> reference to a VERIFIED field evidence upload; unmanaged or legacy references are not accepted.',
+    });
   }
   const rawId = reference.slice('hm-ev://'.length).trim();
   const evidenceId = assertUuid(rawId, 'evidenceReference');
@@ -510,6 +578,15 @@ export async function assertVerifiedManagedEvidenceReference(
       code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
       message:
         'Referenced field evidence upload belongs to a different tenant, building, or Work Order.',
+    });
+  }
+
+  if (record.attachmentReference !== reference) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED,
+      message:
+        'Referenced field evidence upload has no finalized attachment reference.',
     });
   }
 
@@ -641,6 +718,18 @@ export async function uploadFieldEvidenceBinary(
       );
     if (existing) {
       if (
+        existing.handymanRequestId !== target.handymanRequestId ||
+        existing.executionScopeId !== target.executionScopeId ||
+        existing.buildingId !== target.buildingId
+      ) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT,
+          message:
+            'idempotencyKey was already used for evidence in a different Work Order / execution scope.',
+        });
+      }
+      if (
         existing.purpose !== purpose ||
         existing.mimeType !== mimeType ||
         (existing.sha256Checksum &&
@@ -684,6 +773,7 @@ export async function uploadFieldEvidenceBinary(
       variationId,
       materialPurchaseRecordId,
       attachmentReference,
+      actorUserId,
     });
 
     const record = await handymanFieldEvidenceRepository.insertUpload(tx, {
@@ -815,6 +905,20 @@ export async function createPresignedFieldEvidenceIntent(
         idempotencyKey,
       );
     if (existing) {
+      if (
+        existing.handymanRequestId !== target.handymanRequestId ||
+        existing.executionScopeId !== target.executionScopeId ||
+        existing.purpose !== purpose ||
+        existing.mimeType !== mimeType ||
+        existing.declaredByteSize !== declaredByteSize
+      ) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_IDEMPOTENCY_CONFLICT,
+          message:
+            'idempotencyKey was already used with a different evidence upload intent.',
+        });
+      }
       return {
         replayed: true,
         evidence: existing,
@@ -920,6 +1024,24 @@ export async function putStagedFieldEvidenceBytes(
     verifyBinaryMagicSignature(bytes, record.mimeType);
     const sha256Checksum = computeEvidenceSha256(bytes);
 
+    // P0-B — VERIFIED bytes are immutable. An exact retry (same SHA-256 and
+    // byte size) is a safe no-op; any conflicting re-upload is a typed 409
+    // and the finalized bytes, digest and size are preserved.
+    if (record.uploadStatus === 'VERIFIED') {
+      if (
+        record.sha256Checksum === sha256Checksum &&
+        record.verifiedByteSize === bytes.byteLength
+      ) {
+        return record;
+      }
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_IMMUTABLE,
+        message:
+          'Evidence upload is VERIFIED and its bytes are immutable; conflicting re-upload rejected.',
+      });
+    }
+
     const storage = createEvidenceStorage();
     await storage.put(record.storageKey, {
       buffer: bytes,
@@ -1015,6 +1137,7 @@ export async function confirmFieldEvidenceUpload(
       variationId: record.variationId,
       materialPurchaseRecordId: record.materialPurchaseRecordId,
       attachmentReference,
+      actorUserId,
     });
 
     const verified = await handymanFieldEvidenceRepository.markVerified(tx, {

@@ -216,6 +216,7 @@ export const handymanFieldEvidenceRepository = {
               sha256_checksum = $3,
               updated_at = NOW()
         WHERE id = $1
+          AND upload_status IN ('PENDING_BYTES', 'STAGED_BYTES')
         RETURNING ${EVIDENCE_COLUMNS}`,
       [input.evidenceId, input.verifiedByteSize, input.sha256Checksum],
     );

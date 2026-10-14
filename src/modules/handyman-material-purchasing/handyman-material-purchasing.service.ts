@@ -657,6 +657,8 @@ export async function approveMaterialPurchaseRequest(
           )
         : record.latestEvidenceReference;
 
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+
     const updated =
       await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
         purchaseRecordId: record.id,
@@ -842,6 +844,8 @@ export async function recordMaterialWarehouseIssue(
         message: `Issued quantity (${issuedQuantity}) cannot exceed approved quantity (${record.approvedQuantity}).`,
       });
     }
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const updated =
       await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
@@ -1306,6 +1310,8 @@ export async function recordMaterialPurchaseUsage(
     const unitPrice = Number(record.actualUnitPrice ?? 0);
     const netUsedExpenseAmount = (nextUsedQty * unitPrice).toFixed(2);
 
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+
     const updated =
       await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
         purchaseRecordId: record.id,
@@ -1500,6 +1506,8 @@ export async function recordMaterialPurchaseReturn(
         message: `Used (${usedQty.toFixed(3)}) + returned (${nextReturnedQty.toFixed(3)}) quantity cannot exceed acquired (${acquiredQty.toFixed(3)}) quantity.`,
       });
     }
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const updated =
       await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
@@ -1716,6 +1724,8 @@ export async function reconcileMaterialPurchase(
             500,
           )
         : record.latestEvidenceReference;
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const updated =
       await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {

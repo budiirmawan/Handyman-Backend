@@ -5,8 +5,8 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
@@ -23,6 +23,7 @@ import { propertyRepository } from '../src/modules/properties/property.repositor
 import { clientRepository } from '../src/modules/clients/client.repository';
 import { userRepository } from '../src/modules/users/user.repository';
 import { permissionService } from '../src/modules/permissions';
+import { createEvidenceStorage } from '../src/modules/evidence/storage';
 import { migration0435CreateHandymanScopeVariations } from '../src/database/migrations/0435_create_handyman_scope_variations';
 
 const CLIENT_A = '10000000-0000-4000-8000-000000000001';
@@ -77,6 +78,7 @@ const UOM_PCS = '10000000-0000-4000-8000-000000000702';
 
 let pg: EmbeddedPostgres | null = null;
 let pgDir: string | null = null;
+let evidenceStorageDir = '';
 let pool: Pool | null = null;
 let server: Server;
 let baseUrl: string;
@@ -89,8 +91,35 @@ const origFindProperty = propertyRepository.findById;
 const origFindClient = clientRepository.findById;
 const origResolvePermissions = permissionService.resolvePermissionsForUser;
 
+
+/** Seeds a genuinely VERIFIED managed evidence upload (real bytes + SHA-256
+ * in the configured storage dir) and returns its hm-ev:// reference. */
+async function verifiedEvidenceRef(seed: string): Promise<string> {
+  const hex = createHash('sha256').update(seed).digest('hex');
+  const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  const bytes = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from(seed),
+  ]);
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  await createEvidenceStorage().put(`evidence/${id}`, { buffer: bytes, mimeType: 'image/png' });
+  await pool!.query(
+    `INSERT INTO handyman_field_evidence_uploads
+       (id, client_id, tenant_company_id, building_id, handyman_request_id, execution_scope_id,
+        purpose, upload_status, original_file_name, mime_type, storage_key, declared_byte_size,
+        verified_byte_size, sha256_checksum, attachment_reference, uploaded_by_user_id,
+        uploaded_by_role, idempotency_key, verified_at)
+     VALUES ($1,$2,$3,$4,$5,$6,'VARIATION_FINDING','VERIFIED','seed.png','image/png',$7,$8,$8,$9,$10,$11,'PIC_PEKERJAAN',$12,NOW())
+     ON CONFLICT (id) DO NOTHING`,
+    [id, CLIENT_A, TENANT_A, BUILDING_A1, REQ_A1, SCOPE_A1, `evidence/${id}`, bytes.byteLength, sha, `hm-ev://${id}`, LEAD_USER_A, `seed-${id}`],
+  );
+  return `hm-ev://${id}`;
+}
+
 before(async () => {
   pgDir = mkdtempSync(join(tmpdir(), 'hm-scope-var-'));
+  evidenceStorageDir = mkdtempSync(join(tmpdir(), 'hm-evidence-store-'));
+  process.env.EVIDENCE_STORAGE_DIR = evidenceStorageDir;
   pg = new EmbeddedPostgres({
     databaseDir: pgDir,
     port: 55445,
@@ -335,6 +364,19 @@ before(async () => {
     );
   `);
 
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS handyman_field_evidence_uploads (
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, tenant_company_id uuid NOT NULL,
+      building_id uuid NOT NULL, handyman_request_id uuid NOT NULL, execution_scope_id uuid,
+      variation_id uuid, material_purchase_record_id uuid, purpose text NOT NULL,
+      upload_status text NOT NULL, original_file_name text NOT NULL, mime_type text NOT NULL,
+      storage_key text NOT NULL UNIQUE, declared_byte_size int, verified_byte_size int NOT NULL DEFAULT 0,
+      sha256_checksum varchar(64), attachment_reference text UNIQUE, uploaded_by_user_id uuid NOT NULL,
+      uploaded_by_role text NOT NULL, notes text, idempotency_key text NOT NULL,
+      verified_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
   const client = await pool.connect();
   try {
     await migration0435CreateHandymanScopeVariations.up(client);
@@ -647,7 +689,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         technicalFinding: 'Hidden moisture seepage found behind drywall',
         quantity: 2,
         uomId: UOM_UNIT,
-        evidenceReference: 'ev://finding/membrane-001',
+        evidenceReference: await verifiedEvidenceRef('ev://finding/membrane-001'),
         notes: 'Inspector technical recommendation',
         idempotencyKey: 'idem-add-finding-1',
       },
@@ -676,7 +718,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       `/handyman/field/execution-scopes/${SCOPE_A1}/variations/${varId}/propose`,
       LEAD_USER_A,
       {
-        evidenceReference: 'ev://proposal/membrane-002',
+        evidenceReference: await verifiedEvidenceRef('ev://proposal/membrane-002'),
         notes: 'Crew Lead proposes additional waterproofing scope',
         idempotencyKey: 'idem-add-propose-1',
         expectedVersion: 1,
@@ -721,7 +763,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/operations-review`,
       OPS_MANAGER_USER_A,
       {
-        evidenceReference: 'ev://ops-review/membrane-003',
+        evidenceReference: await verifiedEvidenceRef('ev://ops-review/membrane-003'),
         notes: 'Verified technical need with inspector report',
         idempotencyKey: 'idem-add-ops-review-1',
         expectedVersion: 2,
@@ -738,7 +780,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         quotedUnitAmount: 175000,
         currency: 'IDR',
-        evidenceReference: 'ev://revised-quo/membrane-omit',
+        evidenceReference: await verifiedEvidenceRef('ev://revised-quo/membrane-omit'),
         idempotencyKey: 'idem-add-rev-quo-omit',
         expectedVersion: 3,
       },
@@ -753,7 +795,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         quotedUnitAmount: 175000,
         currency: 'IDR',
         revisedQuotationVersionId: QVER_A1,
-        evidenceReference: 'ev://revised-quo/membrane-reuse-orig',
+        evidenceReference: await verifiedEvidenceRef('ev://revised-quo/membrane-reuse-orig'),
         idempotencyKey: 'idem-add-rev-quo-reuse-orig',
         expectedVersion: 3,
       },
@@ -772,7 +814,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         quotedUnitAmount: 175000,
         currency: 'IDR',
         revisedQuotationVersionId: QVER_EMPTY,
-        evidenceReference: 'ev://revised-quo/membrane-empty-qv',
+        evidenceReference: await verifiedEvidenceRef('ev://revised-quo/membrane-empty-qv'),
         idempotencyKey: 'idem-add-rev-quo-empty-qv',
         expectedVersion: 3,
       },
@@ -786,7 +828,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         quotedUnitAmount: 175000,
         currency: 'IDR',
         revisedQuotationVersionId: QVER_WRONG_DELTA,
-        evidenceReference: 'ev://revised-quo/membrane-wrong-delta',
+        evidenceReference: await verifiedEvidenceRef('ev://revised-quo/membrane-wrong-delta'),
         idempotencyKey: 'idem-add-rev-quo-wrong-delta',
         expectedVersion: 3,
       },
@@ -801,7 +843,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         quotedUnitAmount: 175000,
         currency: 'IDR',
         revisedQuotationVersionId: QVER_A2_ADD,
-        evidenceReference: 'ev://revised-quo/membrane-004',
+        evidenceReference: await verifiedEvidenceRef('ev://revised-quo/membrane-004'),
         notes: 'Revised quotation prepared for tenant approval',
         idempotencyKey: 'idem-add-rev-quo-1',
         expectedVersion: 3,
@@ -820,7 +862,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       OPS_MANAGER_USER_A,
       {
         decision: 'APPROVE',
-        evidenceReference: 'ev://fake-tenant-consent',
+        evidenceReference: await verifiedEvidenceRef('ev://fake-tenant-consent'),
         idempotencyKey: 'idem-ops-impersonate',
       },
     );
@@ -836,7 +878,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       LEAD_USER_A,
       {
         decision: 'APPROVE',
-        evidenceReference: 'ev://fake-lead-consent',
+        evidenceReference: await verifiedEvidenceRef('ev://fake-lead-consent'),
         idempotencyKey: 'idem-lead-impersonate',
       },
     );
@@ -849,7 +891,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         decision: 'APPROVE',
         revisedQuotationVersionId: QVER_A1,
-        evidenceReference: 'ev://mismatched-qv',
+        evidenceReference: await verifiedEvidenceRef('ev://mismatched-qv'),
         idempotencyKey: 'idem-mismatched-qv',
       },
     );
@@ -866,7 +908,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         decision: 'APPROVE',
         revisedQuotationVersionId: QVER_A2_ADD,
-        evidenceReference: 'ev://tenant-consent/membrane-005',
+        evidenceReference: await verifiedEvidenceRef('ev://tenant-consent/membrane-005'),
         notes: 'Approved by Tenant PIC Siti',
         idempotencyKey: 'idem-add-tenant-approve-1',
         expectedVersion: 4,
@@ -882,7 +924,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/authorize-scope`,
       OPS_MANAGER_USER_A,
       {
-        evidenceReference: 'ev://auth-scope/membrane-006',
+        evidenceReference: await verifiedEvidenceRef('ev://auth-scope/membrane-006'),
         notes: 'Scope authorized after tenant approval',
         idempotencyKey: 'idem-add-auth-scope-1',
         expectedVersion: 5,
@@ -905,7 +947,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       `/handyman/field/execution-scopes/${SCOPE_A1}/variations/${varId}/execution`,
       LEAD_USER_A,
       {
-        evidenceReference: 'ev://execution/membrane-007',
+        evidenceReference: await verifiedEvidenceRef('ev://execution/membrane-007'),
         notes: 'Membrane installed and cured',
         idempotencyKey: 'idem-add-exec-1',
         expectedVersion: 6,
@@ -921,7 +963,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         qcOutcome: 'PASSED',
         qcRunId: QCRUN_PASSED_A1,
-        evidenceReference: 'ev://self-qc',
+        evidenceReference: await verifiedEvidenceRef('ev://self-qc'),
         idempotencyKey: 'idem-self-qc',
       },
     );
@@ -934,7 +976,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         qcOutcome: 'PASSED',
         qcRunId: QCRUN_PASSED_A1,
-        evidenceReference: 'ev://inspector-bypass-qc',
+        evidenceReference: await verifiedEvidenceRef('ev://inspector-bypass-qc'),
         idempotencyKey: 'idem-inspector-bypass-qc',
       },
     );
@@ -950,7 +992,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       OPS_MANAGER_USER_A,
       {
         qcOutcome: 'PASSED',
-        evidenceReference: 'ev://qc/no-run',
+        evidenceReference: await verifiedEvidenceRef('ev://qc/no-run'),
         idempotencyKey: 'idem-qc-no-run',
         expectedVersion: 7,
       },
@@ -964,7 +1006,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         qcOutcome: 'PASSED',
         qcRunId: QCRUN_OPEN_A1,
-        evidenceReference: 'ev://qc/open-run',
+        evidenceReference: await verifiedEvidenceRef('ev://qc/open-run'),
         idempotencyKey: 'idem-qc-open-run',
         expectedVersion: 7,
       },
@@ -978,7 +1020,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         qcOutcome: 'PASSED',
         qcRunId: QCRUN_PASSED_A1,
-        evidenceReference: 'ev://qc/open-defect',
+        evidenceReference: await verifiedEvidenceRef('ev://qc/open-defect'),
         idempotencyKey: 'idem-qc-open-defect',
         expectedVersion: 7,
       },
@@ -1002,7 +1044,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         qcOutcome: 'PASSED',
         qcRunId: QCRUN_PASSED_A1,
-        evidenceReference: 'ev://qc/membrane-008',
+        evidenceReference: await verifiedEvidenceRef('ev://qc/membrane-008'),
         notes: 'Moisture test passed after membrane installation',
         idempotencyKey: 'idem-add-qc-1',
         expectedVersion: 7,
@@ -1018,7 +1060,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/final-charge-eligibility`,
       OPS_MANAGER_USER_A,
       {
-        evidenceReference: 'ev://final-charge/open-session',
+        evidenceReference: await verifiedEvidenceRef('ev://final-charge/open-session'),
         idempotencyKey: 'idem-fce-open-session',
         expectedVersion: 8,
       },
@@ -1037,7 +1079,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       OPS_MANAGER_USER_A,
       {
         bastId: BAST_A1,
-        evidenceReference: 'ev://final-charge/unaccepted-bast',
+        evidenceReference: await verifiedEvidenceRef('ev://final-charge/unaccepted-bast'),
         idempotencyKey: 'idem-fce-unaccepted-bast',
         expectedVersion: 8,
       },
@@ -1061,7 +1103,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       OPS_MANAGER_USER_A,
       {
         bastId: BAST_A1,
-        evidenceReference: 'ev://final-charge/finalized-inv',
+        evidenceReference: await verifiedEvidenceRef('ev://final-charge/finalized-inv'),
         idempotencyKey: 'idem-fce-finalized-inv',
         expectedVersion: 8,
       },
@@ -1081,7 +1123,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         qcRunId: QCRUN_PASSED_A1,
         bastId: BAST_A1,
-        evidenceReference: 'ev://final-charge/membrane-009',
+        evidenceReference: await verifiedEvidenceRef('ev://final-charge/membrane-009'),
         notes: 'Eligible for downstream final charge settlement',
         idempotencyKey: 'idem-add-final-charge-1',
         expectedVersion: 8,
@@ -1117,7 +1159,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         technicalFinding: 'Only 6 pcs needed instead of 10 pcs',
         quantity: 4,
         uomId: UOM_PCS,
-        evidenceReference: 'ev://reduce/pipe-001',
+        evidenceReference: await verifiedEvidenceRef('ev://reduce/pipe-001'),
         notes: 'Pekerjaan Kurang 4 pcs',
         idempotencyKey: 'idem-reduce-prop-1',
       },
@@ -1167,7 +1209,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         decision: 'APPROVE',
         revisedQuotationVersionId: QVER_A3_REDUCE,
-        evidenceReference: 'ev://tenant-approve-reduce',
+        evidenceReference: await verifiedEvidenceRef('ev://tenant-approve-reduce'),
         idempotencyKey: 'idem-red-ten-1',
       },
     );
@@ -1207,7 +1249,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         technicalFinding: 'Over reduction test',
         quantity: 7,
         uomId: UOM_PCS,
-        evidenceReference: 'ev://reduce/over-001',
+        evidenceReference: await verifiedEvidenceRef('ev://reduce/over-001'),
         idempotencyKey: 'idem-over-reduce-1',
       },
     );
@@ -1231,7 +1273,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         technicalFinding: 'Cosmetic paint wear',
         quantity: 1,
         uomId: UOM_UNIT,
-        evidenceReference: 'ev://prop/repaint-001',
+        evidenceReference: await verifiedEvidenceRef('ev://prop/repaint-001'),
         idempotencyKey: 'idem-reject-flow-1',
       },
     );
@@ -1250,7 +1292,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         technicalFinding: 'Cosmetic paint wear',
         quantity: 1,
         uomId: UOM_UNIT,
-        evidenceReference: 'ev://prop/repaint-001',
+        evidenceReference: await verifiedEvidenceRef('ev://prop/repaint-001'),
         idempotencyKey: 'idem-reject-flow-1',
       },
     );
@@ -1269,7 +1311,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         technicalFinding: 'Cosmetic paint wear',
         quantity: 5,
         uomId: UOM_UNIT,
-        evidenceReference: 'ev://prop/repaint-001',
+        evidenceReference: await verifiedEvidenceRef('ev://prop/repaint-001'),
         idempotencyKey: 'idem-reject-flow-1',
       },
     );
@@ -1316,7 +1358,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         decision: 'REJECT',
         revisedQuotationVersionId: QVER_A4_REJECT,
-        evidenceReference: 'ev://tenant-reject/repaint',
+        evidenceReference: await verifiedEvidenceRef('ev://tenant-reject/repaint'),
         notes: 'Declined optional repaint',
         idempotencyKey: 'idem-rej-dec-1',
       },
