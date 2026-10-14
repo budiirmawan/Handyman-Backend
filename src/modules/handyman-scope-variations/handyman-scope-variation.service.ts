@@ -499,6 +499,294 @@ function assertExpectedVersion(
   }
 }
 
+function toCents(amount: string): bigint {
+  const trimmed = amount.trim();
+  const isNegative = trimmed.startsWith('-');
+  const unsigned = isNegative ? trimmed.slice(1) : trimmed;
+  const [whole = '0', frac = '00'] = unsigned.split('.');
+  const cents =
+    BigInt(whole || '0') * 100n +
+    BigInt((frac + '00').slice(0, 2));
+  return isNegative ? -cents : cents;
+}
+
+function fromCents(cents: bigint): string {
+  const isNegative = cents < 0n;
+  const abs = isNegative ? -cents : cents;
+  const whole = abs / 100n;
+  const frac = (abs % 100n).toString().padStart(2, '0');
+  return `${isNegative ? '-' : ''}${whole}.${frac}`;
+}
+
+async function assertValidRevisedQuotationVersionForVariation(
+  tx: PoolClient,
+  ctx: ExecutionScopeContext,
+  params: {
+    variationId: string;
+    revisedQuotationVersionId: string;
+    expectedCurrency: string;
+    expectedVariationDelta: string;
+  },
+): Promise<{
+  revisedVersionNumber: number;
+  originalVersionNumber: number;
+  originalQuotedTotal: string;
+  revisedQuotedTotal: string;
+}> {
+  if (params.revisedQuotationVersionId === ctx.approvedQuotationVersionId) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message:
+        'Cannot reuse the original approved quotation version as revisedQuotationVersionId; a distinct revised quotation version on the same quotation thread is required.',
+    });
+  }
+
+  const qvRes = await tx.query<{
+    id: string;
+    version_number: number;
+    status: string;
+    orig_version_number: number;
+  }>(
+    `SELECT qv.id,
+            qv.version_number,
+            qv.status,
+            orig_qv.version_number AS orig_version_number
+       FROM handyman_quotation_versions qv
+       JOIN handyman_quotations q
+         ON q.id = qv.quotation_id
+       JOIN handyman_quotation_versions orig_qv
+         ON orig_qv.id = $4
+        AND orig_qv.quotation_id = q.id
+      WHERE qv.id = $1
+        AND q.id = $2
+        AND q.client_id = $3
+      FOR SHARE`,
+    [
+      params.revisedQuotationVersionId,
+      ctx.quotationId,
+      ctx.clientId,
+      ctx.approvedQuotationVersionId,
+    ],
+  );
+  const qv = qvRes.rows[0];
+  if (!qv) {
+    throw AppError.validation(
+      'revisedQuotationVersionId does not belong to this execution scope quotation thread.',
+    );
+  }
+  if (Number(qv.version_number) <= Number(qv.orig_version_number)) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message:
+        'revisedQuotationVersionId must have a higher version_number than the original approved quotation version.',
+    });
+  }
+  if (qv.status !== 'ISSUED' && qv.status !== 'APPROVED') {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message:
+        'revisedQuotationVersionId must be in ISSUED or APPROVED status.',
+    });
+  }
+
+  const origLinesRes = await tx.query<{
+    line_total: string;
+    currency: string;
+  }>(
+    `SELECT line_total::numeric(18,2)::text AS line_total,
+            currency
+       FROM handyman_quotation_lines
+      WHERE quotation_version_id = $1`,
+    [ctx.approvedQuotationVersionId],
+  );
+  const revLinesRes = await tx.query<{
+    line_total: string;
+    currency: string;
+  }>(
+    `SELECT line_total::numeric(18,2)::text AS line_total,
+            currency
+       FROM handyman_quotation_lines
+      WHERE quotation_version_id = $1`,
+    [params.revisedQuotationVersionId],
+  );
+
+  if (revLinesRes.rows.length === 0) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message:
+        'revisedQuotationVersionId has no quotation lines; a valid revised scope/charge representation is required.',
+    });
+  }
+  for (const row of revLinesRes.rows) {
+    if (row.currency !== params.expectedCurrency) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'revisedQuotationVersionId line currency does not match the variation currency.',
+      });
+    }
+  }
+
+  let origTotalCents = 0n;
+  for (const row of origLinesRes.rows) {
+    origTotalCents += toCents(row.line_total);
+  }
+  let revTotalCents = 0n;
+  for (const row of revLinesRes.rows) {
+    revTotalCents += toCents(row.line_total);
+  }
+  if (revTotalCents < 0n) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'Revised quotation total cannot be negative.',
+    });
+  }
+
+  const priorVarsRes = await tx.query<{ quoted_total_delta: string }>(
+    `SELECT quoted_total_delta::numeric(18,2)::text AS quoted_total_delta
+       FROM handyman_scope_variations
+      WHERE execution_scope_id = $1
+        AND id <> $2
+        AND quoted_total_delta IS NOT NULL
+        AND status IN ('AUTHORIZED_SCOPE', 'EXECUTION', 'QC', 'FINAL_CHARGE_ELIGIBILITY')`,
+    [ctx.executionScopeId, params.variationId],
+  );
+  let priorAuthorizedDeltaCents = 0n;
+  for (const row of priorVarsRes.rows) {
+    priorAuthorizedDeltaCents += toCents(row.quoted_total_delta);
+  }
+
+  const thisDeltaCents = toCents(params.expectedVariationDelta);
+  const actualRevDeltaCents = revTotalCents - origTotalCents;
+  const matchesStandalone = actualRevDeltaCents === thisDeltaCents;
+  const matchesCumulative =
+    actualRevDeltaCents === priorAuthorizedDeltaCents + thisDeltaCents;
+
+  if (!matchesStandalone && !matchesCumulative) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: `Revised quotation line total delta (${fromCents(actualRevDeltaCents)}) does not reconcile with variation quotedTotalDelta (${fromCents(thisDeltaCents)}).`,
+    });
+  }
+
+  return {
+    revisedVersionNumber: Number(qv.version_number),
+    originalVersionNumber: Number(qv.orig_version_number),
+    originalQuotedTotal: fromCents(origTotalCents),
+    revisedQuotedTotal: fromCents(revTotalCents),
+  };
+}
+
+async function assertVerifiedAuthoritativeQcRunForVariation(
+  tx: PoolClient,
+  ctx: ExecutionScopeContext,
+  qcRunId: string,
+  expectedQcOutcome: HandymanScopeVariationQcOutcome,
+): Promise<{
+  qcRunId: string;
+  checklistIdentity: string;
+  qcRunStatus: string;
+}> {
+  const qcRes = await tx.query<{
+    id: string;
+    checklist_identity: string;
+    status: string;
+    created_at: Date | string;
+  }>(
+    `SELECT id, checklist_identity, status, created_at
+       FROM handyman_qc_runs
+      WHERE id = $1
+        AND execution_scope_id = $2
+        AND client_id = $3
+      FOR SHARE`,
+    [qcRunId, ctx.executionScopeId, ctx.clientId],
+  );
+  const qcRun = qcRes.rows[0];
+  if (!qcRun) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message:
+        'qcRunId must reference an existing authoritative Supervisor QC run (handyman_qc_runs) for this execution scope.',
+    });
+  }
+  if (qcRun.status !== expectedQcOutcome) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: `Authoritative QC run (${qcRun.id}) status is ${qcRun.status}, which does not match variation qcOutcome ${expectedQcOutcome}.`,
+    });
+  }
+
+  if (expectedQcOutcome === 'PASSED') {
+    const finishEventRes = await tx.query<{ id: string }>(
+      `SELECT id
+         FROM handyman_qc_run_events
+        WHERE run_id = $1
+          AND client_id = $2
+          AND event_type = 'FINISH'
+        LIMIT 1`,
+      [qcRun.id, ctx.clientId],
+    );
+    if (!finishEventRes.rows[0]) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Authoritative QC run must have a recorded FINISH event before variation QC PASSED can be verified.',
+      });
+    }
+
+    const badItemsRes = await tx.query<{ id: string }>(
+      `SELECT id
+         FROM handyman_qc_run_items
+        WHERE run_id = $1
+          AND outcome IN ('DEFECT', 'NOT_CHECKED')
+        LIMIT 1`,
+      [qcRun.id],
+    );
+    if (badItemsRes.rows[0]) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Authoritative QC run contains DEFECT or NOT_CHECKED items and cannot support variation QC PASSED.',
+      });
+    }
+
+    const openDefectsRes = await tx.query<{ id: string; status: string }>(
+      `SELECT id, status
+         FROM handyman_defect_records
+        WHERE execution_scope_id = $1
+          AND client_id = $2
+          AND status <> 'VERIFIED'
+        LIMIT 1`,
+      [ctx.executionScopeId, ctx.clientId],
+    );
+    if (openDefectsRes.rows[0]) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Cannot verify variation QC PASSED while unverified defect records remain open on the execution scope.',
+      });
+    }
+  }
+
+  return {
+    qcRunId: qcRun.id,
+    checklistIdentity: qcRun.checklist_identity,
+    qcRunStatus: qcRun.status,
+  };
+}
+
 function stripCommercialForField(
   v: HandymanScopeVariationRecord,
   events: HandymanScopeVariationEventRecord[],
@@ -518,6 +806,7 @@ function stripCommercialForField(
     status: v.status,
     tenantDecisionOutcome: v.tenantDecisionOutcome,
     qcOutcome: v.qcOutcome,
+    qcRunId: v.qcRunId,
     originActorUserId: v.originActorUserId,
     originActorRole: v.originActorRole,
     latestEvidenceReference: v.latestEvidenceReference,
@@ -1372,14 +1661,10 @@ export async function prepareVariationRevisedQuotation(
     typeof input.notes === 'string' && input.notes.trim().length > 0
       ? input.notes.trim()
       : null;
-  const rawRevisedQuotationVersionId =
-    input.revisedQuotationVersionId !== undefined &&
-    input.revisedQuotationVersionId !== null
-      ? assertUuid(
-          input.revisedQuotationVersionId,
-          'revisedQuotationVersionId',
-        )
-      : null;
+  const revisedQuotationVersionId = assertUuid(
+    input.revisedQuotationVersionId,
+    'revisedQuotationVersionId',
+  );
 
   return withTransaction(async (tx) => {
     const variation =
@@ -1428,32 +1713,23 @@ export async function prepareVariationRevisedQuotation(
       });
     }
 
-    let revisedQuotationVersionId = ctx.approvedQuotationVersionId;
-    if (rawRevisedQuotationVersionId) {
-      const qvCheck = await tx.query<{ id: string }>(
-        `SELECT qv.id
-           FROM handyman_quotation_versions qv
-           JOIN handyman_quotations q
-             ON q.id = qv.quotation_id
-          WHERE qv.id = $1
-            AND q.id = $2
-            AND q.client_id = $3`,
-        [rawRevisedQuotationVersionId, ctx.quotationId, ctx.clientId],
-      );
-      if (!qvCheck.rows[0]) {
-        throw AppError.validation(
-          'revisedQuotationVersionId does not belong to this execution scope quotation thread.',
-        );
-      }
-      revisedQuotationVersionId = rawRevisedQuotationVersionId;
-    }
-
     const rawMagnitude = Number(
       (Number(variation.quantity) * Number(quotedUnitAmount)).toFixed(2),
     );
     const signedDelta =
       variation.variationType === 'REDUCE' ? -rawMagnitude : rawMagnitude;
     const quotedTotalDelta = signedDelta.toFixed(2);
+
+    const qvValidation = await assertValidRevisedQuotationVersionForVariation(
+      tx,
+      ctx,
+      {
+        variationId: variation.id,
+        revisedQuotationVersionId,
+        expectedCurrency: currency,
+        expectedVariationDelta: quotedTotalDelta,
+      },
+    );
 
     const evidenceReference =
       input.evidenceReference !== undefined && input.evidenceReference !== null
@@ -1495,6 +1771,9 @@ export async function prepareVariationRevisedQuotation(
         quotedTotalDelta,
         currency,
         revisedQuotationVersionId,
+        revisedVersionNumber: qvValidation.revisedVersionNumber,
+        originalQuotedTotal: qvValidation.originalQuotedTotal,
+        revisedQuotedTotal: qvValidation.revisedQuotedTotal,
       },
     });
 
@@ -1632,12 +1911,17 @@ export async function recordVariationTenantDecision(
       });
     }
 
-    if (!variation.revisedQuotationVersionId) {
+    if (
+      !variation.revisedQuotationVersionId ||
+      variation.revisedQuotationVersionId === ctx.approvedQuotationVersionId ||
+      !variation.currency ||
+      !variation.quotedTotalDelta
+    ) {
       throw new AppError({
         statusCode: 409,
         code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
         message:
-          'Variation has no bound revisedQuotationVersionId for tenant decision.',
+          'Variation has no valid distinct revisedQuotationVersionId for tenant decision.',
       });
     }
 
@@ -1658,6 +1942,13 @@ export async function recordVariationTenantDecision(
         });
       }
     }
+
+    await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
+      variationId: variation.id,
+      revisedQuotationVersionId: variation.revisedQuotationVersionId,
+      expectedCurrency: variation.currency,
+      expectedVariationDelta: variation.quotedTotalDelta,
+    });
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
@@ -1808,6 +2099,27 @@ export async function authorizeVariationScope(
           'Pending or rejected variations cannot be authorized into executable scope. Requires TENANT_DECISION with APPROVED outcome.',
       });
     }
+
+    if (
+      !variation.revisedQuotationVersionId ||
+      variation.revisedQuotationVersionId === ctx.approvedQuotationVersionId ||
+      !variation.currency ||
+      !variation.quotedTotalDelta
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Cannot authorize scope variation without a distinct, valid revised quotation version.',
+      });
+    }
+
+    await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
+      variationId: variation.id,
+      revisedQuotationVersionId: variation.revisedQuotationVersionId,
+      expectedCurrency: variation.currency,
+      expectedVariationDelta: variation.quotedTotalDelta,
+    });
 
     if (variation.variationType === 'REDUCE') {
       await validateReduceTargetAndRemainingQuantity(tx, ctx, {
@@ -2050,6 +2362,7 @@ export async function recordVariationQc(
   variationId: string,
   input: {
     qcOutcome: unknown;
+    qcRunId: unknown;
     evidenceReference: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
@@ -2075,6 +2388,7 @@ export async function recordVariationQc(
     throw AppError.validation('qcOutcome must be PASSED or FAILED.');
   }
   const qcOutcome = rawOutcome as HandymanScopeVariationQcOutcome;
+  const qcRunId = assertUuid(input.qcRunId, 'qcRunId');
 
   const evidenceReference = assertNonEmptyText(
     input.evidenceReference,
@@ -2145,11 +2459,15 @@ export async function recordVariationQc(
         idempotencyKey,
       );
     if (existingEv) {
-      if (variation.qcOutcome !== qcOutcome) {
+      if (
+        variation.qcOutcome !== qcOutcome ||
+        variation.qcRunId !== qcRunId
+      ) {
         throw new AppError({
           statusCode: 409,
           code: ERROR_CODES.HANDYMAN_VARIATION_IDEMPOTENCY_CONFLICT,
-          message: 'idempotencyKey was already used with a different qcOutcome.',
+          message:
+            'idempotencyKey was already used with a different qcOutcome or qcRunId.',
         });
       }
       const events =
@@ -2172,12 +2490,20 @@ export async function recordVariationQc(
       });
     }
 
+    const verifiedQcRun = await assertVerifiedAuthoritativeQcRunForVariation(
+      tx,
+      ctx,
+      qcRunId,
+      qcOutcome,
+    );
+
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
         variationId: variation.id,
         status: 'QC',
         latestEvidenceReference: evidenceReference,
         qcOutcome,
+        qcRunId: verifiedQcRun.qcRunId,
         qcVerifiedByUserId: actorUserId,
         qcVerifiedAt: new Date(),
       });
@@ -2197,6 +2523,9 @@ export async function recordVariationQc(
       idempotencyKey,
       metadata: {
         qcOutcome,
+        qcRunId: verifiedQcRun.qcRunId,
+        qcChecklistIdentity: verifiedQcRun.checklistIdentity,
+        qcRunStatus: verifiedQcRun.qcRunStatus,
         variationType: variation.variationType,
       },
     });
@@ -2237,6 +2566,8 @@ export async function confirmVariationFinalChargeEligibility(
   executionScopeId: string,
   variationId: string,
   input: {
+    qcRunId?: unknown;
+    bastId?: unknown;
     evidenceReference?: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
@@ -2257,6 +2588,14 @@ export async function confirmVariationFinalChargeEligibility(
   const notes =
     typeof input.notes === 'string' && input.notes.trim().length > 0
       ? input.notes.trim()
+      : null;
+  const callerQcRunId =
+    input.qcRunId !== undefined && input.qcRunId !== null
+      ? assertUuid(input.qcRunId, 'qcRunId')
+      : null;
+  const callerBastId =
+    input.bastId !== undefined && input.bastId !== null
+      ? assertUuid(input.bastId, 'bastId')
       : null;
 
   return withTransaction(async (tx) => {
@@ -2298,12 +2637,184 @@ export async function confirmVariationFinalChargeEligibility(
 
     assertExpectedVersion(variation, input.expectedVersion);
 
-    if (variation.status !== 'QC' || variation.qcOutcome !== 'PASSED') {
+    if (
+      variation.status !== 'QC' ||
+      variation.qcOutcome !== 'PASSED' ||
+      !variation.qcRunId
+    ) {
       throw new AppError({
         statusCode: 409,
         code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
         message:
-          'Variation can only enter FINAL_CHARGE_ELIGIBILITY after QC with PASSED outcome.',
+          'Variation can only enter FINAL_CHARGE_ELIGIBILITY after QC with PASSED outcome and a linked authoritative QC run.',
+      });
+    }
+
+    if (callerQcRunId && callerQcRunId !== variation.qcRunId) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'qcRunId does not match the variation bound authoritative QC run.',
+      });
+    }
+
+    // 1. Authoritative Supervisor QC gate & defect closure
+    const verifiedQcRun = await assertVerifiedAuthoritativeQcRunForVariation(
+      tx,
+      ctx,
+      variation.qcRunId,
+      'PASSED',
+    );
+    const newerFailedOrOpenQcRes = await tx.query<{ id: string; status: string }>(
+      `SELECT id, status
+         FROM handyman_qc_runs
+        WHERE execution_scope_id = $1
+          AND client_id = $2
+          AND id <> $3
+          AND status IN ('OPEN', 'FAILED')
+        LIMIT 1`,
+      [ctx.executionScopeId, ctx.clientId, variation.qcRunId],
+    );
+    if (newerFailedOrOpenQcRes.rows[0]) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Cannot admit variation to FINAL_CHARGE_ELIGIBILITY while an OPEN or FAILED QC run exists on the execution scope.',
+      });
+    }
+
+    // 2. Operational closure gate (no in-flight work sessions)
+    const openSessionRes = await tx.query<{ id: string; status: string }>(
+      `SELECT id, status
+         FROM handyman_work_sessions
+        WHERE execution_scope_id = $1
+          AND client_id = $2
+          AND status IN ('CHECKED_IN', 'IN_PROGRESS', 'PAUSED', 'MATERIAL_RUN')
+        LIMIT 1`,
+      [ctx.executionScopeId, ctx.clientId],
+    );
+    if (openSessionRes.rows[0]) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message: `Cannot admit variation to FINAL_CHARGE_ELIGIBILITY while work session ${openSessionRes.rows[0].id} is still in ${openSessionRes.rows[0].status} status.`,
+      });
+    }
+
+    // 3. Accepted BAST & customer sign-off gate
+    const bastRes = await tx.query<{
+      id: string;
+      status: string;
+      accepted_at: Date | string | null;
+      has_valid_sign_off: boolean;
+    }>(
+      `SELECT b.id,
+              b.status,
+              b.accepted_at,
+              EXISTS (
+                SELECT 1
+                  FROM handyman_bast_sign_offs so
+                 WHERE so.bast_id = b.id
+                   AND so.execution_scope_id = b.execution_scope_id
+                   AND so.client_id = b.client_id
+                   AND so.decision = 'ACCEPT'
+                   AND length(so.signature_digest) > 0
+              ) AS has_valid_sign_off
+         FROM handyman_bast_documents b
+        WHERE b.execution_scope_id = $1
+          AND b.client_id = $2
+          AND ($3::uuid IS NULL OR b.id = $3::uuid)
+          AND b.status <> 'VOID'
+        ORDER BY b.created_at DESC, b.id DESC
+        LIMIT 1
+        FOR SHARE`,
+      [ctx.executionScopeId, ctx.clientId, callerBastId],
+    );
+    const bast = bastRes.rows[0];
+    if (
+      !bast ||
+      bast.status !== 'ACCEPTED' ||
+      !bast.accepted_at ||
+      !bast.has_valid_sign_off
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Variation cannot enter FINAL_CHARGE_ELIGIBILITY without an ACCEPTED BAST and customer acceptance sign-off for this execution scope.',
+      });
+    }
+
+    // 4. Original scope / variation charge reconciliation gate
+    if (
+      !variation.revisedQuotationVersionId ||
+      !variation.currency ||
+      !variation.quotedTotalDelta
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Variation is missing revised quotation commercial binding required for charge reconciliation.',
+      });
+    }
+    const qvReconciliation = await assertValidRevisedQuotationVersionForVariation(
+      tx,
+      ctx,
+      {
+        variationId: variation.id,
+        revisedQuotationVersionId: variation.revisedQuotationVersionId,
+        expectedCurrency: variation.currency,
+        expectedVariationDelta: variation.quotedTotalDelta,
+      },
+    );
+
+    const incompleteAuthorizedVariationRes = await tx.query<{
+      id: string;
+      status: string;
+    }>(
+      `SELECT id, status
+         FROM handyman_scope_variations
+        WHERE execution_scope_id = $1
+          AND id <> $2
+          AND (
+            status IN ('AUTHORIZED_SCOPE', 'EXECUTION')
+            OR (status = 'QC' AND qc_outcome = 'FAILED')
+          )
+        LIMIT 1`,
+      [ctx.executionScopeId, variation.id],
+    );
+    if (incompleteAuthorizedVariationRes.rows[0]) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Cannot admit variation to FINAL_CHARGE_ELIGIBILITY while another authorized scope variation on the execution scope remains incomplete or failed QC.',
+      });
+    }
+
+    // 5. Finance admission & duplicate invoice protection gate
+    const finalizedInvoiceRes = await tx.query<{
+      id: string;
+      status: string;
+    }>(
+      `SELECT id, status
+         FROM tenant_invoices
+        WHERE handyman_execution_scope_id = $1
+          AND client_id = $2
+          AND status = 'FINALIZED'
+        LIMIT 1
+        FOR SHARE`,
+      [ctx.executionScopeId, ctx.clientId],
+    );
+    if (finalizedInvoiceRes.rows[0]) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Cannot admit variation to FINAL_CHARGE_ELIGIBILITY after the execution scope tenant invoice has already been FINALIZED (duplicate invoice / post-finalization charge mutation blocked).',
       });
     }
 
@@ -2316,11 +2827,14 @@ export async function confirmVariationFinalChargeEligibility(
           )
         : variation.latestEvidenceReference;
 
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
         variationId: variation.id,
         status: 'FINAL_CHARGE_ELIGIBILITY',
         latestEvidenceReference: evidenceReference,
+        bastId: bast.id,
         finalChargeEligible: true,
       });
 
@@ -2341,6 +2855,11 @@ export async function confirmVariationFinalChargeEligibility(
         variationType: variation.variationType,
         quotedTotalDelta: variation.quotedTotalDelta,
         currency: variation.currency,
+        revisedQuotationVersionId: variation.revisedQuotationVersionId,
+        originalQuotedTotal: qvReconciliation.originalQuotedTotal,
+        reconciledQuotedTotal: qvReconciliation.revisedQuotedTotal,
+        qcRunId: verifiedQcRun.qcRunId,
+        bastId: bast.id,
         finalChargeEligible: true,
         invoiced: false,
       },

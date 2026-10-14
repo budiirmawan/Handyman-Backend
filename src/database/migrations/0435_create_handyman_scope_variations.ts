@@ -32,6 +32,8 @@ export const migration0435CreateHandymanScopeVariations: Migration = {
           CHECK (line_type IN ('LABOR', 'MATERIAL')),
         target_quotation_line_id     UUID REFERENCES handyman_quotation_lines (id),
         revised_quotation_version_id UUID REFERENCES handyman_quotation_versions (id),
+        qc_run_id                    UUID REFERENCES handyman_qc_runs (id),
+        bast_id                      UUID REFERENCES handyman_bast_documents (id),
         title                        TEXT NOT NULL
           CHECK (char_length(btrim(title)) BETWEEN 1 AND 200),
         description                  TEXT NOT NULL
@@ -91,15 +93,35 @@ export const migration0435CreateHandymanScopeVariations: Migration = {
           UNIQUE (execution_scope_id, create_idempotency_key),
         CONSTRAINT handyman_scope_variations_reduce_target_check
           CHECK (variation_type = 'ADD' OR target_quotation_line_id IS NOT NULL),
+        CONSTRAINT handyman_scope_variations_revised_quotation_required_check
+          CHECK (
+            status NOT IN ('REVISED_QUOTATION', 'TENANT_DECISION', 'AUTHORIZED_SCOPE', 'EXECUTION', 'QC', 'FINAL_CHARGE_ELIGIBILITY')
+            OR (
+              revised_quotation_version_id IS NOT NULL
+              AND quoted_unit_amount IS NOT NULL
+              AND quoted_total_delta IS NOT NULL
+              AND currency IS NOT NULL
+            )
+          ),
         CONSTRAINT handyman_scope_variations_authorized_requires_tenant_approval
           CHECK (
             status NOT IN ('AUTHORIZED_SCOPE', 'EXECUTION', 'QC', 'FINAL_CHARGE_ELIGIBILITY')
             OR tenant_decision_outcome = 'APPROVED'
           ),
+        CONSTRAINT handyman_scope_variations_qc_requires_qc_run_check
+          CHECK (
+            status NOT IN ('QC', 'FINAL_CHARGE_ELIGIBILITY')
+            OR (qc_outcome IS NOT NULL AND qc_run_id IS NOT NULL)
+          ),
         CONSTRAINT handyman_scope_variations_final_charge_requires_qc_pass
           CHECK (
             status <> 'FINAL_CHARGE_ELIGIBILITY'
-            OR (qc_outcome = 'PASSED' AND final_charge_eligible = TRUE)
+            OR (
+              qc_outcome = 'PASSED'
+              AND qc_run_id IS NOT NULL
+              AND bast_id IS NOT NULL
+              AND final_charge_eligible = TRUE
+            )
           )
       );
 
@@ -149,6 +171,8 @@ export const migration0435CreateHandymanScopeVariations: Migration = {
     await client.query(`
       CREATE OR REPLACE FUNCTION handyman_scope_variations_guard()
       RETURNS trigger LANGUAGE plpgsql AS $$
+      DECLARE
+        scope_approved_qv UUID;
       BEGIN
         IF TG_OP = 'DELETE' THEN
           RAISE EXCEPTION 'Handyman scope variations cannot be deleted'
@@ -170,12 +194,22 @@ export const migration0435CreateHandymanScopeVariations: Migration = {
           RAISE EXCEPTION 'Handyman scope variation identity and origin provenance are immutable'
             USING ERRCODE = '23514';
         END IF;
+        IF NEW.revised_quotation_version_id IS NOT NULL THEN
+          SELECT approved_quotation_version_id INTO scope_approved_qv
+            FROM handyman_execution_scopes
+           WHERE id = NEW.execution_scope_id;
+          IF scope_approved_qv IS NOT NULL
+             AND NEW.revised_quotation_version_id = scope_approved_qv THEN
+            RAISE EXCEPTION 'Handyman scope variation revised_quotation_version_id cannot reuse the original approved quotation version'
+              USING ERRCODE = '23514';
+          END IF;
+        END IF;
         RETURN NEW;
       END;
       $$;
 
       CREATE TRIGGER handyman_scope_variations_guard_trg
-        BEFORE UPDATE OR DELETE ON handyman_scope_variations
+        BEFORE INSERT OR UPDATE OR DELETE ON handyman_scope_variations
         FOR EACH ROW EXECUTE FUNCTION handyman_scope_variations_guard();
 
       CREATE OR REPLACE FUNCTION handyman_scope_variation_events_immutable()

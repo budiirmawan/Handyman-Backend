@@ -70,8 +70,10 @@ export interface HandymanScopeVariationRecord {
   tenantDecidedByUserId: string | null;
   tenantDecidedAt: string | null;
   qcOutcome: HandymanScopeVariationQcOutcome | null;
+  qcRunId: string | null;
   qcVerifiedByUserId: string | null;
   qcVerifiedAt: string | null;
+  bastId: string | null;
   finalChargeEligible: boolean;
   invoiced: boolean;
   originActorUserId: string;
@@ -115,6 +117,7 @@ export interface FieldScopeVariationProjection {
   status: HandymanScopeVariationStatus;
   tenantDecisionOutcome: HandymanScopeVariationTenantDecision | null;
   qcOutcome: HandymanScopeVariationQcOutcome | null;
+  qcRunId: string | null;
   originActorUserId: string;
   originActorRole: 'PIC_PEKERJAAN' | 'INSPECTOR';
   latestEvidenceReference: string;

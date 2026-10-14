@@ -37,8 +37,10 @@ interface VariationRow {
   tenant_decided_by_user_id: string | null;
   tenant_decided_at: Date | string | null;
   qc_outcome: HandymanScopeVariationQcOutcome | null;
+  qc_run_id: string | null;
   qc_verified_by_user_id: string | null;
   qc_verified_at: Date | string | null;
+  bast_id: string | null;
   final_charge_eligible: boolean;
   invoiced: boolean;
   origin_actor_user_id: string;
@@ -103,8 +105,10 @@ function mapVariationRow(row: VariationRow): HandymanScopeVariationRecord {
     tenantDecidedByUserId: row.tenant_decided_by_user_id,
     tenantDecidedAt: toIso(row.tenant_decided_at),
     qcOutcome: row.qc_outcome,
+    qcRunId: row.qc_run_id,
     qcVerifiedByUserId: row.qc_verified_by_user_id,
     qcVerifiedAt: toIso(row.qc_verified_at),
+    bastId: row.bast_id,
     finalChargeEligible: Boolean(row.final_charge_eligible),
     invoiced: Boolean(row.invoiced),
     originActorUserId: row.origin_actor_user_id,
@@ -146,8 +150,8 @@ const VARIATION_COLUMNS = `
   quoted_unit_amount::text AS quoted_unit_amount,
   quoted_total_delta::text AS quoted_total_delta,
   currency, status, tenant_decision_outcome, tenant_decided_by_user_id,
-  tenant_decided_at, qc_outcome, qc_verified_by_user_id, qc_verified_at,
-  final_charge_eligible, invoiced, origin_actor_user_id, origin_actor_role,
+  tenant_decided_at, qc_outcome, qc_run_id, qc_verified_by_user_id, qc_verified_at,
+  bast_id, final_charge_eligible, invoiced, origin_actor_user_id, origin_actor_role,
   latest_evidence_reference, create_idempotency_key, version,
   created_at, updated_at
 `;
@@ -273,8 +277,10 @@ export const handymanScopeVariationRepository = {
       tenantDecidedByUserId?: string | null;
       tenantDecidedAt?: Date | null;
       qcOutcome?: HandymanScopeVariationQcOutcome | null;
+      qcRunId?: string | null;
       qcVerifiedByUserId?: string | null;
       qcVerifiedAt?: Date | null;
+      bastId?: string | null;
       finalChargeEligible?: boolean;
     },
   ): Promise<HandymanScopeVariationRecord> {
@@ -291,9 +297,11 @@ export const handymanScopeVariationRepository = {
               tenant_decided_by_user_id = COALESCE($10, tenant_decided_by_user_id),
               tenant_decided_at = COALESCE($11, tenant_decided_at),
               qc_outcome = COALESCE($12, qc_outcome),
-              qc_verified_by_user_id = COALESCE($13, qc_verified_by_user_id),
-              qc_verified_at = COALESCE($14, qc_verified_at),
-              final_charge_eligible = COALESCE($15, final_charge_eligible),
+              qc_run_id = COALESCE($13, qc_run_id),
+              qc_verified_by_user_id = COALESCE($14, qc_verified_by_user_id),
+              qc_verified_at = COALESCE($15, qc_verified_at),
+              bast_id = COALESCE($16, bast_id),
+              final_charge_eligible = COALESCE($17, final_charge_eligible),
               version = version + 1,
               updated_at = NOW()
         WHERE id = $1
@@ -311,8 +319,10 @@ export const handymanScopeVariationRepository = {
         input.tenantDecidedByUserId ?? null,
         input.tenantDecidedAt ?? null,
         input.qcOutcome ?? null,
+        input.qcRunId ?? null,
         input.qcVerifiedByUserId ?? null,
         input.qcVerifiedAt ?? null,
+        input.bastId ?? null,
         input.finalChargeEligible ?? null,
       ],
     );

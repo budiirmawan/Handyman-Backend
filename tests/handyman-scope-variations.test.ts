@@ -56,10 +56,21 @@ const MEM_HELPER_A = '10000000-0000-4000-8000-000000000232';
 const REQ_A1 = '10000000-0000-4000-8000-000000000301';
 const QUO_A1 = '10000000-0000-4000-8000-000000000401';
 const QVER_A1 = '10000000-0000-4000-8000-000000000411';
+const QVER_A2_ADD = '10000000-0000-4000-8000-000000000412';
+const QVER_A3_REDUCE = '10000000-0000-4000-8000-000000000413';
+const QVER_A4_REJECT = '10000000-0000-4000-8000-000000000414';
+const QVER_EMPTY = '10000000-0000-4000-8000-000000000415';
+const QVER_WRONG_DELTA = '10000000-0000-4000-8000-000000000416';
 const QLINE_LABOR_A1 = '10000000-0000-4000-8000-000000000421';
 const QLINE_MAT_A1 = '10000000-0000-4000-8000-000000000422';
 const SCOPE_A1 = '10000000-0000-4000-8000-000000000501';
 const ASSIGN_A1 = '10000000-0000-4000-8000-000000000601';
+const QCRUN_OPEN_A1 = '10000000-0000-4000-8000-000000000801';
+const QCRUN_PASSED_A1 = '10000000-0000-4000-8000-000000000802';
+const DEFECT_A1 = '10000000-0000-4000-8000-000000000811';
+const WSESS_A1 = '10000000-0000-4000-8000-000000000821';
+const BAST_A1 = '10000000-0000-4000-8000-000000000831';
+const INVOICE_A1 = '10000000-0000-4000-8000-000000000841';
 
 const UOM_UNIT = '10000000-0000-4000-8000-000000000701';
 const UOM_PCS = '10000000-0000-4000-8000-000000000702';
@@ -224,7 +235,8 @@ before(async () => {
       description text NOT NULL, quantity numeric(14,3) NOT NULL, uom_id uuid NOT NULL,
       cost_basis_unit_amount numeric(18,2) NOT NULL, margin_percent numeric(7,4) NOT NULL,
       reference_unit_amount numeric(18,2) NOT NULL, final_quoted_unit_amount numeric(18,2) NOT NULL,
-      line_total numeric(18,2) NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+      line_total numeric(18,2) NOT NULL, currency varchar(3) NOT NULL DEFAULT 'IDR',
+      created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE TABLE handyman_quotation_decisions(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, quotation_version_id uuid NOT NULL,
@@ -257,6 +269,53 @@ before(async () => {
       superseded_at timestamptz, notes text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_qc_runs(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+      checklist_identity text NOT NULL, status text NOT NULL DEFAULT 'OPEN',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_qc_run_items(
+      id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES handyman_qc_runs(id),
+      item_key text NOT NULL, outcome text NOT NULL DEFAULT 'PASS', note text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_qc_run_events(
+      id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES handyman_qc_runs(id),
+      client_id uuid NOT NULL, event_type text NOT NULL, idempotency_key text NOT NULL,
+      actor_user_id uuid NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_defect_records(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+      run_id uuid REFERENCES handyman_qc_runs(id), description text NOT NULL,
+      status text NOT NULL DEFAULT 'OPENED',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_work_sessions(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+      status text NOT NULL DEFAULT 'IN_PROGRESS',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_bast_documents(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+      status text NOT NULL DEFAULT 'ISSUED', issued_at timestamptz, accepted_at timestamptz,
+      voided_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_bast_sign_offs(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, bast_id uuid NOT NULL REFERENCES handyman_bast_documents(id),
+      execution_scope_id uuid NOT NULL, decision text NOT NULL,
+      signature_digest text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE tenant_invoices(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL,
+      handyman_execution_scope_id uuid, status text NOT NULL DEFAULT 'DRAFT',
+      created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE TABLE handyman_visit_appointments(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, building_id uuid NOT NULL,
@@ -368,11 +427,25 @@ before(async () => {
       id, client_id, quotation_id, version_number, status, currency,
       subtotal_labor, subtotal_material, discount_amount, tax_amount, total_amount,
       notes, prepared_by_user_id, issued_by_user_id, issued_at
-    ) VALUES (
-      '${QVER_A1}', '${CLIENT_A}', '${QUO_A1}', 1, 'APPROVED', 'IDR',
-      500000.00, 250000.00, 0.00, 82500.00, 832500.00,
-      'Original approved scope', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now()
-    );
+    ) VALUES
+      ('${QVER_A1}', '${CLIENT_A}', '${QUO_A1}', 1, 'APPROVED', 'IDR',
+       500000.00, 250000.00, 0.00, 82500.00, 832500.00,
+       'Original approved scope', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now()),
+      ('${QVER_A2_ADD}', '${CLIENT_A}', '${QUO_A1}', 2, 'ISSUED', 'IDR',
+       850000.00, 250000.00, 0.00, 121000.00, 1221000.00,
+       'Revised scope (+350000.00 ADD labor)', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now()),
+      ('${QVER_A3_REDUCE}', '${CLIENT_A}', '${QUO_A1}', 3, 'ISSUED', 'IDR',
+       850000.00, 150000.00, 0.00, 110000.00, 1110000.00,
+       'Revised scope (-100000.00 REDUCE material)', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now()),
+      ('${QVER_A4_REJECT}', '${CLIENT_A}', '${QUO_A1}', 4, 'ISSUED', 'IDR',
+       1150000.00, 150000.00, 0.00, 143000.00, 1443000.00,
+       'Revised scope (+300000.00 optional repaint)', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now()),
+      ('${QVER_EMPTY}', '${CLIENT_A}', '${QUO_A1}', 5, 'ISSUED', 'IDR',
+       0.00, 0.00, 0.00, 0.00, 0.00,
+       'Empty quotation version with no lines', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now()),
+      ('${QVER_WRONG_DELTA}', '${CLIENT_A}', '${QUO_A1}', 6, 'ISSUED', 'IDR',
+       500000.00, 250000.00, 0.00, 82500.00, 832500.00,
+       'Quotation version with unchanged 750000.00 line total', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now());
 
     INSERT INTO handyman_quotation_lines (
       id, client_id, quotation_version_id, line_number, line_type, source_item_id,
@@ -382,7 +455,49 @@ before(async () => {
       ('${QLINE_LABOR_A1}', '${CLIENT_A}', '${QVER_A1}', 1, 'LABOR', NULL,
        'Pipe sealing labor', 1.000, '${UOM_UNIT}', 350000.00, 42.8571, 500000.00, 500000.00, 500000.00),
       ('${QLINE_MAT_A1}', '${CLIENT_A}', '${QVER_A1}', 2, 'MATERIAL', NULL,
-       'PVC Sealant Pipe 2 inch', 10.000, '${UOM_PCS}', 15000.00, 66.6667, 25000.00, 25000.00, 250000.00);
+       'PVC Sealant Pipe 2 inch', 10.000, '${UOM_PCS}', 15000.00, 66.6667, 25000.00, 25000.00, 250000.00),
+      -- QVER_A2_ADD lines (total = 750000 + 350000 = 1100000.00)
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_A2_ADD}', 1, 'LABOR', NULL,
+       'Pipe sealing labor', 1.000, '${UOM_UNIT}', 350000.00, 42.8571, 500000.00, 500000.00, 500000.00),
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_A2_ADD}', 2, 'MATERIAL', NULL,
+       'PVC Sealant Pipe 2 inch', 10.000, '${UOM_PCS}', 15000.00, 66.6667, 25000.00, 25000.00, 250000.00),
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_A2_ADD}', 3, 'LABOR', NULL,
+       'Additional waterproofing membrane', 2.000, '${UOM_UNIT}', 120000.00, 45.8333, 175000.00, 175000.00, 350000.00),
+      -- QVER_A3_REDUCE lines (total = 1100000 - 100000 = 1000000.00)
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_A3_REDUCE}', 1, 'LABOR', NULL,
+       'Pipe sealing labor', 1.000, '${UOM_UNIT}', 350000.00, 42.8571, 500000.00, 500000.00, 500000.00),
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_A3_REDUCE}', 2, 'MATERIAL', NULL,
+       'PVC Sealant Pipe 2 inch (reduced to 6 pcs)', 6.000, '${UOM_PCS}', 15000.00, 66.6667, 25000.00, 25000.00, 150000.00),
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_A3_REDUCE}', 3, 'LABOR', NULL,
+       'Additional waterproofing membrane', 2.000, '${UOM_UNIT}', 120000.00, 45.8333, 175000.00, 175000.00, 350000.00),
+      -- QVER_A4_REJECT lines (total = 1000000 + 300000 = 1300000.00)
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_A4_REJECT}', 1, 'LABOR', NULL,
+       'Pipe sealing + membrane + optional repaint', 1.000, '${UOM_UNIT}', 900000.00, 44.4444, 1300000.00, 1300000.00, 1300000.00),
+      -- QVER_WRONG_DELTA lines (total = 750000.00, zero delta)
+      ('${randomUUID()}', '${CLIENT_A}', '${QVER_WRONG_DELTA}', 1, 'LABOR', NULL,
+       'Unchanged line total', 1.000, '${UOM_UNIT}', 500000.00, 50.0000, 750000.00, 750000.00, 750000.00);
+
+    INSERT INTO handyman_qc_runs (id, client_id, execution_scope_id, checklist_identity, status) VALUES
+      ('${QCRUN_OPEN_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'PLUMBING-QC-V1', 'OPEN'),
+      ('${QCRUN_PASSED_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'PLUMBING-QC-V1', 'PASSED');
+
+    INSERT INTO handyman_qc_run_items (id, run_id, item_key, outcome, note) VALUES
+      ('${randomUUID()}', '${QCRUN_PASSED_A1}', 'MEMBRANE_SEAL', 'PASS', 'Verified watertight');
+
+    INSERT INTO handyman_qc_run_events (id, run_id, client_id, event_type, idempotency_key, actor_user_id) VALUES
+      ('${randomUUID()}', '${QCRUN_PASSED_A1}', '${CLIENT_A}', 'FINISH', 'idem-qc-finish-1', '${OPS_MANAGER_USER_A}');
+
+    INSERT INTO handyman_defect_records (id, client_id, execution_scope_id, run_id, description, status) VALUES
+      ('${DEFECT_A1}', '${CLIENT_A}', '${SCOPE_A1}', '${QCRUN_PASSED_A1}', 'Minor sealant bead gap', 'OPENED');
+
+    INSERT INTO handyman_work_sessions (id, client_id, execution_scope_id, status) VALUES
+      ('${WSESS_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'IN_PROGRESS');
+
+    INSERT INTO handyman_bast_documents (id, client_id, execution_scope_id, status, issued_at) VALUES
+      ('${BAST_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'ISSUED', now());
+
+    INSERT INTO tenant_invoices (id, client_id, handyman_execution_scope_id, status) VALUES
+      ('${INVOICE_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'FINALIZED');
 
     INSERT INTO handyman_execution_scopes (
       id, client_id, handyman_request_id, quotation_id, approved_quotation_version_id,
@@ -616,13 +731,76 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s3.body.data.variation.status, 'OPERATIONS_REVIEW');
     assert.equal(s3.body.data.variation.version, 3);
 
-    // Stage 4: Operations/Manager prepares revised quotation (REVISED_QUOTATION)
+    // CHECK 1 Guard A: Omitting revisedQuotationVersionId fails closed (400 VALIDATION_ERROR)
+    const omitQv = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`,
+      OPS_MANAGER_USER_A,
+      {
+        quotedUnitAmount: 175000,
+        currency: 'IDR',
+        evidenceReference: 'ev://revised-quo/membrane-omit',
+        idempotencyKey: 'idem-add-rev-quo-omit',
+        expectedVersion: 3,
+      },
+    );
+    assert.equal(omitQv.status, 400);
+
+    // CHECK 1 Guard B: Reusing original approved quotation version (QVER_A1) fails closed (409)
+    const reuseOrigQv = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`,
+      OPS_MANAGER_USER_A,
+      {
+        quotedUnitAmount: 175000,
+        currency: 'IDR',
+        revisedQuotationVersionId: QVER_A1,
+        evidenceReference: 'ev://revised-quo/membrane-reuse-orig',
+        idempotencyKey: 'idem-add-rev-quo-reuse-orig',
+        expectedVersion: 3,
+      },
+    );
+    assert.equal(reuseOrigQv.status, 409);
+    assert.equal(
+      reuseOrigQv.body.error.code,
+      'HANDYMAN_VARIATION_ILLEGAL_TRANSITION',
+    );
+
+    // CHECK 1 Guard C: Revised quotation version with no commercial lines or mismatched delta fails closed (409)
+    const emptyQv = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`,
+      OPS_MANAGER_USER_A,
+      {
+        quotedUnitAmount: 175000,
+        currency: 'IDR',
+        revisedQuotationVersionId: QVER_EMPTY,
+        evidenceReference: 'ev://revised-quo/membrane-empty-qv',
+        idempotencyKey: 'idem-add-rev-quo-empty-qv',
+        expectedVersion: 3,
+      },
+    );
+    assert.equal(emptyQv.status, 409);
+
+    const wrongDeltaQv = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`,
+      OPS_MANAGER_USER_A,
+      {
+        quotedUnitAmount: 175000,
+        currency: 'IDR',
+        revisedQuotationVersionId: QVER_WRONG_DELTA,
+        evidenceReference: 'ev://revised-quo/membrane-wrong-delta',
+        idempotencyKey: 'idem-add-rev-quo-wrong-delta',
+        expectedVersion: 3,
+      },
+    );
+    assert.equal(wrongDeltaQv.status, 409);
+
+    // Stage 4: Operations/Manager prepares revised quotation with distinct reconciled QVER_A2_ADD (REVISED_QUOTATION)
     const s4 = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`,
       OPS_MANAGER_USER_A,
       {
         quotedUnitAmount: 175000,
         currency: 'IDR',
+        revisedQuotationVersionId: QVER_A2_ADD,
         evidenceReference: 'ev://revised-quo/membrane-004',
         notes: 'Revised quotation prepared for tenant approval',
         idempotencyKey: 'idem-add-rev-quo-1',
@@ -633,6 +811,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s4.body.data.variation.status, 'REVISED_QUOTATION');
     assert.equal(s4.body.data.variation.quotedUnitAmount, '175000.00');
     assert.equal(s4.body.data.variation.quotedTotalDelta, '350000.00');
+    assert.equal(s4.body.data.variation.revisedQuotationVersionId, QVER_A2_ADD);
     assert.equal(s4.body.data.variation.version, 4);
 
     // Guard: Operations/Manager CANNOT impersonate Tenant consent!
@@ -663,13 +842,13 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     );
     assert.equal(leadImpersonate.status, 403);
 
-    // Guard: Tenant decision with mismatched revisedQuotationVersionId is rejected!
+    // Guard: Tenant decision with mismatched or original revisedQuotationVersionId is rejected!
     const mismatchedQvDecision = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`,
       TENANT_USER_A,
       {
         decision: 'APPROVE',
-        revisedQuotationVersionId: randomUUID(),
+        revisedQuotationVersionId: QVER_A1,
         evidenceReference: 'ev://mismatched-qv',
         idempotencyKey: 'idem-mismatched-qv',
       },
@@ -680,13 +859,13 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       'HANDYMAN_VARIATION_ILLEGAL_TRANSITION',
     );
 
-    // Stage 5: Authorized Tenant PIC user approves variation (TENANT_DECISION)
+    // Stage 5: Authorized Tenant PIC user approves variation bound to QVER_A2_ADD (TENANT_DECISION)
     const s5 = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`,
       TENANT_USER_A,
       {
         decision: 'APPROVE',
-        revisedQuotationVersionId: QVER_A1,
+        revisedQuotationVersionId: QVER_A2_ADD,
         evidenceReference: 'ev://tenant-consent/membrane-005',
         notes: 'Approved by Tenant PIC Siti',
         idempotencyKey: 'idem-add-tenant-approve-1',
@@ -741,6 +920,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       LEAD_USER_A,
       {
         qcOutcome: 'PASSED',
+        qcRunId: QCRUN_PASSED_A1,
         evidenceReference: 'ev://self-qc',
         idempotencyKey: 'idem-self-qc',
       },
@@ -753,6 +933,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       INSPECTOR_USER_A,
       {
         qcOutcome: 'PASSED',
+        qcRunId: QCRUN_PASSED_A1,
         evidenceReference: 'ev://inspector-bypass-qc',
         idempotencyKey: 'idem-inspector-bypass-qc',
       },
@@ -763,12 +944,64 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       'HANDYMAN_VARIATION_ROLE_FORBIDDEN',
     );
 
-    // Stage 8: Authorized Supervisor / Operations Manager verifies QC (QC PASSED)
+    // CHECK 2 Guard A: Variation QC cannot substitute for an authoritative QC artifact without qcRunId (400)
+    const qcWithoutRun = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/qc`,
+      OPS_MANAGER_USER_A,
+      {
+        qcOutcome: 'PASSED',
+        evidenceReference: 'ev://qc/no-run',
+        idempotencyKey: 'idem-qc-no-run',
+        expectedVersion: 7,
+      },
+    );
+    assert.equal(qcWithoutRun.status, 400);
+
+    // CHECK 2 Guard B: Variation QC PASSED with an OPEN (unfinished) QC run fails closed (409)
+    const qcWithOpenRun = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/qc`,
+      OPS_MANAGER_USER_A,
+      {
+        qcOutcome: 'PASSED',
+        qcRunId: QCRUN_OPEN_A1,
+        evidenceReference: 'ev://qc/open-run',
+        idempotencyKey: 'idem-qc-open-run',
+        expectedVersion: 7,
+      },
+    );
+    assert.equal(qcWithOpenRun.status, 409);
+
+    // CHECK 2 Guard C: Variation QC PASSED while an unverified defect exists on the scope fails closed (409)
+    const qcWithOpenDefect = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/qc`,
+      OPS_MANAGER_USER_A,
+      {
+        qcOutcome: 'PASSED',
+        qcRunId: QCRUN_PASSED_A1,
+        evidenceReference: 'ev://qc/open-defect',
+        idempotencyKey: 'idem-qc-open-defect',
+        expectedVersion: 7,
+      },
+    );
+    assert.equal(qcWithOpenDefect.status, 409);
+
+    // Close the defect to VERIFIED and close QCRUN_OPEN_A1 to PASSED
+    await getPool().query(
+      `UPDATE handyman_defect_records SET status = 'VERIFIED' WHERE id = $1`,
+      [DEFECT_A1],
+    );
+    await getPool().query(
+      `UPDATE handyman_qc_runs SET status = 'PASSED' WHERE id = $1`,
+      [QCRUN_OPEN_A1],
+    );
+
+    // Stage 8: Authorized Supervisor / Operations Manager verifies QC linked to QCRUN_PASSED_A1 (QC PASSED)
     const s8 = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/qc`,
       OPS_MANAGER_USER_A,
       {
         qcOutcome: 'PASSED',
+        qcRunId: QCRUN_PASSED_A1,
         evidenceReference: 'ev://qc/membrane-008',
         notes: 'Moisture test passed after membrane installation',
         idempotencyKey: 'idem-add-qc-1',
@@ -778,12 +1011,76 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s8.status, 200, JSON.stringify(s8.body));
     assert.equal(s8.body.data.variation.status, 'QC');
     assert.equal(s8.body.data.variation.qcOutcome, 'PASSED');
+    assert.equal(s8.body.data.variation.qcRunId, QCRUN_PASSED_A1);
+
+    // CHECK 2 Guard D: FINAL_CHARGE_ELIGIBILITY blocked while an active work session is still IN_PROGRESS (409)
+    const fceOpenSession = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/final-charge-eligibility`,
+      OPS_MANAGER_USER_A,
+      {
+        evidenceReference: 'ev://final-charge/open-session',
+        idempotencyKey: 'idem-fce-open-session',
+        expectedVersion: 8,
+      },
+    );
+    assert.equal(fceOpenSession.status, 409);
+
+    // Complete/check out the work session
+    await getPool().query(
+      `UPDATE handyman_work_sessions SET status = 'CHECKED_OUT' WHERE id = $1`,
+      [WSESS_A1],
+    );
+
+    // CHECK 2 Guard E: FINAL_CHARGE_ELIGIBILITY blocked before BAST is ACCEPTED with customer sign-off (409)
+    const fceUnacceptedBast = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/final-charge-eligibility`,
+      OPS_MANAGER_USER_A,
+      {
+        bastId: BAST_A1,
+        evidenceReference: 'ev://final-charge/unaccepted-bast',
+        idempotencyKey: 'idem-fce-unaccepted-bast',
+        expectedVersion: 8,
+      },
+    );
+    assert.equal(fceUnacceptedBast.status, 409);
+
+    // Record customer BAST acceptance + sign-off
+    await getPool().query(
+      `UPDATE handyman_bast_documents SET status = 'ACCEPTED', accepted_at = now() WHERE id = $1`,
+      [BAST_A1],
+    );
+    await getPool().query(
+      `INSERT INTO handyman_bast_sign_offs (id, client_id, bast_id, execution_scope_id, decision, signature_digest)
+       VALUES ($1, $2, $3, $4, 'ACCEPT', 'sha256:tenant-bast-signature-001')`,
+      [randomUUID(), CLIENT_A, BAST_A1, SCOPE_A1],
+    );
+
+    // CHECK 2 Guard F: FINAL_CHARGE_ELIGIBILITY blocked when a FINALIZED invoice already exists for the scope (duplicate invoice protection, 409)
+    const fceFinalizedInvoice = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/final-charge-eligibility`,
+      OPS_MANAGER_USER_A,
+      {
+        bastId: BAST_A1,
+        evidenceReference: 'ev://final-charge/finalized-inv',
+        idempotencyKey: 'idem-fce-finalized-inv',
+        expectedVersion: 8,
+      },
+    );
+    assert.equal(fceFinalizedInvoice.status, 409);
+
+    // Set invoice back to DRAFT so pre-finalization charge admission is legal
+    await getPool().query(
+      `UPDATE tenant_invoices SET status = 'DRAFT' WHERE id = $1`,
+      [INVOICE_A1],
+    );
 
     // Stage 9: Operations/Manager confirms FINAL_CHARGE_ELIGIBILITY (without auto-invoicing)
     const s9 = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/final-charge-eligibility`,
       OPS_MANAGER_USER_A,
       {
+        qcRunId: QCRUN_PASSED_A1,
+        bastId: BAST_A1,
         evidenceReference: 'ev://final-charge/membrane-009',
         notes: 'Eligible for downstream final charge settlement',
         idempotencyKey: 'idem-add-final-charge-1',
@@ -794,6 +1091,8 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s9.body.data.variation.status, 'FINAL_CHARGE_ELIGIBILITY');
     assert.equal(s9.body.data.variation.finalChargeEligible, true);
     assert.equal(s9.body.data.variation.invoiced, false);
+    assert.equal(s9.body.data.variation.qcRunId, QCRUN_PASSED_A1);
+    assert.equal(s9.body.data.variation.bastId, BAST_A1);
     assert.equal(s9.body.data.events.length, 9);
 
     // Verify original approved scope row & quotation lines are 100% untouched
@@ -854,17 +1153,20 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         quotedUnitAmount: 25000,
         currency: 'IDR',
+        revisedQuotationVersionId: QVER_A3_REDUCE,
         idempotencyKey: 'idem-red-quo-1',
       },
     );
     assert.equal(quo.status, 200);
     assert.equal(quo.body.data.variation.quotedTotalDelta, '-100000.00');
+    assert.equal(quo.body.data.variation.revisedQuotationVersionId, QVER_A3_REDUCE);
 
     const ten = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${reduceVarId}/tenant-decision`,
       TENANT_USER_A,
       {
         decision: 'APPROVE',
+        revisedQuotationVersionId: QVER_A3_REDUCE,
         evidenceReference: 'ev://tenant-approve-reduce',
         idempotencyKey: 'idem-red-ten-1',
       },
@@ -1004,6 +1306,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       {
         quotedUnitAmount: 300000,
         currency: 'IDR',
+        revisedQuotationVersionId: QVER_A4_REJECT,
         idempotencyKey: 'idem-rej-quo-1',
       },
     );
@@ -1012,6 +1315,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       TENANT_USER_A,
       {
         decision: 'REJECT',
+        revisedQuotationVersionId: QVER_A4_REJECT,
         evidenceReference: 'ev://tenant-reject/repaint',
         notes: 'Declined optional repaint',
         idempotencyKey: 'idem-rej-dec-1',

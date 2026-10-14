@@ -231,6 +231,16 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
         id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
         status text NOT NULL DEFAULT 'ESTIMATED'
       );
+      CREATE TABLE handyman_qc_runs(
+        id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+        checklist_identity text NOT NULL DEFAULT 'DEFAULT', status text NOT NULL DEFAULT 'PASSED',
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE handyman_bast_documents(
+        id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+        status text NOT NULL DEFAULT 'ACCEPTED', accepted_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
       CREATE TABLE handyman_visit_appointments(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, building_id uuid NOT NULL,
         tenant_company_id uuid NOT NULL, handyman_request_id uuid NOT NULL,

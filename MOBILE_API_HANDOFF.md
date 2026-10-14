@@ -252,6 +252,7 @@ Governed lifecycle:
 ### 2.6 Operations Issues Revised Quotation (`REVISED_QUOTATION`)
 - **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/:variationId/revised-quotation`
 - **Authorized Persona**: Operations (`tenant_company.manage`)
+- **Commercial Invariant**: `revisedQuotationVersionId` is **required**, must belong to the same quotation thread with `version_number > originalVersionNumber`, must be in `ISSUED` or `APPROVED` status, cannot reuse `approvedQuotationVersionId` (`409 HANDYMAN_VARIATION_ILLEGAL_TRANSITION`), and its `handyman_quotation_lines` total delta must reconcile with the variation's `quotedTotalDelta`.
 - **Payload**:
 ```json
 {
@@ -265,13 +266,14 @@ Governed lifecycle:
 }
 ```
 
-### 2.7 Tenant Records Decision (`TENANT_DECISION` / `AUTHORIZED_SCOPE`)
+### 2.7 Tenant Records Decision (`TENANT_DECISION`)
 - **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/:variationId/tenant-decision`
 - **Authorized Persona**: Authorized `TENANT_PIC` for the Work Order's `tenantCompanyId` only. Operations Managers, PIC Pekerjaan, and Inspectors are strictly rejected (`403 HANDYMAN_VARIATION_TENANT_IMPERSONATION_FORBIDDEN`).
 - **Payload**:
 ```json
 {
   "decision": "APPROVED",
+  "revisedQuotationVersionId": "uuid",
   "evidenceReference": "tenant-consent://uuid",
   "notes": "Approved by tenant PIC",
   "expectedVersion": 3,
@@ -279,12 +281,12 @@ Governed lifecycle:
 }
 ```
 - **Outcome**:
-  - If `decision === "APPROVED"`, status transitions to `AUTHORIZED_SCOPE` (for `REDUCE`, remaining authorized line quantity is immediately reconciled).
-  - If `decision === "REJECTED"`, status remains `TENANT_DECISION` with `tenantDecisionOutcome: "REJECTED"` (terminal; cannot be executed).
+  - Verifies that the variation is bound to a distinct, valid revised quotation version (`revisedQuotationVersionId !== approvedQuotationVersionId`) before recording `TENANT_DECISION`, after which `/authorize-scope` transitions `APPROVED` variations to `AUTHORIZED_SCOPE`.
+  - If `decision === "REJECTED"`, status remains `TENANT_DECISION` with `tenantDecisionOutcome: "REJECTED"` (terminal; cannot be authorized or executed).
 
 ### 2.8 PIC Pekerjaan Records Execution of Authorized Variation (`EXECUTION`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/:variationId/execute`
-- **Alias**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/variations/:variationId/execute`
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/:variationId/execution`
+- **Alias**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/variations/:variationId/execution`
 - **Authorized Persona**: Assigned `PIC_PEKERJAAN`
 - **Payload**: `{ "evidenceReference": "hm-ev://uuid", "notes": "Installed 2 valves", "expectedVersion": 4, "idempotencyKey": "var-exec-001" }`
 
@@ -292,13 +294,19 @@ Governed lifecycle:
 - **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/:variationId/qc`
 - **Alias**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/variations/:variationId/qc`
 - **Authorized Persona**: Authorized Supervisor / Operations (`tenant_company.manage`) only. Field `INSPECTOR` technical inspection authority and `PIC_PEKERJAAN` execution authority cannot bypass Supervisor QC authority (`403 HANDYMAN_VARIATION_ROLE_FORBIDDEN`).
-- **Payload**: `{ "qcOutcome": "PASSED", "evidenceReference": "hm-ev://uuid", "notes": "Pressure tested OK", "expectedVersion": 5, "idempotencyKey": "var-qc-001" }`
+- **Authoritative QC Linkage**: `qcRunId` is **required** and verified against `handyman_qc_runs` (`status === qcOutcome`, `FINISH` event recorded for `PASSED`, no `DEFECT`/`NOT_CHECKED` items, and zero unverified `handyman_defect_records` on the execution scope). Variation QC cannot substitute for an authoritative QC artifact without explicit verified linkage.
+- **Payload**: `{ "qcOutcome": "PASSED", "qcRunId": "uuid", "evidenceReference": "hm-ev://uuid", "notes": "Pressure tested OK", "expectedVersion": 5, "idempotencyKey": "var-qc-001" }`
 
 ### 2.10 Operations Marks Final Charge Eligibility (`FINAL_CHARGE_ELIGIBILITY`)
 - **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/:variationId/final-charge-eligibility`
 - **Authorized Persona**: Operations (`tenant_company.manage`)
-- **Payload**: `{ "evidenceReference": "hm-ev://uuid", "notes": "Eligible for final settlement", "expectedVersion": 6, "idempotencyKey": "var-fce-001" }`
-- **Financial Guard**: Sets `finalChargeEligible: true` while keeping `invoiced: false` (never auto-adds to a tenant invoice without commercial settlement).
+- **Payload**: `{ "qcRunId": "uuid", "bastId": "uuid", "evidenceReference": "hm-ev://uuid", "notes": "Eligible for final settlement", "expectedVersion": 6, "idempotencyKey": "var-fce-001" }`
+- **Admission & Financial Guards**:
+  1. Verifies authoritative `handyman_qc_runs` (`PASSED` + `FINISH` event) and zero unverified `handyman_defect_records` or open/failed QC runs on the execution scope.
+  2. Verifies operational closure: no active/in-progress `handyman_work_sessions` (`CHECKED_IN`, `IN_PROGRESS`, `PAUSED`, `MATERIAL_RUN`).
+  3. Verifies an authoritative `ACCEPTED` BAST in `handyman_bast_documents` with customer acceptance sign-off in `handyman_bast_sign_offs`.
+  4. Verifies original scope / variation charge reconciliation and that no other authorized variation on the execution scope remains incomplete or failed QC.
+  5. Verifies duplicate invoice / post-finalization protection: fails closed (`409 HANDYMAN_VARIATION_ILLEGAL_TRANSITION`) if a `FINALIZED` invoice already exists in `tenant_invoices` for the execution scope, and keeps `invoiced: false` (never auto-adds to an invoice).
 
 ---
 
