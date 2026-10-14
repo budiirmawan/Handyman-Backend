@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { handymanDispatchService } from '../handyman-dispatch';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import {
@@ -11,6 +12,7 @@ import {
 import {
   handymanWorkSessionActiveConflictError,
   handymanWorkSessionArrivalRequiredError,
+  handymanWorkSessionDispatchNotReleasedError,
   handymanWorkSessionIllegalTransitionError,
   handymanWorkSessionNotAuthorizedError,
   handymanWorkSessionNotFoundError,
@@ -217,6 +219,19 @@ export async function checkInHandymanWorkSession(
   if (scope.status !== 'AUTHORIZED') {
     throw handymanWorkSessionScopeNotEligibleError();
   }
+  // CR-HM-OPS-DISPATCH-02 PART C: check-in requires an ACTIVE dispatch
+  // release (RELEASED or IN_PROGRESS). An assigned-but-not-released scope
+  // must not allow a work session to start.
+  const { handymanDispatchRepository } = await import(
+    '../handyman-dispatch/handyman-dispatch.repository'
+  );
+  const release = await handymanDispatchRepository.findActiveByScope(
+    undefined,
+    scopeUuid,
+  );
+  if (!release) {
+    throw handymanWorkSessionDispatchNotReleasedError(scopeUuid);
+  }
   if (!(await findVerifiedArrivalResultId(undefined, scopeUuid))) {
     throw handymanWorkSessionArrivalRequiredError(scopeUuid);
   }
@@ -276,6 +291,13 @@ export async function checkInHandymanWorkSession(
           helperUserId: helper.userId,
         }));
     }
+    // P0-C: propagate CHECK_IN to dispatch lifecycle (RELEASED → IN_PROGRESS)
+    // when a release exists. Silently no-op when no release is present.
+    await handymanDispatchService.markDispatchInProgress(
+      scopeUuid,
+      actorUuid,
+      tx,
+    );
     return { session, event, helperPresence, replayed: false };
   });
 }
@@ -604,6 +626,12 @@ async function sessionCloseTransition(
             helperUserId: helper.userId,
           });
       }
+      // P0-C: propagate CHECK_OUT to dispatch lifecycle (IN_PROGRESS → COMPLETED).
+      await handymanDispatchService.markDispatchCompleted(
+        scopeUuid,
+        actorUuid,
+        tx,
+      );
     }
     const row = transitioned.rows[0];
     return {

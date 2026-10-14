@@ -79,6 +79,18 @@ export function handymanWorkSessionIllegalTransitionError(
   });
 }
 
+/** Scope is assigned but not yet RELEASED by dispatch. */
+export function handymanWorkSessionDispatchNotReleasedError(
+  scopeId: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_WORK_SESSION_DISPATCH_NOT_RELEASED,
+    message: 'Execution scope has not been released for dispatch.',
+    statusCode: 409,
+    details: [`executionScopeId=${scopeId}`],
+  });
+}
+
 /** Bounded request-surface validation (no authority from caller). */
 export function handymanWorkSessionValidationError(
   field: string,

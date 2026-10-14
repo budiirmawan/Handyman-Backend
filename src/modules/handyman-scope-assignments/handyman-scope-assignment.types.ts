@@ -35,6 +35,7 @@ export type HandymanExecutionScopeAssignmentRecord = {
   assignedByUserId: string;
   assignedAt: Date;
   supersedesAssignmentId: string | null;
+  version: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -59,7 +60,19 @@ export type AssignHandymanExecutionScopeCrewInput = {
   executionScopeId: string;
   providerContextId: string;
   crewId: string;
+  idempotencyKey?: string;
 };
+
+/**
+ * CR-HM-OPS-DISPATCH-02 P0-B — hardened reassignment input. Requires
+ * expectedVersion concurrency guard, mandatory reason, and optional
+ * idempotencyKey for safe replay.
+ */
+export type ReassignHandymanExecutionScopeCrewInput =
+  AssignHandymanExecutionScopeCrewInput & {
+    expectedVersion: number;
+    reason: string;
+  };
 
 /** Fully-resolved row ready for persistence (server-derived). */
 export type NewHandymanExecutionScopeAssignment = {
