@@ -3965,12 +3965,18 @@ paths:
         Read-only Handyman Request queue; rows are keyed by the authoritative
         `handymanRequestId` and include the existing request lifecycle,
         execution-scope, assignment, readiness, and SLA visibility facts.
-        Requires the existing `tenant_company.read` authority. Reuses the
-        established Client/C6 read wall and exact assigned-Building isolation;
-        an explicit `buildingId` must be accessible under the supplied
-        `clientId`. This endpoint intentionally does not return a Work Order
-        id: `handyman_service_requests` / `handyman_execution_scopes` have no
-        authoritative relation to `work_orders`.
+        Requires the existing `tenant_company.read` authority. CR-HM-OPS-INBOX
+        BE-01 P0-A: discovery uses the genuine Operations scope — every row
+        must sit in a Building where the actor holds an explicit ACTIVE
+        Building assignment under the row's Client; Operations users are NOT
+        required to be Tenant PICs. An explicit `buildingId` must be accessible
+        under the supplied `clientId` (same-Client sibling Buildings are
+        denied), and a Client unreachable through any assignment is denied.
+        The queue returns exactly one row per request even when a request owns
+        several execution scopes. This endpoint intentionally does not return
+        a Work Order id: `handyman_service_requests` /
+        `handyman_execution_scopes` have no authoritative relation to
+        `work_orders`.
       tags: [Handyman Requests]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -4066,6 +4072,212 @@ paths:
                               limit: { type: integer }
                               offset: { type: integer }
                               nextOffset: { type: integer, nullable: true }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /handyman/operations/commercial-inbox:
+    get:
+      operationId: listHandymanOperationsCommercialInbox
+      x-required-permission: tenant_company.read
+      x-building-scoped: true
+      summary: Discover actionable commercial records (Variations & Material Purchasing) within the Operations scope
+      description: >
+        CR-HM-OPS-INBOX-BE-01 P0-B — authoritative, keyset-paginated commercial
+        discovery over the EXISTING `handyman_scope_variations` and
+        `handyman_material_purchase_records`. Requires the existing
+        `tenant_company.read` permission; every row additionally requires the
+        actor's explicit ACTIVE Building assignment under the row's Client
+        (BE-02G) inside the statement, so authorization precedes exposure and
+        cross-tenant/sibling-Building data never leaks. Discovery covers the
+        repositories' own open commercial states: Variation
+        FIELD_FINDING/PROPOSAL/OPERATIONS_REVIEW/REVISED_QUOTATION/
+        TENANT_DECISION (tenant-REJECTED decisions are closed and excluded)
+        and AUTHORIZED_SCOPE, plus Material REQUEST/ISSUED/PURCHASED/USAGE/
+        RETURN (RECONCILIATION is terminal and excluded), across ALL eligible
+        execution scopes and request ages — no Work Order identity is
+        fabricated. The derived `responsible` persona/action reflects only the
+        authorities those modules already enforce (Operations review /
+        revised-quotation preparation, tenant decision waiting, field usage
+        recording, Operations approval and reconciliation) and never grants or
+        impersonates them. This is discovery/read authority ONLY: variation
+        approval and tenant decisions, purchasing/expense authority, QC/BAST,
+        invoice/finance, evidence verification and dispatch assignment are
+        unchanged. Pagination is keyset/cursor-based on the deterministic key
+        `(createdAt DESC, recordType DESC, recordId)`; the opaque `cursor` is
+        the explicit continuation token, records added during a walk sort
+        before the outstanding cursor and therefore surface on a fresh first
+        page — never as duplicates inside a continuation. `includeCounts=true`
+        computes counts over the COMPLETE permitted result set with the same
+        filters (never over the loaded page).
+      tags: [Handyman Requests]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: recordType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [SCOPE_VARIATION, MATERIAL_PURCHASE]
+        - name: status
+          in: query
+          required: false
+          description: Any repository-native Variation or Material Purchasing status.
+          schema:
+            type: string
+            enum:
+              - FIELD_FINDING
+              - PROPOSAL
+              - OPERATIONS_REVIEW
+              - REVISED_QUOTATION
+              - TENANT_DECISION
+              - AUTHORIZED_SCOPE
+              - EXECUTION
+              - QC
+              - FINAL_CHARGE_ELIGIBILITY
+              - REQUEST
+              - APPROVAL
+              - ISSUED
+              - PURCHASED
+              - USAGE
+              - RETURN
+              - RECONCILIATION
+        - name: responsible
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PIC_PEKERJAAN, INSPECTOR, OPERATIONS_MANAGER, TENANT]
+        - name: createdFrom
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: createdTo
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: includeCounts
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque continuation token from the previous page.
+          schema: { type: string }
+      responses:
+        "200":
+          description: >
+            Keyset-paginated commercial discovery with explicit continuation
+            and (when requested) authoritative full-set counts.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, pagination]
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              type: object
+                              required:
+                                - recordId
+                                - recordType
+                                - recordStatus
+                                - commercialKind
+                                - executionScopeId
+                                - handymanRequestId
+                                - clientId
+                                - buildingId
+                                - tenantCompanyId
+                                - title
+                                - responsible
+                                - reconciliationException
+                                - sourceReference
+                                - revisedQuotationVersionId
+                                - version
+                                - createdAt
+                                - updatedAt
+                              properties:
+                                recordId: { type: string, format: uuid }
+                                recordType:
+                                  type: string
+                                  enum: [SCOPE_VARIATION, MATERIAL_PURCHASE]
+                                recordStatus: { type: string }
+                                commercialKind: { type: string }
+                                executionScopeId: { type: string, format: uuid }
+                                handymanRequestId: { type: string, format: uuid }
+                                clientId: { type: string, format: uuid }
+                                buildingId: { type: string, format: uuid }
+                                tenantCompanyId: { type: string, format: uuid }
+                                title: { type: string }
+                                responsible:
+                                  type: object
+                                  required: [persona, action]
+                                  properties:
+                                    persona:
+                                      type: string
+                                      enum: [PIC_PEKERJAAN, INSPECTOR, OPERATIONS_MANAGER, TENANT]
+                                    action: { type: string }
+                                reconciliationException: { type: boolean }
+                                sourceReference: { type: string }
+                                revisedQuotationVersionId: { type: string, format: uuid, nullable: true }
+                                version: { type: integer }
+                                createdAt: { type: string, format: date-time }
+                                updatedAt: { type: string, format: date-time }
+                          pagination:
+                            type: object
+                            required: [limit, nextCursor, hasMore]
+                            properties:
+                              limit: { type: integer }
+                              nextCursor: { type: string, nullable: true }
+                              hasMore: { type: boolean }
+                          counts:
+                            type: object
+                            description: >
+                              Present only with includeCounts=true; always
+                              computed over the COMPLETE permitted result set.
+                            required: [total, byRecordType, byStatus, byResponsiblePersona]
+                            properties:
+                              total: { type: integer }
+                              byRecordType:
+                                type: object
+                                properties:
+                                  SCOPE_VARIATION: { type: integer }
+                                  MATERIAL_PURCHASE: { type: integer }
+                              byStatus:
+                                type: object
+                                additionalProperties: { type: integer }
+                              byResponsiblePersona:
+                                type: object
+                                additionalProperties: { type: integer }
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
