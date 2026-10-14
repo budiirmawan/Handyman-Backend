@@ -43,6 +43,7 @@ import {
   handymanDefectVersionConflictError,
   handymanDefectRectificationRequiredError,
   handymanDefectEvidenceInvalidError,
+  handymanDefectReinspectionRunRequiredError,
   handymanDefectNotAuthorizedError,
   handymanDefectNotFoundError,
 } from './handyman-evidence-qc.errors';
@@ -1753,6 +1754,27 @@ async function transitionHandymanDefect(
     if (defect.version !== input.expectedVersion) {
       throw handymanDefectVersionConflictError();
     }
+    let reinspectionRunId: string | null = null;
+    if (eventType === 'REQUEST_REINSPECTION'
+        || eventType === 'PASS_REINSPECTION') {
+      const runs = await handymanEvidenceQcRepository.listQcRunsByScope(
+        tx, defect.executionScopeId);
+      const current = runs.at(-1);
+      const preceding = runs.at(-2);
+      // A new QC run, not the defect's original failing run or a frontend
+      // claim, is the server-owned reinspection vehicle. A further repair
+      // request needs its own failed FINISH (with reason) first; approval
+      // occurs while the new run is OPEN, before its guarded PASS FINISH.
+      if (!current || !preceding || preceding.status !== 'FAILED'
+          || current.id === defect.runId
+          || new Date(current.createdAt) < new Date(preceding.updatedAt)
+          || (eventType === 'PASS_REINSPECTION'
+            ? current.status !== 'OPEN'
+            : current.status !== 'FAILED' || !current.failureReason)) {
+        throw handymanDefectReinspectionRunRequiredError();
+      }
+      reinspectionRunId = current.id;
+    }
 
     let proofSessionId: string | null = defect.rectificationSessionId;
     let proofUploadId: string | null = defect.rectificationEvidenceUploadId;
@@ -1791,7 +1813,7 @@ async function transitionHandymanDefect(
       idempotencyKey: key, actorUserId: actorUuid,
       metadata: { expectedVersion: defect.version,
         resultingVersion: updated.version, sessionId,
-        evidenceReference: reference, reason,
+        evidenceReference: reference, reason, reinspectionRunId,
         evidenceUploadId: eventType === 'RECORD_RECTIFICATION'
           ? proofUploadId : null,
         supersededSessionId: eventType === 'REQUEST_REINSPECTION'
@@ -1805,8 +1827,8 @@ async function transitionHandymanDefect(
       entityId: defectUuid, eventType: `HANDYMAN_DEFECT_${eventType}`,
       summary: `Defect ${eventType.toLowerCase().replace(/_/g, ' ')}.`,
       metadata: { executionScopeId: defect.executionScopeId,
-        reason, sessionId: proofSessionId, evidenceUploadId: proofUploadId,
-        version: updated.version },
+        reason, reinspectionRunId, sessionId: proofSessionId,
+        evidenceUploadId: proofUploadId, version: updated.version },
     }, tx);
     return { defect: updated, event, replayed: false };
   });

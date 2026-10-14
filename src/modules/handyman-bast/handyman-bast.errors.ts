@@ -68,3 +68,11 @@ export function handymanBastValidationError(field: string): AppError {
     details: [`field=${field}`],
   });
 }
+
+export function handymanBastQcNotReadyError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_BAST_QC_NOT_READY,
+    message: 'BAST PREPARE/ISSUE/ACCEPT requires the latest versioned Supervisor QC PASS with completed Work Sessions, resolved defects and verified QC bytes.',
+    statusCode: 409,
+  });
+}

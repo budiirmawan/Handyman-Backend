@@ -8,6 +8,8 @@ import { recordOperationalEvent } from '../operational-events';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments/handyman-scope-assignment.service';
 import { isHandymanQcSupervisor, lockHandymanQcScope }
   from '../handyman-evidence-qc/handyman-qc-authority';
+import { assertCurrentGuardedHandymanQcPass }
+  from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
@@ -741,79 +743,23 @@ async function assertVerifiedAuthoritativeQcRunForVariation(
   }
 
   if (expectedQcOutcome === 'PASSED') {
-    const manifest = await tx.query<{
-      required_item_keys: string[]; checklist_version_id: string;
-    }>(
-      `SELECT s.required_item_keys, b.checklist_version_id
-         FROM handyman_qc_checklist_specs s
-         JOIN handyman_qc_scope_checklist_bindings b
-           ON b.execution_scope_id = s.execution_scope_id
-         JOIN handyman_qc_checklist_versions v
-           ON v.id = b.checklist_version_id
-          AND v.client_id = s.client_id
-          AND v.required_item_keys = s.required_item_keys
-        WHERE s.execution_scope_id = $1 AND s.client_id = $2
-          AND s.checklist_identity = $3 AND b.bound_at <= $4`,
-      [ctx.executionScopeId, ctx.clientId, qcRun.checklist_identity,
-        qcRun.created_at],
-    );
-    const finishEventRes = await tx.query<{ id: string }>(
-      `SELECT id FROM handyman_qc_run_events
-        WHERE run_id = $1 AND client_id = $2 AND event_type = 'FINISH'
-          AND metadata->>'outcome' = 'PASSED'
-          AND metadata ? 'expectedVersion'
-          AND metadata->>'templateVersionId' = $3
-        LIMIT 1`,
-      [qcRun.id, ctx.clientId,
-        manifest.rows[0]?.checklist_version_id ?? ''],
-    );
-    const bindings = await tx.query<{ id: string }>(
-      `SELECT id FROM handyman_qc_run_evidence WHERE run_id = $1 LIMIT 1`,
-      [qcRun.id],
-    );
-    if (!finishEventRes.rows[0] || !manifest.rows[0]
-        || manifest.rows[0].required_item_keys.length === 0
-        || !bindings.rows[0]) {
-      throw new AppError({
-        statusCode: 409,
-        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-        message: 'Variation QC PASSED requires a guarded Supervisor FINISH, required checklist and bound QC evidence; historical unguarded approvals need re-QC.',
-      });
-    }
-
-    const badItemsRes = await tx.query<{ id: string }>(
-      `SELECT id
-         FROM handyman_qc_run_items
-        WHERE run_id = $1
-          AND outcome IN ('DEFECT', 'NOT_CHECKED')
-        LIMIT 1`,
-      [qcRun.id],
-    );
-    if (badItemsRes.rows[0]) {
-      throw new AppError({
-        statusCode: 409,
-        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-        message:
-          'Authoritative QC run contains DEFECT or NOT_CHECKED items and cannot support variation QC PASSED.',
-      });
-    }
-
-    const openDefectsRes = await tx.query<{ id: string; status: string }>(
-      `SELECT id, status
-         FROM handyman_defect_records
-        WHERE execution_scope_id = $1
-          AND client_id = $2
-          AND status <> 'VERIFIED'
-        LIMIT 1`,
-      [ctx.executionScopeId, ctx.clientId],
-    );
-    if (openDefectsRes.rows[0]) {
-      throw new AppError({
-        statusCode: 409,
-        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-        message:
-          'Cannot verify variation QC PASSED while unverified defect records remain open on the execution scope.',
-      });
+    // Consume the same versioned, byte-verified, latest Supervisor decision
+    // required by BAST; this is not a parallel variation QC engine.
+    try {
+      await assertCurrentGuardedHandymanQcPass(tx, {
+        id: ctx.executionScopeId, clientId: ctx.clientId,
+        buildingId: ctx.buildingId,
+      }, qcRun.id);
+    } catch (error) {
+      if (error instanceof AppError
+          && (error.code === ERROR_CODES.HANDYMAN_QC_PASS_BLOCKED
+            || error.code === ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED)) {
+        throw new AppError({ statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'Variation QC requires a current guarded Supervisor PASS with valid checklist, Work Sessions, defects and evidence.',
+        });
+      }
+      throw error;
     }
   }
 

@@ -249,3 +249,11 @@ export function handymanDefectEvidenceInvalidError(): AppError {
     statusCode: 409,
   });
 }
+
+export function handymanDefectReinspectionRunRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_REINSPECTION_RUN_REQUIRED,
+    message: 'Reinspection must use a new current QC run after a recorded QC FAIL: OPEN to verify, FAILED before requesting another repair cycle.',
+    statusCode: 409,
+  });
+}
