@@ -31,7 +31,7 @@ export function handymanAssignmentContextMismatchError(): AppError {
   });
 }
 
-/** Current Lead fails the F4/§5 validity chain (ACTIVE membership + ACTIVE worker context + non-NULL userId). */
+/** Current Lead fails the F4/§5 validity chain. */
 export function handymanAssignmentLeadInvalidError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID,
@@ -57,8 +57,39 @@ export function handymanAssignmentAlreadyActiveError(): AppError {
 export function handymanAssignmentNotFoundError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_FOUND,
-    message:
-      'No ACTIVE crew assignment exists for this execution scope.',
+    message: 'No ACTIVE crew assignment exists for this execution scope.',
     statusCode: 404,
+  });
+}
+
+/** P0-B: expectedVersion mismatch — caller must reload and retry. */
+export function handymanAssignmentVersionConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_VERSION_CONFLICT,
+    message:
+      'Assignment version has changed; reload and retry with the current version.',
+    statusCode: 409,
+  });
+}
+
+/** P0-B: active (non-CHECKED_OUT) work session blocks reassignment. */
+export function handymanAssignmentActiveSessionBlockError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_ACTIVE_SESSION_BLOCK,
+    message:
+      'Cannot reassign: an active work session exists on this execution scope. ' +
+      'The PIC must check out before reassignment.',
+    statusCode: 409,
+  });
+}
+
+/** P0-B: duplicate idempotency key with conflicting parameters. */
+export function handymanAssignmentIdempotencyConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_IDEMPOTENCY_CONFLICT,
+    message:
+      'An assignment history entry already exists for this idempotency key ' +
+      'with different parameters.',
+    statusCode: 409,
   });
 }

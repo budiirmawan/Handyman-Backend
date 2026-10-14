@@ -13,11 +13,14 @@ import { assertHandymanCrewWorkerEligibility } from '../handyman-providers/handy
 import { workforceRepository } from '../workforce';
 import {
   handymanAssignmentAlreadyActiveError,
+  handymanAssignmentActiveSessionBlockError,
   handymanAssignmentContextInactiveError,
   handymanAssignmentContextMismatchError,
+  handymanAssignmentIdempotencyConflictError,
   handymanAssignmentLeadInvalidError,
   handymanAssignmentNotFoundError,
   handymanAssignmentScopeNotAuthorizedError,
+  handymanAssignmentVersionConflictError,
 } from './handyman-scope-assignment.errors';
 import {
   handymanScopeAssignmentRepository,
@@ -27,6 +30,7 @@ import type {
   HandymanAssignmentLeadResolution,
   HandymanExecutionScopeAssignmentRecord,
   PublicHandymanExecutionScopeAssignment,
+  ReassignHandymanExecutionScopeCrewInput,
 } from './handyman-scope-assignment.types';
 
 /**
@@ -47,6 +51,23 @@ function ensureUuid(value: string, field: string): string {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!isValidUuid(raw)) {
     throw new Error(`HANDYMAN_ES_ASSIGNMENT_INVALID_UUID:${field}`);
+  }
+  return raw;
+}
+
+function ensureReason(value: string | undefined): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (raw.length < 1 || raw.length > 1000) {
+    throw handymanAssignmentIdempotencyConflictError();
+  }
+  return raw;
+}
+
+function ensureKey(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const raw = value.trim();
+  if (raw.length < 8 || raw.length > 128) {
+    throw new Error('HANDYMAN_ES_ASSIGNMENT_INVALID_KEY');
   }
   return raw;
 }
@@ -212,6 +233,7 @@ export async function assignHandymanExecutionScopeCrew(
   );
   const crewId = ensureUuid(input.crewId, 'crewId');
   ensureUuid(actorUserId, 'actorUserId');
+  const idempotencyKey = ensureKey(input.idempotencyKey);
 
   return withTransaction(async (tx) => {
     const scope = await requireAssignableScope(tx, executionScopeId);
@@ -245,6 +267,21 @@ export async function assignHandymanExecutionScopeCrew(
         assignedByUserId: actorUserId,
         supersedesAssignmentId: null,
       });
+    await handymanScopeAssignmentRepository.insertAssignmentHistory(tx, {
+      clientId: scope.clientId,
+      assignmentId: record.id,
+      executionScopeId,
+      fromProviderContextId: null,
+      fromCrewId: null,
+      toProviderContextId: target.providerContextId,
+      toCrewId: target.crewId,
+      action: 'ASSIGNED',
+      reason: null,
+      expectedVersion: null,
+      priorVersion: null,
+      actorUserId,
+      idempotencyKey,
+    });
     await journal(
       tx,
       record,
@@ -256,14 +293,16 @@ export async function assignHandymanExecutionScopeCrew(
 }
 
 /**
- * Atomic reassignment: lock current ACTIVE → validate the new
- * provider/crew/Lead BEFORE mutating anything → supersede old +
- * insert new ACTIVE (supersession provenance) + audit events, all in
- * one transaction. Any failure rolls back ALL — old ACTIVE stays
- * untouched, zero partial rows/events. Never a gap, never two ACTIVE.
+ * Atomic reassignment (P0-B hardened): lock current ACTIVE → active-session
+ * guard → version check → validate new provider/crew/Lead → supersede old
+ * (with version bump) + insert new ACTIVE + append history row + audit
+ * events, all in one transaction. Any failure rolls back ALL — old ACTIVE
+ * stays untouched, zero partial rows/events. Never a gap, never two ACTIVE.
+ * Reassigning to the SAME crew as the current ACTIVE assignment is treated
+ * as a no-op (returns the current assignment) — avoids spurious history.
  */
 export async function reassignHandymanExecutionScopeCrew(
-  input: AssignHandymanExecutionScopeCrewInput,
+  input: ReassignHandymanExecutionScopeCrewInput,
   actorUserId: string,
 ): Promise<PublicHandymanExecutionScopeAssignment> {
   const executionScopeId = ensureUuid(
@@ -276,23 +315,49 @@ export async function reassignHandymanExecutionScopeCrew(
   );
   const crewId = ensureUuid(input.crewId, 'crewId');
   ensureUuid(actorUserId, 'actorUserId');
+  const reason = ensureReason(input.reason);
+  const expectedVersion = input.expectedVersion;
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    throw handymanAssignmentVersionConflictError();
+  }
+  const idempotencyKey = ensureKey(input.idempotencyKey);
 
   return withTransaction(async (tx) => {
     const scope = await requireAssignableScope(tx, executionScopeId);
-    // CR-HM-SEC-01 PART 03A — write authorization: the scope row carries
-    // the authoritative server-derived building_id; per BE-02G the write
-    // requires the actor's explicit ACTIVE assignment to that exact
-    // Building (no same-Client shortcut).
+    // CR-HM-SEC-01 PART 03A — write authorization.
     await assertBuildingScopedResourceAccess(actorUserId, {
       clientId: scope.clientId,
       buildingId: scope.buildingId,
     });
+
+    // P0-B: Active session guard — cannot transfer an in-progress PIC.
+    if (
+      await handymanScopeAssignmentRepository.checkActiveWorkSession(
+        tx,
+        executionScopeId,
+      )
+    ) {
+      throw handymanAssignmentActiveSessionBlockError();
+    }
+
     const current =
       await handymanScopeAssignmentRepository.lockActiveAssignmentByScope(
         tx,
         executionScopeId,
       );
     if (!current) throw handymanAssignmentNotFoundError();
+    if (current.version !== expectedVersion) {
+      throw handymanAssignmentVersionConflictError();
+    }
+
+    // Same crew — no-op replay with same version returns current record.
+    if (
+      current.handymanProviderContextId === providerContextId &&
+      current.handymanCrewId === crewId
+    ) {
+      return toPublic(current);
+    }
+
     const target = await validateTarget(
       tx,
       { providerContextId, crewId },
@@ -300,14 +365,29 @@ export async function reassignHandymanExecutionScopeCrew(
       scope.buildingId,
     );
     const superseded = await handymanScopeAssignmentRepository
-      .supersedeAssignment(tx, current.id);
-    if (!superseded) throw handymanAssignmentNotFoundError();
+      .supersedeAssignment(tx, current.id, expectedVersion);
+    if (!superseded) throw handymanAssignmentVersionConflictError();
     await journal(
       tx,
       superseded,
       'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_SUPERSEDED',
-      `Handyman execution scope crew assignment superseded by reassignment.`,
+      `Handyman execution scope crew assignment superseded: ${reason}.`,
     );
+    await handymanScopeAssignmentRepository.insertAssignmentHistory(tx, {
+      clientId: scope.clientId,
+      assignmentId: superseded.id,
+      executionScopeId,
+      fromProviderContextId: current.handymanProviderContextId,
+      fromCrewId: current.handymanCrewId,
+      toProviderContextId: target.providerContextId,
+      toCrewId: target.crewId,
+      action: 'REASSIGNED',
+      reason,
+      expectedVersion,
+      priorVersion: current.version,
+      actorUserId,
+      idempotencyKey,
+    });
     const record = await handymanScopeAssignmentRepository
       .insertAssignment(tx, {
         clientId: scope.clientId,

@@ -11,6 +11,7 @@ import {
 import {
   parseAssignmentBody,
   parseAssignmentScopeParam,
+  parseReassignmentBody,
 } from './handyman-scope-assignments-api.validation';
 
 /**
@@ -105,7 +106,7 @@ export async function postHandymanExecutionScopeReassignHandler(
     sendSuccess(
       res,
       await reassignHandymanExecutionScopeCrew(
-        { executionScopeId, ...parseAssignmentBody(req.body) },
+        { executionScopeId, ...parseReassignmentBody(req.body) },
         actor(req),
       ),
       201,

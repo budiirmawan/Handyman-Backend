@@ -3,7 +3,7 @@ import { AppError, ERROR_CODES } from '../../shared/errors';
 import { resolveBuildingsForUser } from '../building-assignments';
 import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError } from '../context-access';
-import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
+import { handymanInspectorAssignmentService } from '../handyman-inspector-assignments';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments';
 
 /**
@@ -17,12 +17,17 @@ export const MY_JOBS_SQL = `
   SELECT DISTINCT es.id AS "executionScopeId", es.handyman_request_id AS "requestId",
     es.building_id AS "buildingId", a.handyman_crew_id AS "crewId",
     r.status AS "requestStatus", es.status AS "scopeStatus",
+    dr.id AS "dispatchReleaseId", dr.status AS "dispatchStatus",
+    dr.released_at AS "releasedAt",
     booked.id AS "confirmedAppointmentId", booked.start_at AS "confirmedStartAt",
     booked.end_at AS "confirmedEndAt", booked.timezone AS "timezone"
   FROM handyman_execution_scopes es
   JOIN handyman_service_requests r ON r.id=es.handyman_request_id AND r.client_id=es.client_id
   JOIN handyman_execution_scope_assignments a ON a.execution_scope_id=es.id
     AND a.client_id=es.client_id AND a.status='ACTIVE'
+  LEFT JOIN handyman_dispatch_releases dr
+    ON dr.execution_scope_id=es.id AND dr.client_id=es.client_id
+   AND dr.assignment_id=a.id AND dr.status='RELEASED'
   JOIN handyman_work_crews crew ON crew.id=a.handyman_crew_id
     AND crew.client_id=es.client_id AND crew.handyman_provider_context_id=a.handyman_provider_context_id
     AND crew.status='ACTIVE'
@@ -60,8 +65,11 @@ export const MY_JOBS_SQL = `
 export const MY_INSPECTIONS_SQL = `
   SELECT v.id AS "appointmentId", v.handyman_request_id AS "requestId",
     v.building_id AS "buildingId", v.start_at AS "startAt", v.end_at AS "endAt",
-    v.timezone, v.state, v.version
+    v.timezone, v.state, v.version,
+    ia.id AS "assignmentId", ia.version AS "assignmentVersion"
   FROM handyman_visit_appointments v
+  JOIN handyman_inspector_assignments ia
+    ON ia.visit_appointment_id = v.id AND ia.status = 'ACTIVE'
   JOIN users u ON u.id=$1 AND u.status='ACTIVE'
   JOIN jsonb_to_recordset($2::jsonb) AS access("buildingId" uuid, "clientId" uuid)
     ON access."buildingId"=v.building_id AND access."clientId"=v.client_id
@@ -70,7 +78,8 @@ export const MY_INSPECTIONS_SQL = `
   JOIN user_building_assignments uba ON uba.user_id=u.id
     AND uba.building_id=v.building_id AND uba.status='ACTIVE'
   WHERE v.kind='INSPECTION' AND v.resource_type='INSPECTOR_USER'
-    AND v.resource_id=u.id AND v.state IN ('CONFIRMED','IN_PROGRESS')
+    AND ia.inspector_user_id = u.id
+    AND v.state IN ('PROPOSED','TENANT_SELECTED','CONFIRMED','IN_PROGRESS')
   ORDER BY v.start_at, v.id
   LIMIT 100`;
 
@@ -109,36 +118,15 @@ async function assertExactBuildingClientAccess(
 async function isAssignedInspectorForRequest(
   handymanRequestId: string,
   clientId: string,
-  buildingId: string,
-  tenantCompanyId: string,
+  _buildingId: string,
+  _tenantCompanyId: string,
   actorUserId: string,
 ): Promise<boolean> {
-  const db = getPool();
-  const visitRes = await db.query<{ id: string }>(
-    `SELECT v.id
-       FROM handyman_visit_appointments v
-      WHERE v.handyman_request_id = $1
-        AND v.client_id = $2
-        AND v.building_id = $3
-        AND v.tenant_company_id = $4
-        AND v.kind = 'INSPECTION'
-        AND v.resource_type = 'INSPECTOR_USER'
-        AND v.resource_id = $5
-        AND v.state IN ('CONFIRMED', 'IN_PROGRESS', 'COMPLETED')
-      ORDER BY v.created_at DESC
-      LIMIT 1`,
-    [handymanRequestId, clientId, buildingId, tenantCompanyId, actorUserId],
-  );
-  if ((visitRes.rowCount ?? 0) === 0) {
-    return false;
-  }
-  const eligible = await findEligibleHandymanWorker(db, {
+  return handymanInspectorAssignmentService.isActiveInspectorForRequest(
     clientId,
-    buildingId,
-    userId: actorUserId,
-    requireLogin: true,
-  });
-  return eligible !== null;
+    handymanRequestId,
+    actorUserId,
+  );
 }
 
 async function resolveFieldRoleForExecutionScope(params: {
@@ -600,7 +588,11 @@ export async function readMyHandymanFieldFeed(actorUserId: string) {
       ...row,
       confirmedStartAt: row.confirmedStartAt?.toISOString() ?? null,
       confirmedEndAt: row.confirmedEndAt?.toISOString() ?? null,
+      releasedAt: (row as Record<string, unknown>).releasedAt
+        ? (row as unknown as { releasedAt: Date }).releasedAt.toISOString()
+        : null,
       appointmentConfirmed: Boolean(row.confirmedAppointmentId),
+      dispatchReleased: Boolean((row as Record<string, unknown>).dispatchReleaseId),
     })),
     inspections: inspections.rows.map((row) => ({
       ...row,

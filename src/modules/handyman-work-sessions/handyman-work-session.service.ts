@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { handymanDispatchService } from '../handyman-dispatch';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import {
@@ -276,6 +277,13 @@ export async function checkInHandymanWorkSession(
           helperUserId: helper.userId,
         }));
     }
+    // P0-C: propagate CHECK_IN to dispatch lifecycle (RELEASED → IN_PROGRESS)
+    // when a release exists. Silently no-op when no release is present.
+    await handymanDispatchService.markDispatchInProgress(
+      scopeUuid,
+      actorUuid,
+      tx,
+    );
     return { session, event, helperPresence, replayed: false };
   });
 }
@@ -604,6 +612,12 @@ async function sessionCloseTransition(
             helperUserId: helper.userId,
           });
       }
+      // P0-C: propagate CHECK_OUT to dispatch lifecycle (IN_PROGRESS → COMPLETED).
+      await handymanDispatchService.markDispatchCompleted(
+        scopeUuid,
+        actorUuid,
+        tx,
+      );
     }
     const row = transitioned.rows[0];
     return {

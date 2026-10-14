@@ -469,6 +469,12 @@ import { migration0436CreateHandymanMaterialPurchasing }
   from './0436_create_handyman_material_purchasing';
 import { migration0437CreateHandymanFieldEvidenceUploads }
   from './0437_create_handyman_field_evidence_uploads';
+import { migration0438CreateHandymanInspectorAssignments }
+  from './0438_create_handyman_inspector_assignments';
+import { migration0439HardenExecutionScopeReassignment }
+  from './0439_harden_execution_scope_reassignment';
+import { migration0440CreateHandymanDispatchReleases }
+  from './0440_create_handyman_dispatch_releases';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -911,4 +917,7 @@ export const migrations: readonly Migration[] = [
   migration0435CreateHandymanScopeVariations,
   migration0436CreateHandymanMaterialPurchasing,
   migration0437CreateHandymanFieldEvidenceUploads,
+  migration0438CreateHandymanInspectorAssignments,
+  migration0439HardenExecutionScopeReassignment,
+  migration0440CreateHandymanDispatchReleases,
 ];

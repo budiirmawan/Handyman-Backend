@@ -59,6 +59,8 @@ import { createHandymanServiceWarrantyApiRouter }
 import { createHandymanSlaStatusApiRouter }
   from '../modules/handyman-sla-status-api';
 import { createHandymanScopeAssignmentsApiRouter } from '../modules/handyman-scope-assignments-api';
+import { createHandymanInspectorAssignmentsApiRouter } from '../modules/handyman-inspector-assignments-api';
+import { createHandymanDispatchApiRouter } from '../modules/handyman-dispatch-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
 import { createSupportingDocumentRouter } from '../modules/supporting-documents/supporting-document.routes';
 import { createIncidentClosureRouter } from '../modules/incident-closure/incident-closure.routes';
@@ -830,6 +832,8 @@ export function createApiRouter(): Router {
   router.use(createHandymanReadinessApiRouter());
   router.use(createHandymanQuotationsApiRouter()); // CR-HM-06 PART 07A — quotation surface
   router.use(createHandymanScopeAssignmentsApiRouter()); // CR-HM-04 activation PART C — assignment surface
+  router.use(createHandymanInspectorAssignmentsApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-A — inspector visit assignment surface
+  router.use(createHandymanDispatchApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-C/P0-D — dispatch readiness/release + identity projection
   router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification
   router.use(createHandymanWorkSessionsApiRouter()); // CR-HM-08 PART 05 — work session field-execution surface
   router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface
