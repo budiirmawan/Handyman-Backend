@@ -7,6 +7,7 @@ import { permissionService } from '../permissions';
 import { recordOperationalEvent } from '../operational-events';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments/handyman-scope-assignment.service';
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
+import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
 import { handymanMaterialPurchasingRepository } from './handyman-material-purchasing.repository';
 import {
   HANDYMAN_MATERIAL_FUNDING_SOURCES,
@@ -455,6 +456,8 @@ export async function submitMaterialPurchaseRequest(
         );
       return { replayed: true, record: existing, events };
     }
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const record =
       await handymanMaterialPurchasingRepository.insertPurchaseRecord(tx, {
@@ -1103,6 +1106,12 @@ export async function recordMaterialSupplierPurchase(
       reimbursementPayeeUserId = record.requestedByUserId;
       reimbursementStatus = 'PENDING_RECONCILIATION';
     }
+
+    await assertVerifiedManagedEvidenceReference(
+      tx,
+      ctx,
+      receiptEvidenceReference,
+    );
 
     const updated =
       await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {

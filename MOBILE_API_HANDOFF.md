@@ -288,10 +288,10 @@ Governed lifecycle:
 - **Authorized Persona**: Assigned `PIC_PEKERJAAN`
 - **Payload**: `{ "evidenceReference": "hm-ev://uuid", "notes": "Installed 2 valves", "expectedVersion": 4, "idempotencyKey": "var-exec-001" }`
 
-### 2.9 Inspector / Operations Records QC Verification (`QC`)
+### 2.9 Supervisor / Operations Records QC Verification (`QC`)
 - **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/variations/:variationId/qc`
 - **Alias**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/variations/:variationId/qc`
-- **Authorized Persona**: Assigned `INSPECTOR` or Operations (`tenant_company.manage`)
+- **Authorized Persona**: Authorized Supervisor / Operations (`tenant_company.manage`) only. Field `INSPECTOR` technical inspection authority and `PIC_PEKERJAAN` execution authority cannot bypass Supervisor QC authority (`403 HANDYMAN_VARIATION_ROLE_FORBIDDEN`).
 - **Payload**: `{ "qcOutcome": "PASSED", "evidenceReference": "hm-ev://uuid", "notes": "Pressure tested OK", "expectedVersion": 5, "idempotencyKey": "var-qc-001" }`
 
 ### 2.10 Operations Marks Final Charge Eligibility (`FINAL_CHARGE_ELIGIBILITY`)

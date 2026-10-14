@@ -663,12 +663,30 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     );
     assert.equal(leadImpersonate.status, 403);
 
+    // Guard: Tenant decision with mismatched revisedQuotationVersionId is rejected!
+    const mismatchedQvDecision = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`,
+      TENANT_USER_A,
+      {
+        decision: 'APPROVE',
+        revisedQuotationVersionId: randomUUID(),
+        evidenceReference: 'ev://mismatched-qv',
+        idempotencyKey: 'idem-mismatched-qv',
+      },
+    );
+    assert.equal(mismatchedQvDecision.status, 409);
+    assert.equal(
+      mismatchedQvDecision.body.error.code,
+      'HANDYMAN_VARIATION_ILLEGAL_TRANSITION',
+    );
+
     // Stage 5: Authorized Tenant PIC user approves variation (TENANT_DECISION)
     const s5 = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`,
       TENANT_USER_A,
       {
         decision: 'APPROVE',
+        revisedQuotationVersionId: QVER_A1,
         evidenceReference: 'ev://tenant-consent/membrane-005',
         notes: 'Approved by Tenant PIC Siti',
         idempotencyKey: 'idem-add-tenant-approve-1',
@@ -729,10 +747,26 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     );
     assert.equal(leadSelfQc.status, 403);
 
-    // Stage 8: Assigned Inspector verifies QC (QC PASSED)
-    const s8 = await apiPost(
+    // Guard: Inspector technical inspection authority CANNOT bypass Supervisor QC authority!
+    const inspectorBypassQc = await apiPost(
       `/handyman/field/execution-scopes/${SCOPE_A1}/variations/${varId}/qc`,
       INSPECTOR_USER_A,
+      {
+        qcOutcome: 'PASSED',
+        evidenceReference: 'ev://inspector-bypass-qc',
+        idempotencyKey: 'idem-inspector-bypass-qc',
+      },
+    );
+    assert.equal(inspectorBypassQc.status, 403);
+    assert.equal(
+      inspectorBypassQc.body.error.code,
+      'HANDYMAN_VARIATION_ROLE_FORBIDDEN',
+    );
+
+    // Stage 8: Authorized Supervisor / Operations Manager verifies QC (QC PASSED)
+    const s8 = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/qc`,
+      OPS_MANAGER_USER_A,
       {
         qcOutcome: 'PASSED',
         evidenceReference: 'ev://qc/membrane-008',

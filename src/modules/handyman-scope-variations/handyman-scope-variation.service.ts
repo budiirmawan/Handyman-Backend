@@ -7,6 +7,7 @@ import { permissionService } from '../permissions';
 import { recordOperationalEvent } from '../operational-events';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments/handyman-scope-assignment.service';
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
+import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
 import {
   HANDYMAN_SCOPE_VARIATION_LINE_TYPES,
@@ -102,6 +103,7 @@ interface ExecutionScopeContext {
   executionScopeId: string;
   clientId: string;
   handymanRequestId: string;
+  quotationId: string;
   tenantCompanyId: string;
   buildingId: string;
   approvedQuotationVersionId: string;
@@ -156,6 +158,7 @@ async function loadExecutionScopeContext(
     id: string;
     client_id: string;
     handyman_request_id: string;
+    quotation_id: string;
     tenant_company_id: string;
     building_id: string;
     approved_quotation_version_id: string;
@@ -163,6 +166,7 @@ async function loadExecutionScopeContext(
     `SELECT id,
             client_id,
             handyman_request_id,
+            quotation_id,
             tenant_company_id,
             building_id,
             approved_quotation_version_id
@@ -182,6 +186,7 @@ async function loadExecutionScopeContext(
     executionScopeId: scope.id,
     clientId: scope.client_id,
     handymanRequestId: scope.handyman_request_id,
+    quotationId: scope.quotation_id,
     tenantCompanyId: scope.tenant_company_id,
     buildingId: scope.building_id,
     approvedQuotationVersionId: scope.approved_quotation_version_id,
@@ -930,6 +935,8 @@ export async function proposeScopeVariation(
       });
     }
 
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+
     const variation = await handymanScopeVariationRepository.insertVariation(
       tx,
       {
@@ -1365,7 +1372,7 @@ export async function prepareVariationRevisedQuotation(
     typeof input.notes === 'string' && input.notes.trim().length > 0
       ? input.notes.trim()
       : null;
-  const revisedQuotationVersionId =
+  const rawRevisedQuotationVersionId =
     input.revisedQuotationVersionId !== undefined &&
     input.revisedQuotationVersionId !== null
       ? assertUuid(
@@ -1421,6 +1428,26 @@ export async function prepareVariationRevisedQuotation(
       });
     }
 
+    let revisedQuotationVersionId = ctx.approvedQuotationVersionId;
+    if (rawRevisedQuotationVersionId) {
+      const qvCheck = await tx.query<{ id: string }>(
+        `SELECT qv.id
+           FROM handyman_quotation_versions qv
+           JOIN handyman_quotations q
+             ON q.id = qv.quotation_id
+          WHERE qv.id = $1
+            AND q.id = $2
+            AND q.client_id = $3`,
+        [rawRevisedQuotationVersionId, ctx.quotationId, ctx.clientId],
+      );
+      if (!qvCheck.rows[0]) {
+        throw AppError.validation(
+          'revisedQuotationVersionId does not belong to this execution scope quotation thread.',
+        );
+      }
+      revisedQuotationVersionId = rawRevisedQuotationVersionId;
+    }
+
     const rawMagnitude = Number(
       (Number(variation.quantity) * Number(quotedUnitAmount)).toFixed(2),
     );
@@ -1436,6 +1463,8 @@ export async function prepareVariationRevisedQuotation(
             500,
           )
         : variation.latestEvidenceReference;
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
@@ -1508,6 +1537,7 @@ export async function recordVariationTenantDecision(
   variationId: string,
   input: {
     decision: unknown;
+    revisedQuotationVersionId?: unknown;
     evidenceReference: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
@@ -1601,6 +1631,35 @@ export async function recordVariationTenantDecision(
         message: `Cannot record tenant decision when variation status is ${variation.status}.`,
       });
     }
+
+    if (!variation.revisedQuotationVersionId) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Variation has no bound revisedQuotationVersionId for tenant decision.',
+      });
+    }
+
+    if (
+      input.revisedQuotationVersionId !== undefined &&
+      input.revisedQuotationVersionId !== null
+    ) {
+      const callerQvId = assertUuid(
+        input.revisedQuotationVersionId,
+        'revisedQuotationVersionId',
+      );
+      if (callerQvId !== variation.revisedQuotationVersionId) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message:
+            'Tenant decision revisedQuotationVersionId does not match the variation bound revisedQuotationVersionId.',
+        });
+      }
+    }
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
@@ -1924,6 +1983,8 @@ export async function recordVariationExecution(
       });
     }
 
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
         variationId: variation.id,
@@ -2037,18 +2098,19 @@ export async function recordVariationQc(
     'tenant_company.manage',
   );
 
-  if (!isInspector && (!hasManage || isPicPekerjaan)) {
+  // Supervisor / Operations QC authority is strictly required.
+  // Field Inspector technical inspection authority and PIC Pekerjaan execution
+  // authority must never bypass Supervisor QC authority.
+  if (isInspector || isPicPekerjaan || !hasManage) {
     throw new AppError({
       statusCode: 403,
       code: ERROR_CODES.HANDYMAN_VARIATION_ROLE_FORBIDDEN,
       message:
-        'Only the assigned Inspector or an Operations/Manager actor (not the executing PIC Pekerjaan) may verify variation QC.',
+        'Inspector technical inspection or executing crew cannot bypass Supervisor QC authority; only an authorized Supervisor/Operations actor may verify variation QC.',
     });
   }
 
-  const actorRole: HandymanScopeVariationActorRole = isInspector
-    ? 'INSPECTOR'
-    : 'OPERATIONS_MANAGER';
+  const actorRole: HandymanScopeVariationActorRole = 'OPERATIONS_MANAGER';
 
   return withTransaction(async (tx) => {
     const variation =
@@ -2064,6 +2126,16 @@ export async function recordVariationQc(
         message: 'Handyman scope variation not found.',
       });
     }
+
+    if (variation.originActorUserId === actorUserId) {
+      throw new AppError({
+        statusCode: 403,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ROLE_FORBIDDEN,
+        message: 'Originating actor may not verify QC on their own variation.',
+      });
+    }
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const existingEv =
       await handymanScopeVariationRepository.findEventByIdempotencyKey(

@@ -328,6 +328,89 @@ async function resolveEvidenceActorRole(
   });
 }
 
+async function assertDomainObjectOwnership(
+  tx: PoolClient,
+  target: EvidenceTargetContext,
+  input: {
+    variationId: string | null;
+    materialPurchaseRecordId: string | null;
+  },
+): Promise<void> {
+  if (input.variationId) {
+    const varRes = await tx.query<{
+      id: string;
+      client_id: string;
+      building_id: string;
+      handyman_request_id: string;
+      execution_scope_id: string;
+    }>(
+      `SELECT id, client_id, building_id, handyman_request_id, execution_scope_id
+         FROM handyman_scope_variations
+        WHERE id = $1`,
+      [input.variationId],
+    );
+    const v = varRes.rows[0];
+    if (!v) {
+      throw new AppError({
+        statusCode: 404,
+        code: ERROR_CODES.HANDYMAN_VARIATION_NOT_FOUND,
+        message: 'Linked variationId not found.',
+      });
+    }
+    if (
+      v.client_id !== target.clientId ||
+      v.building_id !== target.buildingId ||
+      v.handyman_request_id !== target.handymanRequestId ||
+      (target.executionScopeId !== null &&
+        v.execution_scope_id !== target.executionScopeId)
+    ) {
+      throw new AppError({
+        statusCode: 403,
+        code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+        message:
+          'Linked variationId does not belong to the authorized Work Order / building scope.',
+      });
+    }
+  }
+
+  if (input.materialPurchaseRecordId) {
+    const matRes = await tx.query<{
+      id: string;
+      client_id: string;
+      building_id: string;
+      handyman_request_id: string;
+      execution_scope_id: string;
+    }>(
+      `SELECT id, client_id, building_id, handyman_request_id, execution_scope_id
+         FROM handyman_material_purchase_records
+        WHERE id = $1`,
+      [input.materialPurchaseRecordId],
+    );
+    const m = matRes.rows[0];
+    if (!m) {
+      throw new AppError({
+        statusCode: 404,
+        code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND,
+        message: 'Linked materialPurchaseRecordId not found.',
+      });
+    }
+    if (
+      m.client_id !== target.clientId ||
+      m.building_id !== target.buildingId ||
+      m.handyman_request_id !== target.handymanRequestId ||
+      (target.executionScopeId !== null &&
+        m.execution_scope_id !== target.executionScopeId)
+    ) {
+      throw new AppError({
+        statusCode: 403,
+        code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+        message:
+          'Linked materialPurchaseRecordId does not belong to the authorized Work Order / building scope.',
+      });
+    }
+  }
+}
+
 async function bindVerifiedAttachmentToDomainObjects(
   tx: PoolClient,
   target: EvidenceTargetContext,
@@ -337,48 +420,131 @@ async function bindVerifiedAttachmentToDomainObjects(
     attachmentReference: string;
   },
 ): Promise<void> {
-  if (input.variationId) {
-    const varRes = await tx.query<{ id: string }>(
-      `UPDATE handyman_scope_variations
-          SET latest_evidence_reference = $3,
-              updated_at = NOW()
-        WHERE id = $1
-          AND client_id = $2
-        RETURNING id`,
-      [input.variationId, target.clientId, input.attachmentReference],
-    );
-    if (!varRes.rows[0]) {
-      throw new AppError({
-        statusCode: 404,
-        code: ERROR_CODES.HANDYMAN_VARIATION_NOT_FOUND,
-        message: 'Linked variationId not found in the authorized client scope.',
-      });
-    }
-  }
+  await assertDomainObjectOwnership(tx, target, {
+    variationId: input.variationId,
+    materialPurchaseRecordId: input.materialPurchaseRecordId,
+  });
 
-  if (input.materialPurchaseRecordId) {
-    const matRes = await tx.query<{ id: string }>(
-      `UPDATE handyman_material_purchase_records
-          SET receipt_evidence_reference = COALESCE($3, receipt_evidence_reference),
-              latest_evidence_reference = $3,
+  if (input.variationId) {
+    await tx.query(
+      `UPDATE handyman_scope_variations
+          SET latest_evidence_reference = $5,
               updated_at = NOW()
         WHERE id = $1
           AND client_id = $2
-        RETURNING id`,
+          AND building_id = $3
+          AND handyman_request_id = $4`,
       [
-        input.materialPurchaseRecordId,
+        input.variationId,
         target.clientId,
+        target.buildingId,
+        target.handymanRequestId,
         input.attachmentReference,
       ],
     );
-    if (!matRes.rows[0]) {
-      throw new AppError({
-        statusCode: 404,
-        code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND,
-        message:
-          'Linked materialPurchaseRecordId not found in the authorized client scope.',
-      });
-    }
+  }
+
+  if (input.materialPurchaseRecordId) {
+    await tx.query(
+      `UPDATE handyman_material_purchase_records
+          SET receipt_evidence_reference = COALESCE($5, receipt_evidence_reference),
+              latest_evidence_reference = $5,
+              updated_at = NOW()
+        WHERE id = $1
+          AND client_id = $2
+          AND building_id = $3
+          AND handyman_request_id = $4`,
+      [
+        input.materialPurchaseRecordId,
+        target.clientId,
+        target.buildingId,
+        target.handymanRequestId,
+        input.attachmentReference,
+      ],
+    );
+  }
+}
+
+/**
+ * Verifies that any managed `hm-ev://<uuid>` evidence reference exists, belongs
+ * to the exact same tenant/building/Work Order, and has verified binary bytes
+ * in storage before being bound to a domain object.
+ */
+export async function assertVerifiedManagedEvidenceReference(
+  tx: PoolClient,
+  scope: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    executionScopeId: string;
+  },
+  reference: string | null | undefined,
+): Promise<void> {
+  if (!reference || !reference.startsWith('hm-ev://')) {
+    return;
+  }
+  const rawId = reference.slice('hm-ev://'.length).trim();
+  const evidenceId = assertUuid(rawId, 'evidenceReference');
+
+  const record = await handymanFieldEvidenceRepository.findByIdForUpdate(
+    tx,
+    evidenceId,
+  );
+  if (!record) {
+    throw new AppError({
+      statusCode: 404,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND,
+      message: 'Referenced field evidence upload does not exist.',
+    });
+  }
+
+  if (
+    record.clientId !== scope.clientId ||
+    record.buildingId !== scope.buildingId ||
+    record.handymanRequestId !== scope.handymanRequestId ||
+    (record.executionScopeId !== null &&
+      record.executionScopeId !== scope.executionScopeId)
+  ) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+      message:
+        'Referenced field evidence upload belongs to a different tenant, building, or Work Order.',
+    });
+  }
+
+  if (
+    record.uploadStatus !== 'VERIFIED' ||
+    record.verifiedByteSize <= 0 ||
+    !record.sha256Checksum
+  ) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED,
+      message:
+        'Cannot bind unverified or metadata-only field evidence upload: binary bytes must be uploaded and verified first.',
+    });
+  }
+
+  const storage = createEvidenceStorage();
+  let storedBuffer: Buffer | null = null;
+  try {
+    const stored = await storage.get(record.storageKey);
+    storedBuffer = stored.buffer;
+  } catch {
+    storedBuffer = null;
+  }
+  if (
+    !storedBuffer ||
+    storedBuffer.byteLength !== record.verifiedByteSize ||
+    computeEvidenceSha256(storedBuffer) !== record.sha256Checksum
+  ) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED,
+      message:
+        'Referenced field evidence upload failed storage byte verification.',
+    });
   }
 }
 
@@ -657,6 +823,11 @@ export async function createPresignedFieldEvidenceIntent(
       };
     }
 
+    await assertDomainObjectOwnership(tx, target, {
+      variationId,
+      materialPurchaseRecordId,
+    });
+
     const evidenceId = randomUUID();
     const storageKey = evidenceStorageKey(evidenceId);
 
@@ -793,7 +964,23 @@ export async function confirmFieldEvidenceUpload(
       handymanRequestId: record.handymanRequestId,
       executionScopeId: record.executionScopeId,
     };
-    await resolveEvidenceActorRole(actorUserId, target, false, tx);
+    const actorRole = await resolveEvidenceActorRole(
+      actorUserId,
+      target,
+      false,
+      tx,
+    );
+    if (
+      record.uploadedByUserId !== actorUserId &&
+      actorRole !== 'OPERATIONS_MANAGER'
+    ) {
+      throw new AppError({
+        statusCode: 403,
+        code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+        message:
+          'Only the initiating uploader or Operations Manager may confirm this upload session.',
+      });
+    }
 
     if (record.uploadStatus === 'VERIFIED') {
       return record;

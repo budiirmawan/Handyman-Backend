@@ -708,6 +708,37 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
     );
     assert.equal(prematureDownloadRes.status, 409);
 
+    // 3b. Attempting to bind unverified hm-ev://<id> reference to a variation proposal must fail (409 HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED)
+    const prematureBindRes = await fetch(
+      `${baseUrl}/handyman/field/execution-scopes/${scopeId}/variations/proposals`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${picUserId}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          variationType: 'ADD',
+          lineType: 'MATERIAL',
+          title: 'Unverified evidence attempt',
+          description: 'Trying to bind unverified presigned ID',
+          technicalFinding: 'Unverified bytes',
+          quantity: 1,
+          uomId,
+          evidenceReference: `hm-ev://${evidenceId}`,
+          idempotencyKey: 'var-premature-ev-1',
+        }),
+      },
+    );
+    assert.equal(prematureBindRes.status, 409);
+    const prematureBindBody = (await prematureBindRes.json()) as {
+      error: { code: string };
+    };
+    assert.equal(
+      prematureBindBody.error.code,
+      'HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED',
+    );
+
     // 4. Upload real binary PNG bytes via PUT /handyman/field/evidence/:evidenceId/bytes
     const putBytesRes = await fetch(
       `${baseUrl}/handyman/field/evidence/${evidenceId}/bytes`,
