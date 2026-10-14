@@ -48,6 +48,7 @@ function toBastPayload(bast: HandymanBastRecord) {
   return {
     id: bast.id,
     executionScopeId: bast.executionScopeId,
+    qcRunId: bast.qcRunId,
     status: bast.status,
     issuedAt: bast.issuedAt,
     acceptedAt: bast.acceptedAt,

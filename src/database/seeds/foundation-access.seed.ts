@@ -253,6 +253,10 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // BE-14A — Tenant Company
   { code: 'tenant_company.read', name: 'Read Tenant Companies' },
   { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
+  // CR-HM-QC-AUTHORITY-01: explicitly granted Handyman QC authority.
+  // A reporting line + exact Building access are ALSO required at runtime.
+  { code: 'handyman.qc.manage', name: 'Inspect and decide Handyman QC' },
+  { code: 'handyman.qc.configure', name: 'Configure Handyman QC checklist requirements' },
   // BE-16A — Inventory Item Master
   { code: 'inventory_item.read', name: 'Read Inventory Items' },
   { code: 'inventory_item.manage', name: 'Manage Inventory Items' },
@@ -756,6 +760,8 @@ export const FOUNDATION_PERMISSIONS: readonly {
  * platform administrator.
  */
 export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new Set([
+  'handyman.qc.manage',
+  'handyman.qc.configure',
   'operational_budget.override',
   'rfq.award',
   // CR-BE-PRICE-01 PART 01 — retroactive correction of an effective price

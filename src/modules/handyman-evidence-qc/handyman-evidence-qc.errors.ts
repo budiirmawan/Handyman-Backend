@@ -89,13 +89,13 @@ export function handymanEvidenceStorageKeyConflictError(): AppError {
 
 /* ---- CR-HM-10 PART 04 — QC command errors --------------------- */
 
-/** Actor is not the CURRENT authoritative Crew Lead of the scope. */
+/** Actor lacks current Supervisor QC authority for this scope. */
 export function handymanQcNotAuthorizedError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_QC_NOT_AUTHORIZED,
     message:
-      'Only the CURRENT authoritative Crew Lead may write or read '
-      + 'Handyman QC for this scope.',
+      'QC decisions require an explicitly permitted current Supervisor '
+      + 'of this scope; read access is separately Building-scoped.',
     statusCode: 403,
   });
 }
@@ -131,15 +131,65 @@ export function handymanQcIdempotencyConflictError(): AppError {
   });
 }
 
+/* ---- CR-HM-QC-AUTHORITY-01 — existing QC finish guards -------- */
+export function handymanQcChecklistNotConfiguredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_CHECKLIST_NOT_CONFIGURED,
+    message: 'A required-item checklist must be configured for this scope before opening QC.',
+    statusCode: 409,
+  });
+}
+
+export function handymanQcChecklistConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_CHECKLIST_CONFLICT,
+    message: 'The checklist requirement for this scope is immutable; a different configuration is forbidden.',
+    statusCode: 409,
+  });
+}
+
+export function handymanQcVersionConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_VERSION_CONFLICT,
+    message: 'QC run version changed. Reload the run before deciding.',
+    statusCode: 409,
+  });
+}
+
+export function handymanQcStaleRunError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_STALE_RUN,
+    message: 'QC decision must use the latest run on this execution scope.',
+    statusCode: 409,
+  });
+}
+
+export function handymanQcPassBlockedError(reason: string): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_PASS_BLOCKED,
+    message: `QC PASS is blocked: ${reason}.`,
+    statusCode: 409,
+    details: [`reason=${reason}`],
+  });
+}
+
+export function handymanQcEvidenceInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QC_EVIDENCE_INVALID,
+    message: 'QC evidence must be a byte-verified QC_EVIDENCE upload on this exact execution scope.',
+    statusCode: 409,
+  });
+}
+
 /* ---- CR-HM-10 PART 05 — defect/rectification errors ------------ */
 
-/** Actor is not the CURRENT authoritative Crew Lead of the scope. */
+/** Actor lacks the role for this defect command (PIC vs Supervisor). */
 export function handymanDefectNotAuthorizedError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_DEFECT_NOT_AUTHORIZED,
     message:
-      'Only the CURRENT authoritative Crew Lead may write or read '
-      + 'Handyman defects for this scope.',
+      'Defect inspection requires the permitted current Supervisor; '
+      + 'rectification requires the currently assigned Crew Lead.',
     statusCode: 403,
   });
 }
@@ -170,6 +220,40 @@ export function handymanDefectIdempotencyConflictError(): AppError {
     code: ERROR_CODES.HANDYMAN_DEFECT_IDEMPOTENCY_CONFLICT,
     message:
       'Idempotency key was already used with a different request.',
+    statusCode: 409,
+  });
+}
+
+/** Optimistic concurrency on the append-only defect rework ladder. */
+export function handymanDefectVersionConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_VERSION_CONFLICT,
+    message: 'Defect changed. Reload its current version before deciding.',
+    statusCode: 409,
+  });
+}
+
+export function handymanDefectRectificationRequiredError(reason: string): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_RECTIFICATION_REQUIRED,
+    message: `Cannot confirm defect rectification: ${reason}.`,
+    statusCode: 409,
+    details: [`reason=${reason}`],
+  });
+}
+
+export function handymanDefectEvidenceInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_EVIDENCE_INVALID,
+    message: 'Rectification evidence must be a fresh, verified BEFORE_AFTER_WORK upload by the assigned PIC on the exact scope.',
+    statusCode: 409,
+  });
+}
+
+export function handymanDefectReinspectionRunRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_REINSPECTION_RUN_REQUIRED,
+    message: 'Reinspection must use a new current QC run after a recorded QC FAIL: OPEN to verify, FAILED before requesting another repair cycle.',
     statusCode: 409,
   });
 }

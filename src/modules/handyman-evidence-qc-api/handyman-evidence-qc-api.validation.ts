@@ -83,6 +83,12 @@ export function parseScopeParam(
   return uuid(first(value), 'executionScopeId');
 }
 
+export function parseClientParam(
+  value: string | string[] | undefined,
+): string {
+  return uuid(first(value), 'clientId');
+}
+
 export function parseEvidenceRecordIdParam(
   value: string | string[] | undefined,
 ): string {
@@ -166,6 +172,18 @@ export function parseKeyedBody(body: unknown): {
   return { idempotencyKey: key(source.idempotencyKey) };
 }
 
+function expectedVersion(value: unknown, required: true): number;
+function expectedVersion(value: unknown, required: false): number | undefined;
+function expectedVersion(value: unknown, required: boolean): number | undefined {
+  if (!required && value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    fail('Request validation failed.', [
+      { field: 'expectedVersion', message: 'expectedVersion must be a positive integer.' },
+    ]);
+  }
+  return value;
+}
+
 /* ---- QC bodies --------------------------------------------------- */
 
 /** OPEN run: checklist identity text; session link optional. */
@@ -188,6 +206,7 @@ export function parseQcItemSetBody(body: unknown): {
   itemKey: string;
   outcome: string;
   note: string | null;
+  expectedVersion?: number;
   idempotencyKey: string;
 } {
   const source = (body ?? {}) as Record<string, unknown>;
@@ -195,6 +214,77 @@ export function parseQcItemSetBody(body: unknown): {
     itemKey: shortText(source.itemKey, 'itemKey', 128),
     outcome: shortText(source.outcome, 'outcome', 64),
     note: nullableText(source.note, 'note', 2000),
+    expectedVersion: expectedVersion(source.expectedVersion, false),
+    idempotencyKey: key(source.idempotencyKey),
+  };
+}
+
+/** Scope pins a server-owned, published version; never caller keys. */
+export function parseQcChecklistBody(body: unknown): {
+  templateVersionId: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return { templateVersionId: uuid(source.templateVersionId,
+    'templateVersionId') };
+}
+
+export function parseQcChecklistVersionBody(body: unknown): {
+  code: string;
+  versionNumber: number;
+  requiredItemKeys: string[];
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  if (!Number.isInteger(source.versionNumber)
+      || (source.versionNumber as number) < 1
+      || (source.versionNumber as number) > 1000000) {
+    fail('Request validation failed.', [{ field: 'versionNumber',
+      message: 'versionNumber must be a positive integer.' }]);
+  }
+  if (!Array.isArray(source.requiredItemKeys)
+      || source.requiredItemKeys.length < 1
+      || source.requiredItemKeys.length > 64) {
+    fail('Request validation failed.', [
+      { field: 'requiredItemKeys', message: 'Supply 1–64 required item keys.' },
+    ]);
+  }
+  return {
+    code: shortText(source.code, 'code', 128),
+    versionNumber: source.versionNumber as number,
+    requiredItemKeys: source.requiredItemKeys.map((item: unknown) =>
+      shortText(item, 'requiredItemKeys', 128)),
+  };
+}
+
+export function parseQcEvidenceBody(body: unknown): {
+  evidenceReference: string;
+  expectedVersion: number;
+  idempotencyKey: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return {
+    evidenceReference: shortText(source.evidenceReference,
+      'evidenceReference', 100),
+    expectedVersion: expectedVersion(source.expectedVersion, true),
+    idempotencyKey: key(source.idempotencyKey),
+  };
+}
+
+export function parseQcFinishBody(body: unknown): {
+  outcome: 'PASSED' | 'FAILED';
+  reason: string | null;
+  expectedVersion: number;
+  idempotencyKey: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  if (source.outcome !== 'PASSED' && source.outcome !== 'FAILED') {
+    fail('Request validation failed.', [
+      { field: 'outcome', message: 'outcome must be PASSED or FAILED.' },
+    ]);
+  }
+  return {
+    outcome: source.outcome,
+    reason: nullableText(source.reason, 'reason', 2000),
+    expectedVersion: expectedVersion(source.expectedVersion, true),
     idempotencyKey: key(source.idempotencyKey),
   };
 }
@@ -214,5 +304,33 @@ export function parseDefectOpenBody(body: unknown): {
     runId: uuidOrNull(source.runId, 'runId'),
     itemId: uuidOrNull(source.itemId, 'itemId'),
     idempotencyKey: key(source.idempotencyKey),
+  };
+}
+
+/** Defect ladder: command-specific provenance, optimistic version and key.
+ * Client-supplied actors, statuses and commercial fields are never used. */
+export function parseDefectTransitionBody(
+  body: unknown,
+  eventType: 'START_RECTIFICATION' | 'RECORD_RECTIFICATION'
+    | 'REQUEST_REINSPECTION' | 'PASS_REINSPECTION',
+): {
+  idempotencyKey: string;
+  expectedVersion: number;
+  sessionId?: string;
+  evidenceReference?: string;
+  reason?: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return {
+    idempotencyKey: key(source.idempotencyKey),
+    expectedVersion: expectedVersion(source.expectedVersion, true),
+    ...(eventType === 'RECORD_RECTIFICATION'
+      ? {
+        sessionId: uuid(source.sessionId, 'sessionId'),
+        evidenceReference: shortText(source.evidenceReference,
+          'evidenceReference', 100),
+      } : {}),
+    ...(eventType === 'REQUEST_REINSPECTION'
+      ? { reason: shortText(source.reason, 'reason', 2000) } : {}),
   };
 }

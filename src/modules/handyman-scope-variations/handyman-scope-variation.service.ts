@@ -6,6 +6,10 @@ import { contextAccessService } from '../context-access/context-access.service';
 import { permissionService } from '../permissions';
 import { recordOperationalEvent } from '../operational-events';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments/handyman-scope-assignment.service';
+import { isHandymanQcSupervisor, lockHandymanQcScope }
+  from '../handyman-evidence-qc/handyman-qc-authority';
+import { assertCurrentGuardedHandymanQcPass }
+  from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
@@ -724,59 +728,38 @@ async function assertVerifiedAuthoritativeQcRunForVariation(
       message: `Authoritative QC run (${qcRun.id}) status is ${qcRun.status}, which does not match variation qcOutcome ${expectedQcOutcome}.`,
     });
   }
+  const latest = await tx.query<{ id: string }>(
+    `SELECT id FROM handyman_qc_runs
+       WHERE execution_scope_id = $1 AND client_id = $2
+       ORDER BY created_at DESC, id DESC LIMIT 1 FOR SHARE`,
+    [ctx.executionScopeId, ctx.clientId],
+  );
+  if (latest.rows[0]?.id !== qcRun.id) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'Variation QC requires the latest authoritative run on this execution scope.',
+    });
+  }
 
   if (expectedQcOutcome === 'PASSED') {
-    const finishEventRes = await tx.query<{ id: string }>(
-      `SELECT id
-         FROM handyman_qc_run_events
-        WHERE run_id = $1
-          AND client_id = $2
-          AND event_type = 'FINISH'
-        LIMIT 1`,
-      [qcRun.id, ctx.clientId],
-    );
-    if (!finishEventRes.rows[0]) {
-      throw new AppError({
-        statusCode: 409,
-        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-        message:
-          'Authoritative QC run must have a recorded FINISH event before variation QC PASSED can be verified.',
-      });
-    }
-
-    const badItemsRes = await tx.query<{ id: string }>(
-      `SELECT id
-         FROM handyman_qc_run_items
-        WHERE run_id = $1
-          AND outcome IN ('DEFECT', 'NOT_CHECKED')
-        LIMIT 1`,
-      [qcRun.id],
-    );
-    if (badItemsRes.rows[0]) {
-      throw new AppError({
-        statusCode: 409,
-        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-        message:
-          'Authoritative QC run contains DEFECT or NOT_CHECKED items and cannot support variation QC PASSED.',
-      });
-    }
-
-    const openDefectsRes = await tx.query<{ id: string; status: string }>(
-      `SELECT id, status
-         FROM handyman_defect_records
-        WHERE execution_scope_id = $1
-          AND client_id = $2
-          AND status <> 'VERIFIED'
-        LIMIT 1`,
-      [ctx.executionScopeId, ctx.clientId],
-    );
-    if (openDefectsRes.rows[0]) {
-      throw new AppError({
-        statusCode: 409,
-        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-        message:
-          'Cannot verify variation QC PASSED while unverified defect records remain open on the execution scope.',
-      });
+    // Consume the same versioned, byte-verified, latest Supervisor decision
+    // required by BAST; this is not a parallel variation QC engine.
+    try {
+      await assertCurrentGuardedHandymanQcPass(tx, {
+        id: ctx.executionScopeId, clientId: ctx.clientId,
+        buildingId: ctx.buildingId,
+      }, qcRun.id);
+    } catch (error) {
+      if (error instanceof AppError
+          && (error.code === ERROR_CODES.HANDYMAN_QC_PASS_BLOCKED
+            || error.code === ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED)) {
+        throw new AppError({ statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+          message: 'Variation QC requires a current guarded Supervisor PASS with valid checklist, Work Sessions, defects and evidence.',
+        });
+      }
+      throw error;
     }
   }
 
@@ -2415,26 +2398,30 @@ export async function recordVariationQc(
 
   const { isInspector, isPicPekerjaan } =
     await resolveFieldRoleForExecutionScope(actorUserId, ctx);
-  const hasManage = await userHasPermissionCode(
-    actorUserId,
-    'tenant_company.manage',
-  );
-
-  // Supervisor / Operations QC authority is strictly required.
-  // Field Inspector technical inspection authority and PIC Pekerjaan execution
-  // authority must never bypass Supervisor QC authority.
-  if (isInspector || isPicPekerjaan || !hasManage) {
+  if (isInspector || isPicPekerjaan) {
     throw new AppError({
       statusCode: 403,
       code: ERROR_CODES.HANDYMAN_VARIATION_ROLE_FORBIDDEN,
-      message:
-        'Inspector technical inspection or executing crew cannot bypass Supervisor QC authority; only an authorized Supervisor/Operations actor may verify variation QC.',
+      message: 'Inspector or executing PIC cannot independently verify variation QC.',
     });
   }
 
-  const actorRole: HandymanScopeVariationActorRole = 'OPERATIONS_MANAGER';
+  const actorRole: HandymanScopeVariationActorRole = 'SUPERVISOR';
 
   return withTransaction(async (tx) => {
+    // Share the scope lock with QC run decisions and reassignments. A broad
+    // Operations role never authorizes this QC approval; only the explicitly
+    // permitted, current Supervisor of the assigned Crew Lead can do so.
+    const qcScope = await lockHandymanQcScope(tx, ctx.executionScopeId);
+    if (qcScope.clientId !== ctx.clientId
+        || !(await isHandymanQcSupervisor(ctx.executionScopeId,
+          ctx.clientId, actorUserId, tx))) {
+      throw new AppError({
+        statusCode: 403,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ROLE_FORBIDDEN,
+        message: 'Variation QC requires the current, explicitly permitted Supervisor.',
+      });
+    }
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,
@@ -2606,7 +2593,17 @@ export async function confirmVariationFinalChargeEligibility(
       ? assertUuid(input.bastId, 'bastId')
       : null;
 
+  await assertBuildingScopeAccess(actorUserId, ctx);
   return withTransaction(async (tx) => {
+    // Serialize admission with QC OPEN/FINISH; the financial gate consumes
+    // the current QC result but never changes its authority or BAST state.
+    const qcScope = await lockHandymanQcScope(tx, ctx.executionScopeId);
+    if (qcScope.clientId !== ctx.clientId) {
+      throw new AppError({
+        statusCode: 403, code: ERROR_CODES.BUILDING_ACCESS_DENIED,
+        message: 'Execution scope Client mismatch.',
+      });
+    }
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,
@@ -2674,24 +2671,10 @@ export async function confirmVariationFinalChargeEligibility(
       variation.qcRunId,
       'PASSED',
     );
-    const newerFailedOrOpenQcRes = await tx.query<{ id: string; status: string }>(
-      `SELECT id, status
-         FROM handyman_qc_runs
-        WHERE execution_scope_id = $1
-          AND client_id = $2
-          AND id <> $3
-          AND status IN ('OPEN', 'FAILED')
-        LIMIT 1`,
-      [ctx.executionScopeId, ctx.clientId, variation.qcRunId],
-    );
-    if (newerFailedOrOpenQcRes.rows[0]) {
-      throw new AppError({
-        statusCode: 409,
-        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-        message:
-          'Cannot admit variation to FINAL_CHARGE_ELIGIBILITY while an OPEN or FAILED QC run exists on the execution scope.',
-      });
-    }
+    // Earlier FAILED runs are immutable rework history, not permanent
+    // financial vetoes. The shared verifier above requires the *latest*
+    // authoritative QC run to be the bound PASSED run; a newer OPEN/FAILED
+    // run is therefore rejected without punishing a corrected failure.
 
     // 2. Operational closure gate (no in-flight work sessions)
     const openSessionRes = await tx.query<{ id: string; status: string }>(

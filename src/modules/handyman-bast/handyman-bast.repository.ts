@@ -18,7 +18,7 @@ type Executor = Pick<PoolClient, 'query'>;
 const PG_UNIQUE_VIOLATION = '23505';
 
 const BAST_SELECT = `
-  SELECT id, client_id, execution_scope_id, status,
+  SELECT id, client_id, execution_scope_id, qc_run_id, status,
          issued_at, accepted_at, rejected_at, voided_at,
          created_at, updated_at
     FROM handyman_bast_documents`;
@@ -33,6 +33,7 @@ function mapBast(row: Row): HandymanBastRecord {
     id: row.id,
     clientId: row.client_id,
     executionScopeId: row.execution_scope_id,
+    qcRunId: row.qc_run_id ?? null,
     status: row.status as HandymanBastStatus,
     issuedAt: row.issued_at,
     acceptedAt: row.accepted_at ?? null,
@@ -65,12 +66,12 @@ async function createBast(
   try {
     const result = await executor.query(
       `INSERT INTO handyman_bast_documents (
-         id, client_id, execution_scope_id, status
-       ) VALUES ($1, $2, $3, 'DRAFT')
-       RETURNING id, client_id, execution_scope_id, status,
+         id, client_id, execution_scope_id, qc_run_id, status
+       ) VALUES ($1, $2, $3, $4, 'DRAFT')
+       RETURNING id, client_id, execution_scope_id, qc_run_id, status,
                  issued_at, accepted_at, rejected_at, voided_at,
                  created_at, updated_at`,
-      [id, record.clientId, record.executionScopeId],
+      [id, record.clientId, record.executionScopeId, record.qcRunId],
     );
     return mapBast(result.rows[0]);
   } catch (error) {
@@ -145,7 +146,7 @@ async function updateBastStatus(
             ${voidedAtSql},
             updated_at = NOW()
       WHERE id = $1
-      RETURNING id, client_id, execution_scope_id, status,
+      RETURNING id, client_id, execution_scope_id, qc_run_id, status,
                 issued_at, accepted_at, rejected_at, voided_at,
                 created_at, updated_at`,
     [id, status],

@@ -8,6 +8,9 @@ import {
   getEvidenceRecordHandler,
   getQcRunHandler,
   getQcRunsByScopeHandler,
+  getQcChecklistHandler,
+  getQcChecklistVersionsHandler,
+  postQcChecklistVersionHandler,
   postDefectOpenHandler,
   postDefectPassReinspectionHandler,
   postDefectRecordRectificationHandler,
@@ -17,6 +20,8 @@ import {
   postEvidenceFileAddHandler,
   postEvidenceFinalizeHandler,
   postQcFinishHandler,
+  postQcEvidenceHandler,
+  postQcChecklistHandler,
   postQcItemSetHandler,
   postQcOpenHandler,
 } from './handyman-evidence-qc-api.controller';
@@ -42,13 +47,13 @@ import {
  *   POST /handyman/defects/:defectId/pass-reinspection
  *   GET  /handyman/defects/:defectId
  *
- * Authentication ONLY: any authenticated local session — Crew Leads
- * hold NO RBAC permissions; authority/locking/idempotency/lifecycle
- * are enforced EXCLUSIVELY by the PART 03–05 services (CURRENT
- * authoritative Crew Lead binding, Client access, frozen ladders,
- * ONE-OPEN window, post-FINALIZE file lock). No permission
- * vocabulary is invented and no caller-supplied identity field is
- * trusted. ZERO pricing/billing/payment/FM route ever exists here.
+ * Authentication on every route. Evidence writes remain assigned PIC only;
+ * QC/defect mutations are role-separated in the service (current supervisor
+ * reporting line + explicitly granted handyman.qc.manage for decisions;
+ * current PIC for corrective work). QC/defect reads admit PIC, Supervisor or
+ * tenant_company.read staff, always inside the exact Building. Route-level
+ * authentication is NOT sufficient to mutate or read a scoped resource.
+ * No caller-supplied actor/role is trusted; no financial state is written.
  */
 export function createHandymanEvidenceQcApiRouter(): Router {
   const router = Router();
@@ -58,6 +63,10 @@ export function createHandymanEvidenceQcApiRouter(): Router {
     '/handyman/execution-scopes/:executionScopeId/evidence';
   const scopeQc =
     '/handyman/execution-scopes/:executionScopeId/qc-runs';
+  const checklist =
+    '/handyman/execution-scopes/:executionScopeId/qc-checklist';
+  const checklistVersions =
+    '/handyman/clients/:clientId/qc-checklist-versions';
   const scopeDefects =
     '/handyman/execution-scopes/:executionScopeId/defects';
   const record = '/handyman/evidence-records/:evidenceRecordId';
@@ -70,14 +79,19 @@ export function createHandymanEvidenceQcApiRouter(): Router {
   router.post(`${record}/finalize`, auth, postEvidenceFinalizeHandler);
   router.get(record, auth, read, getEvidenceRecordHandler);
 
+  router.post(checklistVersions, auth, postQcChecklistVersionHandler);
+  router.get(checklistVersions, auth, getQcChecklistVersionsHandler);
+  router.post(checklist, auth, postQcChecklistHandler);
+  router.get(checklist, auth, getQcChecklistHandler);
   router.post(scopeQc, auth, postQcOpenHandler);
-  router.get(scopeQc, auth, read, getQcRunsByScopeHandler);
+  router.get(scopeQc, auth, getQcRunsByScopeHandler);
   router.post(`${run}/items`, auth, postQcItemSetHandler);
+  router.post(`${run}/evidence`, auth, postQcEvidenceHandler);
   router.post(`${run}/finish`, auth, postQcFinishHandler);
-  router.get(run, auth, read, getQcRunHandler);
+  router.get(run, auth, getQcRunHandler);
 
   router.post(scopeDefects, auth, postDefectOpenHandler);
-  router.get(scopeDefects, auth, read, getDefectsByScopeHandler);
+  router.get(scopeDefects, auth, getDefectsByScopeHandler);
   router.post(`${defect}/start-rectification`, auth,
     postDefectStartRectificationHandler);
   router.post(`${defect}/record-rectification`, auth,
@@ -86,6 +100,6 @@ export function createHandymanEvidenceQcApiRouter(): Router {
     postDefectRequestReinspectionHandler);
   router.post(`${defect}/pass-reinspection`, auth,
     postDefectPassReinspectionHandler);
-  router.get(defect, auth, read, getDefectHandler);
+  router.get(defect, auth, getDefectHandler);
   return router;
 }

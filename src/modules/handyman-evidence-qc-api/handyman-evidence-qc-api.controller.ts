@@ -3,15 +3,20 @@ import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
 import {
   addHandymanEvidenceFile,
+  bindHandymanQcEvidence,
+  configureHandymanQcChecklist,
+  getHandymanQcChecklist,
+  publishHandymanQcChecklistVersion,
+  listHandymanQcChecklistVersions,
   createHandymanEvidenceRecord,
   finalizeHandymanEvidenceRecord,
   finishHandymanQcRun,
-  getHandymanDefectCustomerCareDetail,
+  getHandymanDefectDetail,
   getHandymanEvidenceRecordCustomerCareDetail,
-  getHandymanQcRunCustomerCareDetail,
-  listHandymanDefectsCustomerCareView,
+  getHandymanQcRunDetail,
+  listHandymanDefectsByScope,
   listHandymanEvidenceRecordsCustomerCareView,
-  listHandymanQcRunsCustomerCareView,
+  listHandymanQcRunsByScope,
   openHandymanDefect,
   openHandymanQcRun,
   passHandymanDefectReinspection,
@@ -24,6 +29,7 @@ import type {
   HandymanDefectCommandResult,
   HandymanDefectEventRecord,
   HandymanDefectRecordRecord,
+  TransitionHandymanDefectInput,
   HandymanEvidenceCommandResult,
   HandymanEvidenceEventRecord,
   HandymanEvidenceFileAddResult,
@@ -40,11 +46,17 @@ import type {
 import {
   parseDefectIdParam,
   parseDefectOpenBody,
+  parseDefectTransitionBody,
+  parseClientParam,
+  parseQcChecklistVersionBody,
   parseEvidenceCreateBody,
   parseEvidenceFileAddBody,
   parseEvidenceRecordIdParam,
   parseKeyedBody,
   parseQcItemSetBody,
+  parseQcEvidenceBody,
+  parseQcChecklistBody,
+  parseQcFinishBody,
   parseQcOpenBody,
   parseQcRunIdParam,
   parseScopeParam,
@@ -119,6 +131,8 @@ function toQcRunPayload(run: HandymanQcRunRecord) {
     sessionId: run.sessionId,
     checklistIdentity: run.checklistIdentity,
     status: run.status,
+    version: run.version,
+    failureReason: run.failureReason,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
   };
@@ -142,6 +156,7 @@ function toQcRunEventPayload(event: HandymanQcRunEventRecord) {
     runId: event.runId,
     eventType: event.eventType,
     idempotencyKey: event.idempotencyKey,
+    metadata: event.metadata,
     occurredAt: event.occurredAt,
   };
 }
@@ -154,6 +169,10 @@ function toDefectPayload(defect: HandymanDefectRecordRecord) {
     itemId: defect.itemId,
     description: defect.description,
     status: defect.status,
+    version: defect.version,
+    rectificationSessionId: defect.rectificationSessionId,
+    rectificationEvidenceReference: defect.rectificationEvidenceUploadId
+      ? `hm-ev://${defect.rectificationEvidenceUploadId}` : null,
     createdAt: defect.createdAt,
     updatedAt: defect.updatedAt,
   };
@@ -165,6 +184,7 @@ function toDefectEventPayload(event: HandymanDefectEventRecord) {
     defectId: event.defectId,
     eventType: event.eventType,
     idempotencyKey: event.idempotencyKey,
+    metadata: event.metadata,
     occurredAt: event.occurredAt,
   };
 }
@@ -302,6 +322,72 @@ export async function getEvidenceRecordHandler(
 
 /* ---- QC handlers ------------------------------------------------- */
 
+/** Client-owned versioned checklist configuration (not a second QC run). */
+export async function postQcChecklistVersionHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const clientId = parseClientParam(p(req.params.clientId));
+    const body = parseQcChecklistVersionBody(req.body);
+    const result = await publishHandymanQcChecklistVersion({
+      clientId, ...body }, actor(req));
+    sendSuccess(res, result);
+  } catch (error) { next(error); }
+}
+
+export async function getQcChecklistVersionsHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const clientId = parseClientParam(p(req.params.clientId));
+    const versions = await listHandymanQcChecklistVersions(clientId,
+      actor(req));
+    sendSuccess(res, { versions });
+  } catch (error) { next(error); }
+}
+
+/** One-time, explicitly permissioned required-item configuration. */
+export async function postQcChecklistHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseScopeParam(p(req.params.executionScopeId));
+    const body = parseQcChecklistBody(req.body);
+    const result = await configureHandymanQcChecklist({
+      executionScopeId, ...body,
+    }, actor(req));
+    sendSuccess(res, { checklist: {
+      executionScopeId: result.spec.executionScopeId,
+      checklistIdentity: result.spec.checklistIdentity,
+      requiredItemKeys: result.spec.requiredItemKeys,
+      templateVersionId: result.spec.templateVersionId,
+      templateCode: result.spec.templateCode,
+      templateVersionNumber: result.spec.templateVersionNumber,
+      configuredAt: result.spec.configuredAt,
+      boundAt: result.spec.boundAt,
+    }, replayed: result.replayed });
+  } catch (error) { next(error); }
+}
+
+export async function getQcChecklistHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseScopeParam(p(req.params.executionScopeId));
+    const spec = await getHandymanQcChecklist(executionScopeId, actor(req));
+    sendSuccess(res, { checklist: spec ? {
+      executionScopeId: spec.executionScopeId,
+      checklistIdentity: spec.checklistIdentity,
+      requiredItemKeys: spec.requiredItemKeys,
+      templateVersionId: spec.templateVersionId,
+      templateCode: spec.templateCode,
+      templateVersionNumber: spec.templateVersionNumber,
+      configuredAt: spec.configuredAt,
+      boundAt: spec.boundAt,
+    } : null });
+  } catch (error) { next(error); }
+}
+
 /** OPEN run (PART 04 command): ONE OPEN per scope. */
 export async function postQcOpenHandler(
   req: Request,
@@ -343,11 +429,13 @@ export async function postQcItemSetHandler(
         itemKey: body.itemKey,
         outcome: body.outcome as never,
         note: body.note,
+        expectedVersion: body.expectedVersion,
         idempotencyKey: body.idempotencyKey,
       }, actor(req));
     sendSuccess(res, {
       item: toQcRunItemPayload(result.item),
       event: toQcRunEventPayload(result.event),
+      runVersion: result.runVersion,
       replayed: result.replayed,
     }, 200);
   } catch (error) {
@@ -355,7 +443,29 @@ export async function postQcItemSetHandler(
   }
 }
 
-/** FINISH (PART 04 command): server-side PASSED/FAILED decision. */
+/** Bind verified QC_EVIDENCE upload to the current run. */
+export async function postQcEvidenceHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const qcRunId = parseQcRunIdParam(p(req.params.qcRunId));
+    const body = parseQcEvidenceBody(req.body);
+    const result = await bindHandymanQcEvidence({ qcRunId, ...body },
+      actor(req));
+    sendSuccess(res, {
+      evidence: {
+        id: result.evidence.id,
+        runId: result.evidence.runId,
+        evidenceReference: result.evidence.evidenceReference,
+        createdAt: result.evidence.createdAt,
+      },
+      runVersion: result.runVersion,
+      replayed: result.replayed,
+    });
+  } catch (error) { next(error); }
+}
+
+/** FINISH: caller requests a decision; server adjudicates PASS. */
 export async function postQcFinishHandler(
   req: Request,
   res: Response,
@@ -363,10 +473,13 @@ export async function postQcFinishHandler(
 ): Promise<void> {
   try {
     const qcRunId = parseQcRunIdParam(p(req.params.qcRunId));
-    const { idempotencyKey } = parseKeyedBody(req.body);
+    const body = parseQcFinishBody(req.body);
     const result: HandymanQcFinishResult = await finishHandymanQcRun({
       qcRunId,
-      idempotencyKey,
+      outcome: body.outcome,
+      expectedVersion: body.expectedVersion,
+      reason: body.reason,
+      idempotencyKey: body.idempotencyKey,
     }, actor(req));
     sendSuccess(res, {
       run: toQcRunPayload(result.run),
@@ -387,12 +500,14 @@ export async function getQcRunsByScopeHandler(
   try {
     const executionScopeId = parseScopeParam(
       p(req.params.executionScopeId));
-    const views = await listHandymanQcRunsCustomerCareView(
+    const views = await listHandymanQcRunsByScope(
       executionScopeId, actor(req));
     sendSuccess(res, {
       runs: views.map((view) => ({
         run: toQcRunPayload(view.run),
         items: view.items.map(toQcRunItemPayload),
+        evidence: view.evidence.map((e) => ({ id: e.id,
+          evidenceReference: e.evidenceReference, createdAt: e.createdAt })),
       })),
     }, 200);
   } catch (error) {
@@ -408,11 +523,13 @@ export async function getQcRunHandler(
 ): Promise<void> {
   try {
     const qcRunId = parseQcRunIdParam(p(req.params.qcRunId));
-    const view = await getHandymanQcRunCustomerCareDetail(
+    const view = await getHandymanQcRunDetail(
       qcRunId, actor(req));
     sendSuccess(res, {
       run: toQcRunPayload(view.run),
       items: view.items.map(toQcRunItemPayload),
+      evidence: view.evidence.map((e) => ({ id: e.id,
+        evidenceReference: e.evidenceReference, createdAt: e.createdAt })),
       events: view.events.map(toQcRunEventPayload),
     }, 200);
   } catch (error) {
@@ -454,16 +571,17 @@ async function runDefectTransition(
   req: Request,
   res: Response,
   next: NextFunction,
+  eventType: 'START_RECTIFICATION' | 'RECORD_RECTIFICATION'
+    | 'REQUEST_REINSPECTION' | 'PASS_REINSPECTION',
   command: (
-    input: { defectId: string; idempotencyKey: string },
+    input: TransitionHandymanDefectInput,
     actorUserId: string,
   ) => Promise<HandymanDefectCommandResult>,
 ): Promise<void> {
   try {
     const defectId = parseDefectIdParam(p(req.params.defectId));
-    const { idempotencyKey } = parseKeyedBody(req.body);
-    const result = await command({ defectId, idempotencyKey },
-      actor(req));
+    const body = parseDefectTransitionBody(req.body, eventType);
+    const result = await command({ defectId, ...body }, actor(req));
     sendSuccess(res, {
       defect: toDefectPayload(result.defect),
       event: toDefectEventPayload(result.event),
@@ -481,7 +599,7 @@ export function postDefectStartRectificationHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    startHandymanDefectRectification);
+    'START_RECTIFICATION', startHandymanDefectRectification);
 }
 
 /** RECORD_RECTIFICATION (RECTIFYING → RECTIFIED). */
@@ -491,7 +609,7 @@ export function postDefectRecordRectificationHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    recordHandymanDefectRectification);
+    'RECORD_RECTIFICATION', recordHandymanDefectRectification);
 }
 
 /** REQUEST_REINSPECTION (RECTIFIED → RECTIFYING loop). */
@@ -501,7 +619,7 @@ export function postDefectRequestReinspectionHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    requestHandymanDefectReinspection);
+    'REQUEST_REINSPECTION', requestHandymanDefectReinspection);
 }
 
 /** PASS_REINSPECTION (RECTIFIED → VERIFIED, terminal). */
@@ -511,7 +629,7 @@ export function postDefectPassReinspectionHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    passHandymanDefectReinspection);
+    'PASS_REINSPECTION', passHandymanDefectReinspection);
 }
 
 /** Per-scope defect listing (PART 05 read model). */
@@ -523,7 +641,7 @@ export async function getDefectsByScopeHandler(
   try {
     const executionScopeId = parseScopeParam(
       p(req.params.executionScopeId));
-    const defects = await listHandymanDefectsCustomerCareView(
+    const defects = await listHandymanDefectsByScope(
       executionScopeId, actor(req));
     sendSuccess(res, { defects: defects.map(toDefectPayload) }, 200);
   } catch (error) {
@@ -539,7 +657,7 @@ export async function getDefectHandler(
 ): Promise<void> {
   try {
     const defectId = parseDefectIdParam(p(req.params.defectId));
-    const view = await getHandymanDefectCustomerCareDetail(
+    const view = await getHandymanDefectDetail(
       defectId, actor(req));
     sendSuccess(res, {
       defect: toDefectPayload(view.defect),

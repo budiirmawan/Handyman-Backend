@@ -1,3 +1,7 @@
+import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
+import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
+import { migration0443SeparateHandymanVariationQcAuthority } from './0443_separate_handyman_variation_qc_authority';
+import { migration0442HardenHandymanQc } from './0442_harden_handyman_qc';
 import { migration0431CreateHandymanVisitAppointments } from './0431_create_handyman_visit_appointments';
 import { migration0432HandymanChargeTenantInvoiceSource } from './0432_handyman_charge_tenant_invoice_source';
 import { migration0433HandymanCustomerPaymentProof } from './0433_handyman_customer_payment_proof';
@@ -923,4 +927,8 @@ export const migrations: readonly Migration[] = [
   migration0439HardenExecutionScopeReassignment,
   migration0440CreateHandymanDispatchReleases,
   migration0441HandymanDispatchReleaseReassignmentSupersede,
+  migration0442HardenHandymanQc,
+  migration0443SeparateHandymanVariationQcAuthority,
+  migration0444VersionHandymanQcChecklists,
+  migration0445BindHandymanBastToQcPass,
 ];

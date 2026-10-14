@@ -1,6 +1,9 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
+import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
+import { assertCurrentGuardedHandymanQcPass }
+  from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
@@ -11,6 +14,7 @@ import {
   handymanBastIllegalTransitionError,
   handymanBastNotFoundError,
   handymanBastScopeNotEligibleError,
+  handymanBastQcNotReadyError,
   handymanBastValidationError,
 } from './handyman-bast.errors';
 import {
@@ -91,6 +95,25 @@ async function loadAuthorizedScope(
   return scope;
 }
 
+async function requireCurrentQcPassForBast(
+  tx: PoolClient,
+  scope: { id: string; clientId: string; buildingId: string },
+  expectedRunId?: string,
+): Promise<string> {
+  try {
+    const decision = await assertCurrentGuardedHandymanQcPass(tx, scope,
+      expectedRunId);
+    return decision.runId;
+  } catch (error) {
+    if (error instanceof AppError
+        && (error.code === ERROR_CODES.HANDYMAN_QC_PASS_BLOCKED
+          || error.code === ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED)) {
+      throw handymanBastQcNotReadyError();
+    }
+    throw error;
+  }
+}
+
 export async function prepareHandymanBast(
   actorUserId: string,
   input: HandymanBastPrepareInput,
@@ -130,9 +153,11 @@ export async function prepareHandymanBast(
       }
       throw handymanBastActiveConflictError(executionScopeId);
     }
+    // PREPARE is strictly downstream of the latest genuine Supervisor QC
+    // PASS. This does not issue, sign or accept the BAST for the customer.
+    const qcRunId = await requireCurrentQcPassForBast(client, scope);
     const bast = await handymanBastRepository.createBast(client, {
-      clientId: scope.clientId,
-      executionScopeId,
+      clientId: scope.clientId, executionScopeId, qcRunId,
     });
     const event = await handymanBastRepository.insertEvent(client, {
       clientId: scope.clientId,
@@ -196,6 +221,10 @@ async function applyPart01Transition(
     }
     await loadAuthorizedScope(client, bast.executionScopeId);
     const next = nextHandymanBastStatus(bast.status, action);
+    if (action === 'ISSUE') {
+      if (!bast.qcRunId) throw handymanBastQcNotReadyError();
+      await requireCurrentQcPassForBast(client, scope, bast.qcRunId);
+    }
     const updated = await handymanBastRepository.updateBastStatus(
       client,
       bast.id,
@@ -338,6 +367,10 @@ async function applyCustomerSignOff(
       };
     }
     const next = nextHandymanBastStatus(bast.status, action);
+    if (action === 'ACCEPT') {
+      if (!bast.qcRunId) throw handymanBastQcNotReadyError();
+      await requireCurrentQcPassForBast(client, scope, bast.qcRunId);
+    }
     const updated = await handymanBastRepository.updateBastStatus(
       client,
       bast.id,

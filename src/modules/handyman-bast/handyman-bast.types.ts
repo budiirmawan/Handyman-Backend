@@ -68,6 +68,8 @@ export type HandymanBastRecord = {
   id: string;
   clientId: string;
   executionScopeId: string;
+  /** NULL only for historical documents prepared before the QC gate. */
+  qcRunId: string | null;
   status: HandymanBastStatus;
   issuedAt: Date | null;
   acceptedAt: Date | null;
@@ -80,6 +82,7 @@ export type HandymanBastRecord = {
 export type NewHandymanBast = {
   clientId: string;
   executionScopeId: string;
+  qcRunId: string;
 };
 
 export type HandymanBastEventRecord = {
