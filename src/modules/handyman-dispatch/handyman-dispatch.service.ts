@@ -49,10 +49,11 @@ function toPublic(
 export async function evaluateDispatchReadiness(
   executionScopeId: string,
   actorUserId: string,
+  executor?: Pick<import('pg').PoolClient, 'query'>,
 ): Promise<HandymanDispatchReadinessReport> {
   const scopeId = ensureUuid(executionScopeId, 'executionScopeId');
   ensureUuid(actorUserId, 'actorUserId');
-  const db = getPool();
+  const db = executor ?? getPool();
 
   const scope = await handymanScopeAssignmentRepository.findScopeById(
     db,
@@ -130,8 +131,22 @@ export async function evaluateDispatchReadiness(
     }
   }
 
-  // 5. No conflicting crew commitment (other active work session on this crew)
+  // 5. No conflicting crew commitment — another ACTIVE work session, OR an
+  //    overlapping CONFIRMED/IN_PROGRESS EXECUTION appointment already
+  //    reserved for this crew (double-book). Dispatch release must not
+  //    silently allocate the same crew to two overlapping windows, even
+  //    before either session starts.
   let noConflictingCommitment = true;
+  let confirmedStartAt: Date | null = null;
+  let confirmedEndAt: Date | null = null;
+  if (appointmentId && confirmedAppointment) {
+    const window = await db.query<{ start_at: Date; end_at: Date }>(
+      `SELECT start_at, end_at FROM handyman_visit_appointments WHERE id = $1`,
+      [appointmentId],
+    );
+    confirmedStartAt = window.rows[0]?.start_at ?? null;
+    confirmedEndAt = window.rows[0]?.end_at ?? null;
+  }
   if (assignment) {
     const conflicts = await db.query(
       `SELECT 1 FROM handyman_execution_scope_assignments a
@@ -142,7 +157,32 @@ export async function evaluateDispatchReadiness(
         LIMIT 1`,
       [assignment.handymanCrewId, scope.clientId, scopeId],
     );
-    noConflictingCommitment = conflicts.rows.length === 0;
+    if (conflicts.rows.length > 0) noConflictingCommitment = false;
+
+    if (noConflictingCommitment && confirmedStartAt && confirmedEndAt) {
+      const overlap = await db.query(
+        `SELECT 1 FROM handyman_visit_capacity_reservations r
+           JOIN handyman_visit_appointments v ON v.id = r.appointment_id
+             AND v.client_id = r.client_id
+             AND v.kind = 'EXECUTION'
+             AND v.state IN ('CONFIRMED','IN_PROGRESS')
+          WHERE r.active = TRUE
+            AND r.client_id = $1
+            AND r.resource_type = 'CREW'
+            AND r.resource_id = $2
+            AND tstzrange(r.start_at, r.end_at, '[)') && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+            AND v.id <> $5
+          LIMIT 1`,
+        [
+          scope.clientId,
+          assignment.handymanCrewId,
+          confirmedStartAt,
+          confirmedEndAt,
+          appointmentId,
+        ],
+      );
+      if (overlap.rows.length > 0) noConflictingCommitment = false;
+    }
   }
 
   // 6. Permit clearance (handyman_permit_readiness)
@@ -224,15 +264,19 @@ export async function releaseHandymanDispatch(
   ensureUuid(actorUserId, 'actorUserId');
 
   return withTransaction(async (tx) => {
-    const readiness = await evaluateDispatchReadiness(scopeId, actorUserId);
-    if (!readiness.ready) {
-      throw handymanDispatchNotReadyError(readiness.failures);
-    }
     const scope = await handymanScopeAssignmentRepository.lockScopeById(
       tx,
       scopeId,
     );
     if (!scope) throw handymanExecutionScopeNotFoundError();
+    // Evaluate readiness inside the transaction against the locked scope.
+    // The lockScopeById uses SELECT ... FOR UPDATE which serializes
+    // concurrent release attempts on the same scope; below we also rely on
+    // the partial unique index on ACTIVE releases as defense-in-depth.
+    const readiness = await evaluateDispatchReadiness(scopeId, actorUserId, tx);
+    if (!readiness.ready) {
+      throw handymanDispatchNotReadyError(readiness.failures);
+    }
     const active = await handymanDispatchRepository.lockActiveByScope(
       tx,
       scopeId,

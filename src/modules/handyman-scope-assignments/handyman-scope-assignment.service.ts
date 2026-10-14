@@ -364,9 +364,27 @@ export async function reassignHandymanExecutionScopeCrew(
       scope.clientId,
       scope.buildingId,
     );
+    // Supersede any RELEASED dispatch release tied to the current ACTIVE
+    // assignment BEFORE we flip the assignment to SUPERSEDED — the
+    // dispatch-release guard requires the referenced assignment to be
+    // ACTIVE at write time, and supersedeForAssignment only targets
+    // RELEASED rows (IN_PROGRESS is forbidden by trigger). This ensures
+    // the former PIC loses mutation authority and MY_JOBS stops
+    // surfacing the work order as actionable after reassignment.
+    const { handymanDispatchRepository } = await import(
+      '../handyman-dispatch/handyman-dispatch.repository'
+    );
+    await handymanDispatchRepository.supersedeForAssignment(
+      tx,
+      current.id,
+      actorUserId,
+      `Assignment reassigned: ${reason}`,
+    );
+
     const superseded = await handymanScopeAssignmentRepository
       .supersedeAssignment(tx, current.id, expectedVersion);
     if (!superseded) throw handymanAssignmentVersionConflictError();
+
     await journal(
       tx,
       superseded,

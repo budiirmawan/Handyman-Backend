@@ -475,6 +475,8 @@ import { migration0439HardenExecutionScopeReassignment }
   from './0439_harden_execution_scope_reassignment';
 import { migration0440CreateHandymanDispatchReleases }
   from './0440_create_handyman_dispatch_releases';
+import { migration0441HandymanDispatchReleaseReassignmentSupersede }
+  from './0441_handyman_dispatch_release_reassignment_supersede';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -920,4 +922,5 @@ export const migrations: readonly Migration[] = [
   migration0438CreateHandymanInspectorAssignments,
   migration0439HardenExecutionScopeReassignment,
   migration0440CreateHandymanDispatchReleases,
+  migration0441HandymanDispatchReleaseReassignmentSupersede,
 ];

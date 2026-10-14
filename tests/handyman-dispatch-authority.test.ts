@@ -280,7 +280,33 @@ async function setupCrew(
 
 async function setupRequest(
   realm: Awaited<ReturnType<typeof setupRealm>>,
+  opts?: { spaceId?: string },
 ): Promise<{ requestId: string }> {
+  // Create a fresh space hierarchy per request so parallel fixtures do not
+  // collide on tenant-space bindings.
+  const floor = await floorService.createFloor({
+    buildingId: realm.building.id,
+    code: `F_${suffix()}`,
+    name: 'Floor',
+    levelNumber: 1,
+  });
+  const area = await areaService.createArea({
+    floorId: floor.id,
+    code: `A_${suffix()}`,
+    name: 'Area',
+  });
+  const room = await roomService.createRoom({
+    areaId: area.id,
+    code: `R_${suffix()}`,
+    name: 'Room',
+  });
+  const space = await spaceService.createSpace({
+    roomId: room.id,
+    code: `S_${suffix()}`,
+    name: 'Space',
+  });
+  const spaceId = opts?.spaceId ?? space.id;
+
   // A tenant customer to own the request.
   const linkedUser = await userService.createUser({
     email: `customer-${suffix().toLowerCase()}@example.com`,
@@ -292,23 +318,24 @@ async function setupRequest(
   const pic = await tenantPicService.createTenantPic({
     tenantCompanyId: realm.tenant.id,
     picName: 'Tenant Requester',
-    email: 'requester@tenant.example.com',
+    email: `requester-${suffix().toLowerCase()}@tenant.example.com`,
     userId: linkedUser.id,
   }, adminUserId);
+  // assignSpaceToTenant enforces one-active per space; assign our fresh space.
   await tenantSpaceService.assignSpaceToTenant({
     tenantCompanyId: realm.tenant.id,
     buildingId: realm.building.id,
-    spaceId: realm.space.id,
-  }, adminUserId);
+    spaceId,
+  }, adminUserId).catch(() => undefined); // idempotent across tests
   await tenantBuildingContextService.createTenantBuildingContext({
     tenantCompanyId: realm.tenant.id,
     buildingId: realm.building.id,
-  }, adminUserId);
+  }, adminUserId).catch(() => undefined);
   const attribution = await createChannelAttribution({
     tenantCompanyId: realm.tenant.id,
     buildingId: realm.building.id,
     tenantPicId: pic.id,
-    spaceId: realm.space.id,
+    spaceId,
     originChannel: 'BM_SUPER_APP',
     originReference: `bm-handoff:BM_SUPER_APP:${randomUUID()}`,
     createdByUserId: linkedUser.id,
@@ -744,6 +771,149 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
       (err: Error) =>
         errorCode(err) === 'HANDYMAN_WORK_SESSION_DISPATCH_NOT_RELEASED',
     );
+  });
+
+  async function seedConfirmedCrewAppointment(
+    scopeId: string,
+    crew: { crew: { id: string } },
+  ): Promise<string> {
+    const apptId = randomUUID();
+    const startAt = new Date(Date.now() + 2 * 3600_000);
+    const endAt = new Date(Date.now() + 4 * 3600_000);
+    await q(
+      `ALTER TABLE handyman_visit_appointments DISABLE TRIGGER ALL`);
+    await q(
+      `INSERT INTO handyman_visit_appointments
+         (id, client_id, handyman_request_id, execution_scope_id,
+          tenant_company_id, building_id, kind, resource_type, resource_id,
+          start_at, end_at, timezone, state, confirmed_by_user_id, confirmed_at,
+          created_by_user_id, tenant_choice_evidence_ref, version)
+       SELECT $1, es.client_id, es.handyman_request_id, es.id,
+         es.tenant_company_id, es.building_id, 'EXECUTION','CREW',$2,
+         $3, $4, COALESCE(b.timezone,'UTC'),'CONFIRMED',$5,NOW(),$5,'seed',1
+         FROM handyman_execution_scopes es
+         JOIN buildings b ON b.id = es.building_id
+        WHERE es.id = $6`,
+      [apptId, crew.crew.id, startAt, endAt, adminUserId, scopeId],
+    );
+    await q(
+      `ALTER TABLE handyman_visit_appointments ENABLE TRIGGER ALL`);
+    await q(
+      `INSERT INTO handyman_visit_capacity_reservations
+         (id, appointment_id, client_id, resource_type, resource_id,
+          start_at, end_at, active)
+       SELECT $1, $2, client_id, 'CREW', $3, $4, $5, TRUE
+         FROM handyman_visit_appointments WHERE id = $2`,
+      [randomUUID(), apptId, crew.crew.id, startAt, endAt],
+    );
+    return apptId;
+  }
+
+  it('P0-B: reassignment supersedes any existing dispatch release', async (t) => {
+    if (!requireDb(t)) return;
+    const realm = await setupRealm();
+    const crew1 = await setupCrew(realm);
+    const crew2 = await setupCrew(realm);
+    const { requestId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId);
+    const initial = await assignHandymanExecutionScopeCrew(
+      {
+        executionScopeId: scopeId,
+        providerContextId: crew1.providerContext.id,
+        crewId: crew1.crew.id,
+      },
+      adminUserId,
+    );
+    const apptId = await seedConfirmedCrewAppointment(scopeId, crew1);
+    const rel = await handymanDispatchService.releaseHandymanDispatch(
+      { executionScopeId: scopeId, appointmentId: apptId },
+      adminUserId,
+    );
+    assert.equal(rel.status, 'RELEASED');
+
+    // Reassigning the crew must supersede the release; the prior PIC
+    // must no longer see the job as actionable.
+    const reassigned = await reassignHandymanExecutionScopeCrew(
+      {
+        executionScopeId: scopeId,
+        providerContextId: crew2.providerContext.id,
+        crewId: crew2.crew.id,
+        expectedVersion: initial.version,
+        reason: 'Crew unavailable',
+      },
+      adminUserId,
+    );
+    assert.equal(reassigned.status, 'ACTIVE');
+
+    const supersededRows = await q(
+      `SELECT status FROM handyman_dispatch_releases WHERE id = $1`,
+      [rel.id],
+    );
+    assert.equal(supersededRows.rows[0].status, 'SUPERSEDED');
+
+    // A new release is required before the new crew can act.
+    await assert.rejects(
+      () =>
+        handymanDispatchService.releaseHandymanDispatch(
+          { executionScopeId: scopeId, appointmentId: apptId },
+          adminUserId,
+        ),
+      (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY',
+    );
+  });
+
+  it('P0-C: concurrent duplicate release is safely serialized', async (t) => {
+    if (!requireDb(t)) return;
+    // Defense-in-depth: the partial unique index on ACTIVE releases and
+    // the FOR UPDATE lock on scope guarantee only one release commits.
+    const realm = await setupRealm();
+    const crew = await setupCrew(realm);
+    const { requestId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId);
+    await assignHandymanExecutionScopeCrew(
+      { executionScopeId: scopeId, providerContextId: crew.providerContext.id, crewId: crew.crew.id },
+      adminUserId,
+    );
+    const apptId = await seedConfirmedCrewAppointment(scopeId, crew);
+    const results = await Promise.allSettled([
+      handymanDispatchService.releaseHandymanDispatch(
+        { executionScopeId: scopeId, appointmentId: apptId }, adminUserId),
+      handymanDispatchService.releaseHandymanDispatch(
+        { executionScopeId: scopeId, appointmentId: apptId }, adminUserId),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    assert.equal(fulfilled.length, 1, 'exactly one release must commit');
+    assert.equal(rejected.length, 1, 'exactly one release must conflict');
+    const err = (rejected[0] as PromiseRejectedResult).reason as { code?: string };
+    assert.ok(
+      err.code === 'HANDYMAN_DISPATCH_RELEASE_CONFLICT'
+        || err.code === '23505',
+      `expected conflict code, got ${err.code}`,
+    );
+  });
+
+  it('P0-A: revoke inspector removes visit authority and version-conflicts stale', async (t) => {
+    if (!requireDb(t)) return;
+    const realm = await setupRealm();
+    const inspector = await setupInspectorUser(realm);
+    const { requestId } = await setupRequest(realm);
+    const visitId = await setupProposedInspectionVisit(requestId, inspector.user.id);
+    const assigned = await handymanInspectorAssignmentService.assignInspectorToVisit(
+      { visitAppointmentId: visitId, inspectorUserId: inspector.user.id },
+      adminUserId,
+    );
+    // stale version rejection
+    await assert.rejects(
+      () =>
+        handymanInspectorAssignmentService.revokeInspectorAssignment(
+          visitId, assigned.version + 5, 'wrong', adminUserId),
+      (err: Error) => errorCode(err) === 'HANDYMAN_INSPECTOR_ASSIGNMENT_VERSION_CONFLICT',
+    );
+    const revoked = await handymanInspectorAssignmentService.revokeInspectorAssignment(
+      visitId, assigned.version, 'No-show', adminUserId,
+    );
+    assert.equal(revoked.status, 'REVOKED');
   });
 
   it('P0-E: active work session blocks reassignment', async (t) => {

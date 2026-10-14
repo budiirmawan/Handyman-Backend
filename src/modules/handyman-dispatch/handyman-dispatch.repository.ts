@@ -145,6 +145,28 @@ async function cancel(
   return res.rows[0] ? map(res.rows[0]) : null;
 }
 
+/**
+ * Supersede RELEASED releases tied to a superseded assignment. Used by
+ * crew reassignment before a work session starts (IN_PROGRESS rows are
+ * forbidden by the trigger/upstream guard). Returns the number of rows
+ * updated so callers can audit.
+ */
+async function supersedeForAssignment(
+  executor: Pick<PoolClient, 'query'>,
+  assignmentId: string,
+  actorUserId: string,
+  reason: string,
+): Promise<number> {
+  const res = await executor.query(
+    `UPDATE handyman_dispatch_releases
+        SET status = 'SUPERSEDED', version = version + 1, updated_at = NOW(),
+            cancelled_by_user_id = $2, cancelled_at = NOW(), cancel_reason = $3
+      WHERE assignment_id = $1 AND status = 'RELEASED'`,
+    [assignmentId, actorUserId, reason],
+  );
+  return res.rowCount ?? 0;
+}
+
 export const handymanDispatchRepository = {
   findActiveByScope,
   lockActiveByScope,
@@ -152,4 +174,5 @@ export const handymanDispatchRepository = {
   markInProgress,
   markCompleted,
   cancel,
+  supersedeForAssignment,
 };

@@ -27,7 +27,7 @@ export const MY_JOBS_SQL = `
     AND a.client_id=es.client_id AND a.status='ACTIVE'
   LEFT JOIN handyman_dispatch_releases dr
     ON dr.execution_scope_id=es.id AND dr.client_id=es.client_id
-   AND dr.assignment_id=a.id AND dr.status='RELEASED'
+   AND dr.assignment_id=a.id AND dr.status IN ('RELEASED','IN_PROGRESS')
   JOIN handyman_work_crews crew ON crew.id=a.handyman_crew_id
     AND crew.client_id=es.client_id AND crew.handyman_provider_context_id=a.handyman_provider_context_id
     AND crew.status='ACTIVE'
