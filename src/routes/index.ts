@@ -377,6 +377,7 @@ import { createWorkOrderEvidenceRouter } from '../modules/work-order-evidence/wo
 import { createWorkOrderVerificationRouter } from '../modules/work-order-verification/work-order-verification.routes';
 import { createWorkOrderHistoryRouter } from '../modules/work-order-history/work-order-history.routes';
 import { createHandymanScopeVariationRouter } from '../modules/handyman-scope-variations/handyman-scope-variation.routes';
+import { createHandymanMaterialPurchasingRouter } from '../modules/handyman-material-purchasing/handyman-material-purchasing.routes';
 import { createHealthRouter } from './health.routes';
 
 export function createApiRouter(): Router {
@@ -836,6 +837,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanServiceWarrantyApiRouter()); // CR-HM-17 GAP PART 06 — CR-HM-15 service warranty, claim, rework & chargeable additional work surface
   router.use(createHandymanSlaStatusApiRouter()); // CR-HM-17 GAP PART 07 — CR-HM-16 SLA, provider performance & status visibility surface
   router.use(createHandymanScopeVariationRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / REDUCE)
+  router.use(createHandymanMaterialPurchasingRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;

@@ -465,6 +465,8 @@ import { migration0428CreateHandymanCarePropertyGrants }
   from './0428_create_handyman_care_property_grants';
 import { migration0435CreateHandymanScopeVariations }
   from './0435_create_handyman_scope_variations';
+import { migration0436CreateHandymanMaterialPurchasing }
+  from './0436_create_handyman_material_purchasing';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -905,4 +907,5 @@ export const migrations: readonly Migration[] = [
   migration0433HandymanCustomerPaymentProof,
   migration0434CreateHandymanTenantSlotConsents,
   migration0435CreateHandymanScopeVariations,
+  migration0436CreateHandymanMaterialPurchasing,
 ];
