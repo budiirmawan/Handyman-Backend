@@ -307,7 +307,8 @@ describe('CR-HM-09 PART 01 — material execution persistence', () => {
     });
     await assertPgError('23514', () =>
       setHead(lineC.id, { returnedQty: 4 }));
-    // Legal boundary: returned reduces final usage exactly.
+    // Legal boundary: 2 used + 3 unused returned partition 5 acquired;
+    // returned stock is not a deduction from actual usage.
     await setHead(lineC.id, { returnedQty: 3 });
     assert.ok(true);
   });

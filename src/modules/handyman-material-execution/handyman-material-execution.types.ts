@@ -67,11 +67,17 @@ export type HandymanMaterialExecutionLineRecord = {
   sourceItemId: string | null;
   status: HandymanMaterialExecutionStatus;
   acquisitionMode: HandymanMaterialAcquisitionMode | null;
+  /** Estimate only; approvedQty below remains the quantity authority. */
   estimatedQty: number;
+  /** Quantity copied from the scope's immutable approved quote line. */
   approvedQty: number;
+  /** Cumulative stock issued; mutually exclusive with PURCHASED. */
   issuedQty: number;
+  /** Cumulative field purchase; mutually exclusive with ISSUED. */
   purchasedQty: number;
+  /** Cumulative actual consumption. */
   usedQty: number;
+  /** Cumulative unconsumed stock returned; disjoint from usedQty. */
   returnedQty: number;
   supplierReference: string | null;
   createdAt: string;
@@ -152,8 +158,9 @@ export type HandymanMaterialExecutionCommandResult = {
  * FINAL_CHARGE_READY projection over one execution scope
  * (governance PART 05 read model): EXECUTION TRUTH ONLY — a list of
  * all settled lines with their frozen quantities and ONE aggregated
- * usage figure (sum of used - returned). This is the ONLY handoff
- * artifact to CR-HM-12/13 pricing/ledger authority.
+ * usage figure (sum of actual usedQty). returnedQty is a separate
+ * unused-stock axis and is NOT subtracted from usage. This is the ONLY
+ * handoff artifact to CR-HM-12/13 pricing/ledger authority.
  */
 export type HandymanMaterialFinalChargeReadyProjection = {
   executionScopeId: string;
@@ -163,8 +170,8 @@ export type HandymanMaterialFinalChargeReadyProjection = {
 
 /**
  * CR-HM-17 GAP PART 03 — Customer Care material execution line read item
- * across all governed statuses, with recorded events and settled final
- * used quantity (zero money columns).
+ * across all governed statuses, with recorded events and settled actual
+ * used quantity; unused returned stock is not subtracted (zero money columns).
  */
 export type HandymanCustomerCareMaterialLineItem = {
   line: HandymanMaterialExecutionLineRecord;

@@ -157,7 +157,7 @@ function lineInput(over: Record<string, unknown> = {}) {
  * Full lawful chain for composition tests: AUTHORIZED scope + Crew
  * Lead + one MATERIAL snapshot line (unit 25.00, qty 4) and the
  * material lifecycle driven to FINAL_CHARGE_READY with
- * used 3 - returned 1 => finalUsed 2.
+ * used 3 and 1 unused unit returned => finalUsed 3.
  */
 async function settledScopeFixture(agreementClient = true) {
   const f = await baseFixture();
@@ -266,6 +266,20 @@ describe('CR-HM-12 PART 03 material pricing basis', () => {
     );
     assert.equal(approved.basisAmount, '100.00');
     assert.equal(approved.lines[0].appliedQty, 4);
+
+    // A 10-unit quotation at 25.00 with 7 actually consumed and 3
+    // unused returned units: SETTLED_USAGE charges 7, whereas the
+    // approved-quantity quotation basis remains 10 (no return deduction).
+    const settledAfterReturn = evaluateHandymanMaterialPricingBasis(
+      'SETTLED_USAGE', [lineInput({ approvedQty: 10, finalUsedQty: 7 })],
+    );
+    assert.equal(settledAfterReturn.lines[0].appliedQty, 7);
+    assert.equal(settledAfterReturn.basisAmount, '175.00');
+    const approvedSnapshot = evaluateHandymanMaterialPricingBasis(
+      'APPROVED_QTY', [lineInput({ approvedQty: 10, finalUsedQty: 7 })],
+    );
+    assert.equal(approvedSnapshot.lines[0].appliedQty, 10);
+    assert.equal(approvedSnapshot.basisAmount, '250.00');
 
     // Multi-line scope basis is the exact sum of line bases;
     // half-up per line (25.00 * 0.5 = 12.50; 0.01 * 0.5 -> 0.01).
@@ -698,12 +712,13 @@ describe('CR-HM-12 PART 03 material pricing basis', () => {
         `composition must never write ${name}`);
     }
 
-    // 25.00 x finalUsed(3 - 1 = 2) = 50.00 — the settled basis.
-    assert.equal(result.basis.basisAmount, '50.00');
+    // 25.00 x usedQty(3) = 75.00. The 1 returned unit was unused
+    // stock and must not be subtracted from the settled-use basis.
+    assert.equal(result.basis.basisAmount, '75.00');
     assert.equal(result.basis.mode, 'SETTLED_USAGE');
     assert.equal(result.basis.lines.length, 1);
-    assert.equal(result.basis.lines[0].appliedQty, 2);
-    assert.equal(result.totalFinalUsedQty, 2);
+    assert.equal(result.basis.lines[0].appliedQty, 3);
+    assert.equal(result.totalFinalUsedQty, 3);
     assert.equal(result.agreementVersionId, versionId);
     assert.equal(result.basis.currency, 'IDR');
 
@@ -733,7 +748,7 @@ describe('CR-HM-12 PART 03 material pricing basis', () => {
     const past = await computeHandymanMaterialPricingBasisForScope(
       f.scope.id, new Date(f2 - 1).toISOString(), f.leadUserId,
     );
-    assert.equal(past.basis.basisAmount, '50.00');
+    assert.equal(past.basis.basisAmount, '75.00');
 
     // Non-Lead actor: CR-HM-09 authority wall stays in force — the
     // composition NEVER bypasses read authority.

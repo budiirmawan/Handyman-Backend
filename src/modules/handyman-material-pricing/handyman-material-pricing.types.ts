@@ -55,6 +55,7 @@ export type HandymanMaterialPricingLineInput = {
   finalQuotedUnitAmount: string;
   currency: string;
   approvedQty: number;
+  /** Actual consumed quantity; unconsumed returnedQty is not deducted. */
   finalUsedQty: number;
 };
 

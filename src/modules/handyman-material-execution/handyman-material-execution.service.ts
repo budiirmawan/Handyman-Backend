@@ -422,15 +422,15 @@ export async function purchaseHandymanMaterialExecutionLine(
 }
 
 /* ---- PART 05 — USE / RETURN adjustments + FINAL_CHARGE_READY ----
- * Governance D2/D5: the final usage basis is ONLY
- * finalUsedQty = usedQty - returnedQty. USE/RETURN are bounded
- * quantity adjustments (partials legal) on the factual axes; RETURN
- * is never a sticky status. SETTLE (FINAL_CHARGE_READY) closes the
- * line: after that, ANY further USE/RETURN/ISSUE/PURCHASE is a
- * bounded 409 MATERIAL_LINE_SETTLED — corrections live downstream in
- * CR-HM-13 reversal/adjustment, NEVER by history rewrite here.
- * Execution truth ONLY: this layer computes NO amounts, NO pricing,
- * NO billing.
+ * Governance D2/D5: `usedQty` is actual consumed quantity and
+ * `returnedQty` is unused material handed back. They are disjoint
+ * portions of acquired quantity, so the settled usage basis is
+ * `finalUsedQty = usedQty` (never `usedQty - returnedQty`). USE/RETURN
+ * are bounded quantity adjustments; RETURN is never a sticky status.
+ * SETTLE (FINAL_CHARGE_READY) closes the line: after that, ANY further
+ * USE/RETURN/ISSUE/PURCHASE is a bounded 409 MATERIAL_LINE_SETTLED —
+ * corrections live downstream in CR-HM-13 reversal/adjustment, NEVER
+ * by history rewrite here. Execution truth ONLY: no amount/pricing/billing.
  */
 
 async function adjustUsageHandymanMaterialLine(
@@ -473,11 +473,11 @@ async function adjustUsageHandymanMaterialLine(
     const nextReturned = kind === 'RETURN'
       ? current.returnedQty + deltaQty
       : current.returnedQty;
-    // Frozen quantity caps: the usage basis may never go negative —
-    // (a) used, including this delta, may not exceed what is held
-    // after previously returned quantities;
-    // (b) returned, including this delta, may not exceed what
-    // remains used.
+    // Frozen quantity caps keep actual use and unused returns disjoint —
+    // (a) used, including this delta, may not exceed acquired quantity
+    // after previously returned stock;
+    // (b) returned, including this delta, may not exceed acquired
+    // quantity that has not been used.
     if (nextUsed > current.issuedQty + current.purchasedQty
           - nextReturned) {
       throw handymanMaterialExecutionQuantityExceededError(
@@ -486,7 +486,7 @@ async function adjustUsageHandymanMaterialLine(
     if (nextReturned > current.issuedQty + current.purchasedQty
           - nextUsed) {
       throw handymanMaterialExecutionQuantityExceededError(
-        'return-exceeds-used-quantity');
+        'return-exceeds-unused-held-quantity');
     }
     const headed = await handymanMaterialExecutionRepository
       .updateMaterialExecutionLineHead(tx, lineUuid, {
@@ -529,8 +529,8 @@ export async function useHandymanMaterialExecutionLine(
 /**
  * RETURN: hand back `quantity` of the held-not-used remainder.
  * Partial returns are legal; the status is NOT sticky (RETURNED is
- * not a status). The returned quantity reduces the final usage
- * basis: finalUsedQty = usedQty - returnedQty.
+ * not a status). Returned quantity is disjoint from consumed quantity;
+ * it reduces held stock, not billable usage. `finalUsedQty = usedQty`.
  */
 export async function returnHandymanMaterialExecutionLine(
   input: UsageHandymanMaterialLineInput,
@@ -618,7 +618,7 @@ export async function getHandymanMaterialFinalChargeReadyProjection(
     .listMaterialExecutionLinesByScope(undefined, scopeUuid))
     .filter((line) => line.status === 'FINAL_CHARGE_READY');
   const totalFinalUsedQty = lines.reduce(
-    (sum, line) => sum + (line.usedQty - line.returnedQty), 0);
+    (sum, line) => sum + line.usedQty, 0);
   return {
     executionScopeId: scopeUuid,
     lines,
@@ -668,9 +668,9 @@ export async function getHandymanMaterialLinesCustomerCareView(
     const events = await handymanMaterialExecutionRepository
       .listMaterialExecutionEventsByLine(undefined, line.id);
     const isSettled = line.status === 'FINAL_CHARGE_READY';
-    const finalUsedQty = isSettled ? line.usedQty - line.returnedQty : null;
+    const finalUsedQty = isSettled ? line.usedQty : null;
     if (isSettled) {
-      totalFinalUsedQty += line.usedQty - line.returnedQty;
+      totalFinalUsedQty += line.usedQty;
     }
     lines.push({
       line,

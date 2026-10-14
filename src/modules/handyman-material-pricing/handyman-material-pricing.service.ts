@@ -258,7 +258,7 @@ export async function computeHandymanMaterialPricingBasisForScope(
       finalQuotedUnitAmount: snapshot.finalQuotedUnitAmount.toFixed(2),
       currency: snapshot.currency,
       approvedQty: settled.approvedQty,
-      finalUsedQty: settled.usedQty - settled.returnedQty,
+      finalUsedQty: settled.usedQty,
     });
   }
 

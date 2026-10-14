@@ -30,13 +30,13 @@ import { ensureTestDatabase } from './helpers/postgres';
 
 /**
  * CR-HM-09 PART 05 — USE / RETURN / FINAL_CHARGE_READY ONLY
- * (governance D2/D5): frozen usage-basis invariants
- * (used <= issued+purchased-returned; returned <= issued+purchased-
- * used), returned reduces the final usage figure, SETTLE closes the
- * line (post-settled adjustments bounded 409), FINAL_CHARGE_READY
- * read projection is EXECUTION TRUTH ONLY (no amounts). Lead-only
- * authority, idempotent replay. Six focused cases. ZERO API/OpenAPI,
- * ZERO pricing/billing/FM.
+ * (governance D2/D5): acquired quantity is partitioned into actual
+ * used, unused returned, and remaining held stock; USE and RETURN are
+ * disjoint. RETURN reduces held stock, not final used quantity. SETTLE
+ * closes the line (post-settled adjustments bounded 409), and the
+ * FINAL_CHARGE_READY projection is EXECUTION TRUTH ONLY (no amounts).
+ * Lead-only authority, idempotent replay. Focused cases. ZERO
+ * API/OpenAPI, ZERO pricing/billing/FM.
  */
 
 let database: DatabaseConfig | null = null;
@@ -192,48 +192,46 @@ async function lineAt(
 }
 
 describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
-  it('1: USE consumes with atomic head+event and replay', async (t) => {
+  it('1: partial USEs across work days accumulate to 10 issued, 10 used', async (t) => {
     if (!requireDatabase(t)) return;
-    const f = await lineAt('ISSUED', { snapshots: 4 });
-    const key = `k-${randomUUID()}`;
-    const used = await useHandymanMaterialExecutionLine({
+    const f = await lineAt('ISSUED', { snapshots: 10, issuedQty: 10 });
+    const dayOneKey = `k-${randomUUID()}`;
+    const dayOne = await useHandymanMaterialExecutionLine({
       executionScopeId: f.scope.id,
       lineId: f.line.id,
-      quantity: 2.5,
-      idempotencyKey: key,
+      quantity: 3,
+      idempotencyKey: dayOneKey,
     }, f.leadUserId);
-    assert.equal(used.replayed, false);
-    assert.equal(used.line.status, 'USED');
-    assert.equal(used.line.usedQty, 2.5);
-    assert.equal(used.line.returnedQty, 0);
-    assert.equal(used.line.acquisitionMode, 'ISSUED');
-    assert.equal(used.line.issuedQty, 4);
-    assert.equal(used.event.eventType, 'USE');
-    assert.equal(used.event.idempotencyKey, key);
-    // Replay returns the SAME event; no double quantity effect.
+    assert.equal(dayOne.replayed, false);
+    assert.equal(dayOne.line.status, 'USED');
+    assert.equal(dayOne.line.approvedQty, 10);
+    assert.equal(dayOne.line.issuedQty, 10);
+    assert.equal(dayOne.line.usedQty, 3);
+    assert.equal(dayOne.line.returnedQty, 0);
+    assert.equal(dayOne.line.acquisitionMode, 'ISSUED');
+    assert.equal(dayOne.event.eventType, 'USE');
+    // Same-key replay cannot count the day-one usage twice.
     const replay = await useHandymanMaterialExecutionLine({
       executionScopeId: f.scope.id,
       lineId: f.line.id,
-      quantity: 2.5,
-      idempotencyKey: key,
+      quantity: 3,
+      idempotencyKey: dayOneKey,
     }, f.leadUserId);
     assert.equal(replay.replayed, true);
-    assert.equal(replay.event.id, used.event.id);
-    assert.equal(replay.line.usedQty, 2.5);
-    // Partial USEs accumulate while still on the USED axis.
-    const second = await useHandymanMaterialExecutionLine({
+    assert.equal(replay.event.id, dayOne.event.id);
+    assert.equal(replay.line.usedQty, 3);
+
+    // Day two continues the same execution line and adds the remaining 7.
+    const dayTwo = await useHandymanMaterialExecutionLine({
       executionScopeId: f.scope.id,
       lineId: f.line.id,
-      quantity: 1.5,
+      quantity: 7,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
-    assert.equal(second.line.usedQty, 4);
-    assert.equal(second.line.status, 'USED');
-    const events = await handymanMaterialExecutionRepository
-      .listMaterialExecutionEventsByLine(undefined, f.line.id);
-    assert.deepEqual(events.map((e) => e.eventType),
-      ['ESTIMATE', 'APPROVE', 'ISSUE', 'USE', 'USE']);
-    // USE beyond the held quantity is bounded.
+    assert.equal(dayTwo.line.usedQty, 10);
+    assert.equal(dayTwo.line.returnedQty, 0);
+    assert.equal(dayTwo.line.status, 'USED');
+    // 10 issued / 10 used / 0 returned is the exact settled usage basis.
     await assertDomainReject(
       'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED',
       () => useHandymanMaterialExecutionLine({
@@ -242,59 +240,71 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
         quantity: 0.1,
         idempotencyKey: `k-${randomUUID()}`,
       }, f.leadUserId));
+    await settleHandymanMaterialExecutionLine({
+      executionScopeId: f.scope.id,
+      lineId: f.line.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
+    const projection = await getHandymanMaterialFinalChargeReadyProjection(
+      f.scope.id, f.leadUserId);
+    assert.equal(projection.lines[0].usedQty, 10);
+    assert.equal(projection.lines[0].returnedQty, 0);
+    assert.equal(projection.totalFinalUsedQty, 10);
+    const events = await handymanMaterialExecutionRepository
+      .listMaterialExecutionEventsByLine(undefined, f.line.id);
+    assert.deepEqual(events.map((e) => e.eventType),
+      ['ESTIMATE', 'APPROVE', 'ISSUE', 'USE', 'USE', 'FINAL_CHARGE_READY']);
   });
 
-  it('2: RETURN reduces the final usage basis (partials legal)', async (t) => {
+  it('2: 10 issued, 7 used, 3 unused returned bills 7, not 4', async (t) => {
     if (!requireDatabase(t)) return;
-    const f = await lineAt('PURCHASED', { snapshots: 6 });
+    const f = await lineAt('ISSUED', { snapshots: 10, issuedQty: 10 });
     await useHandymanMaterialExecutionLine({
       executionScopeId: f.scope.id,
       lineId: f.line.id,
-      quantity: 4,
+      quantity: 7,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
     const key = `k-${randomUUID()}`;
     const returned = await returnHandymanMaterialExecutionLine({
       executionScopeId: f.scope.id,
       lineId: f.line.id,
-      quantity: 1.5,
+      quantity: 2,
       idempotencyKey: key,
     }, f.leadUserId);
-    // RETURN is NOT a sticky status: the line stays USED with the
-    // returned remainder carrying the final usage reduction.
+    // RETURN records unused acquired stock, not a reversal of USE.
     assert.equal(returned.line.status, 'USED');
-    assert.equal(returned.line.returnedQty, 1.5);
-    assert.equal(returned.line.usedQty, 4);
+    assert.equal(returned.line.issuedQty, 10);
+    assert.equal(returned.line.usedQty, 7);
+    assert.equal(returned.line.returnedQty, 2);
     assert.equal(returned.event.eventType, 'RETURN');
-    // Replay returns the same event.
     const replay = await returnHandymanMaterialExecutionLine({
       executionScopeId: f.scope.id,
       lineId: f.line.id,
-      quantity: 1.5,
+      quantity: 2,
       idempotencyKey: key,
     }, f.leadUserId);
     assert.equal(replay.replayed, true);
-    // Cap: returned <= issued+purchased-used (+ previously returned):
-    // 6 - 4 - 1.5 = 0.5 remains returnable.
+    assert.equal(replay.line.usedQty, 7);
+    assert.equal(replay.line.returnedQty, 2);
+    // Exactly one of the 10 held units remains returnable.
     await assertDomainReject(
       'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED',
       () => returnHandymanMaterialExecutionLine({
         executionScopeId: f.scope.id,
         lineId: f.line.id,
-        quantity: 0.5001,
+        quantity: 1.0001,
         idempotencyKey: `k-${randomUUID()}`,
       }, f.leadUserId));
-    // Legal boundary hit: remaining 0.5 can be returned.
     const tail = await returnHandymanMaterialExecutionLine({
       executionScopeId: f.scope.id,
       lineId: f.line.id,
-      quantity: 0.5,
+      quantity: 1,
       idempotencyKey: `k-${randomUUID()}`,
     }, f.leadUserId);
-    assert.equal(tail.line.returnedQty, 2);
-    // The frozen invariant (used <= issued+purchased-returned) holds:
-    // after 4 used + 2 returned of 6 purchased, NO further quantity
-    // is usable (returns reduce holdings, not just the settled basis).
+    assert.equal(tail.line.returnedQty, 3);
+    // The acquired-quantity partition remains intact: used 7 +
+    // unused returned 3 = issued 10, so no more USE is available.
     await assertDomainReject(
       'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED',
       () => useHandymanMaterialExecutionLine({
@@ -303,10 +313,18 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
         quantity: 0.001,
         idempotencyKey: `k-${randomUUID()}`,
       }, f.leadUserId));
-    // Final usage basis here is used(4) - returned(2) = 2.
-    const head = await handymanMaterialExecutionRepository
-      .findMaterialExecutionLineById(undefined, f.line.id);
-    assert.equal(head!.usedQty - head!.returnedQty, 2);
+    const settled = await settleHandymanMaterialExecutionLine({
+      executionScopeId: f.scope.id,
+      lineId: f.line.id,
+      idempotencyKey: `k-${randomUUID()}`,
+    }, f.leadUserId);
+    assert.equal(settled.line.usedQty, 7);
+    assert.equal(settled.line.returnedQty, 3);
+    const projection = await getHandymanMaterialFinalChargeReadyProjection(
+      f.scope.id, f.leadUserId);
+    assert.equal(projection.totalFinalUsedQty, 7);
+    assert.equal(projection.lines[0].usedQty, 7);
+    assert.equal(projection.lines[0].returnedQty, 3);
   });
 
   it('3: RETURN and USE are refused before acquisition and after settle', async (t) => {
@@ -578,8 +596,9 @@ describe('CR-HM-09 PART 05 — use / return / final-charge-ready', () => {
     // absent (never fabricated as handoff).
     assert.deepEqual(projection.lines.map((line) => line.id).sort(),
       [a.line.id, b.id].sort());
-    // Aggregated final usage = (3-0) + (4-1) = 6 exactly; c excluded.
-    assert.equal(projection.totalFinalUsedQty, 6);
+    // Aggregated actual usage = 3 + 4 = 7; b's returned 1 is unused
+    // stock and c remains unsettled, so neither reduces/adds used qty.
+    assert.equal(projection.totalFinalUsedQty, 7);
     // The projection is quantity truth only: record fields carry no
     // financial columns (structural type-level safety verified at
     // the source scan below, rows here bounded by the PART-01/02
