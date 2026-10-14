@@ -223,3 +223,29 @@ export function handymanDefectIdempotencyConflictError(): AppError {
     statusCode: 409,
   });
 }
+
+/** Optimistic concurrency on the append-only defect rework ladder. */
+export function handymanDefectVersionConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_VERSION_CONFLICT,
+    message: 'Defect changed. Reload its current version before deciding.',
+    statusCode: 409,
+  });
+}
+
+export function handymanDefectRectificationRequiredError(reason: string): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_RECTIFICATION_REQUIRED,
+    message: `Cannot confirm defect rectification: ${reason}.`,
+    statusCode: 409,
+    details: [`reason=${reason}`],
+  });
+}
+
+export function handymanDefectEvidenceInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_DEFECT_EVIDENCE_INVALID,
+    message: 'Rectification evidence must be a fresh, verified BEFORE_AFTER_WORK upload by the assigned PIC on the exact scope.',
+    statusCode: 409,
+  });
+}

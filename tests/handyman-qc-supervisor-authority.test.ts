@@ -13,15 +13,24 @@ import {
   bindHandymanQcEvidence,
   configureHandymanQcChecklist,
   finishHandymanQcRun,
+  getHandymanDefectDetail,
   getHandymanQcChecklist,
   getHandymanQcRunDetail,
   listHandymanDefectsByScope,
   openHandymanDefect,
   openHandymanQcRun,
+  passHandymanDefectReinspection,
+  recordHandymanDefectRectification,
+  requestHandymanDefectReinspection,
   setHandymanQcRunItemOutcome,
+  startHandymanDefectRectification,
 } from '../src/modules/handyman-evidence-qc';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { createEvidenceStorage, evidenceStorageKey } from '../src/modules/evidence/storage';
+import { recordVariationQc, confirmVariationFinalChargeEligibility }
+  from '../src/modules/handyman-scope-variations';
+import { prepareHandymanBast, issueHandymanBast, acceptHandymanBast }
+  from '../src/modules/handyman-bast';
 import { permissionService } from '../src/modules/permissions';
 import { roleService } from '../src/modules/roles';
 import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
@@ -183,6 +192,50 @@ const fail = (runId: string, expectedVersion: number,
   idempotencyKey = key()) => ({ qcRunId: runId, outcome: 'FAILED' as const,
   reason: 'Supervisor found incomplete repair', expectedVersion,
   idempotencyKey });
+
+async function passedRun(f: QcFixture) {
+  await session(f);
+  const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+  await passItem(f, run.id, 1);
+  const photo = await qcUpload(f);
+  await bindHandymanQcEvidence({ qcRunId: run.id,
+    evidenceReference: photo.reference, expectedVersion: 2,
+    idempotencyKey: key() }, f.supervisor.id);
+  await finishHandymanQcRun(pass(run.id, 3), f.supervisor.id);
+  return run;
+}
+
+/** Seed only the upstream EXECUTION state, not a fake QC decision. */
+async function variationExecution(f: QcFixture) {
+  const id = randomUUID();
+  const evidence = await qcUpload(f, 'VARIATION_FINDING');
+  const uom = await getPool().query<{ uom_id: string }>(
+    `SELECT uom_id FROM handyman_quotation_lines
+      WHERE quotation_version_id = $1 LIMIT 1`,
+    [f.scope.approvedQuotationVersionId]);
+  const revisedVersionId = randomUUID();
+  await getPool().query(`INSERT INTO handyman_quotation_versions
+    (id, quotation_id, version_number, status, created_by_user_id)
+    SELECT $1, quotation_id, version_number + 1, 'ISSUED', $2
+    FROM handyman_quotation_versions WHERE id = $3`,
+    [revisedVersionId, adminId, f.scope.approvedQuotationVersionId]);
+  await getPool().query(`INSERT INTO handyman_scope_variations
+    (id, client_id, execution_scope_id, handyman_request_id,
+     tenant_company_id, building_id, variation_type, line_type,
+     revised_quotation_version_id, title, description, technical_finding,
+     quantity, uom_id, quoted_unit_amount, quoted_total_delta, currency,
+     status, tenant_decision_outcome, origin_actor_user_id,
+     origin_actor_role, latest_evidence_reference, create_idempotency_key)
+    VALUES ($1,$2,$3,$4,$5,$6,'ADD','LABOR',$7,
+      'Extra repair','Extra waterproofing','Crew discovered a leak',
+      1,$8,100,100,'IDR','EXECUTION','APPROVED',$9,
+      'PIC_PEKERJAAN',$10,$11)`,
+    [id, f.scope.clientId, f.scope.id, f.scope.handymanRequestId,
+      f.scope.tenantCompanyId, f.scope.buildingId,
+      revisedVersionId, uom.rows[0].uom_id,
+      f.crew.leadUser.id, evidence.reference, key()]);
+  return { id, evidence };
+}
 
 describe('Supervisor QC is distinct from execution and inspection', () => {
   it('permits assigned supervisor and PIC reads, but denies PIC self-QC', async () => {
@@ -503,5 +556,269 @@ describe('Additive migration on existing QC aggregates', () => {
     }
     assert.equal((await getHandymanQcRunDetail(run.id,
       f.supervisor.id)).run.failureReason, failed.run.failureReason);
+  });
+});
+
+describe('Defect repair and Supervisor reinspection provenance', () => {
+  async function failedDefect(f: QcFixture) {
+    const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    const item = await setHandymanQcRunItemOutcome({ qcRunId: run.id,
+      itemKey: 'quality', outcome: 'DEFECT', expectedVersion: 1,
+      idempotencyKey: key() }, f.supervisor.id);
+    await finishHandymanQcRun(fail(run.id, item.runVersion),
+      f.supervisor.id);
+    const { defect } = await openHandymanDefect({
+      executionScopeId: f.scope.id, runId: run.id,
+      itemId: item.item.id, description: 'Repair faulty seal',
+      idempotencyKey: key(),
+    }, f.supervisor.id);
+    return { run, defect };
+  }
+
+  it('requires a completed PIC session and fresh bytes; only the Supervisor verifies, then new QC may PASS', async () => {
+    const f = await fixture();
+    const { run, defect } = await failedDefect(f);
+    assert.equal(defect.version, 1);
+    await assert.rejects(startHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 1, idempotencyKey: key(),
+    }, f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_NOT_AUTHORIZED');
+    const start = await startHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 1, idempotencyKey: key(),
+    }, f.crew.leadUser.id);
+    assert.equal(start.defect.version, 2);
+    const fromOther = await fixture();
+    const foreignSession = await session(fromOther);
+    const oldUpload = await qcUpload(f, 'BEFORE_AFTER_WORK');
+    await assert.rejects(recordHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 2, sessionId: foreignSession,
+      evidenceReference: oldUpload.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_RECTIFICATION_REQUIRED');
+    const completedSession = await session(f);
+    await assert.rejects(recordHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 2, sessionId: completedSession,
+      evidenceReference: oldUpload.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_EVIDENCE_INVALID');
+    const repairPhoto = await qcUpload(f, 'BEFORE_AFTER_WORK');
+    await assert.rejects(recordHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 2, sessionId: completedSession,
+      evidenceReference: repairPhoto.reference, idempotencyKey: key(),
+    }, f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_NOT_AUTHORIZED');
+    const recorded = await recordHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 2, sessionId: completedSession,
+      evidenceReference: repairPhoto.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id);
+    assert.equal(recorded.defect.status, 'RECTIFIED');
+    assert.equal(recorded.defect.version, 3);
+    assert.equal(recorded.defect.rectificationSessionId, completedSession);
+    assert.equal(recorded.defect.rectificationEvidenceUploadId,
+      repairPhoto.id);
+    await assert.rejects(passHandymanDefectReinspection({
+      defectId: defect.id, expectedVersion: 3, idempotencyKey: key(),
+    }, f.crew.leadUser.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_NOT_AUTHORIZED');
+
+    const second = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    await passItem(f, second.run.id, 1);
+    const upload = await qcUpload(f);
+    await bindHandymanQcEvidence({ qcRunId: second.run.id,
+      evidenceReference: upload.reference, expectedVersion: 2,
+      idempotencyKey: key() }, f.supervisor.id);
+    await assert.rejects(finishHandymanQcRun(pass(second.run.id, 3),
+      f.supervisor.id), (e) => code(e) === 'HANDYMAN_QC_PASS_BLOCKED');
+
+    const k = key();
+    const approved = await passHandymanDefectReinspection({
+      defectId: defect.id, expectedVersion: 3, idempotencyKey: k,
+    }, f.supervisor.id);
+    assert.equal(approved.defect.status, 'VERIFIED');
+    assert.equal(approved.defect.version, 4);
+    const replay = await passHandymanDefectReinspection({
+      defectId: defect.id, expectedVersion: 3, idempotencyKey: k,
+    }, f.supervisor.id);
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.event.id, approved.event.id);
+    await assert.rejects(passHandymanDefectReinspection({
+      defectId: defect.id, expectedVersion: 3, idempotencyKey: key(),
+    }, f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_ILLEGAL_TRANSITION');
+    const decision = await finishHandymanQcRun(pass(second.run.id, 3),
+      f.supervisor.id);
+    assert.equal(decision.run.status, 'PASSED');
+    assert.equal((await getHandymanQcRunDetail(run.id,
+      f.supervisor.id)).run.status, 'FAILED');
+    const details = await getHandymanDefectDetail(defect.id,
+      f.crew.leadUser.id);
+    assert.deepEqual(details.events.map((e) => e.eventType), [
+      'OPEN_DEFECT', 'START_RECTIFICATION', 'RECORD_RECTIFICATION',
+      'PASS_REINSPECTION',
+    ]);
+    assert.equal(details.events[2].metadata.sessionId, completedSession);
+  });
+
+  it('reinspection FAIL preserves prior proof, clears head, requires a new repair, and rejects tampering', async () => {
+    const f = await fixture();
+    const { defect } = await failedDefect(f);
+    await startHandymanDefectRectification({ defectId: defect.id,
+      expectedVersion: 1, idempotencyKey: key() }, f.crew.leadUser.id);
+    const firstSession = await session(f);
+    const firstPhoto = await qcUpload(f, 'BEFORE_AFTER_WORK');
+    await recordHandymanDefectRectification({ defectId: defect.id,
+      expectedVersion: 2, sessionId: firstSession,
+      evidenceReference: firstPhoto.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id);
+    const rejected = await requestHandymanDefectReinspection({
+      defectId: defect.id, expectedVersion: 3,
+      reason: 'Leak still present', idempotencyKey: key(),
+    }, f.supervisor.id);
+    assert.equal(rejected.defect.status, 'RECTIFYING');
+    assert.equal(rejected.defect.rectificationSessionId, null);
+    assert.equal(rejected.event.metadata.supersededSessionId, firstSession);
+    assert.equal(rejected.event.metadata.supersededEvidenceUploadId,
+      firstPhoto.id);
+    await assert.rejects(recordHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 3, sessionId: firstSession,
+      evidenceReference: firstPhoto.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_VERSION_CONFLICT');
+    await assert.rejects(recordHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 4, sessionId: firstSession,
+      evidenceReference: firstPhoto.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_RECTIFICATION_REQUIRED');
+    const secondSession = await session(f);
+    await assert.rejects(recordHandymanDefectRectification({
+      defectId: defect.id, expectedVersion: 4, sessionId: secondSession,
+      evidenceReference: firstPhoto.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id),
+    (e) => code(e) === 'HANDYMAN_DEFECT_EVIDENCE_INVALID');
+    const secondPhoto = await qcUpload(f, 'BEFORE_AFTER_WORK');
+    await recordHandymanDefectRectification({ defectId: defect.id,
+      expectedVersion: 4, sessionId: secondSession,
+      evidenceReference: secondPhoto.reference, idempotencyKey: key(),
+    }, f.crew.leadUser.id);
+    await createEvidenceStorage().put(secondPhoto.storageKey, {
+      buffer: Buffer.from('tampered'), mimeType: 'image/png',
+    });
+    await assert.rejects(passHandymanDefectReinspection({
+      defectId: defect.id, expectedVersion: 5, idempotencyKey: key(),
+    }, f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED');
+    assert.equal((await getHandymanDefectDetail(defect.id,
+      f.supervisor.id)).defect.status, 'RECTIFIED');
+  });
+});
+
+describe('Variation QC consumes Supervisor decision; BAST and finance remain distinct', () => {
+  it('refuses broad Operations QC authority, persists Supervisor provenance, and keeps BAST unsigned', async () => {
+    const f = await fixture();
+    const qc = await passedRun(f);
+    const v = await variationExecution(f);
+    const request = { qcOutcome: 'PASSED', qcRunId: qc.id,
+      evidenceReference: v.evidence.reference, idempotencyKey: key(),
+      expectedVersion: 1 };
+    for (const actor of [adminId, f.crew.leadUser.id]) {
+      await assert.rejects(recordVariationQc(actor, f.scope.id, v.id,
+        request), (e) => code(e) === 'HANDYMAN_VARIATION_ROLE_FORBIDDEN');
+    }
+    await assert.rejects(getPool().query(`INSERT INTO handyman_scope_variation_events
+      (id, client_id, variation_id, execution_scope_id, event_type,
+       from_status, to_status, actor_user_id, actor_role,
+       evidence_reference, idempotency_key)
+      VALUES ($1,$2,$3,$4,'QC','EXECUTION','QC',$5,
+        'OPERATIONS_MANAGER',$6,$7)`,
+    [randomUUID(), f.scope.clientId, v.id, f.scope.id,
+      adminId, v.evidence.reference, key()]),
+    (e) => code(e) === '23514');
+    const accepted = await recordVariationQc(f.supervisor.id,
+      f.scope.id, v.id, request);
+    assert.equal(accepted.variation.status, 'QC');
+    assert.equal(accepted.events.at(-1)?.actorRole, 'SUPERVISOR');
+    const counts = await getPool().query(`SELECT
+      (SELECT count(*)::int FROM handyman_bast_documents
+        WHERE execution_scope_id = $1) AS bast_count,
+      (SELECT count(*)::int FROM tenant_invoices
+        WHERE handyman_execution_scope_id = $1) AS invoice_count`,
+    [f.scope.id]);
+    assert.equal(counts.rows[0].bast_count, 0);
+    assert.equal(counts.rows[0].invoice_count, 0);
+    await assert.rejects(confirmVariationFinalChargeEligibility(adminId,
+      f.scope.id, v.id, { idempotencyKey: key(), expectedVersion: 2 }),
+    (e) => code(e) === 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION'
+      && /ACCEPTED BAST/.test((e as Error).message));
+
+    const bast = await prepareHandymanBast(adminId, {
+      executionScopeId: f.scope.id, idempotencyKey: key(),
+    });
+    assert.equal(bast.bast.status, 'DRAFT');
+    await issueHandymanBast(adminId, { bastId: bast.bast.id,
+      idempotencyKey: key() });
+    await assert.rejects(confirmVariationFinalChargeEligibility(adminId,
+      f.scope.id, v.id, { idempotencyKey: key(), expectedVersion: 2 }),
+    (e) => code(e) === 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION'
+      && /ACCEPTED BAST/.test((e as Error).message));
+    const signOff = await acceptHandymanBast(adminId, {
+      bastId: bast.bast.id, signatureDigest: 'customer-signature-digest',
+      idempotencyKey: key(),
+    });
+    assert.equal(signOff.bast.status, 'ACCEPTED');
+    assert.ok(signOff.signOff);
+    assert.equal((await getPool().query(`SELECT count(*)::int AS n
+      FROM tenant_invoices WHERE handyman_execution_scope_id = $1`,
+    [f.scope.id])).rows[0].n, 0);
+  });
+
+  it('does not treat historical unguarded PASSED runs as a valid new QC/BAST approval', async () => {
+    const f = await fixture();
+    const legacyId = randomUUID();
+    await getPool().query(`INSERT INTO handyman_qc_runs
+      (id, client_id, execution_scope_id, checklist_identity, status)
+      VALUES ($1,$2,$3,'handyman-final-v1','PASSED')`,
+    [legacyId, f.scope.clientId, f.scope.id]);
+    await getPool().query(`INSERT INTO handyman_qc_run_events
+      (id, run_id, client_id, event_type, idempotency_key, actor_user_id)
+      VALUES ($1,$2,$3,'FINISH',$4,$5)`,
+    [randomUUID(), legacyId, f.scope.clientId, key(), adminId]);
+    const v = await variationExecution(f);
+    await assert.rejects(recordVariationQc(f.supervisor.id,
+      f.scope.id, v.id, { qcOutcome: 'PASSED', qcRunId: legacyId,
+        evidenceReference: v.evidence.reference,
+        expectedVersion: 1, idempotencyKey: key() }),
+    (e) => code(e) === 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    assert.equal((await getPool().query(`SELECT status FROM handyman_qc_runs
+      WHERE id=$1`, [legacyId])).rows[0].status, 'PASSED');
+  });
+
+  it('rejects stale FAILED runs but permits later re-QC PASS despite preserved failure history', async () => {
+    const f = await fixture();
+    const first = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    await finishHandymanQcRun(fail(first.run.id, 1), f.supervisor.id);
+    const current = await passedRun(f);
+    const v = await variationExecution(f);
+    await assert.rejects(recordVariationQc(f.supervisor.id,
+      f.scope.id, v.id, { qcOutcome: 'FAILED', qcRunId: first.run.id,
+        evidenceReference: v.evidence.reference, expectedVersion: 1,
+        idempotencyKey: key() }),
+    (e) => code(e) === 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    const qc = await recordVariationQc(f.supervisor.id, f.scope.id,
+      v.id, { qcOutcome: 'PASSED', qcRunId: current.id,
+        evidenceReference: v.evidence.reference, expectedVersion: 1,
+        idempotencyKey: key() });
+    assert.equal(qc.variation.qcRunId, current.id);
+    const bast = await prepareHandymanBast(adminId,
+      { executionScopeId: f.scope.id, idempotencyKey: key() });
+    await issueHandymanBast(adminId,
+      { bastId: bast.bast.id, idempotencyKey: key() });
+    await acceptHandymanBast(adminId, { bastId: bast.bast.id,
+      signatureDigest: 'signed-by-customer', idempotencyKey: key() });
+    // This fixture deliberately lacks a reconciled revised quote. It should
+    // fail at that independent finance gate, NOT on its historical QC FAIL.
+    await assert.rejects(confirmVariationFinalChargeEligibility(adminId,
+      f.scope.id, v.id, { idempotencyKey: key(), expectedVersion: 2 }),
+    (e) => code(e) === 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION'
+      && !/FAILED QC run/.test((e as Error).message));
   });
 });

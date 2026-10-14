@@ -285,3 +285,31 @@ export function parseDefectOpenBody(body: unknown): {
     idempotencyKey: key(source.idempotencyKey),
   };
 }
+
+/** Defect ladder: command-specific provenance, optimistic version and key.
+ * Client-supplied actors, statuses and commercial fields are never used. */
+export function parseDefectTransitionBody(
+  body: unknown,
+  eventType: 'START_RECTIFICATION' | 'RECORD_RECTIFICATION'
+    | 'REQUEST_REINSPECTION' | 'PASS_REINSPECTION',
+): {
+  idempotencyKey: string;
+  expectedVersion: number;
+  sessionId?: string;
+  evidenceReference?: string;
+  reason?: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return {
+    idempotencyKey: key(source.idempotencyKey),
+    expectedVersion: expectedVersion(source.expectedVersion, true),
+    ...(eventType === 'RECORD_RECTIFICATION'
+      ? {
+        sessionId: uuid(source.sessionId, 'sessionId'),
+        evidenceReference: shortText(source.evidenceReference,
+          'evidenceReference', 100),
+      } : {}),
+    ...(eventType === 'REQUEST_REINSPECTION'
+      ? { reason: shortText(source.reason, 'reason', 2000) } : {}),
+  };
+}

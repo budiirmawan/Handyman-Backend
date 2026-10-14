@@ -27,6 +27,7 @@ import type {
   HandymanDefectCommandResult,
   HandymanDefectEventRecord,
   HandymanDefectRecordRecord,
+  TransitionHandymanDefectInput,
   HandymanEvidenceCommandResult,
   HandymanEvidenceEventRecord,
   HandymanEvidenceFileAddResult,
@@ -43,6 +44,7 @@ import type {
 import {
   parseDefectIdParam,
   parseDefectOpenBody,
+  parseDefectTransitionBody,
   parseEvidenceCreateBody,
   parseEvidenceFileAddBody,
   parseEvidenceRecordIdParam,
@@ -163,6 +165,10 @@ function toDefectPayload(defect: HandymanDefectRecordRecord) {
     itemId: defect.itemId,
     description: defect.description,
     status: defect.status,
+    version: defect.version,
+    rectificationSessionId: defect.rectificationSessionId,
+    rectificationEvidenceReference: defect.rectificationEvidenceUploadId
+      ? `hm-ev://${defect.rectificationEvidenceUploadId}` : null,
     createdAt: defect.createdAt,
     updatedAt: defect.updatedAt,
   };
@@ -174,6 +180,7 @@ function toDefectEventPayload(event: HandymanDefectEventRecord) {
     defectId: event.defectId,
     eventType: event.eventType,
     idempotencyKey: event.idempotencyKey,
+    metadata: event.metadata,
     occurredAt: event.occurredAt,
   };
 }
@@ -528,16 +535,17 @@ async function runDefectTransition(
   req: Request,
   res: Response,
   next: NextFunction,
+  eventType: 'START_RECTIFICATION' | 'RECORD_RECTIFICATION'
+    | 'REQUEST_REINSPECTION' | 'PASS_REINSPECTION',
   command: (
-    input: { defectId: string; idempotencyKey: string },
+    input: TransitionHandymanDefectInput,
     actorUserId: string,
   ) => Promise<HandymanDefectCommandResult>,
 ): Promise<void> {
   try {
     const defectId = parseDefectIdParam(p(req.params.defectId));
-    const { idempotencyKey } = parseKeyedBody(req.body);
-    const result = await command({ defectId, idempotencyKey },
-      actor(req));
+    const body = parseDefectTransitionBody(req.body, eventType);
+    const result = await command({ defectId, ...body }, actor(req));
     sendSuccess(res, {
       defect: toDefectPayload(result.defect),
       event: toDefectEventPayload(result.event),
@@ -555,7 +563,7 @@ export function postDefectStartRectificationHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    startHandymanDefectRectification);
+    'START_RECTIFICATION', startHandymanDefectRectification);
 }
 
 /** RECORD_RECTIFICATION (RECTIFYING → RECTIFIED). */
@@ -565,7 +573,7 @@ export function postDefectRecordRectificationHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    recordHandymanDefectRectification);
+    'RECORD_RECTIFICATION', recordHandymanDefectRectification);
 }
 
 /** REQUEST_REINSPECTION (RECTIFIED → RECTIFYING loop). */
@@ -575,7 +583,7 @@ export function postDefectRequestReinspectionHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    requestHandymanDefectReinspection);
+    'REQUEST_REINSPECTION', requestHandymanDefectReinspection);
 }
 
 /** PASS_REINSPECTION (RECTIFIED → VERIFIED, terminal). */
@@ -585,7 +593,7 @@ export function postDefectPassReinspectionHandler(
   next: NextFunction,
 ): Promise<void> {
   return runDefectTransition(req, res, next,
-    passHandymanDefectReinspection);
+    'PASS_REINSPECTION', passHandymanDefectReinspection);
 }
 
 /** Per-scope defect listing (PART 05 read model). */

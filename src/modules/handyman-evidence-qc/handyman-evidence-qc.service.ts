@@ -39,6 +39,9 @@ import {
   handymanQcRunNotFoundError,
   handymanDefectIdempotencyConflictError,
   handymanDefectIllegalTransitionError,
+  handymanDefectVersionConflictError,
+  handymanDefectRectificationRequiredError,
+  handymanDefectEvidenceInvalidError,
   handymanDefectNotAuthorizedError,
   handymanDefectNotFoundError,
 } from './handyman-evidence-qc.errors';
@@ -1353,6 +1356,7 @@ async function defectAuthorityPreamble(
  * provenance trigger is the final wall).
  */
 async function resolveDefectRunItemLink(
+  tx: PoolClient,
   scopeUuid: string,
   runId: string | null,
   itemId: string | null,
@@ -1360,8 +1364,9 @@ async function resolveDefectRunItemLink(
   let resolvedRunId = runId;
   if (resolvedRunId !== null) {
     const run = await handymanEvidenceQcRepository
-      .findQcRunById(undefined, resolvedRunId);
-    if (!run || run.executionScopeId !== scopeUuid) {
+      .findQcRunById(tx, resolvedRunId);
+    if (!run || run.executionScopeId !== scopeUuid
+        || run.status === 'PASSED') {
       throw handymanEvidenceValidationError('runId');
     }
   }
@@ -1369,8 +1374,10 @@ async function resolveDefectRunItemLink(
     return { runId: resolvedRunId, itemId: null };
   }
   const item = await handymanEvidenceQcRepository
-    .findQcRunItemById(undefined, itemId);
-  if (!item) throw handymanEvidenceValidationError('itemId');
+    .findQcRunItemById(tx, itemId);
+  if (!item || item.outcome !== 'DEFECT') {
+    throw handymanEvidenceValidationError('itemId');
+  }
   if (resolvedRunId !== null && item.runId !== resolvedRunId) {
     // Item must belong to the SAME run the caller linked; never
     // silently repoint the pair (DB provenance trigger backstop).
@@ -1379,8 +1386,9 @@ async function resolveDefectRunItemLink(
   if (resolvedRunId === null) {
     resolvedRunId = item.runId;
     const run = await handymanEvidenceQcRepository
-      .findQcRunById(undefined, resolvedRunId);
-    if (!run || run.executionScopeId !== scopeUuid) {
+      .findQcRunById(tx, resolvedRunId);
+    if (!run || run.executionScopeId !== scopeUuid
+        || run.status === 'PASSED') {
       throw handymanEvidenceValidationError('itemId');
     }
   }
@@ -1434,19 +1442,21 @@ export async function openHandymanDefect(
   return withTransaction(async (tx: PoolClient) => {
     const scope = await defectAuthorityPreamble(tx, scopeUuid,
       actorUuid, 'SUPERVISOR');
-    const link = await resolveDefectRunItemLink(scopeUuid, runExpl,
-      itemExpl);
     const replay = await handymanEvidenceQcRepository
       .findDefectOpenReplayByScope(tx, scopeUuid, key);
     if (replay) {
-      if ((replay.defect.runId ?? null) !== link.runId
-          || (replay.defect.itemId ?? null) !== link.itemId
+      if ((replay.defect.itemId ?? null) !== itemExpl
+          || (runExpl !== null && replay.defect.runId !== runExpl)
+          || (runExpl === null && itemExpl === null
+            && replay.defect.runId !== null)
           || replay.defect.description !== description) {
         throw handymanDefectIdempotencyConflictError();
       }
       return { defect: replay.defect, event: replay.event,
         replayed: true };
     }
+    const link = await resolveDefectRunItemLink(tx, scopeUuid, runExpl,
+      itemExpl);
     const defect = await handymanEvidenceQcRepository
       .createDefectRecord(tx, {
         clientId: scope.clientId,
@@ -1462,7 +1472,16 @@ export async function openHandymanDefect(
         eventType: 'OPEN_DEFECT',
         idempotencyKey: key,
         actorUserId: actorUuid,
+        metadata: { runId: link.runId, itemId: link.itemId },
       });
+    await recordOperationalEvent({
+      clientId: scope.clientId, buildingId: scope.buildingId,
+      actorUserId: actorUuid, entityType: 'HANDYMAN_DEFECT',
+      entityId: defect.id, eventType: 'HANDYMAN_DEFECT_OPENED',
+      summary: 'Supervisor opened a defect for corrective work.',
+      metadata: { executionScopeId: scopeUuid, runId: link.runId,
+        itemId: link.itemId },
+    }, tx);
     return { defect, event, replayed: false };
   });
 }
@@ -1471,8 +1490,77 @@ export async function openHandymanDefect(
 
 export type TransitionHandymanDefectInput = {
   defectId: string;
+  expectedVersion: number;
   idempotencyKey: string;
+  /** RECORD only: completed Work Session of the current PIC. */
+  sessionId?: string;
+  /** RECORD only: verified BEFORE_AFTER_WORK attachment on this scope. */
+  evidenceReference?: string;
+  /** REQUEST_REINSPECTION only: Supervisor's rejection reason. */
+  reason?: string;
 };
+
+/** Verify actual Work Session and managed bytes, never a claimed role/file. */
+async function verifyDefectReworkProof(
+  tx: PoolClient,
+  defect: HandymanDefectRecordRecord,
+  picUserId: string,
+  sessionId: string,
+  reference: string,
+  recording: boolean,
+): Promise<string> {
+  const fullScope = await handymanExecutionScopeRepository.findScopeById(
+    tx, defect.executionScopeId);
+  if (!fullScope) throw handymanExecutionScopeNotFoundError();
+  const sessions = await tx.query<{ completed_at: Date }>(
+    `SELECT completed_at FROM handyman_work_sessions s
+      WHERE s.id = $1 AND s.execution_scope_id = $2 AND s.client_id = $3
+        AND s.lead_user_id = $4 AND s.status IN ('COMPLETED', 'CHECKED_OUT')
+        AND s.completed_at IS NOT NULL
+        AND ($5::boolean = false OR (
+          s.assignment_id = (SELECT id
+            FROM handyman_execution_scope_assignments
+            WHERE execution_scope_id = $2 AND status = 'ACTIVE')
+          AND s.completed_at > (SELECT updated_at
+            FROM handyman_defect_records WHERE id = $6)))
+      FOR SHARE OF s`,
+    [sessionId, defect.executionScopeId, defect.clientId, picUserId,
+      recording, defect.id],
+  );
+  const session = sessions.rows[0];
+  if (!session) {
+    throw handymanDefectRectificationRequiredError(
+      'a completed corrective Work Session by the assigned PIC is required');
+  }
+  if (recording && defect.runId) {
+    const linkedRun = await handymanEvidenceQcRepository.findQcRunById(
+      tx, defect.runId);
+    if (linkedRun?.status === 'FAILED' && session.completed_at.getTime()
+        <= new Date(linkedRun.updatedAt).getTime()) {
+      throw handymanDefectRectificationRequiredError(
+        'corrective Work Session must finish after the linked QC failure');
+    }
+  }
+  const uploads = await tx.query<{ id: string }>(
+    `SELECT id FROM handyman_field_evidence_uploads
+      WHERE attachment_reference = $1 AND purpose = 'BEFORE_AFTER_WORK'
+        AND upload_status = 'VERIFIED' AND verified_at IS NOT NULL
+        AND verified_at >= $2 AND execution_scope_id = $3
+        AND client_id = $4 AND tenant_company_id = $5
+        AND building_id = $6 AND handyman_request_id = $7
+        AND uploaded_by_user_id = $8 AND uploaded_by_role = 'PIC_PEKERJAAN'`,
+    [reference, session.completed_at, defect.executionScopeId,
+      defect.clientId, fullScope.tenantCompanyId, fullScope.buildingId,
+      fullScope.handymanRequestId, picUserId],
+  );
+  if (!uploads.rows[0]) throw handymanDefectEvidenceInvalidError();
+  await assertVerifiedManagedEvidenceReference(tx, {
+    clientId: defect.clientId, buildingId: fullScope.buildingId,
+    handymanRequestId: fullScope.handymanRequestId,
+    executionScopeId: defect.executionScopeId,
+  }, reference);
+  return uploads.rows[0].id;
+}
 
 /**
  * Shared ladder executor (D3/D7): row-lock → replay-check →
@@ -1488,13 +1576,32 @@ async function transitionHandymanDefect(
   const defectUuid = ensureUuid(input.defectId, 'defectId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
+  if (!Number.isInteger(input.expectedVersion)
+      || input.expectedVersion < 1) {
+    throw handymanEvidenceValidationError('expectedVersion');
+  }
+  const sessionId = eventType === 'RECORD_RECTIFICATION'
+    ? ensureUuid(input.sessionId ?? '', 'sessionId') : null;
+  const reference = eventType === 'RECORD_RECTIFICATION'
+    ? input.evidenceReference?.trim() ?? '' : null;
+  if (eventType === 'RECORD_RECTIFICATION'
+      && !/^hm-ev:\/\/[0-9a-f-]{36}$/i.test(reference ?? '')) {
+    throw handymanEvidenceValidationError('evidenceReference');
+  }
+  const reason = eventType === 'REQUEST_REINSPECTION'
+    ? input.reason?.trim() ?? '' : null;
+  if (eventType === 'REQUEST_REINSPECTION'
+      && (!reason || reason.length > 2000)) {
+    throw handymanEvidenceValidationError('reason');
+  }
 
   const target = await handymanEvidenceQcRepository.findDefectById(
     undefined, defectUuid,
   );
   if (!target) throw handymanDefectNotFoundError();
   return withTransaction(async (tx: PoolClient) => {
-    await defectAuthorityPreamble(tx, target.executionScopeId, actorUuid,
+    const scope = await defectAuthorityPreamble(tx,
+      target.executionScopeId, actorUuid,
       eventType === 'START_RECTIFICATION'
         || eventType === 'RECORD_RECTIFICATION' ? 'PIC' : 'SUPERVISOR');
     const defect = await handymanEvidenceQcRepository
@@ -1504,25 +1611,77 @@ async function transitionHandymanDefect(
     const replayEvent = await handymanEvidenceQcRepository
       .findDefectEventByIdempotency(tx, defectUuid, eventType, key);
     if (replayEvent) {
+      if (replayEvent.metadata.expectedVersion !== input.expectedVersion
+          || (replayEvent.metadata.sessionId ?? null) !== sessionId
+          || (replayEvent.metadata.evidenceReference ?? null) !== reference
+          || (replayEvent.metadata.reason ?? null) !== reason) {
+        throw handymanDefectIdempotencyConflictError();
+      }
       return { defect, event: replayEvent, replayed: true };
     }
-
     const rule = DEFECT_TRANSITIONS[eventType];
     if (!rule.from.includes(defect.status)) {
       throw handymanDefectIllegalTransitionError(defect.status,
         eventType);
     }
-    const updated = await handymanEvidenceQcRepository
-      .updateDefectStatus(tx, defectUuid, rule.to);
-    if (!updated) throw handymanDefectNotFoundError();
-    const event = await handymanEvidenceQcRepository
-      .appendDefectEvent(tx, {
-        defectId: defectUuid,
-        clientId: defect.clientId,
-        eventType,
-        idempotencyKey: key,
-        actorUserId: actorUuid,
-      });
+    if (defect.version !== input.expectedVersion) {
+      throw handymanDefectVersionConflictError();
+    }
+
+    let proofSessionId: string | null = defect.rectificationSessionId;
+    let proofUploadId: string | null = defect.rectificationEvidenceUploadId;
+    if (eventType === 'START_RECTIFICATION'
+        || eventType === 'REQUEST_REINSPECTION') {
+      // Each failed reinspection starts a fresh repair cycle. The prior
+      // proof survives in RECORD and REQUEST event metadata, not the head.
+      proofSessionId = null;
+      proofUploadId = null;
+    } else if (eventType === 'RECORD_RECTIFICATION') {
+      proofSessionId = sessionId;
+      proofUploadId = await verifyDefectReworkProof(tx, defect, actorUuid,
+        sessionId!, reference!, true);
+    } else {
+      const events = await handymanEvidenceQcRepository.listDefectEvents(
+        tx, defectUuid);
+      const recorded = events.filter((e) =>
+        e.eventType === 'RECORD_RECTIFICATION').at(-1);
+      if (!recorded || !proofSessionId || !proofUploadId
+          || recorded.metadata.sessionId !== proofSessionId
+          || recorded.metadata.evidenceUploadId !== proofUploadId) {
+        throw handymanDefectRectificationRequiredError(
+          'a recorded corrective session and evidence are required before reinspection');
+      }
+      await verifyDefectReworkProof(tx, defect, recorded.actorUserId,
+        proofSessionId, `hm-ev://${proofUploadId}`, false);
+    }
+    const updated = await handymanEvidenceQcRepository.updateDefectStatus(
+      tx, { defectId: defectUuid, from: defect.status, to: rule.to,
+        expectedVersion: defect.version,
+        rectificationSessionId: proofSessionId,
+        rectificationEvidenceUploadId: proofUploadId });
+    if (!updated) throw handymanDefectVersionConflictError();
+    const event = await handymanEvidenceQcRepository.appendDefectEvent(tx, {
+      defectId: defectUuid, clientId: defect.clientId, eventType,
+      idempotencyKey: key, actorUserId: actorUuid,
+      metadata: { expectedVersion: defect.version,
+        resultingVersion: updated.version, sessionId,
+        evidenceReference: reference, reason,
+        evidenceUploadId: eventType === 'RECORD_RECTIFICATION'
+          ? proofUploadId : null,
+        supersededSessionId: eventType === 'REQUEST_REINSPECTION'
+          ? defect.rectificationSessionId : null,
+        supersededEvidenceUploadId: eventType === 'REQUEST_REINSPECTION'
+          ? defect.rectificationEvidenceUploadId : null },
+    });
+    await recordOperationalEvent({
+      clientId: defect.clientId, buildingId: scope.buildingId,
+      actorUserId: actorUuid, entityType: 'HANDYMAN_DEFECT',
+      entityId: defectUuid, eventType: `HANDYMAN_DEFECT_${eventType}`,
+      summary: `Defect ${eventType.toLowerCase().replace(/_/g, ' ')}.`,
+      metadata: { executionScopeId: defect.executionScopeId,
+        reason, sessionId: proofSessionId, evidenceUploadId: proofUploadId,
+        version: updated.version },
+    }, tx);
     return { defect: updated, event, replayed: false };
   });
 }

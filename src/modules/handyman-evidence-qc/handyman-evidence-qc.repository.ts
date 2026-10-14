@@ -964,20 +964,29 @@ async function listDefectsByScope(
   return result.rows.map(mapDefect);
 }
 
-/** Head mutation primitive: status ONLY (frozen ladder). */
+/** Versioned head mutation; event append happens in the same transaction. */
 async function updateDefectStatus(
-  executor: Executor = getPool(),
-  defectId: string,
-  status: HandymanDefectStatus,
+  executor: Executor,
+  input: {
+    defectId: string;
+    from: HandymanDefectStatus;
+    to: HandymanDefectStatus;
+    expectedVersion: number;
+    rectificationSessionId: string | null;
+    rectificationEvidenceUploadId: string | null;
+  },
 ): Promise<HandymanDefectRecordRecord | null> {
   const result = await executor.query(
     `UPDATE handyman_defect_records
-        SET status = $2, updated_at = NOW()
-      WHERE id = $1
+        SET status = $3, version = version + 1,
+            rectification_session_id = $5,
+            rectification_evidence_upload_id = $6, updated_at = NOW()
+      WHERE id = $1 AND status = $2 AND version = $4
       RETURNING id, client_id, execution_scope_id, run_id, item_id,
                 description, status, version, rectification_session_id,
-               rectification_evidence_upload_id, created_at, updated_at`,
-    [defectId, status],
+                rectification_evidence_upload_id, created_at, updated_at`,
+    [input.defectId, input.from, input.to, input.expectedVersion,
+      input.rectificationSessionId, input.rectificationEvidenceUploadId],
   );
   return result.rows[0] ? mapDefect(result.rows[0]) : null;
 }

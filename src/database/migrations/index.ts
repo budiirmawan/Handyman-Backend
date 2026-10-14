@@ -1,3 +1,4 @@
+import { migration0443SeparateHandymanVariationQcAuthority } from './0443_separate_handyman_variation_qc_authority';
 import { migration0442HardenHandymanQc } from './0442_harden_handyman_qc';
 import { migration0431CreateHandymanVisitAppointments } from './0431_create_handyman_visit_appointments';
 import { migration0432HandymanChargeTenantInvoiceSource } from './0432_handyman_charge_tenant_invoice_source';
@@ -925,4 +926,5 @@ export const migrations: readonly Migration[] = [
   migration0440CreateHandymanDispatchReleases,
   migration0441HandymanDispatchReleaseReassignmentSupersede,
   migration0442HardenHandymanQc,
+  migration0443SeparateHandymanVariationQcAuthority,
 ];

@@ -27,6 +27,7 @@ export const HANDYMAN_SCOPE_VARIATION_ACTOR_ROLES = [
   'PIC_PEKERJAAN',
   'INSPECTOR',
   'OPERATIONS_MANAGER',
+  'SUPERVISOR',
   'TENANT',
 ] as const;
 export type HandymanScopeVariationActorRole =
