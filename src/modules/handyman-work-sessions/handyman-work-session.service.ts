@@ -12,6 +12,7 @@ import {
 import {
   handymanWorkSessionActiveConflictError,
   handymanWorkSessionArrivalRequiredError,
+  handymanWorkSessionDispatchNotReleasedError,
   handymanWorkSessionIllegalTransitionError,
   handymanWorkSessionNotAuthorizedError,
   handymanWorkSessionNotFoundError,
@@ -217,6 +218,19 @@ export async function checkInHandymanWorkSession(
   );
   if (scope.status !== 'AUTHORIZED') {
     throw handymanWorkSessionScopeNotEligibleError();
+  }
+  // CR-HM-OPS-DISPATCH-02 PART C: check-in requires an ACTIVE dispatch
+  // release (RELEASED or IN_PROGRESS). An assigned-but-not-released scope
+  // must not allow a work session to start.
+  const { handymanDispatchRepository } = await import(
+    '../handyman-dispatch/handyman-dispatch.repository'
+  );
+  const release = await handymanDispatchRepository.findActiveByScope(
+    undefined,
+    scopeUuid,
+  );
+  if (!release) {
+    throw handymanWorkSessionDispatchNotReleasedError(scopeUuid);
   }
   if (!(await findVerifiedArrivalResultId(undefined, scopeUuid))) {
     throw handymanWorkSessionArrivalRequiredError(scopeUuid);

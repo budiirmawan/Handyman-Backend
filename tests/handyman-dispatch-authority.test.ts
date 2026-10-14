@@ -716,6 +716,36 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     assert.ok(proj.missingSeams.includes('EXECUTION_SCOPE'));
   });
 
+  it('P0-E: check-in requires dispatch release (not-released gate)', async (t) => {
+    if (!requireDb(t)) return;
+    const realm = await setupRealm();
+    const crew = await setupCrew(realm);
+    const { requestId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId);
+    await assignHandymanExecutionScopeCrew(
+      {
+        executionScopeId: scopeId,
+        providerContextId: crew.providerContext.id,
+        crewId: crew.crew.id,
+      },
+      adminUserId,
+    );
+    // Without a RELEASED dispatch row, check-in must be rejected even though
+    // crew is assigned. The dispatch gate fires before arrival checks.
+    await assert.rejects(
+      () =>
+        checkInHandymanWorkSession(
+          {
+            executionScopeId: scopeId,
+            idempotencyKey: `k-${randomUUID()}`,
+          },
+          crew.leadUser.id,
+        ),
+      (err: Error) =>
+        errorCode(err) === 'HANDYMAN_WORK_SESSION_DISPATCH_NOT_RELEASED',
+    );
+  });
+
   it('P0-E: active work session blocks reassignment', async (t) => {
     if (!requireDb(t)) return;
     // A work session can only begin after arrival verification + check-in;
