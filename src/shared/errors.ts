@@ -2908,6 +2908,7 @@ export const ERROR_CODES = {
   SAAS_SUPPORT_SESSION_EXPIRED: 'SAAS_SUPPORT_SESSION_EXPIRED',
   // CR-BE-SAAS-01 PART 12 — Platform configuration (frozen §17.1).
   SAAS_PLATFORM_CONFIG_NOT_FOUND: 'SAAS_PLATFORM_CONFIG_NOT_FOUND',
+  HANDYMAN_FIELD_READ_FORBIDDEN: 'HANDYMAN_FIELD_READ_FORBIDDEN',
   /** Generic 409 conflict code (used by PART 11A for "unique effective
    * session" collisions where no domain-specific error is frozen). */
   CONFLICT: 'CONFLICT',
