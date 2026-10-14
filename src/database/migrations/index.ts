@@ -463,6 +463,12 @@ import { migration0427HandymanAttributionActorProvenance }
   from './0427_handyman_attribution_actor_provenance';
 import { migration0428CreateHandymanCarePropertyGrants }
   from './0428_create_handyman_care_property_grants';
+import { migration0435CreateHandymanScopeVariations }
+  from './0435_create_handyman_scope_variations';
+import { migration0436CreateHandymanMaterialPurchasing }
+  from './0436_create_handyman_material_purchasing';
+import { migration0437CreateHandymanFieldEvidenceUploads }
+  from './0437_create_handyman_field_evidence_uploads';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -902,4 +908,7 @@ export const migrations: readonly Migration[] = [
   migration0432HandymanChargeTenantInvoiceSource,
   migration0433HandymanCustomerPaymentProof,
   migration0434CreateHandymanTenantSlotConsents,
+  migration0435CreateHandymanScopeVariations,
+  migration0436CreateHandymanMaterialPurchasing,
+  migration0437CreateHandymanFieldEvidenceUploads,
 ];
