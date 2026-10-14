@@ -379,6 +379,7 @@ import { createWorkOrderHistoryRouter } from '../modules/work-order-history/work
 import { createHandymanScopeVariationRouter } from '../modules/handyman-scope-variations/handyman-scope-variation.routes';
 import { createHandymanMaterialPurchasingRouter } from '../modules/handyman-material-purchasing/handyman-material-purchasing.routes';
 import { createHandymanFieldEvidenceRouter } from '../modules/handyman-field-evidence/handyman-field-evidence.routes';
+import { createHandymanWorkerProfileRouter } from '../modules/handyman-worker-profile/handyman-worker-profile.routes';
 import { createHealthRouter } from './health.routes';
 
 export function createApiRouter(): Router {
@@ -840,6 +841,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanScopeVariationRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / REDUCE)
   router.use(createHandymanMaterialPurchasingRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle
   router.use(createHandymanFieldEvidenceRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-D — Genuine Binary Field Evidence Upload
+  router.use(createHandymanWorkerProfileRouter()); // CR-HM-FIELD-AUTHORITY-01 P1 — Worker Profile Projection
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;
