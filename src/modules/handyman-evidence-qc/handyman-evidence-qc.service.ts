@@ -1,6 +1,12 @@
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import type { AppError } from '../../shared/errors';
+import { permissionService } from '../permissions';
+import {
+  assertHandymanQcSupervisor,
+  isHandymanQcSupervisor,
+  lockHandymanQcScope,
+} from './handyman-qc-authority';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { isManagedStorageKey } from '../evidence/storage';
@@ -566,43 +572,15 @@ function ensureChecklistIdentity(value: string): string {
   return raw;
 }
 
-/**
- * CR-HM-SEC-01 PART 04B — QC WRITE authorization preamble (OPEN /
- * ITEM_SET / FINISH only; the QC reads use `leadReadAuthorityPreamble`
- * from PART 04A). Same frozen worker contract — scope exists, CURRENT
- * authoritative Lead resolved via the CR-HM-07 seam, actor IS that
- * Lead, 403 maps to the QC vocabulary — but the data-scope wall is
- * the BE-02G building guard on the authoritative server-derived
- * `executionScope.buildingId` (migration 0395): an explicit ACTIVE
- * `user_building_assignment` to the scope's exact Building under its
- * Client. The client-level `canAccessClient` wall is NOT sufficient
- * here — a same-Client sibling Building assignment must not open any
- * QC write.
- */
+/** QC decisions belong to the assigned, RBAC-granted Supervisor, never PIC. */
 async function qcAuthorityPreamble(
+  tx: PoolClient,
   scopeUuid: string,
   actorUserId: string,
 ) {
-  const scope = await handymanExecutionScopeRepository.findScopeById(
-    undefined,
-    scopeUuid,
-  );
-  if (!scope) throw handymanExecutionScopeNotFoundError();
-  // CR-HM-SEC-01 PART 04B — explicit ACTIVE building assignment to
-  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
-  // (no same-Client shortcut, no existence/content leak).
-  await assertBuildingScopedResourceAccess(actorUserId, {
-    clientId: scope.clientId,
-    buildingId: scope.buildingId,
-  });
-  const resolution = await resolveHandymanAssignmentLead(
-    scopeUuid,
-    actorUserId,
-  );
-  if (!resolution || resolution.leadUserId !== actorUserId) {
-    throw handymanQcNotAuthorizedError();
-  }
-  return { scope, resolution };
+  const scope = await lockHandymanQcScope(tx, scopeUuid);
+  await assertHandymanQcSupervisor(scope, actorUserId, tx);
+  return scope;
 }
 
 /**
@@ -648,6 +626,37 @@ async function leadReadAuthorityPreamble(
   return { scope, resolution };
 }
 
+/**
+ * PIC sees the result of their work; the appointed Supervisor sees their
+ * inspection; a staff reader needs tenant_company.read. None of those read
+ * paths grants a QC mutation. Evidence file reads remain Lead-gated.
+ */
+async function qcDefectReadAuthorityPreamble(
+  scopeUuid: string,
+  actorUserId: string,
+  notAuthorized: () => AppError,
+): Promise<void> {
+  const scope = await handymanExecutionScopeRepository.findScopeById(
+    undefined, scopeUuid,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId, buildingId: scope.buildingId,
+  });
+  const permissions = await permissionService.resolvePermissionsForUser(
+    actorUserId,
+  );
+  if (permissions.includes('tenant_company.read')) return;
+  const lead = await resolveHandymanAssignmentLead(scopeUuid, actorUserId);
+  if (lead?.leadUserId === actorUserId) return;
+  const supervisor = await withTransaction(async (tx) => {
+    await lockHandymanQcScope(tx, scopeUuid);
+    return isHandymanQcSupervisor(scopeUuid, scope.clientId,
+      actorUserId, tx);
+  });
+  if (!supervisor) throw notAuthorized();
+}
+
 /* ---- QC OPEN ---------------------------------------------------- */
 
 export type OpenHandymanQcRunInput = {
@@ -686,11 +695,11 @@ export async function openHandymanQcRun(
   const sessionId = sessionRaw === null
     ? null
     : ensureUuid(sessionRaw, 'sessionId');
-  const { scope } = await qcAuthorityPreamble(scopeUuid, actorUuid);
   const boundSessionId = await ensureSessionBinding(sessionId,
     scopeUuid);
 
   return withTransaction(async (tx: PoolClient) => {
+    const scope = await qcAuthorityPreamble(tx, scopeUuid, actorUuid);
     const replay = await handymanEvidenceQcRepository
       .findQcOpenReplayByScope(tx, scopeUuid, key);
     if (replay) {
@@ -762,11 +771,15 @@ export async function setHandymanQcRunItemOutcome(
     throw handymanEvidenceValidationError('note');
   }
 
+  const target = await handymanEvidenceQcRepository.findQcRunById(
+    undefined, runUuid,
+  );
+  if (!target) throw handymanQcRunNotFoundError();
   return withTransaction(async (tx: PoolClient) => {
+    await qcAuthorityPreamble(tx, target.executionScopeId, actorUuid);
     const run = await handymanEvidenceQcRepository
       .findQcRunByIdForUpdate(tx, runUuid);
     if (!run) throw handymanQcRunNotFoundError();
-    await qcAuthorityPreamble(run.executionScopeId, actorUuid);
 
     // Replay before the transition check (same key replays).
     const replayEvent = await handymanEvidenceQcRepository
@@ -828,11 +841,15 @@ export async function finishHandymanQcRun(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
+  const target = await handymanEvidenceQcRepository.findQcRunById(
+    undefined, runUuid,
+  );
+  if (!target) throw handymanQcRunNotFoundError();
   return withTransaction(async (tx: PoolClient) => {
+    await qcAuthorityPreamble(tx, target.executionScopeId, actorUuid);
     const run = await handymanEvidenceQcRepository
       .findQcRunByIdForUpdate(tx, runUuid);
     if (!run) throw handymanQcRunNotFoundError();
-    await qcAuthorityPreamble(run.executionScopeId, actorUuid);
 
     const replayEvent = await handymanEvidenceQcRepository
       .findQcRunEventByIdempotency(tx, runUuid, 'FINISH', key);
@@ -885,7 +902,7 @@ export async function listHandymanQcRunsByScope(
 ): Promise<HandymanQcRunView[]> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await leadReadAuthorityPreamble(scopeUuid, actorUuid,
+  await qcDefectReadAuthorityPreamble(scopeUuid, actorUuid,
     handymanQcNotAuthorizedError);
   const runs = await handymanEvidenceQcRepository
     .listQcRunsByScope(undefined, scopeUuid);
@@ -914,7 +931,7 @@ export async function getHandymanQcRunDetail(
   const run = await handymanEvidenceQcRepository
     .findQcRunById(undefined, runUuid);
   if (!run) throw handymanQcRunNotFoundError();
-  await leadReadAuthorityPreamble(run.executionScopeId, actorUuid,
+  await qcDefectReadAuthorityPreamble(run.executionScopeId, actorUuid,
     handymanQcNotAuthorizedError);
   const items = await handymanEvidenceQcRepository
     .listQcRunItems(undefined, runUuid);
@@ -950,43 +967,30 @@ const DEFECT_TRANSITIONS: Record<Exclude<HandymanDefectEventType,
 };
 
 /**
- * CR-HM-SEC-01 PART 04C — defect WRITE authorization preamble (OPEN
- * defect + the four ladder transitions via `transitionHandymanDefect`;
- * the defect reads use `leadReadAuthorityPreamble` from PART 04A).
- * Same frozen worker contract — scope exists, CURRENT authoritative
- * Lead resolved via the CR-HM-07 seam, actor IS that Lead, 403 maps
- * to the defect vocabulary — but the data-scope wall is the BE-02G
- * building guard on the authoritative server-derived
- * `executionScope.buildingId` (migration 0395): an explicit ACTIVE
- * `user_building_assignment` to the scope's exact Building under its
- * Client. The client-level `canAccessClient` wall is NOT sufficient
- * here — a same-Client sibling Building assignment must not open any
- * defect write.
+ * QC/verification belongs to the Supervisor. Assigned PIC may only start
+ * and report corrective work; no corrective command can verify its own work.
  */
 async function defectAuthorityPreamble(
+  tx: PoolClient,
   scopeUuid: string,
   actorUserId: string,
+  role: 'SUPERVISOR' | 'PIC',
 ) {
-  const scope = await handymanExecutionScopeRepository.findScopeById(
-    undefined,
-    scopeUuid,
-  );
-  if (!scope) throw handymanExecutionScopeNotFoundError();
-  // CR-HM-SEC-01 PART 04C — explicit ACTIVE building assignment to
-  // the scope's exact Building; otherwise 403 BUILDING_ACCESS_DENIED
-  // (no same-Client shortcut, no existence/content leak).
+  const scope = await lockHandymanQcScope(tx, scopeUuid);
   await assertBuildingScopedResourceAccess(actorUserId, {
-    clientId: scope.clientId,
-    buildingId: scope.buildingId,
+    clientId: scope.clientId, buildingId: scope.buildingId,
   });
-  const resolution = await resolveHandymanAssignmentLead(
-    scopeUuid,
-    actorUserId,
-  );
-  if (!resolution || resolution.leadUserId !== actorUserId) {
-    throw handymanDefectNotAuthorizedError();
+  if (role === 'SUPERVISOR') {
+    if (!(await isHandymanQcSupervisor(scopeUuid, scope.clientId,
+      actorUserId, tx))) throw handymanDefectNotAuthorizedError();
+  } else {
+    const lead = await resolveHandymanAssignmentLead(scopeUuid,
+      actorUserId);
+    if (!lead || lead.leadUserId !== actorUserId) {
+      throw handymanDefectNotAuthorizedError();
+    }
   }
-  return { scope, resolution };
+  return scope;
 }
 
 /**
@@ -1075,12 +1079,11 @@ export async function openHandymanDefect(
   const runExpl = runRaw === null ? null : ensureUuid(runRaw, 'runId');
   const itemExpl = itemRaw === null ? null
     : ensureUuid(itemRaw, 'itemId');
-  const { scope } = await defectAuthorityPreamble(scopeUuid,
-    actorUuid);
-  const link = await resolveDefectRunItemLink(scopeUuid, runExpl,
-    itemExpl);
-
   return withTransaction(async (tx: PoolClient) => {
+    const scope = await defectAuthorityPreamble(tx, scopeUuid,
+      actorUuid, 'SUPERVISOR');
+    const link = await resolveDefectRunItemLink(scopeUuid, runExpl,
+      itemExpl);
     const replay = await handymanEvidenceQcRepository
       .findDefectOpenReplayByScope(tx, scopeUuid, key);
     if (replay) {
@@ -1134,11 +1137,17 @@ async function transitionHandymanDefect(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
+  const target = await handymanEvidenceQcRepository.findDefectById(
+    undefined, defectUuid,
+  );
+  if (!target) throw handymanDefectNotFoundError();
   return withTransaction(async (tx: PoolClient) => {
+    await defectAuthorityPreamble(tx, target.executionScopeId, actorUuid,
+      eventType === 'START_RECTIFICATION'
+        || eventType === 'RECORD_RECTIFICATION' ? 'PIC' : 'SUPERVISOR');
     const defect = await handymanEvidenceQcRepository
       .findDefectByIdForUpdate(tx, defectUuid);
     if (!defect) throw handymanDefectNotFoundError();
-    await defectAuthorityPreamble(defect.executionScopeId, actorUuid);
 
     const replayEvent = await handymanEvidenceQcRepository
       .findDefectEventByIdempotency(tx, defectUuid, eventType, key);
@@ -1216,7 +1225,7 @@ export async function listHandymanDefectsByScope(
 ): Promise<HandymanDefectRecordRecord[]> {
   const scopeUuid = ensureUuid(executionScopeId, 'executionScopeId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
-  await leadReadAuthorityPreamble(scopeUuid, actorUuid,
+  await qcDefectReadAuthorityPreamble(scopeUuid, actorUuid,
     handymanDefectNotAuthorizedError);
   return handymanEvidenceQcRepository
     .listDefectsByScope(undefined, scopeUuid);
@@ -1232,7 +1241,7 @@ export async function getHandymanDefectDetail(
   const defect = await handymanEvidenceQcRepository
     .findDefectById(undefined, defectUuid);
   if (!defect) throw handymanDefectNotFoundError();
-  await leadReadAuthorityPreamble(defect.executionScopeId, actorUuid,
+  await qcDefectReadAuthorityPreamble(defect.executionScopeId, actorUuid,
     handymanDefectNotAuthorizedError);
   const events = await handymanEvidenceQcRepository
     .listDefectEvents(undefined, defectUuid);

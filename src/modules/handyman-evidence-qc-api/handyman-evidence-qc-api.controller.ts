@@ -6,12 +6,12 @@ import {
   createHandymanEvidenceRecord,
   finalizeHandymanEvidenceRecord,
   finishHandymanQcRun,
-  getHandymanDefectCustomerCareDetail,
+  getHandymanDefectDetail,
   getHandymanEvidenceRecordCustomerCareDetail,
-  getHandymanQcRunCustomerCareDetail,
-  listHandymanDefectsCustomerCareView,
+  getHandymanQcRunDetail,
+  listHandymanDefectsByScope,
   listHandymanEvidenceRecordsCustomerCareView,
-  listHandymanQcRunsCustomerCareView,
+  listHandymanQcRunsByScope,
   openHandymanDefect,
   openHandymanQcRun,
   passHandymanDefectReinspection,
@@ -387,7 +387,7 @@ export async function getQcRunsByScopeHandler(
   try {
     const executionScopeId = parseScopeParam(
       p(req.params.executionScopeId));
-    const views = await listHandymanQcRunsCustomerCareView(
+    const views = await listHandymanQcRunsByScope(
       executionScopeId, actor(req));
     sendSuccess(res, {
       runs: views.map((view) => ({
@@ -408,7 +408,7 @@ export async function getQcRunHandler(
 ): Promise<void> {
   try {
     const qcRunId = parseQcRunIdParam(p(req.params.qcRunId));
-    const view = await getHandymanQcRunCustomerCareDetail(
+    const view = await getHandymanQcRunDetail(
       qcRunId, actor(req));
     sendSuccess(res, {
       run: toQcRunPayload(view.run),
@@ -523,7 +523,7 @@ export async function getDefectsByScopeHandler(
   try {
     const executionScopeId = parseScopeParam(
       p(req.params.executionScopeId));
-    const defects = await listHandymanDefectsCustomerCareView(
+    const defects = await listHandymanDefectsByScope(
       executionScopeId, actor(req));
     sendSuccess(res, { defects: defects.map(toDefectPayload) }, 200);
   } catch (error) {
@@ -539,7 +539,7 @@ export async function getDefectHandler(
 ): Promise<void> {
   try {
     const defectId = parseDefectIdParam(p(req.params.defectId));
-    const view = await getHandymanDefectCustomerCareDetail(
+    const view = await getHandymanDefectDetail(
       defectId, actor(req));
     sendSuccess(res, {
       defect: toDefectPayload(view.defect),
