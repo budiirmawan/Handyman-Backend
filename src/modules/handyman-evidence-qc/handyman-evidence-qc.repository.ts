@@ -484,6 +484,16 @@ async function findEvidenceFinalizeEventByRecord(
 
 /* ---- Immutable requirements for the existing QC run ------------ */
 
+export type HandymanQcChecklistVersion = {
+  id: string;
+  clientId: string;
+  code: string;
+  versionNumber: number;
+  requiredItemKeys: string[];
+  publishedByUserId: string;
+  publishedAt: string;
+};
+
 export type HandymanQcChecklistSpec = {
   executionScopeId: string;
   clientId: string;
@@ -491,6 +501,11 @@ export type HandymanQcChecklistSpec = {
   requiredItemKeys: string[];
   configuredByUserId: string;
   configuredAt: string;
+  /** Null only for an existing, pre-version-binding scope manifest. */
+  templateVersionId: string | null;
+  templateCode: string | null;
+  templateVersionNumber: number | null;
+  boundAt: string | null;
 };
 
 function mapQcSpec(row: Row): HandymanQcChecklistSpec {
@@ -501,7 +516,72 @@ function mapQcSpec(row: Row): HandymanQcChecklistSpec {
     requiredItemKeys: row.required_item_keys,
     configuredByUserId: row.configured_by_user_id,
     configuredAt: toTimestamp(row.configured_at) as string,
+    templateVersionId: row.checklist_version_id ?? null,
+    templateCode: row.template_code ?? null,
+    templateVersionNumber: row.template_version_number === null
+      || row.template_version_number === undefined
+      ? null : Number(row.template_version_number),
+    boundAt: toTimestamp(row.bound_at),
   };
+}
+
+function mapQcChecklistVersion(row: Row): HandymanQcChecklistVersion {
+  return {
+    id: row.id, clientId: row.client_id, code: row.code,
+    versionNumber: Number(row.version_number),
+    requiredItemKeys: row.required_item_keys,
+    publishedByUserId: row.published_by_user_id,
+    publishedAt: toTimestamp(row.published_at) as string,
+  };
+}
+
+const QC_VERSION_SELECT = `SELECT id, client_id, code, version_number,
+  required_item_keys, published_by_user_id, published_at
+  FROM handyman_qc_checklist_versions`;
+
+async function findQcChecklistVersionById(
+  executor: Executor = getPool(), id: string,
+): Promise<HandymanQcChecklistVersion | null> {
+  const result = await executor.query(`${QC_VERSION_SELECT} WHERE id = $1`,
+    [id]);
+  return result.rows[0] ? mapQcChecklistVersion(result.rows[0]) : null;
+}
+
+async function findQcChecklistVersionByCode(
+  executor: Executor, clientId: string, code: string,
+  versionNumber: number,
+): Promise<HandymanQcChecklistVersion | null> {
+  const result = await executor.query(
+    `${QC_VERSION_SELECT} WHERE client_id = $1 AND code = $2
+      AND version_number = $3`, [clientId, code, versionNumber]);
+  return result.rows[0] ? mapQcChecklistVersion(result.rows[0]) : null;
+}
+
+async function listQcChecklistVersions(
+  executor: Executor = getPool(), clientId: string,
+): Promise<HandymanQcChecklistVersion[]> {
+  const result = await executor.query(
+    `${QC_VERSION_SELECT} WHERE client_id = $1
+      ORDER BY code, version_number DESC`, [clientId]);
+  return result.rows.map(mapQcChecklistVersion);
+}
+
+async function publishQcChecklistVersion(
+  executor: Executor, input: {
+    clientId: string; code: string; versionNumber: number;
+    requiredItemKeys: string[]; publishedByUserId: string;
+  },
+): Promise<HandymanQcChecklistVersion> {
+  const result = await executor.query(
+    `INSERT INTO handyman_qc_checklist_versions (id, client_id, code,
+      version_number, required_item_keys, published_by_user_id)
+      VALUES ($1,$2,$3,$4,$5,$6)
+      RETURNING id, client_id, code, version_number,
+        required_item_keys, published_by_user_id, published_at`,
+    [randomUUID(), input.clientId, input.code, input.versionNumber,
+      input.requiredItemKeys, input.publishedByUserId],
+  );
+  return mapQcChecklistVersion(result.rows[0]);
 }
 
 async function findQcChecklistSpec(
@@ -509,9 +589,17 @@ async function findQcChecklistSpec(
   executionScopeId: string,
 ): Promise<HandymanQcChecklistSpec | null> {
   const result = await executor.query(
-    `SELECT execution_scope_id, client_id, checklist_identity,
-            required_item_keys, configured_by_user_id, configured_at
-       FROM handyman_qc_checklist_specs WHERE execution_scope_id = $1`,
+    `SELECT s.execution_scope_id, s.client_id, s.checklist_identity,
+            s.required_item_keys, s.configured_by_user_id, s.configured_at,
+            b.checklist_version_id, b.bound_at,
+            v.code AS template_code,
+            v.version_number AS template_version_number
+       FROM handyman_qc_checklist_specs s
+       LEFT JOIN handyman_qc_scope_checklist_bindings b
+         ON b.execution_scope_id = s.execution_scope_id
+       LEFT JOIN handyman_qc_checklist_versions v
+         ON v.id = b.checklist_version_id
+      WHERE s.execution_scope_id = $1`,
     [executionScopeId],
   );
   return result.rows[0] ? mapQcSpec(result.rows[0]) : null;
@@ -519,7 +607,8 @@ async function findQcChecklistSpec(
 
 async function createQcChecklistSpec(
   executor: Executor,
-  input: Omit<HandymanQcChecklistSpec, 'configuredAt'>,
+  input: Pick<HandymanQcChecklistSpec, 'executionScopeId' | 'clientId'
+    | 'checklistIdentity' | 'requiredItemKeys' | 'configuredByUserId'>,
 ): Promise<HandymanQcChecklistSpec> {
   const result = await executor.query(
     `INSERT INTO handyman_qc_checklist_specs (
@@ -532,6 +621,16 @@ async function createQcChecklistSpec(
       input.requiredItemKeys, input.configuredByUserId],
   );
   return mapQcSpec(result.rows[0]);
+}
+
+async function bindQcChecklistVersion(
+  executor: Executor, input: { executionScopeId: string;
+    checklistVersionId: string; boundByUserId: string },
+): Promise<void> {
+  await executor.query(`INSERT INTO handyman_qc_scope_checklist_bindings
+    (execution_scope_id, checklist_version_id, bound_by_user_id)
+    VALUES ($1,$2,$3)`, [input.executionScopeId,
+    input.checklistVersionId, input.boundByUserId]);
 }
 
 /* ---- QC runs (aggregate B head) -------------------------------- */
@@ -1139,6 +1238,11 @@ export const handymanEvidenceQcRepository = {
   findEvidenceFinalizeEventByRecord,
   findQcChecklistSpec,
   createQcChecklistSpec,
+  findQcChecklistVersionById,
+  findQcChecklistVersionByCode,
+  listQcChecklistVersions,
+  publishQcChecklistVersion,
+  bindQcChecklistVersion,
   createQcRun,
   findQcRunById,
   findQcRunByIdForUpdate,

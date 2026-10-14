@@ -12,6 +12,8 @@ import { buildingService } from '../src/modules/buildings';
 import {
   bindHandymanQcEvidence,
   configureHandymanQcChecklist,
+  publishHandymanQcChecklistVersion,
+  listHandymanQcChecklistVersions,
   finishHandymanQcRun,
   getHandymanDefectDetail,
   getHandymanQcChecklist,
@@ -97,8 +99,12 @@ async function grant(userId: string, permissionCodes: string[]) {
   await roleService.assignRoleToUser(userId, role.id);
 }
 
-async function fixture() {
+async function fixture(configure = true) {
   const f = await baseFixture();
+  const template = await publishHandymanQcChecklistVersion({
+    clientId: f.scope.clientId, code: 'HANDYMAN_FINAL',
+    versionNumber: 1, requiredItemKeys: ['quality'],
+  }, adminId);
   const crew = await crewFixture(f.realm);
   await workforceBuildingAssignmentService.assignBuildingToWorkforce({
     workforceProfileId: crew.workerContext.workforceProfileId,
@@ -108,9 +114,8 @@ async function fixture() {
     executionScopeId: f.scope.id, providerContextId: crew.providerContext.id,
     crewId: crew.crew.id,
   }, adminId);
-  await configureHandymanQcChecklist({
-    executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
-    requiredItemKeys: ['quality'],
+  if (configure) await configureHandymanQcChecklist({
+    executionScopeId: f.scope.id, templateVersionId: template.version.id,
   }, adminId);
   const supervisor = await userService.createUser({
     email: `supervisor-${randomUUID()}@example.com`,
@@ -132,11 +137,11 @@ async function fixture() {
     buildingId: f.realm.building.id,
   });
   await grant(supervisor.id, ['handyman.qc.manage']);
-  return { ...f, crew, assignment, supervisor, supProfile };
+  return { ...f, template, crew, assignment, supervisor, supProfile };
 }
 
 const open = (scopeId: string) => ({ executionScopeId: scopeId,
-  checklistIdentity: 'handyman-final-v1', idempotencyKey: key() });
+  checklistIdentity: 'HANDYMAN_FINAL@v1', idempotencyKey: key() });
 
 type QcFixture = Awaited<ReturnType<typeof fixture>>;
 async function session(f: QcFixture,
@@ -315,22 +320,38 @@ describe('QC decision guard, persistence and replay (embedded PostgreSQL)', () =
     const f = await fixture();
     const spec = await getHandymanQcChecklist(f.scope.id, f.supervisor.id);
     assert.deepEqual(spec?.requiredItemKeys, ['quality']);
-    assert.equal((await configureHandymanQcChecklist({
-      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
-      requiredItemKeys: ['quality'],
+    assert.equal(spec?.templateVersionId, f.template.version.id);
+    assert.equal(spec?.templateVersionNumber, 1);
+    assert.equal((await listHandymanQcChecklistVersions(f.scope.clientId,
+      adminId)).length, 1);
+    assert.equal((await publishHandymanQcChecklistVersion({
+      clientId: f.scope.clientId, code: 'HANDYMAN_FINAL',
+      versionNumber: 1, requiredItemKeys: ['quality'],
     }, adminId)).replayed, true);
+    assert.equal((await configureHandymanQcChecklist({
+      executionScopeId: f.scope.id,
+      templateVersionId: f.template.version.id,
+    }, adminId)).replayed, true);
+    const next = await publishHandymanQcChecklistVersion({
+      clientId: f.scope.clientId, code: 'HANDYMAN_FINAL',
+      versionNumber: 2, requiredItemKeys: ['different'],
+    }, adminId);
     await assert.rejects(configureHandymanQcChecklist({
-      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
-      requiredItemKeys: ['different'],
+      executionScopeId: f.scope.id,
+      templateVersionId: next.version.id,
     }, adminId), (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_CONFLICT');
     await assert.rejects(configureHandymanQcChecklist({
-      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
-      requiredItemKeys: ['different'],
+      executionScopeId: f.scope.id,
+      templateVersionId: f.template.version.id,
     }, f.supervisor.id), (e) => code(e) === 'HANDYMAN_QC_NOT_AUTHORIZED');
     await assert.rejects(configureHandymanQcChecklist({
-      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
-      requiredItemKeys: ['quality'],
+      executionScopeId: f.scope.id,
+      templateVersionId: f.template.version.id,
     }, f.crew.leadUser.id), (e) => code(e) === 'HANDYMAN_QC_NOT_AUTHORIZED');
+    await assert.rejects(getPool().query(
+      `UPDATE handyman_qc_checklist_versions SET required_item_keys = ARRAY['skip']
+       WHERE id = $1`, [f.template.version.id]),
+    (e) => code(e) === '23514');
     await assert.rejects(openHandymanQcRun({ ...open(f.scope.id),
       checklistIdentity: 'free-text-checklist' }, f.supervisor.id),
     (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_NOT_CONFIGURED');
@@ -531,10 +552,14 @@ describe('Additive migration on existing QC aggregates', () => {
       await client.query('BEGIN');
       const { migration0442HardenHandymanQc } = await import(
         '../src/database/migrations/0442_harden_handyman_qc');
+      const { migration0444VersionHandymanQcChecklists } = await import(
+        '../src/database/migrations/0444_version_handyman_qc_checklists');
+      await migration0444VersionHandymanQcChecklists.down(client);
       await migration0442HardenHandymanQc.down(client);
       assert.equal((await client.query(`SELECT status FROM handyman_qc_runs
         WHERE id = $1`, [run.id])).rows[0].status, 'FAILED');
       await migration0442HardenHandymanQc.up(client);
+      await migration0444VersionHandymanQcChecklists.up(client);
       const rows = await client.query(`SELECT r.status, r.version,
         i.outcome, d.description FROM handyman_qc_runs r
         JOIN handyman_qc_run_items i ON i.run_id = r.id
@@ -820,5 +845,64 @@ describe('Variation QC consumes Supervisor decision; BAST and finance remain dis
       f.scope.id, v.id, { idempotencyKey: key(), expectedVersion: 2 }),
     (e) => code(e) === 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION'
       && !/FAILED QC run/.test((e as Error).message));
+  });
+});
+
+describe('Versioned checklist configuration and pre-migration QC compatibility', () => {
+  it('fails closed before publishing/binding, rejects empty keys and foreign Client templates', async () => {
+    const f = await fixture(false);
+    await assert.rejects(openHandymanQcRun(open(f.scope.id), f.supervisor.id),
+      (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_NOT_CONFIGURED');
+    await assert.rejects(publishHandymanQcChecklistVersion({
+      clientId: f.scope.clientId, code: 'EMPTY', versionNumber: 1,
+      requiredItemKeys: [],
+    }, adminId), (e) => code(e) === 'VALIDATION_ERROR');
+    const other = await fixture(false);
+    await assert.rejects(configureHandymanQcChecklist({
+      executionScopeId: f.scope.id,
+      templateVersionId: other.template.version.id,
+    }, adminId), (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_CONFLICT');
+    await assert.rejects(publishHandymanQcChecklistVersion({
+      clientId: f.scope.clientId, code: 'HANDYMAN_FINAL',
+      versionNumber: 1, requiredItemKeys: ['different'],
+    }, adminId), (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_CONFLICT');
+    const pinned = await configureHandymanQcChecklist({
+      executionScopeId: f.scope.id,
+      templateVersionId: f.template.version.id,
+    }, adminId);
+    assert.ok(pinned.spec.boundAt);
+    assert.equal((await openHandymanQcRun(open(f.scope.id),
+      f.supervisor.id)).run.status, 'OPEN');
+  });
+
+  it('never invents a version for an already OPEN run; explicitly binds matching legacy manifest after FAIL', async () => {
+    const f = await fixture(false);
+    await getPool().query(`INSERT INTO handyman_qc_checklist_specs
+      (execution_scope_id, client_id, checklist_identity,
+       required_item_keys, configured_by_user_id)
+      VALUES ($1,$2,'HANDYMAN_FINAL',ARRAY['quality'],$3)`,
+    [f.scope.id, f.scope.clientId, adminId]);
+    const legacyRun = randomUUID();
+    await getPool().query(`INSERT INTO handyman_qc_runs
+      (id, client_id, execution_scope_id, checklist_identity, status)
+      VALUES ($1,$2,$3,'HANDYMAN_FINAL','OPEN')`,
+    [legacyRun, f.scope.clientId, f.scope.id]);
+    await assert.rejects(configureHandymanQcChecklist({
+      executionScopeId: f.scope.id,
+      templateVersionId: f.template.version.id,
+    }, adminId), (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_CONFLICT');
+    await assert.rejects(finishHandymanQcRun(pass(legacyRun, 1),
+      f.supervisor.id), (e) => code(e) === 'HANDYMAN_QC_PASS_BLOCKED');
+    await finishHandymanQcRun(fail(legacyRun, 1), f.supervisor.id);
+    const pinned = await configureHandymanQcChecklist({
+      executionScopeId: f.scope.id,
+      templateVersionId: f.template.version.id,
+    }, adminId);
+    assert.equal(pinned.spec.checklistIdentity, 'HANDYMAN_FINAL');
+    assert.equal((await getPool().query(`SELECT status FROM handyman_qc_runs
+      WHERE id=$1`, [legacyRun])).rows[0].status, 'FAILED');
+    const next = await openHandymanQcRun({ ...open(f.scope.id),
+      checklistIdentity: pinned.spec.checklistIdentity }, f.supervisor.id);
+    assert.equal(next.run.status, 'OPEN');
   });
 });

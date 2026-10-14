@@ -83,6 +83,12 @@ export function parseScopeParam(
   return uuid(first(value), 'executionScopeId');
 }
 
+export function parseClientParam(
+  value: string | string[] | undefined,
+): string {
+  return uuid(first(value), 'clientId');
+}
+
 export function parseEvidenceRecordIdParam(
   value: string | string[] | undefined,
 ): string {
@@ -213,12 +219,27 @@ export function parseQcItemSetBody(body: unknown): {
   };
 }
 
-/** Provision the immutable set of required items for this execution scope. */
+/** Scope pins a server-owned, published version; never caller keys. */
 export function parseQcChecklistBody(body: unknown): {
-  checklistIdentity: string;
+  templateVersionId: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return { templateVersionId: uuid(source.templateVersionId,
+    'templateVersionId') };
+}
+
+export function parseQcChecklistVersionBody(body: unknown): {
+  code: string;
+  versionNumber: number;
   requiredItemKeys: string[];
 } {
   const source = (body ?? {}) as Record<string, unknown>;
+  if (!Number.isInteger(source.versionNumber)
+      || (source.versionNumber as number) < 1
+      || (source.versionNumber as number) > 1000000) {
+    fail('Request validation failed.', [{ field: 'versionNumber',
+      message: 'versionNumber must be a positive integer.' }]);
+  }
   if (!Array.isArray(source.requiredItemKeys)
       || source.requiredItemKeys.length < 1
       || source.requiredItemKeys.length > 64) {
@@ -227,8 +248,8 @@ export function parseQcChecklistBody(body: unknown): {
     ]);
   }
   return {
-    checklistIdentity: shortText(source.checklistIdentity,
-      'checklistIdentity', 200),
+    code: shortText(source.code, 'code', 128),
+    versionNumber: source.versionNumber as number,
     requiredItemKeys: source.requiredItemKeys.map((item: unknown) =>
       shortText(item, 'requiredItemKeys', 128)),
   };

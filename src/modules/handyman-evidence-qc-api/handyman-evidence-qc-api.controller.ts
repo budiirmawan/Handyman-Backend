@@ -6,6 +6,8 @@ import {
   bindHandymanQcEvidence,
   configureHandymanQcChecklist,
   getHandymanQcChecklist,
+  publishHandymanQcChecklistVersion,
+  listHandymanQcChecklistVersions,
   createHandymanEvidenceRecord,
   finalizeHandymanEvidenceRecord,
   finishHandymanQcRun,
@@ -45,6 +47,8 @@ import {
   parseDefectIdParam,
   parseDefectOpenBody,
   parseDefectTransitionBody,
+  parseClientParam,
+  parseQcChecklistVersionBody,
   parseEvidenceCreateBody,
   parseEvidenceFileAddBody,
   parseEvidenceRecordIdParam,
@@ -318,6 +322,30 @@ export async function getEvidenceRecordHandler(
 
 /* ---- QC handlers ------------------------------------------------- */
 
+/** Client-owned versioned checklist configuration (not a second QC run). */
+export async function postQcChecklistVersionHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const clientId = parseClientParam(p(req.params.clientId));
+    const body = parseQcChecklistVersionBody(req.body);
+    const result = await publishHandymanQcChecklistVersion({
+      clientId, ...body }, actor(req));
+    sendSuccess(res, result);
+  } catch (error) { next(error); }
+}
+
+export async function getQcChecklistVersionsHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const clientId = parseClientParam(p(req.params.clientId));
+    const versions = await listHandymanQcChecklistVersions(clientId,
+      actor(req));
+    sendSuccess(res, { versions });
+  } catch (error) { next(error); }
+}
+
 /** One-time, explicitly permissioned required-item configuration. */
 export async function postQcChecklistHandler(
   req: Request, res: Response, next: NextFunction,
@@ -332,7 +360,11 @@ export async function postQcChecklistHandler(
       executionScopeId: result.spec.executionScopeId,
       checklistIdentity: result.spec.checklistIdentity,
       requiredItemKeys: result.spec.requiredItemKeys,
+      templateVersionId: result.spec.templateVersionId,
+      templateCode: result.spec.templateCode,
+      templateVersionNumber: result.spec.templateVersionNumber,
       configuredAt: result.spec.configuredAt,
+      boundAt: result.spec.boundAt,
     }, replayed: result.replayed });
   } catch (error) { next(error); }
 }
@@ -347,7 +379,11 @@ export async function getQcChecklistHandler(
       executionScopeId: spec.executionScopeId,
       checklistIdentity: spec.checklistIdentity,
       requiredItemKeys: spec.requiredItemKeys,
+      templateVersionId: spec.templateVersionId,
+      templateCode: spec.templateCode,
+      templateVersionNumber: spec.templateVersionNumber,
       configuredAt: spec.configuredAt,
+      boundAt: spec.boundAt,
     } : null });
   } catch (error) { next(error); }
 }

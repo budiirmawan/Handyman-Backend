@@ -11,7 +11,8 @@ import {
   lockHandymanQcScope,
 } from './handyman-qc-authority';
 import { isValidUuid } from '../clients';
-import { assertBuildingScopedResourceAccess } from '../context-access';
+import { assertBuildingScopedResourceAccess, canAccessClient,
+  buildingAccessDeniedError } from '../context-access';
 import { isManagedStorageKey } from '../evidence/storage';
 import {
   handymanExecutionScopeNotFoundError,
@@ -47,7 +48,7 @@ import {
 } from './handyman-evidence-qc.errors';
 import { handymanEvidenceQcRepository }
   from './handyman-evidence-qc.repository';
-import type { HandymanQcChecklistSpec }
+import type { HandymanQcChecklistSpec, HandymanQcChecklistVersion }
   from './handyman-evidence-qc.repository';
 import {
   HANDYMAN_EVIDENCE_MEDIA_KINDS,
@@ -674,33 +675,116 @@ async function qcDefectReadAuthorityPreamble(
 
 /* ---- Required-item contract for the existing QC run ----------- */
 
-export type ConfigureHandymanQcChecklistInput = {
-  executionScopeId: string;
-  checklistIdentity: string;
+export type PublishHandymanQcChecklistVersionInput = {
+  clientId: string;
+  code: string;
+  versionNumber: number;
   requiredItemKeys: string[];
 };
 
-/**
- * Provision once per execution scope by a separately authorized coordinator.
- * Immutable: a Supervisor/PIC cannot quietly remove required items after
- * work starts. This is a manifest of required keys, NOT another QC engine.
- */
+function validateRequiredQcKeys(value: string[]): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) {
+    throw handymanEvidenceValidationError('requiredItemKeys');
+  }
+  const keys = value.map(ensureItemKey);
+  if (new Set(keys).size !== keys.length) {
+    throw handymanEvidenceValidationError('requiredItemKeys');
+  }
+  return keys;
+}
+
+async function assertQcConfigManager(actorId: string,
+  clientId: string): Promise<void> {
+  if (!(await canAccessClient(actorId, clientId))) {
+    throw buildingAccessDeniedError();
+  }
+  const permissions = await permissionService.resolvePermissionsForUser(
+    actorId);
+  if (!permissions.includes('handyman.qc.configure')) {
+    throw handymanQcNotAuthorizedError();
+  }
+}
+
+/** Publish immutable, monotonically numbered Client-owned requirements.
+ * This is configuration for the EXISTING QC run, not a parallel QC engine. */
+export async function publishHandymanQcChecklistVersion(
+  input: PublishHandymanQcChecklistVersionInput,
+  actorUserId: string,
+): Promise<{ version: HandymanQcChecklistVersion; replayed: boolean }> {
+  const clientId = ensureUuid(input.clientId, 'clientId');
+  const actorId = ensureUuid(actorUserId, 'actorUserId');
+  const code = typeof input.code === 'string'
+    ? input.code.trim().toUpperCase() : '';
+  if (!/^[A-Z0-9][A-Z0-9._-]{0,127}$/.test(code)) {
+    throw handymanEvidenceValidationError('code');
+  }
+  if (!Number.isInteger(input.versionNumber)
+      || input.versionNumber < 1 || input.versionNumber > 1000000) {
+    throw handymanEvidenceValidationError('versionNumber');
+  }
+  const keys = validateRequiredQcKeys(input.requiredItemKeys);
+  await assertQcConfigManager(actorId, clientId);
+  return withTransaction(async (tx) => {
+    // Serialize two administrators publishing the next version for a Client.
+    const client = await tx.query('SELECT id FROM clients WHERE id=$1 FOR UPDATE',
+      [clientId]);
+    if (!client.rows[0]) throw buildingAccessDeniedError();
+    const existing = await handymanEvidenceQcRepository
+      .findQcChecklistVersionByCode(tx, clientId, code,
+        input.versionNumber);
+    if (existing) {
+      if (existing.requiredItemKeys.length !== keys.length
+          || existing.requiredItemKeys.some((item, index) =>
+            item !== keys[index])) throw handymanQcChecklistConflictError();
+      return { version: existing, replayed: true };
+    }
+    const latest = (await handymanEvidenceQcRepository
+      .listQcChecklistVersions(tx, clientId))
+      .find((v) => v.code === code);
+    if (input.versionNumber !== (latest?.versionNumber ?? 0) + 1) {
+      throw handymanQcChecklistConflictError();
+    }
+    const version = await handymanEvidenceQcRepository
+      .publishQcChecklistVersion(tx, { clientId, code,
+        versionNumber: input.versionNumber, requiredItemKeys: keys,
+        publishedByUserId: actorId });
+    await recordOperationalEvent({
+      clientId, actorUserId: actorId, entityType: 'HANDYMAN_QC_CHECKLIST',
+      entityId: version.id, eventType: 'HANDYMAN_QC_CHECKLIST_VERSION_PUBLISHED',
+      summary: 'Published immutable Handyman QC checklist requirements.',
+      metadata: { code, versionNumber: version.versionNumber,
+        requiredItemKeys: keys },
+    }, tx);
+    return { version, replayed: false };
+  });
+}
+
+export async function listHandymanQcChecklistVersions(
+  clientIdRaw: string, actorUserId: string,
+): Promise<HandymanQcChecklistVersion[]> {
+  const clientId = ensureUuid(clientIdRaw, 'clientId');
+  const actorId = ensureUuid(actorUserId, 'actorUserId');
+  await assertQcConfigManager(actorId, clientId);
+  return handymanEvidenceQcRepository.listQcChecklistVersions(undefined,
+    clientId);
+}
+
+export type ConfigureHandymanQcChecklistInput = {
+  executionScopeId: string;
+  templateVersionId: string;
+};
+
+/** A scope pins one immutable published version before a NEW run opens.
+ * Pre-version manifests are never silently backfilled or reinterpreted; an
+ * administrator can explicitly bind a matching version between QC runs. */
 export async function configureHandymanQcChecklist(
   input: ConfigureHandymanQcChecklistInput,
   actorUserId: string,
 ): Promise<{ spec: HandymanQcChecklistSpec; replayed: boolean }> {
   const scopeId = ensureUuid(input.executionScopeId, 'executionScopeId');
   const actorId = ensureUuid(actorUserId, 'actorUserId');
-  const identity = ensureChecklistIdentity(input.checklistIdentity);
-  if (!Array.isArray(input.requiredItemKeys)
-      || input.requiredItemKeys.length < 1
-      || input.requiredItemKeys.length > 64) {
-    throw handymanEvidenceValidationError('requiredItemKeys');
-  }
-  const keys = input.requiredItemKeys.map(ensureItemKey);
-  if (new Set(keys).size !== keys.length) {
-    throw handymanEvidenceValidationError('requiredItemKeys');
-  }
+  const templateVersionId = ensureUuid(input.templateVersionId,
+    'templateVersionId');
   return withTransaction(async (tx) => {
     const scope = await lockHandymanQcScope(tx, scopeId);
     await assertBuildingScopedResourceAccess(actorId, {
@@ -714,26 +798,59 @@ export async function configureHandymanQcChecklist(
     if (scope.status !== 'AUTHORIZED') {
       throw handymanQcChecklistConflictError();
     }
+    const version = await handymanEvidenceQcRepository
+      .findQcChecklistVersionById(tx, templateVersionId);
+    if (!version || version.clientId !== scope.clientId) {
+      throw handymanQcChecklistConflictError();
+    }
     const existing = await handymanEvidenceQcRepository.findQcChecklistSpec(
       tx, scopeId);
-    if (existing) {
-      if (existing.checklistIdentity !== identity
-          || existing.requiredItemKeys.length !== keys.length
-          || existing.requiredItemKeys.some((key, index) => key !== keys[index])) {
-        throw handymanQcChecklistConflictError();
-      }
+    if (existing?.templateVersionId === templateVersionId) {
       return { spec: existing, replayed: true };
     }
-    const spec = await handymanEvidenceQcRepository.createQcChecklistSpec(
-      tx, { executionScopeId: scopeId, clientId: scope.clientId,
-        checklistIdentity: identity, requiredItemKeys: keys,
-        configuredByUserId: actorId });
+    if (existing?.templateVersionId
+        || await handymanEvidenceQcRepository.findOpenQcRunByScope(tx,
+          scopeId)) throw handymanQcChecklistConflictError();
+    const latest = (await handymanEvidenceQcRepository
+      .listQcChecklistVersions(tx, scope.clientId))
+      .find((v) => v.code === version.code);
+    if (!latest || latest.id !== version.id) {
+      throw handymanQcChecklistConflictError();
+    }
+    const identity = `${version.code}@v${version.versionNumber}`;
+    if (existing) {
+      if (![identity, version.code.toLowerCase(), version.code]
+        .includes(existing.checklistIdentity)
+        || existing.requiredItemKeys.length
+          !== version.requiredItemKeys.length
+        || existing.requiredItemKeys.some((item, index) =>
+          item !== version.requiredItemKeys[index])) {
+        throw handymanQcChecklistConflictError();
+      }
+    } else {
+      await handymanEvidenceQcRepository.createQcChecklistSpec(tx, {
+        executionScopeId: scopeId, clientId: scope.clientId,
+        checklistIdentity: identity,
+        requiredItemKeys: version.requiredItemKeys,
+        configuredByUserId: actorId,
+      });
+    }
+    await handymanEvidenceQcRepository.bindQcChecklistVersion(tx, {
+      executionScopeId: scopeId, checklistVersionId: version.id,
+      boundByUserId: actorId,
+    });
+    const spec = await handymanEvidenceQcRepository.findQcChecklistSpec(
+      tx, scopeId);
+    if (!spec) throw handymanQcChecklistConflictError();
     await recordOperationalEvent({
       clientId: scope.clientId, buildingId: scope.buildingId,
       actorUserId: actorId, entityType: 'HANDYMAN_QC_CHECKLIST',
       entityId: scopeId, eventType: 'HANDYMAN_QC_CHECKLIST_CONFIGURED',
-      summary: 'Immutable QC required-item manifest configured.',
-      metadata: { checklistIdentity: identity, requiredItemKeys: keys },
+      summary: 'Pinned an immutable versioned QC checklist to the scope.',
+      metadata: { templateVersionId, templateCode: version.code,
+        templateVersionNumber: version.versionNumber,
+        checklistIdentity: spec.checklistIdentity,
+        requiredItemKeys: spec.requiredItemKeys },
     }, tx);
     return { spec, replayed: false };
   });
@@ -812,7 +929,9 @@ export async function openHandymanQcRun(
       tx, scopeUuid);
     if (scope.status !== 'AUTHORIZED' || !spec
         || spec.clientId !== scope.clientId
-        || spec.checklistIdentity !== checklistIdentity) {
+        || spec.checklistIdentity !== checklistIdentity
+        || !spec.templateVersionId || !spec.boundAt
+        || spec.requiredItemKeys.length === 0) {
       throw handymanQcChecklistNotConfiguredError();
     }
     const run = await handymanEvidenceQcRepository
@@ -834,7 +953,10 @@ export async function openHandymanQcRun(
         eventType: 'OPEN',
         idempotencyKey: key,
         actorUserId: actorUuid,
-        metadata: { checklistIdentity, requiredItemKeys: spec.requiredItemKeys },
+        metadata: { checklistIdentity, templateVersionId: spec.templateVersionId,
+          templateCode: spec.templateCode,
+          templateVersionNumber: spec.templateVersionNumber,
+          requiredItemKeys: spec.requiredItemKeys },
       });
     await recordOperationalEvent({
       clientId: scope.clientId, buildingId: scope.buildingId,
@@ -1135,12 +1257,15 @@ export async function finishHandymanQcRun(
       throw handymanQcPassBlockedError('execution scope not authorized');
     }
 
+    const spec = await handymanEvidenceQcRepository.findQcChecklistSpec(
+      tx, run.executionScopeId);
     if (input.outcome === 'PASSED') {
-      const spec = await handymanEvidenceQcRepository.findQcChecklistSpec(
-        tx, run.executionScopeId);
       if (!spec || spec.clientId !== run.clientId
           || spec.checklistIdentity !== run.checklistIdentity
-          || new Date(run.createdAt) < new Date(spec.configuredAt)) {
+          || !spec.templateVersionId || !spec.boundAt
+          || spec.requiredItemKeys.length === 0
+          || new Date(run.createdAt) < new Date(spec.configuredAt)
+          || new Date(run.createdAt) < new Date(spec.boundAt)) {
         throw handymanQcPassBlockedError('required checklist not bound to this run');
       }
       const items = await handymanEvidenceQcRepository.listQcRunItems(
@@ -1220,7 +1345,8 @@ export async function finishHandymanQcRun(
       runId: runUuid, clientId: run.clientId, eventType: 'FINISH',
       idempotencyKey: key, actorUserId: actorUuid,
       metadata: { outcome: input.outcome, reason,
-        expectedVersion: input.expectedVersion },
+        expectedVersion: input.expectedVersion,
+        templateVersionId: spec?.templateVersionId ?? null },
     });
     await recordOperationalEvent({
       clientId: run.clientId, buildingId: scope.buildingId,

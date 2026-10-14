@@ -741,25 +741,38 @@ async function assertVerifiedAuthoritativeQcRunForVariation(
   }
 
   if (expectedQcOutcome === 'PASSED') {
+    const manifest = await tx.query<{
+      required_item_keys: string[]; checklist_version_id: string;
+    }>(
+      `SELECT s.required_item_keys, b.checklist_version_id
+         FROM handyman_qc_checklist_specs s
+         JOIN handyman_qc_scope_checklist_bindings b
+           ON b.execution_scope_id = s.execution_scope_id
+         JOIN handyman_qc_checklist_versions v
+           ON v.id = b.checklist_version_id
+          AND v.client_id = s.client_id
+          AND v.required_item_keys = s.required_item_keys
+        WHERE s.execution_scope_id = $1 AND s.client_id = $2
+          AND s.checklist_identity = $3 AND b.bound_at <= $4`,
+      [ctx.executionScopeId, ctx.clientId, qcRun.checklist_identity,
+        qcRun.created_at],
+    );
     const finishEventRes = await tx.query<{ id: string }>(
       `SELECT id FROM handyman_qc_run_events
         WHERE run_id = $1 AND client_id = $2 AND event_type = 'FINISH'
           AND metadata->>'outcome' = 'PASSED'
           AND metadata ? 'expectedVersion'
+          AND metadata->>'templateVersionId' = $3
         LIMIT 1`,
-      [qcRun.id, ctx.clientId],
-    );
-    const manifest = await tx.query<{ required_item_keys: string[] }>(
-      `SELECT required_item_keys FROM handyman_qc_checklist_specs
-        WHERE execution_scope_id = $1 AND client_id = $2
-          AND checklist_identity = $3`,
-      [ctx.executionScopeId, ctx.clientId, qcRun.checklist_identity],
+      [qcRun.id, ctx.clientId,
+        manifest.rows[0]?.checklist_version_id ?? ''],
     );
     const bindings = await tx.query<{ id: string }>(
       `SELECT id FROM handyman_qc_run_evidence WHERE run_id = $1 LIMIT 1`,
       [qcRun.id],
     );
     if (!finishEventRes.rows[0] || !manifest.rows[0]
+        || manifest.rows[0].required_item_keys.length === 0
         || !bindings.rows[0]) {
       throw new AppError({
         statusCode: 409,
