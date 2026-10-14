@@ -3965,12 +3965,18 @@ paths:
         Read-only Handyman Request queue; rows are keyed by the authoritative
         `handymanRequestId` and include the existing request lifecycle,
         execution-scope, assignment, readiness, and SLA visibility facts.
-        Requires the existing `tenant_company.read` authority. Reuses the
-        established Client/C6 read wall and exact assigned-Building isolation;
-        an explicit `buildingId` must be accessible under the supplied
-        `clientId`. This endpoint intentionally does not return a Work Order
-        id: `handyman_service_requests` / `handyman_execution_scopes` have no
-        authoritative relation to `work_orders`.
+        Requires the existing `tenant_company.read` authority. CR-HM-OPS-INBOX
+        BE-01 P0-A: discovery uses the genuine Operations scope — every row
+        must sit in a Building where the actor holds an explicit ACTIVE
+        Building assignment under the row's Client; Operations users are NOT
+        required to be Tenant PICs. An explicit `buildingId` must be accessible
+        under the supplied `clientId` (same-Client sibling Buildings are
+        denied), and a Client unreachable through any assignment is denied.
+        The queue returns exactly one row per request even when a request owns
+        several execution scopes. This endpoint intentionally does not return
+        a Work Order id: `handyman_service_requests` /
+        `handyman_execution_scopes` have no authoritative relation to
+        `work_orders`.
       tags: [Handyman Requests]
       security: [{ bearerAuth: [] }]
       parameters:

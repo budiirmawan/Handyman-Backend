@@ -8,10 +8,16 @@ import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
+import {
+  addHandymanQuotationLine,
+  createHandymanQuotationRevision,
+  decideHandymanQuotation,
+  issueHandymanQuotationVersion,
+} from '../src/modules/handyman-quotations';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { parseHandymanOperationsQueueQuery } from '../src/modules/handyman-operations-queue';
 import { locationChain, realmFixture, scopeFixture, initHandymanFixtures } from './helpers/handyman-fixtures';
-import { createAdminUser } from './helpers/access';
+import { createAdminUser, createSessionWithPermissions } from './helpers/access';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
@@ -35,13 +41,19 @@ let pg: EmbeddedPostgres | null = null;
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let admin: { token: string; userId: string } | null = null;
+let operationsOnly: { token: string; userId: string } | null = null;
+let noPermissionToken = '';
+let unassignedToken = '';
 let fixture: {
   clientId: string;
   buildingId: string;
   siblingBuildingId: string;
+  foreignClientId: string;
   scopeIds: string[];
-  c6DeniedScopeId: string;
-  foreignScopeId: string;
+  inBuildingRequestIds: string[];
+  siblingRequestIds: string[];
+  foreignRequestIds: string[];
+  latestScopeId: string;
 } | null = null;
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
@@ -118,33 +130,69 @@ before(async () => {
   });
   const foreignScope = await scopeFixture(siblingRealm, siblingChain);
 
-  // Make the queue actor an ACTIVE represented PIC for the two in-scope
-  // requests, preserving the existing Customer Care read wall.
-  initHandymanFixtures({ adminUserId: actorId, disciplineId: discipline.id, query });
-  await q(
-    `UPDATE tenant_pics pic
-        SET user_id = $1
-      WHERE pic.id IN (
-        SELECT r.tenant_pic_id
-          FROM handyman_service_requests r
-         WHERE r.building_id = $2
-      )`,
-    [actorId, realm.building.id],
+  // A genuinely foreign Client (own property/building chain) reachable only
+  // through its own assigned actor — never through the queue actors below.
+  initHandymanFixtures({ adminUserId: foreignAdmin.userId, disciplineId: discipline.id, query });
+  const otherRealm = await realmFixture('Foreign client');
+  const otherChain = await locationChain(otherRealm);
+  const otherScope = await scopeFixture(otherRealm, otherChain);
+
+  // CR-HM-OPS-INBOX-BE-01 P0-A — a genuine Operations actor: exactly the
+  // route's tenant_company.read permission and an ACTIVE Building assignment.
+  // Deliberately NOT a Tenant PIC, NOT a PLATFORM_ADMIN, and holding no other
+  // permission.
+  operationsOnly = {
+    token: await createSessionWithPermissions([
+      { code: 'tenant_company.read', name: 'Read Tenant Companies' },
+    ]),
+    userId: randomUUID(),
+  };
+  // Resolve the created user id from its session-independent identity: the
+  // helper returns only a token, so re-derive the user by unique email prefix
+  // is unnecessary — instead assign via a fresh scoped session user lookup.
+  const opsUserId = await q(
+    `SELECT id FROM users ORDER BY created_at DESC LIMIT 1`,
+  );
+  operationsOnly.userId = opsUserId.rows[0].id as string;
+  await buildingAssignmentService.createAssignment(operationsOnly.userId, {
+    buildingId: realm.building.id,
+  });
+
+  // Same Building assignment but WITHOUT the route permission → 403 RBAC.
+  noPermissionToken = await createSessionWithPermissions([]);
+  const noPermissionUserId = await q(
+    `SELECT id FROM users ORDER BY created_at DESC LIMIT 1`,
+  );
+  await buildingAssignmentService.createAssignment(
+    noPermissionUserId.rows[0].id as string,
+    { buildingId: realm.building.id },
   );
 
-  // Same Client + Building, but a different active PIC: the queue actor must
-  // not receive this row through the existing C6 customer read wall.
-  const deniedC6Chain = await locationChain(realm);
-  const deniedC6Scope = await scopeFixture(realm, deniedC6Chain);
+  // Permission but NO Building assignment anywhere → unreachable Client.
+  unassignedToken = await createSessionWithPermissions([
+    { code: 'tenant_company.read', name: 'Read Tenant Companies' },
+  ]);
 
   fixture = {
     clientId: realm.client.id,
     buildingId: realm.building.id,
     siblingBuildingId: sibling.id,
+    foreignClientId: otherRealm.client.id,
     scopeIds: [scopeA1.scope.id, scopeA2.scope.id],
-    c6DeniedScopeId: deniedC6Scope.scope.id,
-    foreignScopeId: foreignScope.scope.id,
+    inBuildingRequestIds: await inBuildingRequestIds(realm.building.id),
+    siblingRequestIds: await inBuildingRequestIds(sibling.id),
+    foreignRequestIds: await inBuildingRequestIds(otherRealm.building.id),
+    latestScopeId: scopeA1.scope.id,
   };
+
+  async function inBuildingRequestIds(buildingId: string): Promise<string[]> {
+    const res = await q(
+      `SELECT id FROM handyman_service_requests WHERE building_id = $1
+        ORDER BY created_at ASC, id ASC`,
+      [buildingId],
+    );
+    return res.rows.map((row) => row.id as string);
+  }
 });
 
 after(async () => {
@@ -160,7 +208,7 @@ after(async () => {
 });
 
 function requireDatabase(t: TestContext): boolean {
-  if (!database || !pool || !admin || !fixture) {
+  if (!database || !pool || !admin || !operationsOnly || !fixture) {
     t.skip('test database unavailable');
     return false;
   }
@@ -192,7 +240,39 @@ describe('Handyman Production Operations read-only queue', () => {
     );
   });
 
-  it('pages only exact-building-authorized rows and maps lifecycle, scope, readiness, assignment, and SLA facts', async (t) => {
+  it('CR-HM-OPS-INBOX-BE-01 P0-A: discovers rows for an Operations actor without Tenant PIC membership', async (t) => {
+    if (!requireDatabase(t)) return;
+    const all = await api()
+      .get(QUEUE_PATH)
+      .set(auth(operationsOnly!.token))
+      .query({ clientId: fixture!.clientId, limit: 50 });
+    assert.equal(all.status, 200, JSON.stringify(all.body));
+    const ids = all.body.data.items.map(
+      (item: { handymanRequestId: string }) => item.handymanRequestId,
+    );
+    assert.deepEqual(
+      [...ids].sort(),
+      [...fixture!.inBuildingRequestIds].sort(),
+      'every request in the assigned Building is discoverable without PIC membership',
+    );
+    assert.ok(
+      all.body.data.items.every(
+        (item: { buildingId: string }) => item.buildingId === fixture!.buildingId,
+      ),
+    );
+    // Cross-Building and cross-Client requests never leak.
+    for (const siblingRequestId of fixture!.siblingRequestIds) {
+      assert.ok(
+        !ids.includes(siblingRequestId),
+        'sibling-Building request must not leak into the assigned-Building queue',
+      );
+    }
+    for (const foreignRequestId of fixture!.foreignRequestIds) {
+      assert.ok(!ids.includes(foreignRequestId));
+    }
+  });
+
+  it('pages only assigned-Building rows and maps lifecycle, scope, readiness, assignment, and SLA facts', async (t) => {
     if (!requireDatabase(t)) return;
     const first = await api()
       .get(QUEUE_PATH)
@@ -208,7 +288,6 @@ describe('Handyman Production Operations read-only queue', () => {
       .query({ clientId: fixture!.clientId, limit: 1, offset: 1 });
     assert.equal(second.status, 200, JSON.stringify(second.body));
     assert.equal(second.body.data.items.length, 1);
-    assert.equal(second.body.data.pagination.nextOffset, null);
     assert.notEqual(
       first.body.data.items[0].handymanRequestId,
       second.body.data.items[0].handymanRequestId,
@@ -219,15 +298,9 @@ describe('Handyman Production Operations read-only queue', () => {
       .set(auth(admin!.token))
       .query({ clientId: fixture!.clientId, limit: 50 });
     assert.equal(all.status, 200, JSON.stringify(all.body));
-    assert.equal(all.body.data.items.length, 2);
+    assert.equal(all.body.data.items.length, fixture!.inBuildingRequestIds.length);
     assert.ok(all.body.data.items.every(
       (item: { buildingId: string }) => item.buildingId === fixture!.buildingId,
-    ));
-    assert.ok(!all.body.data.items.some(
-      (item: { executionScopeId: string }) => item.executionScopeId === fixture!.foreignScopeId,
-    ));
-    assert.ok(!all.body.data.items.some(
-      (item: { executionScopeId: string }) => item.executionScopeId === fixture!.c6DeniedScopeId,
     ));
 
     const mapped = all.body.data.items.find(
@@ -254,6 +327,72 @@ describe('Handyman Production Operations read-only queue', () => {
     assert.equal(Object.hasOwn(mapped, 'workOrderId'), false);
   });
 
+  it('P1: returns exactly one row per request even when a request owns several execution scopes', async (t) => {
+    if (!requireDatabase(t)) return;
+    // Create a second approved quotation revision for the first request → a
+    // second execution scope on the SAME request. The legacy Customer Care
+    // projection JOIN fanned this out into duplicated queue rows.
+    const firstRequest = fixture!.inBuildingRequestIds[0];
+    const scopeRow = await q(
+      `SELECT s.quotation_id AS "quotationId", s.client_id AS "clientId"
+         FROM handyman_execution_scopes s
+        WHERE s.id = $1`,
+      [fixture!.scopeIds[0]],
+    );
+    const quotationId = scopeRow.rows[0].quotationId as string;
+    const uom = await q(
+      `SELECT id FROM units_of_measure LIMIT 1`,
+    );
+    const revision = await createHandymanQuotationRevision(
+      quotationId,
+      admin!.userId,
+    );
+    await addHandymanQuotationLine(revision.id, {
+      lineType: 'LABOR', description: 'Revision hours', quantity: 2, uomId: uom.rows[0].id as string,
+      currency: 'IDR', finalQuotedUnitAmount: 150,
+    }, admin!.userId);
+    await issueHandymanQuotationVersion(revision.id, {
+      validUntil: new Date(Date.now() + 3_600_000).toISOString(),
+    }, admin!.userId);
+    const decision = await decideHandymanQuotation(revision.id, {
+      decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
+    }, admin!.userId);
+    const revisedScopeId = decision.executionScope?.id ?? null;
+    assert.ok(revisedScopeId, 'approved revision must create its execution scope');
+    assert.notEqual(revisedScopeId, fixture!.scopeIds[0]);
+
+    fixture!.latestScopeId = revisedScopeId;
+
+    const all = await api()
+      .get(QUEUE_PATH)
+      .set(auth(admin!.token))
+      .query({ clientId: fixture!.clientId, limit: 50 });
+    assert.equal(all.status, 200, JSON.stringify(all.body));
+    const ids = all.body.data.items.map(
+      (item: { handymanRequestId: string }) => item.handymanRequestId,
+    );
+    assert.equal(
+      new Set(ids).size,
+      ids.length,
+      'no duplicated queue rows caused by the execution-scope one-to-many join',
+    );
+    assert.deepEqual(
+      [...ids].sort(),
+      [...fixture!.inBuildingRequestIds].sort(),
+    );
+    const fanouted = all.body.data.items.find(
+      (item: { handymanRequestId: string }) => item.handymanRequestId === firstRequest,
+    );
+    assert.ok(fanouted);
+    assert.equal(
+      fanouted.executionScopeId,
+      revisedScopeId,
+      'the scope pointer matches the per-item status read (latest scope)',
+    );
+    // The Operations actor still sees both scopes' commercial facts through
+    // the commercial inbox; the request-keyed queue stays one-row-per-request.
+  });
+
   it('denies a same-Client sibling Building filter with 403 and no data', async (t) => {
     if (!requireDatabase(t)) return;
     const response = await api()
@@ -268,4 +407,36 @@ describe('Handyman Production Operations read-only queue', () => {
     assert.equal(response.body.data, undefined);
   });
 
+  it('denies a Client the actor cannot reach through any assignment with 403 and no data', async (t) => {
+    if (!requireDatabase(t)) return;
+    const response = await api()
+      .get(QUEUE_PATH)
+      .set(auth(operationsOnly!.token))
+      .query({ clientId: fixture!.foreignClientId });
+    assert.equal(response.status, 403, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(response.body.data, undefined);
+  });
+
+  it('denies a Building-assigned actor without the tenant_company.read permission (403 PERMISSION_DENIED)', async (t) => {
+    if (!requireDatabase(t)) return;
+    const response = await api()
+      .get(QUEUE_PATH)
+      .set(auth(noPermissionToken))
+      .query({ clientId: fixture!.clientId });
+    assert.equal(response.status, 403, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, 'PERMISSION_DENIED');
+    assert.equal(response.body.data, undefined);
+  });
+
+  it('denies a permissioned actor with no Building assignment anywhere (403, no data leak)', async (t) => {
+    if (!requireDatabase(t)) return;
+    const response = await api()
+      .get(QUEUE_PATH)
+      .set(auth(unassignedToken))
+      .query({ clientId: fixture!.clientId });
+    assert.equal(response.status, 403, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, 'BUILDING_ACCESS_DENIED');
+    assert.equal(response.body.data, undefined);
+  });
 });

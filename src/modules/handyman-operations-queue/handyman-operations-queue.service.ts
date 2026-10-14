@@ -1,12 +1,15 @@
-import { buildingAccessDeniedError } from '../context-access';
 import {
-  handymanServiceRequestService,
-  type PublicHandymanCustomerCareServiceRequest,
-} from '../handyman-requests';
+  assertBuildingScopedResourceAccess,
+  buildingAccessDeniedError,
+  contextAccessService,
+} from '../context-access';
+import { AppError } from '../../shared/errors';
+import { isValidUuid } from '../clients';
 import {
   readHandymanRequestStatusVisibility,
   type HandymanStatusVisibilityReadView,
 } from '../handyman-sla-status-api';
+import { handymanOperationsQueueRepository } from './handyman-operations-queue.repository';
 import type { HandymanOperationsQueueQuery } from './handyman-operations-queue.validation';
 
 export type HandymanOperationsQueueItem = {
@@ -38,6 +41,16 @@ export type HandymanOperationsQueuePage = {
   };
 };
 
+/** Minimal authoritative lineage the queue item is keyed by. The queue
+ * discovery repository supplies exactly these server-owned columns. */
+export type HandymanOperationsQueueRequestRef = {
+  id: string;
+  clientId: string;
+  buildingId: string;
+  tenantCompanyId: string;
+  createdAt: string;
+};
+
 /**
  * Map only authoritative Handyman identities and the existing status read
  * service's assignment/readiness/SLA facts. There is deliberately no
@@ -45,7 +58,7 @@ export type HandymanOperationsQueuePage = {
  * no authoritative relation.
  */
 export function toHandymanOperationsQueueItem(
-  request: PublicHandymanCustomerCareServiceRequest,
+  request: HandymanOperationsQueueRequestRef,
   visibility: HandymanStatusVisibilityReadView,
 ): HandymanOperationsQueueItem {
   if (
@@ -77,34 +90,76 @@ export function toHandymanOperationsQueueItem(
   };
 }
 
-/** Read-only, bounded Handyman queue. Both source list and per-item detail
- * reuse existing tenant_company.read authority and exact scope guards. */
+/**
+ * CR-HM-OPS-INBOX-BE-01 P0-A — Operations queue discovery.
+ *
+ * Discovery authority is the genuine Operations scope: the route's existing
+ * `tenant_company.read` permission plus the actor's explicit ACTIVE Building
+ * assignment under the queried Client (BE-02G exact-Building wall, applied
+ * per row inside the repository statement). Operations users are NOT required
+ * to be Tenant PICs and never inherit customer occupancy authority — the
+ * Customer Care C6 wall remains the authority of the customer-facing Handyman
+ * reads and is deliberately untouched.
+ *
+ * A supplied Building filter is additionally checked against the actor's
+ * exact Client + Building assignment before querying, so a same-Client
+ * sibling Building is denied (403) exactly like an unknown one; a Client the
+ * actor cannot reach through any assigned Building is denied identically.
+ * Authorization always precedes exposure — cross-tenant queries return no
+ * data. Fan-out is prevented by the repository's one-row-per-request query.
+ */
 export async function listHandymanOperationsQueue(
   actorUserId: string,
   query: HandymanOperationsQueueQuery,
 ): Promise<HandymanOperationsQueuePage> {
-  const page = await handymanServiceRequestService.listHandymanServiceRequestsPage(
-    query.filters,
-    { limit: query.limit, offset: query.offset },
+  const { filters, limit, offset } = query;
+  if (!isValidUuid(filters.clientId)) {
+    throw AppError.validation('Request query validation failed.', [
+      { field: 'clientId', message: 'clientId must be a valid UUID.' },
+    ]);
+  }
+  if (filters.buildingId !== undefined) {
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: filters.clientId,
+      buildingId: filters.buildingId,
+    });
+  }
+  if (!(await contextAccessService.canAccessClient(actorUserId, filters.clientId))) {
+    throw buildingAccessDeniedError();
+  }
+
+  const page = await handymanOperationsQueueRepository.listOperationsQueueRequests(
+    undefined,
+    filters,
     actorUserId,
+    { limit, offset },
   );
 
   const items = await Promise.all(
-    page.items.map(async (request) => {
+    page.rows.map(async (request) => {
       const visibility = await readHandymanRequestStatusVisibility(
         actorUserId,
-        request.id,
+        request.handymanRequestId,
       );
-      return toHandymanOperationsQueueItem(request, visibility);
+      return toHandymanOperationsQueueItem(
+        {
+          id: request.handymanRequestId,
+          clientId: request.clientId,
+          buildingId: request.buildingId,
+          tenantCompanyId: request.tenantCompanyId,
+          createdAt: request.createdAt.toISOString(),
+        },
+        visibility,
+      );
     }),
   );
 
   return {
     items,
     pagination: {
-      limit: query.limit,
-      offset: query.offset,
-      nextOffset: page.hasMore ? query.offset + query.limit : null,
+      limit,
+      offset,
+      nextOffset: page.hasMore ? offset + limit : null,
     },
   };
 }
