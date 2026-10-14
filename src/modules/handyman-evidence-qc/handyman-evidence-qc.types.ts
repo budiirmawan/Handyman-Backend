@@ -149,6 +149,8 @@ export type HandymanQcRunRecord = {
   sessionId: string | null;
   checklistIdentity: string;
   status: HandymanQcRunStatus;
+  version: number;
+  failureReason: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -184,6 +186,7 @@ export type HandymanQcRunEventRecord = {
   eventType: HandymanQcRunEventType;
   idempotencyKey: string;
   actorUserId: string;
+  metadata: Record<string, unknown>;
   occurredAt: string;
   createdAt: string;
 };
@@ -194,6 +197,17 @@ export type NewHandymanQcRunEvent = {
   eventType: HandymanQcRunEventType;
   idempotencyKey: string;
   actorUserId: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type HandymanQcRunEvidenceRecord = {
+  id: string;
+  runId: string;
+  evidenceUploadId: string;
+  evidenceReference: string;
+  actorUserId: string;
+  idempotencyKey: string;
+  createdAt: string;
 };
 
 /** Persisted defect record row (aggregate C head). */
@@ -205,6 +219,9 @@ export type HandymanDefectRecordRecord = {
   itemId: string | null;
   description: string;
   status: HandymanDefectStatus;
+  version: number;
+  rectificationSessionId: string | null;
+  rectificationEvidenceUploadId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -224,6 +241,7 @@ export type HandymanDefectEventRecord = {
   eventType: HandymanDefectEventType;
   idempotencyKey: string;
   actorUserId: string;
+  metadata: Record<string, unknown>;
   occurredAt: string;
   createdAt: string;
 };
@@ -234,4 +252,5 @@ export type NewHandymanDefectEvent = {
   eventType: HandymanDefectEventType;
   idempotencyKey: string;
   actorUserId: string;
+  metadata?: Record<string, unknown>;
 };

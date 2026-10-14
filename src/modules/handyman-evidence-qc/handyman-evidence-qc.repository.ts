@@ -16,6 +16,7 @@ import type {
   HandymanQcRunEventType,
   HandymanQcRunItemRecord,
   HandymanQcRunRecord,
+  HandymanQcRunEvidenceRecord,
   HandymanQcRunStatus,
   NewHandymanDefectEvent,
   NewHandymanDefectRecord,
@@ -64,7 +65,8 @@ const EVIDENCE_EVENT_SELECT = `
 
 const QC_RUN_SELECT = `
   SELECT id, client_id, execution_scope_id, session_id,
-         checklist_identity, status, created_at, updated_at
+         checklist_identity, status, version, failure_reason,
+         created_at, updated_at
     FROM handyman_qc_runs`;
 
 const QC_ITEM_SELECT = `
@@ -73,17 +75,18 @@ const QC_ITEM_SELECT = `
 
 const QC_EVENT_SELECT = `
   SELECT id, run_id, client_id, event_type, idempotency_key,
-         actor_user_id, occurred_at, created_at
+         actor_user_id, metadata, occurred_at, created_at
     FROM handyman_qc_run_events`;
 
 const DEFECT_SELECT = `
   SELECT id, client_id, execution_scope_id, run_id, item_id,
-         description, status, created_at, updated_at
+         description, status, version, rectification_session_id,
+         rectification_evidence_upload_id, created_at, updated_at
     FROM handyman_defect_records`;
 
 const DEFECT_EVENT_SELECT = `
   SELECT id, defect_id, client_id, event_type, idempotency_key,
-         actor_user_id, occurred_at, created_at
+         actor_user_id, metadata, occurred_at, created_at
     FROM handyman_defect_events`;
 
 const PG_UNIQUE_VIOLATION = '23505';
@@ -141,6 +144,8 @@ function mapQcRun(row: Row): HandymanQcRunRecord {
     sessionId: row.session_id,
     checklistIdentity: row.checklist_identity,
     status: row.status as HandymanQcRunStatus,
+    version: Number(row.version),
+    failureReason: row.failure_reason ?? null,
     createdAt: toTimestamp(row.created_at) as string,
     updatedAt: toTimestamp(row.updated_at) as string,
   };
@@ -166,6 +171,7 @@ function mapQcRunEvent(row: Row): HandymanQcRunEventRecord {
     eventType: row.event_type as HandymanQcRunEventType,
     idempotencyKey: row.idempotency_key,
     actorUserId: row.actor_user_id,
+    metadata: row.metadata ?? {},
     occurredAt: toTimestamp(row.occurred_at) as string,
     createdAt: toTimestamp(row.created_at) as string,
   };
@@ -180,6 +186,9 @@ function mapDefect(row: Row): HandymanDefectRecordRecord {
     itemId: row.item_id,
     description: row.description,
     status: row.status as HandymanDefectStatus,
+    version: Number(row.version),
+    rectificationSessionId: row.rectification_session_id ?? null,
+    rectificationEvidenceUploadId: row.rectification_evidence_upload_id ?? null,
     createdAt: toTimestamp(row.created_at) as string,
     updatedAt: toTimestamp(row.updated_at) as string,
   };
@@ -193,6 +202,7 @@ function mapDefectEvent(row: Row): HandymanDefectEventRecord {
     eventType: row.event_type as HandymanDefectEventType,
     idempotencyKey: row.idempotency_key,
     actorUserId: row.actor_user_id,
+    metadata: row.metadata ?? {},
     occurredAt: toTimestamp(row.occurred_at) as string,
     createdAt: toTimestamp(row.created_at) as string,
   };
@@ -472,6 +482,58 @@ async function findEvidenceFinalizeEventByRecord(
   return result.rows[0] ? mapEvidenceEvent(result.rows[0]) : null;
 }
 
+/* ---- Immutable requirements for the existing QC run ------------ */
+
+export type HandymanQcChecklistSpec = {
+  executionScopeId: string;
+  clientId: string;
+  checklistIdentity: string;
+  requiredItemKeys: string[];
+  configuredByUserId: string;
+  configuredAt: string;
+};
+
+function mapQcSpec(row: Row): HandymanQcChecklistSpec {
+  return {
+    executionScopeId: row.execution_scope_id,
+    clientId: row.client_id,
+    checklistIdentity: row.checklist_identity,
+    requiredItemKeys: row.required_item_keys,
+    configuredByUserId: row.configured_by_user_id,
+    configuredAt: toTimestamp(row.configured_at) as string,
+  };
+}
+
+async function findQcChecklistSpec(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+): Promise<HandymanQcChecklistSpec | null> {
+  const result = await executor.query(
+    `SELECT execution_scope_id, client_id, checklist_identity,
+            required_item_keys, configured_by_user_id, configured_at
+       FROM handyman_qc_checklist_specs WHERE execution_scope_id = $1`,
+    [executionScopeId],
+  );
+  return result.rows[0] ? mapQcSpec(result.rows[0]) : null;
+}
+
+async function createQcChecklistSpec(
+  executor: Executor,
+  input: Omit<HandymanQcChecklistSpec, 'configuredAt'>,
+): Promise<HandymanQcChecklistSpec> {
+  const result = await executor.query(
+    `INSERT INTO handyman_qc_checklist_specs (
+       execution_scope_id, client_id, checklist_identity,
+       required_item_keys, configured_by_user_id
+     ) VALUES ($1, $2, $3, $4, $5)
+     RETURNING execution_scope_id, client_id, checklist_identity,
+               required_item_keys, configured_by_user_id, configured_at`,
+    [input.executionScopeId, input.clientId, input.checklistIdentity,
+      input.requiredItemKeys, input.configuredByUserId],
+  );
+  return mapQcSpec(result.rows[0]);
+}
+
 /* ---- QC runs (aggregate B head) -------------------------------- */
 
 async function createQcRun(
@@ -484,7 +546,7 @@ async function createQcRun(
        checklist_identity, status
      ) VALUES ($1, $2, $3, $4, $5, 'OPEN')
      RETURNING id, client_id, execution_scope_id, session_id,
-               checklist_identity, status, created_at, updated_at`,
+               checklist_identity, status, version, failure_reason, created_at, updated_at`,
     [
       randomUUID(),
       record.clientId,
@@ -531,6 +593,18 @@ async function findOpenQcRunByScope(
   return result.rows[0] ? mapQcRun(result.rows[0]) : null;
 }
 
+async function findLatestQcRunByScope(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+): Promise<HandymanQcRunRecord | null> {
+  const result = await executor.query(
+    `${QC_RUN_SELECT} WHERE execution_scope_id = $1
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [executionScopeId],
+  );
+  return result.rows[0] ? mapQcRun(result.rows[0]) : null;
+}
+
 async function listQcRunsByScope(
   executor: Executor = getPool(),
   executionScopeId: string,
@@ -544,19 +618,41 @@ async function listQcRunsByScope(
   return result.rows.map(mapQcRun);
 }
 
-/** Head mutation primitive: status ONLY (OPEN -> PASSED|FAILED). */
-async function updateQcRunStatus(
-  executor: Executor = getPool(),
+/** CAS version bump for item/evidence changes, while the run is OPEN. */
+async function bumpQcRunVersion(
+  executor: Executor,
   runId: string,
-  status: HandymanQcRunStatus,
+  expectedVersion: number,
 ): Promise<HandymanQcRunRecord | null> {
   const result = await executor.query(
     `UPDATE handyman_qc_runs
-        SET status = $2, updated_at = NOW()
-      WHERE id = $1
+        SET version = version + 1, updated_at = NOW()
+      WHERE id = $1 AND status = 'OPEN' AND version = $2
       RETURNING id, client_id, execution_scope_id, session_id,
-                checklist_identity, status, created_at, updated_at`,
-    [runId, status],
+                checklist_identity, status, version, failure_reason,
+                created_at, updated_at`,
+    [runId, expectedVersion],
+  );
+  return result.rows[0] ? mapQcRun(result.rows[0]) : null;
+}
+
+/** OPEN -> terminal, checked against the version validated under the lock. */
+async function updateQcRunStatus(
+  executor: Executor,
+  runId: string,
+  status: Exclude<HandymanQcRunStatus, 'OPEN'>,
+  expectedVersion: number,
+  failureReason: string | null,
+): Promise<HandymanQcRunRecord | null> {
+  const result = await executor.query(
+    `UPDATE handyman_qc_runs
+        SET status = $2, failure_reason = $4,
+            version = version + 1, updated_at = NOW()
+      WHERE id = $1 AND status = 'OPEN' AND version = $3
+      RETURNING id, client_id, execution_scope_id, session_id,
+                checklist_identity, status, version, failure_reason,
+                created_at, updated_at`,
+    [runId, status, expectedVersion, failureReason],
   );
   return result.rows[0] ? mapQcRun(result.rows[0]) : null;
 }
@@ -620,6 +716,68 @@ async function findQcRunItemById(
   return result.rows[0] ? mapQcRunItem(result.rows[0]) : null;
 }
 
+/* ---- Verified field-evidence bindings (append-only) ------------ */
+
+function mapQcEvidence(row: Row): HandymanQcRunEvidenceRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    evidenceUploadId: row.evidence_upload_id,
+    evidenceReference: row.attachment_reference,
+    actorUserId: row.actor_user_id,
+    idempotencyKey: row.idempotency_key,
+    createdAt: toTimestamp(row.created_at) as string,
+  };
+}
+
+const QC_EVIDENCE_SELECT = `
+  SELECT b.id, b.run_id, b.evidence_upload_id, b.actor_user_id,
+         b.idempotency_key, b.created_at, e.attachment_reference
+    FROM handyman_qc_run_evidence b
+    JOIN handyman_field_evidence_uploads e ON e.id = b.evidence_upload_id`;
+
+async function listQcRunEvidence(
+  executor: Executor = getPool(),
+  runId: string,
+): Promise<HandymanQcRunEvidenceRecord[]> {
+  const result = await executor.query(
+    `${QC_EVIDENCE_SELECT} WHERE b.run_id = $1 ORDER BY b.created_at, b.id`,
+    [runId],
+  );
+  return result.rows.map(mapQcEvidence);
+}
+
+async function findQcEvidenceByKey(
+  executor: Executor,
+  runId: string,
+  idempotencyKey: string,
+): Promise<HandymanQcRunEvidenceRecord | null> {
+  const result = await executor.query(
+    `${QC_EVIDENCE_SELECT} WHERE b.run_id = $1 AND b.idempotency_key = $2`,
+    [runId, idempotencyKey],
+  );
+  return result.rows[0] ? mapQcEvidence(result.rows[0]) : null;
+}
+
+async function insertQcRunEvidence(
+  executor: Executor,
+  input: { runId: string; evidenceUploadId: string;
+    actorUserId: string; idempotencyKey: string },
+): Promise<HandymanQcRunEvidenceRecord> {
+  const id = randomUUID();
+  await executor.query(
+    `INSERT INTO handyman_qc_run_evidence
+       (id, run_id, evidence_upload_id, actor_user_id, idempotency_key)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [id, input.runId, input.evidenceUploadId,
+      input.actorUserId, input.idempotencyKey],
+  );
+  const result = await executor.query(
+    `${QC_EVIDENCE_SELECT} WHERE b.id = $1`, [id],
+  );
+  return mapQcEvidence(result.rows[0]);
+}
+
 /* ---- QC run events (append-only) ------------------------------- */
 
 async function appendQcRunEvent(
@@ -629,10 +787,10 @@ async function appendQcRunEvent(
   const result = await executor.query(
     `INSERT INTO handyman_qc_run_events (
        id, run_id, client_id, event_type, idempotency_key,
-       actor_user_id, occurred_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       actor_user_id, metadata, occurred_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
      RETURNING id, run_id, client_id, event_type,
-               idempotency_key, actor_user_id, occurred_at,
+               idempotency_key, actor_user_id, metadata, occurred_at,
                created_at`,
     [
       randomUUID(),
@@ -641,6 +799,7 @@ async function appendQcRunEvent(
       record.eventType,
       record.idempotencyKey,
       record.actorUserId,
+      JSON.stringify(record.metadata ?? {}),
     ],
   );
   return mapQcRunEvent(result.rows[0]);
@@ -693,6 +852,8 @@ async function findQcOpenReplayByScope(
             r.session_id    AS r_session_id,
             r.checklist_identity AS r_checklist_identity,
             r.status        AS r_status,
+            r.version       AS r_version,
+            r.failure_reason AS r_failure_reason,
             r.created_at    AS r_created_at,
             r.updated_at    AS r_updated_at,
             e.id            AS e_id,
@@ -701,6 +862,7 @@ async function findQcOpenReplayByScope(
             e.event_type    AS e_event_type,
             e.idempotency_key AS e_idempotency_key,
             e.actor_user_id AS e_actor_user_id,
+            e.metadata      AS e_metadata,
             e.occurred_at   AS e_occurred_at,
             e.created_at    AS e_created_at
        FROM handyman_qc_run_events e
@@ -722,6 +884,8 @@ async function findQcOpenReplayByScope(
       sessionId: row.r_session_id,
       checklistIdentity: row.r_checklist_identity,
       status: row.r_status as HandymanQcRunStatus,
+      version: Number(row.r_version),
+      failureReason: row.r_failure_reason ?? null,
       createdAt: toTimestamp(row.r_created_at) as string,
       updatedAt: toTimestamp(row.r_updated_at) as string,
     },
@@ -732,6 +896,7 @@ async function findQcOpenReplayByScope(
       eventType: row.e_event_type as HandymanQcRunEventType,
       idempotencyKey: row.e_idempotency_key,
       actorUserId: row.e_actor_user_id,
+      metadata: row.e_metadata ?? {},
       occurredAt: toTimestamp(row.e_occurred_at) as string,
       createdAt: toTimestamp(row.e_created_at) as string,
     },
@@ -750,7 +915,8 @@ async function createDefectRecord(
        description, status
      ) VALUES ($1, $2, $3, $4, $5, $6, 'OPENED')
      RETURNING id, client_id, execution_scope_id, run_id, item_id,
-               description, status, created_at, updated_at`,
+               description, status, version, rectification_session_id,
+               rectification_evidence_upload_id, created_at, updated_at`,
     [
       randomUUID(),
       record.clientId,
@@ -809,7 +975,8 @@ async function updateDefectStatus(
         SET status = $2, updated_at = NOW()
       WHERE id = $1
       RETURNING id, client_id, execution_scope_id, run_id, item_id,
-                description, status, created_at, updated_at`,
+                description, status, version, rectification_session_id,
+               rectification_evidence_upload_id, created_at, updated_at`,
     [defectId, status],
   );
   return result.rows[0] ? mapDefect(result.rows[0]) : null;
@@ -824,10 +991,10 @@ async function appendDefectEvent(
   const result = await executor.query(
     `INSERT INTO handyman_defect_events (
        id, defect_id, client_id, event_type, idempotency_key,
-       actor_user_id, occurred_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       actor_user_id, metadata, occurred_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
      RETURNING id, defect_id, client_id, event_type,
-               idempotency_key, actor_user_id, occurred_at,
+               idempotency_key, actor_user_id, metadata, occurred_at,
                created_at`,
     [
       randomUUID(),
@@ -836,6 +1003,7 @@ async function appendDefectEvent(
       record.eventType,
       record.idempotencyKey,
       record.actorUserId,
+      JSON.stringify(record.metadata ?? {}),
     ],
   );
   return mapDefectEvent(result.rows[0]);
@@ -890,6 +1058,9 @@ async function findDefectOpenReplayByScope(
             d.item_id       AS d_item_id,
             d.description   AS d_description,
             d.status        AS d_status,
+            d.version       AS d_version,
+            d.rectification_session_id AS d_rectification_session_id,
+            d.rectification_evidence_upload_id AS d_rectification_evidence_upload_id,
             d.created_at    AS d_created_at,
             d.updated_at    AS d_updated_at,
             e.id            AS e_id,
@@ -898,6 +1069,7 @@ async function findDefectOpenReplayByScope(
             e.event_type    AS e_event_type,
             e.idempotency_key AS e_idempotency_key,
             e.actor_user_id AS e_actor_user_id,
+            e.metadata      AS e_metadata,
             e.occurred_at   AS e_occurred_at,
             e.created_at    AS e_created_at
        FROM handyman_defect_events e
@@ -920,6 +1092,9 @@ async function findDefectOpenReplayByScope(
       itemId: row.d_item_id,
       description: row.d_description,
       status: row.d_status as HandymanDefectStatus,
+      version: Number(row.d_version),
+      rectificationSessionId: row.d_rectification_session_id ?? null,
+      rectificationEvidenceUploadId: row.d_rectification_evidence_upload_id ?? null,
       createdAt: toTimestamp(row.d_created_at) as string,
       updatedAt: toTimestamp(row.d_updated_at) as string,
     },
@@ -930,6 +1105,7 @@ async function findDefectOpenReplayByScope(
       eventType: row.e_event_type as HandymanDefectEventType,
       idempotencyKey: row.e_idempotency_key,
       actorUserId: row.e_actor_user_id,
+      metadata: row.e_metadata ?? {},
       occurredAt: toTimestamp(row.e_occurred_at) as string,
       createdAt: toTimestamp(row.e_created_at) as string,
     },
@@ -952,15 +1128,22 @@ export const handymanEvidenceQcRepository = {
   listEvidenceEventsByRecord,
   findEvidenceCreateReplayByScope,
   findEvidenceFinalizeEventByRecord,
+  findQcChecklistSpec,
+  createQcChecklistSpec,
   createQcRun,
   findQcRunById,
   findQcRunByIdForUpdate,
   findOpenQcRunByScope,
+  findLatestQcRunByScope,
   listQcRunsByScope,
+  bumpQcRunVersion,
   updateQcRunStatus,
   setQcRunItemOutcome,
   listQcRunItems,
   findQcRunItemById,
+  listQcRunEvidence,
+  findQcEvidenceByKey,
+  insertQcRunEvidence,
   appendQcRunEvent,
   findQcRunEventByIdempotency,
   listQcRunEvents,

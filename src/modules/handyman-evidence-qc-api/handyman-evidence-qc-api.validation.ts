@@ -166,6 +166,18 @@ export function parseKeyedBody(body: unknown): {
   return { idempotencyKey: key(source.idempotencyKey) };
 }
 
+function expectedVersion(value: unknown, required: true): number;
+function expectedVersion(value: unknown, required: false): number | undefined;
+function expectedVersion(value: unknown, required: boolean): number | undefined {
+  if (!required && value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    fail('Request validation failed.', [
+      { field: 'expectedVersion', message: 'expectedVersion must be a positive integer.' },
+    ]);
+  }
+  return value;
+}
+
 /* ---- QC bodies --------------------------------------------------- */
 
 /** OPEN run: checklist identity text; session link optional. */
@@ -188,6 +200,7 @@ export function parseQcItemSetBody(body: unknown): {
   itemKey: string;
   outcome: string;
   note: string | null;
+  expectedVersion?: number;
   idempotencyKey: string;
 } {
   const source = (body ?? {}) as Record<string, unknown>;
@@ -195,6 +208,62 @@ export function parseQcItemSetBody(body: unknown): {
     itemKey: shortText(source.itemKey, 'itemKey', 128),
     outcome: shortText(source.outcome, 'outcome', 64),
     note: nullableText(source.note, 'note', 2000),
+    expectedVersion: expectedVersion(source.expectedVersion, false),
+    idempotencyKey: key(source.idempotencyKey),
+  };
+}
+
+/** Provision the immutable set of required items for this execution scope. */
+export function parseQcChecklistBody(body: unknown): {
+  checklistIdentity: string;
+  requiredItemKeys: string[];
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  if (!Array.isArray(source.requiredItemKeys)
+      || source.requiredItemKeys.length < 1
+      || source.requiredItemKeys.length > 64) {
+    fail('Request validation failed.', [
+      { field: 'requiredItemKeys', message: 'Supply 1–64 required item keys.' },
+    ]);
+  }
+  return {
+    checklistIdentity: shortText(source.checklistIdentity,
+      'checklistIdentity', 200),
+    requiredItemKeys: source.requiredItemKeys.map((item: unknown) =>
+      shortText(item, 'requiredItemKeys', 128)),
+  };
+}
+
+export function parseQcEvidenceBody(body: unknown): {
+  evidenceReference: string;
+  expectedVersion: number;
+  idempotencyKey: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  return {
+    evidenceReference: shortText(source.evidenceReference,
+      'evidenceReference', 100),
+    expectedVersion: expectedVersion(source.expectedVersion, true),
+    idempotencyKey: key(source.idempotencyKey),
+  };
+}
+
+export function parseQcFinishBody(body: unknown): {
+  outcome: 'PASSED' | 'FAILED';
+  reason: string | null;
+  expectedVersion: number;
+  idempotencyKey: string;
+} {
+  const source = (body ?? {}) as Record<string, unknown>;
+  if (source.outcome !== 'PASSED' && source.outcome !== 'FAILED') {
+    fail('Request validation failed.', [
+      { field: 'outcome', message: 'outcome must be PASSED or FAILED.' },
+    ]);
+  }
+  return {
+    outcome: source.outcome,
+    reason: nullableText(source.reason, 'reason', 2000),
+    expectedVersion: expectedVersion(source.expectedVersion, true),
     idempotencyKey: key(source.idempotencyKey),
   };
 }

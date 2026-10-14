@@ -2,6 +2,9 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import type { AppError } from '../../shared/errors';
 import { permissionService } from '../permissions';
+import { recordOperationalEvent } from '../operational-events';
+import { assertVerifiedManagedEvidenceReference }
+  from '../handyman-field-evidence/handyman-field-evidence.service';
 import {
   assertHandymanQcSupervisor,
   isHandymanQcSupervisor,
@@ -24,6 +27,12 @@ import {
   handymanEvidenceStorageKeyConflictError,
   handymanEvidenceValidationError,
   handymanQcIdempotencyConflictError,
+  handymanQcChecklistNotConfiguredError,
+  handymanQcChecklistConflictError,
+  handymanQcVersionConflictError,
+  handymanQcStaleRunError,
+  handymanQcPassBlockedError,
+  handymanQcEvidenceInvalidError,
   handymanQcNotAuthorizedError,
   handymanQcRunAlreadyOpenError,
   handymanQcRunIllegalTransitionError,
@@ -34,6 +43,8 @@ import {
   handymanDefectNotFoundError,
 } from './handyman-evidence-qc.errors';
 import { handymanEvidenceQcRepository }
+  from './handyman-evidence-qc.repository';
+import type { HandymanQcChecklistSpec }
   from './handyman-evidence-qc.repository';
 import {
   HANDYMAN_EVIDENCE_MEDIA_KINDS,
@@ -52,6 +63,7 @@ import type {
   HandymanEvidenceStage,
   HandymanQcItemOutcome,
   HandymanQcRunEventRecord,
+  HandymanQcRunEvidenceRecord,
   HandymanQcRunItemRecord,
   HandymanQcRunRecord,
   HandymanQcRunStatus,
@@ -657,6 +669,84 @@ async function qcDefectReadAuthorityPreamble(
   if (!supervisor) throw notAuthorized();
 }
 
+/* ---- Required-item contract for the existing QC run ----------- */
+
+export type ConfigureHandymanQcChecklistInput = {
+  executionScopeId: string;
+  checklistIdentity: string;
+  requiredItemKeys: string[];
+};
+
+/**
+ * Provision once per execution scope by a separately authorized coordinator.
+ * Immutable: a Supervisor/PIC cannot quietly remove required items after
+ * work starts. This is a manifest of required keys, NOT another QC engine.
+ */
+export async function configureHandymanQcChecklist(
+  input: ConfigureHandymanQcChecklistInput,
+  actorUserId: string,
+): Promise<{ spec: HandymanQcChecklistSpec; replayed: boolean }> {
+  const scopeId = ensureUuid(input.executionScopeId, 'executionScopeId');
+  const actorId = ensureUuid(actorUserId, 'actorUserId');
+  const identity = ensureChecklistIdentity(input.checklistIdentity);
+  if (!Array.isArray(input.requiredItemKeys)
+      || input.requiredItemKeys.length < 1
+      || input.requiredItemKeys.length > 64) {
+    throw handymanEvidenceValidationError('requiredItemKeys');
+  }
+  const keys = input.requiredItemKeys.map(ensureItemKey);
+  if (new Set(keys).size !== keys.length) {
+    throw handymanEvidenceValidationError('requiredItemKeys');
+  }
+  return withTransaction(async (tx) => {
+    const scope = await lockHandymanQcScope(tx, scopeId);
+    await assertBuildingScopedResourceAccess(actorId, {
+      clientId: scope.clientId, buildingId: scope.buildingId,
+    });
+    const permissions = await permissionService.resolvePermissionsForUser(
+      actorId);
+    if (!permissions.includes('handyman.qc.configure')) {
+      throw handymanQcNotAuthorizedError();
+    }
+    if (scope.status !== 'AUTHORIZED') {
+      throw handymanQcChecklistConflictError();
+    }
+    const existing = await handymanEvidenceQcRepository.findQcChecklistSpec(
+      tx, scopeId);
+    if (existing) {
+      if (existing.checklistIdentity !== identity
+          || existing.requiredItemKeys.length !== keys.length
+          || existing.requiredItemKeys.some((key, index) => key !== keys[index])) {
+        throw handymanQcChecklistConflictError();
+      }
+      return { spec: existing, replayed: true };
+    }
+    const spec = await handymanEvidenceQcRepository.createQcChecklistSpec(
+      tx, { executionScopeId: scopeId, clientId: scope.clientId,
+        checklistIdentity: identity, requiredItemKeys: keys,
+        configuredByUserId: actorId });
+    await recordOperationalEvent({
+      clientId: scope.clientId, buildingId: scope.buildingId,
+      actorUserId: actorId, entityType: 'HANDYMAN_QC_CHECKLIST',
+      entityId: scopeId, eventType: 'HANDYMAN_QC_CHECKLIST_CONFIGURED',
+      summary: 'Immutable QC required-item manifest configured.',
+      metadata: { checklistIdentity: identity, requiredItemKeys: keys },
+    }, tx);
+    return { spec, replayed: false };
+  });
+}
+
+export async function getHandymanQcChecklist(
+  executionScopeId: string,
+  actorUserId: string,
+): Promise<HandymanQcChecklistSpec | null> {
+  const scopeId = ensureUuid(executionScopeId, 'executionScopeId');
+  const actorId = ensureUuid(actorUserId, 'actorUserId');
+  await qcDefectReadAuthorityPreamble(scopeId, actorId,
+    handymanQcNotAuthorizedError);
+  return handymanEvidenceQcRepository.findQcChecklistSpec(undefined, scopeId);
+}
+
 /* ---- QC OPEN ---------------------------------------------------- */
 
 export type OpenHandymanQcRunInput = {
@@ -710,11 +800,18 @@ export async function openHandymanQcRun(
       return { run: replay.run, event: replay.event,
         replayed: true };
     }
-    // ONE OPEN per scope: any existing OPEN run (different key) is
-    // a bounded 409; replay handled above.
+    // ONE OPEN per scope; required keys come from the immutable,
+    // coordinator-configured scope manifest, never from the QC caller.
     const openRun = await handymanEvidenceQcRepository
       .findOpenQcRunByScope(tx, scopeUuid);
     if (openRun) throw handymanQcRunAlreadyOpenError();
+    const spec = await handymanEvidenceQcRepository.findQcChecklistSpec(
+      tx, scopeUuid);
+    if (scope.status !== 'AUTHORIZED' || !spec
+        || spec.clientId !== scope.clientId
+        || spec.checklistIdentity !== checklistIdentity) {
+      throw handymanQcChecklistNotConfiguredError();
+    }
     const run = await handymanEvidenceQcRepository
       .createQcRun(tx, {
         clientId: scope.clientId,
@@ -722,6 +819,11 @@ export async function openHandymanQcRun(
         sessionId: boundSessionId,
         checklistIdentity,
       });
+    for (const itemKey of spec.requiredItemKeys) {
+      await handymanEvidenceQcRepository.setQcRunItemOutcome(tx, {
+        runId: run.id, itemKey, outcome: 'NOT_CHECKED', note: null,
+      });
+    }
     const event = await handymanEvidenceQcRepository
       .appendQcRunEvent(tx, {
         runId: run.id,
@@ -729,7 +831,15 @@ export async function openHandymanQcRun(
         eventType: 'OPEN',
         idempotencyKey: key,
         actorUserId: actorUuid,
+        metadata: { checklistIdentity, requiredItemKeys: spec.requiredItemKeys },
       });
+    await recordOperationalEvent({
+      clientId: scope.clientId, buildingId: scope.buildingId,
+      actorUserId: actorUuid, entityType: 'HANDYMAN_QC_RUN',
+      entityId: run.id, eventType: 'HANDYMAN_QC_RUN_OPENED',
+      summary: 'Supervisor opened a Handyman QC run.',
+      metadata: { executionScopeId: scopeUuid, checklistIdentity },
+    }, tx);
     return { run, event, replayed: false };
   });
 }
@@ -741,12 +851,14 @@ export type SetHandymanQcRunItemOutcomeInput = {
   itemKey: string;
   outcome: HandymanQcItemOutcome;
   note?: string | null;
+  expectedVersion?: number;
   idempotencyKey: string;
 };
 
 export type HandymanQcItemSetResult = {
   item: HandymanQcRunItemRecord;
   event: HandymanQcRunEventRecord;
+  runVersion: number;
   replayed: boolean;
 };
 
@@ -770,6 +882,11 @@ export async function setHandymanQcRunItemOutcome(
   if (note !== null && typeof note !== 'string') {
     throw handymanEvidenceValidationError('note');
   }
+  if (input.expectedVersion !== undefined
+      && (!Number.isInteger(input.expectedVersion)
+        || input.expectedVersion < 1)) {
+    throw handymanEvidenceValidationError('expectedVersion');
+  }
 
   const target = await handymanEvidenceQcRepository.findQcRunById(
     undefined, runUuid,
@@ -789,17 +906,34 @@ export async function setHandymanQcRunItemOutcome(
         .listQcRunItems(tx, runUuid);
       const item = items.find((candidate) =>
         candidate.itemKey === itemKey) ?? null;
-      if (!item) throw handymanQcIdempotencyConflictError();
-      return { item, event: replayEvent, replayed: true };
+      if (!item || (replayEvent.metadata.itemKey
+          && (replayEvent.metadata.itemKey !== itemKey
+            || replayEvent.metadata.outcome !== outcome
+            || (replayEvent.metadata.note ?? null) !== note))) {
+        throw handymanQcIdempotencyConflictError();
+      }
+      return { item, event: replayEvent, runVersion: run.version,
+        replayed: true };
     }
 
     if (run.status !== 'OPEN') {
       throw handymanQcRunIllegalTransitionError();
     }
-
+    if (input.expectedVersion !== undefined
+        && run.version !== input.expectedVersion) {
+      throw handymanQcVersionConflictError();
+    }
+    const spec = await handymanEvidenceQcRepository.findQcChecklistSpec(
+      tx, run.executionScopeId);
+    if (spec && !spec.requiredItemKeys.includes(itemKey)) {
+      throw handymanEvidenceValidationError('itemKey');
+    }
     const item = await handymanEvidenceQcRepository
       .setQcRunItemOutcome(tx, { runId: runUuid, itemKey, outcome,
         note });
+    const updated = await handymanEvidenceQcRepository.bumpQcRunVersion(
+      tx, runUuid, run.version);
+    if (!updated) throw handymanQcVersionConflictError();
     const event = await handymanEvidenceQcRepository
       .appendQcRunEvent(tx, {
         runId: runUuid,
@@ -807,8 +941,116 @@ export async function setHandymanQcRunItemOutcome(
         eventType: 'ITEM_SET',
         idempotencyKey: key,
         actorUserId: actorUuid,
+        metadata: { itemKey, outcome, note },
       });
-    return { item, event, replayed: false };
+    return { item, event, runVersion: updated.version, replayed: false };
+  });
+}
+
+/* ---- Verified evidence binding to the existing QC run --------- */
+
+export type BindHandymanQcEvidenceInput = {
+  qcRunId: string;
+  evidenceReference: string;
+  expectedVersion: number;
+  idempotencyKey: string;
+};
+
+export async function bindHandymanQcEvidence(
+  input: BindHandymanQcEvidenceInput,
+  actorUserId: string,
+): Promise<{ evidence: HandymanQcRunEvidenceRecord;
+  runVersion: number; replayed: boolean }> {
+  const runId = ensureUuid(input.qcRunId, 'qcRunId');
+  const actorId = ensureUuid(actorUserId, 'actorUserId');
+  const key = ensureKey(input.idempotencyKey);
+  const reference = typeof input.evidenceReference === 'string'
+    ? input.evidenceReference.trim() : '';
+  if (!/^hm-ev:\/\/[0-9a-f-]{36}$/i.test(reference)) {
+    throw handymanEvidenceValidationError('evidenceReference');
+  }
+  if (!Number.isInteger(input.expectedVersion)
+      || input.expectedVersion < 1) {
+    throw handymanEvidenceValidationError('expectedVersion');
+  }
+  const target = await handymanEvidenceQcRepository.findQcRunById(
+    undefined, runId);
+  if (!target) throw handymanQcRunNotFoundError();
+  return withTransaction(async (tx) => {
+    const scope = await qcAuthorityPreamble(tx,
+      target.executionScopeId, actorId);
+    const run = await handymanEvidenceQcRepository.findQcRunByIdForUpdate(
+      tx, runId);
+    if (!run) throw handymanQcRunNotFoundError();
+    const replay = await handymanEvidenceQcRepository.findQcEvidenceByKey(
+      tx, runId, key);
+    if (replay) {
+      if (replay.evidenceReference !== reference) {
+        throw handymanQcIdempotencyConflictError();
+      }
+      return { evidence: replay, runVersion: run.version, replayed: true };
+    }
+    if (run.status !== 'OPEN') throw handymanQcRunIllegalTransitionError();
+    if (run.version !== input.expectedVersion) {
+      throw handymanQcVersionConflictError();
+    }
+    const latest = await handymanEvidenceQcRepository.findLatestQcRunByScope(
+      tx, run.executionScopeId);
+    if (!latest || latest.id !== run.id) throw handymanQcStaleRunError();
+    const fullScope = await handymanExecutionScopeRepository.findScopeById(
+      tx, run.executionScopeId);
+    if (!fullScope) throw handymanExecutionScopeNotFoundError();
+    const upload = await tx.query<{
+      id: string; purpose: string; upload_status: string;
+      verified_at: Date | null;
+    }>(
+      `SELECT id, purpose, upload_status, verified_at
+         FROM handyman_field_evidence_uploads
+        WHERE attachment_reference = $1 AND execution_scope_id = $2
+          AND client_id = $3 AND building_id = $4`,
+      [reference, run.executionScopeId, scope.clientId, scope.buildingId],
+    );
+    const row = upload.rows[0];
+    if (!row || row.purpose !== 'QC_EVIDENCE'
+        || row.upload_status !== 'VERIFIED' || !row.verified_at) {
+      throw handymanQcEvidenceInvalidError();
+    }
+    const runs = await handymanEvidenceQcRepository.listQcRunsByScope(
+      tx, run.executionScopeId);
+    const previous = runs.filter((candidate) => candidate.id !== run.id)
+      .at(-1);
+    // The attachment must be captured for this adjudication, not recycled
+    // from a prior run (or from work done before the run opened).
+    if (row.verified_at.getTime() < new Date(run.createdAt).getTime()
+        || (previous && row.verified_at.getTime()
+          <= new Date(previous.updatedAt).getTime())) {
+      throw handymanQcEvidenceInvalidError();
+    }
+    await assertVerifiedManagedEvidenceReference(tx, {
+      clientId: scope.clientId, buildingId: scope.buildingId,
+      handymanRequestId: fullScope.handymanRequestId,
+      executionScopeId: run.executionScopeId,
+    }, reference);
+    const existing = await handymanEvidenceQcRepository.listQcRunEvidence(
+      tx, runId);
+    if (existing.some((evidence) => evidence.evidenceUploadId === row.id)) {
+      throw handymanQcEvidenceInvalidError();
+    }
+    const evidence = await handymanEvidenceQcRepository.insertQcRunEvidence(
+      tx, { runId, evidenceUploadId: row.id, actorUserId: actorId,
+        idempotencyKey: key });
+    const updated = await handymanEvidenceQcRepository.bumpQcRunVersion(
+      tx, runId, run.version);
+    if (!updated) throw handymanQcVersionConflictError();
+    await recordOperationalEvent({
+      clientId: scope.clientId, buildingId: scope.buildingId,
+      actorUserId: actorId, entityType: 'HANDYMAN_QC_RUN',
+      entityId: runId, eventType: 'HANDYMAN_QC_EVIDENCE_VERIFIED',
+      summary: 'Supervisor bound a byte-verified QC evidence upload.',
+      metadata: { executionScopeId: run.executionScopeId,
+        evidenceUploadId: row.id },
+    }, tx);
+    return { evidence, runVersion: updated.version, replayed: false };
   });
 }
 
@@ -816,6 +1058,10 @@ export async function setHandymanQcRunItemOutcome(
 
 export type FinishHandymanQcRunInput = {
   qcRunId: string;
+  /** Requested decision is an assertion, NOT the authority for a PASS. */
+  outcome: 'PASSED' | 'FAILED';
+  expectedVersion: number;
+  reason?: string | null;
   idempotencyKey: string;
 };
 
@@ -826,12 +1072,11 @@ export type HandymanQcFinishResult = {
 };
 
 /**
- * FINISH (D3): the terminal evaluation is computed SERVER-SIDE —
- * PASSED iff EVERY item outcome is PASS or NA; ANY DEFECT or
- * remaining NOT_CHECKED → FAILED. The caller never picks the
- * result. Terminal runs cannot be reopened: a fresh FINISH key on
- * a terminal run is a bounded 409; replay with the same key
- * returns the SAME event.
+ * The client requests PASS/FAIL, but only the locked, current run and its
+ * server-owned checklist/evidence/defect/session facts can authorize PASS.
+ * FAIL records a reason without destroying failed items, evidence or defects.
+ * The CAS head update, append-only FINISH event and operational audit event
+ * commit in the same transaction. A retry with the same key never redecides.
  */
 export async function finishHandymanQcRun(
   input: FinishHandymanQcRunInput,
@@ -840,13 +1085,28 @@ export async function finishHandymanQcRun(
   const runUuid = ensureUuid(input.qcRunId, 'qcRunId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
+  if (input.outcome !== 'PASSED' && input.outcome !== 'FAILED') {
+    throw handymanEvidenceValidationError('outcome');
+  }
+  if (!Number.isInteger(input.expectedVersion)
+      || input.expectedVersion < 1) {
+    throw handymanEvidenceValidationError('expectedVersion');
+  }
+  const reason = typeof input.reason === 'string'
+    ? input.reason.trim() : null;
+  if (input.outcome === 'FAILED'
+      ? !reason || reason.length > 2000
+      : reason !== null) {
+    throw handymanEvidenceValidationError('reason');
+  }
 
   const target = await handymanEvidenceQcRepository.findQcRunById(
     undefined, runUuid,
   );
   if (!target) throw handymanQcRunNotFoundError();
   return withTransaction(async (tx: PoolClient) => {
-    await qcAuthorityPreamble(tx, target.executionScopeId, actorUuid);
+    const scope = await qcAuthorityPreamble(tx,
+      target.executionScopeId, actorUuid);
     const run = await handymanEvidenceQcRepository
       .findQcRunByIdForUpdate(tx, runUuid);
     if (!run) throw handymanQcRunNotFoundError();
@@ -854,33 +1114,119 @@ export async function finishHandymanQcRun(
     const replayEvent = await handymanEvidenceQcRepository
       .findQcRunEventByIdempotency(tx, runUuid, 'FINISH', key);
     if (replayEvent) {
+      if (replayEvent.metadata.outcome !== input.outcome
+          || replayEvent.metadata.expectedVersion !== input.expectedVersion
+          || (replayEvent.metadata.reason ?? null) !== reason) {
+        throw handymanQcIdempotencyConflictError();
+      }
       return { run, event: replayEvent, replayed: true };
     }
-
-    if (run.status !== 'OPEN') {
-      throw handymanQcRunIllegalTransitionError();
+    const latest = await handymanEvidenceQcRepository.findLatestQcRunByScope(
+      tx, run.executionScopeId);
+    if (!latest || latest.id !== run.id) throw handymanQcStaleRunError();
+    if (run.status !== 'OPEN') throw handymanQcRunIllegalTransitionError();
+    if (run.version !== input.expectedVersion) {
+      throw handymanQcVersionConflictError();
+    }
+    if (scope.status !== 'AUTHORIZED') {
+      throw handymanQcPassBlockedError('execution scope not authorized');
     }
 
-    // Server-evaluated terminal status (D3).
-    const items = await handymanEvidenceQcRepository
-      .listQcRunItems(tx, runUuid);
-    const hasFailure = items.some((item) =>
-      item.outcome === 'DEFECT' || item.outcome === 'NOT_CHECKED');
-    const terminalStatus: HandymanQcRunStatus = hasFailure
-      ? 'FAILED'
-      : 'PASSED';
+    if (input.outcome === 'PASSED') {
+      const spec = await handymanEvidenceQcRepository.findQcChecklistSpec(
+        tx, run.executionScopeId);
+      if (!spec || spec.clientId !== run.clientId
+          || spec.checklistIdentity !== run.checklistIdentity
+          || new Date(run.createdAt) < new Date(spec.configuredAt)) {
+        throw handymanQcPassBlockedError('required checklist not bound to this run');
+      }
+      const items = await handymanEvidenceQcRepository.listQcRunItems(
+        tx, runUuid);
+      if (items.length !== spec.requiredItemKeys.length
+          || spec.requiredItemKeys.some((key) =>
+            items.find((item) => item.itemKey === key)?.outcome !== 'PASS')) {
+        throw handymanQcPassBlockedError('required checklist incomplete or failed');
+      }
+      const defects = await handymanEvidenceQcRepository.listDefectsByScope(
+        tx, run.executionScopeId);
+      if (defects.some((defect) => defect.status !== 'VERIFIED')) {
+        throw handymanQcPassBlockedError('unverified defects on execution scope');
+      }
+      const sessions = await tx.query<{
+        id: string; status: string; completed_at: Date | null;
+      }>(
+        `SELECT id, status, completed_at FROM handyman_work_sessions
+          WHERE execution_scope_id = $1 AND client_id = $2
+          FOR SHARE`,
+        [run.executionScopeId, run.clientId],
+      );
+      if (sessions.rows.length === 0 || sessions.rows.some((session) =>
+        !session.completed_at
+          || !['COMPLETED', 'CHECKED_OUT'].includes(session.status))) {
+        throw handymanQcPassBlockedError('Work Sessions not completed');
+      }
+      const runs = await handymanEvidenceQcRepository.listQcRunsByScope(
+        tx, run.executionScopeId);
+      const previous = runs.filter((candidate) => candidate.id !== run.id)
+        .at(-1);
+      if (previous?.status === 'FAILED' && !sessions.rows.some((session) =>
+        session.completed_at
+          && session.completed_at.getTime()
+            > new Date(previous.updatedAt).getTime())) {
+        throw handymanQcPassBlockedError('corrective Work Session not completed after QC FAIL');
+      }
+      const evidence = await handymanEvidenceQcRepository.listQcRunEvidence(
+        tx, runUuid);
+      if (evidence.length === 0) {
+        throw handymanQcPassBlockedError('no byte-verified QC evidence bound to run');
+      }
+      const fullScope = await handymanExecutionScopeRepository.findScopeById(
+        tx, run.executionScopeId);
+      if (!fullScope) throw handymanExecutionScopeNotFoundError();
+      for (const binding of evidence) {
+        const verification = await tx.query<{
+          purpose: string; verified_at: Date | null;
+        }>(
+          `SELECT purpose, verified_at FROM handyman_field_evidence_uploads
+            WHERE id = $1 AND execution_scope_id = $2 AND client_id = $3
+              AND building_id = $4 AND upload_status = 'VERIFIED'`,
+          [binding.evidenceUploadId, run.executionScopeId, run.clientId,
+            scope.buildingId],
+        );
+        const upload = verification.rows[0];
+        if (!upload || upload.purpose !== 'QC_EVIDENCE'
+            || !upload.verified_at
+            || upload.verified_at.getTime()
+              < new Date(run.createdAt).getTime()
+            || (previous && upload.verified_at.getTime()
+              <= new Date(previous.updatedAt).getTime())) {
+          throw handymanQcPassBlockedError('QC evidence is unverified or stale');
+        }
+        await assertVerifiedManagedEvidenceReference(tx, {
+          clientId: run.clientId, buildingId: scope.buildingId,
+          handymanRequestId: fullScope.handymanRequestId,
+          executionScopeId: run.executionScopeId,
+        }, binding.evidenceReference);
+      }
+    }
 
-    const updated = await handymanEvidenceQcRepository
-      .updateQcRunStatus(tx, runUuid, terminalStatus);
-    if (!updated) throw handymanQcRunNotFoundError();
-    const event = await handymanEvidenceQcRepository
-      .appendQcRunEvent(tx, {
-        runId: runUuid,
-        clientId: run.clientId,
-        eventType: 'FINISH',
-        idempotencyKey: key,
-        actorUserId: actorUuid,
-      });
+    const updated = await handymanEvidenceQcRepository.updateQcRunStatus(
+      tx, runUuid, input.outcome, input.expectedVersion, reason);
+    if (!updated) throw handymanQcVersionConflictError();
+    const event = await handymanEvidenceQcRepository.appendQcRunEvent(tx, {
+      runId: runUuid, clientId: run.clientId, eventType: 'FINISH',
+      idempotencyKey: key, actorUserId: actorUuid,
+      metadata: { outcome: input.outcome, reason,
+        expectedVersion: input.expectedVersion },
+    });
+    await recordOperationalEvent({
+      clientId: run.clientId, buildingId: scope.buildingId,
+      actorUserId: actorUuid, entityType: 'HANDYMAN_QC_RUN',
+      entityId: runUuid, eventType: 'HANDYMAN_QC_RUN_FINISHED',
+      summary: `Supervisor finished QC: ${input.outcome}.`,
+      metadata: { executionScopeId: run.executionScopeId,
+        outcome: input.outcome, reason, version: updated.version },
+    }, tx);
     return { run: updated, event, replayed: false };
   });
 }
@@ -890,6 +1236,7 @@ export async function finishHandymanQcRun(
 export type HandymanQcRunView = {
   run: HandymanQcRunRecord;
   items: HandymanQcRunItemRecord[];
+  evidence: HandymanQcRunEvidenceRecord[];
 };
 
 /**
@@ -910,7 +1257,9 @@ export async function listHandymanQcRunsByScope(
   for (const run of runs) {
     const items = await handymanEvidenceQcRepository
       .listQcRunItems(undefined, run.id);
-    views.push({ run, items });
+    const evidence = await handymanEvidenceQcRepository
+      .listQcRunEvidence(undefined, run.id);
+    views.push({ run, items, evidence });
   }
   return views;
 }
@@ -919,6 +1268,7 @@ export type HandymanQcRunDetailView = {
   run: HandymanQcRunRecord;
   items: HandymanQcRunItemRecord[];
   events: HandymanQcRunEventRecord[];
+  evidence: HandymanQcRunEvidenceRecord[];
 };
 
 /** Single-run detail (run + items + append-only event chain). */
@@ -937,7 +1287,9 @@ export async function getHandymanQcRunDetail(
     .listQcRunItems(undefined, runUuid);
   const events = await handymanEvidenceQcRepository
     .listQcRunEvents(undefined, runUuid);
-  return { run, items, events };
+  const evidence = await handymanEvidenceQcRepository
+    .listQcRunEvidence(undefined, runUuid);
+  return { run, items, events, evidence };
 }
 
 /* ==================================================================
@@ -1374,7 +1726,9 @@ export async function listHandymanQcRunsCustomerCareView(
   for (const run of runs) {
     const items = await handymanEvidenceQcRepository
       .listQcRunItems(undefined, run.id);
-    views.push({ run, items });
+    const evidence = await handymanEvidenceQcRepository
+      .listQcRunEvidence(undefined, run.id);
+    views.push({ run, items, evidence });
   }
   return views;
 }
@@ -1393,7 +1747,9 @@ export async function getHandymanQcRunCustomerCareDetail(
     .listQcRunItems(undefined, runUuid);
   const events = await handymanEvidenceQcRepository
     .listQcRunEvents(undefined, runUuid);
-  return { run, items, events };
+  const evidence = await handymanEvidenceQcRepository
+    .listQcRunEvidence(undefined, runUuid);
+  return { run, items, events, evidence };
 }
 
 export async function listHandymanDefectsCustomerCareView(

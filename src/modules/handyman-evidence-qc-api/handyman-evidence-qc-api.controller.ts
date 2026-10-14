@@ -3,6 +3,9 @@ import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
 import {
   addHandymanEvidenceFile,
+  bindHandymanQcEvidence,
+  configureHandymanQcChecklist,
+  getHandymanQcChecklist,
   createHandymanEvidenceRecord,
   finalizeHandymanEvidenceRecord,
   finishHandymanQcRun,
@@ -45,6 +48,9 @@ import {
   parseEvidenceRecordIdParam,
   parseKeyedBody,
   parseQcItemSetBody,
+  parseQcEvidenceBody,
+  parseQcChecklistBody,
+  parseQcFinishBody,
   parseQcOpenBody,
   parseQcRunIdParam,
   parseScopeParam,
@@ -119,6 +125,8 @@ function toQcRunPayload(run: HandymanQcRunRecord) {
     sessionId: run.sessionId,
     checklistIdentity: run.checklistIdentity,
     status: run.status,
+    version: run.version,
+    failureReason: run.failureReason,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
   };
@@ -142,6 +150,7 @@ function toQcRunEventPayload(event: HandymanQcRunEventRecord) {
     runId: event.runId,
     eventType: event.eventType,
     idempotencyKey: event.idempotencyKey,
+    metadata: event.metadata,
     occurredAt: event.occurredAt,
   };
 }
@@ -302,6 +311,40 @@ export async function getEvidenceRecordHandler(
 
 /* ---- QC handlers ------------------------------------------------- */
 
+/** One-time, explicitly permissioned required-item configuration. */
+export async function postQcChecklistHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseScopeParam(p(req.params.executionScopeId));
+    const body = parseQcChecklistBody(req.body);
+    const result = await configureHandymanQcChecklist({
+      executionScopeId, ...body,
+    }, actor(req));
+    sendSuccess(res, { checklist: {
+      executionScopeId: result.spec.executionScopeId,
+      checklistIdentity: result.spec.checklistIdentity,
+      requiredItemKeys: result.spec.requiredItemKeys,
+      configuredAt: result.spec.configuredAt,
+    }, replayed: result.replayed });
+  } catch (error) { next(error); }
+}
+
+export async function getQcChecklistHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseScopeParam(p(req.params.executionScopeId));
+    const spec = await getHandymanQcChecklist(executionScopeId, actor(req));
+    sendSuccess(res, { checklist: spec ? {
+      executionScopeId: spec.executionScopeId,
+      checklistIdentity: spec.checklistIdentity,
+      requiredItemKeys: spec.requiredItemKeys,
+      configuredAt: spec.configuredAt,
+    } : null });
+  } catch (error) { next(error); }
+}
+
 /** OPEN run (PART 04 command): ONE OPEN per scope. */
 export async function postQcOpenHandler(
   req: Request,
@@ -343,11 +386,13 @@ export async function postQcItemSetHandler(
         itemKey: body.itemKey,
         outcome: body.outcome as never,
         note: body.note,
+        expectedVersion: body.expectedVersion,
         idempotencyKey: body.idempotencyKey,
       }, actor(req));
     sendSuccess(res, {
       item: toQcRunItemPayload(result.item),
       event: toQcRunEventPayload(result.event),
+      runVersion: result.runVersion,
       replayed: result.replayed,
     }, 200);
   } catch (error) {
@@ -355,7 +400,29 @@ export async function postQcItemSetHandler(
   }
 }
 
-/** FINISH (PART 04 command): server-side PASSED/FAILED decision. */
+/** Bind verified QC_EVIDENCE upload to the current run. */
+export async function postQcEvidenceHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    const qcRunId = parseQcRunIdParam(p(req.params.qcRunId));
+    const body = parseQcEvidenceBody(req.body);
+    const result = await bindHandymanQcEvidence({ qcRunId, ...body },
+      actor(req));
+    sendSuccess(res, {
+      evidence: {
+        id: result.evidence.id,
+        runId: result.evidence.runId,
+        evidenceReference: result.evidence.evidenceReference,
+        createdAt: result.evidence.createdAt,
+      },
+      runVersion: result.runVersion,
+      replayed: result.replayed,
+    });
+  } catch (error) { next(error); }
+}
+
+/** FINISH: caller requests a decision; server adjudicates PASS. */
 export async function postQcFinishHandler(
   req: Request,
   res: Response,
@@ -363,10 +430,13 @@ export async function postQcFinishHandler(
 ): Promise<void> {
   try {
     const qcRunId = parseQcRunIdParam(p(req.params.qcRunId));
-    const { idempotencyKey } = parseKeyedBody(req.body);
+    const body = parseQcFinishBody(req.body);
     const result: HandymanQcFinishResult = await finishHandymanQcRun({
       qcRunId,
-      idempotencyKey,
+      outcome: body.outcome,
+      expectedVersion: body.expectedVersion,
+      reason: body.reason,
+      idempotencyKey: body.idempotencyKey,
     }, actor(req));
     sendSuccess(res, {
       run: toQcRunPayload(result.run),
@@ -393,6 +463,8 @@ export async function getQcRunsByScopeHandler(
       runs: views.map((view) => ({
         run: toQcRunPayload(view.run),
         items: view.items.map(toQcRunItemPayload),
+        evidence: view.evidence.map((e) => ({ id: e.id,
+          evidenceReference: e.evidenceReference, createdAt: e.createdAt })),
       })),
     }, 200);
   } catch (error) {
@@ -413,6 +485,8 @@ export async function getQcRunHandler(
     sendSuccess(res, {
       run: toQcRunPayload(view.run),
       items: view.items.map(toQcRunItemPayload),
+      evidence: view.evidence.map((e) => ({ id: e.id,
+        evidenceReference: e.evidenceReference, createdAt: e.createdAt })),
       events: view.events.map(toQcRunEventPayload),
     }, 200);
   } catch (error) {

@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import EmbeddedPostgres from 'embedded-postgres';
 import { closePool, getPool, initDatabase, migrateUp } from '../src/database';
+import { resetAppConfigCache } from '../src/config';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
 import {
+  bindHandymanQcEvidence,
+  configureHandymanQcChecklist,
+  finishHandymanQcRun,
+  getHandymanQcChecklist,
   getHandymanQcRunDetail,
   listHandymanDefectsByScope,
   openHandymanDefect,
@@ -16,6 +21,7 @@ import {
   setHandymanQcRunItemOutcome,
 } from '../src/modules/handyman-evidence-qc';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
+import { createEvidenceStorage, evidenceStorageKey } from '../src/modules/evidence/storage';
 import { permissionService } from '../src/modules/permissions';
 import { roleService } from '../src/modules/roles';
 import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
@@ -32,6 +38,8 @@ let adminId: string;
 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'hm-qc-authority-'));
+  process.env.EVIDENCE_STORAGE_DIR = join(dir, 'evidence');
+  resetAppConfigCache();
   const port = 54000 + Math.floor(Math.random() * 1000);
   pg = new EmbeddedPostgres({ databaseDir: dir, port, user: 'postgres',
     password: 'password', persistent: false });
@@ -42,6 +50,7 @@ before(async () => {
     ssl: false, poolMin: 1, poolMax: 16 });
   await migrateUp(pool);
   adminId = (await createAdminUser()).userId;
+  await grant(adminId, ['handyman.qc.configure']);
   const discipline = await handymanDisciplineRepository.findDisciplineByCode(
     undefined, 'GENERAL_HANDYMAN');
   if (!discipline) throw new Error('Missing GENERAL_HANDYMAN discipline');
@@ -53,6 +62,8 @@ after(async () => {
   await closePool(getPool()).catch(() => undefined);
   if (pg) await pg.stop();
   if (dir) rmSync(dir, { recursive: true, force: true });
+  delete process.env.EVIDENCE_STORAGE_DIR;
+  resetAppConfigCache();
 });
 
 const key = () => `qc-${randomUUID()}`;
@@ -84,8 +95,14 @@ async function fixture() {
     workforceProfileId: crew.workerContext.workforceProfileId,
     buildingId: f.realm.building.id,
   });
-  await assignHandymanExecutionScopeCrew({ executionScopeId: f.scope.id,
-    providerContextId: crew.providerContext.id, crewId: crew.crew.id }, adminId);
+  const assignment = await assignHandymanExecutionScopeCrew({
+    executionScopeId: f.scope.id, providerContextId: crew.providerContext.id,
+    crewId: crew.crew.id,
+  }, adminId);
+  await configureHandymanQcChecklist({
+    executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
+    requiredItemKeys: ['quality'],
+  }, adminId);
   const supervisor = await userService.createUser({
     email: `supervisor-${randomUUID()}@example.com`,
     displayName: 'Assigned Supervisor',
@@ -106,11 +123,66 @@ async function fixture() {
     buildingId: f.realm.building.id,
   });
   await grant(supervisor.id, ['handyman.qc.manage']);
-  return { ...f, crew, supervisor, supProfile };
+  return { ...f, crew, assignment, supervisor, supProfile };
 }
 
 const open = (scopeId: string) => ({ executionScopeId: scopeId,
   checklistIdentity: 'handyman-final-v1', idempotencyKey: key() });
+
+type QcFixture = Awaited<ReturnType<typeof fixture>>;
+async function session(f: QcFixture,
+  status: 'IN_PROGRESS' | 'CHECKED_OUT' = 'CHECKED_OUT') {
+  const id = randomUUID();
+  await getPool().query(`INSERT INTO handyman_work_sessions
+    (id, client_id, execution_scope_id, assignment_id, lead_worker_id,
+     lead_user_id, status, started_work_at, completed_at, checked_out_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(),
+      CASE WHEN $7 = 'CHECKED_OUT' THEN NOW() ELSE NULL END,
+      CASE WHEN $7 = 'CHECKED_OUT' THEN NOW() ELSE NULL END)`,
+  [id, f.scope.clientId, f.scope.id, f.assignment.id,
+    f.crew.workerContext.id, f.crew.leadUser.id, status]);
+  return id;
+}
+
+/** Persist real bytes and an exact-scope verified field upload; the service
+ * still re-reads the file and validates its checksum on each bind/finish. */
+async function qcUpload(f: QcFixture, purpose = 'QC_EVIDENCE') {
+  const id = randomUUID();
+  const storageKey = evidenceStorageKey(id);
+  const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47,
+    0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(`qc-${id}`)]);
+  await createEvidenceStorage().put(storageKey, {
+    buffer: bytes, mimeType: 'image/png',
+  });
+  const reference = `hm-ev://${id}`;
+  await getPool().query(`INSERT INTO handyman_field_evidence_uploads
+    (id, client_id, tenant_company_id, building_id, handyman_request_id,
+     execution_scope_id, purpose, upload_status, original_file_name,
+     mime_type, storage_key, declared_byte_size, verified_byte_size,
+     sha256_checksum, attachment_reference, uploaded_by_user_id,
+     uploaded_by_role, idempotency_key, verified_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,'VERIFIED','qc.png','image/png',
+      $8,$9,$9,$10,$11,$12,'PIC_PEKERJAAN',$13,NOW())`,
+  [id, f.scope.clientId, f.scope.tenantCompanyId,
+    f.realm.building.id, f.scope.handymanRequestId, f.scope.id,
+    purpose, storageKey, bytes.byteLength,
+    createHash('sha256').update(bytes).digest('hex'), reference,
+    f.crew.leadUser.id, key()]);
+  return { id, reference, storageKey };
+}
+
+async function passItem(f: QcFixture, runId: string, version: number) {
+  return setHandymanQcRunItemOutcome({ qcRunId: runId,
+    itemKey: 'quality', outcome: 'PASS', expectedVersion: version,
+    idempotencyKey: key() }, f.supervisor.id);
+}
+const pass = (runId: string, expectedVersion: number,
+  idempotencyKey = key()) => ({ qcRunId: runId, outcome: 'PASSED' as const,
+  expectedVersion, idempotencyKey });
+const fail = (runId: string, expectedVersion: number,
+  idempotencyKey = key()) => ({ qcRunId: runId, outcome: 'FAILED' as const,
+  reason: 'Supervisor found incomplete repair', expectedVersion,
+  idempotencyKey });
 
 describe('Supervisor QC is distinct from execution and inspection', () => {
   it('permits assigned supervisor and PIC reads, but denies PIC self-QC', async () => {
@@ -182,5 +254,254 @@ describe('Supervisor QC is distinct from execution and inspection', () => {
       (e) => code(e) === 'BUILDING_ACCESS_DENIED');
     await assert.rejects(listHandymanDefectsByScope(other.scope.id,
       f.crew.leadUser.id), (e) => code(e) === 'BUILDING_ACCESS_DENIED');
+  });
+});
+
+describe('QC decision guard, persistence and replay (embedded PostgreSQL)', () => {
+  it('requires a separately authorized immutable manifest before OPEN', async () => {
+    const f = await fixture();
+    const spec = await getHandymanQcChecklist(f.scope.id, f.supervisor.id);
+    assert.deepEqual(spec?.requiredItemKeys, ['quality']);
+    assert.equal((await configureHandymanQcChecklist({
+      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
+      requiredItemKeys: ['quality'],
+    }, adminId)).replayed, true);
+    await assert.rejects(configureHandymanQcChecklist({
+      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
+      requiredItemKeys: ['different'],
+    }, adminId), (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_CONFLICT');
+    await assert.rejects(configureHandymanQcChecklist({
+      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
+      requiredItemKeys: ['different'],
+    }, f.supervisor.id), (e) => code(e) === 'HANDYMAN_QC_NOT_AUTHORIZED');
+    await assert.rejects(configureHandymanQcChecklist({
+      executionScopeId: f.scope.id, checklistIdentity: 'handyman-final-v1',
+      requiredItemKeys: ['quality'],
+    }, f.crew.leadUser.id), (e) => code(e) === 'HANDYMAN_QC_NOT_AUTHORIZED');
+    await assert.rejects(openHandymanQcRun({ ...open(f.scope.id),
+      checklistIdentity: 'free-text-checklist' }, f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_QC_CHECKLIST_NOT_CONFIGURED');
+    await assert.rejects(getPool().query(
+      `UPDATE handyman_qc_checklist_specs SET required_item_keys = ARRAY['skip']
+       WHERE execution_scope_id = $1`, [f.scope.id]),
+    (e) => code(e) === 'P0001');
+  });
+
+  it('rejects unchecked items, noncompleted sessions and missing verified evidence; passes with all facts', async () => {
+    const f = await fixture();
+    const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    const detail = await getHandymanQcRunDetail(run.id, f.crew.leadUser.id);
+    assert.equal(detail.items[0].outcome, 'NOT_CHECKED');
+    await assert.rejects(finishHandymanQcRun(pass(run.id, 1), f.supervisor.id),
+      (e) => code(e) === 'HANDYMAN_QC_PASS_BLOCKED');
+    const item = await passItem(f, run.id, run.version);
+    assert.equal(item.runVersion, 2);
+    await assert.rejects(finishHandymanQcRun(pass(run.id, 2), f.supervisor.id),
+      (e) => code(e) === 'HANDYMAN_QC_PASS_BLOCKED');
+    const active = await session(f, 'IN_PROGRESS');
+    await assert.rejects(finishHandymanQcRun(pass(run.id, 2), f.supervisor.id),
+      (e) => code(e) === 'HANDYMAN_QC_PASS_BLOCKED');
+    await getPool().query(`UPDATE handyman_work_sessions SET status = 'CHECKED_OUT',
+      completed_at = NOW(), checked_out_at = NOW() WHERE id = $1`, [active]);
+    await assert.rejects(finishHandymanQcRun(pass(run.id, 2), f.supervisor.id),
+      (e) => code(e) === 'HANDYMAN_QC_PASS_BLOCKED');
+    const upload = await qcUpload(f);
+    const bound = await bindHandymanQcEvidence({ qcRunId: run.id,
+      evidenceReference: upload.reference, expectedVersion: 2,
+      idempotencyKey: key() }, f.supervisor.id);
+    assert.equal(bound.runVersion, 3);
+    await assert.rejects(finishHandymanQcRun(pass(run.id, 2), f.supervisor.id),
+      (e) => code(e) === 'HANDYMAN_QC_VERSION_CONFLICT');
+    const result = await finishHandymanQcRun(pass(run.id, 3), f.supervisor.id);
+    assert.equal(result.run.status, 'PASSED');
+    assert.equal(result.run.version, 4);
+    assert.equal(result.run.failureReason, null);
+    assert.equal((await getHandymanQcRunDetail(run.id,
+      f.crew.leadUser.id)).evidence.length, 1);
+    const audit = await getPool().query(`SELECT id FROM operational_events
+      WHERE entity_type = 'HANDYMAN_QC_RUN' AND entity_id = $1
+        AND event_type = 'HANDYMAN_QC_RUN_FINISHED'`, [run.id]);
+    assert.equal(audit.rowCount, 1);
+  });
+
+  it('will not bind wrong-purpose, wrong-scope or missing-byte uploads, or approve tampered bytes', async () => {
+    const f = await fixture();
+    const other = await fixture();
+    const stale = await qcUpload(f);
+    // Deliberately predate the run, rather than relying on clock precision.
+    await getPool().query(`UPDATE handyman_field_evidence_uploads
+      SET verified_at = NOW() - INTERVAL '1 day' WHERE id = $1`,
+    [stale.id]);
+    const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    const wrongPurpose = await qcUpload(f, 'BEFORE_AFTER_WORK');
+    const wrongScope = await qcUpload(other);
+    // DB provenance backstop also rejects a bypass of the service.
+    await assert.rejects(getPool().query(`INSERT INTO handyman_qc_run_evidence
+      (id, run_id, evidence_upload_id, actor_user_id, idempotency_key)
+      VALUES ($1,$2,$3,$4,$5)`, [randomUUID(), run.id, wrongScope.id,
+      f.supervisor.id, key()]), (e) => code(e) === '23514');
+    const missingBytes = await qcUpload(f);
+    await createEvidenceStorage().remove(missingBytes.storageKey);
+    for (const reference of [wrongPurpose.reference, wrongScope.reference,
+      stale.reference]) {
+      await assert.rejects(bindHandymanQcEvidence({ qcRunId: run.id,
+        evidenceReference: reference, expectedVersion: 1,
+        idempotencyKey: key() }, f.supervisor.id),
+      (e) => code(e) === 'HANDYMAN_QC_EVIDENCE_INVALID');
+    }
+    await assert.rejects(bindHandymanQcEvidence({ qcRunId: run.id,
+      evidenceReference: missingBytes.reference, expectedVersion: 1,
+      idempotencyKey: key() }, f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED');
+    const good = await qcUpload(f);
+    const bound = await bindHandymanQcEvidence({ qcRunId: run.id,
+      evidenceReference: good.reference, expectedVersion: 1,
+      idempotencyKey: key() }, f.supervisor.id);
+    await session(f);
+    await passItem(f, run.id, bound.runVersion);
+    // The existing shared storage verifier is re-run at FINISH, not just BIND.
+    await createEvidenceStorage().put(good.storageKey, {
+      buffer: Buffer.from('tampered'), mimeType: 'image/png',
+    });
+    await assert.rejects(finishHandymanQcRun(pass(run.id, 3), f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED');
+    assert.equal((await getHandymanQcRunDetail(run.id,
+      f.supervisor.id)).run.status, 'OPEN');
+  });
+
+  it('serializes simultaneous FINISH, preserves reason, replays once and rejects stale runs', async () => {
+    const f = await fixture();
+    const opened = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    await assert.rejects(openHandymanQcRun(open(f.scope.id), f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_QC_RUN_ALREADY_OPEN');
+    const idempotencyKey = key();
+    const request = fail(opened.run.id, opened.run.version, idempotencyKey);
+    const both = await Promise.all([
+      finishHandymanQcRun(request, f.supervisor.id),
+      finishHandymanQcRun(request, f.supervisor.id),
+    ]);
+    assert.deepEqual(both.map((result) => result.replayed).sort(),
+      [false, true]);
+    assert.equal(both[0].event.id, both[1].event.id);
+    assert.equal(both[0].run.status, 'FAILED');
+    assert.equal(both[1].run.failureReason, request.reason);
+    assert.equal((await getPool().query(`SELECT id FROM handyman_qc_run_events
+      WHERE run_id = $1 AND event_type = 'FINISH'`,
+    [opened.run.id])).rowCount, 1);
+    assert.equal((await getPool().query(`SELECT id FROM operational_events
+      WHERE entity_id = $1 AND event_type = 'HANDYMAN_QC_RUN_FINISHED'`,
+    [opened.run.id])).rowCount, 1);
+    await assert.rejects(finishHandymanQcRun({ ...request,
+      reason: 'different reason' }, f.supervisor.id),
+    (e) => code(e) === 'HANDYMAN_QC_IDEMPOTENCY_CONFLICT');
+    await assert.rejects(finishHandymanQcRun(fail(opened.run.id, 1),
+      f.supervisor.id), (e) => code(e) === 'HANDYMAN_QC_RUN_ILLEGAL_TRANSITION');
+    const reopened = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    assert.notEqual(reopened.run.id, opened.run.id);
+    assert.equal(reopened.run.status, 'OPEN');
+    await assert.rejects(finishHandymanQcRun(fail(opened.run.id, 1),
+      f.supervisor.id), (e) => code(e) === 'HANDYMAN_QC_STALE_RUN');
+  });
+
+  it('permits one winner for competing item/finish writes and never duplicates FINISH audit', async () => {
+    const f = await fixture();
+    const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    const updates = await Promise.allSettled([
+      setHandymanQcRunItemOutcome({ qcRunId: run.id, itemKey: 'quality',
+        outcome: 'PASS', expectedVersion: 1, idempotencyKey: key() },
+      f.supervisor.id),
+      setHandymanQcRunItemOutcome({ qcRunId: run.id, itemKey: 'quality',
+        outcome: 'DEFECT', expectedVersion: 1, idempotencyKey: key() },
+      f.supervisor.id),
+    ]);
+    assert.equal(updates.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(updates.filter((result) => result.status === 'rejected'
+      && code(result.reason) === 'HANDYMAN_QC_VERSION_CONFLICT').length, 1);
+    const finishes = await Promise.allSettled([
+      finishHandymanQcRun(fail(run.id, 2), f.supervisor.id),
+      finishHandymanQcRun(fail(run.id, 2), f.supervisor.id),
+    ]);
+    assert.equal(finishes.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(finishes.filter((result) => result.status === 'rejected'
+      && code(result.reason) === 'HANDYMAN_QC_RUN_ILLEGAL_TRANSITION').length, 1);
+    assert.equal((await getPool().query(`SELECT count(*)::int AS n
+      FROM handyman_qc_run_events WHERE run_id = $1 AND event_type = 'FINISH'`,
+    [run.id])).rows[0].n, 1);
+    assert.equal((await getPool().query(`SELECT count(*)::int AS n
+      FROM operational_events WHERE entity_id = $1
+        AND event_type = 'HANDYMAN_QC_RUN_FINISHED'`,
+    [run.id])).rows[0].n, 1);
+  });
+
+  it('enforces exact Building and actor permission on BIND/FINISH/read as well as OPEN', async () => {
+    const f = await fixture();
+    const other = await fixture();
+    const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    const upload = await qcUpload(f);
+    for (const actor of [adminId, f.crew.leadUser.id,
+      other.supervisor.id]) {
+      await assert.rejects(finishHandymanQcRun(fail(run.id, 1), actor),
+        (e) => ['HANDYMAN_QC_NOT_AUTHORIZED', 'BUILDING_ACCESS_DENIED']
+          .includes(code(e) ?? ''));
+      await assert.rejects(bindHandymanQcEvidence({ qcRunId: run.id,
+        evidenceReference: upload.reference, expectedVersion: 1,
+        idempotencyKey: key() }, actor),
+        (e) => ['HANDYMAN_QC_NOT_AUTHORIZED', 'BUILDING_ACCESS_DENIED']
+          .includes(code(e) ?? ''));
+    }
+    await assert.rejects(getHandymanQcRunDetail(run.id,
+      other.crew.leadUser.id),
+    (e) => code(e) === 'BUILDING_ACCESS_DENIED');
+    assert.equal((await getHandymanQcRunDetail(run.id,
+      f.supervisor.id)).run.status, 'OPEN');
+  });
+});
+
+describe('Additive migration on existing QC aggregates', () => {
+  it('upgrades populated pre-0442 run/item/event/defect rows without deleting history', async () => {
+    const f = await fixture();
+    const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+    const item = await setHandymanQcRunItemOutcome({ qcRunId: run.id,
+      itemKey: 'quality', outcome: 'DEFECT', idempotencyKey: key() },
+    f.supervisor.id);
+    const failed = await finishHandymanQcRun(fail(run.id, item.runVersion),
+      f.supervisor.id);
+    const { defect } = await openHandymanDefect({
+      executionScopeId: f.scope.id, runId: run.id, itemId: item.item.id,
+      description: 'Preserve pre-upgrade defect', idempotencyKey: key(),
+    }, f.supervisor.id);
+    const client = await getPool().connect();
+    try {
+      // Roll back within a transaction to simulate the previous schema with
+      // populated aggregates, apply the additive upgrade, then undo this
+      // simulation; no shared test fixture data is discarded.
+      await client.query('BEGIN');
+      const { migration0442HardenHandymanQc } = await import(
+        '../src/database/migrations/0442_harden_handyman_qc');
+      await migration0442HardenHandymanQc.down(client);
+      assert.equal((await client.query(`SELECT status FROM handyman_qc_runs
+        WHERE id = $1`, [run.id])).rows[0].status, 'FAILED');
+      await migration0442HardenHandymanQc.up(client);
+      const rows = await client.query(`SELECT r.status, r.version,
+        i.outcome, d.description FROM handyman_qc_runs r
+        JOIN handyman_qc_run_items i ON i.run_id = r.id
+        JOIN handyman_defect_records d ON d.item_id = i.id
+        WHERE r.id = $1 AND d.id = $2`, [run.id, defect.id]);
+      assert.equal(rows.rows[0].status, 'FAILED');
+      assert.equal(rows.rows[0].version, 1);
+      assert.equal(rows.rows[0].outcome, 'DEFECT');
+      assert.equal(rows.rows[0].description, defect.description);
+      assert.equal((await client.query(`SELECT count(*)::int AS n
+        FROM handyman_qc_run_events WHERE run_id = $1`,
+      [run.id])).rows[0].n, 3);
+      assert.equal((await client.query(`SELECT count(*)::int AS n
+        FROM handyman_defect_events WHERE defect_id = $1`,
+      [defect.id])).rows[0].n, 1);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+    assert.equal((await getHandymanQcRunDetail(run.id,
+      f.supervisor.id)).run.failureReason, failed.run.failureReason);
   });
 });

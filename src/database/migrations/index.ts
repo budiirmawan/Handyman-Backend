@@ -1,3 +1,4 @@
+import { migration0442HardenHandymanQc } from './0442_harden_handyman_qc';
 import { migration0431CreateHandymanVisitAppointments } from './0431_create_handyman_visit_appointments';
 import { migration0432HandymanChargeTenantInvoiceSource } from './0432_handyman_charge_tenant_invoice_source';
 import { migration0433HandymanCustomerPaymentProof } from './0433_handyman_customer_payment_proof';
@@ -923,4 +924,5 @@ export const migrations: readonly Migration[] = [
   migration0439HardenExecutionScopeReassignment,
   migration0440CreateHandymanDispatchReleases,
   migration0441HandymanDispatchReleaseReassignmentSupersede,
+  migration0442HardenHandymanQc,
 ];

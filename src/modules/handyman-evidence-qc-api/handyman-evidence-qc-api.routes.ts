@@ -8,6 +8,7 @@ import {
   getEvidenceRecordHandler,
   getQcRunHandler,
   getQcRunsByScopeHandler,
+  getQcChecklistHandler,
   postDefectOpenHandler,
   postDefectPassReinspectionHandler,
   postDefectRecordRectificationHandler,
@@ -17,6 +18,8 @@ import {
   postEvidenceFileAddHandler,
   postEvidenceFinalizeHandler,
   postQcFinishHandler,
+  postQcEvidenceHandler,
+  postQcChecklistHandler,
   postQcItemSetHandler,
   postQcOpenHandler,
 } from './handyman-evidence-qc-api.controller';
@@ -58,6 +61,8 @@ export function createHandymanEvidenceQcApiRouter(): Router {
     '/handyman/execution-scopes/:executionScopeId/evidence';
   const scopeQc =
     '/handyman/execution-scopes/:executionScopeId/qc-runs';
+  const checklist =
+    '/handyman/execution-scopes/:executionScopeId/qc-checklist';
   const scopeDefects =
     '/handyman/execution-scopes/:executionScopeId/defects';
   const record = '/handyman/evidence-records/:evidenceRecordId';
@@ -70,9 +75,12 @@ export function createHandymanEvidenceQcApiRouter(): Router {
   router.post(`${record}/finalize`, auth, postEvidenceFinalizeHandler);
   router.get(record, auth, read, getEvidenceRecordHandler);
 
+  router.post(checklist, auth, postQcChecklistHandler);
+  router.get(checklist, auth, getQcChecklistHandler);
   router.post(scopeQc, auth, postQcOpenHandler);
   router.get(scopeQc, auth, getQcRunsByScopeHandler);
   router.post(`${run}/items`, auth, postQcItemSetHandler);
+  router.post(`${run}/evidence`, auth, postQcEvidenceHandler);
   router.post(`${run}/finish`, auth, postQcFinishHandler);
   router.get(run, auth, getQcRunHandler);
 
