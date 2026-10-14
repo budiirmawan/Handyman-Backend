@@ -5,8 +5,8 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
@@ -23,6 +23,7 @@ import { propertyRepository } from '../src/modules/properties/property.repositor
 import { clientRepository } from '../src/modules/clients/client.repository';
 import { userRepository } from '../src/modules/users/user.repository';
 import { permissionService } from '../src/modules/permissions';
+import { createEvidenceStorage } from '../src/modules/evidence/storage';
 import { migration0436CreateHandymanMaterialPurchasing } from '../src/database/migrations/0436_create_handyman_material_purchasing';
 
 const CLIENT_A = '10000000-0000-4000-8000-000000000001';
@@ -61,6 +62,7 @@ const UOM_PCS = '10000000-0000-4000-8000-000000000702';
 
 let pg: EmbeddedPostgres | null = null;
 let pgDir: string | null = null;
+let evidenceStorageDir = '';
 let pool: Pool | null = null;
 let server: Server;
 let baseUrl: string;
@@ -73,8 +75,35 @@ const origFindProperty = propertyRepository.findById;
 const origFindClient = clientRepository.findById;
 const origResolvePermissions = permissionService.resolvePermissionsForUser;
 
+
+/** Seeds a genuinely VERIFIED managed evidence upload (real bytes + SHA-256
+ * in the configured storage dir) and returns its hm-ev:// reference. */
+async function verifiedEvidenceRef(seed: string): Promise<string> {
+  const hex = createHash('sha256').update(seed).digest('hex');
+  const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  const bytes = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from(seed),
+  ]);
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  await createEvidenceStorage().put(`evidence/${id}`, { buffer: bytes, mimeType: 'image/png' });
+  await pool!.query(
+    `INSERT INTO handyman_field_evidence_uploads
+       (id, client_id, tenant_company_id, building_id, handyman_request_id, execution_scope_id,
+        purpose, upload_status, original_file_name, mime_type, storage_key, declared_byte_size,
+        verified_byte_size, sha256_checksum, attachment_reference, uploaded_by_user_id,
+        uploaded_by_role, idempotency_key, verified_at)
+     VALUES ($1,$2,$3,$4,$5,$6,'MATERIAL_RECEIPT','VERIFIED','seed.png','image/png',$7,$8,$8,$9,$10,$11,'PIC_PEKERJAAN',$12,NOW())
+     ON CONFLICT (id) DO NOTHING`,
+    [id, CLIENT_A, TENANT_A, BUILDING_A1, REQ_A1, SCOPE_A1, `evidence/${id}`, bytes.byteLength, sha, `hm-ev://${id}`, LEAD_USER_A, `seed-${id}`],
+  );
+  return `hm-ev://${id}`;
+}
+
 before(async () => {
   pgDir = mkdtempSync(join(tmpdir(), 'hm-mat-purch-'));
+  evidenceStorageDir = mkdtempSync(join(tmpdir(), 'hm-evidence-store-'));
+  process.env.EVIDENCE_STORAGE_DIR = evidenceStorageDir;
   pg = new EmbeddedPostgres({
     databaseDir: pgDir,
     port: 55446,
@@ -229,6 +258,19 @@ before(async () => {
     );
   `);
 
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS handyman_field_evidence_uploads (
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, tenant_company_id uuid NOT NULL,
+      building_id uuid NOT NULL, handyman_request_id uuid NOT NULL, execution_scope_id uuid,
+      variation_id uuid, material_purchase_record_id uuid, purpose text NOT NULL,
+      upload_status text NOT NULL, original_file_name text NOT NULL, mime_type text NOT NULL,
+      storage_key text NOT NULL UNIQUE, declared_byte_size int, verified_byte_size int NOT NULL DEFAULT 0,
+      sha256_checksum varchar(64), attachment_reference text UNIQUE, uploaded_by_user_id uuid NOT NULL,
+      uploaded_by_role text NOT NULL, notes text, idempotency_key text NOT NULL,
+      verified_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
   const client = await pool.connect();
   try {
     await migration0436CreateHandymanMaterialPurchasing.up(client);
@@ -442,7 +484,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
         requestedQuantity: 10,
         supplierName: 'Toko Bangunan Jaya',
         currency: 'IDR',
-        evidenceReference: 'ev://mat-req/valve-001',
+        evidenceReference: await verifiedEvidenceRef('ev://mat-req/valve-001'),
         notes: 'Urgent valve replacement',
         idempotencyKey: 'idem-mat-req-1',
       },
@@ -476,7 +518,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
         currency: 'IDR',
         approvalReference: 'APR-MAT-2026-001',
         expenditureReference: 'EXP-MAT-2026-001',
-        evidenceReference: 'ev://mat-approve/valve-002',
+        evidenceReference: await verifiedEvidenceRef('ev://mat-approve/valve-002'),
         notes: 'Approved for field reimbursement purchase',
         idempotencyKey: 'idem-mat-app-1',
         expectedVersion: 1,
@@ -499,7 +541,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
         currency: 'IDR',
         purchaseDate: '2026-10-14T03:30:00.000Z',
         expenditureReference: 'EXP-MAT-2026-001',
-        receiptEvidenceReference: 'ev://receipt/tbj-889.jpg',
+        receiptEvidenceReference: await verifiedEvidenceRef('ev://receipt/tbj-889.jpg'),
         notes: 'Purchased 10 brass valves with store receipt',
         idempotencyKey: 'idem-mat-pur-1',
         expectedVersion: 2,
@@ -524,7 +566,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
       LEAD_USER_A,
       {
         usedQuantity: 7,
-        evidenceReference: 'ev://usage/valve-installed.jpg',
+        evidenceReference: await verifiedEvidenceRef('ev://usage/valve-installed.jpg'),
         notes: 'Installed 7 valves on riser manifold',
         idempotencyKey: 'idem-mat-use-1',
         expectedVersion: 3,
@@ -556,7 +598,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
       {
         returnedQuantity: 3,
         returnDestination: 'WAREHOUSE',
-        evidenceReference: 'ev://return/valve-warehouse.jpg',
+        evidenceReference: await verifiedEvidenceRef('ev://return/valve-warehouse.jpg'),
         notes: 'Returned 3 unused valves to building warehouse',
         idempotencyKey: 'idem-mat-ret-1',
         expectedVersion: 4,
@@ -572,7 +614,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
       OPS_MANAGER_USER_A,
       {
         tenantChargeEligible: true,
-        evidenceReference: 'ev://reconcile/valve-006',
+        evidenceReference: await verifiedEvidenceRef('ev://reconcile/valve-006'),
         notes: 'Reconciled 7 used + 3 warehouse return',
         idempotencyKey: 'idem-mat-rec-1',
         expectedVersion: 5,
@@ -633,7 +675,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
         uomCode: 'PCS',
         fundingSource: 'WAREHOUSE_STOCK',
         requestedQuantity: 5,
-        evidenceReference: 'ev://mat-req/tape-001',
+        evidenceReference: await verifiedEvidenceRef('ev://mat-req/tape-001'),
         idempotencyKey: 'idem-wh-req-1',
       },
     );
@@ -659,7 +701,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle', ()
       {
         issuedQuantity: 5,
         warehouseIssueReference: 'WH-ISS-2026-009',
-        evidenceReference: 'ev://wh-issue/tape-002',
+        evidenceReference: await verifiedEvidenceRef('ev://wh-issue/tape-002'),
         idempotencyKey: 'idem-wh-iss-1',
       },
     );

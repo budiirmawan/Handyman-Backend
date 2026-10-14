@@ -17,6 +17,7 @@ import { propertyRepository } from '../src/modules/properties/property.repositor
 import { clientRepository } from '../src/modules/clients/client.repository';
 import { permissionService } from '../src/modules/permissions';
 import { computeEvidenceSha256 } from '../src/modules/evidence/evidence-integrity';
+import { createEvidenceStorage } from '../src/modules/evidence/storage';
 import { migration0435CreateHandymanScopeVariations } from '../src/database/migrations/0435_create_handyman_scope_variations';
 import { migration0436CreateHandymanMaterialPurchasing } from '../src/database/migrations/0436_create_handyman_material_purchasing';
 import { migration0437CreateHandymanFieldEvidenceUploads } from '../src/database/migrations/0437_create_handyman_field_evidence_uploads';
@@ -924,4 +925,168 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
     );
     assert.equal(crossTenantRes.status, 403);
   });
+
+  it('P0-A/B/C: rejects unmanaged, cross-tenant and byte-missing references; VERIFIED bytes are immutable; binding is versioned and audited', async () => {
+    const propose = async (evidenceReference: string, key: string) =>
+      fetch(
+        `${baseUrl}/handyman/field/execution-scopes/${scopeId}/variations/proposals`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${picUserId}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            variationType: 'ADD',
+            lineType: 'MATERIAL',
+            title: 'Evidence hardening probe',
+            description: 'probe',
+            technicalFinding: 'probe',
+            quantity: 1,
+            uomId,
+            evidenceReference,
+            idempotencyKey: key,
+          }),
+        },
+      );
+
+    // Arbitrary / legacy references cannot bypass verification by omitting hm-ev://
+    for (const [ref, key] of [
+      ['receipt-photo.jpg', 'var-hard-arb-1'],
+      ['ev://legacy/finding-001', 'var-hard-legacy-1'],
+      ['https://example.invalid/photo.jpg', 'var-hard-url-1'],
+    ] as const) {
+      const res = await propose(ref, key);
+      assert.equal(res.status, 400);
+      const body = (await res.json()) as { error: { code: string } };
+      assert.equal(body.error.code, 'HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED');
+    }
+
+    // Cross-tenant VERIFIED upload (real bytes, wrong client/building/request) is denied
+    const crossId = randomUUID();
+    await createEvidenceStorage().put(`evidence/${crossId}`, {
+      buffer: VALID_PNG_BYTES,
+      mimeType: 'image/png',
+    });
+    await getPool().query(
+      `INSERT INTO handyman_field_evidence_uploads
+         (id, client_id, tenant_company_id, building_id, handyman_request_id, execution_scope_id,
+          purpose, upload_status, original_file_name, mime_type, storage_key, declared_byte_size,
+          verified_byte_size, sha256_checksum, attachment_reference, uploaded_by_user_id,
+          uploaded_by_role, idempotency_key, verified_at)
+       VALUES ($1,$2,$3,$4,$5,NULL,'VARIATION_FINDING','VERIFIED','x.png','image/png',$6,$7,$7,$8,$9,$10,'PIC_PEKERJAAN',$11,NOW())`,
+      [
+        crossId, otherClientId, otherTenantCompanyId, otherBuildingId, otherRequestId,
+        `evidence/${crossId}`, VALID_PNG_BYTES.byteLength,
+        computeEvidenceSha256(VALID_PNG_BYTES), `hm-ev://${crossId}`, picUserId, `cross-${crossId}`,
+      ],
+    );
+    const crossRes = await propose(`hm-ev://${crossId}`, 'var-hard-cross-1');
+    assert.equal(crossRes.status, 403);
+
+    // VERIFIED row whose stored bytes are missing fails integrity verification
+    const missingId = randomUUID();
+    await getPool().query(
+      `INSERT INTO handyman_field_evidence_uploads
+         (id, client_id, tenant_company_id, building_id, handyman_request_id, execution_scope_id,
+          purpose, upload_status, original_file_name, mime_type, storage_key, declared_byte_size,
+          verified_byte_size, sha256_checksum, attachment_reference, uploaded_by_user_id,
+          uploaded_by_role, idempotency_key, verified_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'VARIATION_FINDING','VERIFIED','x.png','image/png',$7,$8,$8,$9,$10,$11,'PIC_PEKERJAAN',$12,NOW())`,
+      [
+        missingId, clientId, tenantCompanyId, buildingId, requestId, scopeId,
+        `evidence/${missingId}`, VALID_PNG_BYTES.byteLength,
+        computeEvidenceSha256(VALID_PNG_BYTES), `hm-ev://${missingId}`, picUserId, `missing-${missingId}`,
+      ],
+    );
+    const missingRes = await propose(`hm-ev://${missingId}`, 'var-hard-missing-1');
+    assert.equal(missingRes.status, 409);
+    const missingBody = (await missingRes.json()) as { error: { code: string } };
+    assert.equal(missingBody.error.code, 'HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED');
+
+    // Immutability: presign -> put -> confirm, then exact retry is safe and conflicting retry is 409
+    const presignRes = await fetch(`${baseUrl}/handyman/field/evidence/presign`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${picUserId}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        executionScopeId: scopeId,
+        variationId,
+        purpose: 'VARIATION_FINDING',
+        originalFileName: 'immutable.png',
+        mimeType: 'image/png',
+        declaredByteSize: VALID_PNG_BYTES.byteLength,
+        idempotencyKey: 'ev-immutable-1',
+      }),
+    });
+    assert.equal(presignRes.status, 201);
+    const presignBody = (await presignRes.json()) as {
+      data: { evidence: { id: string } };
+    };
+    const immId = presignBody.data.evidence.id;
+    const put = async (bytes: Buffer) =>
+      fetch(`${baseUrl}/handyman/field/evidence/${immId}/bytes`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${picUserId}`,
+          'Content-Type': 'image/png',
+        },
+        body: bytes,
+      });
+    assert.equal((await put(VALID_PNG_BYTES)).status, 200);
+
+    const versionBefore = await getPool().query<{ version: number }>(
+      `SELECT version FROM handyman_scope_variations WHERE id = $1`,
+      [variationId],
+    );
+    const confirmRes = await fetch(
+      `${baseUrl}/handyman/field/evidence/${immId}/confirm`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${picUserId}` },
+      },
+    );
+    assert.equal(confirmRes.status, 200);
+
+    // Binding bumped the variation aggregate version and wrote an audit event
+    const versionAfter = await getPool().query<{ version: number }>(
+      `SELECT version FROM handyman_scope_variations WHERE id = $1`,
+      [variationId],
+    );
+    assert.equal(
+      Number(versionAfter.rows[0].version),
+      Number(versionBefore.rows[0].version) + 1,
+    );
+    const bindEvents = await getPool().query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM operational_events
+        WHERE event_type = 'handyman_field_evidence.bound_to_variation'
+          AND entity_id = $1`,
+      [variationId],
+    );
+    assert.ok(Number(bindEvents.rows[0].count) >= 1);
+
+    // Exact retry: safe no-op
+    const retryRes = await put(VALID_PNG_BYTES);
+    assert.equal(retryRes.status, 200);
+    // Conflicting retry: typed 409, verified bytes preserved
+    const conflictBytes = Buffer.concat([VALID_PNG_BYTES, Buffer.from([0x00])]);
+    const conflictRes = await put(conflictBytes);
+    assert.equal(conflictRes.status, 409);
+    const conflictBody = (await conflictRes.json()) as {
+      error: { code: string };
+    };
+    assert.equal(conflictBody.error.code, 'HANDYMAN_EVIDENCE_UPLOAD_IMMUTABLE');
+    const contentRes = await fetch(
+      `${baseUrl}/handyman/field/evidence/${immId}/content`,
+      { headers: { Authorization: `Bearer ${picUserId}` } },
+    );
+    assert.equal(contentRes.status, 200);
+    assert.deepEqual(
+      Buffer.from(await contentRes.arrayBuffer()),
+      VALID_PNG_BYTES,
+    );
+  });
 });
+

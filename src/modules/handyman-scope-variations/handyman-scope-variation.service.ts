@@ -1035,6 +1035,8 @@ export async function submitFieldFindingVariation(
       });
     }
 
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+
     const variation = await handymanScopeVariationRepository.insertVariation(
       tx,
       {
@@ -1422,6 +1424,8 @@ export async function promoteFieldFindingToProposal(
           )
         : variation.latestEvidenceReference;
 
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
         variationId: variation.id,
@@ -1566,6 +1570,8 @@ export async function reviewScopeVariation(
             500,
           )
         : variation.latestEvidenceReference;
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
@@ -2140,6 +2146,8 @@ export async function authorizeVariationScope(
             500,
           )
         : variation.latestEvidenceReference;
+
+    await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
