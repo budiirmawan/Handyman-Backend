@@ -226,6 +226,8 @@ export type HandymanLedgerClientBasisEntry = {
 };
 
 export type ReadHandymanLedgerClientBasisOptions = {
+  /** Optional exact Building filter within the Client scope. */
+  buildingId?: string | null;
   /** Inclusive lower bound on transaction creation time (ISO-8601). */
   from?: string | null;
   /** Exclusive upper bound (ISO-8601). */

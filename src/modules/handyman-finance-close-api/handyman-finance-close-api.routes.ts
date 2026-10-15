@@ -3,6 +3,7 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   getBmFeeConfigurationHandler,
+  getFinanceActionInboxHandler,
   getFinancialClientHandler,
   getFinancialTransactionHandler,
   getPricingContractHandler,
@@ -234,6 +235,12 @@ export function createHandymanFinanceCloseApiRouter(): Router {
     auth,
     financeRead,
     getFinancialClientHandler,
+  );
+  router.get(
+    '/handyman/finance/action-inbox',
+    auth,
+    financeRead,
+    getFinanceActionInboxHandler,
   );
 
   /* J11 — service warranty start/expire */

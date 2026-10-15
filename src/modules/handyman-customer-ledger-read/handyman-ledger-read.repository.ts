@@ -198,6 +198,8 @@ async function readTransactionByScope(
  */
 async function readClientBasisRows(
   clientId: string,
+  actorUserId: string,
+  buildingId: string | null,
   from: string | null,
   to: string | null,
   limit: number,
@@ -206,9 +208,25 @@ async function readClientBasisRows(
     `WITH tx AS (
        SELECT t.id, t.execution_scope_id, t.currency, t.created_at
          FROM handyman_customer_transactions t
+         JOIN handyman_execution_scopes s
+           ON s.id = t.execution_scope_id
+          AND s.client_id = t.client_id
         WHERE t.client_id = $1
           AND ($2::timestamptz IS NULL OR t.created_at >= $2::timestamptz)
           AND ($3::timestamptz IS NULL OR t.created_at < $3::timestamptz)
+          AND ($5::uuid IS NULL OR s.building_id = $5::uuid)
+          AND EXISTS (
+            SELECT 1
+              FROM user_building_assignments uba
+              JOIN buildings b ON b.id = uba.building_id AND b.status = 'ACTIVE'
+              JOIN properties p ON p.id = b.property_id AND p.status = 'ACTIVE'
+              JOIN clients c ON c.id = p.client_id AND c.status = 'ACTIVE'
+              JOIN users u ON u.id = uba.user_id AND u.status = 'ACTIVE'
+             WHERE uba.user_id = $6::uuid
+               AND uba.status = 'ACTIVE'
+               AND b.id = s.building_id
+               AND c.id = t.client_id
+          )
         ORDER BY t.created_at ASC, t.id ASC
         LIMIT $4::int
      ),
@@ -328,7 +346,7 @@ async function readClientBasisRows(
        LEFT JOIN pay_roll pr ON pr.transaction_id = t.id
        LEFT JOIN corr_roll cr ON cr.transaction_id = t.id
       ORDER BY t.created_at ASC, t.id ASC`,
-    [clientId, from, to, limit],
+    [clientId, from, to, limit, buildingId, actorUserId],
   );
   return result.rows as RawClientBasisRow[];
 }

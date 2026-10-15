@@ -409,6 +409,10 @@ export async function readHandymanLedgerClientBasisAt(
 ): Promise<HandymanLedgerClientBasisRead> {
   const clientUuid = ensureUuid(clientId, 'clientId');
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
+  const buildingUuid =
+    options.buildingId === undefined || options.buildingId === null
+      ? null
+      : ensureUuid(options.buildingId, 'buildingId');
   const from = ensureWindow(options.from, 'from');
   const to = ensureWindow(options.to, 'to');
   if (from !== null && to !== null && from >= to) {
@@ -422,9 +426,18 @@ export async function readHandymanLedgerClientBasisAt(
   if (!(await contextAccessService.canAccessClient(actorUuid, clientUuid))) {
     throw handymanCustomerTransactionNotAuthorizedError();
   }
+  if (
+    buildingUuid !== null &&
+    !(await canAccessBuildingScopedResource(actorUuid, {
+      clientId: clientUuid,
+      buildingId: buildingUuid,
+    }))
+  ) {
+    throw handymanCustomerTransactionNotAuthorizedError();
+  }
 
   const rows = await handymanLedgerReadRepository
-    .readClientBasisRows(clientUuid, from, to, limit);
+    .readClientBasisRows(clientUuid, actorUuid, buildingUuid, from, to, limit);
   return composeClientBasisRead(clientUuid, from, to, limit, rows);
 }
 

@@ -96,6 +96,15 @@ export function parseCustomerLedgerClientBasisQuery(
     fail('clientId', 'clientId is required and must be a valid UUID.');
   }
 
+  const rawBuildingId = parseQueryString(query.buildingId, 'buildingId');
+  let buildingId: string | null | undefined;
+  if (rawBuildingId !== undefined) {
+    if (!isValidUuid(rawBuildingId)) {
+      fail('buildingId', 'buildingId must be a valid UUID.');
+    }
+    buildingId = rawBuildingId;
+  }
+
   const rawFrom = parseQueryString(query.from, 'from');
   let from: string | null | undefined;
   if (rawFrom !== undefined) {
@@ -152,6 +161,7 @@ export function parseCustomerLedgerClientBasisQuery(
   return {
     clientId: rawClientId,
     options: {
+      ...(buildingId !== undefined ? { buildingId } : {}),
       ...(from !== undefined ? { from } : {}),
       ...(to !== undefined ? { to } : {}),
       ...(limit !== undefined ? { limit } : {}),
