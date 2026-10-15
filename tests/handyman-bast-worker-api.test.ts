@@ -43,10 +43,12 @@ import {
 import { api } from './helpers/http';
 
 /**
- * CR-HM-BAST-HTTP-01 — Authorized Worker BAST Transport (focused tests,
- * disposable embedded PostgreSQL).
+ * CR-HM-BAST-HTTP-01 + CR-HM-BAST-WORKER-READ-01 — worker BAST transport
+ * and scoped read (focused tests, disposable embedded PostgreSQL).
  *
  * Covers the mandated matrix:
+ *   - worker GET empty/current/accepted/historical projections, refresh,
+ *     event filtering and read-only behavior;
  *   - authorized worker PREPARE/ISSUE/VOID over HTTP with exact
  *     Client/Building scope + CURRENT Crew Lead authority;
  *   - unauthorized actor, cross-Building and non-lead denials;
@@ -259,6 +261,8 @@ async function passedRun(f: Fixture) {
   return run;
 }
 
+const readUrl = (scopeId: string) =>
+  `${V1}/handyman/field/execution-scopes/${scopeId}/bast`;
 const prepareUrl = (scopeId: string) =>
   `${V1}/handyman/field/execution-scopes/${scopeId}/bast/prepare`;
 const issueUrl = (bastId: string) => `${V1}/handyman/field/bast/${bastId}/issue`;
@@ -266,6 +270,10 @@ const voidUrl = (bastId: string) => `${V1}/handyman/field/bast/${bastId}/void`;
 
 function post(token: string, url: string, body: unknown) {
   return api().post(url).set('Authorization', `Bearer ${token}`).send(body);
+}
+
+function get(token: string, url: string) {
+  return api().get(url).set('Authorization', `Bearer ${token}`);
 }
 
 function err(res: { body?: { error?: { code?: string } } }): string {
@@ -355,6 +363,157 @@ describe('CR-HM-BAST-HTTP-01 — migration/permission compatibility', () => {
       await client.query('ROLLBACK');
       client.release();
     }
+  });
+});
+
+describe('CR-HM-BAST-WORKER-READ-01 — authorized worker BAST read', () => {
+  it('returns an empty, read-only scope projection before any BAST exists', async () => {
+    const f = await fixture();
+    const token = await workerSession(f);
+
+    const response = await get(token, readUrl(f.scope.id));
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.equal(response.body.data.executionScopeId, f.scope.id);
+    assert.equal(response.body.data.scopeStatus, 'AUTHORIZED');
+    assert.equal(response.body.data.bast, null);
+    assert.equal(response.body.data.acceptance, null);
+    assert.deepEqual(response.body.data.lifecycleActions, ['PREPARE']);
+    assert.deepEqual(response.body.data.events, []);
+    assert.deepEqual(response.body.data.eligibility, {
+      currentWorkerAssignment: 'CURRENT_CREW_LEAD',
+      scopeAuthorized: true,
+      bastQcRunId: null,
+      prepareRequiresLatestGuardedQcPass: true,
+      issueRequiresAnchoredQcPassToRemainLatest: true,
+      customerAccepted: false,
+      warrantyStartEligible: false,
+    });
+    assert.deepEqual(await bastRows(f.scope.id), [],
+      'read must not prepare or otherwise mutate a BAST');
+  });
+
+  it('supports refresh/read-after-command and exposes acceptance state without sign-off details', async () => {
+    const f = await fixture();
+    const run = await passedRun(f);
+    const token = await workerSession(f);
+
+    const prepared = await post(token, prepareUrl(f.scope.id),
+      { idempotencyKey: 'read-prepare' });
+    assert.equal(prepared.status, 201);
+    const bastId = prepared.body.data.bast.id as string;
+
+    const draft = await get(token, readUrl(f.scope.id));
+    assert.equal(draft.status, 200, JSON.stringify(draft.body));
+    assert.equal(draft.body.data.bast.id, bastId);
+    assert.equal(draft.body.data.bast.qcRunId, run.id);
+    assert.equal(draft.body.data.bast.status, 'DRAFT');
+    assert.equal(draft.body.data.bast.artifact.version, 1);
+    assert.equal(draft.body.data.bast.artifact.ref, `BAST/${bastId}/v1`);
+    assert.deepEqual(draft.body.data.bast.availableActions, ['ISSUE', 'VOID']);
+    assert.deepEqual(draft.body.data.lifecycleActions, ['ISSUE', 'VOID']);
+    assert.equal(draft.body.data.acceptance.customerAccepted, false);
+    assert.equal(draft.body.data.acceptance.warrantyStartEligible, false);
+    assert.deepEqual(draft.body.data.events.map(
+      (event: { eventType: string }) => event.eventType), ['PREPARE']);
+    assert.equal('clientId' in draft.body.data, false);
+    assert.equal('buildingId' in draft.body.data, false);
+    assert.equal('tenantCompanyId' in draft.body.data, false);
+    assert.equal('signOffs' in draft.body.data, false);
+    assert.equal('signOff' in draft.body.data, false);
+    assert.equal('approvedSignOff' in draft.body.data.acceptance, false);
+    assert.equal('signOffComplete' in draft.body.data.acceptance, false);
+
+    // Repeat reads are idempotent and do not append events or create signs.
+    const eventCountBefore = (await eventRows(bastId)).length;
+    const refreshed = await get(token, readUrl(f.scope.id));
+    assert.equal(refreshed.status, 200);
+    assert.equal(refreshed.body.data.bast.id, bastId);
+    assert.equal((await eventRows(bastId)).length, eventCountBefore);
+    assert.equal((await getPool().query(
+      `SELECT count(*)::int AS n FROM handyman_bast_sign_offs WHERE bast_id = $1`,
+      [bastId],
+    )).rows[0].n, 0);
+
+    const issued = await post(token, issueUrl(bastId),
+      { idempotencyKey: 'read-issue', expectedVersion: 1 });
+    assert.equal(issued.status, 200);
+    const issuedRead = await get(token, readUrl(f.scope.id));
+    assert.equal(issuedRead.body.data.bast.status, 'ISSUED');
+    assert.equal(issuedRead.body.data.bast.artifact.version, 2);
+    assert.deepEqual(issuedRead.body.data.lifecycleActions, ['VOID']);
+    assert.deepEqual(issuedRead.body.data.events.map(
+      (event: { eventType: string }) => event.eventType), ['PREPARE', 'ISSUE']);
+    assert.equal(issuedRead.body.data.acceptance.customerAccepted, false,
+      'ISSUED must remain distinct from customer acceptance');
+
+    // Acceptance is a separate Customer Care action. Worker GET only reports
+    // the bounded resulting state; no customer sign-off evidence or event leaks.
+    const care = await staffSession(f.realm.building.id,
+      ['tenant_company.manage']);
+    const accepted = await post(care, `${V1}/handyman/bast/${bastId}/accept`,
+      { idempotencyKey: 'read-customer-accept', signatureDigest: 'c'.repeat(64) });
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+    const acceptedRead = await get(token, readUrl(f.scope.id));
+    assert.equal(acceptedRead.status, 200, JSON.stringify(acceptedRead.body));
+    assert.equal(acceptedRead.body.data.bast.status, 'ACCEPTED');
+    assert.equal(acceptedRead.body.data.bast.artifact.version, 3);
+    assert.equal(acceptedRead.body.data.acceptance.customerAccepted, true);
+    assert.equal(acceptedRead.body.data.acceptance.warrantyStartEligible, true);
+    assert.equal(acceptedRead.body.data.eligibility.customerAccepted, true);
+    assert.equal(acceptedRead.body.data.eligibility.warrantyStartEligible, true);
+    assert.deepEqual(acceptedRead.body.data.lifecycleActions, []);
+    assert.deepEqual(acceptedRead.body.data.events.map(
+      (event: { eventType: string }) => event.eventType), ['PREPARE', 'ISSUE']);
+    assert.equal('signOffs' in acceptedRead.body.data, false);
+    assert.equal('approvedSignOff' in acceptedRead.body.data.acceptance, false);
+    assert.equal('signOffComplete' in acceptedRead.body.data.acceptance, false);
+    assert.equal((await getPool().query(
+      `SELECT count(*)::int AS n FROM handyman_bast_sign_offs WHERE bast_id = $1`,
+      [bastId],
+    )).rows[0].n, 1,
+    'GET must leave Customer Care sign-off evidence unchanged and unexposed');
+  });
+
+  it('selects the active BAST, then the latest historical record without rewriting history', async () => {
+    const f = await fixture();
+    await passedRun(f);
+    const token = await workerSession(f);
+    const prepared = await post(token, prepareUrl(f.scope.id),
+      { idempotencyKey: 'history-prepare-1' });
+    const oldBastId = prepared.body.data.bast.id as string;
+    await post(token, issueUrl(oldBastId),
+      { idempotencyKey: 'history-issue-1', expectedVersion: 1 });
+    const voided = await post(token, voidUrl(oldBastId),
+      { idempotencyKey: 'history-void-1', expectedVersion: 2,
+        reason: 'Superseded after field refresh.' });
+    assert.equal(voided.status, 200);
+
+    const historicalView = await get(token, readUrl(f.scope.id));
+    assert.equal(historicalView.body.data.bast.id, oldBastId);
+    assert.equal(historicalView.body.data.bast.status, 'VOID');
+    assert.equal(historicalView.body.data.bast.artifact.version, 2);
+    assert.deepEqual(historicalView.body.data.events.map(
+      (event: { eventType: string }) => event.eventType),
+      ['PREPARE', 'ISSUE', 'VOID']);
+    assert.equal(historicalView.body.data.events[2].voidReason,
+      'Superseded after field refresh.');
+
+    const next = await post(token, prepareUrl(f.scope.id),
+      { idempotencyKey: 'history-prepare-2' });
+    assert.equal(next.status, 201);
+    const newBastId = next.body.data.bast.id as string;
+    assert.notEqual(newBastId, oldBastId);
+
+    const activeView = await get(token, readUrl(f.scope.id));
+    assert.equal(activeView.body.data.bast.id, newBastId,
+      'GET must use the same active-then-latest selection as the existing service');
+    assert.equal(activeView.body.data.bast.status, 'DRAFT');
+    assert.deepEqual(activeView.body.data.events.map(
+      (event: { eventType: string }) => event.eventType), ['PREPARE']);
+    assert.deepEqual((await bastRows(f.scope.id)).map((row) => row.status).sort(),
+      ['DRAFT', 'VOID']);
+    assert.deepEqual((await eventRows(oldBastId)).map((event) => event.event_type),
+      ['PREPARE', 'ISSUE', 'VOID'], 'historical event chain must remain intact');
   });
 });
 
@@ -471,6 +630,9 @@ describe('worker authorization denials (401/403) with zero mutation', () => {
       .send({ idempotencyKey: key() });
     assert.equal(anon.status, 401);
     assert.equal(err(anon), 'AUTHENTICATION_REQUIRED');
+    const anonRead = await api().get(readUrl(f.scope.id));
+    assert.equal(anonRead.status, 401);
+    assert.equal(err(anonRead), 'AUTHENTICATION_REQUIRED');
 
     // 403 — authenticated but no permission (generic login is not authority).
     const plain = await staffSession(f.realm.building.id, []);
@@ -478,6 +640,9 @@ describe('worker authorization denials (401/403) with zero mutation', () => {
       { idempotencyKey: key() });
     assert.equal(plainDenied.status, 403);
     assert.equal(err(plainDenied), 'PERMISSION_DENIED');
+    const plainReadDenied = await get(plain, readUrl(f.scope.id));
+    assert.equal(plainReadDenied.status, 403);
+    assert.equal(err(plainReadDenied), 'PERMISSION_DENIED');
 
     // 403 — the ACTUAL CURRENT Crew Lead WITHOUT the explicit grant: the lead
     // binding alone never opens the lane.
@@ -500,6 +665,9 @@ describe('worker authorization denials (401/403) with zero mutation', () => {
       assert.equal(denied.status, 403, url);
       assert.equal(err(denied), 'HANDYMAN_BAST_NOT_AUTHORIZED', url);
     }
+    const nonLeadReadDenied = await get(notLead, readUrl(f.scope.id));
+    assert.equal(nonLeadReadDenied.status, 403);
+    assert.equal(err(nonLeadReadDenied), 'HANDYMAN_BAST_NOT_AUTHORIZED');
 
     // 403 — permission but NO Building assignment (BE-02G).
     const noBuilding = await staffSession(f.realm.building.id,
@@ -508,12 +676,18 @@ describe('worker authorization denials (401/403) with zero mutation', () => {
       { idempotencyKey: key() });
     assert.equal(buildingDenied.status, 403);
     assert.equal(err(buildingDenied), 'BUILDING_ACCESS_DENIED');
+    const noBuildingRead = await get(noBuilding, readUrl(f.scope.id));
+    assert.equal(noBuildingRead.status, 403);
+    assert.equal(err(noBuildingRead), 'BUILDING_ACCESS_DENIED');
 
     // Cross-Building: a second realm/lead may neither prepare on this scope
     // nor issue/void this document (exact Building wall, no Client shortcut).
     const other = await fixture();
     await passedRun(other);
     const otherToken = await workerSession(other);
+    const otherBuildingRead = await get(otherToken, readUrl(f.scope.id));
+    assert.equal(otherBuildingRead.status, 403);
+    assert.equal(err(otherBuildingRead), 'BUILDING_ACCESS_DENIED');
     const prepared = await post(token, prepareUrl(f.scope.id),
       { idempotencyKey: 'denied-baseline' });
     assert.equal(prepared.status, 201);
@@ -528,6 +702,10 @@ describe('worker authorization denials (401/403) with zero mutation', () => {
     });
     const siblingToken = await staffSession(siblingBuilding.id,
       ['handyman.bast.manage']);
+    const siblingRead = await get(siblingToken, readUrl(f.scope.id));
+    assert.equal(siblingRead.status, 403);
+    assert.equal(err(siblingRead), 'BUILDING_ACCESS_DENIED',
+      'same-Client sibling Building must not open worker BAST read');
     for (const [url, body] of [
       [prepareUrl(f.scope.id), { idempotencyKey: key() }],
       [issueUrl(bastId), { idempotencyKey: key() }],
@@ -869,6 +1047,11 @@ describe('finance/close guard regression', () => {
     assert.equal(issued.status, 200);
     await post(token, voidUrl(bastId),
       { idempotencyKey: 'fin-void', reason: 'Finance guard check.' });
+
+    // The worker read projection is also strictly read-only.
+    const readBack = await get(token, readUrl(f.scope.id));
+    assert.equal(readBack.status, 200, JSON.stringify(readBack.body));
+    assert.equal(readBack.body.data.bast.status, 'VOID');
 
     // Acceptance/warranty gates stay shut.
     assert.equal(issued.body.data.acceptance.customerAccepted, false);

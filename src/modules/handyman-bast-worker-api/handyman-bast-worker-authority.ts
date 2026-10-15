@@ -45,6 +45,7 @@ export type WorkerBastLaneScope = {
   id: string;
   clientId: string;
   buildingId: string;
+  status: string;
 };
 
 export type WorkerBastAction = 'ISSUE' | 'VOID';
@@ -78,7 +79,12 @@ export async function loadWorkerBastLaneScope(
   if (!resolution || resolution.leadUserId !== actorUserId) {
     throw handymanBastNotAuthorizedError();
   }
-  return { id: scope.id, clientId: scope.clientId, buildingId: scope.buildingId };
+  return {
+    id: scope.id,
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+    status: scope.status,
+  };
 }
 
 /**

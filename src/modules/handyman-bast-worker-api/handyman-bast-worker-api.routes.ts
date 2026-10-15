@@ -5,6 +5,7 @@ import {
   HANDYMAN_BAST_MANAGE_PERMISSION,
 } from './handyman-bast-worker-authority';
 import {
+  getWorkerExecutionScopeBastHandler,
   postWorkerBastIssueHandler,
   postWorkerBastPrepareHandler,
   postWorkerBastVoidHandler,
@@ -13,6 +14,7 @@ import {
 /**
  * CR-HM-BAST-HTTP-01 — Authorized Worker BAST transport:
  *
+ *   GET  /handyman/field/execution-scopes/:executionScopeId/bast
  *   POST /handyman/field/execution-scopes/:executionScopeId/bast/prepare
  *   POST /handyman/field/bast/:bastId/issue
  *   POST /handyman/field/bast/:bastId/void
@@ -33,6 +35,13 @@ export function createHandymanBastWorkerApiRouter(): Router {
   const router = Router();
   const auth = authenticationMiddleware;
   const workerBast = requirePermission(HANDYMAN_BAST_MANAGE_PERMISSION);
+
+  router.get(
+    '/handyman/field/execution-scopes/:executionScopeId/bast',
+    auth,
+    workerBast,
+    getWorkerExecutionScopeBastHandler,
+  );
 
   router.post(
     '/handyman/field/execution-scopes/:executionScopeId/bast/prepare',

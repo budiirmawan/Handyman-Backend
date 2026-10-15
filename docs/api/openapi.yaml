@@ -7400,6 +7400,33 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/field/execution-scopes/{executionScopeId}/bast:
+    get:
+      tags: [Handyman BAST]
+      operationId: getHandymanWorkerExecutionScopeBast
+      x-required-permission: handyman.bast.manage
+      x-building-scoped: true
+      x-current-assignment-role: CREW_LEAD
+      summary: Read the current BAST state for the authorized field Crew Lead (CR-HM-BAST-WORKER-READ-01)
+      description: "CR-HM-BAST-WORKER-READ-01 — read-only field projection. Requires authentication, `handyman.bast.manage`, exact server-derived Building access, and the CURRENT authoritative Crew Lead assignment. Reuses the existing active-then-latest BAST selection. Returns only worker lifecycle events (PREPARE/ISSUE/VOID), bounded acceptance facts, document ID/version and lifecycle candidates; it omits tenant/building data, Customer Care sign-off rows/evidence and ACCEPT/REJECT event details. No acceptance, invoice, payment, warranty or closure state is mutated."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Current worker-safe BAST projection; `bast` and `acceptance` are null before any BAST exists
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastWorkerReadView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /handyman/field/execution-scopes/{executionScopeId}/bast/prepare:
     post:
       tags: [Handyman BAST]
@@ -81438,6 +81465,71 @@ components:
         event:
           $ref: '#/components/schemas/HandymanBastWorkerEvent'
         replayed: { type: boolean, description: 'True when idempotencyKey replayed an earlier command; event is the original row.' }
+    HandymanBastWorkerLifecycleAction:
+      type: string
+      enum: [PREPARE, ISSUE, VOID]
+    HandymanBastWorkerAcceptance:
+      description: 'Worker-safe acceptance state only. Deliberately excludes clientId, approvedSignOff, signature digest/evidence and signOffComplete; ACCEPT/REJECT remain Customer Care actions.'
+      type: object
+      required: [bastId, executionScopeId, status, customerAccepted, warrantyStartEligible, issuedAt, acceptedAt, rejectedAt, voidedAt, artifactRef]
+      properties:
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanBastStatus' }
+        customerAccepted: { type: boolean }
+        warrantyStartEligible: { type: boolean }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        voidedAt: { type: string, format: date-time, nullable: true }
+        artifactRef: { type: string, description: 'Server-computed BAST/<id>/v<N> reference; not a storage key.' }
+    HandymanBastWorkerReadEvent:
+      description: 'Only PREPARE/ISSUE/VOID history is exposed to the worker lane; Customer Care ACCEPT/REJECT events and sign-off evidence are omitted.'
+      type: object
+      required: [id, bastId, executionScopeId, eventType, idempotencyKey, actorUserId, occurredAt, createdAt, voidReason]
+      properties:
+        id: { type: string, format: uuid }
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        eventType: { type: string, enum: [PREPARE, ISSUE, VOID] }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        actorUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        voidReason: { type: string, nullable: true, maxLength: 2000 }
+    HandymanBastWorkerReadView:
+      description: 'Bounded field-worker projection used for refresh/read-after-command; contains no client/building fields or Customer Care sign-off payload.'
+      type: object
+      required: [executionScopeId, scopeStatus, bast, acceptance, eligibility, lifecycleActions, events]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        scopeStatus: { type: string, enum: [AUTHORIZED] }
+        bast:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastWorkerDocument'
+          nullable: true
+        acceptance:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastWorkerAcceptance'
+          nullable: true
+        eligibility:
+          type: object
+          required: [currentWorkerAssignment, scopeAuthorized, bastQcRunId, prepareRequiresLatestGuardedQcPass, issueRequiresAnchoredQcPassToRemainLatest, customerAccepted, warrantyStartEligible]
+          properties:
+            currentWorkerAssignment: { type: string, enum: [CURRENT_CREW_LEAD] }
+            scopeAuthorized: { type: boolean }
+            bastQcRunId: { type: string, format: uuid, nullable: true }
+            prepareRequiresLatestGuardedQcPass: { type: boolean }
+            issueRequiresAnchoredQcPassToRemainLatest: { type: boolean }
+            customerAccepted: { type: boolean }
+            warrantyStartEligible: { type: boolean }
+        lifecycleActions:
+          type: array
+          description: 'Current worker lifecycle candidates: PREPARE when no active BAST is present; otherwise transitions derived from the frozen BAST lifecycle. QC gates are rechecked by command services.'
+          items: { $ref: '#/components/schemas/HandymanBastWorkerLifecycleAction' }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanBastWorkerReadEvent' }
     HandymanCustomerLedgerLineKind:
       type: string
       enum: [LABOR, MATERIAL]

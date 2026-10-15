@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
 import {
+  getHandymanExecutionScopeBastCustomerCareView,
   issueHandymanBast,
   prepareHandymanBast,
   voidHandymanBast,
@@ -113,6 +114,67 @@ function toWorkerCommandPayload(result: HandymanBastCommandResult) {
     event: toWorkerEventPayload(result.event),
     replayed: result.replayed,
   };
+}
+
+/**
+ * GET /handyman/field/execution-scopes/:executionScopeId/bast
+ * Worker-authorized read projection for page refresh/state recovery. Reuses
+ * the existing BAST read service and the same active-then-latest document
+ * selection as Customer Care, but only after `handyman.bast.manage`, exact
+ * Building and CURRENT Crew Lead authorization. It deliberately omits
+ * sign-off rows, signature digests/evidence, and ACCEPT/REJECT event details;
+ * customer decision state is represented by the bounded acceptance facts.
+ */
+export async function getWorkerExecutionScopeBastHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseWorkerBastScopeParam(
+      p(req.params.executionScopeId),
+    );
+    const actorUserId = actor(req);
+    const laneScope = await loadWorkerBastLaneScope(
+      executionScopeId,
+      actorUserId,
+    );
+    const view = await getHandymanExecutionScopeBastCustomerCareView(
+      executionScopeId,
+      actorUserId,
+    );
+    const hasActiveBast = Boolean(view.bast && view.bast.status !== 'VOID');
+    const lifecycleActions = hasActiveBast && view.bast
+      ? computeWorkerBastAvailableActions(view.bast.status)
+      : laneScope.status === 'AUTHORIZED'
+        ? ['PREPARE' as const]
+        : [];
+    const workerEvents = view.events
+      .filter((event) => ['PREPARE', 'ISSUE', 'VOID'].includes(event.eventType))
+      .map(toWorkerEventPayload);
+
+    sendSuccess(res, {
+      executionScopeId: view.executionScopeId,
+      scopeStatus: laneScope.status,
+      bast: view.bast ? toWorkerBastPayload(view.bast) : null,
+      acceptance: view.acceptance
+        ? toWorkerAcceptancePayload(view.acceptance)
+        : null,
+      eligibility: {
+        currentWorkerAssignment: 'CURRENT_CREW_LEAD',
+        scopeAuthorized: laneScope.status === 'AUTHORIZED',
+        bastQcRunId: view.bast?.qcRunId ?? null,
+        prepareRequiresLatestGuardedQcPass: true,
+        issueRequiresAnchoredQcPassToRemainLatest: true,
+        customerAccepted: view.acceptance?.customerAccepted ?? false,
+        warrantyStartEligible: view.acceptance?.warrantyStartEligible ?? false,
+      },
+      lifecycleActions,
+      events: workerEvents,
+    }, 200);
+  } catch (error) {
+    next(error);
+  }
 }
 
 /**
