@@ -100,6 +100,7 @@ function toApprovedSignOffPayload(
 }
 
 function toBastEventPayload(event: HandymanBastEventRecord) {
+  const metadata = event.metadata ?? {};
   return {
     id: event.id,
     bastId: event.bastId,
@@ -109,6 +110,11 @@ function toBastEventPayload(event: HandymanBastEventRecord) {
     actorUserId: event.actorUserId,
     occurredAt: event.occurredAt,
     createdAt: event.createdAt,
+    // CR-HM-BAST-HTTP-01 — expose only the bounded audit field from the
+    // append-only metadata. This makes a worker VOID reason available on
+    // customer-care GET read-after-write without publishing arbitrary JSON.
+    voidReason:
+      typeof metadata.voidReason === 'string' ? metadata.voidReason : null,
   };
 }
 

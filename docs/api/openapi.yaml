@@ -81265,6 +81265,7 @@ components:
         - actorUserId
         - occurredAt
         - createdAt
+        - voidReason
       properties:
         id: { type: string, format: uuid }
         bastId: { type: string, format: uuid }
@@ -81274,6 +81275,7 @@ components:
         actorUserId: { type: string, format: uuid }
         occurredAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
+        voidReason: { type: string, nullable: true, maxLength: 2000, description: 'The preserved worker VOID justification; null for other events.' }
     HandymanBastSignOff:
       type: object
       required:

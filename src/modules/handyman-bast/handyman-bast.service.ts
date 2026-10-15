@@ -111,7 +111,10 @@ async function loadAuthorizedScope(
   executor: Pick<PoolClient, 'query'>,
   executionScopeId: string,
 ) {
-  const scope = await handymanScopeAssignmentRepository.findScopeById(
+  // Scope-row lock serializes PREPARE's active-document/idempotency check
+  // with assignment changes and competing PREPARE requests. A duplicate key
+  // waits here, then observes and replays the winner's DRAFT/event.
+  const scope = await handymanScopeAssignmentRepository.lockScopeById(
     executor,
     executionScopeId,
   );
@@ -215,7 +218,10 @@ async function applyPart01Transition(
   const voidReasonMetadata = ensureVoidReasonMetadata(action, voidReason);
 
   return withTransaction(async (client) => {
-    const bast = await handymanBastRepository.findBastById(client, bastId);
+    const bast = await handymanBastRepository.findBastByIdForUpdate(
+      client,
+      bastId,
+    );
     if (!bast) {
       throw handymanBastNotFoundError();
     }
@@ -338,7 +344,10 @@ async function applyCustomerSignOff(
     : null;
 
   return withTransaction(async (client) => {
-    const bast = await handymanBastRepository.findBastById(client, bastId);
+    const bast = await handymanBastRepository.findBastByIdForUpdate(
+      client,
+      bastId,
+    );
     if (!bast) {
       throw handymanBastNotFoundError();
     }

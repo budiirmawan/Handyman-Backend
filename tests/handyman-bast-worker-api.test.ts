@@ -8,6 +8,7 @@ import EmbeddedPostgres from 'embedded-postgres';
 import { closePool, getPool, initDatabase, migrateUp } from '../src/database';
 import { resetAppConfigCache } from '../src/config';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
+import { buildingService } from '../src/modules/buildings';
 import { credentialService } from '../src/modules/auth';
 import {
   bindHandymanQcEvidence,
@@ -517,6 +518,26 @@ describe('worker authorization denials (401/403) with zero mutation', () => {
       { idempotencyKey: 'denied-baseline' });
     assert.equal(prepared.status, 201);
     const bastId = prepared.body.data.bast.id as string;
+
+    // Same-Client SIBLING Building is still a hard denial (not merely a
+    // foreign-Client denial). Exact server-derived Building scope is required.
+    const siblingBuilding = await buildingService.createBuilding({
+      propertyId: f.realm.property.id,
+      code: `B_${randomUUID().slice(0, 8).toUpperCase()}`,
+      name: 'Same-client sibling building',
+    });
+    const siblingToken = await staffSession(siblingBuilding.id,
+      ['handyman.bast.manage']);
+    for (const [url, body] of [
+      [prepareUrl(f.scope.id), { idempotencyKey: key() }],
+      [issueUrl(bastId), { idempotencyKey: key() }],
+      [voidUrl(bastId), { idempotencyKey: key(), reason: 'sibling attempt' }],
+    ] as const) {
+      const denied = await post(siblingToken, url, body);
+      assert.equal(denied.status, 403, url);
+      assert.equal(err(denied), 'BUILDING_ACCESS_DENIED', url);
+    }
+
     for (const [url, body] of [
       [prepareUrl(f.scope.id), { idempotencyKey: key() }],
       [issueUrl(bastId), { idempotencyKey: key() }],
@@ -651,6 +672,54 @@ describe('duplicate and concurrent requests', () => {
     assert.ok(['Concurrent void A.', 'Concurrent void B.']
       .includes(voidMeta?.voidReason as string),
       'the surviving VOID keeps exactly one of the reasons');
+  });
+
+  it('replays concurrent same-key PREPARE/ISSUE/VOID requests as the original command', async () => {
+    const f = await fixture();
+    await passedRun(f);
+    const token = await workerSession(f);
+
+    const prepareKey = key();
+    const [p1, p2] = await Promise.all([
+      post(token, prepareUrl(f.scope.id), { idempotencyKey: prepareKey }),
+      post(token, prepareUrl(f.scope.id), { idempotencyKey: prepareKey }),
+    ]);
+    assert.deepEqual([p1.status, p2.status].sort(), [200, 201]);
+    assert.equal(p1.body.data.bast.id, p2.body.data.bast.id);
+    assert.equal(p1.body.data.event.id, p2.body.data.event.id);
+    assert.deepEqual([p1.body.data.replayed, p2.body.data.replayed].sort(),
+      [false, true]);
+    const bastId = p1.body.data.bast.id as string;
+
+    const issueKey = key();
+    const [i1, i2] = await Promise.all([
+      post(token, issueUrl(bastId),
+        { idempotencyKey: issueKey, expectedVersion: 1 }),
+      post(token, issueUrl(bastId),
+        { idempotencyKey: issueKey, expectedVersion: 1 }),
+    ]);
+    assert.deepEqual([i1.status, i2.status], [200, 200]);
+    assert.equal(i1.body.data.event.id, i2.body.data.event.id);
+    assert.deepEqual([i1.body.data.replayed, i2.body.data.replayed].sort(),
+      [false, true]);
+
+    const voidKey = key();
+    const voidBody = {
+      idempotencyKey: voidKey,
+      expectedVersion: 2,
+      reason: 'One concurrent void command.',
+    };
+    const [v1, v2] = await Promise.all([
+      post(token, voidUrl(bastId), voidBody),
+      post(token, voidUrl(bastId), voidBody),
+    ]);
+    assert.deepEqual([v1.status, v2.status], [200, 200]);
+    assert.equal(v1.body.data.event.id, v2.body.data.event.id);
+    assert.deepEqual([v1.body.data.replayed, v2.body.data.replayed].sort(),
+      [false, true]);
+    assert.deepEqual((await eventRows(bastId)).map((row) => row.event_type),
+      ['PREPARE', 'ISSUE', 'VOID'],
+      'concurrent retries append exactly one event per idempotency key');
   });
 });
 

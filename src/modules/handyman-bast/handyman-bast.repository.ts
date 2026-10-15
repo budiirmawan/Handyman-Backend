@@ -98,6 +98,23 @@ async function findBastById(
   return result.rows[0] ? mapBast(result.rows[0]) : null;
 }
 
+/**
+ * Transactional command read. Serializes concurrent duplicate ISSUE/VOID and
+ * customer sign-off requests before replay lookup, so a same-key retry waits
+ * for the winner and then returns its original append-only event instead of
+ * spuriously receiving ILLEGAL_TRANSITION.
+ */
+async function findBastByIdForUpdate(
+  executor: Executor,
+  id: string,
+): Promise<HandymanBastRecord | null> {
+  const result = await executor.query(
+    `${BAST_SELECT} WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  return result.rows[0] ? mapBast(result.rows[0]) : null;
+}
+
 async function findActiveBastByScopeId(
   executor: Executor = getPool(),
   executionScopeId: string,
@@ -306,6 +323,7 @@ async function listSignOffsByBastId(
 export const handymanBastRepository = {
   createBast,
   findBastById,
+  findBastByIdForUpdate,
   findActiveBastByScopeId,
   findLatestBastByScopeId,
   updateBastStatus,

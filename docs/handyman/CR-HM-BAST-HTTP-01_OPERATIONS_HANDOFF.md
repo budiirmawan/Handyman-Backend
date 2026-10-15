@@ -97,7 +97,7 @@ REJECT  : ISSUED  → REJECTED  (customer lane only)
 
 ## Document / evidence access
 
-- BAST reads stay on the Customer Care transport: `GET /handyman/execution-scopes/:executionScopeId/bast` and `GET /handyman/bast/:bastId` (`tenant_company.read` + exact Building). They return the document, the acceptance contract, the full event chain and sign-off rows; command responses above are also immediately consistent (read-after-write).
+- BAST reads stay on the Customer Care transport: `GET /handyman/execution-scopes/:executionScopeId/bast` and `GET /handyman/bast/:bastId` (`tenant_company.read` + exact Building). They return the document, the acceptance contract, the full event chain (including the preserved `voidReason`, null on other events) and sign-off rows; command responses above are also immediately consistent (read-after-write).
 - QC evidence bytes remain under the existing field-evidence contract (`POST /handyman/field/execution-scopes/:executionScopeId/evidence/upload` → `hm-ev://<uuid>` references). The BAST artifact reference `BAST/<id>/v<N>` is server-computed metadata for UI tracking — it is not a storage key and must never be generated client-side.
 
 ## Existing Customer ACCEPT/REJECT contract (unchanged)
