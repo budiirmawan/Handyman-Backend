@@ -22,14 +22,19 @@ import {
  *   POST /handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/reject
  *
  * Reads require `tenant_company.read` + `canAccessClient`.
- * Payment commands require `tenant_company.manage` + `canAccessClient`
- * + single-use `idempotencyKey`.
+ * Payment REPORTING (record) requires `tenant_company.manage` +
+ * `canAccessClient` + single-use `idempotencyKey` — reporting a payment
+ * is a Customer/Tenant action, not Finance verification.
+ * Payment VERIFICATION (confirm / reject) requires
+ * `handyman.finance.manage` (CR-HM-FIN-AUTH-01) + scope: generic
+ * `tenant_company.manage` alone can no longer verify money.
  */
 export function createHandymanCustomerLedgerApiRouter(): Router {
   const router = Router();
   const auth = authenticationMiddleware;
   const read = requirePermission('tenant_company.read');
   const manage = requirePermission('tenant_company.manage');
+  const financeVerify = requirePermission('handyman.finance.manage');
 
   router.get(
     '/handyman/execution-scopes/:executionScopeId/customer-ledger',
@@ -58,13 +63,13 @@ export function createHandymanCustomerLedgerApiRouter(): Router {
   router.post(
     '/handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/confirm',
     auth,
-    manage,
+    financeVerify,
     postConfirmCustomerPaymentHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/reject',
     auth,
-    manage,
+    financeVerify,
     postRejectCustomerPaymentHandler,
   );
 

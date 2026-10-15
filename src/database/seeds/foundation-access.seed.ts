@@ -265,6 +265,24 @@ export const FOUNDATION_PERMISSIONS: readonly {
     code: 'handyman.bast.manage',
     name: 'Prepare, issue and void Handyman BAST documents',
   },
+  // CR-HM-FIN-AUTH-01: explicitly granted Handyman Commercial, Finance
+  // and Settlement authorities (migration 0448). Generic
+  // `tenant_company.manage` alone does NOT authorize financial
+  // mutations; Client / exact-Building scope is ALSO required at
+  // runtime, and settlement authority never implies refund authority.
+  {
+    code: 'handyman.commercial.manage',
+    name: 'Author Handyman commercial agreements, pricing and BM-fee terms',
+  },
+  { code: 'handyman.finance.read', name: 'Read Handyman financial transactions' },
+  {
+    code: 'handyman.finance.manage',
+    name: 'Execute Handyman finance commands (ledger, allocations, corrections, payment verification)',
+  },
+  {
+    code: 'handyman.settlement.manage',
+    name: 'Execute Handyman settlement commands',
+  },
   // BE-16A — Inventory Item Master
   { code: 'inventory_item.read', name: 'Read Inventory Items' },
   { code: 'inventory_item.manage', name: 'Manage Inventory Items' },
@@ -776,6 +794,15 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   // platform administrator. The permission alone still authorizes nothing
   // without the CURRENT Crew Lead binding and exact Building access.
   'handyman.bast.manage',
+  // CR-HM-FIN-AUTH-01 — financial execution authorities. Allocating,
+  // refunding, correcting, verifying or settling money must be assigned
+  // as a deliberate administrative act, never inherited by being a
+  // platform administrator, Customer Care, Tenant PIC, Dispatcher or
+  // generic Operations user.
+  'handyman.commercial.manage',
+  'handyman.finance.read',
+  'handyman.finance.manage',
+  'handyman.settlement.manage',
   'operational_budget.override',
   'rfq.award',
   // CR-BE-PRICE-01 PART 01 — retroactive correction of an effective price

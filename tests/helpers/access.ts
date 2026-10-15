@@ -266,6 +266,14 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   // BE-14A — Tenant Company
   { code: 'tenant_company.read', name: 'Read Tenant Companies' },
   { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
+  // CR-HM-FIN-AUTH-01 — the test administrator is a deliberately
+  // provisioned actor and therefore holds the dedicated financial
+  // authorities. Production does NOT inherit these: the foundation
+  // seed keeps them UNASSIGNED_BY_DEFAULT (see foundation-access.seed).
+  { code: 'handyman.commercial.manage', name: 'Author Handyman commercial agreements, pricing and BM-fee terms' },
+  { code: 'handyman.finance.read', name: 'Read Handyman financial transactions' },
+  { code: 'handyman.finance.manage', name: 'Execute Handyman finance commands (ledger, allocations, corrections, payment verification)' },
+  { code: 'handyman.settlement.manage', name: 'Execute Handyman settlement commands' },
   // BE-17A — Purchase Request
   { code: 'purchase_request.read', name: 'Read Purchase Requests' },
   { code: 'purchase_request.manage', name: 'Manage Purchase Requests' },

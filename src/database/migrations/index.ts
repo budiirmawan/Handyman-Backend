@@ -1,4 +1,6 @@
 import { migration0446HandymanBastWorkerTransport } from './0446_handyman_bast_worker_transport';
+import { migration0447NetHandymanAllocationCaps } from './0447_net_handyman_allocation_caps';
+import { migration0448HandymanFinanceAuthorityPermissions } from './0448_handyman_finance_authority_permissions';
 import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
 import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
 import { migration0443SeparateHandymanVariationQcAuthority } from './0443_separate_handyman_variation_qc_authority';
@@ -933,4 +935,6 @@ export const migrations: readonly Migration[] = [
   migration0444VersionHandymanQcChecklists,
   migration0445BindHandymanBastToQcPass,
   migration0446HandymanBastWorkerTransport,
+  migration0447NetHandymanAllocationCaps,
+  migration0448HandymanFinanceAuthorityPermissions,
 ];
