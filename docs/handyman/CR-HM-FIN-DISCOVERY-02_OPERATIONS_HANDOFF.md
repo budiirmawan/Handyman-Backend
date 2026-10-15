@@ -60,18 +60,20 @@ All paths below are relative to `API_PREFIX` (normally `/api/v1`). Responses use
 | --- | --- | --- | --- |
 | `clientId` | UUID | **Yes** | Target Client ID. |
 | `buildingId` | UUID | No | Optional Building ID filter within `clientId`. |
+| `tenantCompanyId` | UUID | No | Optional Tenant Company ID filter within `clientId`. |
 | `executionScopeId` | UUID | No | Optional Execution Scope ID filter. |
+| `handymanRequestId` | UUID | No | Optional Handyman Request ID filter. |
 | `transactionId` | UUID | No | Optional Customer Transaction ID filter. |
 | `recordType` | enum | No | `CUSTOMER_PAYMENT` \| `LEDGER_CORRECTION` \| `SETTLEMENT_UNIT` \| `CUSTOMER_TRANSACTION` |
 | `actionCategory` | enum | No | `PAYMENT_VERIFICATION` \| `PAYMENT_ALLOCATION` \| `PENDING_CORRECTION` \| `PENDING_RECONCILIATION` \| `FINANCE_BLOCKER` |
-| `recordStatus` | string (`1..64`) | No | Exact authoritative status filter (`PENDING`, `CONFIRMED`, `REFUND`, `REVERSAL`, `ADJUSTMENT`, `PAYABLE`, `INCLUDED_IN_SETTLEMENT`, `SETTLED`, `LEDGER_ONLY`). |
-| `blockerCode` | string (`1..64`) | No | Exact blocker code filter (`PROVISIONAL_PAYMENTS_PENDING`, `NO_POSTED_CHARGE_FACTS`, `OPEN_EXCEPTION`, `PAYABLE_NE_INVOICE_SUBTOTAL`, `INCLUDED_NE_PAYABLE`, `PAYOUT_NE_INCLUDED`, `UNAPPLIED_OR_PENDING_FUNDS`, `POST_SETTLEMENT_CORRECTION`). |
+| `recordStatus` | enum | No | Exact authoritative status filter (`PENDING`, `CONFIRMED`, `REFUND`, `REVERSAL`, `ADJUSTMENT`, `PAYABLE`, `INCLUDED_IN_SETTLEMENT`, `SETTLED`, `LEDGER_ONLY`). |
+| `blockerCode` | enum | No | Exact blocker code filter (`NO_POSTED_CHARGE_FACTS`, `PROVISIONAL_PAYMENTS_PENDING`, `FUNDING_SHORTFALL`, `INCLUSION_MISMATCH`, `LEDGER_BASIS_MISMATCH`, `OPEN_EXCEPTION`). |
 | `hasBlocker` | boolean (`true`\|`false`) | No | `true` = only items where `blockerCode IS NOT NULL`; `false` = only items where `blockerCode IS NULL`. |
 | `responsiblePermission` | enum | No | `handyman.finance.manage` \| `handyman.settlement.manage` |
 | `createdFrom` | ISO-8601 date-time | No | Inclusive lower bound on `createdAt`. |
 | `createdTo` | ISO-8601 date-time | No | Inclusive upper bound on `createdAt` (`createdFrom <= createdTo`). |
-| `includeCounts` | boolean (`true`\|`false`) | No | When `true`, computes `data.counts` over the **complete authorized and filtered result set** (independent of `limit`/`cursor`). When `false` or omitted, `data.counts` is `null`. |
-| `limit` | integer (`1..100`) | No | Page size (default `25`, max `100`). |
+| `includeCounts` | boolean (`true`\|`false`) | No | When `true`, computes `data.counts` over the **complete authorized and filtered result set** (independent of `limit`/`cursor`). When `false` or omitted, `data.counts` is omitted (`undefined`). |
+| `limit` | integer (`1..100`) | No | Page size (default `20`, max `100`). |
 | `cursor` | string (base64url) | No | Opaque keyset continuation cursor returned in `data.pagination.nextCursor`. |
 
 Unknown query parameters or smuggled identity fields (such as `actorUserId`) are rejected with `400 VALIDATION_ERROR`.
@@ -86,11 +88,11 @@ Every item in `data.items` is backed by an existing database row and its authori
      - `recordStatus`: `'PENDING'`
      - `blockerCode`: `'PROVISIONAL_PAYMENTS_PENDING'`
      - `responsible`: `{ permission: 'handyman.finance.manage', action: 'VERIFY_CUSTOMER_PAYMENT' }`
-     - `provenance`: includes `paymentId`, `paymentStatus`, `paymentChannel`, `paymentReference`, `paymentProofEvidenceId` (resolved from `evidence_submissions` where `purpose = 'PAYMENT_PROOF'`), and `recordedByUserId`.
-   - **Confirmed payments with unallocated balance (`status = 'CONFIRMED'`, not reversed by `REVERSAL`, `amount - net_allocated > 0`):**
+     - `provenance`: includes `paymentId`, `paymentStatus`, `paymentChannel`, `paymentReference`, `paymentProofEvidenceId` (resolved strictly from `evidence_submissions` where `execution_type = 'HANDYMAN_CUSTOMER_PAYMENT'`, `execution_id = payment.id`, `client_id = payment.client_id`, `status = 'ACTIVE'`, `evidence_type IN ('PHOTO', 'DOCUMENT')`, `file_reference = 'evidence/' || id::text`, `file_size > 0`, and `content_sha256 IS NOT NULL`), and `recordedByUserId`.
+   - **Confirmed payments with unallocated balance (`status = 'CONFIRMED'`, not reversed by `REVERSAL`, `amount - (allocated_gross - reversed_allocated) > 0`):**
      - `actionCategory`: `'PAYMENT_ALLOCATION'`
      - `recordStatus`: `'CONFIRMED'`
-     - `allocationState`: `'UNALLOCATED'` (`allocatedAmount == 0`) or `'PARTIALLY_ALLOCATED'` (`0 < allocatedAmount < amount`)
+     - `allocationState`: `'UNALLOCATED'` (`allocatedAmount == '0.00'`) or `'PARTIALLY_ALLOCATED'` (`0 < allocatedAmount < amount`). Reversing an allocation (`REVERSAL` with `source_kind = 'ALLOCATION'`) nets out `reversed_allocated` and automatically returns the payment to `PAYMENT_ALLOCATION`.
      - `blockerCode`: `'NO_POSTED_CHARGE_FACTS'` if the transaction currently has `0` charge lines; otherwise `null`
      - `responsible`: `{ permission: 'handyman.finance.manage', action: 'ALLOCATE_CUSTOMER_PAYMENT' }`
 
@@ -98,22 +100,25 @@ Every item in `data.items` is backed by an existing database row and its authori
    - **Post-settlement or settlement-linked `REFUND | REVERSAL | ADJUSTMENT` rows whose `ledger_correction_id` has not yet been recorded in `handyman_settlement_exceptions` via `POST /handyman/execution-scopes/:executionScopeId/settlement/correction`:**
      - `actionCategory`: `'PENDING_CORRECTION'`
      - `recordStatus`: `correction_kind` (`'REFUND'` \| `'REVERSAL'` \| `'ADJUSTMENT'`)
-     - `blockerCode`: `'POST_SETTLEMENT_CORRECTION'` when the scope's settlement unit is already `'SETTLED'`; otherwise `null`
+     - `blockerCode`: `null`
      - `responsible`: `{ permission: 'handyman.settlement.manage', action: 'RECORD_SETTLEMENT_CORRECTION' }`
-     - `provenance`: includes `ledgerCorrectionId`, `correctionKind`, `correctionSourceKind`, `entitlementCorrectionPending`, `settlementCorrectionPending: true`, `settlementUnitId`, and `settlementUnitStatus`.
+     - `provenance`: includes `ledgerCorrectionId`, `correctionKind`, `correctionSourceKind`, `entitlementCorrectionPending`, `settlementCorrectionPending: true`, `settlementUnitId`, and `settlementState`.
 
 3. **Branch 3 — `SETTLEMENT_UNIT` (`handyman_settlement_units`)**
    - **Settlement units not yet in terminal clean state (`SETTLED` with latest reconciliation `MATCHED` and `0` exceptions):**
      - When latest reconciliation outcome is `'VARIANCE'` or `open_exception_count > 0`:
        - `actionCategory`: `'FINANCE_BLOCKER'`
-       - `blockerCode`: `variance_cause` (e.g. `'PAYABLE_NE_INVOICE_SUBTOTAL'`, `'INCLUDED_NE_PAYABLE'`, `'PAYOUT_NE_INCLUDED'`, `'UNAPPLIED_OR_PENDING_FUNDS'`, `'POST_SETTLEMENT_CORRECTION'`) or `'OPEN_EXCEPTION'`
+       - `blockerCode`: `variance_cause` (`'FUNDING_SHORTFALL'`, `'INCLUSION_MISMATCH'`, `'LEDGER_BASIS_MISMATCH'`, `'OPEN_EXCEPTION'`) or `'OPEN_EXCEPTION'`
      - Otherwise (`PAYABLE`, `INCLUDED_IN_SETTLEMENT` awaiting reconciliation, or `INCLUDED_IN_SETTLEMENT` with `MATCHED` reconciliation awaiting `settle`):
        - `actionCategory`: `'PENDING_RECONCILIATION'`
        - `blockerCode`: `null`
      - `responsible`:
-       - `status === 'PAYABLE'` -> `{ permission: 'handyman.settlement.manage', action: 'INCLUDE_IN_SETTLEMENT' }`
-       - `status === 'INCLUDED_IN_SETTLEMENT'` and `reconciliationOutcome === 'MATCHED'` and `openExceptionCount === 0` -> `{ permission: 'handyman.settlement.manage', action: 'SETTLE_SETTLEMENT_UNIT' }`
-       - Otherwise -> `{ permission: 'handyman.settlement.manage', action: 'RECONCILE_SETTLEMENT_UNIT' }`
+       - `latest_recon.outcome === 'VARIANCE'` and `variance_cause === 'FUNDING_SHORTFALL'` -> `{ permission: 'handyman.finance.manage', action: 'RESOLVE_FUNDING_SHORTFALL' }`
+       - `latest_recon.outcome === 'VARIANCE'` -> `{ permission: 'handyman.settlement.manage', action: 'RESOLVE_SETTLEMENT_VARIANCE' }`
+       - `open_exception_count > 0` -> `{ permission: 'handyman.settlement.manage', action: 'RECONCILE_SETTLEMENT_UNIT' }`
+       - `recordStatus === 'PAYABLE'` -> `{ permission: 'handyman.settlement.manage', action: 'INCLUDE_IN_SETTLEMENT' }`
+       - `latest_recon === null` or `latest_recon.occurred_at < latest_ev.occurred_at` -> `{ permission: 'handyman.settlement.manage', action: 'RECONCILE_SETTLEMENT_UNIT' }`
+       - Otherwise -> `{ permission: 'handyman.settlement.manage', action: 'SETTLE_SETTLEMENT_UNIT' }`
 
 4. **Branch 4 — `CUSTOMER_TRANSACTION` (`handyman_customer_transactions`)**
    - **Opened customer transactions (`status = 'LEDGER_ONLY'`) with zero `handyman_charge_lines`:**
@@ -121,6 +126,19 @@ Every item in `data.items` is backed by an existing database row and its authori
      - `recordStatus`: `'LEDGER_ONLY'`
      - `blockerCode`: `'NO_POSTED_CHARGE_FACTS'`
      - `responsible`: `{ permission: 'handyman.finance.manage', action: 'COMPOSE_CHARGE_LINES' }`
+
+### Payment Proof Evidence Provenance Boundary (Migration `0433`)
+
+- `provenance.paymentProofEvidenceId` is populated **only** when an authoritative row exists in `evidence_submissions` satisfying all of:
+  - `execution_type = 'HANDYMAN_CUSTOMER_PAYMENT'`
+  - `execution_id = handyman_customer_payments.id`
+  - `client_id = handyman_customer_payments.client_id`
+  - `status = 'ACTIVE'`
+  - `evidence_type IN ('PHOTO', 'DOCUMENT')`
+  - `file_reference = 'evidence/' || id::text`, `file_size > 0`, and `content_sha256 IS NOT NULL`
+- The database trigger `handyman_customer_payment_proof_guard()` (`0433_handyman_customer_payment_proof`) enforces that such an evidence row can only be created against a `PENDING` payment linked to a `FINALIZED` `tenant_invoices` row (`handyman_execution_scope_id = execution_scope_id`) with `HANDYMAN_CHARGE` invoice lines, via the Care Workspace upload contract (`POST /handyman/care/requests/:requestId/invoices/:invoiceId/payments/:paymentId/proof`).
+- Generic field evidence (`handyman_field_evidence`), `WORK_ORDER` or `HANDYMAN_REQUEST` attachments in `evidence_submissions`, and `REMOVED` payment proofs are **never** inferred or substituted as payment proof.
+- When a payment is recorded via Operations Customer Care (`POST /handyman/execution-scopes/:executionScopeId/customer-payments`) without a bound `HANDYMAN_CUSTOMER_PAYMENT` evidence submission, `provenance.paymentProofEvidenceId` truthfully remains `null`.
 
 ### Response Schema (`200 OK`)
 
@@ -134,50 +152,50 @@ Every item in `data.items` is backed by an existing database row and its authori
         "recordType": "CUSTOMER_PAYMENT",
         "recordStatus": "PENDING",
         "actionCategory": "PAYMENT_VERIFICATION",
+        "blockerCode": "PROVISIONAL_PAYMENTS_PENDING",
+        "executionScopeId": "33333333-4444-4555-8666-777777777777",
+        "handymanRequestId": "44444444-5555-4666-8777-888888888888",
+        "transactionId": "55555555-6666-4777-8888-999999999999",
         "clientId": "11111111-2222-4333-8444-555555555555",
         "buildingId": "22222222-3333-4444-8555-666666666666",
-        "executionScopeId": "33333333-4444-4555-8666-777777777777",
-        "requestId": "44444444-5555-4666-8777-888888888888",
-        "transactionId": "55555555-6666-4777-8888-999999999999",
+        "tenantCompanyId": "66666666-7777-4888-8999-000000000000",
         "currency": "IDR",
         "amount": "150.00",
         "allocatedAmount": "0.00",
-        "unallocatedAmount": "150.00",
-        "allocationState": "NOT_APPLICABLE",
-        "blockerCode": "PROVISIONAL_PAYMENTS_PENDING",
-        "summary": "Customer-reported payment awaiting Finance verification (BANK_TRANSFER)",
-        "createdAt": "2026-10-15T10:15:30.000Z",
-        "occurredAt": "2026-10-15T10:15:30.000Z",
+        "unallocatedAmount": "0.00",
+        "allocationState": null,
         "responsible": {
           "permission": "handyman.finance.manage",
           "action": "VERIFY_CUSTOMER_PAYMENT"
         },
         "provenance": {
-          "transactionStatus": "CHARGED",
           "paymentId": "8f5c2d9a-4d3a-4b9c-9a1e-1d2e3f4a5b6c",
           "paymentStatus": "PENDING",
           "paymentChannel": "BANK_TRANSFER",
           "paymentReference": "EXT-MDR-001",
-          "paymentProofEvidenceId": null,
           "recordedByUserId": "77777777-8888-4999-8000-111111111111",
+          "paymentProofEvidenceId": null,
           "ledgerCorrectionId": null,
           "correctionKind": null,
           "correctionSourceKind": null,
           "entitlementCorrectionPending": false,
           "settlementCorrectionPending": false,
           "settlementUnitId": null,
-          "settlementUnitStatus": null,
+          "settlementState": null,
+          "reconciliationId": null,
           "reconciliationOutcome": null,
           "varianceCause": null,
+          "varianceAmount": null,
           "openExceptionCount": 0
-        }
+        },
+        "createdAt": "2026-10-15T10:15:30.000Z",
+        "updatedAt": "2026-10-15T10:15:30.000Z"
       }
     ],
     "pagination": {
-      "limit": 25,
-      "hasMore": false,
+      "limit": 20,
       "nextCursor": null,
-      "sort": "created_at_desc_id_desc"
+      "hasMore": false
     },
     "counts": {
       "total": 1,
@@ -215,10 +233,10 @@ Every item in `data.items` is backed by an existing database row and its authori
 ### Pagination & Count Semantics
 
 1. **Deterministic Keyset Ordering:** Rows are ordered by `(created_at DESC, record_type DESC, record_id DESC)`.
-2. **Opaque Continuation Cursor:** `pagination.nextCursor` encodes `{ v: 1, createdAt, recordType, recordId }` as base64url JSON. Pass `cursor=<nextCursor>` on subsequent requests with the same filters. When `pagination.hasMore === false`, `pagination.nextCursor` is `null`.
+2. **Opaque Continuation Cursor:** `pagination.nextCursor` encodes `{ createdAt, recordType, recordId }` as base64url JSON. Pass `cursor=<nextCursor>` on subsequent requests with the same filters. When `pagination.hasMore === false`, `pagination.nextCursor` is `null`.
 3. **Mid-Walk Insertion Stability:** Because continuation uses keyset comparisons `(created_at < cursor.createdAt) OR (created_at = cursor.createdAt AND (record_type < cursor.recordType OR (record_type = cursor.recordType AND record_id < cursor.recordId)))`, newly created records with newer `created_at` timestamps sort ahead of the cursor and never cause duplicate rows or skipped rows in an in-flight continuation walk.
 4. **Full-Result-Set Counts vs. Omitted Counts:**
-   - When `includeCounts=false` (or omitted), `data.counts` is `null`.
+   - When `includeCounts=false` (or omitted), `data.counts` is omitted (`undefined`).
    - When `includeCounts=true`, `data.counts` (`total`, `byActionCategory`, `byRecordType`, `byRecordStatus`, `byBlockerCode`, `byResponsiblePermission`) is computed by a separate aggregate query over the **entire authorized and filtered result set**—never over the current `limit` page slice.
 
 ---

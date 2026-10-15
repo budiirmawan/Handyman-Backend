@@ -107,7 +107,7 @@ function buildDiscoveryCte(): string {
              ), 0)::numeric(18, 2) AS reversed_allocated
         FROM handyman_payment_allocations a
         LEFT JOIN (
-          SELECT source_allocation_id AS allocation_id
+          SELECT DISTINCT source_allocation_id AS allocation_id
             FROM handyman_ledger_corrections
            WHERE correction_kind = 'REVERSAL'
              AND source_kind = 'ALLOCATION'
@@ -202,9 +202,20 @@ function buildDiscoveryCte(): string {
         ON par.payment_id = p.id
       LEFT JOIN tx_charge_counts tcc
         ON tcc.transaction_id = p.transaction_id
-      LEFT JOIN evidence_submissions ev
-        ON ev.execution_type = 'HANDYMAN_CUSTOMER_PAYMENT'
-       AND ev.execution_id = p.id
+      LEFT JOIN LATERAL (
+        SELECT e.id
+          FROM evidence_submissions e
+         WHERE e.execution_type = 'HANDYMAN_CUSTOMER_PAYMENT'
+           AND e.execution_id = p.id
+           AND e.client_id = p.client_id
+           AND e.status = 'ACTIVE'
+           AND e.evidence_type IN ('PHOTO', 'DOCUMENT')
+           AND e.file_reference = 'evidence/' || e.id::text
+           AND e.file_size > 0
+           AND e.content_sha256 IS NOT NULL
+         ORDER BY e.created_at DESC, e.id DESC
+         LIMIT 1
+      ) ev ON TRUE
       WHERE p.client_id = $1::uuid
         AND ${scopeGuard}
         AND (

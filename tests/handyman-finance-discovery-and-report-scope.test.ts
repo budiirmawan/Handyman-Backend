@@ -12,6 +12,12 @@ import {
   UNASSIGNED_BY_DEFAULT_PERMISSION_CODES,
 } from '../src/database/seeds/foundation-access.seed';
 import { closePool, initDatabase, migrateUp } from '../src/database';
+import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
+import {
+  addTenantInvoiceLine,
+  createTenantInvoice,
+  finalizeTenantInvoice,
+} from '../src/modules/tenant-invoices';
 import { credentialService } from '../src/modules/auth';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
@@ -759,7 +765,26 @@ describe('CR-HM-FIN-DISCOVERY-02 — P0-B Authoritative Finance Action Discovery
     assert.equal(reported.status, 200, JSON.stringify(reported.body));
     const payment1Id = reported.body.data.payment.id as string;
 
-    // Finance Reader discovers the PENDING payment in PAYMENT_VERIFICATION
+    // Payment Evidence Boundary (negative): unrelated HANDYMAN_REQUEST attachment in evidence_submissions
+    // must NEVER be inferred as paymentProofEvidenceId.
+    const genericEvId = randomUUID();
+    await q(
+      `INSERT INTO evidence_submissions (
+         id, client_id, evidence_requirement_id, execution_type, execution_id,
+         evidence_type, file_reference, original_file_name, mime_type, file_size,
+         submitted_by_user_id, content_sha256, content_hashed_at, hash_algorithm
+       ) VALUES ($1, $2, NULL, 'HANDYMAN_REQUEST', $3,
+         'PHOTO', $4, 'site-photo.png', 'image/png', 16, $5, repeat('b', 64), NOW(), 'SHA-256')`,
+      [
+        genericEvId,
+        clientId,
+        s1.scope.handymanRequestId,
+        `evidence/${genericEvId}`,
+        adminUserId,
+      ],
+    );
+
+    // Finance Reader discovers the PENDING payment in PAYMENT_VERIFICATION (with paymentProofEvidenceId === null)
     const inboxPendingPay = await get(
       financeReader.token,
       `${V1}/handyman/finance/action-inbox?clientId=${clientId}&includeCounts=true`,
@@ -780,6 +805,11 @@ describe('CR-HM-FIN-DISCOVERY-02 — P0-B Authoritative Finance Action Discovery
     assert.equal(pendingItem.provenance.paymentChannel, 'BANK_TRANSFER');
     assert.equal(pendingItem.provenance.paymentReference, 'EXT-MDR-001');
     assert.equal(pendingItem.provenance.recordedByUserId, careActor.userId);
+    assert.equal(
+      pendingItem.provenance.paymentProofEvidenceId,
+      null,
+      'unrelated HANDYMAN_REQUEST evidence must never populate paymentProofEvidenceId',
+    );
     assert.deepEqual(pendingItem.responsible, {
       permission: 'handyman.finance.manage',
       action: 'VERIFY_CUSTOMER_PAYMENT',
@@ -787,6 +817,73 @@ describe('CR-HM-FIN-DISCOVERY-02 — P0-B Authoritative Finance Action Discovery
     assert.equal(
       inboxPendingPay.body.data.counts.byActionCategory.PAYMENT_VERIFICATION,
       1,
+    );
+
+    // Payment Evidence Boundary (positive + REMOVED negative): authoritative 0433 HANDYMAN_CUSTOMER_PAYMENT proof
+    await clientMonetaryContextService.setClientMonetaryContext(
+      {
+        clientId,
+        baseCurrencyCode: 'IDR',
+        defaultTransactionCurrencyCode: 'IDR',
+        allowedCurrencyCodes: ['IDR', 'USD'],
+      },
+      adminUserId,
+    );
+    const draftInv = await createTenantInvoice(
+      {
+        tenantCompanyId: s1.scope.tenantCompanyId,
+        buildingId: s1.scope.buildingId,
+        spaceId: s1.scope.spaceId!,
+        invoiceNumber: `HM-PRF-${randomUUID().slice(0, 8)}`,
+        invoiceDate: '2026-10-01',
+        dueDate: '2026-11-01',
+        currencyCode: 'IDR',
+      },
+      adminUserId,
+    );
+    await addTenantInvoiceLine(
+      draftInv.id,
+      { sourceType: 'HANDYMAN_CHARGE', sourceId: chargeLine1Id },
+      adminUserId,
+    );
+    await finalizeTenantInvoice(draftInv.id, adminUserId);
+
+    const proofEvId = randomUUID();
+    await q(
+      `INSERT INTO evidence_submissions (
+         id, client_id, evidence_requirement_id, execution_type, execution_id,
+         evidence_type, file_reference, original_file_name, mime_type, file_size,
+         submitted_by_user_id, content_sha256, content_hashed_at, hash_algorithm
+       ) VALUES ($1, $2, NULL, 'HANDYMAN_CUSTOMER_PAYMENT', $3,
+         'PHOTO', $4, 'transfer-receipt.png', 'image/png', 32, NULL, repeat('a', 64), NOW(), 'SHA-256')`,
+      [proofEvId, clientId, payment1Id, `evidence/${proofEvId}`],
+    );
+
+    const inboxWithProof = await get(
+      financeReader.token,
+      `${V1}/handyman/finance/action-inbox?clientId=${clientId}`,
+    );
+    assert.equal(inboxWithProof.status, 200);
+    assert.equal(inboxWithProof.body.data.items.length, 1);
+    assert.equal(
+      inboxWithProof.body.data.items[0].provenance.paymentProofEvidenceId,
+      proofEvId,
+    );
+
+    // Transitioning the proof to REMOVED must revert paymentProofEvidenceId to null
+    await q(
+      `UPDATE evidence_submissions SET status = 'REMOVED', updated_at = NOW() WHERE id = $1`,
+      [proofEvId],
+    );
+    const inboxRemovedProof = await get(
+      financeReader.token,
+      `${V1}/handyman/finance/action-inbox?clientId=${clientId}`,
+    );
+    assert.equal(inboxRemovedProof.status, 200);
+    assert.equal(
+      inboxRemovedProof.body.data.items[0].provenance.paymentProofEvidenceId,
+      null,
+      'REMOVED payment proof must not be exposed as active paymentProofEvidenceId',
     );
 
     // Finance Manager confirms the payment using the discovered executionScopeId & recordId
@@ -988,6 +1085,62 @@ describe('CR-HM-FIN-DISCOVERY-02 — P0-B Authoritative Finance Action Discovery
     assert.equal(varItem.provenance.reconciliationOutcome, 'VARIANCE');
     assert.equal(varItem.blockerCode, varItem.provenance.varianceCause);
     assert.equal(inboxVariance.body.data.counts.byActionCategory.FINANCE_BLOCKER, 1);
+
+    // Reverse the partial (40.00) allocation -> net allocation drops to remainingAmount and payment re-enters PAYMENT_ALLOCATION
+    const revAlloc = await post(
+      financeManager.token,
+      `${scope1Url}/ledger-reversals/allocation`,
+      {
+        allocationId: partialAlloc.body.data.allocation.id as string,
+        reason: 'Re-verify allocation target line',
+        idempotencyKey: key(),
+      },
+    );
+    assert.equal(revAlloc.status, 200, JSON.stringify(revAlloc.body));
+
+    const inboxAfterRevAlloc = await get(
+      financeReader.token,
+      `${V1}/handyman/finance/action-inbox?clientId=${clientId}&recordType=CUSTOMER_PAYMENT`,
+    );
+    assert.equal(inboxAfterRevAlloc.status, 200);
+    assert.equal(inboxAfterRevAlloc.body.data.items.length, 1);
+    assert.equal(inboxAfterRevAlloc.body.data.items[0].recordId, payment1Id);
+    assert.equal(
+      inboxAfterRevAlloc.body.data.items[0].actionCategory,
+      'PAYMENT_ALLOCATION',
+    );
+    assert.equal(
+      inboxAfterRevAlloc.body.data.items[0].allocationState,
+      'PARTIALLY_ALLOCATED',
+    );
+    assert.equal(
+      inboxAfterRevAlloc.body.data.items[0].allocatedAmount,
+      remainingAmount,
+    );
+    assert.equal(
+      inboxAfterRevAlloc.body.data.items[0].unallocatedAmount,
+      '40.00',
+    );
+
+    // Re-allocate 40.00 -> payment leaves CUSTOMER_PAYMENT in the Action Inbox again
+    const reAlloc = await post(
+      financeManager.token,
+      `${scope1Url}/payment-allocations`,
+      {
+        paymentId: payment1Id,
+        chargeLineId: chargeLine1Id,
+        amount: '40.00',
+        idempotencyKey: key(),
+      },
+    );
+    assert.equal(reAlloc.status, 200, JSON.stringify(reAlloc.body));
+
+    const inboxAfterReAlloc = await get(
+      financeReader.token,
+      `${V1}/handyman/finance/action-inbox?clientId=${clientId}&recordType=CUSTOMER_PAYMENT`,
+    );
+    assert.equal(inboxAfterReAlloc.status, 200);
+    assert.equal(inboxAfterReAlloc.body.data.items.length, 0);
   });
 
   it('P0-B.2: keyset pagination is duplicate-free, stable across mid-walk insertions, server-side filterable, and counts cover the complete authorized set', async () => {
