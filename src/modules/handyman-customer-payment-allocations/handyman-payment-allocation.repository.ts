@@ -130,10 +130,56 @@ async function sumAllocatedForChargeLine(
   return toAmount(result.rows[0].total);
 }
 
+/**
+ * CR-HM-E2E-LIFECYCLE-01 repair — amounts of allocations that a later
+ * CR-HM-13 PART 05 ALLOCATION REVERSAL correction has negated. The
+ * correction service's own law is that "a reversed allocation stops
+ * counting toward the applied amount"; the published PART 06 ledger
+ * read nets the same way (`applied = allocated - reversedAllocations`).
+ * The allocation command's caps and derived figures must use the same
+ * net basis, otherwise reversed funds could never be re-allocated to
+ * the correct charge line and the reversal would be a one-way trap.
+ */
+async function sumReversedAllocationsForPayment(
+  executor: Executor = getPool(),
+  paymentId: string,
+): Promise<string> {
+  const result = await executor.query(
+    `SELECT COALESCE(SUM(c.amount), 0)::numeric(18, 2)::text AS total
+       FROM handyman_ledger_corrections c
+       JOIN handyman_payment_allocations a
+         ON a.id = c.source_allocation_id
+      WHERE a.payment_id = $1
+        AND c.correction_kind = 'REVERSAL'
+        AND c.source_kind = 'ALLOCATION'`,
+    [paymentId],
+  );
+  return toAmount(result.rows[0].total);
+}
+
+async function sumReversedAllocationsForChargeLine(
+  executor: Executor = getPool(),
+  chargeLineId: string,
+): Promise<string> {
+  const result = await executor.query(
+    `SELECT COALESCE(SUM(c.amount), 0)::numeric(18, 2)::text AS total
+       FROM handyman_ledger_corrections c
+       JOIN handyman_payment_allocations a
+         ON a.id = c.source_allocation_id
+      WHERE a.charge_line_id = $1
+        AND c.correction_kind = 'REVERSAL'
+        AND c.source_kind = 'ALLOCATION'`,
+    [chargeLineId],
+  );
+  return toAmount(result.rows[0].total);
+}
+
 export const handymanPaymentAllocationRepository = {
   insertAllocation,
   findAllocationByKey,
   listAllocationsByTransaction,
   sumAllocatedForPayment,
   sumAllocatedForChargeLine,
+  sumReversedAllocationsForPayment,
+  sumReversedAllocationsForChargeLine,
 };

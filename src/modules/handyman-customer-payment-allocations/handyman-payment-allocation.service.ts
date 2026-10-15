@@ -217,6 +217,32 @@ export async function allocateHandymanCustomerPayment(
       );
     }
 
+    // Net applied basis (CR-HM-E2E-LIFECYCLE-01 repair): allocation
+    // facts are immutable, but a PART 05 ALLOCATION REVERSAL negates
+    // one exactly, and the correction law + PART 06 read both stop
+    // counting it toward the applied amount. Caps and derived figures
+    // below therefore net reversed allocations; the gross fact sum
+    // remains available in the module summary for audit.
+    const netAllocated = async () => {
+      const [grossPayment, reversedPayment, grossLine, reversedLine] =
+        await Promise.all([
+          handymanPaymentAllocationRepository.sumAllocatedForPayment(
+            tx, paymentUuid),
+          handymanPaymentAllocationRepository
+            .sumReversedAllocationsForPayment(tx, paymentUuid),
+          handymanPaymentAllocationRepository.sumAllocatedForChargeLine(
+            tx, chargeLineUuid),
+          handymanPaymentAllocationRepository
+            .sumReversedAllocationsForChargeLine(tx, chargeLineUuid),
+        ]);
+      return {
+        paymentAllocated: fromCents(
+          toCents(grossPayment) - toCents(reversedPayment)),
+        chargeLineAllocated: fromCents(
+          toCents(grossLine) - toCents(reversedLine)),
+      };
+    };
+
     // -------- idempotent replay (same key = same allocation) ------
     const replay = await handymanPaymentAllocationRepository
       .findAllocationByKey(tx, transaction.id, key);
@@ -232,10 +258,7 @@ export async function allocateHandymanCustomerPayment(
           'idempotency-key-bound-to-another-allocation',
         );
       }
-      const paymentAllocated = await handymanPaymentAllocationRepository
-        .sumAllocatedForPayment(tx, paymentUuid);
-      const chargeLineAllocated = await handymanPaymentAllocationRepository
-        .sumAllocatedForChargeLine(tx, chargeLineUuid);
+      const { paymentAllocated, chargeLineAllocated } = await netAllocated();
       return {
         allocation: replay,
         ...derive(
@@ -279,11 +302,11 @@ export async function allocateHandymanCustomerPayment(
       );
     }
 
-    // -------- bounded caps (payment + charge line) ----------------
-    const paymentAllocatedBefore = await handymanPaymentAllocationRepository
-      .sumAllocatedForPayment(tx, paymentUuid);
-    const chargeAllocatedBefore = await handymanPaymentAllocationRepository
-      .sumAllocatedForChargeLine(tx, chargeLineUuid);
+    // -------- bounded caps (payment + charge line, net basis) -----
+    const {
+      paymentAllocated: paymentAllocatedBefore,
+      chargeLineAllocated: chargeAllocatedBefore,
+    } = await netAllocated();
     const requestedCents = toCents(requested);
     const paymentUnallocatedBefore =
       toCents(String(payment.amount)) - toCents(paymentAllocatedBefore);
@@ -313,10 +336,7 @@ export async function allocateHandymanCustomerPayment(
         allocatedByUserId: actorUuid,
         idempotencyKey: key,
       });
-    const paymentAllocated = await handymanPaymentAllocationRepository
-      .sumAllocatedForPayment(tx, paymentUuid);
-    const chargeLineAllocated = await handymanPaymentAllocationRepository
-      .sumAllocatedForChargeLine(tx, chargeLineUuid);
+    const { paymentAllocated, chargeLineAllocated } = await netAllocated();
     return {
       allocation,
       ...derive(
