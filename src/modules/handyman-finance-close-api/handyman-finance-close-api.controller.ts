@@ -68,6 +68,10 @@ import {
   requireQueryString,
   requireStringField,
 } from './handyman-finance-close-api.validation';
+import {
+  listHandymanFinanceActionInbox,
+  parseHandymanFinanceActionInboxQuery,
+} from './handyman-finance-action-inbox.service';
 
 /**
  * CR-HM-E2E-LIFECYCLE-01 — thin HTTP transport over the already-merged
@@ -757,6 +761,21 @@ export async function getFinancialClientHandler(
         limit: optionalQueryLimit(query),
       },
     );
+    sendSuccess(res, result, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getFinanceActionInboxHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const actorUserId = actor(req);
+    const query = parseHandymanFinanceActionInboxQuery(req.query);
+    const result = await listHandymanFinanceActionInbox(actorUserId, query);
     sendSuccess(res, result, 200);
   } catch (error) {
     next(error);

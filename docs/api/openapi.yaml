@@ -3850,6 +3850,347 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         403:
           $ref: "#/components/responses/Forbidden"
+  /handyman/finance/action-inbox:
+    get:
+      operationId: listHandymanFinanceActionInbox
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      summary: Discover actionable Finance & Settlement records within the actor's authorized Buildings
+      description: >
+        CR-HM-FIN-DISCOVERY-02 P0-B — authoritative, keyset-paginated Finance Action
+        Inbox over existing `handyman_customer_payments`, `handyman_ledger_corrections`,
+        `handyman_settlement_units`, and `handyman_customer_transactions`. Requires
+        `handyman.finance.read` (no generic `tenant_company.manage` or `tenant_company.read`
+        fallback) plus an explicit ACTIVE `user_building_assignments` grant under `clientId`
+        (BE-02G). Every row is filtered inside the SQL statement against the actor's exact
+        authorized Buildings before counting or paginating. Covers:
+        (1) customer-reported payments awaiting Finance verification (`PENDING`),
+        (2) confirmed non-reversed payments with unallocated balance (`CONFIRMED`,
+        `unallocatedAmount > 0`),
+        (3) recorded ledger corrections (`REFUND | REVERSAL | ADJUSTMENT`) awaiting
+        downstream entitlement correction or settlement exception propagation,
+        (4) settlement units awaiting inclusion/reconciliation/settlement (`PAYABLE |
+        INCLUDED_IN_SETTLEMENT`), and
+        (5) Finance blockers (`NO_POSTED_CHARGE_FACTS` transactions and settlement
+        reconciliation `VARIANCE` / `OPEN_EXCEPTION` states). Pagination is deterministic
+        keyset continuation on `(createdAt DESC, recordType DESC, recordId DESC)`.
+        `includeCounts=true` computes counts over the complete authorized and filtered
+        result set.
+      tags:
+        - Handyman
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: buildingId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: executionScopeId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: handymanRequestId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: transactionId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: recordType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - CUSTOMER_PAYMENT
+              - LEDGER_CORRECTION
+              - SETTLEMENT_UNIT
+              - CUSTOMER_TRANSACTION
+        - name: actionCategory
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - PAYMENT_VERIFICATION
+              - PAYMENT_ALLOCATION
+              - PENDING_CORRECTION
+              - PENDING_RECONCILIATION
+              - FINANCE_BLOCKER
+        - name: recordStatus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - CONFIRMED
+              - REFUND
+              - REVERSAL
+              - ADJUSTMENT
+              - PAYABLE
+              - INCLUDED_IN_SETTLEMENT
+              - SETTLED
+              - LEDGER_ONLY
+        - name: blockerCode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - NO_POSTED_CHARGE_FACTS
+              - PROVISIONAL_PAYMENTS_PENDING
+              - FUNDING_SHORTFALL
+              - INCLUSION_MISMATCH
+              - LEDGER_BASIS_MISMATCH
+              - OPEN_EXCEPTION
+        - name: hasBlocker
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: responsiblePermission
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - handyman.finance.manage
+              - handyman.settlement.manage
+        - name: createdFrom
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: createdTo
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: includeCounts
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque base64url keyset continuation token from the previous page.
+          schema:
+            type: string
+      responses:
+        200:
+          description: Keyset-paginated Finance Action Inbox discovery view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [items, pagination]
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              type: object
+                              required:
+                                - recordId
+                                - recordType
+                                - recordStatus
+                                - actionCategory
+                                - blockerCode
+                                - executionScopeId
+                                - handymanRequestId
+                                - transactionId
+                                - clientId
+                                - buildingId
+                                - tenantCompanyId
+                                - currency
+                                - amount
+                                - allocatedAmount
+                                - unallocatedAmount
+                                - allocationState
+                                - responsible
+                                - provenance
+                                - createdAt
+                                - updatedAt
+                              properties:
+                                recordId: { type: string, format: uuid }
+                                recordType:
+                                  type: string
+                                  enum: [CUSTOMER_PAYMENT, LEDGER_CORRECTION, SETTLEMENT_UNIT, CUSTOMER_TRANSACTION]
+                                recordStatus:
+                                  type: string
+                                  enum: [PENDING, CONFIRMED, REFUND, REVERSAL, ADJUSTMENT, PAYABLE, INCLUDED_IN_SETTLEMENT, SETTLED, LEDGER_ONLY]
+                                actionCategory:
+                                  type: string
+                                  enum: [PAYMENT_VERIFICATION, PAYMENT_ALLOCATION, PENDING_CORRECTION, PENDING_RECONCILIATION, FINANCE_BLOCKER]
+                                blockerCode:
+                                  type: string
+                                  nullable: true
+                                  enum: [NO_POSTED_CHARGE_FACTS, PROVISIONAL_PAYMENTS_PENDING, FUNDING_SHORTFALL, INCLUSION_MISMATCH, LEDGER_BASIS_MISMATCH, OPEN_EXCEPTION, null]
+                                executionScopeId: { type: string, format: uuid }
+                                handymanRequestId: { type: string, format: uuid }
+                                transactionId: { type: string, format: uuid }
+                                clientId: { type: string, format: uuid }
+                                buildingId: { type: string, format: uuid }
+                                tenantCompanyId: { type: string, format: uuid }
+                                currency: { type: string }
+                                amount: { type: string }
+                                allocatedAmount: { type: string, nullable: true }
+                                unallocatedAmount: { type: string, nullable: true }
+                                allocationState:
+                                  type: string
+                                  nullable: true
+                                  enum: [UNALLOCATED, PARTIALLY_ALLOCATED, null]
+                                responsible:
+                                  type: object
+                                  required: [permission, action]
+                                  properties:
+                                    permission:
+                                      type: string
+                                      enum: [handyman.finance.manage, handyman.settlement.manage]
+                                    action:
+                                      type: string
+                                      enum:
+                                        - VERIFY_CUSTOMER_PAYMENT
+                                        - ALLOCATE_CUSTOMER_PAYMENT
+                                        - COMPOSE_CHARGE_LINES
+                                        - PROPAGATE_ENTITLEMENT_CORRECTION
+                                        - RECORD_SETTLEMENT_CORRECTION
+                                        - INCLUDE_IN_SETTLEMENT
+                                        - RECONCILE_SETTLEMENT_UNIT
+                                        - SETTLE_SETTLEMENT_UNIT
+                                        - RESOLVE_FUNDING_SHORTFALL
+                                        - RESOLVE_SETTLEMENT_VARIANCE
+                                provenance:
+                                  type: object
+                                  required:
+                                    - paymentId
+                                    - paymentStatus
+                                    - paymentChannel
+                                    - paymentReference
+                                    - recordedByUserId
+                                    - paymentProofEvidenceId
+                                    - ledgerCorrectionId
+                                    - correctionKind
+                                    - correctionSourceKind
+                                    - entitlementCorrectionPending
+                                    - settlementCorrectionPending
+                                    - settlementUnitId
+                                    - settlementState
+                                    - reconciliationId
+                                    - reconciliationOutcome
+                                    - varianceCause
+                                    - varianceAmount
+                                    - openExceptionCount
+                                  properties:
+                                    paymentId: { type: string, format: uuid, nullable: true }
+                                    paymentStatus: { type: string, nullable: true }
+                                    paymentChannel: { type: string, nullable: true }
+                                    paymentReference: { type: string, nullable: true }
+                                    recordedByUserId: { type: string, format: uuid, nullable: true }
+                                    paymentProofEvidenceId: { type: string, format: uuid, nullable: true }
+                                    ledgerCorrectionId: { type: string, format: uuid, nullable: true }
+                                    correctionKind: { type: string, nullable: true }
+                                    correctionSourceKind: { type: string, nullable: true }
+                                    entitlementCorrectionPending: { type: boolean }
+                                    settlementCorrectionPending: { type: boolean }
+                                    settlementUnitId: { type: string, format: uuid, nullable: true }
+                                    settlementState: { type: string, nullable: true }
+                                    reconciliationId: { type: string, format: uuid, nullable: true }
+                                    reconciliationOutcome: { type: string, nullable: true }
+                                    varianceCause: { type: string, nullable: true }
+                                    varianceAmount: { type: string, nullable: true }
+                                    openExceptionCount: { type: integer }
+                                createdAt: { type: string, format: date-time }
+                                updatedAt: { type: string, format: date-time }
+                          pagination:
+                            type: object
+                            required: [limit, nextCursor, hasMore]
+                            properties:
+                              limit: { type: integer }
+                              nextCursor: { type: string, nullable: true }
+                              hasMore: { type: boolean }
+                          counts:
+                            type: object
+                            description: Present only when includeCounts=true; computed over the complete authorized and filtered result set.
+                            required:
+                              - total
+                              - byActionCategory
+                              - byRecordType
+                              - byRecordStatus
+                              - byBlockerCode
+                              - byResponsiblePermission
+                            properties:
+                              total: { type: integer }
+                              byActionCategory:
+                                type: object
+                                properties:
+                                  PAYMENT_VERIFICATION: { type: integer }
+                                  PAYMENT_ALLOCATION: { type: integer }
+                                  PENDING_CORRECTION: { type: integer }
+                                  PENDING_RECONCILIATION: { type: integer }
+                                  FINANCE_BLOCKER: { type: integer }
+                              byRecordType:
+                                type: object
+                                properties:
+                                  CUSTOMER_PAYMENT: { type: integer }
+                                  LEDGER_CORRECTION: { type: integer }
+                                  SETTLEMENT_UNIT: { type: integer }
+                                  CUSTOMER_TRANSACTION: { type: integer }
+                              byRecordStatus:
+                                type: object
+                                additionalProperties: { type: integer }
+                              byBlockerCode:
+                                type: object
+                                additionalProperties: { type: integer }
+                              byResponsiblePermission:
+                                type: object
+                                properties:
+                                  handyman.finance.manage: { type: integer }
+                                  handyman.settlement.manage: { type: integer }
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
   /handyman/execution-scopes/{executionScopeId}/service-warranty/start:
     post:
       operationId: postHandymanServiceWarrantyStart
