@@ -262,6 +262,7 @@ async function applyPart01Transition(
       client,
       bast.id,
       next,
+      bast.status,
     );
     const event = await handymanBastRepository.insertEvent(client, {
       clientId: bast.clientId,
@@ -411,6 +412,7 @@ async function applyCustomerSignOff(
       client,
       bast.id,
       next,
+      bast.status,
     );
     const event = await handymanBastRepository.insertEvent(client, {
       clientId: bast.clientId,

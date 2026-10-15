@@ -1,7 +1,10 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { getPool } from '../../database';
-import { handymanBastActiveConflictError } from './handyman-bast.errors';
+import {
+  handymanBastActiveConflictError,
+  handymanBastIllegalTransitionError,
+} from './handyman-bast.errors';
 import type {
   HandymanBastEventRecord,
   HandymanBastEventType,
@@ -125,6 +128,7 @@ async function updateBastStatus(
   executor: Executor = getPool(),
   id: string,
   status: HandymanBastStatus,
+  expectedFromStatus: HandymanBastStatus,
 ): Promise<HandymanBastRecord> {
   const issuedAtSql = status === 'ISSUED'
     ? 'issued_at = COALESCE(issued_at, NOW())'
@@ -138,6 +142,13 @@ async function updateBastStatus(
   const voidedAtSql = status === 'VOID'
     ? 'voided_at = NOW()'
     : 'voided_at = voided_at';
+  // CR-HM-BAST-HTTP-01 — the frozen state machine is enforced ATOMICALLY:
+  // the UPDATE only applies from the exact status the transition was
+  // validated against (same optimistic-concurrency precedent as the QC/defect
+  // expectedVersion guards). A racing writer that already transitioned the
+  // document matches zero rows and receives the standard 409
+  // HANDYMAN_BAST_ILLEGAL_TRANSITION instead of appending a duplicate event;
+  // the serial path is byte-for-byte unchanged.
   const result = await executor.query(
     `UPDATE handyman_bast_documents
         SET status = $2,
@@ -146,12 +157,23 @@ async function updateBastStatus(
             ${rejectedAtSql},
             ${voidedAtSql},
             updated_at = NOW()
-      WHERE id = $1
+      WHERE id = $1 AND status = $3
       RETURNING id, client_id, execution_scope_id, qc_run_id, status,
                 issued_at, accepted_at, rejected_at, voided_at,
                 created_at, updated_at`,
-    [id, status],
+    [id, status, expectedFromStatus],
   );
+  if (!result.rows[0]) {
+    // Lost the concurrency race: another writer already transitioned this
+    // document away from `expectedFromStatus`.
+    const action = ({
+      ISSUED: 'ISSUE',
+      VOID: 'VOID',
+      ACCEPTED: 'ACCEPT',
+      REJECTED: 'REJECT',
+    } as Record<string, string>)[status] ?? status;
+    throw handymanBastIllegalTransitionError(expectedFromStatus, action);
+  }
   return mapBast(result.rows[0]);
 }
 
