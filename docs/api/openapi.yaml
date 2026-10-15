@@ -2480,6 +2480,1665 @@ tags:
 security: []
 
 paths:
+  /handyman/commercial-agreements:
+    post:
+      operationId: postHandymanCommercialAgreement
+      summary: Prepare a commercial agreement for a Client
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope: the actor must have access to `clientId`."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - clientId
+                - idempotencyKey
+              properties:
+                clientId:
+                  type: string
+                  description: Client (tenant company) identifier; the actor must have access to this Client.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Prepare a commercial agreement for a Client — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Commercial agreement view incl. agreementId and status.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/activate:
+    post:
+      operationId: postHandymanCommercialAgreementVersionActivate
+      summary: Activate a prepared commercial agreement version
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - effectiveFrom
+                - idempotencyKey
+              properties:
+                effectiveFrom:
+                  type: string
+                  description: ISO-8601 timestamp from which the version is effective.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Activate a prepared commercial agreement version — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Activated agreement version view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/supersede:
+    post:
+      operationId: postHandymanCommercialAgreementVersionSupersede
+      summary: Supersede an agreement version with a prepared replacement
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - replacementVersionId
+                - effectiveFrom
+                - idempotencyKey
+              properties:
+                replacementVersionId:
+                  type: string
+                  description: Authoritative id of the prepared replacement agreement version.
+                effectiveFrom:
+                  type: string
+                  description: ISO-8601 timestamp from which the version is effective.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Supersede an agreement version with a prepared replacement — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Superseded agreement version view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/labor-pricing-basis:
+    post:
+      operationId: postHandymanLaborPricingBasis
+      summary: Prepare the labor pricing basis of an agreement version
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - mode
+                - crewMode
+                - unitAmount
+                - currency
+                - idempotencyKey
+              properties:
+                mode:
+                  type: string
+                  description: Domain mode enum validated by the owning pricing service.
+                crewMode:
+                  type: string
+                  description: Crew composition mode enum validated by the labor pricing service.
+                billableTimeBasis:
+                  type: string
+                  description: Optional billable-time basis enum.
+                  nullable: true
+                unitAmount:
+                  type: string
+                  description: "Canonical decimal money string (e.g. \"100.00\"); never a JSON number."
+                currency:
+                  type: string
+                  description: ISO currency code (e.g. IDR).
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Prepare the labor pricing basis of an agreement version — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Labor pricing basis view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/material-pricing-basis:
+    post:
+      operationId: postHandymanMaterialPricingBasis
+      summary: Prepare the material pricing basis of an agreement version
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - mode
+                - idempotencyKey
+              properties:
+                mode:
+                  type: string
+                  description: Domain mode enum validated by the owning pricing service.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Prepare the material pricing basis of an agreement version — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Material pricing basis view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/bm-fee-rule:
+    post:
+      operationId: postHandymanBmFeeRule
+      summary: Prepare the BM fee rule of an agreement version
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - basis
+                - mode
+                - idempotencyKey
+              properties:
+                basis:
+                  type: string
+                  description: BM fee basis enum validated by the BM fee service.
+                mode:
+                  type: string
+                  description: Domain mode enum validated by the owning pricing service.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Prepare the BM fee rule of an agreement version — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: BM fee rule view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/bm-fee-term:
+    post:
+      operationId: postHandymanBmFeeTerm
+      summary: Prepare a BM fee term (rate) of an agreement version
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - termKind
+                - ratePercent
+                - idempotencyKey
+              properties:
+                termKind:
+                  type: string
+                  description: BM fee term kind enum.
+                ratePercent:
+                  type: string
+                  description: "Canonical decimal percent string (e.g. \"2.50\")."
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Prepare a BM fee term (rate) of an agreement version — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: BM fee term view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/bm-fee-beneficiary:
+    post:
+      operationId: postHandymanBmFeeBeneficiary
+      summary: Prepare the BM fee beneficiary of an agreement version
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - beneficiaryKind
+                - beneficiaryReferenceId
+                - idempotencyKey
+              properties:
+                beneficiaryKind:
+                  type: string
+                  description: Beneficiary kind enum.
+                beneficiaryReferenceId:
+                  type: string
+                  description: Beneficiary reference identifier.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Prepare the BM fee beneficiary of an agreement version — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: BM fee beneficiary view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/pricing-contract:
+    get:
+      operationId: getHandymanPricingContract
+      summary: Read the effective pricing contract for a Client at a point in time
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Client scope: the actor must have access to `clientId`."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          description: Client (tenant company) identifier; the actor must have access to this Client.
+          schema:
+            type: string
+            format: uuid
+        - name: asOf
+          in: query
+          required: true
+          description: ISO-8601 timestamp at which the configuration is read.
+          schema:
+            type: string
+      responses:
+        200:
+          description: Read the effective pricing contract for a Client at a point in time — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Pricing contract view (labor/material bases effective at `asOf`).
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+  /handyman/bm-fee-configuration:
+    get:
+      operationId: getHandymanBmFeeConfiguration
+      summary: Read the effective BM fee configuration for a Client at a point in time
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Client scope: the actor must have access to `clientId`."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          description: Client (tenant company) identifier; the actor must have access to this Client.
+          schema:
+            type: string
+            format: uuid
+        - name: asOf
+          in: query
+          required: true
+          description: ISO-8601 timestamp at which the configuration is read.
+          schema:
+            type: string
+      responses:
+        200:
+          description: Read the effective BM fee configuration for a Client at a point in time — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: BM fee configuration view (rule, terms, beneficiary effective at `asOf`).
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+  /handyman/execution-scopes/{executionScopeId}/customer-transaction:
+    post:
+      operationId: postHandymanCustomerTransactionOpen
+      summary: Open (idempotently) the customer transaction of an execution scope
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Open (idempotently) the customer transaction of an execution scope — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Customer transaction view incl. transactionId, status and currency.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/customer-charge-lines:
+    post:
+      operationId: postHandymanCustomerChargeLine
+      summary: Compose a ledger charge line from a confirmed quotation line
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - quotationLineId
+                - idempotencyKey
+              properties:
+                quotationLineId:
+                  type: string
+                  description: Authoritative confirmed quotation line to charge; amount is server-derived from it.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Compose a ledger charge line from a confirmed quotation line — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Charged transaction view incl. chargeLineId and totalCharge; the amount is server-derived from the quotation line.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/payment-allocations:
+    post:
+      operationId: postHandymanPaymentAllocation
+      summary: Allocate received customer payment to a charge line
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - paymentId
+                - chargeLineId
+                - amount
+                - idempotencyKey
+              properties:
+                paymentId:
+                  type: string
+                  description: Authoritative customer payment identifier.
+                chargeLineId:
+                  type: string
+                  description: Authoritative ledger charge line identifier.
+                amount:
+                  type: string
+                  description: "Canonical decimal money string (e.g. \"100.00\"); never a JSON number."
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Allocate received customer payment to a charge line — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: "Allocation view incl. allocationId, appliedAmount, paymentUnallocated and chargeLineUnallocated. Net caps apply: reversed allocations restore capacity; concurrent allocations beyond remaining capacity yield exactly one success and 409 for the rest."
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/ledger-refunds:
+    post:
+      operationId: postHandymanLedgerRefund
+      summary: Refund customer payment up to what was received AND applied (net)
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - paymentId
+                - amount
+                - reason
+                - idempotencyKey
+              properties:
+                paymentId:
+                  type: string
+                  description: Authoritative customer payment identifier.
+                amount:
+                  type: string
+                  description: "Canonical decimal money string (e.g. \"100.00\"); never a JSON number."
+                reason:
+                  type: string
+                  description: Human-readable reason recorded on the correction fact.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Refund customer payment up to what was received AND applied (net) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Refund correction view incl. correctionId, correctionKind REFUND and amount. Refunds above the net applied amount are rejected (409) and record nothing.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/ledger-reversals/allocation:
+    post:
+      operationId: postHandymanLedgerAllocationReversal
+      summary: Reverse one payment allocation exactly (restores allocatable capacity)
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - allocationId
+                - reason
+                - idempotencyKey
+              properties:
+                allocationId:
+                  type: string
+                  description: Authoritative payment allocation identifier.
+                reason:
+                  type: string
+                  description: Human-readable reason recorded on the correction fact.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Reverse one payment allocation exactly (restores allocatable capacity) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Reversal correction view; each allocation can be reversed at most once.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/ledger-reversals/payment:
+    post:
+      operationId: postHandymanLedgerPaymentReversal
+      summary: Reverse a customer payment (requires every allocation reversed first)
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - paymentId
+                - reason
+                - idempotencyKey
+              properties:
+                paymentId:
+                  type: string
+                  description: Authoritative customer payment identifier.
+                reason:
+                  type: string
+                  description: Human-readable reason recorded on the correction fact.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Reverse a customer payment (requires every allocation reversed first) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Payment reversal correction view for exactly the payment amount.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/ledger-adjustments:
+    post:
+      operationId: postHandymanLedgerAdjustment
+      summary: Record a signed ledger adjustment, optionally against one charge line
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - chargeLineId
+                - amount
+                - reason
+                - idempotencyKey
+              properties:
+                chargeLineId:
+                  type: string
+                  description: Authoritative ledger charge line identifier.
+                amount:
+                  type: string
+                  description: "Canonical decimal money string (e.g. \"100.00\"); never a JSON number."
+                reason:
+                  type: string
+                  description: Human-readable reason recorded on the correction fact.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Record a signed ledger adjustment, optionally against one charge line — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Adjustment correction view incl. correctionId and signed amount.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/financial-entitlements/derive:
+    post:
+      operationId: postHandymanFinancialEntitlementsDerive
+      summary: Derive provider/BM-fee financial entitlements for a scope
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Derive provider/BM-fee financial entitlements for a scope — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Entitlement view incl. providerPayableAmount and bmFeeAmount, derived server-side from the charged total and the effective BM fee terms.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/settlement/prepare:
+    post:
+      operationId: postHandymanSettlementPrepare
+      summary: Prepare the settlement record for a scope
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Prepare the settlement record for a scope — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Settlement view incl. settlementId and status.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/settlement/include:
+    post:
+      operationId: postHandymanSettlementInclude
+      summary: Include the prepared settlement
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Include the prepared settlement — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Settlement view incl. settlementId and status.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/settlement/reconcile:
+    post:
+      operationId: postHandymanSettlementReconcile
+      summary: Reconcile the included settlement
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Reconcile the included settlement — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Settlement view incl. settlementId and status.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/settlement/settle:
+    post:
+      operationId: postHandymanSettlementSettle
+      summary: Mark the settlement settled (record state only; no fund movement)
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Mark the settlement settled (record state only; no fund movement) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Settlement view incl. settlementId and status.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/settlement/dispute:
+    post:
+      operationId: postHandymanSettlementDispute
+      summary: Open a settlement dispute hold (recording only; adjudication is not implemented)
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Open a settlement dispute hold (recording only; adjudication is not implemented) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Settlement view incl. settlementId and status.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/settlement/correction:
+    post:
+      operationId: postHandymanSettlementCorrection
+      summary: Record a settlement correction from a ledger correction
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - ledgerCorrectionId
+                - idempotencyKey
+              properties:
+                ledgerCorrectionId:
+                  type: string
+                  description: Authoritative ledger correction identifier.
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Record a settlement correction from a ledger correction — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Settlement view after the correction.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/financial-transaction:
+    get:
+      operationId: getHandymanFinancialTransaction
+      summary: Read the financial transaction view of an execution scope
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      responses:
+        200:
+          description: Read the financial transaction view of an execution scope — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Financial transaction read view incl. totals and per-charge-line applied/unallocated amounts.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+  /handyman/financial-transactions:
+    get:
+      operationId: getHandymanFinancialTransactions
+      summary: Read financial transactions of a Client in a period
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Client scope is enforced by the read service from the authenticated actor.
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          description: Client (tenant company) identifier.
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          required: false
+          description: Optional ISO-8601 period start.
+          schema:
+            type: string
+        - name: to
+          in: query
+          required: false
+          description: Optional ISO-8601 period end.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Optional positive integer page limit.
+          schema:
+            type: integer
+      responses:
+        200:
+          description: Read financial transactions of a Client in a period — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Client financial read view (list of transaction summaries).
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+  /handyman/execution-scopes/{executionScopeId}/service-warranty/start:
+    post:
+      operationId: postHandymanServiceWarrantyStart
+      summary: Start the service warranty of a completed execution scope
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Start the service warranty of a completed execution scope — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Service warranty view incl. warrantyId, startsAt and endsAt (server-derived window).
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/service-warranties/{warrantyId}/expire:
+    post:
+      operationId: postHandymanServiceWarrantyExpire
+      summary: Expire an active service warranty
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Building scope is enforced from the warranty's own execution scope; foreign warranties are 404 before any state change."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ServiceWarrantyIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Expire an active service warranty — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Expired service warranty view.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/service-warranty-claims/{claimId}/reworks:
+    post:
+      operationId: postHandymanServiceWarrantyReworkPropose
+      summary: Propose a free rework for an accepted warranty claim (Crew Lead)
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Authenticated only at the transport edge; the owning service additionally requires the actor to be the CURRENT Crew Lead of the claim's Building assignment. There is no generic Worker/Customer-Care permission path. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial)."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ServiceWarrantyClaimIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                scopeNote:
+                  type: string
+                  description: Optional free-text scope note.
+                  nullable: true
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Propose a free rework for an accepted warranty claim (Crew Lead) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Rework view incl. reworkId and status PROPOSED.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/service-warranty-reworks/{reworkId}/start:
+    post:
+      operationId: postHandymanServiceWarrantyReworkStart
+      summary: Start a proposed free rework (Crew Lead)
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Authenticated only at the transport edge; the owning service additionally requires the actor to be the CURRENT Crew Lead of the claim's Building assignment. There is no generic Worker/Customer-Care permission path. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial)."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ServiceWarrantyReworkIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Start a proposed free rework (Crew Lead) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Rework view with status IN_PROGRESS.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/service-warranty-reworks/{reworkId}/complete:
+    post:
+      operationId: postHandymanServiceWarrantyReworkComplete
+      summary: Complete a started free rework (Crew Lead)
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Authenticated only at the transport edge; the owning service additionally requires the actor to be the CURRENT Crew Lead of the claim's Building assignment. There is no generic Worker/Customer-Care permission path. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial)."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ServiceWarrantyReworkIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - idempotencyKey
+              properties:
+                completionNote:
+                  type: string
+                  description: Optional free-text completion note.
+                  nullable: true
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Complete a started free rework (Crew Lead) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Rework view with status COMPLETED.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
+  /handyman/service-warranty-reworks/{reworkId}/verify:
+    post:
+      operationId: postHandymanServiceWarrantyReworkVerify
+      summary: Verify a completed free rework against QC-passed evidence (Crew Lead)
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Authenticated only at the transport edge; the owning service additionally requires the actor to be the CURRENT Crew Lead of the claim's Building assignment. There is no generic Worker/Customer-Care permission path. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial)."
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ServiceWarrantyReworkIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - evidenceRecordId
+                - idempotencyKey
+              properties:
+                evidenceRecordId:
+                  type: string
+                  description: Authoritative QC-passed evidence record identifier.
+                qcRunId:
+                  type: string
+                  description: Optional QC run identifier.
+                  nullable: true
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: Verify a completed free rework against QC-passed evidence (Crew Lead) — authoritative server view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        description: Rework view with terminal customer-visible outcome; failed verification keeps the claim actionable.
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
   /handyman/care/properties/{propertyId}/catalogue/services:
     get:
       operationId: careCatalogueServices

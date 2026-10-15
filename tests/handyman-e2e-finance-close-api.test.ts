@@ -919,4 +919,128 @@ describe('CR-HM-E2E-LIFECYCLE-01 finance close HTTP seams (J10–J12)', () => {
       ['PROPOSE', 'ACCEPT', 'START', 'COMPLETE', 'VERIFY'],
     );
   });
+
+  it('finance integrity: refund is bounded by received-and-applied, concurrent allocations cannot exceed capacity, idempotency keys cannot be rebound', async () => {
+    const f = await scopedFixture();
+    await configureCommercialViaHttp(f.realm.client.id);
+    const scopeUrl = `${V1}/handyman/execution-scopes/${f.scope.id}`;
+    await post(adminToken, `${scopeUrl}/customer-transaction`, {
+      idempotencyKey: key(),
+    });
+    const charge = await post(adminToken, `${scopeUrl}/customer-charge-lines`, {
+      quotationLineId: await laborQuotationLineId(f.scope),
+      idempotencyKey: key(),
+    });
+    const chargeLineId = charge.body.data.chargeLine.id as string;
+    const recorded = await post(adminToken, `${scopeUrl}/customer-payments`, {
+      amount: '100.00',
+      channel: 'BANK_TRANSFER',
+      providerReference: id(),
+      idempotencyKey: key(),
+    });
+    const paymentId = recorded.body.data.payment.id as string;
+    const transactionId = recorded.body.data.payment.transactionId as string;
+    await post(
+      adminToken,
+      `${scopeUrl}/customer-payments/${paymentId}/confirm`,
+      { idempotencyKey: key() },
+    );
+
+    const first = await post(adminToken, `${scopeUrl}/payment-allocations`, {
+      paymentId,
+      chargeLineId,
+      amount: '60.00',
+      idempotencyKey: key(),
+    });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+
+    // Refund bound: only received AND applied funds (60.00) can leave.
+    const overRefund = await post(adminToken, `${scopeUrl}/ledger-refunds`, {
+      paymentId,
+      amount: '60.01',
+      reason: 'Refund beyond applied amount',
+      idempotencyKey: key(),
+    });
+    assert.equal(overRefund.status, 409, JSON.stringify(overRefund.body));
+    const noCorrection = await q(
+      `SELECT count(*)::int AS n FROM handyman_ledger_corrections
+        WHERE transaction_id = $1`,
+      [transactionId],
+    );
+    assert.equal(noCorrection.rows[0].n, 0);
+
+    // Concurrency: two parallel 40.00 allocations race for the last
+    // 40.00 of capacity — exactly one may persist.
+    const raceKeyA = key();
+    const raceKeyB = key();
+    const [raceA, raceB] = await Promise.all([
+      post(adminToken, `${scopeUrl}/payment-allocations`, {
+        paymentId,
+        chargeLineId,
+        amount: '40.00',
+        idempotencyKey: raceKeyA,
+      }),
+      post(adminToken, `${scopeUrl}/payment-allocations`, {
+        paymentId,
+        chargeLineId,
+        amount: '40.00',
+        idempotencyKey: raceKeyB,
+      }),
+    ]);
+    const raceStatuses = [raceA.status, raceB.status].sort();
+    assert.deepEqual(raceStatuses, [200, 409]);
+    const winner = raceA.status === 200 ? raceA : raceB;
+    const winnerKey = raceA.status === 200 ? raceKeyA : raceKeyB;
+    const persisted = await q(
+      `SELECT COALESCE(SUM(amount), 0)::numeric(18, 2)::text AS total,
+              count(*)::int AS n
+         FROM handyman_payment_allocations WHERE payment_id = $1`,
+      [paymentId],
+    );
+    assert.equal(persisted.rows[0].total, '100.00');
+    assert.equal(persisted.rows[0].n, 2);
+
+    // Replay of the winning key returns the same allocation; rebinding
+    // the same key to a different amount is a bounded conflict.
+    const replay = await post(adminToken, `${scopeUrl}/payment-allocations`, {
+      paymentId,
+      chargeLineId,
+      amount: '40.00',
+      idempotencyKey: winnerKey,
+    });
+    assert.equal(replay.status, 200, JSON.stringify(replay.body));
+    assert.equal(replay.body.data.replayed, true);
+    assert.equal(
+      replay.body.data.allocation.id,
+      winner.body.data.allocation.id,
+    );
+    const rebound = await post(adminToken, `${scopeUrl}/payment-allocations`, {
+      paymentId,
+      chargeLineId,
+      amount: '10.00',
+      idempotencyKey: winnerKey,
+    });
+    assert.equal(rebound.status, 409, JSON.stringify(rebound.body));
+
+    // After reversing the first allocation, its capacity is allocatable
+    // again (net cap), and the payment ends exactly fully applied.
+    await post(adminToken, `${scopeUrl}/ledger-reversals/allocation`, {
+      allocationId: first.body.data.allocation.id,
+      reason: 'Re-route to corrected application',
+      idempotencyKey: key(),
+    });
+    const reallocated = await post(
+      adminToken,
+      `${scopeUrl}/payment-allocations`,
+      {
+        paymentId,
+        chargeLineId,
+        amount: '60.00',
+        idempotencyKey: key(),
+      },
+    );
+    assert.equal(reallocated.status, 200, JSON.stringify(reallocated.body));
+    assert.equal(reallocated.body.data.paymentUnallocated, '0.00');
+    assert.equal(reallocated.body.data.chargeLineOutstanding, '0.00');
+  });
 });

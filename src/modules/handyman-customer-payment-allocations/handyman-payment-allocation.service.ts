@@ -323,19 +323,38 @@ export async function allocateHandymanCustomerPayment(
       );
     }
 
-    const allocation = await handymanPaymentAllocationRepository
-      .insertAllocation(tx, {
-        clientId: transaction.clientId,
-        transactionId: transaction.id,
-        paymentId: paymentUuid,
-        chargeLineId: chargeLineUuid,
-        // The charge line's OWN kind: LABOR and MATERIAL never merge.
-        lineKind: chargeLine.line_kind as 'LABOR' | 'MATERIAL',
-        currency: transaction.currency,
-        amount: requested,
-        allocatedByUserId: actorUuid,
-        idempotencyKey: key,
-      });
+    let allocation;
+    try {
+      allocation = await handymanPaymentAllocationRepository
+        .insertAllocation(tx, {
+          clientId: transaction.clientId,
+          transactionId: transaction.id,
+          paymentId: paymentUuid,
+          chargeLineId: chargeLineUuid,
+          // The charge line's OWN kind: LABOR and MATERIAL never merge.
+          lineKind: chargeLine.line_kind as 'LABOR' | 'MATERIAL',
+          currency: transaction.currency,
+          amount: requested,
+          allocatedByUserId: actorUuid,
+          idempotencyKey: key,
+        });
+    } catch (error) {
+      // CR-HM-E2E-LIFECYCLE-01 final gate: the DB guard (0413, net caps
+      // since 0447) is the backstop for races the service pre-check
+      // cannot see; its raw pg errors must not surface as HTTP 500s.
+      const message = (error as { message?: string })?.message ?? '';
+      if (/allocation exceeds the payment amount/.test(message)) {
+        throw handymanPaymentAllocationConflictError(
+          'exceeds-payment-unallocated-amount',
+        );
+      }
+      if (/allocation exceeds the charge line amount/.test(message)) {
+        throw handymanPaymentAllocationConflictError(
+          'exceeds-charge-line-outstanding-amount',
+        );
+      }
+      throw error;
+    }
     const { paymentAllocated, chargeLineAllocated } = await netAllocated();
     return {
       allocation,

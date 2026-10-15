@@ -232,7 +232,7 @@ No merged capability was duplicated; Dispatch, Commercial Inbox, QC and Worker B
 
 | Result | Count |
 |---|---|
-| PASS | **5** (J12→J10→J12 full journey; J10 corrections; authority boundaries; J11 warranty start/expire; J11 rework ladder) |
+| PASS | **5** at CR completion (J12→J10→J12 full journey; J10 corrections; authority boundaries; J11 warranty start/expire; J11 rework ladder); a 6th finance-integrity test was added by the final gate — see §18.4 (6 PASS / 0 FAIL / 0 SKIPPED) |
 | FAIL | 0 |
 | SKIPPED | 0 |
 
@@ -285,6 +285,72 @@ No merged capability was duplicated; Dispatch, Commercial Inbox, QC and Worker B
 2. Use the auth-only field rework ladder from the worker app with the Crew Lead's own session; rework **authorize** remains the customer-side command.
 3. Treat `GET /handyman/financial-transactions` and pricing reads as read-only reporting inputs (`isFinalCharge: false` facts), not as payment instructions; settlement records state, never fund movement.
 
-**Contract documentation**: the endpoints above are authoritative in this matrix and in the router (`src/modules/handyman-finance-close-api/handyman-finance-close-api.routes.ts`). `docs/api/openapi.yaml` was not expanded in this CR, following the repository precedent that handyman surfaces after the CR-HM-17 certification are specified by their CR documents; OpenAPI expansion is a follow-up documentation task, not a runtime gap.
+**Contract documentation**: the endpoints above are authoritative in this matrix and in the router (`src/modules/handyman-finance-close-api/handyman-finance-close-api.routes.ts`). Since the final gate (§18), all 32 routes are also documented in `docs/api/openapi.yaml` (request/response, permission, scope and error contract per route).
 
 **Out of scope by instruction**: no Railway deploy, no production migration, no reset/force-push. Migration 0447 is additive and ships with the code for the normal migration runner.
+
+## 18. Final contract & authority gate (PR #29)
+
+### 18.1 Endpoint inventory — 32 routes, `src/modules/handyman-finance-close-api/`
+
+All successes are HTTP 200 with the standard `{ success, data }` envelope. The actor is always `req.auth`; strict body allow-lists reject unknown/authority fields with 400. `manage` = `tenant_company.manage`, `read` = `tenant_company.read`. Every mutating route requires `idempotencyKey`: replay with the same payload returns the original result; rebinding the key to a different payload is 409. Money is canonical decimal strings.
+
+| # | Route | Permission | Scope authority | Financial / state effect |
+|---|---|---|---|---|
+| 1 | `POST /handyman/commercial-agreements` | manage | Client (`canAccessClient`) | Prepares agreement (no amounts) |
+| 2 | `POST /handyman/commercial-agreement-versions/{agreementVersionId}/activate` | manage | Client via version | Activates version from `effectiveFrom` |
+| 3 | `POST /handyman/commercial-agreement-versions/{agreementVersionId}/supersede` | manage | Client via version | Supersedes with prepared replacement |
+| 4 | `POST /handyman/commercial-agreement-versions/{agreementVersionId}/labor-pricing-basis` | manage | Client via version | Labor pricing basis (mode/crew/unitAmount) |
+| 5 | `POST /handyman/commercial-agreement-versions/{agreementVersionId}/material-pricing-basis` | manage | Client via version | Material pricing basis |
+| 6 | `POST /handyman/commercial-agreement-versions/{agreementVersionId}/bm-fee-rule` | manage | Client via version | BM fee rule (basis/mode) |
+| 7 | `POST /handyman/commercial-agreement-versions/{agreementVersionId}/bm-fee-term` | manage | Client via version | BM fee term (`ratePercent`) |
+| 8 | `POST /handyman/commercial-agreement-versions/{agreementVersionId}/bm-fee-beneficiary` | manage | Client via version | BM fee beneficiary |
+| 9 | `GET /handyman/pricing-contract?clientId&asOf` | read | Client | Read-only |
+| 10 | `GET /handyman/bm-fee-configuration?clientId&asOf` | read | Client | Read-only |
+| 11 | `POST /handyman/execution-scopes/{executionScopeId}/customer-transaction` | manage | Exact Building via scope | Opens transaction once (idempotent) |
+| 12 | `POST /handyman/execution-scopes/{executionScopeId}/customer-charge-lines` | manage | Exact Building via scope | Charge composed from confirmed quotation line; amount server-derived |
+| 13 | `POST /handyman/execution-scopes/{executionScopeId}/payment-allocations` | manage | Exact Building via scope | Allocates ≤ NET unallocated payment & charge capacity |
+| 14 | `POST /handyman/execution-scopes/{executionScopeId}/ledger-refunds` | manage | Exact Building via scope | Refund ≤ net received-and-applied; above → 409, nothing recorded |
+| 15 | `POST /handyman/execution-scopes/{executionScopeId}/ledger-reversals/allocation` | manage | Exact Building via scope | Reverses one allocation exactly; restores capacity |
+| 16 | `POST /handyman/execution-scopes/{executionScopeId}/ledger-reversals/payment` | manage | Exact Building via scope | Reverses payment; requires all allocations reversed first |
+| 17 | `POST /handyman/execution-scopes/{executionScopeId}/ledger-adjustments` | manage | Exact Building via scope | Signed adjustment (optional charge line) |
+| 18 | `POST /handyman/execution-scopes/{executionScopeId}/financial-entitlements/derive` | manage | Exact Building via scope | Derives provider payable + BM fee server-side |
+| 19–23 | `POST .../settlement/prepare|include|reconcile|settle|correction` | manage | Exact Building via scope | Settlement ladder; records state only, never moves funds (`correction` takes `ledgerCorrectionId`) |
+| 24 | `POST /handyman/execution-scopes/{executionScopeId}/settlement/dispute` | manage | Exact Building via scope | Opens dispute HOLD only — adjudication NOT implemented (product decision pending) |
+| 25 | `GET /handyman/execution-scopes/{executionScopeId}/financial-transaction` | read | Exact Building via scope | Read-only transaction view |
+| 26 | `GET /handyman/financial-transactions?clientId&from&to&limit` | read | Client (read service) | Read-only reporting |
+| 27 | `POST /handyman/execution-scopes/{executionScopeId}/service-warranty/start` | manage | Exact Building via scope | Starts warranty; window server-derived |
+| 28 | `POST /handyman/service-warranties/{warrantyId}/expire` | manage | Building via the warranty's own scope (404 before any state change) | Expires warranty |
+| 29 | `POST /handyman/service-warranty-claims/{claimId}/reworks` | authenticated only | Service requires CURRENT Crew Lead of the claim's Building assignment | Proposes free rework |
+| 30 | `POST /handyman/service-warranty-reworks/{reworkId}/start` | authenticated only | Same Crew-Lead rule | Starts rework |
+| 31 | `POST /handyman/service-warranty-reworks/{reworkId}/complete` | authenticated only | Same Crew-Lead rule | Completes rework |
+| 32 | `POST /handyman/service-warranty-reworks/{reworkId}/verify` | authenticated only | Same Crew-Lead rule + QC-passed evidence | Verifies rework; failure keeps claim actionable |
+
+Boundary evidence: no route exposes Finance/Manager authority through Worker or Customer Care permissions — rework routes are auth-only with the Crew-Lead rule inside the service (never an RBAC shortcut), and every finance route denies actors lacking `tenant_company.manage` (403) or Building access (404-style), proven in E2E test 3 including a smuggled-authority-field 400.
+
+### 18.2 Migration 0447 review
+
+`0447_net_handyman_allocation_caps.ts` is additive and function-replacement only: it redefines the 0413 allocation-cap guard to NET semantics (gross allocations minus ALLOCATION-kind REVERSAL corrections). Its `down` restores the exact 0413 body (verified up/down during the CR). No table/column changes, no historical row rewritten, and no other schema change exists in PR #29 (diff vs `main`: 11 files, transport + netting + this migration + index registration + tests + docs only).
+
+### 18.3 Gate fixes and integrity evidence
+
+One verified defect was found and fixed in this gate: an over-refund escaped the correction service as a raw database-guard error (HTTP 500). Known migration-0414/0413 guard messages and unique violations are now mapped to bounded 409 `HANDYMAN_CUSTOMER_LEDGER_CORRECTION_CONFLICT` / allocation-conflict responses at the service layer (raw guard text preserved where the frozen PART 05 contract asserts it). New E2E test 6 proves, over real HTTP with persisted-state assertions: refund above net applied is rejected and records nothing; two concurrent allocations racing for the last capacity produce exactly one success and allocations totalling exactly the charge; same-key replay returns the original allocation; key rebinding is 409; allocation reversal restores allocatable capacity (net `paymentUnallocated` returns to `0.00` after re-allocation). Gross historical reporting (`summarizeHandymanPaymentAllocations`) is unchanged by design; command caps are net at both service and DB-guard layers.
+
+### 18.4 Gate validation (targeted only)
+
+| Check | Result |
+|---|---|
+| `tests/handyman-e2e-finance-close-api.test.ts` (6 tests) | 6 PASS / 0 FAIL / 0 SKIPPED |
+| `tests/handyman-ledger-corrections.test.ts` | 6 PASS / 0 FAIL / 0 SKIPPED |
+| `tests/handyman-payment-allocation.test.ts` | 5 PASS / 1 FAIL — identical to baseline (stale firewall token; not a regression) |
+| `tests/audit-part05-openapi.test.ts` | 4 PASS / 0 FAIL |
+| `tests/cr-be-fin-rpt-01-part05-openapi.test.ts` standalone | 14 PASS / 1 FAIL — only the stale `0334 must not exist` pin (pre-existing); router-alignment and `$ref` subtests PASS with the new entries |
+| `tests/mobile-openapi-completeness.test.ts` + fin-rpt combined | 17 PASS / 3 FAIL — byte-identical on clean PR HEAD (pre-existing) |
+| `npm run typecheck` | PASS |
+| `docs/api/openapi.yaml` | parses (OpenAPI 3.0.3), 32 new operations, no duplicate operationIds, all `$ref`s resolve |
+
+Full-suite re-runs were intentionally not repeated; the §16 baseline comparison stands. The Inspector (0434 TEMP-harness table) and Scope-Assignment (0439 fixture) debts in §16 remain recorded as harness/fixture debt — production workforce Building-assignment and QC gates are unchanged.
+
+### 18.5 Still PARTIAL — authority decisions required (not invented)
+
+Tenant cancellation policy (J01), manual Manager CLOSE aggregate (J11), and settlement dispute adjudication (J12) remain PARTIAL exactly as in §17; route 24 records the dispute hold only.

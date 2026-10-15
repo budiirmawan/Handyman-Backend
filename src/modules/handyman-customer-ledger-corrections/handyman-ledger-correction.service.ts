@@ -1,4 +1,5 @@
 import { withTransaction } from '../../database';
+import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
 import {
@@ -237,10 +238,71 @@ async function recordCorrection(
       correctedByUserId: actorUuid,
       idempotencyKey: intent.idempotencyKey,
     };
-    const correction = await handymanLedgerCorrectionRepository
-      .insertCorrection(tx, record);
-    return { correction, replayed: false };
+    try {
+      const correction = await handymanLedgerCorrectionRepository
+        .insertCorrection(tx, record);
+      return { correction, replayed: false };
+    } catch (error) {
+      throw mapLedgerCorrectionGuardError(error);
+    }
   });
+}
+
+/**
+ * CR-HM-E2E-LIFECYCLE-01 final gate — bounded transport for DB guard
+ * rejections. The migration-0414 guard re-proves every correction law
+ * for every writer, but its raw plpgsql errors are plain pg errors:
+ * over HTTP they surfaced as unhandled 500s. Known guard rejections
+ * are rethrown as the module's bounded 409 conflict vocabulary,
+ * PRESERVING the guard's message text (the frozen service contract).
+ * Anything else propagates unchanged.
+ */
+const LEDGER_CORRECTION_GUARD_REASONS: readonly [RegExp, string][] = [
+  [/refund exceeds what was actually received and applied/,
+    'refund-exceeds-received-and-applied'],
+  [/Only a CONFIRMED Handyman customer payment may be refunded/,
+    'payment-not-confirmed'],
+  [/Only a CONFIRMED Handyman customer payment may be reversed/,
+    'payment-not-confirmed'],
+  [/payment reversal requires that every allocation/,
+    'payment-allocations-not-reversed'],
+  [/adjustment exceeds the charge line amount/,
+    'adjustment-exceeds-charge-line-amount'],
+  [/adjustment exceeds the total charge/,
+    'adjustment-exceeds-transaction-total'],
+  [/reversal of an allocation must equal the allocation amount/,
+    'allocation-reversal-amount-mismatch'],
+  [/reversal of a payment must equal the payment amount/,
+    'payment-reversal-amount-mismatch'],
+];
+
+function mapLedgerCorrectionGuardError(error: unknown): unknown {
+  if (error instanceof AppError) return error;
+  const pgError = error as { code?: string; message?: string };
+  const message = typeof pgError?.message === 'string'
+    ? pgError.message
+    : '';
+  for (const [pattern, reason] of LEDGER_CORRECTION_GUARD_REASONS) {
+    if (pattern.test(message)) {
+      return new AppError({
+        code: ERROR_CODES.HANDYMAN_CUSTOMER_LEDGER_CORRECTION_CONFLICT,
+        message,
+        statusCode: 409,
+        details: [`reason=${reason}`],
+      });
+    }
+  }
+  if (pgError?.code === '23505') {
+    // Preserve the raw unique-violation text (frozen service contract
+    // asserted by the PART 05 suite) while bounding code + status.
+    return new AppError({
+      code: ERROR_CODES.HANDYMAN_CUSTOMER_LEDGER_CORRECTION_CONFLICT,
+      message: message || 'Handyman ledger correction conflict.',
+      statusCode: 409,
+      details: ['reason=correction-source-already-corrected'],
+    });
+  }
+  return error;
 }
 
 /**
