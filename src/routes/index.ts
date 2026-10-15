@@ -56,6 +56,8 @@ import { createHandymanBastWorkerApiRouter }
   from '../modules/handyman-bast-worker-api';
 import { createHandymanCustomerLedgerApiRouter }
   from '../modules/handyman-customer-ledger-api';
+import { createHandymanPaymentProofRouter }
+  from '../modules/handyman-payment-proof';
 import { createHandymanFinanceCloseApiRouter }
   from '../modules/handyman-finance-close-api';
 import { createHandymanServiceWarrantyApiRouter }
@@ -845,6 +847,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanBastApiRouter()); // CR-HM-17 GAP PART 04 — CR-HM-11 BAST read & sign-off surface
   router.use(createHandymanBastWorkerApiRouter()); // CR-HM-BAST-HTTP-01 — authorized worker BAST PREPARE/ISSUE/VOID transport
   router.use(createHandymanCustomerLedgerApiRouter()); // CR-HM-17 GAP PART 05 — CR-HM-13 customer ledger & payment surface
+  router.use(createHandymanPaymentProofRouter()); // CR-HM-FIN-DOCUMENTS-01 — Finance payment-proof metadata & verified content retrieval
   router.use(createHandymanServiceWarrantyApiRouter()); // CR-HM-17 GAP PART 06 — CR-HM-15 service warranty, claim, rework & chargeable additional work surface
   router.use(createHandymanFinanceCloseApiRouter()); // CR-HM-E2E-LIFECYCLE-01 — J10–J12 finance close seams (commercial/pricing authoring, ledger open/charge/allocation/corrections, entitlement/settlement, warranty start/expire + field rework)
   router.use(createHandymanSlaStatusApiRouter()); // CR-HM-17 GAP PART 07 — CR-HM-16 SLA, provider performance & status visibility surface
