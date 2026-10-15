@@ -32,7 +32,8 @@ import {
  * `rejectHandymanBast`).
  *
  * Worker/provider BAST preparation, issuance, and voiding commands
- * are NEVER imported or exposed here.
+ * are NEVER imported or exposed here (they live on the separate
+ * `handyman-bast-worker-api` transport, CR-HM-BAST-HTTP-01).
  */
 
 const p = (v: string | string[] | undefined) =>
