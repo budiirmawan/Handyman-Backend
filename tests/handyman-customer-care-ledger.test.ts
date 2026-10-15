@@ -58,9 +58,10 @@ import { ensureTestDatabase } from './helpers/postgres';
  *  2. `GET /api/v1/handyman/customer-ledger` returns the published
  *     windowed client-level customer ledger basis read contract.
  *  3. Bounded customer payment transport (`GET/POST .../customer-payments`,
- *     `POST .../confirm`, `POST .../reject`) enforces `tenant_company.manage`,
- *     `canAccessClient`, idempotency replay safety, ignoring smuggled
- *     authority keys, and one-way payment decisions.
+ *     `POST .../confirm`, `POST .../reject`) enforces `tenant_company.manage`
+ *     for reporting and `handyman.finance.manage` for verification
+ *     (CR-HM-FIN-AUTH-01), `canAccessClient`, idempotency replay safety,
+ *     ignoring smuggled authority keys, and one-way payment decisions.
  *  4. Access control (`401`, `403`, `404`, `400`) and strict client
  *     isolation across all 6 operations.
  *  5. Strict firewall: zero CR-HM-14 provider/BM entitlement or
@@ -499,6 +500,8 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
     const careManager = await createCustomerCareActor(f.buildingId, [
       { code: 'tenant_company.read', name: 'Read tenant company' },
       { code: 'tenant_company.manage', name: 'Manage tenant company' },
+      // CR-HM-FIN-AUTH-01: payment verification is Finance authority.
+      { code: 'handyman.finance.manage', name: 'Execute Handyman finance commands' },
     ]);
 
     const recordKey = key();
@@ -674,6 +677,8 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
     const validManager = await createCustomerCareActor(f.buildingId, [
       { code: 'tenant_company.read', name: 'Read tenant company' },
       { code: 'tenant_company.manage', name: 'Manage tenant company' },
+      // CR-HM-FIN-AUTH-01: payment verification is Finance authority.
+      { code: 'handyman.finance.manage', name: 'Execute Handyman finance commands' },
     ]);
 
     const getRoutes = [

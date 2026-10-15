@@ -2484,7 +2484,7 @@ paths:
     post:
       operationId: postHandymanCommercialAgreement
       summary: Prepare a commercial agreement for a Client
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope: the actor must have access to `clientId`."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope: the actor must have access to `clientId`."
       tags:
         - Handyman
       security:
@@ -2533,7 +2533,7 @@ paths:
     post:
       operationId: postHandymanCommercialAgreementVersionActivate
       summary: Activate a prepared commercial agreement version
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope is derived from the version's owning Client; foreign versions are 404."
       tags:
         - Handyman
       security:
@@ -2589,7 +2589,7 @@ paths:
     post:
       operationId: postHandymanCommercialAgreementVersionSupersede
       summary: Supersede an agreement version with a prepared replacement
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope is derived from the version's owning Client; foreign versions are 404."
       tags:
         - Handyman
       security:
@@ -2649,7 +2649,7 @@ paths:
     post:
       operationId: postHandymanLaborPricingBasis
       summary: Prepare the labor pricing basis of an agreement version
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope is derived from the version's owning Client; foreign versions are 404."
       tags:
         - Handyman
       security:
@@ -2721,7 +2721,7 @@ paths:
     post:
       operationId: postHandymanMaterialPricingBasis
       summary: Prepare the material pricing basis of an agreement version
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope is derived from the version's owning Client; foreign versions are 404."
       tags:
         - Handyman
       security:
@@ -2777,7 +2777,7 @@ paths:
     post:
       operationId: postHandymanBmFeeRule
       summary: Prepare the BM fee rule of an agreement version
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope is derived from the version's owning Client; foreign versions are 404."
       tags:
         - Handyman
       security:
@@ -2837,7 +2837,7 @@ paths:
     post:
       operationId: postHandymanBmFeeTerm
       summary: Prepare a BM fee term (rate) of an agreement version
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope is derived from the version's owning Client; foreign versions are 404."
       tags:
         - Handyman
       security:
@@ -2897,7 +2897,7 @@ paths:
     post:
       operationId: postHandymanBmFeeBeneficiary
       summary: Prepare the BM fee beneficiary of an agreement version
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Client scope is derived from the version's owning Client; foreign versions are 404."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Client scope is derived from the version's owning Client; foreign versions are 404."
       tags:
         - Handyman
       security:
@@ -2957,7 +2957,7 @@ paths:
     get:
       operationId: getHandymanPricingContract
       summary: Read the effective pricing contract for a Client at a point in time
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Client scope: the actor must have access to `clientId`."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.read` (CR-HM-FIN-AUTH-01). Client scope: the actor must have access to `clientId`."
       tags:
         - Handyman
       security:
@@ -2999,7 +2999,7 @@ paths:
     get:
       operationId: getHandymanBmFeeConfiguration
       summary: Read the effective BM fee configuration for a Client at a point in time
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Client scope: the actor must have access to `clientId`."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.read` (CR-HM-FIN-AUTH-01). Client scope: the actor must have access to `clientId`."
       tags:
         - Handyman
       security:
@@ -3041,7 +3041,7 @@ paths:
     post:
       operationId: postHandymanCustomerTransactionOpen
       summary: Open (idempotently) the customer transaction of an execution scope
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3088,7 +3088,7 @@ paths:
     post:
       operationId: postHandymanCustomerChargeLine
       summary: Compose a ledger charge line from a confirmed quotation line
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3139,7 +3139,7 @@ paths:
     post:
       operationId: postHandymanPaymentAllocation
       summary: Allocate received customer payment to a charge line
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3198,7 +3198,7 @@ paths:
     post:
       operationId: postHandymanLedgerRefund
       summary: Refund customer payment up to what was received AND applied (net)
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3257,7 +3257,7 @@ paths:
     post:
       operationId: postHandymanLedgerAllocationReversal
       summary: Reverse one payment allocation exactly (restores allocatable capacity)
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3312,7 +3312,7 @@ paths:
     post:
       operationId: postHandymanLedgerPaymentReversal
       summary: Reverse a customer payment (requires every allocation reversed first)
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3367,7 +3367,7 @@ paths:
     post:
       operationId: postHandymanLedgerAdjustment
       summary: Record a signed ledger adjustment, optionally against one charge line
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3426,7 +3426,7 @@ paths:
     post:
       operationId: postHandymanFinancialEntitlementsDerive
       summary: Derive provider/BM-fee financial entitlements for a scope
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3473,7 +3473,7 @@ paths:
     post:
       operationId: postHandymanSettlementPrepare
       summary: Prepare the settlement record for a scope
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.settlement.manage` (CR-HM-FIN-AUTH-01; never implies refund authority). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3520,7 +3520,7 @@ paths:
     post:
       operationId: postHandymanSettlementInclude
       summary: Include the prepared settlement
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.settlement.manage` (CR-HM-FIN-AUTH-01; never implies refund authority). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3567,7 +3567,7 @@ paths:
     post:
       operationId: postHandymanSettlementReconcile
       summary: Reconcile the included settlement
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.settlement.manage` (CR-HM-FIN-AUTH-01; never implies refund authority). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3614,7 +3614,7 @@ paths:
     post:
       operationId: postHandymanSettlementSettle
       summary: Mark the settlement settled (record state only; no fund movement)
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.settlement.manage` (CR-HM-FIN-AUTH-01; never implies refund authority). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3661,7 +3661,7 @@ paths:
     post:
       operationId: postHandymanSettlementDispute
       summary: Open a settlement dispute hold (recording only; adjudication is not implemented)
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.settlement.manage` (CR-HM-FIN-AUTH-01; never implies refund authority). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3708,7 +3708,7 @@ paths:
     post:
       operationId: postHandymanSettlementCorrection
       summary: Record a settlement correction from a ledger correction
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.settlement.manage` (CR-HM-FIN-AUTH-01; never implies refund authority). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3759,7 +3759,7 @@ paths:
     get:
       operationId: getHandymanFinancialTransaction
       summary: Read the financial transaction view of an execution scope
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.read` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3791,7 +3791,7 @@ paths:
     get:
       operationId: getHandymanFinancialTransactions
       summary: Read financial transactions of a Client in a period
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.read`. Client scope is enforced by the read service from the authenticated actor.
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.read` (CR-HM-FIN-AUTH-01). Client scope is enforced by the read service from the authenticated actor.
       tags:
         - Handyman
       security:
@@ -3845,7 +3845,7 @@ paths:
     post:
       operationId: postHandymanServiceWarrantyStart
       summary: Start the service warranty of a completed execution scope
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
+      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Exact-Building scope is enforced by the owning service from the authenticated actor (`req.auth`); foreign-scope resources are indistinguishable from missing ones (404-style denial).
       tags:
         - Handyman
       security:
@@ -3892,7 +3892,7 @@ paths:
     post:
       operationId: postHandymanServiceWarrantyExpire
       summary: Expire an active service warranty
-      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `tenant_company.manage`. Building scope is enforced from the warranty's own execution scope; foreign warranties are 404 before any state change."
+      description: "The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.commercial.manage` (CR-HM-FIN-AUTH-01). Building scope is enforced from the warranty's own execution scope; foreign warranties are 404 before any state change."
       tags:
         - Handyman
       security:
@@ -9312,7 +9312,7 @@ paths:
       tags: [Handyman Customer Ledger]
       operationId: confirmHandymanCustomerPayment
       summary: Confirm a `PENDING` customer payment (`CONFIRMED`) (CR-HM-13 / CR-HM-17 GAP PART 05)
-      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `confirmHandymanCustomerPayment`."
+      description: "CR-HM-17 GAP PART 05 — governed Finance verification transport (`handyman.finance.manage` (CR-HM-FIN-AUTH-01) + `canAccessClient` + `idempotencyKey`; payment reporting stays `tenant_company.manage`, verification does not) over `confirmHandymanCustomerPayment`."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
         - $ref: '#/components/parameters/CustomerPaymentIdPath'
@@ -9344,7 +9344,7 @@ paths:
       tags: [Handyman Customer Ledger]
       operationId: rejectHandymanCustomerPayment
       summary: Reject a `PENDING` customer payment (`REJECTED`) (CR-HM-13 / CR-HM-17 GAP PART 05)
-      description: "CR-HM-17 GAP PART 05 — governed Customer Care command transport (`tenant_company.manage` + `canAccessClient` + `idempotencyKey`) over `rejectHandymanCustomerPayment`."
+      description: "CR-HM-17 GAP PART 05 — governed Finance verification transport (`handyman.finance.manage` (CR-HM-FIN-AUTH-01) + `canAccessClient` + `idempotencyKey`; payment reporting stays `tenant_company.manage`, verification does not) over `rejectHandymanCustomerPayment`."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
         - $ref: '#/components/parameters/CustomerPaymentIdPath'

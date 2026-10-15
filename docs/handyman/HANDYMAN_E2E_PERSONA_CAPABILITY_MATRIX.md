@@ -354,3 +354,14 @@ Full-suite re-runs were intentionally not repeated; the §16 baseline comparison
 ### 18.5 Still PARTIAL — authority decisions required (not invented)
 
 Tenant cancellation policy (J01), manual Manager CLOSE aggregate (J11), and settlement dispute adjudication (J12) remain PARTIAL exactly as in §17; route 24 records the dispute hold only.
+
+## 19. CR-HM-FIN-AUTH-01 — dedicated Commercial / Finance / Settlement authority
+
+The §18 gate's open question — `tenant_company.manage` is generic, so Finance persona isolation did not exist (proven: a manage-only actor allocated and refunded with HTTP 200) — was decided as **Option B: explicit domain permissions**. Full inventory, permission matrix, provisioning runbook and migration notes: `docs/handyman/CR-HM-FIN-AUTH-01_FINANCE_AUTHORITY.md`.
+
+- New permissions (migration `0448_handyman_finance_authority_permissions`, catalogue + foundation seed, **unassigned by default — not even PLATFORM_ADMIN inherits**): `handyman.commercial.manage`, `handyman.finance.read`, `handyman.finance.manage`, `handyman.settlement.manage`.
+- The §18.1 permission column is superseded for the 32 routes: commercial authoring + warranty start/expire → `handyman.commercial.manage`; ledger open/charge/allocation/refund/reversals/adjustment + entitlement derivation → `handyman.finance.manage`; settlement ladder → `handyman.settlement.manage`; the 4 finance-close reads → `handyman.finance.read`; the 4 rework routes stay auth-only Crew-Lead.
+- Existing merged surface secured coherently: payment **verification** (confirm/reject on the customer-ledger API) now requires `handyman.finance.manage`; payment **reporting** (record) and customer ledger reads keep `tenant_company.manage` / `.read` so legitimate Customer/Tenant reporting is unbroken.
+- Domain separation is non-implicative: settlement ⊄ refund, commercial ⊄ allocation, finance ⊄ settlement; scope (Client/exact-Building) still binds every grant; rejected mutations persist nothing.
+- Evidence: `tests/handyman-finance-authority.test.ts` (personas A–E, reporting-vs-verification split, spoof 400, cross-scope denial, audit actors, exact persisted totals); E2E lifecycle suite stays 6/6; affected merged suites are at or better than their verified baselines (customer-care-ledger verifier fixtures now carry the Finance grant — tests 1 & 5 failures there are the pre-existing ones from §16).
+- J11 Manager CLOSE and J12 dispute adjudication remain PARTIAL by separate product decision (§18.5 unchanged).

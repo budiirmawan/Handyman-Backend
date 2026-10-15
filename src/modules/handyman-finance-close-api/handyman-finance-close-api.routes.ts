@@ -46,13 +46,16 @@ import {
  *   J12 entitlement derivation / settlement ladder / financial reads
  *   J11 service-warranty start/expire + field free-rework ladder
  *
- * Authority law:
- *  - commercial/pricing authoring is a client-scoped aggregate: RBAC
- *    `tenant_company.manage` plus a client-access guard in the
- *    controller (the authoring services own no Building guard);
- *  - scope-bound finance commands use RBAC `tenant_company.manage` and
- *    delegate exact-Building / ledger authority to the owning services;
- *  - financial/pricing reads use RBAC `tenant_company.read`;
+ * Authority law (CR-HM-FIN-AUTH-01):
+ *  - commercial agreement / pricing / BM-fee authoring and warranty
+ *    start/expire require `handyman.commercial.manage` plus Client
+ *    access (controller guard / scope guard in the services);
+ *  - ledger open/charge/allocation/corrections and entitlement
+ *    derivation require `handyman.finance.manage` plus exact-Building
+ *    scope in the owning services; settlement ladder commands require
+ *    `handyman.settlement.manage` (never implies refund authority);
+ *  - financial/pricing reads require `handyman.finance.read`;
+ *  - generic `tenant_company.manage` alone authorizes none of these;
  *  - field rework propose/start/complete/verify are authentication-only
  *    at transport (mirroring work-sessions / evidence-QC): Crew Leads
  *    hold no tenant RBAC permissions, and the rework service enforces
@@ -63,68 +66,73 @@ import {
 export function createHandymanFinanceCloseApiRouter(): Router {
   const router = Router();
   const auth = authenticationMiddleware;
-  const read = requirePermission('tenant_company.read');
-  const manage = requirePermission('tenant_company.manage');
+  // CR-HM-FIN-AUTH-01 — explicit domain authorities. Generic
+  // `tenant_company.manage` alone authorizes none of these commands;
+  // Client / exact-Building scope is still enforced by the services.
+  const commercial = requirePermission('handyman.commercial.manage');
+  const financeRead = requirePermission('handyman.finance.read');
+  const finance = requirePermission('handyman.finance.manage');
+  const settlement = requirePermission('handyman.settlement.manage');
 
   /* J12 — commercial agreement + pricing/BM-fee authoring */
   router.post(
     '/handyman/commercial-agreements',
     auth,
-    manage,
+    commercial,
     postCommercialAgreementHandler,
   );
   router.post(
     '/handyman/commercial-agreement-versions/:agreementVersionId/activate',
     auth,
-    manage,
+    commercial,
     postCommercialAgreementVersionActivateHandler,
   );
   router.post(
     '/handyman/commercial-agreement-versions/:agreementVersionId/supersede',
     auth,
-    manage,
+    commercial,
     postCommercialAgreementVersionSupersedeHandler,
   );
   router.post(
     '/handyman/commercial-agreement-versions/:agreementVersionId/labor-pricing-basis',
     auth,
-    manage,
+    commercial,
     postLaborPricingBasisHandler,
   );
   router.post(
     '/handyman/commercial-agreement-versions/:agreementVersionId/material-pricing-basis',
     auth,
-    manage,
+    commercial,
     postMaterialPricingBasisHandler,
   );
   router.post(
     '/handyman/commercial-agreement-versions/:agreementVersionId/bm-fee-rule',
     auth,
-    manage,
+    commercial,
     postBmFeeRuleHandler,
   );
   router.post(
     '/handyman/commercial-agreement-versions/:agreementVersionId/bm-fee-term',
     auth,
-    manage,
+    commercial,
     postBmFeeTermHandler,
   );
   router.post(
     '/handyman/commercial-agreement-versions/:agreementVersionId/bm-fee-beneficiary',
     auth,
-    manage,
+    commercial,
     postBmFeeBeneficiaryHandler,
   );
   router.get(
     '/handyman/pricing-contract',
     auth,
-    read,
+    financeRead,
     getPricingContractHandler,
   );
   router.get(
     '/handyman/bm-fee-configuration',
     auth,
-    read,
+    financeRead,
     getBmFeeConfigurationHandler,
   );
 
@@ -132,43 +140,43 @@ export function createHandymanFinanceCloseApiRouter(): Router {
   router.post(
     '/handyman/execution-scopes/:executionScopeId/customer-transaction',
     auth,
-    manage,
+    finance,
     postOpenCustomerTransactionHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/customer-charge-lines',
     auth,
-    manage,
+    finance,
     postComposeChargeLineHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/payment-allocations',
     auth,
-    manage,
+    finance,
     postAllocateCustomerPaymentHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/ledger-refunds',
     auth,
-    manage,
+    finance,
     postRefundCustomerPaymentHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/ledger-reversals/allocation',
     auth,
-    manage,
+    finance,
     postReversePaymentAllocationHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/ledger-reversals/payment',
     auth,
-    manage,
+    finance,
     postReverseCustomerPaymentHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/ledger-adjustments',
     auth,
-    manage,
+    finance,
     postAdjustCustomerLedgerHandler,
   );
 
@@ -176,55 +184,55 @@ export function createHandymanFinanceCloseApiRouter(): Router {
   router.post(
     '/handyman/execution-scopes/:executionScopeId/financial-entitlements/derive',
     auth,
-    manage,
+    finance,
     postDeriveEntitlementsHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/settlement/prepare',
     auth,
-    manage,
+    settlement,
     postPrepareSettlementHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/settlement/include',
     auth,
-    manage,
+    settlement,
     postIncludeSettlementHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/settlement/reconcile',
     auth,
-    manage,
+    settlement,
     postReconcileSettlementHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/settlement/settle',
     auth,
-    manage,
+    settlement,
     postSettleSettlementHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/settlement/correction',
     auth,
-    manage,
+    settlement,
     postSettlementCorrectionHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/settlement/dispute',
     auth,
-    manage,
+    settlement,
     postSettlementDisputeHandler,
   );
   router.get(
     '/handyman/execution-scopes/:executionScopeId/financial-transaction',
     auth,
-    read,
+    financeRead,
     getFinancialTransactionHandler,
   );
   router.get(
     '/handyman/financial-transactions',
     auth,
-    read,
+    financeRead,
     getFinancialClientHandler,
   );
 
@@ -232,13 +240,13 @@ export function createHandymanFinanceCloseApiRouter(): Router {
   router.post(
     '/handyman/execution-scopes/:executionScopeId/service-warranty/start',
     auth,
-    manage,
+    commercial,
     postStartServiceWarrantyHandler,
   );
   router.post(
     '/handyman/service-warranties/:warrantyId/expire',
     auth,
-    manage,
+    commercial,
     postExpireServiceWarrantyHandler,
   );
 
