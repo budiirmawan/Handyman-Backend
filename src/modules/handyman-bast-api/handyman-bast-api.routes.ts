@@ -20,7 +20,10 @@ import {
  *
  * Reads require `tenant_company.read` + `canAccessClient`.
  * Customer sign-off requires `tenant_company.manage` + `canAccessClient`.
- * Worker/provider BAST commands (`prepare`, `issue`, `void`) are NOT exposed.
+ * Worker/provider BAST commands (`prepare`, `issue`, `void`) are NOT exposed
+ * on this Customer Care surface — they live on the separate, Building-scoped
+ * worker transport (`handyman-bast-worker-api`, CR-HM-BAST-HTTP-01) gated by
+ * `handyman.bast.manage` + CURRENT Crew Lead authority.
  */
 export function createHandymanBastApiRouter(): Router {
   const router = Router();

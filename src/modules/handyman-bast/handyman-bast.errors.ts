@@ -8,6 +8,41 @@ export function handymanBastNotFoundError(): AppError {
   });
 }
 
+/**
+ * CR-HM-BAST-HTTP-01 — worker BAST transport: the caller is not the CURRENT
+ * authoritative Crew Lead of the execution scope's active assignment (or no
+ * active assignment resolves a Lead at all). Never granted by login, persona
+ * name, or the permission alone.
+ */
+export function handymanBastNotAuthorizedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_BAST_NOT_AUTHORIZED,
+    message:
+      'Actor is not the authorized worker (CURRENT Crew Lead) for this execution scope.',
+    statusCode: 403,
+  });
+}
+
+/**
+ * CR-HM-BAST-HTTP-01 — optimistic concurrency guard: the caller's
+ * expectedVersion does not match the artifact version derived from the
+ * authoritative current status.
+ */
+export function handymanBastVersionConflictError(
+  expectedVersion: number,
+  actualVersion: number,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_BAST_VERSION_CONFLICT,
+    message: 'Handyman BAST version conflict.',
+    statusCode: 409,
+    details: [
+      `expectedVersion=${expectedVersion}`,
+      `actualVersion=${actualVersion}`,
+    ],
+  });
+}
+
 export function handymanBastScopeNotEligibleError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_BAST_SCOPE_NOT_ELIGIBLE,

@@ -1,7 +1,10 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { getPool } from '../../database';
-import { handymanBastActiveConflictError } from './handyman-bast.errors';
+import {
+  handymanBastActiveConflictError,
+  handymanBastIllegalTransitionError,
+} from './handyman-bast.errors';
 import type {
   HandymanBastEventRecord,
   HandymanBastEventType,
@@ -25,7 +28,7 @@ const BAST_SELECT = `
 
 const EVENT_SELECT = `
   SELECT id, client_id, bast_id, execution_scope_id, event_type,
-         idempotency_key, actor_user_id, occurred_at, created_at
+         idempotency_key, actor_user_id, occurred_at, created_at, metadata
     FROM handyman_bast_events`;
 
 function mapBast(row: Row): HandymanBastRecord {
@@ -55,6 +58,7 @@ function mapEvent(row: Row): HandymanBastEventRecord {
     actorUserId: row.actor_user_id,
     occurredAt: row.occurred_at,
     createdAt: row.created_at,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? {},
   };
 }
 
@@ -94,6 +98,23 @@ async function findBastById(
   return result.rows[0] ? mapBast(result.rows[0]) : null;
 }
 
+/**
+ * Transactional command read. Serializes concurrent duplicate ISSUE/VOID and
+ * customer sign-off requests before replay lookup, so a same-key retry waits
+ * for the winner and then returns its original append-only event instead of
+ * spuriously receiving ILLEGAL_TRANSITION.
+ */
+async function findBastByIdForUpdate(
+  executor: Executor,
+  id: string,
+): Promise<HandymanBastRecord | null> {
+  const result = await executor.query(
+    `${BAST_SELECT} WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  return result.rows[0] ? mapBast(result.rows[0]) : null;
+}
+
 async function findActiveBastByScopeId(
   executor: Executor = getPool(),
   executionScopeId: string,
@@ -124,6 +145,7 @@ async function updateBastStatus(
   executor: Executor = getPool(),
   id: string,
   status: HandymanBastStatus,
+  expectedFromStatus: HandymanBastStatus,
 ): Promise<HandymanBastRecord> {
   const issuedAtSql = status === 'ISSUED'
     ? 'issued_at = COALESCE(issued_at, NOW())'
@@ -137,6 +159,13 @@ async function updateBastStatus(
   const voidedAtSql = status === 'VOID'
     ? 'voided_at = NOW()'
     : 'voided_at = voided_at';
+  // CR-HM-BAST-HTTP-01 — the frozen state machine is enforced ATOMICALLY:
+  // the UPDATE only applies from the exact status the transition was
+  // validated against (same optimistic-concurrency precedent as the QC/defect
+  // expectedVersion guards). A racing writer that already transitioned the
+  // document matches zero rows and receives the standard 409
+  // HANDYMAN_BAST_ILLEGAL_TRANSITION instead of appending a duplicate event;
+  // the serial path is byte-for-byte unchanged.
   const result = await executor.query(
     `UPDATE handyman_bast_documents
         SET status = $2,
@@ -145,12 +174,23 @@ async function updateBastStatus(
             ${rejectedAtSql},
             ${voidedAtSql},
             updated_at = NOW()
-      WHERE id = $1
+      WHERE id = $1 AND status = $3
       RETURNING id, client_id, execution_scope_id, qc_run_id, status,
                 issued_at, accepted_at, rejected_at, voided_at,
                 created_at, updated_at`,
-    [id, status],
+    [id, status, expectedFromStatus],
   );
+  if (!result.rows[0]) {
+    // Lost the concurrency race: another writer already transitioned this
+    // document away from `expectedFromStatus`.
+    const action = ({
+      ISSUED: 'ISSUE',
+      VOID: 'VOID',
+      ACCEPTED: 'ACCEPT',
+      REJECTED: 'REJECT',
+    } as Record<string, string>)[status] ?? status;
+    throw handymanBastIllegalTransitionError(expectedFromStatus, action);
+  }
   return mapBast(result.rows[0]);
 }
 
@@ -162,10 +202,10 @@ async function insertEvent(
   const result = await executor.query(
     `INSERT INTO handyman_bast_events (
        id, client_id, bast_id, execution_scope_id, event_type,
-       idempotency_key, actor_user_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+       idempotency_key, actor_user_id, metadata
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
      RETURNING id, client_id, bast_id, execution_scope_id, event_type,
-               idempotency_key, actor_user_id, occurred_at, created_at`,
+               idempotency_key, actor_user_id, occurred_at, created_at, metadata`,
     [
       id,
       record.clientId,
@@ -174,6 +214,7 @@ async function insertEvent(
       record.eventType,
       record.idempotencyKey,
       record.actorUserId,
+      JSON.stringify(record.metadata ?? {}),
     ],
   );
   return mapEvent(result.rows[0]);
@@ -282,6 +323,7 @@ async function listSignOffsByBastId(
 export const handymanBastRepository = {
   createBast,
   findBastById,
+  findBastByIdForUpdate,
   findActiveBastByScopeId,
   findLatestBastByScopeId,
   updateBastStatus,

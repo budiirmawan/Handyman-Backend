@@ -45,6 +45,13 @@ export type HandymanBastPrepareInput = {
 export type HandymanBastTransitionInput = {
   bastId: string;
   idempotencyKey: string;
+  /**
+   * CR-HM-BAST-HTTP-01 — VOID only: audit justification preserved inside the
+   * append-only event chain (`metadata.voidReason`). Optional for in-process
+   * callers (historical behaviour); the worker HTTP transport requires it.
+   * Ignored for ISSUE.
+   */
+  voidReason?: string | null;
 };
 
 export type HandymanBastCommandResult = {
@@ -78,11 +85,36 @@ function ensureKey(value: string): string {
   return raw;
 }
 
+/**
+ * CR-HM-BAST-HTTP-01 — VOID audit reason. Stored as event metadata, never as
+ * a document column and never a status authority. Blank/absent reasons stay
+ * legal for in-process callers; malformed or oversized reasons are rejected
+ * rather than silently truncated (audit text must not be distorted).
+ */
+function ensureVoidReasonMetadata(
+  action: string,
+  voidReason: string | null | undefined,
+): Record<string, unknown> {
+  if (action !== 'VOID') return {};
+  if (voidReason === undefined || voidReason === null) return {};
+  if (typeof voidReason !== 'string') {
+    throw handymanBastValidationError('voidReason');
+  }
+  const raw = voidReason.trim();
+  if (raw.length > 2000) {
+    throw handymanBastValidationError('voidReason');
+  }
+  return raw.length > 0 ? { voidReason: raw } : {};
+}
+
 async function loadAuthorizedScope(
   executor: Pick<PoolClient, 'query'>,
   executionScopeId: string,
 ) {
-  const scope = await handymanScopeAssignmentRepository.findScopeById(
+  // Scope-row lock serializes PREPARE's active-document/idempotency check
+  // with assignment changes and competing PREPARE requests. A duplicate key
+  // waits here, then observes and replays the winner's DRAFT/event.
+  const scope = await handymanScopeAssignmentRepository.lockScopeById(
     executor,
     executionScopeId,
   );
@@ -176,13 +208,20 @@ async function applyPart01Transition(
   bastIdRaw: string,
   idempotencyKeyRaw: string,
   action: Exclude<HandymanBastPart01EventType, 'PREPARE'>,
+  voidReason?: string | null,
 ): Promise<HandymanBastCommandResult> {
   const actor = ensureUuid(actorUserId, 'actorUserId');
   const bastId = ensureUuid(bastIdRaw, 'bastId');
   const idempotencyKey = ensureKey(idempotencyKeyRaw);
+  // CR-HM-BAST-HTTP-01 — validate the VOID reason before any mutation so a
+  // malformed reason can never half-apply; non-VOID actions ignore it.
+  const voidReasonMetadata = ensureVoidReasonMetadata(action, voidReason);
 
   return withTransaction(async (client) => {
-    const bast = await handymanBastRepository.findBastById(client, bastId);
+    const bast = await handymanBastRepository.findBastByIdForUpdate(
+      client,
+      bastId,
+    );
     if (!bast) {
       throw handymanBastNotFoundError();
     }
@@ -229,6 +268,7 @@ async function applyPart01Transition(
       client,
       bast.id,
       next,
+      bast.status,
     );
     const event = await handymanBastRepository.insertEvent(client, {
       clientId: bast.clientId,
@@ -237,6 +277,7 @@ async function applyPart01Transition(
       eventType: action,
       idempotencyKey,
       actorUserId: actor,
+      metadata: voidReasonMetadata,
     });
     return { bast: updated, event, replayed: false };
   });
@@ -251,6 +292,7 @@ export async function issueHandymanBast(
     input.bastId,
     input.idempotencyKey,
     'ISSUE',
+    // ISSUE never consumes a void reason (kept out of the ISSUE audit chain).
   );
 }
 
@@ -263,6 +305,7 @@ export async function voidHandymanBast(
     input.bastId,
     input.idempotencyKey,
     'VOID',
+    input.voidReason,
   );
 }
 
@@ -301,7 +344,10 @@ async function applyCustomerSignOff(
     : null;
 
   return withTransaction(async (client) => {
-    const bast = await handymanBastRepository.findBastById(client, bastId);
+    const bast = await handymanBastRepository.findBastByIdForUpdate(
+      client,
+      bastId,
+    );
     if (!bast) {
       throw handymanBastNotFoundError();
     }
@@ -375,6 +421,7 @@ async function applyCustomerSignOff(
       client,
       bast.id,
       next,
+      bast.status,
     );
     const event = await handymanBastRepository.insertEvent(client, {
       clientId: bast.clientId,

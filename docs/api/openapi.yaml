@@ -7312,7 +7312,7 @@ paths:
       tags: [Handyman BAST]
       operationId: acceptHandymanBast
       summary: Customer ACCEPT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
-      description: "Governed customer sign-off requires tenant_company.manage and exact Building access, and is legal only from ISSUED with signatureDigest and idempotencyKey. A current guarded QC PASS for the PREPARE-anchored qcRunId is rechecked; otherwise 409 HANDYMAN_BAST_QC_NOT_READY. Worker/provider PREPARE/ISSUE/VOID are service-only, not HTTP routes."
+      description: "Governed customer sign-off requires tenant_company.manage and exact Building access, and is legal only from ISSUED with signatureDigest and idempotencyKey. A current guarded QC PASS for the PREPARE-anchored qcRunId is rechecked; otherwise 409 HANDYMAN_BAST_QC_NOT_READY. Worker/provider PREPARE/ISSUE/VOID run on the separate worker transport (CR-HM-BAST-HTTP-01), never on this route."
       parameters:
         - $ref: '#/components/parameters/BastIdPath'
       requestBody:
@@ -7395,6 +7395,137 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/HandymanBastSignOffCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/field/execution-scopes/{executionScopeId}/bast:
+    get:
+      tags: [Handyman BAST]
+      operationId: getHandymanWorkerExecutionScopeBast
+      x-required-permission: handyman.bast.manage
+      x-building-scoped: true
+      x-current-assignment-role: CREW_LEAD
+      summary: Read the current BAST state for the authorized field Crew Lead (CR-HM-BAST-WORKER-READ-01)
+      description: "CR-HM-BAST-WORKER-READ-01 — read-only field projection. Requires authentication, `handyman.bast.manage`, exact server-derived Building access, and the CURRENT authoritative Crew Lead assignment. Reuses the existing active-then-latest BAST selection. Returns only worker lifecycle events (PREPARE/ISSUE/VOID), bounded acceptance facts, document ID/version and lifecycle candidates; it omits tenant/building data, Customer Care sign-off rows/evidence and ACCEPT/REJECT event details. No acceptance, invoice, payment, warranty or closure state is mutated."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Current worker-safe BAST projection; `bast` and `acceptance` are null before any BAST exists
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastWorkerReadView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/field/execution-scopes/{executionScopeId}/bast/prepare:
+    post:
+      tags: [Handyman BAST]
+      operationId: prepareHandymanBastWorker
+      summary: Worker PREPARE of the execution-scope DRAFT Handyman BAST (CR-HM-BAST-HTTP-01)
+      description: "CR-HM-BAST-HTTP-01 — authorized worker transport over `prepareHandymanBast`. Gated by authentication + `handyman.bast.manage` (registered by migration 0446, granted to NO role by default) + exact Building access + the CURRENT authoritative Crew Lead binding for the execution scope. The actor is always the session principal; no body field may name an actor. Requires the latest guarded Supervisor QC PASS (versioned checklist, completed Work Sessions, zero unverified defects, byte-verified QC uploads); otherwise 409 HANDYMAN_BAST_QC_NOT_READY. Creates a DRAFT anchored to that qcRunId (201) or idempotently replays the same key (200). Never issues, signs, accepts or writes financial state."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastWorkerPrepareRequest'
+      responses:
+        '200':
+          description: Idempotent replay of an earlier PREPARE with the same idempotencyKey
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastWorkerCommandResult'
+        '201':
+          description: DRAFT BAST anchored to the guarded QC PASS + recorded PREPARE event
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastWorkerCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/field/bast/{bastId}/issue:
+    post:
+      tags: [Handyman BAST]
+      operationId: issueHandymanBastWorker
+      summary: Worker ISSUE of a DRAFT Handyman BAST (CR-HM-BAST-HTTP-01)
+      description: "CR-HM-BAST-HTTP-01 — authorized worker transport over `issueHandymanBast` (`handyman.bast.manage` + exact Building + CURRENT Crew Lead). Legal only from DRAFT; the document identity, artifact version history and append-only event chain are preserved and the anchored qcRunId must still be the latest guarded PASS (409 HANDYMAN_BAST_QC_NOT_READY otherwise). Optional `expectedVersion` (the `artifact.version` last observed: DRAFT=1) yields 409 HANDYMAN_BAST_VERSION_CONFLICT on mismatch; the check is skipped for an idempotent replay of the same key, which returns 200 with the original event. ISSUED is NOT customer acceptance (`customerAccepted` stays false)."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastWorkerIssueRequest'
+      responses:
+        '200':
+          description: ISSUED BAST + recorded ISSUE event (or idempotent replay)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastWorkerCommandResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/field/bast/{bastId}/void:
+    post:
+      tags: [Handyman BAST]
+      operationId: voidHandymanBastWorker
+      summary: Worker VOID of a DRAFT or ISSUED Handyman BAST (CR-HM-BAST-HTTP-01)
+      description: "CR-HM-BAST-HTTP-01 — authorized worker transport over `voidHandymanBast` (`handyman.bast.manage` + exact Building + CURRENT Crew Lead). Legal only from DRAFT or ISSUED. Requires a non-empty `reason` (1..2000 chars), preserved in the append-only event chain as `event.voidReason`; historical documents, prior acceptance evidence and event history are never deleted. Optional `expectedVersion` semantics match the ISSUE route (DRAFT=1, ISSUED=2). Voiding never implies or destroys customer acceptance."
+      parameters:
+        - $ref: '#/components/parameters/BastIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBastWorkerVoidRequest'
+      responses:
+        '200':
+          description: VOID BAST + recorded VOID event with preserved reason (or idempotent replay)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBastWorkerCommandResult'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -81161,6 +81292,7 @@ components:
         - actorUserId
         - occurredAt
         - createdAt
+        - voidReason
       properties:
         id: { type: string, format: uuid }
         bastId: { type: string, format: uuid }
@@ -81170,6 +81302,7 @@ components:
         actorUserId: { type: string, format: uuid }
         occurredAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
+        voidReason: { type: string, nullable: true, maxLength: 2000, description: 'The preserved worker VOID justification; null for other events.' }
     HandymanBastSignOff:
       type: object
       required:
@@ -81268,6 +81401,135 @@ components:
             - $ref: '#/components/schemas/HandymanBastSignOff'
           nullable: true
         replayed: { type: boolean }
+    HandymanBastWorkerAction:
+      type: string
+      enum: [ISSUE, VOID]
+    HandymanBastWorkerDocument:
+      description: 'CR-HM-BAST-HTTP-01 worker payload: the BAST document plus the server-computed artifact reference/version and the worker-lane availableActions (never customer ACCEPT/REJECT).'
+      allOf:
+        - $ref: '#/components/schemas/HandymanBastDocument'
+        - type: object
+          required: [artifact, availableActions]
+          properties:
+            artifact:
+              type: object
+              required: [ref, version]
+              properties:
+                ref: { type: string, description: 'Server-owned artifact reference (BAST/{id}/v{N}); never forged by clients.' }
+                version: { type: integer, minimum: 1 }
+            availableActions:
+              type: array
+              items: { $ref: '#/components/schemas/HandymanBastWorkerAction' }
+    HandymanBastWorkerEvent:
+      description: 'CR-HM-BAST-HTTP-01 event payload: the append-only event row plus the preserved worker VOID reason (audit metadata; null except on VOID).'
+      allOf:
+        - $ref: '#/components/schemas/HandymanBastEvent'
+        - type: object
+          required: [voidReason]
+          properties:
+            voidReason: { type: string, nullable: true, maxLength: 2000 }
+    HandymanBastWorkerPrepareRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanBastWorkerIssueRequest:
+      type: object
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        expectedVersion:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: 'Optimistic concurrency: artifact.version last observed (DRAFT=1). Mismatch is 409 HANDYMAN_BAST_VERSION_CONFLICT; skipped for idempotent replay.'
+    HandymanBastWorkerVoidRequest:
+      type: object
+      required: [idempotencyKey, reason]
+      properties:
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        reason: { type: string, minLength: 1, maxLength: 2000, description: 'Void justification, preserved in the append-only event chain (event.voidReason).' }
+        expectedVersion:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: 'Optimistic concurrency: artifact.version last observed (DRAFT=1, ISSUED=2). Mismatch is 409 HANDYMAN_BAST_VERSION_CONFLICT; skipped for idempotent replay.'
+    HandymanBastWorkerCommandResult:
+      type: object
+      required: [bast, acceptance, event, replayed]
+      properties:
+        bast:
+          $ref: '#/components/schemas/HandymanBastWorkerDocument'
+        acceptance:
+          $ref: '#/components/schemas/HandymanBastAcceptanceReadContract'
+        event:
+          $ref: '#/components/schemas/HandymanBastWorkerEvent'
+        replayed: { type: boolean, description: 'True when idempotencyKey replayed an earlier command; event is the original row.' }
+    HandymanBastWorkerLifecycleAction:
+      type: string
+      enum: [PREPARE, ISSUE, VOID]
+    HandymanBastWorkerAcceptance:
+      description: 'Worker-safe acceptance state only. Deliberately excludes clientId, approvedSignOff, signature digest/evidence and signOffComplete; ACCEPT/REJECT remain Customer Care actions.'
+      type: object
+      required: [bastId, executionScopeId, status, customerAccepted, warrantyStartEligible, issuedAt, acceptedAt, rejectedAt, voidedAt, artifactRef]
+      properties:
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanBastStatus' }
+        customerAccepted: { type: boolean }
+        warrantyStartEligible: { type: boolean }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        voidedAt: { type: string, format: date-time, nullable: true }
+        artifactRef: { type: string, description: 'Server-computed BAST/<id>/v<N> reference; not a storage key.' }
+    HandymanBastWorkerReadEvent:
+      description: 'Only PREPARE/ISSUE/VOID history is exposed to the worker lane; Customer Care ACCEPT/REJECT events and sign-off evidence are omitted.'
+      type: object
+      required: [id, bastId, executionScopeId, eventType, idempotencyKey, actorUserId, occurredAt, createdAt, voidReason]
+      properties:
+        id: { type: string, format: uuid }
+        bastId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        eventType: { type: string, enum: [PREPARE, ISSUE, VOID] }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        actorUserId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        voidReason: { type: string, nullable: true, maxLength: 2000 }
+    HandymanBastWorkerReadView:
+      description: 'Bounded field-worker projection used for refresh/read-after-command; contains no client/building fields or Customer Care sign-off payload.'
+      type: object
+      required: [executionScopeId, scopeStatus, bast, acceptance, eligibility, lifecycleActions, events]
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        scopeStatus: { type: string, enum: [AUTHORIZED] }
+        bast:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastWorkerDocument'
+          nullable: true
+        acceptance:
+          allOf:
+            - $ref: '#/components/schemas/HandymanBastWorkerAcceptance'
+          nullable: true
+        eligibility:
+          type: object
+          required: [currentWorkerAssignment, scopeAuthorized, bastQcRunId, prepareRequiresLatestGuardedQcPass, issueRequiresAnchoredQcPassToRemainLatest, customerAccepted, warrantyStartEligible]
+          properties:
+            currentWorkerAssignment: { type: string, enum: [CURRENT_CREW_LEAD] }
+            scopeAuthorized: { type: boolean }
+            bastQcRunId: { type: string, format: uuid, nullable: true }
+            prepareRequiresLatestGuardedQcPass: { type: boolean }
+            issueRequiresAnchoredQcPassToRemainLatest: { type: boolean }
+            customerAccepted: { type: boolean }
+            warrantyStartEligible: { type: boolean }
+        lifecycleActions:
+          type: array
+          description: 'Current worker lifecycle candidates: PREPARE when no active BAST is present; otherwise transitions derived from the frozen BAST lifecycle. QC gates are rechecked by command services.'
+          items: { $ref: '#/components/schemas/HandymanBastWorkerLifecycleAction' }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanBastWorkerReadEvent' }
     HandymanCustomerLedgerLineKind:
       type: string
       enum: [LABOR, MATERIAL]

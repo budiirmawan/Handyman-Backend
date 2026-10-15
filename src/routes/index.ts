@@ -52,6 +52,8 @@ import { createHandymanEvidenceQcApiRouter }
   from '../modules/handyman-evidence-qc-api';
 import { createHandymanBastApiRouter }
   from '../modules/handyman-bast-api';
+import { createHandymanBastWorkerApiRouter }
+  from '../modules/handyman-bast-worker-api';
 import { createHandymanCustomerLedgerApiRouter }
   from '../modules/handyman-customer-ledger-api';
 import { createHandymanServiceWarrantyApiRouter }
@@ -839,6 +841,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface
   router.use(createHandymanEvidenceQcApiRouter()); // CR-HM-10 PART 06 — evidence/QC/defect surface
   router.use(createHandymanBastApiRouter()); // CR-HM-17 GAP PART 04 — CR-HM-11 BAST read & sign-off surface
+  router.use(createHandymanBastWorkerApiRouter()); // CR-HM-BAST-HTTP-01 — authorized worker BAST PREPARE/ISSUE/VOID transport
   router.use(createHandymanCustomerLedgerApiRouter()); // CR-HM-17 GAP PART 05 — CR-HM-13 customer ledger & payment surface
   router.use(createHandymanServiceWarrantyApiRouter()); // CR-HM-17 GAP PART 06 — CR-HM-15 service warranty, claim, rework & chargeable additional work surface
   router.use(createHandymanSlaStatusApiRouter()); // CR-HM-17 GAP PART 07 — CR-HM-16 SLA, provider performance & status visibility surface

@@ -130,6 +130,12 @@ const UNRELATED_PINNED: Record<string, string> = {
 
 /** Exceptional authorities withheld from PLATFORM_ADMIN — must stay exactly these. */
 const EXPECTED_UNASSIGNED_BY_DEFAULT = [
+  // CR-HM-QC-AUTHORITY-01 — QC decision/checklist authority: explicit grants.
+  'handyman.qc.manage',
+  'handyman.qc.configure',
+  // CR-HM-BAST-HTTP-01 — worker BAST PREPARE/ISSUE/VOID authority: explicit
+  // grants (never inherited, never auto-assigned by migration/seed).
+  'handyman.bast.manage',
   'operational_budget.override',
   'rfq.award',
   'price_catalog.override',
@@ -222,9 +228,10 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
     }
 
     // 320 pre-existing + 13 registered by this CR + 19 CR-BE-SAAS-01
-    // platform.* codes (PART 01 seed).
-    assert.equal(CATALOGUE.length, 352);
-    assert.equal(CATALOGUE_SET.size, 352, 'catalogue must contain no duplicates');
+    // platform.* codes (PART 01 seed) + 2 CR-HM-QC-AUTHORITY-01 handyman.qc.*
+    // codes + 1 CR-HM-BAST-HTTP-01 handyman.bast.manage code.
+    assert.equal(CATALOGUE.length, 355);
+    assert.equal(CATALOGUE_SET.size, 355, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {
