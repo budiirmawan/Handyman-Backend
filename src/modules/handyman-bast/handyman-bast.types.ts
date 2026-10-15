@@ -95,6 +95,12 @@ export type HandymanBastEventRecord = {
   actorUserId: string;
   occurredAt: Date;
   createdAt: Date;
+  /**
+   * CR-HM-BAST-HTTP-01 — append-only audit extras (e.g. the worker VOID
+   * reason as `{ voidReason }`). Optional in the type so historical
+   * constructions stay valid; rows always carry at least `{}`.
+   */
+  metadata?: Record<string, unknown>;
 };
 
 export type NewHandymanBastEvent = {
@@ -104,6 +110,8 @@ export type NewHandymanBastEvent = {
   eventType: HandymanBastEventType;
   idempotencyKey: string;
   actorUserId: string;
+  /** CR-HM-BAST-HTTP-01 — append-only audit extras; default `{}`. */
+  metadata?: Record<string, unknown> | null;
 };
 
 export type HandymanBastSignOffRecord = {

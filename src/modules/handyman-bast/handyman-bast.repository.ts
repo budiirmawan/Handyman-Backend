@@ -25,7 +25,7 @@ const BAST_SELECT = `
 
 const EVENT_SELECT = `
   SELECT id, client_id, bast_id, execution_scope_id, event_type,
-         idempotency_key, actor_user_id, occurred_at, created_at
+         idempotency_key, actor_user_id, occurred_at, created_at, metadata
     FROM handyman_bast_events`;
 
 function mapBast(row: Row): HandymanBastRecord {
@@ -55,6 +55,7 @@ function mapEvent(row: Row): HandymanBastEventRecord {
     actorUserId: row.actor_user_id,
     occurredAt: row.occurred_at,
     createdAt: row.created_at,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? {},
   };
 }
 
@@ -162,10 +163,10 @@ async function insertEvent(
   const result = await executor.query(
     `INSERT INTO handyman_bast_events (
        id, client_id, bast_id, execution_scope_id, event_type,
-       idempotency_key, actor_user_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+       idempotency_key, actor_user_id, metadata
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
      RETURNING id, client_id, bast_id, execution_scope_id, event_type,
-               idempotency_key, actor_user_id, occurred_at, created_at`,
+               idempotency_key, actor_user_id, occurred_at, created_at, metadata`,
     [
       id,
       record.clientId,
@@ -174,6 +175,7 @@ async function insertEvent(
       record.eventType,
       record.idempotencyKey,
       record.actorUserId,
+      JSON.stringify(record.metadata ?? {}),
     ],
   );
   return mapEvent(result.rows[0]);

@@ -27,12 +27,15 @@ export type {
 
 export {
   handymanBastNotFoundError,
+  handymanBastNotAuthorizedError,
   handymanBastScopeNotEligibleError,
   handymanBastIllegalTransitionError,
   handymanBastSignOffReservedError,
   handymanBastSignatureRequiredError,
   handymanBastActiveConflictError,
   handymanBastValidationError,
+  handymanBastVersionConflictError,
+  handymanBastQcNotReadyError,
 } from './handyman-bast.errors';
 
 export {
