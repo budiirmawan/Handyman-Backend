@@ -729,6 +729,14 @@ export async function getFinancialTransactionHandler(
   }
 }
 
+const FINANCIAL_CLIENT_QUERY_KEYS = [
+  'clientId',
+  'buildingId',
+  'from',
+  'to',
+  'limit',
+] as const;
+
 export async function getFinancialClientHandler(
   req: Request,
   res: Response,
@@ -737,11 +745,13 @@ export async function getFinancialClientHandler(
   try {
     const actorUserId = actor(req);
     const query = (req.query ?? {}) as Record<string, unknown>;
+    assertOnlyKeys(query, FINANCIAL_CLIENT_QUERY_KEYS);
     const clientId = requireQueryString(query, 'clientId');
     const result = await readHandymanFinancialClientAt(
       clientId,
       actorUserId,
       {
+        buildingId: optionalQueryString(query, 'buildingId') ?? null,
         from: optionalQueryString(query, 'from') ?? null,
         to: optionalQueryString(query, 'to') ?? null,
         limit: optionalQueryLimit(query),

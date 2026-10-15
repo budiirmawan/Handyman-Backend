@@ -3790,8 +3790,10 @@ paths:
   /handyman/financial-transactions:
     get:
       operationId: getHandymanFinancialTransactions
-      summary: Read financial transactions of a Client in a period
-      description: The actor is always the authenticated user; bodies containing actor/authority fields are rejected (400). Requires `handyman.finance.read` (CR-HM-FIN-AUTH-01). Client scope is enforced by the read service from the authenticated actor.
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      summary: Read financial transactions of a Client in a period (Building-scoped)
+      description: The actor is always the authenticated user; bodies or queries containing actor/authority fields are rejected (400). Requires `handyman.finance.read` (CR-HM-FIN-AUTH-01; no generic `tenant_company.manage` fallback). CR-HM-FIN-DISCOVERY-02 P0-A enforces exact Client/Building scope inside the database query before pagination/counting, returning only transactions from Buildings under `clientId` to which the actor holds an explicit ACTIVE `user_building_assignments` grant (or the exact requested `buildingId`, which returns 403 `HANDYMAN_CUSTOMER_TRANSACTION_NOT_AUTHORIZED` if unauthorized).
       tags:
         - Handyman
       security:
@@ -3800,7 +3802,14 @@ paths:
         - name: clientId
           in: query
           required: true
-          description: Client (tenant company) identifier.
+          description: Client identifier.
+          schema:
+            type: string
+            format: uuid
+        - name: buildingId
+          in: query
+          required: false
+          description: Optional Building identifier within the Client scope. Must be an authorized Building of the authenticated actor.
           schema:
             type: string
             format: uuid
@@ -9219,11 +9228,15 @@ paths:
       tags: [Handyman Customer Ledger]
       operationId: getHandymanClientCustomerLedger
       summary: Read client-scoped customer transaction ledger basis (CR-HM-13 / CR-HM-17 GAP PART 05)
-      description: "CR-HM-17 GAP PART 05 — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient`) over `readHandymanLedgerClientBasisAt`: windowed per-transaction net basis and aggregate totals for one client."
+      description: "CR-HM-17 GAP PART 05 / CR-HM-FIN-DISCOVERY-02 P0-A — authenticated Customer Care READ-ONLY transport (`tenant_company.read` + `canAccessClient` + exact Building scope inside the SQL query) over `readHandymanLedgerClientBasisAt`: windowed per-transaction net basis and aggregate totals over the actor's authorized Buildings for one client."
       parameters:
         - name: clientId
           in: query
           required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
           schema: { type: string, format: uuid }
         - name: from
           in: query
