@@ -9607,6 +9607,34 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/financial-ledger:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: getHandymanExecutionScopeFinancialLedger
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      security:
+        - bearerAuth: []
+      summary: Finance detail-read of one execution-scope customer ledger (CR-HM-FIN-DOCUMENTS-01)
+      description: "CR-HM-FIN-DOCUMENTS-01 — minimal Finance detail-read door: the SAME frozen CR-HM-13 read contract (`readHandymanLedgerTransactionAt` — separated LABOR/MATERIAL charge lines, provider-neutral payments, allocations, corrections, gross/net totals) behind `handyman.finance.read` (CR-HM-FIN-AUTH-01), scoped to ONE execution scope with the service's exact-Building wall (BE-02G). Exists so a Finance verifier can read the detail of the exact authorized transaction WITHOUT the tenant-wide `tenant_company.read`. No existing gate is changed: `GET /handyman/customer-ledger` and the customer-ledger doors stay `tenant_company.read`, and Finance receives no tenant-wide read here. Read-only: zero mutations, zero financial state transitions."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Execution-scope customer transaction ledger read contract (CR-HM-13)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCustomerLedgerTransactionRead'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /handyman/execution-scopes/{executionScopeId}/customer-payments:
     get:
       tags: [Handyman Customer Ledger]
@@ -9725,6 +9753,82 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/payment-proof:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: getHandymanCustomerPaymentProof
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      security:
+        - bearerAuth: []
+      summary: Read payment-proof metadata for one authorized payment (CR-HM-FIN-DOCUMENTS-01)
+      description: "CR-HM-FIN-DOCUMENTS-01 — Finance payment-proof metadata retrieval over the authoritative migration-0433 bound proof (`evidence_submissions` with `execution_type = HANDYMAN_CUSTOMER_PAYMENT`, `execution_id = payment.id`, `client_id = payment.client_id`, `status = ACTIVE`, `evidence_type IN (PHOTO, DOCUMENT)`, managed storage key, positive size and authoritative `content_sha256`). Requires `handyman.finance.read` (CR-HM-FIN-AUTH-01) plus the exact-Building scope of the payment's execution scope (BE-02G); `tenant_company.read` is NOT accepted as a substitute and no tenant-wide read is granted. The payment must be anchored on the scope's own ledger transaction — cross-payment and cross-tenant ids are bounded 404. Generic Field Evidence, `WORK_ORDER` / `HANDYMAN_REQUEST` attachments, REMOVED proofs and purged tombstones are never inferred or substituted (uniformly 404 `HANDYMAN_PAYMENT_PROOF_NOT_FOUND`). Response exposes no storage key, storage URL or credential. Read-only: never mutates payment status, evidence status, retention/integrity state, or any financial fact — uploading proof never confirms funds, and verification stays `handyman.finance.manage`. Cache-Control is no-store."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/CustomerPaymentIdPath'
+      responses:
+        '200':
+          description: Minimal payment-proof metadata (identity + integrity) for the exact authorized payment.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [paymentProof]
+                        properties:
+                          paymentProof: { $ref: '#/components/schemas/HandymanCustomerPaymentProofMetadata' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: Uniform HANDYMAN_PAYMENT_PROOF_NOT_FOUND / HANDYMAN_CUSTOMER_PAYMENT_NOT_FOUND / HANDYMAN_CUSTOMER_TRANSACTION_SCOPE_NOT_FOUND for any absent, REMOVED, mismatched or cross-tenant context; never fabricated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/payment-proof/content:
+    get:
+      tags: [Handyman Customer Ledger]
+      operationId: getHandymanCustomerPaymentProofContent
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      security:
+        - bearerAuth: []
+      summary: Download the verified payment-proof bytes for one authorized payment (CR-HM-FIN-DOCUMENTS-01)
+      description: "CR-HM-FIN-DOCUMENTS-01 — authenticated byte delivery of the exact bound payment proof. Same authority and binding law as the metadata door (`handyman.finance.read` + exact-Building scope + exact payment). Before any byte is served, existence, size and SHA-256 are validated against the authoritative upload-time metadata: missing stored bytes are an explicit unavailable state (404 `EVIDENCE_FILE_NOT_FOUND`) and corrupt/truncated content is rejected (409 `HANDYMAN_PAYMENT_PROOF_INTEGRITY_CONFLICT`) — never streamed, never fabricated. Content-Type is the stored MIME type (image/jpeg | image/png | image/webp | application/pdf); Content-Disposition is inline with the original file name. No storage key, storage URL, signed URL or bearer token is disclosed; bytes are reachable only through this authenticated route. Read-only and non-transitional. Cache-Control is no-store."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - $ref: '#/components/parameters/CustomerPaymentIdPath'
+      responses:
+        '200':
+          description: Verified payment-proof bytes (checksum and size validated before delivery).
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+            Content-Disposition:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: HANDYMAN_PAYMENT_PROOF_NOT_FOUND / payment or scope not found / EVIDENCE_FILE_NOT_FOUND when stored bytes are unavailable (explicit unavailable state — never a fabricated download).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: HANDYMAN_PAYMENT_PROOF_INTEGRITY_CONFLICT — stored bytes contradict the authoritative upload-time size/checksum and are never served.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   /handyman/execution-scopes/{executionScopeId}/service-warranty:
     get:
       tags: [Handyman Service Warranty]
@@ -83964,6 +84068,45 @@ components:
         payment: { $ref: '#/components/schemas/HandymanCustomerPaymentRecord' }
         event: { $ref: '#/components/schemas/HandymanCustomerPaymentEventRecord' }
         replayed: { type: boolean }
+    HandymanCustomerPaymentProofMetadata:
+      type: object
+      additionalProperties: false
+      description: >-
+        CR-HM-FIN-DOCUMENTS-01 — minimal payment-proof metadata for ONE
+        authorized payment. Identity + integrity only: never the storage
+        key, never a storage/signed URL, never a credential. `contentSha256`
+        is the authoritative upload-time SHA-256 of the stored bytes.
+      required:
+        - paymentId
+        - evidenceId
+        - executionType
+        - executionId
+        - clientId
+        - evidenceType
+        - originalFileName
+        - mimeType
+        - fileSize
+        - contentSha256
+        - hashAlgorithm
+        - status
+        - retentionState
+        - createdAt
+      properties:
+        paymentId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        executionType: { type: string, enum: [HANDYMAN_CUSTOMER_PAYMENT] }
+        executionId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        evidenceType: { type: string, enum: [PHOTO, DOCUMENT] }
+        originalFileName: { type: string }
+        mimeType: { type: string }
+        fileSize: { type: integer, minimum: 1, maximum: 52428800 }
+        contentSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        hashAlgorithm: { type: string, enum: [SHA-256] }
+        status: { type: string, enum: [ACTIVE] }
+        retentionState: { type: string }
+        capturedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
     HandymanServiceWarrantyStatus:
       type: string
       enum:
