@@ -49,8 +49,13 @@ export type HandymanQuotationLineRecord = {
   updatedAt: Date;
 };
 
-/** Safe public representation (timestamps ISO). */
-export type PublicHandymanQuotationLine = Omit<
+/**
+ * Internal service-layer view of the immutable line snapshot (timestamps ISO).
+ * Carries provenance and reference-price snapshots for Backend processes;
+ * HTTP controllers must serialize an explicit customer allow-list instead
+ * of returning this type.
+ */
+export type HandymanQuotationLineServiceView = Omit<
   HandymanQuotationLineRecord,
   'createdAt' | 'updatedAt'
 > & { createdAt: string; updatedAt: string };

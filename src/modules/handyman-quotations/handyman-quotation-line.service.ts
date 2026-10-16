@@ -22,7 +22,7 @@ import {
   HANDYMAN_QUOTATION_LINE_TYPES,
   type AddHandymanQuotationLineInput,
   type HandymanQuotationLineRecord,
-  type PublicHandymanQuotationLine,
+  type HandymanQuotationLineServiceView,
   type PublicHandymanQuotationTotals,
 } from './handyman-quotation-line.types';
 
@@ -50,9 +50,9 @@ function isValidAmount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function toPublicLine(
+function toServiceLineView(
   row: HandymanQuotationLineRecord,
-): PublicHandymanQuotationLine {
+): HandymanQuotationLineServiceView {
   return {
     id: row.id,
     quotationVersionId: row.quotationVersionId,
@@ -131,7 +131,7 @@ export async function addHandymanQuotationLine(
   quotationVersionId: string,
   input: AddHandymanQuotationLineInput,
   actorUserId: string,
-): Promise<PublicHandymanQuotationLine> {
+): Promise<HandymanQuotationLineServiceView> {
   assertUuid(quotationVersionId, 'quotationVersionId');
   assertUuid(actorUserId, 'actorUserId');
   const { description } = validateInput(input);
@@ -257,7 +257,7 @@ export async function addHandymanQuotationLine(
       },
       tx,
     );
-    return toPublicLine(line);
+    return toServiceLineView(line);
   });
 }
 
@@ -265,7 +265,7 @@ export async function addHandymanQuotationLine(
 export async function listHandymanQuotationVersionLines(
   quotationVersionId: string,
   actorUserId: string,
-): Promise<PublicHandymanQuotationLine[]> {
+): Promise<HandymanQuotationLineServiceView[]> {
   assertUuid(quotationVersionId, 'quotationVersionId');
   assertUuid(actorUserId, 'actorUserId');
   const version = await handymanQuotationRepository.findVersionById(
@@ -289,7 +289,7 @@ export async function listHandymanQuotationVersionLines(
     undefined,
     version.id,
   );
-  return lines.map(toPublicLine);
+  return lines.map(toServiceLineView);
 }
 
 /** Bounded derived totals (F4/F5: derived, never persisted). */

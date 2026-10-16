@@ -16,6 +16,14 @@ import {
   listHandymanQuotationVersionLines,
   supersedeHandymanQuotationVersion,
 } from '../handyman-quotations';
+import type {
+  PublicHandymanExecutionScope,
+  PublicHandymanQuotationBundle,
+  PublicHandymanQuotationDecision,
+  PublicHandymanQuotationVersion,
+} from '../handyman-quotations';
+import type { HandymanQuotationLineServiceView }
+  from '../handyman-quotations/handyman-quotation-line.types';
 import {
   parseQuotationApiUuidParam,
   parseQuotationDecisionBody,
@@ -41,6 +49,171 @@ function actor(req: Request): string {
 
 function idempotencyHeader(req: Request): string {
   return req.header('Idempotency-Key')?.trim() ?? '';
+}
+
+/**
+ * Explicit customer-facing quotation-line allow-list. The service result
+ * intentionally retains immutable commercial provenance for Backend
+ * calculations, but this HTTP contract never serializes reference pricing,
+ * source catalog IDs, or internal actor identity.
+ */
+type CustomerHandymanQuotationLinePayload = Pick<
+  HandymanQuotationLineServiceView,
+  | 'id'
+  | 'quotationVersionId'
+  | 'lineType'
+  | 'description'
+  | 'quantity'
+  | 'uomId'
+  | 'finalQuotedUnitAmount'
+  | 'lineTotal'
+  | 'currency'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+function toCustomerQuotationLinePayload(
+  line: HandymanQuotationLineServiceView,
+): CustomerHandymanQuotationLinePayload {
+  return {
+    id: line.id,
+    quotationVersionId: line.quotationVersionId,
+    lineType: line.lineType,
+    description: line.description,
+    quantity: line.quantity,
+    uomId: line.uomId,
+    finalQuotedUnitAmount: line.finalQuotedUnitAmount,
+    lineTotal: line.lineTotal,
+    currency: line.currency,
+    createdAt: line.createdAt,
+    updatedAt: line.updatedAt,
+  };
+}
+
+type CustomerHandymanQuotationVersionPayload = Pick<
+  PublicHandymanQuotationVersion,
+  | 'id'
+  | 'quotationId'
+  | 'versionNumber'
+  | 'status'
+  | 'validUntil'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+function toCustomerQuotationVersionPayload(
+  version: PublicHandymanQuotationVersion,
+): CustomerHandymanQuotationVersionPayload {
+  return {
+    id: version.id,
+    quotationId: version.quotationId,
+    versionNumber: version.versionNumber,
+    status: version.status,
+    validUntil: version.validUntil,
+    createdAt: version.createdAt,
+    updatedAt: version.updatedAt,
+  };
+}
+
+type CustomerHandymanQuotationBundlePayload = {
+  quotation: Pick<
+    PublicHandymanQuotationBundle['quotation'],
+    'id' | 'clientId' | 'handymanRequestId' | 'createdAt' | 'updatedAt'
+  >;
+  versions: CustomerHandymanQuotationVersionPayload[];
+};
+
+function toCustomerQuotationBundlePayload(
+  bundle: PublicHandymanQuotationBundle,
+): CustomerHandymanQuotationBundlePayload {
+  return {
+    quotation: {
+      id: bundle.quotation.id,
+      clientId: bundle.quotation.clientId,
+      handymanRequestId: bundle.quotation.handymanRequestId,
+      createdAt: bundle.quotation.createdAt,
+      updatedAt: bundle.quotation.updatedAt,
+    },
+    versions: bundle.versions.map(toCustomerQuotationVersionPayload),
+  };
+}
+
+type CustomerHandymanQuotationDecisionPayload = Pick<
+  PublicHandymanQuotationDecision,
+  | 'id'
+  | 'clientId'
+  | 'quotationId'
+  | 'quotationVersionId'
+  | 'decision'
+  | 'tenantCompanyId'
+  | 'tenantPicId'
+  | 'idempotencyKey'
+  | 'decidedAt'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+function toCustomerQuotationDecisionPayload(
+  decision: PublicHandymanQuotationDecision,
+): CustomerHandymanQuotationDecisionPayload {
+  return {
+    id: decision.id,
+    clientId: decision.clientId,
+    quotationId: decision.quotationId,
+    quotationVersionId: decision.quotationVersionId,
+    decision: decision.decision,
+    tenantCompanyId: decision.tenantCompanyId,
+    tenantPicId: decision.tenantPicId,
+    idempotencyKey: decision.idempotencyKey,
+    decidedAt: decision.decidedAt,
+    createdAt: decision.createdAt,
+    updatedAt: decision.updatedAt,
+  };
+}
+
+type CustomerHandymanExecutionScopePayload = Pick<
+  PublicHandymanExecutionScope,
+  | 'id'
+  | 'clientId'
+  | 'handymanRequestId'
+  | 'channelAttributionId'
+  | 'quotationId'
+  | 'approvedQuotationVersionId'
+  | 'quotationDecisionId'
+  | 'tenantCompanyId'
+  | 'tenantPicId'
+  | 'buildingId'
+  | 'floorId'
+  | 'areaId'
+  | 'roomId'
+  | 'spaceId'
+  | 'status'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+function toCustomerExecutionScopePayload(
+  scope: PublicHandymanExecutionScope,
+): CustomerHandymanExecutionScopePayload {
+  return {
+    id: scope.id,
+    clientId: scope.clientId,
+    handymanRequestId: scope.handymanRequestId,
+    channelAttributionId: scope.channelAttributionId,
+    quotationId: scope.quotationId,
+    approvedQuotationVersionId: scope.approvedQuotationVersionId,
+    quotationDecisionId: scope.quotationDecisionId,
+    tenantCompanyId: scope.tenantCompanyId,
+    tenantPicId: scope.tenantPicId,
+    buildingId: scope.buildingId,
+    floorId: scope.floorId,
+    areaId: scope.areaId,
+    roomId: scope.roomId,
+    spaceId: scope.spaceId,
+    status: scope.status,
+    createdAt: scope.createdAt,
+    updatedAt: scope.updatedAt,
+  };
 }
 
 export async function postHandymanQuotationHandler(
@@ -73,16 +246,14 @@ export async function getHandymanQuotationHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
-    sendSuccess(
-      res,
-      await getHandymanQuotation(
-        parseQuotationApiUuidParam(
-          p(req.params.handymanRequestId),
-          'handymanRequestId',
-        ),
-        actor(req),
+    const bundle = await getHandymanQuotation(
+      parseQuotationApiUuidParam(
+        p(req.params.handymanRequestId),
+        'handymanRequestId',
       ),
+      actor(req),
     );
+    sendSuccess(res, toCustomerQuotationBundlePayload(bundle));
   } catch (error) {
     next(error);
   }
@@ -94,15 +265,16 @@ export async function getHandymanPresentedQuotationHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const version = await getCurrentHandymanIssuedQuotationVersion(
+      parseQuotationApiUuidParam(
+        p(req.params.handymanRequestId),
+        'handymanRequestId',
+      ),
+      actor(req),
+    );
     sendSuccess(
       res,
-      await getCurrentHandymanIssuedQuotationVersion(
-        parseQuotationApiUuidParam(
-          p(req.params.handymanRequestId),
-          'handymanRequestId',
-        ),
-        actor(req),
-      ),
+      version ? toCustomerQuotationVersionPayload(version) : null,
     );
   } catch (error) {
     next(error);
@@ -139,13 +311,15 @@ export async function postHandymanQuotationLineHandler(
   try {
     sendSuccess(
       res,
-      await addHandymanQuotationLine(
-        parseQuotationApiUuidParam(
-          p(req.params.quotationVersionId),
-          'quotationVersionId',
+      toCustomerQuotationLinePayload(
+        await addHandymanQuotationLine(
+          parseQuotationApiUuidParam(
+            p(req.params.quotationVersionId),
+            'quotationVersionId',
+          ),
+          parseQuotationLineBody(req.body),
+          actor(req),
         ),
-        parseQuotationLineBody(req.body),
-        actor(req),
       ),
       201,
     );
@@ -160,16 +334,14 @@ export async function getHandymanQuotationLinesHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
-    sendSuccess(
-      res,
-      await listHandymanQuotationVersionLines(
-        parseQuotationApiUuidParam(
-          p(req.params.quotationVersionId),
-          'quotationVersionId',
-        ),
-        actor(req),
+    const lines = await listHandymanQuotationVersionLines(
+      parseQuotationApiUuidParam(
+        p(req.params.quotationVersionId),
+        'quotationVersionId',
       ),
+      actor(req),
     );
+    sendSuccess(res, lines.map(toCustomerQuotationLinePayload));
   } catch (error) {
     next(error);
   }
@@ -292,16 +464,14 @@ export async function getHandymanQuotationDecisionHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
-    sendSuccess(
-      res,
-      await getHandymanQuotationDecision(
-        parseQuotationApiUuidParam(
-          p(req.params.quotationVersionId),
-          'quotationVersionId',
-        ),
-        actor(req),
+    const decision = await getHandymanQuotationDecision(
+      parseQuotationApiUuidParam(
+        p(req.params.quotationVersionId),
+        'quotationVersionId',
       ),
+      actor(req),
     );
+    sendSuccess(res, toCustomerQuotationDecisionPayload(decision));
   } catch (error) {
     next(error);
   }
@@ -313,16 +483,14 @@ export async function getHandymanExecutionScopeHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
-    sendSuccess(
-      res,
-      await getHandymanExecutionScopeByQuotationVersion(
-        parseQuotationApiUuidParam(
-          p(req.params.quotationVersionId),
-          'quotationVersionId',
-        ),
-        actor(req),
+    const scope = await getHandymanExecutionScopeByQuotationVersion(
+      parseQuotationApiUuidParam(
+        p(req.params.quotationVersionId),
+        'quotationVersionId',
       ),
+      actor(req),
     );
+    sendSuccess(res, toCustomerExecutionScopePayload(scope));
   } catch (error) {
     next(error);
   }

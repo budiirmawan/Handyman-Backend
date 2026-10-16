@@ -38,9 +38,12 @@ import {
  *        execution-scope                                             read
  *
  * Permissions: reads `tenant_company.read`; mutations
- * `tenant_company.manage` (existing vocabulary). Actor is always the
- * authenticated session user; customer/client/location lineage is
- * service-derived. The explicit supersede route exposes the genuine
+ * `tenant_company.manage` (existing vocabulary). Quotation-line HTTP
+ * responses pass through an explicit customer allow-list; internal
+ * reference prices, source catalog identifiers, and actor IDs are excluded
+ * from these quotation payloads. Backend snapshots are unchanged. Actor is
+ * always the authenticated session user;
+ * customer/client/location lineage is service-derived. The explicit supersede route exposes the genuine
  * public service (ISSUED-withdrawal), not an internal helper. The
  * minimum Execution Scope read (bounded, by approved quotation
  * version) exists solely for quotation-approval result + downstream

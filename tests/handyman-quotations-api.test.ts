@@ -4,6 +4,11 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
+import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
+import {
+  hashSessionToken,
+  sessionService,
+} from '../src/modules/auth';
 import { areaService } from '../src/modules/areas';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
@@ -11,6 +16,13 @@ import { clientService } from '../src/modules/clients';
 import { floorService } from '../src/modules/floors';
 import { createChannelAttribution } from '../src/modules/handyman-channel-attributions';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
+import { inventoryItemService } from '../src/modules/inventory-items';
+import { priceCatalogEntryService } from '../src/modules/price-catalog-entries';
+import {
+  permissionRepository,
+  permissionService,
+} from '../src/modules/permissions';
+import { roleService } from '../src/modules/roles';
 import {
   handymanServiceRequestDiagnosisService,
   handymanServiceRequestService,
@@ -37,7 +49,8 @@ import { ensureTestDatabase } from './helpers/postgres';
  * CR-HM-06 PART 07A — focused HTTP/OpenAPI tests for the Handyman
  * QUOTATION surface (FROZEN F1-F12 + PART 06 HTTP handoff).
  *
- * Ten cases prove the 13-operation / 10-path surface works end-to-end:
+ * Eleven cases prove the 13-operation / 10-path surface and the customer-safe
+ * quotation-line response projection end-to-end:
  * create/DRAFT-v1, LABOR/MATERIAL lines + totals, empty DRAFT revision,
  * issue + presented read, expiry, APPROVE exposing the authoritative
  * Execution Scope, REJECT never exposing one, read/manage RBAC with
@@ -236,6 +249,66 @@ async function insertUom(clientId: string): Promise<string> {
   return id;
 }
 
+async function insertMaterialItem(clientId: string, uomId: string) {
+  return inventoryItemService.createInventoryItem(
+    {
+      clientId,
+      code: `ITM_${suffix()}`,
+      name: 'Copper Pipe',
+      itemType: 'MATERIAL',
+      uomId,
+    },
+    adminUserId,
+  );
+}
+
+async function insertActivePriceEntry(
+  clientId: string,
+  itemId: string,
+  uomId: string,
+  unitPrice: number,
+) {
+  const entry = await priceCatalogEntryService.createPriceCatalogEntry(
+    {
+      clientId,
+      sourceMode: 'MATERIAL',
+      itemId,
+      uomId,
+      currency: 'IDR',
+      unitPrice,
+      effectiveFrom: new Date(Date.now() - 86_400_000).toISOString(),
+      idempotencyKey: randomUUID(),
+    },
+    adminUserId,
+  );
+  await priceCatalogEntryService.activatePriceCatalogEntry(
+    entry.id,
+    adminUserId,
+  );
+  return entry;
+}
+
+async function createTenantReadSession(tenantUserId: string): Promise<string> {
+  const permission = await permissionRepository.findByCode('tenant_company.read');
+  if (!permission) throw new Error('tenant_company.read permission missing');
+  const role = await roleService.createRole({
+    code: `TENANT_READ_${suffix()}`,
+    name: 'Tenant Quotation Read Only',
+  });
+  await permissionService.assignPermissionToRole(role.id, permission.id);
+  await roleService.assignRoleToUser(tenantUserId, role.id);
+  return (await sessionService.createSessionForUser(tenantUserId)).sessionToken;
+}
+
+async function userIdForToken(sessionToken: string): Promise<string> {
+  const rows = await q<{ user_id: string }>(
+    'SELECT user_id FROM user_sessions WHERE token_hash = $1',
+    [hashSessionToken(sessionToken)],
+  );
+  if (!rows.rows[0]) throw new Error('session token user not found');
+  return rows.rows[0].user_id;
+}
+
 /** Quotation (DRAFT v1) created through HTTP. */
 async function createQuotationHttp(requestId: string) {
   const created = await api().post(QUOTATION(requestId)).set(auth());
@@ -286,8 +359,9 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     assert.equal(labor.status, 201, JSON.stringify(labor.body));
     assert.equal(labor.body.data.lineType, 'LABOR');
     assert.equal(labor.body.data.lineTotal, 200);
-    assert.equal(labor.body.data.referenceUnitAmount, null);
-    assert.equal(labor.body.data.createdByUserId, adminUserId);
+    assert.equal('referenceUnitAmount' in labor.body.data, false);
+    assert.equal('sourceItemId' in labor.body.data, false);
+    assert.equal('createdByUserId' in labor.body.data, false);
     const material = await api().post(`${VERSION(versionId)}/lines`)
       .set(auth())
       .send({
@@ -358,6 +432,9 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     assert.equal(totals.body.data.currency, null);
     const read = await api().get(QUOTATION(f.request.id)).set(auth());
     assert.equal(read.body.data.versions.length, 2);
+    assert.equal('createdByUserId' in read.body.data.quotation, false);
+    assert.equal(read.body.data.versions.some((v: Record<string, unknown>) =>
+      'createdByUserId' in v), false);
   });
 
   it('4: issue + current presented read through HTTP', async (t) => {
@@ -392,7 +469,10 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       .set(auth());
     assert.equal(presented.status, 200);
     assert.equal(presented.body.data.id, versionId);
+    assert.equal(presented.body.data.versionNumber, 1);
     assert.equal(presented.body.data.status, 'ISSUED');
+    assert.equal(presented.body.data.validUntil, validUntil);
+    assert.equal('createdByUserId' in presented.body.data, false);
   });
 
   it('5: expiry lifecycle through HTTP', async (t) => {
@@ -486,17 +566,25 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     assert.equal(scope.handymanRequestId, f.request.id);
     assert.equal(scope.tenantCompanyId, f.company.id);
     assert.equal(scope.buildingId, f.building.id);
-    // The same scope is discoverable through the bounded version-keyed read.
+    assert.equal(scope.createdByUserId, adminUserId,
+      'authorized decision mutation retains its actor audit fact');
+    // The same authoritative scope is discoverable through the bounded read,
+    // but internal actor identity is not part of the customer read contract.
     const scopedRead = await api()
       .get(`${VERSION(versionId)}/execution-scope`)
       .set(auth());
     assert.equal(scopedRead.status, 200);
-    assert.deepEqual(scopedRead.body.data, scope);
+    assert.equal(scopedRead.body.data.id, scope.id);
+    assert.equal(scopedRead.body.data.status, 'AUTHORIZED');
+    assert.equal(scopedRead.body.data.approvedQuotationVersionId, versionId);
+    assert.equal(scopedRead.body.data.buildingId, f.building.id);
+    assert.equal('createdByUserId' in scopedRead.body.data, false);
     const decisionRead = await api().get(`${VERSION(versionId)}/decision`)
       .set(auth());
     assert.equal(decisionRead.status, 200);
     assert.equal(decisionRead.body.data.decision, 'APPROVE');
     assert.equal(decisionRead.body.data.quotationVersionId, versionId);
+    assert.equal('decidedByUserId' in decisionRead.body.data, false);
   });
 
   it('7: REJECT HTTP yields no Execution Scope', async (t) => {
@@ -569,10 +657,15 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     const manageGet = await api().get(QUOTATION(f.request.id))
       .set(auth(manageOnly));
     assert.equal(manageGet.status, 403);
-    // Full actor works and is authoritative for created/decided identity.
+    // The manager mutation response retains its audit actor, while customer
+    // reads omit that internal actor identity regardless of caller role.
+    assert.equal(bundle.quotation.createdByUserId, adminUserId);
     const adminRead = await api().get(QUOTATION(f.request.id)).set(auth());
     assert.equal(adminRead.status, 200);
-    assert.equal(adminRead.body.data.quotation.createdByUserId, adminUserId);
+    assert.equal('createdByUserId' in adminRead.body.data.quotation, false);
+    assert.equal(adminRead.body.data.versions.some(
+      (version: Record<string, unknown>) => 'createdByUserId' in version,
+    ), false);
   });
 
   it('9: smuggled authority/location/downstream fields cannot override', async (t) => {
@@ -627,9 +720,10 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     assert.equal(line.status, 201, JSON.stringify(line.body));
     // Caller prices/totals/lineage never win: lineTotal is server-derived.
     assert.equal(line.body.data.lineTotal, 200);
-    assert.equal(line.body.data.referenceUnitAmount, null);
+    assert.equal('referenceUnitAmount' in line.body.data, false);
+    assert.equal('sourceItemId' in line.body.data, false);
     assert.equal(line.body.data.quotationVersionId, versionId);
-    assert.equal(line.body.data.createdByUserId, adminUserId);
+    assert.equal('createdByUserId' in line.body.data, false);
     await api().post(`${VERSION(versionId)}/issue`)
       .set(auth())
       .send({ validUntil: FUTURE(), ...smuggle });
@@ -656,8 +750,7 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     }
   });
 
-  it('10: OpenAPI/runtime parity; ZERO downstream/payment/BAST/FM APIs', async (t) => {
-    if (!requireDatabase(t)) return;
+  it('10: OpenAPI/runtime parity; ZERO downstream/payment/BAST/FM APIs', async () => {
     const { parse: parseYaml } = await import('yaml');
     const { readFileSync } = await import('node:fs');
     const { join } = await import('node:path');
@@ -736,8 +829,13 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       'HandymanQuotationRecord',
       'HandymanQuotationVersionRecord',
       'HandymanQuotationBundle',
+      'HandymanQuotationCustomerRead',
+      'HandymanQuotationVersionCustomerProjection',
+      'HandymanQuotationCustomerReadBundle',
+      'HandymanQuotationDecisionCustomerProjection',
+      'HandymanExecutionScopeCustomerProjection',
       'CreateHandymanQuotationLineRequest',
-      'HandymanQuotationLineRecord',
+      'HandymanQuotationLineCustomerProjection',
       'HandymanQuotationTotals',
       'IssueHandymanQuotationVersionRequest',
       'DecideHandymanQuotationRequest',
@@ -756,13 +854,107 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       assert.ok(versionSchema.properties.status.enum.includes(status),
         `version status enum missing ${status}`);
     }
-    const lineSchema = doc.components.schemas.HandymanQuotationLineRecord as {
+    const lineSchema = doc.components.schemas
+      .HandymanQuotationLineCustomerProjection as {
       properties: Record<string, unknown>;
+      additionalProperties?: boolean;
     };
-    assert.ok('referenceUnitAmount' in lineSchema.properties,
-      'reference-price vs final-quoted distinction must be preserved');
-    assert.ok('finalQuotedUnitAmount' in lineSchema.properties);
-    assert.ok('lineTotal' in lineSchema.properties);
+    assert.equal(lineSchema.additionalProperties, false,
+      'safe line contract must be closed against unreviewed properties');
+    for (const field of [
+      'id', 'quotationVersionId', 'lineType', 'description', 'quantity',
+      'uomId', 'finalQuotedUnitAmount', 'lineTotal', 'currency',
+      'createdAt', 'updatedAt',
+    ]) {
+      assert.ok(field in lineSchema.properties,
+        `customer quotation-line projection must include ${field}`);
+    }
+    for (const forbidden of [
+      'referenceUnitAmount', 'sourceItemId', 'createdByUserId',
+    ]) {
+      assert.equal(forbidden in lineSchema.properties, false,
+        `customer quotation-line projection must exclude ${forbidden}`);
+    }
+    const linePath = doc.paths[
+      '/handyman/quotation-versions/{quotationVersionId}/lines'
+    ] as Record<string, Record<string, unknown>>;
+    for (const method of ['get', 'post']) {
+      const response = (linePath[method] as any).responses;
+      const schema = response[method === 'get' ? '200' : '201']
+        .content['application/json'].schema;
+      assert.equal(schema.allOf[0].$ref,
+        '#/components/schemas/SuccessEnvelope');
+      const dataSchema = schema.allOf[1].properties.data;
+      const responseRef = method === 'get'
+        ? dataSchema.items.$ref
+        : dataSchema.$ref;
+      assert.equal(responseRef,
+        '#/components/schemas/HandymanQuotationLineCustomerProjection',
+        `${method.toUpperCase()} line responses must use the safe projection`);
+    }
+    const actorFreeCustomerSchemas = [
+      ['HandymanQuotationCustomerRead', 'createdByUserId'],
+      ['HandymanQuotationVersionCustomerProjection', 'createdByUserId'],
+      ['HandymanQuotationDecisionCustomerProjection', 'decidedByUserId'],
+      ['HandymanExecutionScopeCustomerProjection', 'createdByUserId'],
+    ];
+    for (const [name, actorField] of actorFreeCustomerSchemas) {
+      const schema = doc.components.schemas[name] as any;
+      assert.equal(schema.additionalProperties, false,
+        `${name} must be closed against unreviewed metadata`);
+      assert.equal(actorField in schema.properties, false,
+        `${name} must omit internal ${actorField}`);
+    }
+    const readResponseRef = (path: string, method: string) => {
+      const responseSchema = (doc.paths[path][method] as any)
+        .responses['200'].content['application/json'].schema;
+      assert.equal(responseSchema.allOf[0].$ref,
+        '#/components/schemas/SuccessEnvelope');
+      return responseSchema.allOf[1].properties.data;
+    };
+    assert.equal(readResponseRef(
+      '/handyman/requests/{handymanRequestId}/quotation', 'get').$ref,
+      '#/components/schemas/HandymanQuotationCustomerReadBundle');
+    const presentedSchema = readResponseRef(
+      '/handyman/requests/{handymanRequestId}/quotation/presented', 'get');
+    assert.equal(presentedSchema.nullable, true);
+    assert.equal(presentedSchema.allOf[0].$ref,
+      '#/components/schemas/HandymanQuotationVersionCustomerProjection');
+    assert.equal(readResponseRef(
+      '/handyman/quotation-versions/{quotationVersionId}/decision', 'get').$ref,
+      '#/components/schemas/HandymanQuotationDecisionCustomerProjection');
+    assert.equal(readResponseRef(
+      '/handyman/quotation-versions/{quotationVersionId}/execution-scope', 'get').$ref,
+      '#/components/schemas/HandymanExecutionScopeCustomerProjection');
+    const materialCommandLineSchema = doc.components.schemas
+      .HandymanMaterialExecutionLineRecord as any;
+    assert.ok('sourceItemId' in materialCommandLineSchema.properties,
+      'current Crew Lead command contract retains its internal material identity');
+    for (const name of ['HandymanCustomerCareMaterialLineItem']) {
+      const safeMaterialLineSchema = doc.components.schemas[name] as any;
+      assert.equal(safeMaterialLineSchema.additionalProperties, false,
+        `${name} must be a closed customer response schema`);
+      assert.equal('sourceItemId' in safeMaterialLineSchema.properties, false,
+        `${name} must omit internal sourceItemId`);
+      assert.equal(safeMaterialLineSchema.required?.includes('sourceItemId') ?? false,
+        false, `${name} must not require sourceItemId`);
+    }
+    const finalChargeProjection = doc.components.schemas
+      .HandymanMaterialFinalChargeReadyProjection as any;
+    assert.equal(finalChargeProjection.properties.lines.items.$ref,
+      '#/components/schemas/HandymanMaterialExecutionLineRecord');
+    const finalChargeReadSchema = (doc.paths[
+      '/handyman/execution-scopes/{executionScopeId}/material-lines/final-charge-ready'
+    ].get as any).responses['200'].content['application/json'].schema;
+    assert.equal(finalChargeReadSchema.$ref,
+      '#/components/schemas/HandymanMaterialFinalChargeReadyProjection');
+    const careReadSchema = (doc.paths[
+      '/handyman/execution-scopes/{executionScopeId}/material-lines'
+    ].get as any).responses['200'].content['application/json'].schema;
+    assert.equal(careReadSchema.allOf[0].$ref,
+      '#/components/schemas/SuccessEnvelope');
+    assert.equal(careReadSchema.allOf[1].properties.data.$ref,
+      '#/components/schemas/HandymanCustomerCareMaterialLinesProjection');
     const scopeSchema = doc.components.schemas.HandymanExecutionScopeRecord as {
       properties: { status: { enum: string[] } };
     };
@@ -789,5 +981,219 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       ),
       'decision POST must consume the Idempotency-Key header',
     );
+  });
+
+  it('11: authorized Tenant receives a safe quote projection; internal pricing snapshots remain stored', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await diagnosedFixture();
+    const bundle = await createQuotationHttp(f.request.id);
+    const versionId = bundle.versions[0].id;
+    const uomId = await insertUom(f.client.id);
+    await clientMonetaryContextService.setClientMonetaryContext(
+      {
+        clientId: f.client.id,
+        baseCurrencyCode: 'IDR',
+        defaultTransactionCurrencyCode: 'IDR',
+        allowedCurrencyCodes: ['IDR'],
+      },
+      adminUserId,
+    );
+    const item = await insertMaterialItem(f.client.id, uomId);
+    await insertActivePriceEntry(f.client.id, item.id, uomId, 25_000);
+
+    const createdLine = await api().post(`${VERSION(versionId)}/lines`)
+      .set(auth())
+      .send({
+        lineType: 'MATERIAL',
+        description: 'Copper pipe supply',
+        quantity: 2,
+        uomId,
+        currency: 'IDR',
+        finalQuotedUnitAmount: 30_000,
+        sourceItemId: item.id,
+      });
+    assert.equal(createdLine.status, 201, JSON.stringify(createdLine.body));
+    const lineId = createdLine.body.data.id as string;
+
+    // The quote's internal commercial snapshot and calculation are preserved.
+    const stored = await q<{
+      referenceUnitAmount: number;
+      sourceItemId: string;
+      finalQuotedUnitAmount: number;
+      lineTotal: number;
+    }>(
+      `SELECT reference_unit_amount::float AS "referenceUnitAmount",
+              source_item_id AS "sourceItemId",
+              final_quoted_unit_amount::float AS "finalQuotedUnitAmount",
+              line_total::float AS "lineTotal"
+         FROM handyman_quotation_lines WHERE id = $1`,
+      [lineId],
+    );
+    assert.deepEqual(stored.rows[0], {
+      referenceUnitAmount: 25_000,
+      sourceItemId: item.id,
+      finalQuotedUnitAmount: 30_000,
+      lineTotal: 60_000,
+    });
+
+    const issued = await api().post(`${VERSION(versionId)}/issue`)
+      .set(auth())
+      .send({ validUntil: FUTURE() });
+    assert.equal(issued.status, 200, JSON.stringify(issued.body));
+    const tenantToken = await createTenantReadSession(f.linkedUser.id);
+
+    const read = await api().get(`${VERSION(versionId)}/lines`)
+      .set(auth(tenantToken));
+    assert.equal(read.status, 200, JSON.stringify(read.body));
+    assert.equal(read.body.data.length, 1);
+    const line = read.body.data[0] as Record<string, unknown>;
+    assert.deepEqual(Object.keys(line).sort(), [
+      'createdAt', 'currency', 'description', 'finalQuotedUnitAmount',
+      'id', 'lineTotal', 'lineType', 'quantity', 'quotationVersionId',
+      'uomId', 'updatedAt',
+    ].sort());
+    assert.equal(line.description, 'Copper pipe supply');
+    assert.equal(line.quantity, 2);
+    assert.equal(line.uomId, uomId);
+    assert.equal(line.finalQuotedUnitAmount, 30_000);
+    assert.equal(line.lineTotal, 60_000);
+
+    const customerResponseJson = JSON.stringify(read.body);
+    for (const field of [
+      'referenceUnitAmount', 'sourceItemId', 'createdByUserId',
+      'referenceUnitPrice', 'catalogItemId', 'internalCost', 'margin',
+      'pricingSource',
+    ]) {
+      assert.equal(customerResponseJson.includes(field), false,
+        `customer quotation response leaked ${field}`);
+    }
+    assert.equal(customerResponseJson.includes(item.id), false,
+      'customer quotation response leaked the internal catalog item UUID');
+    assert.equal(customerResponseJson.includes('25000'), false,
+      'customer quotation response leaked the internal reference unit price');
+
+    // Mutation responses use the same safe contract; no null placeholder or
+    // internal value is emitted for the omitted fields.
+    const createResponseJson = JSON.stringify(createdLine.body);
+    assert.equal(createResponseJson.includes('referenceUnitAmount'), false);
+    assert.equal(createResponseJson.includes('sourceItemId'), false);
+    assert.equal(createResponseJson.includes(item.id), false);
+
+    const totals = await api().get(`${VERSION(versionId)}/totals`)
+      .set(auth(tenantToken));
+    assert.equal(totals.status, 200, JSON.stringify(totals.body));
+    assert.deepEqual(totals.body.data, {
+      laborSubtotal: 0,
+      materialSubtotal: 60_000,
+      total: 60_000,
+      currency: 'IDR',
+      lineCount: 1,
+    });
+
+    const presented = await api().get(`${QUOTATION(f.request.id)}/presented`)
+      .set(auth(tenantToken));
+    assert.equal(presented.status, 200);
+    assert.equal(presented.body.data.status, 'ISSUED');
+    const root = await api().get(QUOTATION(f.request.id))
+      .set(auth(tenantToken));
+    assert.equal(root.status, 200);
+    for (const response of [presented, root]) {
+      const raw = JSON.stringify(response.body);
+      assert.equal(raw.includes('referenceUnitAmount'), false);
+      assert.equal(raw.includes('sourceItemId'), false);
+      assert.equal(raw.includes('createdByUserId'), false);
+      assert.equal(raw.includes('decidedByUserId'), false);
+      assert.equal(raw.includes(item.id), false);
+    }
+
+    // The Customer Care read is customer-readable and source-free; the
+    // final-charge read remains an independently authorized Crew Lead contract.
+    const approved = await api().post(`${VERSION(versionId)}/decision`)
+      .set(auth())
+      .set('Idempotency-Key', `k-${randomUUID()}`)
+      .send({ decision: 'APPROVE' });
+    assert.equal(approved.status, 201, JSON.stringify(approved.body));
+    const executionScopeId = approved.body.data.executionScope.id as string;
+    const materialExecutionLineId = randomUUID();
+    await q(
+      `INSERT INTO handyman_material_execution_lines (
+         id, client_id, execution_scope_id, quotation_version_id,
+         quotation_line_id, source_item_id, status, acquisition_mode,
+         estimated_qty, approved_qty, issued_qty, purchased_qty,
+         used_qty, returned_qty, supplier_reference
+       ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
+                 $6::uuid, 'FINAL_CHARGE_READY', 'ISSUED',
+                 2, 2, 2, 0, 1, 0, NULL)`,
+      [materialExecutionLineId, f.client.id, executionScopeId,
+        versionId, lineId, item.id],
+    );
+    const careRead = await api()
+      .get(`${HM}/execution-scopes/${executionScopeId}/material-lines`)
+      .set(auth(tenantToken));
+    assert.equal(careRead.status, 200, JSON.stringify(careRead.body));
+    const careRaw = JSON.stringify(careRead.body);
+    for (const field of [
+      'sourceItemId', 'referenceUnitAmount', 'referenceUnitPrice',
+      'catalogItemId', 'internalCost', 'margin', 'pricingSource',
+    ]) {
+      assert.equal(careRaw.includes(field), false,
+        `customer material response leaked ${field}`);
+    }
+    assert.equal(careRaw.includes(item.id), false,
+      'customer material response leaked the internal catalog item UUID');
+    assert.equal(careRead.body.data.lines[0].id, materialExecutionLineId);
+
+    // The separate final-charge-ready contract requires the current assigned
+    // Crew Lead, so a Tenant cannot use it as a side door to internal IDs.
+    const tenantFinalChargeRead = await api()
+      .get(`${HM}/execution-scopes/${executionScopeId}/material-lines/final-charge-ready`)
+      .set(auth(tenantToken));
+    assert.equal(tenantFinalChargeRead.status, 403);
+    const deniedRaw = JSON.stringify(tenantFinalChargeRead.body);
+    assert.equal(deniedRaw.includes('sourceItemId'), false);
+    assert.equal(deniedRaw.includes(item.id), false);
+
+    // A same-client sibling Building and a separate Client remain denied even
+    // when the caller has tenant_company.read.
+    const readPermission = {
+      code: 'tenant_company.read',
+      name: 'Read Tenant Companies',
+    };
+    const siblingToken = await createSessionWithPermissions([readPermission]);
+    const siblingUserId = await userIdForToken(siblingToken);
+    const siblingBuilding = await buildingService.createBuilding({
+      propertyId: f.building.propertyId,
+      code: `B_${suffix()}`,
+      name: 'Sibling Building',
+    });
+    await buildingAssignmentService.createAssignment(siblingUserId, {
+      buildingId: siblingBuilding.id,
+    });
+    const siblingRead = await api().get(`${VERSION(versionId)}/lines`)
+      .set(auth(siblingToken));
+    assert.equal(siblingRead.status, 403);
+
+    const foreignToken = await createSessionWithPermissions([readPermission]);
+    const foreignUserId = await userIdForToken(foreignToken);
+    const foreignClient = await clientService.createClient({
+      code: `C_${suffix()}`,
+      name: 'Foreign Client',
+    });
+    const foreignProperty = await propertyService.createProperty({
+      clientId: foreignClient.id,
+      code: `P_${suffix()}`,
+      name: 'Foreign Property',
+    });
+    const foreignBuilding = await buildingService.createBuilding({
+      propertyId: foreignProperty.id,
+      code: `B_${suffix()}`,
+      name: 'Foreign Building',
+    });
+    await buildingAssignmentService.createAssignment(foreignUserId, {
+      buildingId: foreignBuilding.id,
+    });
+    const foreignRead = await api().get(`${VERSION(versionId)}/lines`)
+      .set(auth(foreignToken));
+    assert.equal(foreignRead.status, 403);
   });
 });
