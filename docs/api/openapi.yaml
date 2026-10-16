@@ -7880,7 +7880,7 @@ paths:
       tags: [Handyman Quotations]
       operationId: addHandymanQuotationLine
       summary: Add an immutable commercial snapshot line (LABOR or MATERIAL) to a DRAFT version
-      description: "Lines are immutable snapshots of bounded commercial facts: the operator supplies description/quantity/UOM/currency and the final quoted unit amount; lineTotal is server-calculated only (quantity x final quoted unit amount) and a governed reference price (when available) is snapshotted for material provenance. Reference price is never the final quoted charge. Only DRAFT versions accept lines; one currency per version; no tax/discount exist."
+      description: "Lines are immutable snapshots of bounded commercial facts: the operator supplies description/quantity/UOM/currency and the final quoted unit amount; lineTotal is server-calculated only (quantity x final quoted unit amount) and a governed reference price (when available) is snapshotted for material provenance. Reference price is never the final quoted charge and is not returned in customer-facing HTTP projections. The response also omits sourceItemId and createdByUserId. Only DRAFT versions accept lines; one currency per version; no tax/discount exist."
       parameters:
         - name: quotationVersionId
           in: path
@@ -7898,7 +7898,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQuotationLineRecord'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanQuotationLineCustomerProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -7906,7 +7911,8 @@ paths:
     get:
       tags: [Handyman Quotations]
       operationId: listHandymanQuotationVersionLines
-      summary: Exact bounded read of one version's immutable lines
+      summary: Exact bounded read of one version's customer-facing immutable lines
+      description: "Tenant-authorized response is an explicit allow-list: line identity, type/description, quantity/UOM, final quoted amount, server-calculated line total, currency, and timestamps. It never includes referenceUnitAmount, sourceItemId, or createdByUserId; Backend storage and internal quotation calculations retain their snapshots."
       parameters:
         - name: quotationVersionId
           in: path
@@ -7918,9 +7924,14 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/HandymanQuotationLineRecord'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/HandymanQuotationLineCustomerProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -8463,7 +8474,7 @@ paths:
       tags: [Handyman Material Execution]
       operationId: listHandymanMaterialLinesByScope
       summary: Read Customer Care material execution lines projection for an Execution Scope
-      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for material execution lines on an Execution Scope. Requires tenant_company.read + contextAccessService.canAccessClient(actorUserId, scope.clientId). Returns all governed material execution statuses, quantities, events, and totalFinalUsedQty with zero money columns."
+      description: "CR-HM-17 GAP PART 03 — authenticated Customer Care read projection for material execution lines on an Execution Scope. Requires tenant_company.read plus exact-Building access to the scope. Returns governed statuses, quantities, events, and totalFinalUsedQty with zero money columns; internal sourceItemId is excluded from this customer-facing projection."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -8513,7 +8524,7 @@ paths:
       tags: [Handyman Material Execution]
       operationId: getHandymanMaterialFinalChargeReadyProjection
       summary: Read the scope-level FINAL_CHARGE_READY quantity projection (PART 05)
-      description: "CR-HM-09 PART 06 — authenticated READ-ONLY projection over ONE execution scope (PART 05 service authority): the exact SETTLED lines (status FINAL_CHARGE_READY only; lines still in flight are absent) and ONE aggregated quantity figure totalFinalUsedQty = SUM(usedQty - returnedQty). EXECUTION TRUTH ONLY — quantity and reference data; NO amount/currency/rate/price/charge/billing/payment field can exist (CR-HM-12/13 own pricing/ledger). Same Lead authority; unknown scope = 404."
+      description: "CR-HM-09 PART 06 — READ-ONLY projection over ONE execution scope: the exact SETTLED lines (status FINAL_CHARGE_READY only; lines still in flight are absent) and ONE aggregated quantity figure totalFinalUsedQty = SUM(usedQty - returnedQty). Requires the current authoritative assigned Crew Lead and Client access; tenant/customer-care non-Lead actors cannot use this field contract. This internal Crew Lead projection retains sourceItemId but contains no amount/currency/rate/price/charge/billing/payment field (CR-HM-12/13 own pricing/ledger). Unknown scope = 404."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -85090,7 +85101,7 @@ components:
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
     HandymanMaterialExecutionLineRecord:
       type: object
-      description: "Execution-TRUTH line projection (bounded). Statuses exactly ESTIMATED / APPROVED / ISSUED / PURCHASED / USED / FINAL_CHARGE_READY. Quantities sit on FOUR mutually consistent axes: approved authority (immutable), ISSUED / PURCHASED acquisition (exactly ONE mode), USED consumption, RETURNED adjustments. ZERO amount/currency/rate/price/charge/billing/payment field."
+      description: "Execution-TRUTH line projection for current Crew Lead-authorized command and final-charge responses (bounded). sourceItemId remains available only on these independently authorized internal contracts. Statuses exactly ESTIMATED / APPROVED / ISSUED / PURCHASED / USED / FINAL_CHARGE_READY. Quantities sit on FOUR mutually consistent axes: approved authority (immutable), ISSUED / PURCHASED acquisition (exactly ONE mode), USED consumption, RETURNED adjustments. ZERO amount/currency/rate/price/charge/billing/payment field."
       properties:
         id: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
@@ -85136,7 +85147,7 @@ components:
         replayed: { type: boolean }
     HandymanMaterialFinalChargeReadyProjection:
       type: object
-      description: "Scope-level FINAL_CHARGE_READY projection (PART 05, READ-ONLY): the exact SETTLED lines + ONE aggregated usage figure totalFinalUsedQty = SUM(usedQty - returnedQty). EXECUTION TRUTH ONLY — the sole quantity handoff to CR-HM-12/13 pricing/ledger; NO financial field can exist here."
+      description: "Current Crew Lead-authorized scope-level FINAL_CHARGE_READY projection (PART 05, READ-ONLY): the exact SETTLED lines + ONE aggregated usage figure totalFinalUsedQty = SUM(usedQty - returnedQty). Internal sourceItemId remains available on this independently authorized field contract; customer-readable material reads use the source-free Customer Care projection. EXECUTION TRUTH ONLY — the sole quantity handoff to CR-HM-12/13 pricing/ledger; NO financial field can exist here."
       properties:
         executionScopeId: { type: string, format: uuid }
         lines:
@@ -85144,17 +85155,16 @@ components:
           items:
             $ref: '#/components/schemas/HandymanMaterialExecutionLineRecord'
         totalFinalUsedQty: { type: number }
-        projectedAt: { type: string, format: date-time }
     HandymanCustomerCareMaterialLineItem:
       type: object
-      description: "CR-HM-17 GAP PART 03 — Customer Care material execution line read item across all governed statuses, with recorded events and settled finalUsedQty (zero money columns)."
-      required: [id, executionScopeId, quotationVersionId, quotationLineId, sourceItemId, status, acquisitionMode, estimatedQty, approvedQty, issuedQty, purchasedQty, usedQty, returnedQty, finalUsedQty, supplierReference, createdAt, updatedAt, events]
+      additionalProperties: false
+      description: "CR-HM-17 GAP PART 03 — Customer Care material execution line read item across all governed statuses, with recorded events and settled finalUsedQty (zero money columns). Internal sourceItemId is intentionally omitted."
+      required: [id, executionScopeId, quotationVersionId, quotationLineId, status, acquisitionMode, estimatedQty, approvedQty, issuedQty, purchasedQty, usedQty, returnedQty, finalUsedQty, supplierReference, createdAt, updatedAt, events]
       properties:
         id: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
         quotationVersionId: { type: string, format: uuid }
         quotationLineId: { type: string, format: uuid }
-        sourceItemId: { type: string, format: uuid, nullable: true }
         status:
           type: string
           enum: [ESTIMATED, APPROVED, ISSUED, PURCHASED, USED, FINAL_CHARGE_READY]
@@ -85272,10 +85282,12 @@ components:
         sourceItemId:
           type: string
           format: uuid
-          description: Optional MATERIAL provenance reference (never re-prices the immutable line later).
-    HandymanQuotationLineRecord:
+          description: Optional MATERIAL provenance input for authorized quotation management; it is stored for internal lineage and never returned in customer-facing quotation-line responses.
+    HandymanQuotationLineCustomerProjection:
       type: object
-      description: Immutable commercial snapshot line; referenceUnitAmount is a governed reference-price snapshot (informational), never the final quoted charge; lineTotal is server-calculated (quantity x finalQuotedUnitAmount).
+      additionalProperties: false
+      description: Allow-listed customer-facing immutable line response. Excludes governed reference pricing, internal source catalog identifiers, and internal actor identity; finalQuotedUnitAmount and lineTotal are the customer-facing quoted amounts.
+      required: [id, quotationVersionId, lineType, description, quantity, uomId, finalQuotedUnitAmount, lineTotal, currency, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         quotationVersionId: { type: string, format: uuid }
@@ -85285,12 +85297,9 @@ components:
         description: { type: string }
         quantity: { type: number }
         uomId: { type: string, format: uuid }
-        referenceUnitAmount: { type: number, nullable: true }
         finalQuotedUnitAmount: { type: number }
         lineTotal: { type: number }
         currency: { type: string }
-        sourceItemId: { type: string, format: uuid, nullable: true }
-        createdByUserId: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     HandymanQuotationTotals:

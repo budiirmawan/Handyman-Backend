@@ -47,7 +47,7 @@ export type {
   HandymanQuotationLineRecord,
   HandymanQuotationLineType,
   HandymanQuotationCurrency,
-  PublicHandymanQuotationLine,
+  HandymanQuotationLineServiceView,
   PublicHandymanQuotationTotals,
   AddHandymanQuotationLineInput,
 } from './handyman-quotation-line.types';

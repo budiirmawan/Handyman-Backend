@@ -45,7 +45,7 @@ function actor(req: Request): string {
   return req.auth.userId;
 }
 
-/** Bounded line projection (NO client id, NO financial field). */
+/** Bounded current-Crew-Lead line (NO client id or money). */
 function toLinePayload(line: HandymanMaterialExecutionLineRecord) {
   return {
     id: line.id,
@@ -53,6 +53,32 @@ function toLinePayload(line: HandymanMaterialExecutionLineRecord) {
     quotationVersionId: line.quotationVersionId,
     quotationLineId: line.quotationLineId,
     sourceItemId: line.sourceItemId,
+    status: line.status,
+    acquisitionMode: line.acquisitionMode,
+    estimatedQty: line.estimatedQty,
+    approvedQty: line.approvedQty,
+    issuedQty: line.issuedQty,
+    purchasedQty: line.purchasedQty,
+    usedQty: line.usedQty,
+    returnedQty: line.returnedQty,
+    supplierReference: line.supplierReference,
+    createdAt: line.createdAt,
+    updatedAt: line.updatedAt,
+  };
+}
+
+/**
+ * Customer-authorized material read projection. The quotation line link is
+ * sufficient for customer context; the internal inventory/catalog item ID
+ * remains limited to independently authorized Crew Lead contracts, the
+ * assigned field-feed projection, and Backend storage.
+ */
+function toCustomerLinePayload(line: HandymanMaterialExecutionLineRecord) {
+  return {
+    id: line.id,
+    executionScopeId: line.executionScopeId,
+    quotationVersionId: line.quotationVersionId,
+    quotationLineId: line.quotationLineId,
     status: line.status,
     acquisitionMode: line.acquisitionMode,
     estimatedQty: line.estimatedQty,
@@ -100,7 +126,7 @@ function toCustomerCareLineItemPayload(
   item: HandymanCustomerCareMaterialLineItem,
 ) {
   return {
-    ...toLinePayload(item.line),
+    ...toCustomerLinePayload(item.line),
     finalUsedQty: item.finalUsedQty,
     events: item.events.map(toEventPayload),
   };

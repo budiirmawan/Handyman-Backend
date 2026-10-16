@@ -16,6 +16,8 @@ import {
   listHandymanQuotationVersionLines,
   supersedeHandymanQuotationVersion,
 } from '../handyman-quotations';
+import type { HandymanQuotationLineServiceView }
+  from '../handyman-quotations/handyman-quotation-line.types';
 import {
   parseQuotationApiUuidParam,
   parseQuotationDecisionBody,
@@ -41,6 +43,45 @@ function actor(req: Request): string {
 
 function idempotencyHeader(req: Request): string {
   return req.header('Idempotency-Key')?.trim() ?? '';
+}
+
+/**
+ * Explicit customer-facing quotation-line allow-list. The service result
+ * intentionally retains immutable commercial provenance for Backend
+ * calculations, but this HTTP contract never serializes reference pricing,
+ * source catalog IDs, or internal actor identity.
+ */
+type CustomerHandymanQuotationLinePayload = Pick<
+  HandymanQuotationLineServiceView,
+  | 'id'
+  | 'quotationVersionId'
+  | 'lineType'
+  | 'description'
+  | 'quantity'
+  | 'uomId'
+  | 'finalQuotedUnitAmount'
+  | 'lineTotal'
+  | 'currency'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+function toCustomerQuotationLinePayload(
+  line: HandymanQuotationLineServiceView,
+): CustomerHandymanQuotationLinePayload {
+  return {
+    id: line.id,
+    quotationVersionId: line.quotationVersionId,
+    lineType: line.lineType,
+    description: line.description,
+    quantity: line.quantity,
+    uomId: line.uomId,
+    finalQuotedUnitAmount: line.finalQuotedUnitAmount,
+    lineTotal: line.lineTotal,
+    currency: line.currency,
+    createdAt: line.createdAt,
+    updatedAt: line.updatedAt,
+  };
 }
 
 export async function postHandymanQuotationHandler(
@@ -139,13 +180,15 @@ export async function postHandymanQuotationLineHandler(
   try {
     sendSuccess(
       res,
-      await addHandymanQuotationLine(
-        parseQuotationApiUuidParam(
-          p(req.params.quotationVersionId),
-          'quotationVersionId',
+      toCustomerQuotationLinePayload(
+        await addHandymanQuotationLine(
+          parseQuotationApiUuidParam(
+            p(req.params.quotationVersionId),
+            'quotationVersionId',
+          ),
+          parseQuotationLineBody(req.body),
+          actor(req),
         ),
-        parseQuotationLineBody(req.body),
-        actor(req),
       ),
       201,
     );
@@ -160,16 +203,14 @@ export async function getHandymanQuotationLinesHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
-    sendSuccess(
-      res,
-      await listHandymanQuotationVersionLines(
-        parseQuotationApiUuidParam(
-          p(req.params.quotationVersionId),
-          'quotationVersionId',
-        ),
-        actor(req),
+    const lines = await listHandymanQuotationVersionLines(
+      parseQuotationApiUuidParam(
+        p(req.params.quotationVersionId),
+        'quotationVersionId',
       ),
+      actor(req),
     );
+    sendSuccess(res, lines.map(toCustomerQuotationLinePayload));
   } catch (error) {
     next(error);
   }
