@@ -2992,6 +2992,20 @@ export const ERROR_CODES = {
   HANDYMAN_EVIDENCE_UPLOAD_IMMUTABLE: 'HANDYMAN_EVIDENCE_UPLOAD_IMMUTABLE',
   HANDYMAN_WORKER_PROFILE_NOT_FOUND: 'HANDYMAN_WORKER_PROFILE_NOT_FOUND',
   HANDYMAN_WORKER_PROFILE_FORBIDDEN: 'HANDYMAN_WORKER_PROFILE_FORBIDDEN',
+  // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A).
+  // `HANDYMAN_CARE_AUTHORITY_DENIED` is deliberately the SINGLE,
+  // non-enumerating failure for every Authority A defect: missing dedicated
+  // Care permission, no ACTIVE assignment to the exact Building, an
+  // INACTIVE/revoked assignment, an INACTIVE Building, a wrong asserted
+  // Client/Company, a non-ACTIVE account, and a cross-tenant attempt all
+  // collapse into it, so a caller cannot learn which check failed (and
+  // therefore cannot map which Buildings or Clients exist).
+  HANDYMAN_CARE_AUTHORITY_DENIED: 'HANDYMAN_CARE_AUTHORITY_DENIED',
+  // A browser-supplied recording identity (`recordedByUserId`,
+  // `tenantPicId`, `actorUserId`, ...) is never trusted and is rejected
+  // outright rather than silently ignored, so no client can believe it was
+  // honoured. 400 — a malformed request, not an authorization probe.
+  HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED: 'HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED',
   /** Generic 409 conflict code (used by PART 11A for "unique effective
    * session" collisions where no domain-specific error is frozen). */
   CONFLICT: 'CONFLICT',

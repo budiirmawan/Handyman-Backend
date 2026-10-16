@@ -283,6 +283,17 @@ export const FOUNDATION_PERMISSIONS: readonly {
     code: 'handyman.settlement.manage',
     name: 'Execute Handyman settlement commands',
   },
+  // CR-HM-BM-CARE-AUTH-01: explicitly granted Building Customer Care
+  // authority (migration 0450). This is Authority A ONLY — it establishes
+  // who the Care actor is and which exact Building they may mediate. It
+  // does NOT authorize recording a Care decision, and it never authorizes
+  // quotation approval, variation approval or BAST ACCEPT. Generic
+  // `tenant_company.manage` is NOT a substitute; an ACTIVE assignment to
+  // the EXACT Building under the server-derived Client is ALSO required.
+  {
+    code: 'handyman.care.building',
+    name: 'Act as the Building Customer Care actor for an assigned Building (mediation bridge only)',
+  },
   // BE-16A — Inventory Item Master
   { code: 'inventory_item.read', name: 'Read Inventory Items' },
   { code: 'inventory_item.manage', name: 'Manage Inventory Items' },
@@ -803,6 +814,15 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   'handyman.finance.read',
   'handyman.finance.manage',
   'handyman.settlement.manage',
+  // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A).
+  // Being the mediation bridge between Tenant/PIC and Handyman for a Building
+  // is an explicit operational authority: it must be assigned as a deliberate
+  // administrative act, never inherited by being a platform administrator,
+  // and never substituted by generic `tenant_company.manage`. Even when
+  // granted, the permission alone authorizes nothing out of scope — the
+  // runtime additionally requires an ACTIVE assignment to the EXACT Building
+  // under the server-derived Client.
+  'handyman.care.building',
   'operational_budget.override',
   'rfq.award',
   // CR-BE-PRICE-01 PART 01 — retroactive correction of an effective price
