@@ -280,7 +280,7 @@ export async function scopeFixture(
   }, adminUserId);
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   return { scope: decision.executionScope };
 }
 

@@ -12,6 +12,8 @@ import { assertCurrentGuardedHandymanQcPass }
   from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
+import { assertHandymanTenantDecisionActor }
+  from '../handyman-tenant-decision-authority/handyman-tenant-decision-authority';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
 import {
   HANDYMAN_SCOPE_VARIATION_LINE_TYPES,
@@ -312,51 +314,12 @@ async function assertAuthorizedTenantDecisionActor(
 ): Promise<void> {
   await assertBuildingScopeAccess(actorUserId, ctx);
 
-  // Check if actor is the linked Tenant PIC user for this service request.
-  const res = await tx.query<{
-    tenant_pic_user_id: string | null;
-    tenant_pic_status: string | null;
-  }>(
-    `SELECT tp.user_id AS tenant_pic_user_id,
-            tp.status AS tenant_pic_status
-       FROM handyman_service_requests r
-       LEFT JOIN tenant_pics tp
-         ON tp.id = r.tenant_pic_id
-        AND tp.client_id = r.client_id
-        AND tp.tenant_company_id = r.tenant_company_id
-      WHERE r.id = $1
-        AND r.client_id = $2`,
-    [ctx.handymanRequestId, ctx.clientId],
-  );
-  const row = res.rows[0];
-  const isAuthorizedTenantPic =
-    row &&
-    row.tenant_pic_user_id === actorUserId &&
-    row.tenant_pic_status === 'ACTIVE';
-
-  if (isAuthorizedTenantPic) {
-    return;
-  }
-
-  // Check if an Operations/Manager actor is trying to impersonate Tenant consent.
-  const hasManage = await userHasPermissionCode(
+  await assertHandymanTenantDecisionActor(tx, {
     actorUserId,
-    'tenant_company.manage',
-  );
-  if (hasManage) {
-    throw new AppError({
-      statusCode: 403,
-      code: ERROR_CODES.HANDYMAN_VARIATION_TENANT_IMPERSONATION_FORBIDDEN,
-      message:
-        'Operations/Manager may never impersonate Tenant consent on a scope variation.',
-    });
-  }
-
-  throw new AppError({
-    statusCode: 403,
-    code: ERROR_CODES.HANDYMAN_VARIATION_ROLE_FORBIDDEN,
-    message:
-      'Only the authorized Tenant PIC user for this service request may record a tenant variation decision.',
+    handymanRequestId: ctx.handymanRequestId,
+    clientId: ctx.clientId,
+    tenantCompanyId: ctx.tenantCompanyId,
+    buildingId: ctx.buildingId,
   });
 }
 

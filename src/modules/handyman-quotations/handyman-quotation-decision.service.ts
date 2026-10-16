@@ -5,6 +5,8 @@ import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from '../handyman-requests';
+import { assertHandymanTenantDecisionActor }
+  from '../handyman-tenant-decision-authority/handyman-tenant-decision-authority';
 import { assertQuotationThreadBuildingAccess }
   from './handyman-quotation-access';
 import { handymanExecutionScopeRepository }
@@ -201,6 +203,17 @@ export async function decideHandymanQuotation(
       quotation.handymanRequestId,
     );
     if (!request) throw handymanQuotationNotFoundError();
+
+    // Building membership and tenant_company.manage are only outer guards.
+    // Bind this commercial decision to the exact active PIC designated by
+    // the request, and to its current company/unit occupancy.
+    await assertHandymanTenantDecisionActor(tx, {
+      actorUserId,
+      handymanRequestId: request.id,
+      clientId: request.clientId,
+      tenantCompanyId: request.tenantCompanyId,
+      buildingId: request.buildingId,
+    });
 
     // 5) Immutable decision insert + bounded lifecycle projection
     //    (ISSUED → APPROVED | REJECTED) — atomic, single transaction.
