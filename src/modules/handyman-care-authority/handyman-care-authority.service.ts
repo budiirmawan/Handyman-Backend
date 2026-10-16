@@ -118,11 +118,9 @@ export const NON_ACCEPTED_IDENTITY_FIELDS: readonly string[] = [
  * Read-only: it performs no mutation of any quotation, variation, BAST,
  * tenant or Care row, and it opens no transaction.
  */
-export async function resolveBuildingCareAuthority(
-  input: ResolveBuildingCareAuthorityInput,
-): Promise<BuildingCareAuthority> {
-  // (1) Authenticated real Care actor.
-  const actorUserId = input?.actorUserId;
+async function resolveActiveBuildingCareActor(
+  actorUserId: string | null | undefined,
+) {
   if (typeof actorUserId !== 'string' || actorUserId.length === 0) {
     throw careAuthorityDeniedError();
   }
@@ -132,12 +130,32 @@ export async function resolveBuildingCareAuthority(
     throw careAuthorityDeniedError();
   }
 
-  // (2) Explicit Care permission — the dedicated capability only.
   const permissions =
     await permissionService.resolvePermissionsForUser(actorUserId);
   if (!permissions.includes(HANDYMAN_CARE_BUILDING_PERMISSION)) {
     throw careAuthorityDeniedError();
   }
+
+  return user;
+}
+
+/**
+ * Reusable identity + dedicated-capability check for Building Care reads
+ * whose scope is a list rather than one selected Building. Assignment and
+ * Client/Property/Building lineage must still be resolved separately.
+ */
+export async function assertBuildingCareActor(
+  actorUserId: string | null | undefined,
+): Promise<void> {
+  await resolveActiveBuildingCareActor(actorUserId);
+}
+
+export async function resolveBuildingCareAuthority(
+  input: ResolveBuildingCareAuthorityInput,
+): Promise<BuildingCareAuthority> {
+  // (1)+(2) Authenticated active Backend actor with the dedicated capability.
+  const actorUserId = input?.actorUserId;
+  const user = await resolveActiveBuildingCareActor(actorUserId);
 
   // (3)+(4) ACTIVE assignment to the EXACT Building, under the Client the
   // Backend derives from the actor's own assignment.
@@ -146,7 +164,7 @@ export async function resolveBuildingCareAuthority(
     throw careAuthorityDeniedError();
   }
 
-  const contexts = await resolveBuildingsForUser(actorUserId);
+  const contexts = await resolveBuildingsForUser(user.id);
   const context = contexts.find((entry) => entry.building.id === buildingId);
   if (!context) {
     throw careAuthorityDeniedError();
@@ -206,6 +224,7 @@ export async function assertBuildingCareAuthority(
 }
 
 export const buildingCareAuthorityService = {
+  assertBuildingCareActor,
   assertBuildingCareAuthority,
   resolveBuildingCareAuthority,
 };

@@ -387,6 +387,7 @@ import { createWorkOrderHistoryRouter } from '../modules/work-order-history/work
 import { createHandymanScopeVariationRouter } from '../modules/handyman-scope-variations/handyman-scope-variation.routes';
 import { createHandymanCareAuthorityRouter } from '../modules/handyman-care-authority/handyman-care-authority.routes';
 import { createHandymanCareCommunicationsRouter } from '../modules/handyman-care-communications/handyman-care-communications.routes';
+import { createHandymanCareStandaloneDiscoveryRouter } from '../modules/handyman-care-standalone-discovery/handyman-care-standalone-discovery.routes';
 import { createHandymanMaterialPurchasingRouter } from '../modules/handyman-material-purchasing/handyman-material-purchasing.routes';
 import { createHandymanFieldEvidenceRouter } from '../modules/handyman-field-evidence/handyman-field-evidence.routes';
 import { createHandymanWorkerProfileRouter } from '../modules/handyman-worker-profile/handyman-worker-profile.routes';
@@ -858,6 +859,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanFieldEvidenceRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-D — Genuine Binary Field Evidence Upload
   router.use(createHandymanWorkerProfileRouter()); // CR-HM-FIELD-AUTHORITY-01 P1 — Worker Profile Projection
   router.use(createHandymanCareAuthorityRouter()); // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A: identity + exact Building reach only)
+  router.use(createHandymanCareStandaloneDiscoveryRouter()); // CR-HM-BM-CARE-DISCOVERY-01 — Backend-session-only read discovery + safe progress
   router.use(createHandymanCareCommunicationsRouter()); // CR-HM-BM-CARE-EVIDENCE-01 — request-scoped non-executable communication intake
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
