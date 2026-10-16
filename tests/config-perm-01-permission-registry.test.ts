@@ -136,6 +136,20 @@ const EXPECTED_UNASSIGNED_BY_DEFAULT = [
   // CR-HM-BAST-HTTP-01 — worker BAST PREPARE/ISSUE/VOID authority: explicit
   // grants (never inherited, never auto-assigned by migration/seed).
   'handyman.bast.manage',
+  // CR-HM-FIN-AUTH-01 (migration 0448) — financial execution authorities.
+  // These four were added to UNASSIGNED_BY_DEFAULT_PERMISSION_CODES by PR #34
+  // without reconciling this pin, which is why guard L was already failing on
+  // merged main before CR-HM-BM-CARE-AUTH-01.
+  'handyman.commercial.manage',
+  'handyman.finance.read',
+  'handyman.finance.manage',
+  'handyman.settlement.manage',
+  // CR-HM-BM-CARE-AUTH-01 (migration 0450) — Building Customer Care
+  // authority (Authority A). Withheld by default: enabling a Care persona is
+  // a deliberate, audited administrative grant, and the permission alone
+  // still authorizes nothing without an ACTIVE assignment to the EXACT
+  // Building under the server-derived Client.
+  'handyman.care.building',
   'operational_budget.override',
   'rfq.award',
   'price_catalog.override',
@@ -229,9 +243,12 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
 
     // 320 pre-existing + 13 registered by this CR + 19 CR-BE-SAAS-01
     // platform.* codes (PART 01 seed) + 2 CR-HM-QC-AUTHORITY-01 handyman.qc.*
-    // codes + 1 CR-HM-BAST-HTTP-01 handyman.bast.manage code.
-    assert.equal(CATALOGUE.length, 355);
-    assert.equal(CATALOGUE_SET.size, 355, 'catalogue must contain no duplicates');
+    // codes + 1 CR-HM-BAST-HTTP-01 handyman.bast.manage code
+    // + 4 CR-HM-FIN-AUTH-01 handyman.{commercial,finance,settlement} codes
+    // (migration 0448 — never reconciled into this pin by PR #34)
+    // + 1 CR-HM-BM-CARE-AUTH-01 handyman.care.building code (migration 0450).
+    assert.equal(CATALOGUE.length, 360);
+    assert.equal(CATALOGUE_SET.size, 360, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {

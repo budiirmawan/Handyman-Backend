@@ -219,3 +219,20 @@ Response: 200 { valid: boolean }
 | SD-08 | Warranty auto-start on ACCEPT | ACCEPT → warranty immediately active | **ACCEPTed warrants further QC/verification before warranty** | Ops Lead |
 | SD-09 | VOID reason stored in event metadata only | VOID reason also stored as document column | **Event metadata only** (existing pattern) | Product Lead |
 | SD-10 | Concurrent ACCEPT: last-write-wins vs error | Concurrent: reject second, or allow last-write-wins | **Error (409 concurrency conflict)** | Security Lead |
+
+> **GOVERNANCE CORRECTION — CR-HM-BM-CARE-AUTH-01.** The `Default/Recommended`
+> column above records the **Arena session default**, not a business decision. No
+> Product Lead, Security Lead, Ops Lead or Legal approval for SD-01…SD-15 exists
+> anywhere in the repository; the only approval evidence was self-declared in the
+> companion document. Status is **Proposed** (SD-11 **Pending** on Legal). The
+> authoritative, corrected register is
+> `CR-HM-BAST-SIGN-00_Unresolved_Decisions.md` §Decision Table.
+>
+> **SD-16…SD-19 remain Approved** — they restate the established
+> TENANT/PIC ↔ CUSTOMER CARE BUILDING ↔ HANDYMAN business and security principles
+> rather than inventing policy.
+>
+> **Runtime consequence:** ECDSA/PSrE signature policy (SD-01, SD-03, SD-11,
+> SD-13), optional-evidence relaxation (SD-05), step-up waiver / internal bypass
+> (SD-06, SD-07) and warranty auto-start (SD-08) are **not implemented as runtime
+> authority** and must not be, until a named decision maker records approval.

@@ -385,6 +385,7 @@ import { createWorkOrderEvidenceRouter } from '../modules/work-order-evidence/wo
 import { createWorkOrderVerificationRouter } from '../modules/work-order-verification/work-order-verification.routes';
 import { createWorkOrderHistoryRouter } from '../modules/work-order-history/work-order-history.routes';
 import { createHandymanScopeVariationRouter } from '../modules/handyman-scope-variations/handyman-scope-variation.routes';
+import { createHandymanCareAuthorityRouter } from '../modules/handyman-care-authority/handyman-care-authority.routes';
 import { createHandymanMaterialPurchasingRouter } from '../modules/handyman-material-purchasing/handyman-material-purchasing.routes';
 import { createHandymanFieldEvidenceRouter } from '../modules/handyman-field-evidence/handyman-field-evidence.routes';
 import { createHandymanWorkerProfileRouter } from '../modules/handyman-worker-profile/handyman-worker-profile.routes';
@@ -855,6 +856,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanMaterialPurchasingRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle
   router.use(createHandymanFieldEvidenceRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-D — Genuine Binary Field Evidence Upload
   router.use(createHandymanWorkerProfileRouter()); // CR-HM-FIELD-AUTHORITY-01 P1 — Worker Profile Projection
+  router.use(createHandymanCareAuthorityRouter()); // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A: identity + exact Building reach only)
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;
