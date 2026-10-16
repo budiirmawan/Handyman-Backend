@@ -376,7 +376,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     assert.equal(decision.decision, 'APPROVE');
     assert.equal(decision.quotationVersionId, f.version.id);
@@ -409,7 +409,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     assert.equal(decision.decision, 'REJECT');
     const versionRow = await q(
@@ -439,7 +439,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
         decideHandymanQuotation(
           v2.id,
           { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-          adminUserId,
+          f.linkedUser.id,
         ),
         (e: unknown) =>
           errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
@@ -460,7 +460,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
         decideHandymanQuotation(
           f.version.id,
           { decision, idempotencyKey: `k-${randomUUID()}` },
-          adminUserId,
+          f.linkedUser.id,
         ),
         (e: unknown) =>
           errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
@@ -480,7 +480,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     const otherCompany = await tenantCompanyService.createTenantCompany(
       { clientId: f.client.id, tenantCode: `T_${suffix()}`,
         tenantName: 'Other' },
-      adminUserId,
+      f.linkedUser.id,
     );
     const smuggled = {
       decision: 'APPROVE',
@@ -492,7 +492,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       status: 'APPROVED',
     } as unknown as Parameters<typeof decideHandymanQuotation>[1];
     const decision = await decideHandymanQuotation(
-      f.version.id, smuggled, adminUserId,
+      f.version.id, smuggled, f.linkedUser.id,
     );
     assert.equal(decision.tenantCompanyId, f.company.id);
     assert.equal(decision.tenantPicId, f.pic.id);
@@ -508,9 +508,9 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       decidedByUserId: randomUUID(),
     } as unknown as Parameters<typeof decideHandymanQuotation>[1];
     const decision = await decideHandymanQuotation(
-      f.version.id, smuggled, adminUserId,
+      f.version.id, smuggled, f.linkedUser.id,
     );
-    assert.equal(decision.decidedByUserId, adminUserId);
+    assert.equal(decision.decidedByUserId, f.linkedUser.id);
     // A request chain without a PIC keeps tenantPicId NULL (lineage
     // NULL is never fabricated into an identity).
     const g = await attributedFixture();
@@ -560,13 +560,15 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     await issueHandymanQuotationVersion(
       v.id, { validUntil: FUTURE() }, adminUserId,
     );
-    const decision2 = await decideHandymanQuotation(
-      v.id,
-      { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+    await assert.rejects(
+      decideHandymanQuotation(
+        v.id,
+        { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+        g.linkedUser.id,
+      ),
+      (e: unknown) =>
+        errorCode(e) === 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN',
     );
-    assert.equal(decision2.tenantPicId, null);
-    assert.equal(decision2.tenantCompanyId, g.company.id);
   });
 
   it('7: same idempotency key + same fingerprint replays same decision', async (t) => {
@@ -575,11 +577,11 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     const key = `k-${randomUUID()}`;
     const first = await decideHandymanQuotation(
       f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
+      f.linkedUser.id,
     );
     const replay = await decideHandymanQuotation(
       f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
+      f.linkedUser.id,
     );
     assert.equal(replay.id, first.id);
     assert.equal(replay.decision, 'APPROVE');
@@ -599,13 +601,13 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     const key = `k-${randomUUID()}`;
     await decideHandymanQuotation(
       f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
+      f.linkedUser.id,
     );
     // Same key + conflicting decision.
     await assert.rejects(
       decideHandymanQuotation(
         f.version.id, { decision: 'REJECT', idempotencyKey: key },
-        adminUserId,
+        f.linkedUser.id,
       ),
       (e: unknown) => errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
     );
@@ -614,7 +616,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       decideHandymanQuotation(
         f.version.id,
         { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-        adminUserId,
+        f.linkedUser.id,
       ),
       (e: unknown) => errorCode(e) === 'HANDYMAN_QUOTATION_DECISION_CONFLICT',
     );
@@ -640,17 +642,18 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       decideHandymanQuotation(
         f.version.id,
         { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-        adminUserId,
+        f.linkedUser.id,
       ),
     );
     assert.equal(
       await tableCount('handyman_quotation_decisions'), before.decisions);
     assert.equal(await tableCount('operational_events'), before.events);
     // Success path: decision + projection appear together.
+    const successFixture = await issuedFixture();
     const ok = await decideHandymanQuotation(
-      (await issuedFixture()).version.id,
+      successFixture.version.id,
       { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      successFixture.linkedUser.id,
     );
     const joined = await q(
       `SELECT d.decision, v.status
@@ -691,7 +694,7 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
     await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     const after = {
       vendorQuotations: await tableCount('vendor_quotations'),
@@ -722,4 +725,105 @@ describe('CR-HM-06 PART 04 — quotation customer decision', () => {
       );
     }
   });
+
+  it('11: enforces real database actor, company, building, space, occupancy and PIC authority', async (t) => {
+    if (!requireDatabase(t)) return;
+    const reject = async (
+      fixture: Awaited<ReturnType<typeof issuedFixture>>,
+      actor = fixture.linkedUser.id,
+      expected = 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN',
+    ) => {
+      await assert.rejects(
+        decideHandymanQuotation(
+          fixture.version.id,
+          { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+          actor,
+        ),
+        (e: unknown) => errorCode(e) === expected,
+      );
+      assert.equal(await decisionCount(fixture.bundle.quotation.id), 0);
+    };
+
+    const inactive = await issuedFixture();
+    await q(`UPDATE tenant_pics SET status = 'INACTIVE' WHERE id = $1`, [inactive.pic.id]);
+    await reject(inactive);
+
+    const wrongUser = await issuedFixture();
+    await q(`UPDATE tenant_pics SET user_id = $2 WHERE id = $1`, [wrongUser.pic.id, adminUserId]);
+    await reject(wrongUser);
+
+    const wrongCompany = await issuedFixture();
+    const otherCompany = await tenantCompanyService.createTenantCompany({
+      clientId: wrongCompany.client.id,
+      tenantCode: `T_${suffix()}`,
+      tenantName: 'Unrelated tenant',
+    }, adminUserId);
+    await q(`UPDATE handyman_service_requests SET tenant_company_id = $2 WHERE id = $1`,
+      [wrongCompany.request.id, otherCompany.id]);
+    await reject(wrongCompany);
+
+    const wrongBuilding = await issuedFixture();
+    const unrelated = await attributedFixture();
+    await q(`UPDATE handyman_service_requests SET building_id = $2 WHERE id = $1`,
+      [wrongBuilding.request.id, unrelated.building.id]);
+    await reject(wrongBuilding, wrongBuilding.linkedUser.id, 'BUILDING_ACCESS_DENIED');
+
+    const unrelatedSpace = await issuedFixture();
+    const otherSpace = await attributedFixture();
+    await q(`UPDATE handyman_service_requests SET space_id = $2 WHERE id = $1`,
+      [unrelatedSpace.request.id, otherSpace.space.id]);
+    await reject(unrelatedSpace);
+
+    const expiredOccupancy = await issuedFixture();
+    await q(`UPDATE tenant_space_relationships
+                SET effective_until = NOW() - INTERVAL '1 second'
+              WHERE tenant_company_id = $1 AND space_id = $2`,
+      [expiredOccupancy.company.id, expiredOccupancy.space.id]);
+    await reject(expiredOccupancy);
+
+    const futureOccupancy = await issuedFixture();
+    await q(`UPDATE tenant_space_relationships
+                SET effective_from = NOW() + INTERVAL '1 hour'
+              WHERE tenant_company_id = $1 AND space_id = $2`,
+      [futureOccupancy.company.id, futureOccupancy.space.id]);
+    await reject(futureOccupancy);
+
+    const missingPic = await issuedFixture();
+    await q(`UPDATE handyman_service_requests SET tenant_pic_id = NULL WHERE id = $1`,
+      [missingPic.request.id]);
+    await reject(missingPic);
+
+    const customerCare = await issuedFixture();
+    await reject(customerCare, adminUserId);
+  });
+
+  it('12: serializes concurrent decisions and persists exact audit actor', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await issuedFixture();
+    const actor = f.linkedUser.id;
+    const outcomes = await Promise.allSettled([
+      decideHandymanQuotation(f.version.id, {
+        decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
+      }, actor),
+      decideHandymanQuotation(f.version.id, {
+        decision: 'REJECT', idempotencyKey: `k-${randomUUID()}`,
+      }, actor),
+    ]);
+    assert.equal(outcomes.filter((x) => x.status === 'fulfilled').length, 1);
+    assert.equal(outcomes.filter((x) => x.status === 'rejected').length, 1);
+    const persisted = await q(
+      `SELECT d.decided_by_user_id, d.decision, e.actor_user_id
+         FROM handyman_quotation_decisions d
+         JOIN operational_events e
+           ON e.metadata->>'decisionId' = d.id::text
+          AND e.event_type IN ('HANDYMAN_QUOTATION_APPROVED', 'HANDYMAN_QUOTATION_REJECTED')
+        WHERE d.quotation_version_id = $1`,
+      [f.version.id],
+    );
+    assert.equal(persisted.rows.length, 1);
+    assert.equal(persisted.rows[0].decided_by_user_id, actor);
+    assert.equal(persisted.rows[0].actor_user_id, actor);
+    assert.ok(['APPROVE', 'REJECT'].includes(persisted.rows[0].decision));
+  });
+
 });

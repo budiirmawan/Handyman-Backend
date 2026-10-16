@@ -172,6 +172,12 @@ before(async () => {
       user_id uuid, full_name text NOT NULL, email text, phone text,
       role_label text, is_primary boolean NOT NULL DEFAULT true, status text NOT NULL
     );
+    CREATE TABLE tenant_space_relationships(
+      id uuid PRIMARY KEY, tenant_company_id uuid NOT NULL,
+      building_id uuid NOT NULL, space_id uuid NOT NULL,
+      effective_from timestamptz, effective_until timestamptz,
+      status text NOT NULL
+    );
     CREATE TABLE units_of_measure(
       id uuid PRIMARY KEY, code text NOT NULL, name text NOT NULL, symbol text, status text NOT NULL DEFAULT 'ACTIVE'
     );
@@ -247,7 +253,7 @@ before(async () => {
     CREATE TABLE handyman_service_requests(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, tenant_company_id uuid NOT NULL,
       tenant_pic_id uuid, property_id uuid NOT NULL, building_id uuid NOT NULL,
-      floor_id uuid, room_id uuid, area_id uuid,
+      floor_id uuid, room_id uuid, area_id uuid, space_id uuid,
       location_description text, request_code text NOT NULL,
       title text NOT NULL, description text NOT NULL,
       requested_work_category text, priority text NOT NULL,
@@ -966,7 +972,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(opsImpersonate.status, 403);
     assert.equal(
       opsImpersonate.body.error.code,
-      'HANDYMAN_VARIATION_TENANT_IMPERSONATION_FORBIDDEN',
+      'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN',
     );
 
     // Guard: PIC Pekerjaan CANNOT record Tenant decision!
