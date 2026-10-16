@@ -4,6 +4,7 @@ import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { contextAccessService } from '../context-access/context-access.service';
 import { permissionService } from '../permissions';
+import { resolveBuildingCareAuthority } from '../handyman-care-authority';
 import { recordOperationalEvent } from '../operational-events';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments/handyman-scope-assignment.service';
 import { isHandymanQcSupervisor, lockHandymanQcScope }
@@ -2953,4 +2954,38 @@ export async function listOperationsScopeVariations(
     })),
     reconciledAuthorizedScope,
   };
+}
+
+/**
+ * Standalone Building Care variation-status projection. This reuses the
+ * variation aggregate's canonical scope loader and repository, but authorizes
+ * with the dedicated Care permission + exact Building resolver rather than
+ * the Operations route's broader tenant_company.read capability. Only
+ * persisted lifecycle/status facts are returned; no commercial or audit data.
+ */
+export async function listBuildingCareScopeVariationStatuses(
+  actorUserId: string,
+  executionScopeId: string,
+): Promise<Array<{
+  status: HandymanScopeVariationStatus;
+  variationType: HandymanScopeVariationType;
+  tenantDecisionOutcome: HandymanScopeVariationTenantDecision | null;
+  updatedAt: string;
+}>> {
+  const ctx = await loadExecutionScopeContext(executionScopeId);
+  await resolveBuildingCareAuthority({
+    actorUserId,
+    buildingId: ctx.buildingId,
+    assertedClientId: ctx.clientId,
+  });
+  const variations =
+    await handymanScopeVariationRepository.listByExecutionScope(
+      ctx.executionScopeId,
+    );
+  return variations.map((variation) => ({
+    status: variation.status,
+    variationType: variation.variationType,
+    tenantDecisionOutcome: variation.tenantDecisionOutcome,
+    updatedAt: variation.updatedAt,
+  }));
 }

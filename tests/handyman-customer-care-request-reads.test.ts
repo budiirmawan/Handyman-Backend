@@ -326,6 +326,7 @@ async function createCustomerReader(tenantCompanyId: string, buildingId: string)
 async function authorizeExecutionScopeForRequest(
   clientId: string,
   handymanRequestId: string,
+  tenantPicUserId: string,
 ) {
   await handymanServiceRequestTriageService.recordHandymanRequestTriage(
     {
@@ -376,9 +377,9 @@ async function authorizeExecutionScopeForRequest(
     {
       decision: 'APPROVE',
       idempotencyKey: randomUUID(),
-      note: 'Customer approved via Customer Care',
+      note: 'Test fixture: the designated Tenant PIC approved the quotation.',
     },
-    adminUserId,
+    tenantPicUserId,
   );
   assert.ok(decision.executionScope);
   return decision.executionScope;
@@ -455,6 +456,7 @@ describe('CR-HM-17 GAP PART 01 — B3 Customer Care request reads', () => {
     const scope = await authorizeExecutionScopeForRequest(
       f.client.id,
       created.id,
+      f.linkedUser.id,
     );
 
     const detail = await getHandymanServiceRequestDetail(

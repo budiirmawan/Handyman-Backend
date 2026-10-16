@@ -4,6 +4,7 @@ export {
 } from './handyman-care-authority.errors';
 
 export {
+  assertBuildingCareActor,
   assertBuildingCareAuthority,
   buildingCareAuthorityService,
   DECISION_AUTHORITY_BLOCKED,
