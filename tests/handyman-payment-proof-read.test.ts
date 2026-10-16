@@ -571,6 +571,9 @@ describe('CR-HM-FIN-DOCUMENTS-01 — payment-proof retrieval & Finance detail re
     assert.equal(content.headers['content-type'], 'image/png');
     assert.equal(content.headers['content-length'], String(proof1Bytes.byteLength));
     assert.equal(content.headers['cache-control'], 'no-store');
+    assert.equal(content.headers['x-content-type-options'], 'nosniff');
+    assert.equal(content.headers['content-disposition'],
+      "inline; filename*=UTF-8''transfer-receipt.png");
     assert.match(String(content.headers['content-disposition']), /transfer-receipt\.png/);
     assert.equal(content.headers.location, undefined);
     assert.ok(Buffer.from(content.body).equals(proof1Bytes), 'bytes must match upload exactly');
