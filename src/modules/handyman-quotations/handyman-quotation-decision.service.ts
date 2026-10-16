@@ -5,6 +5,8 @@ import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from '../handyman-requests';
+import { assertHandymanTenantDecisionActor }
+  from '../handyman-tenant-decision-authority/handyman-tenant-decision-authority';
 import { assertQuotationThreadBuildingAccess }
   from './handyman-quotation-access';
 import { handymanExecutionScopeRepository }
@@ -165,6 +167,23 @@ export async function decideHandymanQuotation(
     // request's building_id (BE-02G; no same-Client shortcut).
     await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
+    // Bind authority inside the same version-lock transaction and before
+    // replay handling. Revocation therefore takes effect even for a retry;
+    // an unrelated actor cannot use a known idempotency key to retrieve the
+    // original decision.
+    const request = await handymanServiceRequestRepository.findById(
+      tx,
+      quotation.handymanRequestId,
+    );
+    if (!request) throw handymanQuotationNotFoundError();
+    await assertHandymanTenantDecisionActor(tx, {
+      actorUserId,
+      handymanRequestId: request.id,
+      clientId: request.clientId,
+      tenantCompanyId: request.tenantCompanyId,
+      buildingId: request.buildingId,
+    });
+
     // 2) One authoritative decision per version: replay or conflict.
     const existing = await handymanQuotationDecisionRepository
       .lockDecisionByVersion(tx, version.id);
@@ -195,14 +214,7 @@ export async function decideHandymanQuotation(
       throw handymanQuotationInvalidTransitionError();
     }
 
-    // 4) Customer context from the authoritative request lineage only.
-    const request = await handymanServiceRequestRepository.findById(
-      tx,
-      quotation.handymanRequestId,
-    );
-    if (!request) throw handymanQuotationNotFoundError();
-
-    // 5) Immutable decision insert + bounded lifecycle projection
+    // 4/5) Immutable decision insert + bounded lifecycle projection
     //    (ISSUED → APPROVED | REJECTED) — atomic, single transaction.
     let record: HandymanQuotationDecisionRecord;
     try {
