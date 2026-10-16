@@ -7822,15 +7822,21 @@ paths:
       tags: [Handyman Quotations]
       operationId: getHandymanQuotation
       summary: Exact bounded read of a quotation thread (root + immutable version list)
+      description: "Customer read projection retains quotation and version identity/status facts but omits internal createdByUserId actor metadata."
       parameters:
         - $ref: '#/components/parameters/HandymanRequestIdPath'
       responses:
         '200':
-          description: Quotation bundle
+          description: Customer-safe quotation bundle
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQuotationBundle'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanQuotationCustomerReadBundle'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -7840,7 +7846,7 @@ paths:
       tags: [Handyman Quotations]
       operationId: getCurrentHandymanIssuedQuotationVersion
       summary: Current customer-presentable ISSUED quotation version (null when none)
-      description: "Only an ISSUED version is customer-presentable: a DRAFT is never presented, a SUPERSEDED version keeps its immutable facts but is not current, and EXPIRED versions are never presented. At most one ISSUED version exists per quotation thread."
+      description: "Only an ISSUED version is customer-presentable: a DRAFT is never presented, a SUPERSEDED version keeps its immutable facts but is not current, and EXPIRED versions are never presented. At most one ISSUED version exists per quotation thread. The customer projection preserves versionNumber, status, and validUntil but omits createdByUserId."
       parameters:
         - $ref: '#/components/parameters/HandymanRequestIdPath'
       responses:
@@ -7849,7 +7855,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        nullable: true
+                        allOf:
+                          - $ref: '#/components/schemas/HandymanQuotationVersionCustomerProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -8063,6 +8077,7 @@ paths:
       tags: [Handyman Quotations]
       operationId: getHandymanQuotationDecision
       summary: Exact read of the immutable decision for a quotation version
+      description: "Customer read projection preserves decision and version facts but omits the internal decidedByUserId actor identity."
       parameters:
         - name: quotationVersionId
           in: path
@@ -8070,11 +8085,16 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Immutable decision
+          description: Customer-safe immutable decision
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanQuotationDecisionRecord'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanQuotationDecisionCustomerProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -8084,7 +8104,7 @@ paths:
       tags: [Handyman Quotations]
       operationId: getHandymanExecutionScopeByQuotationVersion
       summary: Minimum Execution Scope read for downstream target discovery (bounded, by approved quotation version)
-      description: "The Execution Scope is the authoritative downstream target created only by a successful APPROVE: it is not an FM work order, not a work session, not a crew assignment, not a schedule, not an arrival verification, and its AUTHORIZED state means only 'approved and targetable' - not assigned, not scheduled, not arrived, not started, not checked in. No crew/scheduling/arrival/work-session APIs exist on the quotation surface."
+      description: "The Execution Scope is the authoritative downstream target created only by a successful APPROVE: it is not an FM work order, not a work session, not a crew assignment, not a schedule, not an arrival verification, and its AUTHORIZED state means only 'approved and targetable' - not assigned, not scheduled, not arrived, not started, not checked in. The read retains the approved quotation version/status and scope/location lineage while omitting internal createdByUserId metadata. No crew/scheduling/arrival/work-session APIs exist on the quotation surface."
       parameters:
         - name: quotationVersionId
           in: path
@@ -8092,11 +8112,16 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Execution Scope (404 when no APPROVE has occurred)
+          description: Customer-safe Execution Scope (404 when no APPROVE has occurred)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HandymanExecutionScopeRecord'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanExecutionScopeCustomerProjection'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -85256,7 +85281,7 @@ components:
         updatedAt: { type: string, format: date-time }
     HandymanQuotationBundle:
       type: object
-      description: Bounded exact-read bundle; quotation root plus its immutable version thread.
+      description: Bounded creation/management response; quotation root and version records retain actor identity for authorized operations.
       properties:
         quotation:
           $ref: '#/components/schemas/HandymanQuotationRecord'
@@ -85264,6 +85289,44 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/HandymanQuotationVersionRecord'
+    HandymanQuotationCustomerRead:
+      type: object
+      additionalProperties: false
+      description: Allow-listed customer read of the quotation root; internal createdByUserId actor metadata is omitted.
+      required: [id, clientId, handymanRequestId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationVersionCustomerProjection:
+      type: object
+      additionalProperties: false
+      description: Allow-listed customer read preserving authoritative versionNumber, status and validity while omitting internal createdByUserId.
+      required: [id, quotationId, versionNumber, status, validUntil, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        versionNumber: { type: integer, minimum: 1 }
+        status:
+          type: string
+          enum: [DRAFT, ISSUED, APPROVED, REJECTED, EXPIRED, SUPERSEDED]
+        validUntil: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanQuotationCustomerReadBundle:
+      type: object
+      additionalProperties: false
+      description: Customer read of quotation root and immutable version thread using actor-free allow-listed schemas.
+      required: [quotation, versions]
+      properties:
+        quotation:
+          $ref: '#/components/schemas/HandymanQuotationCustomerRead'
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/HandymanQuotationVersionCustomerProjection'
     CreateHandymanQuotationLineRequest:
       type: object
       description: Whitelisted commercial facts only; lineTotal, reference amounts, lineage and any identity/location fields are server-derived and must not be supplied.
@@ -85348,6 +85411,25 @@ components:
         decidedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    HandymanQuotationDecisionCustomerProjection:
+      type: object
+      additionalProperties: false
+      description: Allow-listed customer read of the immutable quotation decision; internal decidedByUserId actor identity is omitted.
+      required: [id, clientId, quotationId, quotationVersionId, decision, tenantCompanyId, tenantPicId, idempotencyKey, decidedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        quotationVersionId: { type: string, format: uuid }
+        decision:
+          type: string
+          enum: [APPROVE, REJECT]
+        tenantCompanyId: { type: string, format: uuid }
+        tenantPicId: { type: string, format: uuid, nullable: true }
+        idempotencyKey: { type: string }
+        decidedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     HandymanQuotationDecisionResult:
       allOf:
         - $ref: '#/components/schemas/HandymanQuotationDecisionRecord'
@@ -85379,6 +85461,31 @@ components:
           type: string
           enum: [AUTHORIZED]
         createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanExecutionScopeCustomerProjection:
+      type: object
+      additionalProperties: false
+      description: Allow-listed customer read of authoritative approved scope and location lineage; internal createdByUserId actor metadata is omitted.
+      required: [id, clientId, handymanRequestId, channelAttributionId, quotationId, approvedQuotationVersionId, quotationDecisionId, tenantCompanyId, tenantPicId, buildingId, floorId, areaId, roomId, spaceId, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        channelAttributionId: { type: string, format: uuid }
+        quotationId: { type: string, format: uuid }
+        approvedQuotationVersionId: { type: string, format: uuid }
+        quotationDecisionId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        tenantPicId: { type: string, format: uuid, nullable: true }
+        buildingId: { type: string, format: uuid }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        status:
+          type: string
+          enum: [AUTHORIZED]
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 

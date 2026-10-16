@@ -432,6 +432,9 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     assert.equal(totals.body.data.currency, null);
     const read = await api().get(QUOTATION(f.request.id)).set(auth());
     assert.equal(read.body.data.versions.length, 2);
+    assert.equal('createdByUserId' in read.body.data.quotation, false);
+    assert.equal(read.body.data.versions.some((v: Record<string, unknown>) =>
+      'createdByUserId' in v), false);
   });
 
   it('4: issue + current presented read through HTTP', async (t) => {
@@ -466,7 +469,10 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       .set(auth());
     assert.equal(presented.status, 200);
     assert.equal(presented.body.data.id, versionId);
+    assert.equal(presented.body.data.versionNumber, 1);
     assert.equal(presented.body.data.status, 'ISSUED');
+    assert.equal(presented.body.data.validUntil, validUntil);
+    assert.equal('createdByUserId' in presented.body.data, false);
   });
 
   it('5: expiry lifecycle through HTTP', async (t) => {
@@ -560,17 +566,25 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     assert.equal(scope.handymanRequestId, f.request.id);
     assert.equal(scope.tenantCompanyId, f.company.id);
     assert.equal(scope.buildingId, f.building.id);
-    // The same scope is discoverable through the bounded version-keyed read.
+    assert.equal(scope.createdByUserId, adminUserId,
+      'authorized decision mutation retains its actor audit fact');
+    // The same authoritative scope is discoverable through the bounded read,
+    // but internal actor identity is not part of the customer read contract.
     const scopedRead = await api()
       .get(`${VERSION(versionId)}/execution-scope`)
       .set(auth());
     assert.equal(scopedRead.status, 200);
-    assert.deepEqual(scopedRead.body.data, scope);
+    assert.equal(scopedRead.body.data.id, scope.id);
+    assert.equal(scopedRead.body.data.status, 'AUTHORIZED');
+    assert.equal(scopedRead.body.data.approvedQuotationVersionId, versionId);
+    assert.equal(scopedRead.body.data.buildingId, f.building.id);
+    assert.equal('createdByUserId' in scopedRead.body.data, false);
     const decisionRead = await api().get(`${VERSION(versionId)}/decision`)
       .set(auth());
     assert.equal(decisionRead.status, 200);
     assert.equal(decisionRead.body.data.decision, 'APPROVE');
     assert.equal(decisionRead.body.data.quotationVersionId, versionId);
+    assert.equal('decidedByUserId' in decisionRead.body.data, false);
   });
 
   it('7: REJECT HTTP yields no Execution Scope', async (t) => {
@@ -643,10 +657,15 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     const manageGet = await api().get(QUOTATION(f.request.id))
       .set(auth(manageOnly));
     assert.equal(manageGet.status, 403);
-    // Full actor works and is authoritative for created/decided identity.
+    // The manager mutation response retains its audit actor, while customer
+    // reads omit that internal actor identity regardless of caller role.
+    assert.equal(bundle.quotation.createdByUserId, adminUserId);
     const adminRead = await api().get(QUOTATION(f.request.id)).set(auth());
     assert.equal(adminRead.status, 200);
-    assert.equal(adminRead.body.data.quotation.createdByUserId, adminUserId);
+    assert.equal('createdByUserId' in adminRead.body.data.quotation, false);
+    assert.equal(adminRead.body.data.versions.some(
+      (version: Record<string, unknown>) => 'createdByUserId' in version,
+    ), false);
   });
 
   it('9: smuggled authority/location/downstream fields cannot override', async (t) => {
@@ -810,6 +829,11 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       'HandymanQuotationRecord',
       'HandymanQuotationVersionRecord',
       'HandymanQuotationBundle',
+      'HandymanQuotationCustomerRead',
+      'HandymanQuotationVersionCustomerProjection',
+      'HandymanQuotationCustomerReadBundle',
+      'HandymanQuotationDecisionCustomerProjection',
+      'HandymanExecutionScopeCustomerProjection',
       'CreateHandymanQuotationLineRequest',
       'HandymanQuotationLineCustomerProjection',
       'HandymanQuotationTotals',
@@ -868,6 +892,40 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
         '#/components/schemas/HandymanQuotationLineCustomerProjection',
         `${method.toUpperCase()} line responses must use the safe projection`);
     }
+    const actorFreeCustomerSchemas = [
+      ['HandymanQuotationCustomerRead', 'createdByUserId'],
+      ['HandymanQuotationVersionCustomerProjection', 'createdByUserId'],
+      ['HandymanQuotationDecisionCustomerProjection', 'decidedByUserId'],
+      ['HandymanExecutionScopeCustomerProjection', 'createdByUserId'],
+    ];
+    for (const [name, actorField] of actorFreeCustomerSchemas) {
+      const schema = doc.components.schemas[name] as any;
+      assert.equal(schema.additionalProperties, false,
+        `${name} must be closed against unreviewed metadata`);
+      assert.equal(actorField in schema.properties, false,
+        `${name} must omit internal ${actorField}`);
+    }
+    const readResponseRef = (path: string, method: string) => {
+      const responseSchema = (doc.paths[path][method] as any)
+        .responses['200'].content['application/json'].schema;
+      assert.equal(responseSchema.allOf[0].$ref,
+        '#/components/schemas/SuccessEnvelope');
+      return responseSchema.allOf[1].properties.data;
+    };
+    assert.equal(readResponseRef(
+      '/handyman/requests/{handymanRequestId}/quotation', 'get').$ref,
+      '#/components/schemas/HandymanQuotationCustomerReadBundle');
+    const presentedSchema = readResponseRef(
+      '/handyman/requests/{handymanRequestId}/quotation/presented', 'get');
+    assert.equal(presentedSchema.nullable, true);
+    assert.equal(presentedSchema.allOf[0].$ref,
+      '#/components/schemas/HandymanQuotationVersionCustomerProjection');
+    assert.equal(readResponseRef(
+      '/handyman/quotation-versions/{quotationVersionId}/decision', 'get').$ref,
+      '#/components/schemas/HandymanQuotationDecisionCustomerProjection');
+    assert.equal(readResponseRef(
+      '/handyman/quotation-versions/{quotationVersionId}/execution-scope', 'get').$ref,
+      '#/components/schemas/HandymanExecutionScopeCustomerProjection');
     const materialCommandLineSchema = doc.components.schemas
       .HandymanMaterialExecutionLineRecord as any;
     assert.ok('sourceItemId' in materialCommandLineSchema.properties,
@@ -1043,6 +1101,8 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       const raw = JSON.stringify(response.body);
       assert.equal(raw.includes('referenceUnitAmount'), false);
       assert.equal(raw.includes('sourceItemId'), false);
+      assert.equal(raw.includes('createdByUserId'), false);
+      assert.equal(raw.includes('decidedByUserId'), false);
       assert.equal(raw.includes(item.id), false);
     }
 

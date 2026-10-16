@@ -25,6 +25,8 @@ import { userRepository } from '../src/modules/users/user.repository';
 import { permissionService } from '../src/modules/permissions';
 import { createEvidenceStorage } from '../src/modules/evidence/storage';
 import { migration0435CreateHandymanScopeVariations } from '../src/database/migrations/0435_create_handyman_scope_variations';
+import { migration0443SeparateHandymanVariationQcAuthority }
+  from '../src/database/migrations/0443_separate_handyman_variation_qc_authority';
 
 const CLIENT_A = '10000000-0000-4000-8000-000000000001';
 const PROPERTY_A = '10000000-0000-4000-8000-000000000011';
@@ -46,6 +48,7 @@ const CREW_A = '10000000-0000-4000-8000-000000000204';
 const WF_LEAD_A = '10000000-0000-4000-8000-000000000211';
 const WF_INSP_A = '10000000-0000-4000-8000-000000000212';
 const WF_HELPER_A = '10000000-0000-4000-8000-000000000213';
+const WF_SUPERVISOR_A = '10000000-0000-4000-8000-000000000214';
 
 const WCTX_LEAD_A = '10000000-0000-4000-8000-000000000221';
 const WCTX_INSP_A = '10000000-0000-4000-8000-000000000222';
@@ -68,6 +71,7 @@ const SCOPE_A1 = '10000000-0000-4000-8000-000000000501';
 const ASSIGN_A1 = '10000000-0000-4000-8000-000000000601';
 const QCRUN_OPEN_A1 = '10000000-0000-4000-8000-000000000801';
 const QCRUN_PASSED_A1 = '10000000-0000-4000-8000-000000000802';
+const QC_CHECKLIST_VERSION_A1 = '10000000-0000-4000-8000-000000000803';
 const DEFECT_A1 = '10000000-0000-4000-8000-000000000811';
 const WSESS_A1 = '10000000-0000-4000-8000-000000000821';
 const BAST_A1 = '10000000-0000-4000-8000-000000000831';
@@ -94,7 +98,10 @@ const origResolvePermissions = permissionService.resolvePermissionsForUser;
 
 /** Seeds a genuinely VERIFIED managed evidence upload (real bytes + SHA-256
  * in the configured storage dir) and returns its hm-ev:// reference. */
-async function verifiedEvidenceRef(seed: string): Promise<string> {
+async function verifiedEvidenceRef(
+  seed: string,
+  purpose = 'VARIATION_FINDING',
+): Promise<string> {
   const hex = createHash('sha256').update(seed).digest('hex');
   const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
   const bytes = Buffer.concat([
@@ -109,9 +116,9 @@ async function verifiedEvidenceRef(seed: string): Promise<string> {
         purpose, upload_status, original_file_name, mime_type, storage_key, declared_byte_size,
         verified_byte_size, sha256_checksum, attachment_reference, uploaded_by_user_id,
         uploaded_by_role, idempotency_key, verified_at)
-     VALUES ($1,$2,$3,$4,$5,$6,'VARIATION_FINDING','VERIFIED','seed.png','image/png',$7,$8,$8,$9,$10,$11,'PIC_PEKERJAAN',$12,NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'VERIFIED','seed.png','image/png',$8,$9,$9,$10,$11,$12,'PIC_PEKERJAAN',$13,NOW())
      ON CONFLICT (id) DO NOTHING`,
-    [id, CLIENT_A, TENANT_A, BUILDING_A1, REQ_A1, SCOPE_A1, `evidence/${id}`, bytes.byteLength, sha, `hm-ev://${id}`, LEAD_USER_A, `seed-${id}`],
+    [id, CLIENT_A, TENANT_A, BUILDING_A1, REQ_A1, SCOPE_A1, purpose, `evidence/${id}`, bytes.byteLength, sha, `hm-ev://${id}`, LEAD_USER_A, `seed-${id}`],
   );
   return `hm-ev://${id}`;
 }
@@ -189,6 +196,14 @@ before(async () => {
       employment_type text NOT NULL DEFAULT 'VENDOR',
       status text NOT NULL, notes text,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE workforce_reporting_lines(
+      id uuid PRIMARY KEY, workforce_profile_id uuid NOT NULL,
+      supervisor_workforce_profile_id uuid NOT NULL,
+      effective_from timestamptz, effective_until timestamptz,
+      status text NOT NULL DEFAULT 'ACTIVE',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE TABLE vendor_workforce_bindings(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, vendor_id uuid NOT NULL,
@@ -275,22 +290,28 @@ before(async () => {
     );
     CREATE TABLE handyman_execution_scopes(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, handyman_request_id uuid NOT NULL,
+      channel_attribution_id uuid NOT NULL,
       quotation_id uuid NOT NULL, approved_quotation_version_id uuid NOT NULL,
-      approval_decision_id uuid NOT NULL, tenant_company_id uuid NOT NULL,
-      building_id uuid NOT NULL, status text NOT NULL DEFAULT 'AUTHORIZED',
+      approval_decision_id uuid NOT NULL, quotation_decision_id uuid NOT NULL,
+      tenant_company_id uuid NOT NULL, tenant_pic_id uuid,
+      building_id uuid NOT NULL, floor_id uuid, area_id uuid, room_id uuid, space_id uuid,
+      status text NOT NULL DEFAULT 'AUTHORIZED',
       currency text NOT NULL,
       approved_labor_subtotal numeric(18,2) NOT NULL,
       approved_material_subtotal numeric(18,2) NOT NULL,
       approved_discount_amount numeric(18,2) NOT NULL,
       approved_tax_amount numeric(18,2) NOT NULL,
       approved_total_amount numeric(18,2) NOT NULL,
-      authorized_by_user_id uuid NOT NULL,
-      authorized_at timestamptz NOT NULL DEFAULT now()
+      authorized_by_user_id uuid NOT NULL, created_by_user_id uuid NOT NULL,
+      authorized_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE TABLE handyman_execution_scope_assignments(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
       handyman_provider_context_id uuid NOT NULL,
       handyman_crew_id uuid NOT NULL, assignment_seq int NOT NULL DEFAULT 1,
+      version int NOT NULL DEFAULT 1,
       status text NOT NULL, assigned_by_user_id uuid NOT NULL,
       assigned_at timestamptz NOT NULL DEFAULT now(),
       supersedes_assignment_id uuid,
@@ -305,6 +326,25 @@ before(async () => {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE handyman_qc_checklist_specs(
+      execution_scope_id uuid PRIMARY KEY, client_id uuid NOT NULL,
+      checklist_identity text NOT NULL, required_item_keys text[] NOT NULL,
+      configured_by_user_id uuid NOT NULL,
+      configured_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_qc_checklist_versions(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, code text NOT NULL,
+      version_number int NOT NULL, required_item_keys text[] NOT NULL
+    );
+    CREATE TABLE handyman_qc_scope_checklist_bindings(
+      execution_scope_id uuid PRIMARY KEY, checklist_version_id uuid NOT NULL,
+      bound_by_user_id uuid NOT NULL, bound_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE handyman_qc_run_evidence(
+      id uuid PRIMARY KEY, run_id uuid NOT NULL, evidence_upload_id uuid NOT NULL,
+      actor_user_id uuid NOT NULL, idempotency_key text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
     CREATE TABLE handyman_qc_run_items(
       id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES handyman_qc_runs(id),
       item_key text NOT NULL, outcome text NOT NULL DEFAULT 'PASS', note text,
@@ -314,7 +354,8 @@ before(async () => {
     CREATE TABLE handyman_qc_run_events(
       id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES handyman_qc_runs(id),
       client_id uuid NOT NULL, event_type text NOT NULL, idempotency_key text NOT NULL,
-      actor_user_id uuid NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now(),
+      actor_user_id uuid NOT NULL, metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+      occurred_at timestamptz NOT NULL DEFAULT now(),
       created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE TABLE handyman_defect_records(
@@ -326,7 +367,7 @@ before(async () => {
     );
     CREATE TABLE handyman_work_sessions(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
-      status text NOT NULL DEFAULT 'IN_PROGRESS',
+      status text NOT NULL DEFAULT 'IN_PROGRESS', completed_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
@@ -380,6 +421,7 @@ before(async () => {
   const client = await pool.connect();
   try {
     await migration0435CreateHandymanScopeVariations.up(client);
+    await migration0443SeparateHandymanVariationQcAuthority.up(client);
   } finally {
     client.release();
   }
@@ -420,7 +462,14 @@ before(async () => {
     INSERT INTO workforce_profiles (id, client_id, organization_id, user_id, employee_code, full_name, workforce_type, status) VALUES
       ('${WF_LEAD_A}', '${CLIENT_A}', '${ORG_A}', '${LEAD_USER_A}', 'EMP-L1', 'Budi Lead A', 'EXTERNAL', 'ACTIVE'),
       ('${WF_INSP_A}', '${CLIENT_A}', '${ORG_A}', '${INSPECTOR_USER_A}', 'EMP-I1', 'Indra Inspector A', 'EXTERNAL', 'ACTIVE'),
-      ('${WF_HELPER_A}', '${CLIENT_A}', '${ORG_A}', '${HELPER_USER_A}', 'EMP-H1', 'Hendra Helper A', 'EXTERNAL', 'ACTIVE');
+      ('${WF_HELPER_A}', '${CLIENT_A}', '${ORG_A}', '${HELPER_USER_A}', 'EMP-H1', 'Hendra Helper A', 'EXTERNAL', 'ACTIVE'),
+      ('${WF_SUPERVISOR_A}', '${CLIENT_A}', '${ORG_A}', '${OPS_MANAGER_USER_A}', 'EMP-S1', 'Rina QC Supervisor', 'EXTERNAL', 'ACTIVE');
+
+    INSERT INTO workforce_reporting_lines (
+      id, workforce_profile_id, supervisor_workforce_profile_id, status
+    ) VALUES (
+      '${randomUUID()}', '${WF_LEAD_A}', '${WF_SUPERVISOR_A}', 'ACTIVE'
+    );
 
     INSERT INTO vendor_workforce_bindings (id, client_id, vendor_id, workforce_profile_id, status) VALUES
       ('${randomUUID()}', '${CLIENT_A}', '${VENDOR_A}', '${WF_LEAD_A}', 'ACTIVE'),
@@ -519,6 +568,27 @@ before(async () => {
       ('${randomUUID()}', '${CLIENT_A}', '${QVER_WRONG_DELTA}', 1, 'LABOR', NULL,
        'Unchanged line total', 1.000, '${UOM_UNIT}', 500000.00, 50.0000, 750000.00, 750000.00, 750000.00);
 
+    INSERT INTO handyman_qc_checklist_specs (
+      execution_scope_id, client_id, checklist_identity, required_item_keys,
+      configured_by_user_id, configured_at
+    ) VALUES (
+      '${SCOPE_A1}', '${CLIENT_A}', 'PLUMBING-QC-V1',
+      ARRAY['MEMBRANE_SEAL']::text[], '${OPS_MANAGER_USER_A}',
+      now() - interval '10 minutes'
+    );
+    INSERT INTO handyman_qc_checklist_versions (
+      id, client_id, code, version_number, required_item_keys
+    ) VALUES (
+      '${QC_CHECKLIST_VERSION_A1}', '${CLIENT_A}', 'PLUMBING-QC-V1', 1,
+      ARRAY['MEMBRANE_SEAL']::text[]
+    );
+    INSERT INTO handyman_qc_scope_checklist_bindings (
+      execution_scope_id, checklist_version_id, bound_by_user_id, bound_at
+    ) VALUES (
+      '${SCOPE_A1}', '${QC_CHECKLIST_VERSION_A1}', '${OPS_MANAGER_USER_A}',
+      now() - interval '10 minutes'
+    );
+
     INSERT INTO handyman_qc_runs (id, client_id, execution_scope_id, checklist_identity, status) VALUES
       ('${QCRUN_OPEN_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'PLUMBING-QC-V1', 'OPEN'),
       ('${QCRUN_PASSED_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'PLUMBING-QC-V1', 'PASSED');
@@ -526,8 +596,13 @@ before(async () => {
     INSERT INTO handyman_qc_run_items (id, run_id, item_key, outcome, note) VALUES
       ('${randomUUID()}', '${QCRUN_PASSED_A1}', 'MEMBRANE_SEAL', 'PASS', 'Verified watertight');
 
-    INSERT INTO handyman_qc_run_events (id, run_id, client_id, event_type, idempotency_key, actor_user_id) VALUES
-      ('${randomUUID()}', '${QCRUN_PASSED_A1}', '${CLIENT_A}', 'FINISH', 'idem-qc-finish-1', '${OPS_MANAGER_USER_A}');
+    INSERT INTO handyman_qc_run_events (
+      id, run_id, client_id, event_type, idempotency_key, actor_user_id, metadata
+    ) VALUES (
+      '${randomUUID()}', '${QCRUN_PASSED_A1}', '${CLIENT_A}', 'FINISH',
+      'idem-qc-finish-1', '${OPS_MANAGER_USER_A}',
+      '{"outcome":"PASSED","expectedVersion":1,"templateVersionId":"${QC_CHECKLIST_VERSION_A1}"}'::jsonb
+    );
 
     INSERT INTO handyman_defect_records (id, client_id, execution_scope_id, run_id, description, status) VALUES
       ('${DEFECT_A1}', '${CLIENT_A}', '${SCOPE_A1}', '${QCRUN_PASSED_A1}', 'Minor sealant bead gap', 'OPENED');
@@ -542,14 +617,20 @@ before(async () => {
       ('${INVOICE_A1}', '${CLIENT_A}', '${SCOPE_A1}', 'FINALIZED');
 
     INSERT INTO handyman_execution_scopes (
-      id, client_id, handyman_request_id, quotation_id, approved_quotation_version_id,
-      approval_decision_id, tenant_company_id, building_id, currency,
+      id, client_id, handyman_request_id, channel_attribution_id,
+      quotation_id, approved_quotation_version_id, approval_decision_id,
+      quotation_decision_id, tenant_company_id, tenant_pic_id, building_id,
+      floor_id, area_id, room_id, space_id, currency,
       approved_labor_subtotal, approved_material_subtotal, approved_discount_amount,
-      approved_tax_amount, approved_total_amount, authorized_by_user_id
+      approved_tax_amount, approved_total_amount, authorized_by_user_id,
+      created_by_user_id
     ) VALUES (
-      '${SCOPE_A1}', '${CLIENT_A}', '${REQ_A1}', '${QUO_A1}', '${QVER_A1}',
-      '${randomUUID()}', '${TENANT_A}', '${BUILDING_A1}', 'IDR',
-      500000.00, 250000.00, 0.00, 82500.00, 832500.00, '${OPS_MANAGER_USER_A}'
+      '${SCOPE_A1}', '${CLIENT_A}', '${REQ_A1}', '${randomUUID()}',
+      '${QUO_A1}', '${QVER_A1}', '${randomUUID()}', '${randomUUID()}',
+      '${TENANT_A}', '${TENANT_PIC_A}', '${BUILDING_A1}',
+      NULL, NULL, NULL, NULL, 'IDR',
+      500000.00, 250000.00, 0.00, 82500.00, 832500.00,
+      '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}'
     );
 
     INSERT INTO handyman_execution_scope_assignments (
@@ -564,6 +645,18 @@ before(async () => {
       '2026-10-15T01:00:00Z', '2026-10-15T02:00:00Z'
     );
   `);
+  const qcEvidenceReference = await verifiedEvidenceRef(
+    'ev://qc/guarded-pass',
+    'QC_EVIDENCE',
+  );
+  await pool.query(
+    `INSERT INTO handyman_qc_run_evidence
+       (id, run_id, evidence_upload_id, actor_user_id, idempotency_key)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [randomUUID(), QCRUN_PASSED_A1,
+      qcEvidenceReference.slice('hm-ev://'.length), OPS_MANAGER_USER_A,
+      'idem-qc-evidence-guarded-pass'],
+  );
 
   sessionService.resolveSessionContext = async (token: string) => ({
     userId: token,
@@ -605,7 +698,11 @@ before(async () => {
     ).rows[0] ?? null;
   permissionService.resolvePermissionsForUser = async (userId: string) => {
     if (userId === OPS_MANAGER_USER_A) {
-      return ['tenant_company.manage', 'tenant_company.read'];
+      return [
+        'tenant_company.manage',
+        'tenant_company.read',
+        'handyman.qc.manage',
+      ];
     }
     return [];
   };
@@ -1011,7 +1108,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         expectedVersion: 7,
       },
     );
-    assert.equal(qcWithOpenRun.status, 409);
+    assert.equal(qcWithOpenRun.status, 409, JSON.stringify(qcWithOpenRun.body));
 
     // CHECK 2 Guard C: Variation QC PASSED while an unverified defect exists on the scope fails closed (409)
     const qcWithOpenDefect = await apiPost(
@@ -1036,6 +1133,13 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       `UPDATE handyman_qc_runs SET status = 'PASSED' WHERE id = $1`,
       [QCRUN_OPEN_A1],
     );
+    // Current QC PASS authority requires completed/check-out Work Sessions.
+    await getPool().query(
+      `UPDATE handyman_work_sessions
+          SET status = 'CHECKED_OUT', completed_at = now()
+        WHERE id = $1`,
+      [WSESS_A1],
+    );
 
     // Stage 8: Authorized Supervisor / Operations Manager verifies QC linked to QCRUN_PASSED_A1 (QC PASSED)
     const s8 = await apiPost(
@@ -1056,6 +1160,12 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s8.body.data.variation.qcRunId, QCRUN_PASSED_A1);
 
     // CHECK 2 Guard D: FINAL_CHARGE_ELIGIBILITY blocked while an active work session is still IN_PROGRESS (409)
+    await getPool().query(
+      `UPDATE handyman_work_sessions
+          SET status = 'IN_PROGRESS', completed_at = NULL
+        WHERE id = $1`,
+      [WSESS_A1],
+    );
     const fceOpenSession = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/final-charge-eligibility`,
       OPS_MANAGER_USER_A,
@@ -1069,7 +1179,9 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
 
     // Complete/check out the work session
     await getPool().query(
-      `UPDATE handyman_work_sessions SET status = 'CHECKED_OUT' WHERE id = $1`,
+      `UPDATE handyman_work_sessions
+          SET status = 'CHECKED_OUT', completed_at = now()
+        WHERE id = $1`,
       [WSESS_A1],
     );
 

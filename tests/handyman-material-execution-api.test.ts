@@ -641,6 +641,9 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     };
     const paths = Object.keys(doc.paths);
     const expectedRoutes = [
+      // Customer Care read route is mounted by its own API module; the other
+      // eight paths below belong to this material-execution API router.
+      '/handyman/execution-scopes/{executionScopeId}/material-lines',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/estimate',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/final-charge-ready',
       '/handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/approve',
@@ -653,12 +656,13 @@ describe('CR-HM-09 PART 06 — material execution HTTP/OpenAPI', () => {
     for (const route of expectedRoutes) {
       assert.ok(paths.includes(route), `missing ${route}`);
     }
-    // Nothing else mentions material-lines in the contract.
+    // Exact OpenAPI path count includes the separately mounted Customer Care
+    // read plus the eight material-execution API paths above.
     assert.equal(
       paths.filter((p) => p.includes('material-lines')).length,
       expectedRoutes.length);
-    // HTTP reality check: all 8 routes are actually MOUNTED (no 404
-    // for a real scope route handler).
+    // HTTP reality check: all 8 material-execution API routes are actually
+    // mounted (no 404 for a real scope route handler).
     const f = await leadFixture();
     const key = () => `k-${randomUUID()}`;
     const est = await estimateViaHttp({

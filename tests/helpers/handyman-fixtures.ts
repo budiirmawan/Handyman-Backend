@@ -37,6 +37,8 @@ import { tenantSpaceService } from '../../src/modules/tenant-spaces';
 import { userService } from '../../src/modules/users';
 import { vendorWorkforceService } from '../../src/modules/vendor-workforce';
 import { vendorService } from '../../src/modules/vendors';
+import { assignBuildingToWorkforce }
+  from '../../src/modules/workforce-building-assignments';
 import { workforceService } from '../../src/modules/workforce';
 
 /**
@@ -153,6 +155,10 @@ export async function crewFixture(
     fullName: 'Lead Worker',
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
+  });
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
   });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: vendor.id,
