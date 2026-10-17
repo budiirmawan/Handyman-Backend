@@ -49,8 +49,8 @@ services:
     volumes:
       - handyman-evidence:/app/.data/evidence
     healthcheck:
-      # Existing unauthenticated endpoint: 200 when the pool connects, 5xx
-      # otherwise. Node 22 global fetch — no curl in the slim image.
+      # Existing unauthenticated readiness: 200 when DB connects and canonical
+      # migration history matches; 503 otherwise. Node 22 global fetch — no curl in the slim image.
       test:
         [
           "CMD",

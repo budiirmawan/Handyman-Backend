@@ -9,6 +9,50 @@ export type MigrationStatusItem = {
 };
 
 const HISTORY_TABLE = 'schema_migrations';
+// Stable application-specific PostgreSQL advisory lock; portable, no extension.
+const MIGRATION_LOCK = 724196031;
+
+/** Read-only gate: never creates history or changes schema using app credentials. */
+export async function verifyMigrationReadiness(pool: Pool): Promise<void> {
+  let ids: string[];
+  try {
+    const result = await pool.query<{ id: string }>(`SELECT id FROM ${HISTORY_TABLE}`);
+    ids = result.rows.map((row) => row.id);
+  } catch {
+    throw new DatabaseError('Migration history unavailable; run the authorized one-shot migration before starting the API.');
+  }
+  const expected = new Set(migrations.map((migration) => migration.id));
+  const applied = new Set(ids);
+  if (migrations.some((migration) => !applied.has(migration.id)) ||
+      ids.some((id) => !expected.has(id))) {
+    throw new DatabaseError('Migration history does not match this artifact; inspect migration status before admitting API traffic.');
+  }
+}
+
+async function withMigrationLock<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  let locked = false;
+  let destroyed = false;
+  try {
+    const result = await client.query<{ locked: boolean }>(
+      'SELECT pg_try_advisory_lock($1) AS locked', [MIGRATION_LOCK],
+    );
+    locked = result.rows[0]?.locked === true;
+    if (!locked) throw new DatabaseError('Another migration runner is active; retry only after it completes.');
+    return await work(client);
+  } finally {
+    if (locked) {
+      try {
+        await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK]);
+      } catch {
+        // Destroy the connection if unlocking fails; never return a locked session.
+        client.release(true);
+        destroyed = true;
+      }
+    }
+    if (!destroyed) client.release();
+  }
+}
 
 export async function ensureMigrationHistory(client: PoolClient): Promise<void> {
   await client.query(`
@@ -39,43 +83,53 @@ export async function getMigrationStatus(
   try {
     const applied = await listAppliedMigrationIds(client);
 
-    return migrations.map((migration) => ({
+    const registered = new Set(migrations.map((migration) => migration.id));
+    return [...migrations.map((migration) => ({
       id: migration.id,
       applied: applied.has(migration.id),
       appliedAt: applied.get(migration.id) ?? null,
-    }));
+    })), ...[...applied].filter(([id]) => !registered.has(id)).map(([id, appliedAt]) => ({
+      id, applied: true, appliedAt,
+    }))];
   } finally {
     client.release();
   }
 }
 
 export async function migrateUp(pool: Pool): Promise<string[]> {
-  const appliedIds: string[] = [];
-
-  for (const migration of migrations) {
-    const applied = await withTransaction(pool, async (client) => {
-      const history = await listAppliedMigrationIds(client);
-      if (history.has(migration.id)) {
-        return false;
-      }
-
-      await migration.up(client);
-      await client.query(`INSERT INTO ${HISTORY_TABLE} (id) VALUES ($1)`, [
-        migration.id,
-      ]);
-      return true;
-    });
-
-    if (applied) {
-      appliedIds.push(migration.id);
+  return withMigrationLock(pool, async (client) => {
+    const appliedIds: string[] = [];
+    const history = await listAppliedMigrationIds(client);
+    const registered = new Set(migrations.map((migration) => migration.id));
+    if ([...history.keys()].some((id) => !registered.has(id))) {
+      throw new DatabaseError('Unknown applied migrations; use the matching artifact, not an older migration runner.');
     }
-  }
 
-  return appliedIds;
+    for (const migration of migrations) {
+      const applied = await withTransaction(client, async (client) => {
+        const history = await listAppliedMigrationIds(client);
+        if (history.has(migration.id)) {
+          return false;
+        }
+
+        await migration.up(client);
+        await client.query(`INSERT INTO ${HISTORY_TABLE} (id) VALUES ($1)`, [
+          migration.id,
+        ]);
+        return true;
+      });
+
+      if (applied) {
+        appliedIds.push(migration.id);
+      }
+    }
+
+    return appliedIds;
+  });
 }
 
 export async function migrateDown(pool: Pool): Promise<string | null> {
-  return withTransaction(pool, async (client) => {
+  return withMigrationLock(pool, (client) => withTransaction(client, async (client) => {
     const history = await listAppliedMigrationIds(client);
     const applied = migrations.filter((migration) => history.has(migration.id));
     const current = applied.at(-1);
@@ -89,15 +143,13 @@ export async function migrateDown(pool: Pool): Promise<string | null> {
       current.id,
     ]);
     return current.id;
-  });
+  }));
 }
 
 async function withTransaction<T>(
-  pool: Pool,
+  client: PoolClient,
   work: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  const client = await pool.connect();
-
   try {
     await client.query('BEGIN');
     const result = await work(client);
@@ -106,8 +158,6 @@ async function withTransaction<T>(
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw toMigrationError(error);
-  } finally {
-    client.release();
   }
 }
 

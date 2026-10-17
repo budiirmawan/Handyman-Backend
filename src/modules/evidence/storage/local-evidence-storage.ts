@@ -76,8 +76,8 @@ export function createLocalEvidenceStorage(baseDir: string): EvidenceStorage {
  * unchanged. Resolves `baseDir`, creates it (recursive), then proves
  * writability by writing and removing a probe file. Resolves with the
  * absolute root path. Throws `ConfigError` (fail fast) when the directory
- * cannot be created or written — e.g. a missing persistent-volume mount or
- * wrong directory ownership in the container.
+ * cannot be created or written — e.g. wrong directory ownership. This does NOT
+ * prove a persistent volume is mounted: writable ephemeral paths also pass.
  */
 export async function verifyLocalEvidenceStorageRoot(baseDir: string): Promise<string> {
   const root = resolve(baseDir);

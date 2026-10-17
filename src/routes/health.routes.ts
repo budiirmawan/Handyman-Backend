@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getAppConfig } from '../config';
+import { verifyMigrationReadiness } from '../database/migrate';
 import { getPool, verifyConnection } from '../database';
 import { sendSuccess } from '../shared/api-response';
 import { AppError } from '../shared/errors';
@@ -24,6 +25,7 @@ export function createHealthRouter(): Router {
     try {
       const pool = getPool();
       await verifyConnection(pool, config.database);
+      await verifyMigrationReadiness(pool);
       sendSuccess(res, {
         status: 'ok',
         database: 'connected',

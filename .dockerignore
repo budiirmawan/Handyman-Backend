@@ -1,0 +1,14 @@
+.git
+node_modules
+dist
+coverage
+.env
+.env.*
+.data
+backups
+*.dump
+*.tar
+*.tar.gz
+*.log
+tests
+docs
