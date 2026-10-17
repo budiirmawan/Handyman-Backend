@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { createApp } from './app';
 import { ConfigError, getAppConfig } from './config';
 import { DatabaseError, closePool, initDatabase } from './database';
+import { verifyMigrationReadiness } from './database/migrate';
 import { verifyEvidenceStorageReady } from './modules/evidence/storage';
 import { logger } from './shared/logger';
 import type { DueJobScheduler } from './modules/due-job-scheduler';
@@ -33,6 +34,18 @@ async function shutdown(
   exitCode = 0,
 ): Promise<void> {
   logger.info('Shutdown initiated', { signal });
+  // Bound HTTP requests and checked-out DB clients as well as scheduler drain.
+  const deadline = setTimeout(() => {
+    logger.error('Shutdown deadline exceeded; terminating');
+    server.closeAllConnections();
+    process.exit(1);
+  }, 25_000);
+  deadline.unref();
+  // Stop admitting new HTTP requests immediately, then drain existing work.
+  logger.info('HTTP server closing');
+  const httpClosed = new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 
   // CR-BE-STAB-01 PART 04 — clear the scheduler timer before tearing down so
   // no dispatcher tick can run during or after shutdown.
@@ -43,25 +56,25 @@ async function shutdown(
     await stopDueJobScheduler(SCHEDULER_DRAIN_TIMEOUT_MS);
   }
 
-  logger.info('HTTP server closing');
-
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  await httpClosed;
 
   logger.info('PostgreSQL pool closing');
   await closePool(pool);
+  clearTimeout(deadline);
   logger.info('Shutdown completed');
   process.exit(exitCode);
 }
 
 async function start(): Promise<void> {
+  let pool: Pool | undefined;
   try {
     const config = getAppConfig();
-    const pool = await initDatabase(config.database);
+    pool = await initDatabase(config.database);
+    await verifyMigrationReadiness(pool);
+    const activePool = pool;
 
     // D03 — fail fast when evidence storage is misconfigured or unwritable
-    // (missing volume mount, wrong ownership) instead of failing operations
+    // (invalid path, wrong ownership) instead of failing operations
     // mid-request. ConfigError exits 1 via the existing startup-error path.
     await verifyEvidenceStorageReady();
 
@@ -78,15 +91,6 @@ async function start(): Promise<void> {
     // It self-disables in the test environment and is stopped on shutdown.
     const scheduler = startDueJobScheduler(config.scheduler);
 
-    server.on('error', (error) => {
-      writeStartupError(error);
-      void closePool(pool)
-        .catch(() => undefined)
-        .finally(() => {
-          process.exit(1);
-        });
-    });
-
     let shuttingDown = false;
 
     const requestShutdown = (signal: string, exitCode = 0): void => {
@@ -95,11 +99,16 @@ async function start(): Promise<void> {
       }
 
       shuttingDown = true;
-      void shutdown(signal, server, pool, scheduler, exitCode).catch((error) => {
+      void shutdown(signal, server, activePool, scheduler, exitCode).catch((error) => {
         writeStartupError(error);
         process.exit(1);
       });
     };
+
+    server.on('error', (error) => {
+      writeStartupError(error);
+      requestShutdown('HTTP_ERROR', 1);
+    });
 
     process.on('SIGINT', () => requestShutdown('SIGINT'));
     process.on('SIGTERM', () => requestShutdown('SIGTERM'));
@@ -123,6 +132,7 @@ async function start(): Promise<void> {
     });
   } catch (error) {
     writeStartupError(error);
+    if (pool) await closePool(pool).catch(() => undefined);
     process.exitCode = 1;
   }
 }

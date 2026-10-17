@@ -1,5 +1,11 @@
 # Evidence Storage — Deploy & Persistence (D03)
 
+For the complete Railway/Coolify operating procedure use
+[Railway deployment](HANDYMAN_RAILWAY_STAGE1_DEPLOYMENT.md),
+[paired backup/recovery](HANDYMAN_DATABASE_EVIDENCE_BACKUP_RECOVERY.md) and
+[verified transfer/cutover](HANDYMAN_RAILWAY_TO_BIZNET_MIGRATION.md).
+The boot probe proves writability, **not attachment or persistence of a volume**.
+
 Local-driver production readiness for evidence and report-artifact file bytes.
 Interface: `EvidenceStorage` (`src/modules/evidence/storage/`).
 
@@ -26,7 +32,8 @@ Interface: `EvidenceStorage` (`src/modules/evidence/storage/`).
   database check: the directory is created (recursive) and writability is
   proven with a probe file that is removed immediately.
 - An invalid or unwritable directory aborts startup with exit 1 and a
-  `ConfigError` naming the resolved path (missing mount, wrong ownership).
+  `ConfigError` naming the resolved path (for example, wrong ownership).
+  A missing mount can still pass when the ephemeral directory is writable.
 
 ## Backup / persistence responsibility
 
@@ -38,7 +45,9 @@ Interface: `EvidenceStorage` (`src/modules/evidence/storage/`).
 - `docker compose down -v` deletes evidence bytes irreversibly; never use
   `-v` outside a deliberate, backed-up teardown.
 - Restore = repopulate the volume at the same keys, then boot normally; the
-  readiness gate confirms the restored directory is writable.
+  readiness gate confirms the restored directory is writable, not that every
+  referenced file exists or has its original checksum. Use the transfer tool and
+  metadata-reference checks in the migration runbook for those guarantees.
 
 ## Verification
 

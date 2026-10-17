@@ -27,6 +27,22 @@ ONE BACKEND PLATFORM
 See [docs/GOVERNANCE.md](docs/GOVERNANCE.md) and
 [docs/backend-foundation.md](docs/backend-foundation.md).
 
+## Handyman production deployment
+
+Railway first, portable to Biznet VPS/Coolify later; Vercel remains the Frontend
+host. These are operator runbooks, not a live deployment certification:
+
+- [Railway Stage 1 setup](docs/HANDYMAN_RAILWAY_STAGE1_DEPLOYMENT.md)
+- [Biznet / Coolify setup](docs/HANDYMAN_BIZNET_COOLIFY_DEPLOYMENT.md)
+- [Railway → Biznet migration](docs/HANDYMAN_RAILWAY_TO_BIZNET_MIGRATION.md)
+- [Paired database/evidence backup and recovery](docs/HANDYMAN_DATABASE_EVIDENCE_BACKUP_RECOVERY.md)
+- [Actual environment variables](docs/HANDYMAN_DEPLOYMENT_ENV_MATRIX.md)
+- [GO/NO-GO and validation evidence](docs/HANDYMAN_STAGE1_GO_NO_GO_CHECKLIST.md)
+
+The production image uses Node 22. Migrations are explicit one-shot operations;
+API startup/readiness require the matching canonical migration history. Evidence
+requires an attached persistent volume, not just a writable directory.
+
 ## Install
 
 ```bash
@@ -34,7 +50,10 @@ npm install
 cp .env.example .env
 ```
 
-Put your local PostgreSQL credentials in `.env`. Never commit `.env`.
+The example is production-oriented with placeholders. For local use set
+`NODE_ENV=development` and replace the database, CORS and storage placeholders
+with local settings. Put local PostgreSQL credentials in `.env`; never commit it.
+Production ignores `.env` and requires platform-injected environment values.
 
 ## Local PostgreSQL
 

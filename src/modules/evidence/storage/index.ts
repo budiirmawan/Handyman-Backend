@@ -39,7 +39,8 @@ export function createEvidenceStorage(): EvidenceStorage {
  * factory and the `EvidenceStorage` interface are unchanged). Resolves with
  * the absolute storage root when the backend is ready; throws `ConfigError`
  * when the configured directory cannot be created or written, so the server
- * refuses to boot instead of failing evidence operations mid-request.
+ * refuses to boot instead of failing evidence operations mid-request. This
+ * verifies writability, not persistent-volume attachment.
  */
 /**
  * P0-D — runtime storage health probe: writes a probe object through the

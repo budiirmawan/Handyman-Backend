@@ -43,7 +43,7 @@ export function createPool(database: DatabaseConfig): Pool {
     const pgError = error as { code?: string; message: string };
     logger.error('PostgreSQL pool error', {
       code: pgError.code,
-      errorMessage: pgError.message,
+      errorMessage: sanitizeDatabaseError(pgError.message, database.password),
     });
   });
 
