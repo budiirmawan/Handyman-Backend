@@ -29,11 +29,31 @@ export type {
 
 export { requirePermission } from './rbac.middleware';
 
-export { authService, login } from './auth.service';
-export type { LoginInput } from './auth.service';
+export {
+  authService,
+  changePassword,
+  getPasswordStatus,
+  login,
+} from './auth.service';
+export type {
+  ChangePasswordInput,
+  LoginInput,
+  PasswordStatus,
+} from './auth.service';
+export {
+  PASSWORD_CHANGE_ALLOWED_OPERATIONS,
+  enforcePasswordChange,
+  isPasswordChangeAllowed,
+} from './password-change.middleware';
 
-export { parseLoginBody } from './auth.validation';
-export type { LoginBody } from './auth.validation';
+export {
+  parseChangePasswordBody,
+  parseLoginBody,
+} from './auth.validation';
+export type {
+  ChangePasswordBody,
+  LoginBody,
+} from './auth.validation';
 
 export {
   credentialAlreadyExistsError,
@@ -45,9 +65,11 @@ export {
 export { credentialRepository } from './credential.repository';
 
 export {
+  changeOwnPassword,
   createInitialCredential,
   credentialService,
   getCredentialByUserId,
+  resetPassword,
   updatePassword,
   verifyPasswordForUser,
 } from './credential.service';
@@ -72,6 +94,7 @@ export {
   createSessionForUser,
   resolveSessionContext,
   revokeActiveSessionsForUser,
+  revokeOtherSessionsForUser,
   revokeSessionById,
   sessionService,
 } from './session.service';

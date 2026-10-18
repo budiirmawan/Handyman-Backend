@@ -61,8 +61,35 @@ export async function assignRoleHandler(
   try {
     const userId = parseRoleUserIdParam(paramString(req.params.userId));
     const { roleId } = parseAssignRoleBody(req.body);
-    const role = await roleService.assignRoleToUser(userId, roleId);
+    const role = await roleService.assignRoleToUser(
+      userId,
+      roleId,
+      req.auth.userId,
+    );
     sendSuccess(res, role, 201);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — revoke a single ACTIVE role assignment.
+ * The last ACTIVE PLATFORM_ADMIN assignment is protected in the service.
+ */
+export async function revokeRoleHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const userId = parseRoleUserIdParam(paramString(req.params.userId));
+    const roleId = parseRoleIdParam(paramString(req.params.roleId));
+    const role = await roleService.revokeRoleFromUser(
+      userId,
+      roleId,
+      req.auth.userId,
+    );
+    sendSuccess(res, role);
   } catch (error) {
     next(error);
   }

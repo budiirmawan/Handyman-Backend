@@ -5,7 +5,9 @@ import {
   createUserHandler,
   deactivateUserHandler,
   getUserHandler,
+  listUsersHandler,
   reactivateUserHandler,
+  resetUserPasswordHandler,
   suspendUserHandler,
   updateUserWhatsAppContactHandler,
 } from './user.controller';
@@ -27,10 +29,25 @@ export function createUserRouter(): Router {
     createUserHandler,
   );
   router.get(
+    '/users',
+    authenticationMiddleware,
+    requirePermission('user.read'),
+    listUsersHandler,
+  );
+  router.get(
     '/users/:id',
     authenticationMiddleware,
     requirePermission('user.read'),
     getUserHandler,
+  );
+
+  // CR-HM-IAM-BOOTSTRAP-01 — administrative credential reset. Revokes all
+  // active sessions and forces a change on next use; never returns a secret.
+  router.post(
+    '/users/:id/password-reset',
+    authenticationMiddleware,
+    requirePermission('user.manage'),
+    resetUserPasswordHandler,
   );
 
   router.post(

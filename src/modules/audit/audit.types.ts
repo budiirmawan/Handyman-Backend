@@ -15,6 +15,12 @@ export const AUDIT_EVENT_TYPES = [
   'ACCOUNT_DEACTIVATED',
   'ACCOUNT_REACTIVATED',
   'ACCOUNT_SUSPENDED',
+  // CR-HM-IAM-BOOTSTRAP-01 — one-time first-owner provisioning and the
+  // credential lifecycle events. Kept in lockstep with the database CHECK
+  // constraint extended by migration 0452.
+  'OWNER_BOOTSTRAPPED',
+  'PASSWORD_RESET',
+  'PASSWORD_CHANGED',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

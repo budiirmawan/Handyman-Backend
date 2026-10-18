@@ -148,6 +148,63 @@ async function findActiveAssignment(
   return row ? mapAssignmentRow(row) : null;
 }
 
+async function revokeAssignment(
+  userId: string,
+  roleId: string,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `UPDATE user_role_assignments
+        SET status = 'REVOKED', updated_at = NOW()
+      WHERE user_id = $1 AND role_id = $2 AND status = 'ACTIVE'`,
+    [userId, roleId],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Counts ACTIVE assignments of a role, optionally excluding one user. Used to
+ * refuse removal of the last active PLATFORM_ADMIN.
+ */
+async function countActiveAssignments(
+  roleId: string,
+  excludeUserId?: string,
+): Promise<number> {
+  const result = await getPool().query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM user_role_assignments
+      WHERE role_id = $1
+        AND status = 'ACTIVE'
+        AND ($2::uuid IS NULL OR user_id <> $2::uuid)`,
+    [roleId, excludeUserId ?? null],
+  );
+
+  return Number(result.rows[0]?.count ?? '0');
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — the ACTIVE permission codes a role would
+ * grant through role_permission_assignments. Used by the assignment guard to
+ * treat any authority-defining role (not only PLATFORM_ADMIN by name) as
+ * privileged, so a role name can never become a shortcut to escalation.
+ */
+async function listActivePermissionCodesForRole(
+  roleId: string,
+): Promise<string[]> {
+  const result = await getPool().query<{ code: string }>(
+    `SELECT p.code
+       FROM role_permission_assignments rpa
+       JOIN permissions p ON p.id = rpa.permission_id
+      WHERE rpa.role_id = $1
+        AND rpa.status = 'ACTIVE'
+        AND p.status = 'ACTIVE'
+      ORDER BY p.code ASC`,
+    [roleId],
+  );
+
+  return result.rows.map((row) => row.code);
+}
+
 async function listActiveRolesForUser(userId: string): Promise<RoleRecord[]> {
   const result = await getPool().query<RoleRow>(
     `SELECT
@@ -169,6 +226,8 @@ async function listActiveRolesForUser(userId: string): Promise<RoleRecord[]> {
 }
 
 export const roleRepository = {
+  listActivePermissionCodesForRole,
+  countActiveAssignments,
   createAssignment,
   createRole,
   findActiveAssignment,
@@ -176,5 +235,6 @@ export const roleRepository = {
   findByCode,
   listActiveRolesForUser,
   listRoles,
+  revokeAssignment,
   updateStatus,
 };

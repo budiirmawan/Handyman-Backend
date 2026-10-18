@@ -7,6 +7,7 @@ import {
   getRoleHandler,
   listRolesHandler,
   listUserRolesHandler,
+  revokeRoleHandler,
 } from './role.controller';
 
 /**
@@ -48,6 +49,14 @@ export function createRoleRouter(): Router {
     authenticationMiddleware,
     requirePermission('role.read'),
     listUserRolesHandler,
+  );
+  // CR-HM-IAM-BOOTSTRAP-01 — role removal. The last active PLATFORM_ADMIN
+  // assignment cannot be revoked (409 LAST_OWNER_ROLE_REQUIRED).
+  router.delete(
+    '/users/:userId/roles/:roleId',
+    authenticationMiddleware,
+    requirePermission('role.manage'),
+    revokeRoleHandler,
   );
 
   return router;

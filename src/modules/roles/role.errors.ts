@@ -31,3 +31,41 @@ export function roleAlreadyAssignedError(): AppError {
     statusCode: 409,
   });
 }
+
+export function roleAssignmentNotFoundError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.ROLE_ASSIGNMENT_NOT_FOUND,
+    message: 'This role is not assigned to the user.',
+    statusCode: 404,
+  });
+}
+
+/**
+ * A system invariant, not a privilege: the PLATFORM_ADMIN role is the only
+ * role that can administer identity/authority, so the last ACTIVE assignment
+ * must not be revoked. Assign the role to a second owner first.
+ */
+export function lastOwnerRoleRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.LAST_OWNER_ROLE_REQUIRED,
+    message:
+      'The last active PLATFORM_ADMIN assignment cannot be revoked. Assign the role to another owner first.',
+    statusCode: 409,
+  });
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — defense in depth for privilege
+ * escalation through role assignment. Even if a role that carries
+ * `role.manage` / `permission.manage` is (mis)granted to a non-owner, that
+ * administrator still cannot assign PLATFORM_ADMIN or any other
+ * authority-defining role. Only an owner may.
+ */
+export function privilegedRoleAssignmentDeniedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.PRIVILEGED_ROLE_ASSIGNMENT_DENIED,
+    message:
+      'Only an owner may assign or revoke PLATFORM_ADMIN or a role that defines authority.',
+    statusCode: 403,
+  });
+}

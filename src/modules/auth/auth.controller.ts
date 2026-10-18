@@ -2,7 +2,10 @@ import type { NextFunction, Request, Response } from 'express';
 import { auditContextFromRequest, recordEvent } from '../audit';
 import { sendSuccess } from '../../shared/api-response';
 import { authService } from './auth.service';
-import { parseLoginBody } from './auth.validation';
+import {
+  parseChangePasswordBody,
+  parseLoginBody,
+} from './auth.validation';
 import { effectiveContextService } from './effective-context.service';
 import { sessionService } from './session.service';
 
@@ -35,6 +38,50 @@ export async function meHandler(
       req.auth.userId,
     );
     sendSuccess(res, context);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — self-service password change. Authentication only
+ * (the caller's own session); the current password is re-verified and other
+ * sessions are revoked. Neither password is logged or returned.
+ */
+export async function changePasswordHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const body = parseChangePasswordBody(req.body);
+    const result = await authService.changePassword(
+      {
+        userId: req.auth.userId,
+        sessionId: req.auth.sessionId,
+        currentPassword: body.currentPassword,
+        newPassword: body.newPassword,
+      },
+      auditContextFromRequest(req),
+    );
+    sendSuccess(res, result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — authentication-only status endpoint for
+ * the forced password change. Reachable while the change is still pending.
+ */
+export async function passwordStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const status = await authService.getPasswordStatus(req.auth.userId);
+    sendSuccess(res, status);
   } catch (error) {
     next(error);
   }

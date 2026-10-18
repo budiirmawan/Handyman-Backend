@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { Seed } from './types';
 
 /**
@@ -859,11 +859,68 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   'platform.audit.read',
 ]);
 
-const PLATFORM_ADMIN_ROLE = {
+export const PLATFORM_ADMIN_ROLE = {
   code: 'PLATFORM_ADMIN',
   name: 'Platform Administrator',
   description: 'Manages identity, roles, and permissions.',
-};
+} as const;
+
+/**
+ * Applies the foundation access catalogue on an EXISTING transaction.
+ *
+ * Extracted so the one-time first-owner bootstrap (CR-HM-IAM-BOOTSTRAP-01)
+ * can seed the canonical permissions + PLATFORM_ADMIN role in the same
+ * all-or-nothing transaction as the owner user, credential, role assignment
+ * and bootstrap proof row. `foundationAccessSeed.run` keeps its historical
+ * standalone behavior (own transaction) for the operator-only `db:seed`.
+ *
+ * Idempotent by construction: every statement uses ON CONFLICT DO NOTHING.
+ */
+export async function seedFoundationAccess(
+  client: PoolClient,
+): Promise<void> {
+  for (const permission of FOUNDATION_PERMISSIONS) {
+    await client.query(
+      `INSERT INTO permissions (id, code, name, status)
+       VALUES ($1, $2, $3, 'ACTIVE')
+       ON CONFLICT (code) DO NOTHING`,
+      [randomUUID(), permission.code, permission.name],
+    );
+  }
+
+  await client.query(
+    `INSERT INTO roles (id, code, name, description, status)
+     VALUES ($1, $2, $3, $4, 'ACTIVE')
+     ON CONFLICT (code) DO NOTHING`,
+    [
+      randomUUID(),
+      PLATFORM_ADMIN_ROLE.code,
+      PLATFORM_ADMIN_ROLE.name,
+      PLATFORM_ADMIN_ROLE.description,
+    ],
+  );
+
+  const roleResult = await client.query<{ id: string }>(
+    `SELECT id FROM roles WHERE code = $1`,
+    [PLATFORM_ADMIN_ROLE.code],
+  );
+  const roleId = roleResult.rows[0]?.id;
+  if (roleId) {
+    for (const permission of FOUNDATION_PERMISSIONS) {
+      if (UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has(permission.code)) {
+        continue;
+      }
+      await client.query(
+        `INSERT INTO role_permission_assignments (id, role_id, permission_id, status)
+         SELECT $1, $2, p.id, 'ACTIVE'
+         FROM permissions p
+         WHERE p.code = $3
+         ON CONFLICT (role_id, permission_id) WHERE status = 'ACTIVE' DO NOTHING`,
+        [randomUUID(), roleId, permission.code],
+      );
+    }
+  }
+}
 
 export const foundationAccessSeed: Seed = {
   id: 'foundation_access',
@@ -873,49 +930,7 @@ export const foundationAccessSeed: Seed = {
 
     try {
       await client.query('BEGIN');
-
-      for (const permission of FOUNDATION_PERMISSIONS) {
-        await client.query(
-          `INSERT INTO permissions (id, code, name, status)
-           VALUES ($1, $2, $3, 'ACTIVE')
-           ON CONFLICT (code) DO NOTHING`,
-          [randomUUID(), permission.code, permission.name],
-        );
-      }
-
-      await client.query(
-        `INSERT INTO roles (id, code, name, description, status)
-         VALUES ($1, $2, $3, $4, 'ACTIVE')
-         ON CONFLICT (code) DO NOTHING`,
-        [
-          randomUUID(),
-          PLATFORM_ADMIN_ROLE.code,
-          PLATFORM_ADMIN_ROLE.name,
-          PLATFORM_ADMIN_ROLE.description,
-        ],
-      );
-
-      const roleResult = await client.query<{ id: string }>(
-        `SELECT id FROM roles WHERE code = $1`,
-        [PLATFORM_ADMIN_ROLE.code],
-      );
-      const roleId = roleResult.rows[0]?.id;
-      if (roleId) {
-        for (const permission of FOUNDATION_PERMISSIONS) {
-          if (UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has(permission.code)) {
-            continue;
-          }
-          await client.query(
-            `INSERT INTO role_permission_assignments (id, role_id, permission_id, status)
-             SELECT $1, $2, p.id, 'ACTIVE'
-             FROM permissions p
-             WHERE p.code = $3
-             ON CONFLICT (role_id, permission_id) WHERE status = 'ACTIVE' DO NOTHING`,
-            [randomUUID(), roleId, permission.code],
-          );
-        }
-      }
-
+      await seedFoundationAccess(client);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);

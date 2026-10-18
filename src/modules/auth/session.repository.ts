@@ -79,6 +79,26 @@ async function revokeActiveByUserId(
   return result.rowCount ?? 0;
 }
 
+/**
+ * Revokes every ACTIVE session for a user EXCEPT the one making the request.
+ * Used by self-service password change so the caller is not logged out while
+ * all other devices lose access.
+ */
+async function revokeActiveByUserIdExcept(
+  userId: string,
+  exceptSessionId: string,
+  revokedAt: Date,
+): Promise<number> {
+  const result = await getPool().query(
+    `UPDATE user_sessions
+     SET status = 'REVOKED', revoked_at = $3, updated_at = NOW()
+     WHERE user_id = $1 AND status = 'ACTIVE' AND id <> $2`,
+    [userId, exceptSessionId, revokedAt],
+  );
+
+  return result.rowCount ?? 0;
+}
+
 async function revokeById(id: string, revokedAt: Date): Promise<SessionRecord | null> {
   const result = await getPool().query<SessionRow>(
     `UPDATE user_sessions
@@ -111,5 +131,6 @@ export const sessionRepository = {
   findByTokenHash,
   markUsedIfStale,
   revokeActiveByUserId,
+  revokeActiveByUserIdExcept,
   revokeById,
 };

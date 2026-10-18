@@ -3,6 +3,7 @@ import { userNotFoundError, userRepository } from '../users';
 import {
   credentialAlreadyExistsError,
   credentialNotFoundError,
+  invalidPasswordError,
 } from './credential.errors';
 import { credentialRepository } from './credential.repository';
 import { passwordService } from './password.service';
@@ -98,9 +99,92 @@ export async function updatePassword(
   return updated;
 }
 
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — administrative password reset.
+ *
+ * Reuses the central bcrypt policy/hasher, stores only the hash, marks
+ * `must_change_password` so the temporary secret is explicitly one-time, and
+ * never returns or logs the plaintext. The caller (user lifecycle service)
+ * revokes every active session; this function intentionally has no HTTP
+ * knowledge.
+ */
+export async function resetPassword(
+  userId: string,
+  newPassword: string,
+): Promise<CredentialRecord> {
+  const existing = await credentialRepository.findByUserId(userId);
+  if (!existing) {
+    throw credentialNotFoundError();
+  }
+
+  const passwordHash = await passwordService.hashPassword(newPassword);
+  const updated = await credentialRepository.updatePassword(userId, {
+    passwordHash,
+    passwordChangedAt: new Date(),
+    mustChangePassword: true,
+  });
+
+  if (!updated) {
+    throw credentialNotFoundError();
+  }
+
+  logger.info('User password reset', {
+    userId,
+    operation: 'credential.reset_password',
+  });
+
+  return updated;
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — authenticated self-service password change.
+ *
+ * Requires the CURRENT password (constant-time bcrypt comparison), applies the
+ * same policy, clears `must_change_password`, and stores only the new hash.
+ * The caller revokes the user's OTHER sessions and keeps the current one.
+ */
+export async function changeOwnPassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<CredentialRecord> {
+  const existing = await credentialRepository.findByUserId(userId);
+  if (!existing) {
+    throw credentialNotFoundError();
+  }
+
+  const matches = await passwordService.verifyPassword(
+    currentPassword,
+    existing.passwordHash,
+  );
+  if (!matches) {
+    throw invalidPasswordError();
+  }
+
+  const passwordHash = await passwordService.hashPassword(newPassword);
+  const updated = await credentialRepository.updatePassword(userId, {
+    passwordHash,
+    passwordChangedAt: new Date(),
+    mustChangePassword: false,
+  });
+
+  if (!updated) {
+    throw credentialNotFoundError();
+  }
+
+  logger.info('User password changed', {
+    userId,
+    operation: 'credential.change_password',
+  });
+
+  return updated;
+}
+
 export const credentialService = {
+  changeOwnPassword,
   createInitialCredential,
   getCredentialByUserId,
+  resetPassword,
   updatePassword,
   verifyPasswordForUser,
 };

@@ -35,3 +35,18 @@ export function authRateLimitedError(): AppError {
     statusCode: 429,
   });
 }
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — the account must change its password
+ * before any other authenticated operation is allowed. The caller keeps the
+ * same session: only `POST /auth/password`, `GET /auth/password/status`,
+ * `POST /auth/logout` and `GET /auth/me` stay reachable.
+ */
+export function passwordChangeRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.PASSWORD_CHANGE_REQUIRED,
+    message:
+      'A password change is required before this operation is available.',
+    statusCode: 403,
+  });
+}
