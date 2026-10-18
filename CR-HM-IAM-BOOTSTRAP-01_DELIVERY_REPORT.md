@@ -7,7 +7,8 @@ Status: implementation complete, hardening pass applied and tested locally,
 
 - Branch: `arena/95af75ae-handyman-backend`
 - Base: `0b72d7c5bff5f978740f17191821c4b26351a25d` (`main`)
-- Commit: `8101b2d90dc213c296cd3e1439ea5ca6f5b8dda1`
+- Implementation commit: `8101b2d90dc213c296cd3e1439ea5ca6f5b8dda1`
+- Security-hardening commit: `219ab01cc0d7bc03ced791551be7c406ffd8866b` (later commits are documentation-only)
 - Pull request: https://github.com/budiirmawan/Handyman-Backend/pull/40 (not merged)
 
 ---
