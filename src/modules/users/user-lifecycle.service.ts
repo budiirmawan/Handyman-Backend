@@ -1,7 +1,15 @@
-import { sessionService } from '../auth';
+import {
+  credentialNotFoundError,
+  credentialService,
+  sessionService,
+} from '../auth';
 import { recordEvent, type AuditRequestContext } from '../audit';
 import { logger } from '../../shared/logger';
-import { invalidAccountStateError, userNotFoundError } from './user.errors';
+import {
+  invalidAccountStateError,
+  privilegedAccountResetDeniedError,
+  userNotFoundError,
+} from './user.errors';
 import { toPublicUser } from './user.mapper';
 import { userRepository } from './user.repository';
 import type { PublicUser, UserStatus } from './user.types';
@@ -83,8 +91,77 @@ export async function reactivateUser(
   return transition(userId, 'INACTIVE', 'ACTIVE', 'ACCOUNT_REACTIVATED', false, audit);
 }
 
+export type UserPasswordResetResult = {
+  reset: true;
+  mustChangePassword: true;
+};
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — administrative password reset (`user.manage`).
+ *
+ * Rules:
+ *   - the account must exist and must already have a credential,
+ *   - the new secret is validated/hashed by the existing credential service
+ *     (policy + bcrypt); only the hash is stored,
+ *   - EVERY active session is revoked BEFORE the new hash is written, so a
+ *     stolen session cannot survive a reset (fail-safe ordering),
+ *   - `must_change_password` is set so the temporary secret is one-time,
+ *   - neither the plaintext nor the hash is returned or logged; the audit
+ *     event carries ids only.
+ */
+export async function resetUserPassword(
+  userId: string,
+  newPassword: string,
+  audit: AuditRequestContext = {},
+): Promise<UserPasswordResetResult> {
+  const user = await userRepository.findById(userId);
+  if (!user) {
+    throw userNotFoundError();
+  }
+
+  // Account-takeover guard: a non-owner must never reset an owner credential,
+  // even when it holds `user.manage` (e.g. SYSTEM_ADMIN).
+  if (await userRepository.hasActiveRole(userId, 'PLATFORM_ADMIN')) {
+    const actorIsOwner = audit.actorUserId
+      ? await userRepository.hasActiveRole(audit.actorUserId, 'PLATFORM_ADMIN')
+      : false;
+    if (!actorIsOwner) {
+      throw privilegedAccountResetDeniedError();
+    }
+  }
+
+  const credential = await credentialService.getCredentialByUserId(userId);
+  if (!credential) {
+    throw credentialNotFoundError();
+  }
+
+  // Fail-safe: cut existing sessions first, then replace the hash.
+  await sessionService.revokeActiveSessionsForUser(userId);
+  await credentialService.resetPassword(userId, newPassword);
+
+  await recordEvent({
+    eventType: 'PASSWORD_RESET',
+    outcome: 'SUCCESS',
+    userId,
+    actorUserId: audit.actorUserId ?? null,
+    requestId: audit.requestId ?? null,
+    ipAddress: audit.ipAddress ?? null,
+    userAgent: audit.userAgent ?? null,
+  });
+
+  logger.info('Administrative password reset applied', {
+    targetUserId: userId,
+    actorUserId: audit.actorUserId,
+    action: 'account.password_reset',
+    result: 'success',
+  });
+
+  return { reset: true, mustChangePassword: true };
+}
+
 export const userLifecycleService = {
   deactivateUser,
   reactivateUser,
+  resetUserPassword,
   suspendUser,
 };

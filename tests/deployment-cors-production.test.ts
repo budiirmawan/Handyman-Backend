@@ -320,11 +320,13 @@ describe('CR-HM-BE-CORS-PRODUCTION-01 — application regression', () => {
     );
   });
 
-  it('does not add or trigger a database migration', () => {
-    assert.equal(migrations.length, 450);
+  it('keeps the canonical migration registry append-only', () => {
+    // CR-HM-IAM-BOOTSTRAP-01 appended one additive migration: the one-time
+    // first-owner bootstrap state + audit vocabulary. Nothing was rewritten.
+    assert.equal(migrations.length, 451);
     assert.equal(
       migrations[migrations.length - 1].id,
-      '0451_handyman_care_communications',
+      '0452_create_iam_owner_bootstrap_state',
     );
   });
 });

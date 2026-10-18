@@ -289,14 +289,22 @@ describe('CR-BE-MOB-CONTRACT-01 PART 01 — auth/session OpenAPI contract', () =
   });
 
   it('never advertises a refresh token, a refresh endpoint, or a sessionId', () => {
-    // Only the three session routes exist in the runtime auth router; the
-    // contract must not publish a token refresh/rotation path.
+    // Only the session routes plus the self-service password change exist in
+    // the runtime auth router; the contract must not publish a token
+    // refresh/rotation path.
     const authPaths = Object.keys(spec.paths ?? {}).filter((p) =>
       p.startsWith('/auth/'),
     );
     assert.deepEqual(
       authPaths.sort(),
-      ['/auth/audit-events', '/auth/login', '/auth/logout', '/auth/me', '/auth/me/buildings'],
+      [
+        '/auth/audit-events',
+        '/auth/login',
+        '/auth/logout',
+        '/auth/me',
+        '/auth/me/buildings',
+        '/auth/password',
+      ],
       'no refresh/extra auth route may be documented',
     );
     assert.ok(

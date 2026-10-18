@@ -12,6 +12,7 @@ import type {
   NewUser,
   PublicUser,
   UpdateUserWhatsAppContactInput,
+  UserStatus,
 } from './user.types';
 
 /**
@@ -40,6 +41,39 @@ export async function createUser(input: CreateUserInput): Promise<PublicUser> {
 
   const record = await userRepository.createUser(newUser);
   return toPublicUser(record);
+}
+
+export type ListUsersInput = {
+  email?: string;
+  status?: UserStatus;
+  limit: number;
+  offset: number;
+};
+
+export type ListUsersResult = {
+  items: PublicUser[];
+  total: number;
+};
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — bounded user listing behind `user.read`.
+ * Emails are normalized with the same identity rule used at creation, so the
+ * lookup is exact and case-insensitive by construction.
+ */
+export async function listUsers(
+  input: ListUsersInput,
+): Promise<ListUsersResult> {
+  const result = await userRepository.listUsers({
+    email: input.email === undefined ? undefined : normalizeEmail(input.email),
+    status: input.status,
+    limit: input.limit,
+    offset: input.offset,
+  });
+
+  return {
+    items: result.items.map(toPublicUser),
+    total: result.total,
+  };
 }
 
 export async function getUserById(id: string): Promise<PublicUser> {
@@ -152,5 +186,6 @@ export async function updateUserWhatsAppContact(
 export const userService = {
   createUser,
   getUserById,
+  listUsers,
   updateUserWhatsAppContact,
 };

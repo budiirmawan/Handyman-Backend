@@ -1,5 +1,9 @@
 import { AppError } from '../../shared/errors';
 import {
+  parsePagination,
+  type PaginationParams,
+} from '../../shared/pagination';
+import {
   USER_STATUSES,
   isUserStatus,
   isUserWhatsAppConsentAction,
@@ -53,6 +57,92 @@ export function parseCreateUserBody(body: unknown): CreateUserInput {
     displayName,
     ...(status === undefined ? {} : { status }),
   };
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — bounded account listing query.
+ *
+ * Pagination is always applied (default page 1, pageSize 50, maximum 200) so
+ * the management surface can never load an unbounded identity table.
+ */
+export type ListUsersQuery = PaginationParams & {
+  email?: string;
+  status?: UserStatus;
+};
+
+export function parseListUsersQuery(
+  query: Record<string, unknown>,
+): ListUsersQuery {
+  const details: ValidationDetail[] = [];
+  let email: string | undefined;
+  let status: UserStatus | undefined;
+
+  if (query.email !== undefined) {
+    if (typeof query.email !== 'string' || query.email.trim() === '') {
+      details.push({
+        field: 'email',
+        message: 'email must be a non-empty string.',
+      });
+    } else {
+      const normalized = query.email.trim().toLowerCase();
+      if (!isValidEmail(normalized)) {
+        details.push({
+          field: 'email',
+          message: 'email must be a valid email address.',
+        });
+      } else {
+        email = normalized;
+      }
+    }
+  }
+
+  if (query.status !== undefined) {
+    if (!isUserStatus(query.status)) {
+      details.push({
+        field: 'status',
+        message: `status must be one of: ${USER_STATUSES.join(', ')}.`,
+      });
+    } else {
+      status = query.status;
+    }
+  }
+
+  if (details.length > 0) {
+    throw AppError.validation('Request validation failed.', details);
+  }
+
+  return {
+    ...parsePagination(query),
+    ...(email === undefined ? {} : { email }),
+    ...(status === undefined ? {} : { status }),
+  };
+}
+
+/**
+ * Parses the administrative password-reset body. The password POLICY is
+ * enforced by the existing credential service (bcrypt + policy error), never
+ * duplicated here; only the request shape is checked.
+ */
+export function parsePasswordResetBody(body: unknown): {
+  newPassword: string;
+} {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'body', message: 'Request body must be a JSON object.' },
+    ]);
+  }
+
+  const source = body as Record<string, unknown>;
+  if (typeof source.newPassword !== 'string' || source.newPassword === '') {
+    throw AppError.validation('Request validation failed.', [
+      {
+        field: 'newPassword',
+        message: 'newPassword is required and must be a string.',
+      },
+    ]);
+  }
+
+  return { newPassword: source.newPassword };
 }
 
 /**

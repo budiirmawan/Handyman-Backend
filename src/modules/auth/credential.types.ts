@@ -23,4 +23,9 @@ export type CreateCredentialInput = {
 export type UpdatePasswordInput = {
   passwordHash: string;
   passwordChangedAt: Date;
+  /**
+   * CR-HM-IAM-BOOTSTRAP-01 — explicit post-reset state. Omitted keeps the
+   * stored value unchanged (historical `updatePassword` semantics).
+   */
+  mustChangePassword?: boolean;
 };

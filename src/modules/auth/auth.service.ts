@@ -10,13 +10,17 @@ import {
 } from '../users';
 import { authRateLimitedError, invalidCredentialsError } from './auth.errors';
 import { credentialRepository } from './credential.repository';
+import { credentialService } from './credential.service';
 import {
   isLoginRateLimited,
   recordLoginFailure,
   recordLoginSuccess,
 } from './login-rate-limit';
 import { passwordService } from './password.service';
-import { createSessionForUser } from './session.service';
+import {
+  createSessionForUser,
+  revokeOtherSessionsForUser,
+} from './session.service';
 import type { SessionResult } from './session.types';
 
 export type LoginInput = {
@@ -104,6 +108,55 @@ function recordLoginFailureAudit(
   });
 }
 
+export type ChangePasswordInput = {
+  userId: string;
+  sessionId: string;
+  currentPassword: string;
+  newPassword: string;
+};
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — authenticated self-service password change.
+ *
+ * Verifies the CURRENT password first (the credential service returns
+ * INVALID_PASSWORD on mismatch, never distinguishing unknown users), applies
+ * the existing password policy + bcrypt, then revokes every OTHER session so a
+ * stolen token cannot survive a password change. The calling session stays
+ * valid. Only ids/codes are audited.
+ */
+export async function changePassword(
+  input: ChangePasswordInput,
+  audit: AuditRequestContext = {},
+): Promise<{ changed: true }> {
+  await credentialService.changeOwnPassword(
+    input.userId,
+    input.currentPassword,
+    input.newPassword,
+  );
+
+  await revokeOtherSessionsForUser(input.userId, input.sessionId);
+
+  await recordEvent({
+    eventType: 'PASSWORD_CHANGED',
+    outcome: 'SUCCESS',
+    userId: input.userId,
+    sessionId: input.sessionId,
+    requestId: audit.requestId ?? null,
+    ipAddress: audit.ipAddress ?? null,
+    userAgent: audit.userAgent ?? null,
+  });
+
+  logger.info('Password changed', {
+    userId: input.userId,
+    sessionId: input.sessionId,
+    operation: 'auth.change_password',
+    result: 'success',
+  });
+
+  return { changed: true };
+}
+
 export const authService = {
+  changePassword,
   login,
 };

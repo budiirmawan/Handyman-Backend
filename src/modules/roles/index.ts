@@ -1,5 +1,7 @@
 export {
+  lastOwnerRoleRequiredError,
   roleAlreadyAssignedError,
+  roleAssignmentNotFoundError,
   roleCodeAlreadyExistsError,
   roleInactiveError,
   roleNotFoundError,
@@ -13,6 +15,7 @@ export {
   getRoleById,
   listRoles,
   listRolesForUser,
+  revokeRoleFromUser,
   roleService,
   toPublicRole,
 } from './role.service';

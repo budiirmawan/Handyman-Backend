@@ -1,5 +1,6 @@
 export {
   invalidAccountStateError,
+  privilegedAccountResetDeniedError,
   userEmailAlreadyExistsError,
   userNotFoundError,
   userWhatsAppPhoneAlreadyExistsError,
@@ -8,6 +9,7 @@ export {
 export {
   deactivateUser,
   reactivateUser,
+  resetUserPassword,
   suspendUser,
   userLifecycleService,
 } from './user-lifecycle.service';
@@ -19,6 +21,7 @@ export { userRepository } from './user.repository';
 export {
   createUser,
   getUserById,
+  listUsers,
   normalizeDisplayName,
   normalizeEmail,
   updateUserWhatsAppContact,
@@ -38,6 +41,8 @@ export {
   isValidEmail,
   isValidUuid,
   parseCreateUserBody,
+  parseListUsersQuery,
+  parsePasswordResetBody,
   parseUpdateUserWhatsAppContactBody,
   parseUserIdParam,
 } from './user.validation';
@@ -51,5 +56,9 @@ export type {
   UserStatus,
   UserWhatsAppConsentAction,
 } from './user.types';
+export type { UserPasswordResetResult } from './user-lifecycle.service';
 
-export type { ValidationDetail } from './user.validation';
+export type {
+  ListUsersQuery,
+  ValidationDetail,
+} from './user.validation';

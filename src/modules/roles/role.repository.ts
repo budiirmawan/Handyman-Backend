@@ -148,6 +148,40 @@ async function findActiveAssignment(
   return row ? mapAssignmentRow(row) : null;
 }
 
+async function revokeAssignment(
+  userId: string,
+  roleId: string,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `UPDATE user_role_assignments
+        SET status = 'REVOKED', updated_at = NOW()
+      WHERE user_id = $1 AND role_id = $2 AND status = 'ACTIVE'`,
+    [userId, roleId],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Counts ACTIVE assignments of a role, optionally excluding one user. Used to
+ * refuse removal of the last active PLATFORM_ADMIN.
+ */
+async function countActiveAssignments(
+  roleId: string,
+  excludeUserId?: string,
+): Promise<number> {
+  const result = await getPool().query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM user_role_assignments
+      WHERE role_id = $1
+        AND status = 'ACTIVE'
+        AND ($2::uuid IS NULL OR user_id <> $2::uuid)`,
+    [roleId, excludeUserId ?? null],
+  );
+
+  return Number(result.rows[0]?.count ?? '0');
+}
+
 async function listActiveRolesForUser(userId: string): Promise<RoleRecord[]> {
   const result = await getPool().query<RoleRow>(
     `SELECT
@@ -169,6 +203,7 @@ async function listActiveRolesForUser(userId: string): Promise<RoleRecord[]> {
 }
 
 export const roleRepository = {
+  countActiveAssignments,
   createAssignment,
   createRole,
   findActiveAssignment,
@@ -176,5 +211,6 @@ export const roleRepository = {
   findByCode,
   listActiveRolesForUser,
   listRoles,
+  revokeAssignment,
   updateStatus,
 };

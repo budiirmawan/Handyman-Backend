@@ -70,10 +70,18 @@ async function updatePassword(
 ): Promise<CredentialRecord | null> {
   const result = await getPool().query<CredentialRow>(
     `UPDATE user_credentials
-     SET password_hash = $2, password_changed_at = $3, updated_at = NOW()
+     SET password_hash = $2,
+         password_changed_at = $3,
+         must_change_password = COALESCE($4, must_change_password),
+         updated_at = NOW()
      WHERE user_id = $1
      RETURNING ${CREDENTIAL_SELECT}`,
-    [userId, input.passwordHash, input.passwordChangedAt],
+    [
+      userId,
+      input.passwordHash,
+      input.passwordChangedAt,
+      input.mustChangePassword ?? null,
+    ],
   );
 
   const row = result.rows[0];

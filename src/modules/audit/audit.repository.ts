@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getPool } from '../../database';
+import type { PoolClient } from 'pg';
 import type {
   AuditEventRecord,
   AuditEventType,
@@ -55,8 +56,10 @@ function mapAuditRow(row: AuditEventRow): AuditEventRecord {
 
 export async function insertAuditEvent(
   input: RecordAuditEventInput,
+  client?: PoolClient,
 ): Promise<AuditEventRecord> {
-  const result = await getPool().query<AuditEventRow>(
+  const queryable = client ?? getPool();
+  const result = await queryable.query<AuditEventRow>(
     `INSERT INTO authentication_audit_events
        (id, event_type, outcome, user_id, actor_user_id, session_id, request_id, ip_address, user_agent, metadata)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::jsonb, '{}'::jsonb))

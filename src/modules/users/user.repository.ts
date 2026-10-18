@@ -124,10 +124,88 @@ async function updateWhatsAppContact(
   return row ? mapUserRow(row) : null;
 }
 
+/**
+ * True when the user currently holds the given ACTIVE role code. Used for the
+ * owner-target password-reset guard without importing the roles module.
+ */
+async function hasActiveRole(userId: string, roleCode: string): Promise<boolean> {
+  const result = await getPool().query<{ present: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+         FROM user_role_assignments ura
+         JOIN roles r ON r.id = ura.role_id
+        WHERE ura.user_id = $1
+          AND ura.status = 'ACTIVE'
+          AND r.status = 'ACTIVE'
+          AND r.code = $2
+     ) AS present`,
+    [userId, roleCode],
+  );
+
+  return result.rows[0]?.present === true;
+}
+
+export type ListUsersFilters = {
+  email?: string;
+  status?: UserStatus;
+  limit: number;
+  offset: number;
+};
+
+export type ListUsersResult = {
+  items: UserRecord[];
+  total: number;
+};
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — bounded account listing for the authenticated
+ * user-management surface. Filtering is exact on the normalized email and/or
+ * status; ordering is deterministic (newest first, id tie-break).
+ */
+async function listUsers(filters: ListUsersFilters): Promise<ListUsersResult> {
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+
+  if (filters.email !== undefined) {
+    values.push(filters.email);
+    conditions.push(`email = $${values.length}`);
+  }
+
+  if (filters.status !== undefined) {
+    values.push(filters.status);
+    conditions.push(`status = $${values.length}`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countResult = await getPool().query<{ total: string }>(
+    `SELECT count(*)::text AS total FROM users ${where}`,
+    values,
+  );
+
+  const limitIndex = values.length + 1;
+  const offsetIndex = values.length + 2;
+  const result = await getPool().query<UserRow>(
+    `SELECT ${USER_SELECT}
+       FROM users
+       ${where}
+      ORDER BY created_at DESC, id ASC
+      LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+    [...values, filters.limit, filters.offset],
+  );
+
+  return {
+    items: result.rows.map(mapUserRow),
+    total: Number(countResult.rows[0]?.total ?? '0'),
+  };
+}
+
 export const userRepository = {
   createUser,
   findById,
   findByEmail,
+  hasActiveRole,
+  listUsers,
   updateStatus,
   updateWhatsAppContact,
 };

@@ -116,9 +116,33 @@ export async function revokeActiveSessionsForUser(userId: string): Promise<void>
   }
 }
 
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 — revokes every OTHER active session for the user
+ * after a self-service password change, leaving the current session usable.
+ */
+export async function revokeOtherSessionsForUser(
+  userId: string,
+  currentSessionId: string,
+): Promise<void> {
+  const count = await sessionRepository.revokeActiveByUserIdExcept(
+    userId,
+    currentSessionId,
+    new Date(),
+  );
+
+  if (count > 0) {
+    logger.info('Other sessions revoked after password change', {
+      userId,
+      operation: 'session.revoke_others',
+      result: 'success',
+    });
+  }
+}
+
 export const sessionService = {
   createSessionForUser,
   resolveSessionContext,
   revokeActiveSessionsForUser,
+  revokeOtherSessionsForUser,
   revokeSessionById,
 };

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  changePasswordHandler,
   loginHandler,
   logoutHandler,
   meHandler,
@@ -11,6 +12,11 @@ export function createAuthRouter(): Router {
 
   router.post('/auth/login', loginHandler);
   router.get('/auth/me', authenticationMiddleware, meHandler);
+  router.post(
+    '/auth/password',
+    authenticationMiddleware,
+    changePasswordHandler,
+  );
   router.post('/auth/logout', authenticationMiddleware, logoutHandler);
 
   return router;

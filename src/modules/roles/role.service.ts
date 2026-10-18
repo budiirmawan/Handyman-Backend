@@ -1,6 +1,8 @@
 import { userNotFoundError, userRepository } from '../users';
 import {
+  lastOwnerRoleRequiredError,
   roleAlreadyAssignedError,
+  roleAssignmentNotFoundError,
   roleCodeAlreadyExistsError,
   roleInactiveError,
   roleNotFoundError,
@@ -82,6 +84,51 @@ export async function assignRoleToUser(
 }
 
 /**
+ * CR-HM-IAM-BOOTSTRAP-01 — revokes one ACTIVE role assignment.
+ *
+ * The assignment must currently be ACTIVE (404 otherwise). The LAST active
+ * PLATFORM_ADMIN assignment is protected: without it the installation would
+ * have no authority to manage identity or roles. Assign a second owner before
+ * removing the first.
+ */
+export async function revokeRoleFromUser(
+  userId: string,
+  roleId: string,
+): Promise<PublicRole> {
+  const user = await userRepository.findById(userId);
+  if (!user) {
+    throw userNotFoundError();
+  }
+
+  const role = await roleRepository.findById(roleId);
+  if (!role) {
+    throw roleNotFoundError();
+  }
+
+  const existing = await roleRepository.findActiveAssignment(userId, roleId);
+  if (!existing) {
+    throw roleAssignmentNotFoundError();
+  }
+
+  if (role.code === 'PLATFORM_ADMIN') {
+    const remaining = await roleRepository.countActiveAssignments(
+      roleId,
+      userId,
+    );
+    if (remaining === 0) {
+      throw lastOwnerRoleRequiredError();
+    }
+  }
+
+  const revoked = await roleRepository.revokeAssignment(userId, roleId);
+  if (!revoked) {
+    throw roleAssignmentNotFoundError();
+  }
+
+  return toPublicRole(role);
+}
+
+/**
  * Lists the ACTIVE roles currently assigned to a user.
  */
 export async function listRolesForUser(userId: string): Promise<PublicRole[]> {
@@ -100,4 +147,5 @@ export const roleService = {
   getRoleById,
   listRoles,
   listRolesForUser,
+  revokeRoleFromUser,
 };
