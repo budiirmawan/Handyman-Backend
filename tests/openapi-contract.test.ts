@@ -122,6 +122,42 @@ describe('OpenAPI contract foundation (docs/api/openapi.yaml)', () => {
     }
   });
 
+  it('documents the governed IAM invitation, role, Building, lifecycle and audit contract', () => {
+    const paths = spec.paths as Record<string, Record<string, Record<string, unknown>>>;
+    const schemas = (spec.components as { schemas: Record<string, Record<string, unknown>> }).schemas;
+
+    assert.equal(paths['/invitations'].post['x-required-permission'], 'user.manage');
+    assert.equal(paths['/invitations'].get['x-required-permission'], 'user.manage');
+    assert.equal(paths['/invitations/{id}'].get['x-required-permission'], 'user.manage');
+    assert.deepEqual(paths['/invitations/validate'].post.security, []);
+    assert.deepEqual(paths['/invitations/accept'].post.security, []);
+    assert.equal(paths['/invitations/accept'].post['x-required-permission'], undefined);
+
+    const invitationCreated = schemas.InvitationCreated.properties as Record<string, unknown>;
+    assert.ok(invitationCreated.invitationToken, 'create response discloses the token once');
+    assert.ok(invitationCreated.delivery, 'delivery availability is explicit');
+    const publicInvitation = schemas.PublicInvitation.properties as Record<string, unknown>;
+    assert.equal(publicInvitation.invitationToken, undefined);
+    assert.equal(publicInvitation.tokenHash, undefined);
+    assert.deepEqual(
+      (publicInvitation.status as { enum: string[] }).enum,
+      ['PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED'],
+    );
+
+    assert.equal(paths['/users/{userId}/roles'].post['x-required-permission'], 'role.manage');
+    assert.equal(paths['/users/{userId}/roles/{roleId}'].delete['x-required-permission'], 'role.manage');
+    assert.equal(paths['/users/{userId}/buildings'].post['x-required-permission'], 'building.manage');
+    assert.equal(paths['/users/{userId}/buildings'].get['x-required-permission'], 'building.read');
+    assert.equal(paths['/users/{userId}/buildings/{buildingId}'].delete['x-required-permission'], 'building.manage');
+    assert.equal(paths['/users/{userId}/suspend'].post['x-required-permission'], 'user.manage');
+    assert.equal(paths['/users/{userId}/reactivate'].post['x-required-permission'], 'user.manage');
+    assert.equal(paths['/auth/audit-events'].get['x-required-permission'], 'auth.audit.read');
+
+    const auditEvents = schemas.AuditEvent.properties as Record<string, { enum?: string[] }>;
+    assert.ok(auditEvents.eventType.enum?.includes('ROLE_ASSIGNED'));
+    assert.ok(auditEvents.eventType.enum?.includes('BUILDING_REVOKED'));
+  });
+
   it('matches the real protected/public behavior of documented endpoints', async () => {
     const request = api();
 

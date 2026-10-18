@@ -1,3 +1,6 @@
+import type { PoolClient } from 'pg';
+import { withTransaction } from '../../database';
+import { recordEvent, type AuditRequestContext } from '../audit';
 import { userNotFoundError, userRepository } from '../users';
 import {
   AUTHORITY_DEFINING_PERMISSIONS,
@@ -9,6 +12,7 @@ import {
   roleAssignmentNotFoundError,
   privilegedRoleAssignmentDeniedError,
   roleCodeAlreadyExistsError,
+  selfRoleAssignmentDeniedError,
   roleInactiveError,
   roleNotFoundError,
 } from './role.errors';
@@ -58,13 +62,13 @@ export async function listRoles(): Promise<PublicRole[]> {
 }
 
 /**
- * CR-HM-IAM-BOOTSTRAP-01 HARDENING — privilege-escalation guard for role
- * mutations.
+ * CR-HM-IAM-BOOTSTRAP-01 / CR-HM-BE-IAM-ADMIN-02 — privilege-escalation
+ * guard for role mutations.
  *
  * A role is "privileged" when it IS the owner role or when it grants an
- * authority-defining permission (`role.manage` / `permission.manage`). Only an
- * owner may assign or revoke such a role, so an administrator who somehow
- * received `role.manage` cannot promote themselves or anyone else to owner.
+ * identity/Building-administration permission (role, permission, user or
+ * Building management). Only an owner may assign or revoke such a role, so a
+ * delegated `role.manage` holder cannot promote themselves or others.
  *
  * `actorUserId` is optional only for trusted in-process callers (seeding and
  * tests); every HTTP handler passes the authenticated actor, and a missing
@@ -73,6 +77,7 @@ export async function listRoles(): Promise<PublicRole[]> {
 async function assertPrivilegedRoleMutationAuthorized(
   role: RoleRecord,
   actorUserId?: string,
+  client?: PoolClient,
 ): Promise<void> {
   if (!actorUserId) {
     return;
@@ -81,7 +86,7 @@ async function assertPrivilegedRoleMutationAuthorized(
   const grantsAuthority =
     role.code === PROTECTED_ROLE_CODE ||
     (
-      await roleRepository.listActivePermissionCodesForRole(role.id)
+      await roleRepository.listActivePermissionCodesForRole(role.id, client)
     ).some((code) => AUTHORITY_DEFINING_PERMISSIONS.includes(code));
 
   if (!grantsAuthority) {
@@ -91,6 +96,7 @@ async function assertPrivilegedRoleMutationAuthorized(
   const actorIsOwner = await userRepository.hasActiveRole(
     actorUserId,
     PROTECTED_ROLE_CODE,
+    client,
   );
   if (!actorIsOwner) {
     throw privilegedRoleAssignmentDeniedError();
@@ -102,33 +108,55 @@ async function assertPrivilegedRoleMutationAuthorized(
  * or inactive roles, and duplicate active assignments. Privileged roles
  * additionally require an owner actor.
  */
+const ROLE_MUTATION_LOCK = 724196034;
+
 export async function assignRoleToUser(
   userId: string,
   roleId: string,
   actorUserId?: string,
+  audit: AuditRequestContext = {},
 ): Promise<PublicRole> {
-  const user = await userRepository.findById(userId);
-  if (!user) {
-    throw userNotFoundError();
-  }
+  const role = await withTransaction(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [ROLE_MUTATION_LOCK]);
 
-  const role = await roleRepository.findById(roleId);
-  if (!role) {
-    throw roleNotFoundError();
-  }
+    const user = await userRepository.findById(userId, client);
+    if (!user) {
+      throw userNotFoundError();
+    }
 
-  if (role.status !== 'ACTIVE') {
-    throw roleInactiveError();
-  }
+    const roleRecord = await roleRepository.findById(roleId, client);
+    if (!roleRecord) {
+      throw roleNotFoundError();
+    }
 
-  const existing = await roleRepository.findActiveAssignment(userId, roleId);
-  if (existing) {
-    throw roleAlreadyAssignedError();
-  }
+    if (roleRecord.status !== 'ACTIVE') {
+      throw roleInactiveError();
+    }
 
-  await assertPrivilegedRoleMutationAuthorized(role, actorUserId);
+    const existing = await roleRepository.findActiveAssignment(userId, roleId, client);
+    if (existing) {
+      throw roleAlreadyAssignedError();
+    }
 
-  await roleRepository.createAssignment(userId, roleId);
+    await assertPrivilegedRoleMutationAuthorized(roleRecord, actorUserId, client);
+    if (actorUserId && actorUserId === userId) {
+      throw selfRoleAssignmentDeniedError();
+    }
+    await roleRepository.createAssignment(userId, roleId, client);
+    return roleRecord;
+  });
+
+  await recordEvent({
+    eventType: 'ROLE_ASSIGNED',
+    outcome: 'SUCCESS',
+    userId,
+    actorUserId: actorUserId ?? null,
+    requestId: audit.requestId ?? null,
+    ipAddress: audit.ipAddress ?? null,
+    userAgent: audit.userAgent ?? null,
+    metadata: { roleId: role.id, roleCode: role.code },
+  });
+
   return toPublicRole(role);
 }
 
@@ -144,38 +172,59 @@ export async function revokeRoleFromUser(
   userId: string,
   roleId: string,
   actorUserId?: string,
+  audit: AuditRequestContext = {},
 ): Promise<PublicRole> {
-  const user = await userRepository.findById(userId);
-  if (!user) {
-    throw userNotFoundError();
-  }
+  const role = await withTransaction(async (client) => {
+    // Serializes Owner assignment revocations so concurrent requests cannot
+    // both observe another active Owner and remove the last usable Owner.
+    await client.query('SELECT pg_advisory_xact_lock($1)', [ROLE_MUTATION_LOCK]);
 
-  const role = await roleRepository.findById(roleId);
-  if (!role) {
-    throw roleNotFoundError();
-  }
-
-  const existing = await roleRepository.findActiveAssignment(userId, roleId);
-  if (!existing) {
-    throw roleAssignmentNotFoundError();
-  }
-
-  await assertPrivilegedRoleMutationAuthorized(role, actorUserId);
-
-  if (role.code === PROTECTED_ROLE_CODE) {
-    const remaining = await roleRepository.countActiveAssignments(
-      roleId,
-      userId,
-    );
-    if (remaining === 0) {
-      throw lastOwnerRoleRequiredError();
+    const user = await userRepository.findById(userId, client);
+    if (!user) {
+      throw userNotFoundError();
     }
-  }
 
-  const revoked = await roleRepository.revokeAssignment(userId, roleId);
-  if (!revoked) {
-    throw roleAssignmentNotFoundError();
-  }
+    const roleRecord = await roleRepository.findById(roleId, client);
+    if (!roleRecord) {
+      throw roleNotFoundError();
+    }
+
+    const existing = await roleRepository.findActiveAssignment(userId, roleId, client);
+    if (!existing) {
+      throw roleAssignmentNotFoundError();
+    }
+
+    await assertPrivilegedRoleMutationAuthorized(roleRecord, actorUserId, client);
+
+    if (roleRecord.code === PROTECTED_ROLE_CODE) {
+      const remaining = await roleRepository.countActiveAssignments(
+        roleId,
+        userId,
+        client,
+      );
+      if (remaining === 0) {
+        throw lastOwnerRoleRequiredError();
+      }
+    }
+
+    const revoked = await roleRepository.revokeAssignment(userId, roleId, client);
+    if (!revoked) {
+      throw roleAssignmentNotFoundError();
+    }
+
+    return roleRecord;
+  });
+
+  await recordEvent({
+    eventType: 'ROLE_REVOKED',
+    outcome: 'SUCCESS',
+    userId,
+    actorUserId: actorUserId ?? null,
+    requestId: audit.requestId ?? null,
+    ipAddress: audit.ipAddress ?? null,
+    userAgent: audit.userAgent ?? null,
+    metadata: { roleId: role.id, roleCode: role.code },
+  });
 
   return toPublicRole(role);
 }

@@ -37,7 +37,7 @@ const ACCOUNT_LIFECYCLE_LOCK = 724196033;
  */
 async function transition(
   userId: string,
-  from: UserStatus,
+  from: UserStatus | readonly UserStatus[],
   to: UserStatus,
   eventType: AuditEventType,
   revokeSessions: boolean,
@@ -60,7 +60,8 @@ async function transition(
       throw userNotFoundError();
     }
 
-    if (user.status !== from) {
+    const allowedFrom = Array.isArray(from) ? from : [from];
+    if (!allowedFrom.includes(user.status)) {
       throw invalidAccountStateError();
     }
 
@@ -96,12 +97,12 @@ async function transition(
     if (!stored) {
       throw userNotFoundError();
     }
+    if (revokeSessions) {
+      // Status and session invalidation commit (or roll back) together.
+      await sessionService.revokeActiveSessionsForUser(userId, client);
+    }
     return stored;
   });
-
-  if (revokeSessions) {
-    await sessionService.revokeActiveSessionsForUser(userId);
-  }
 
   await recordEvent({
     eventType,
@@ -139,12 +140,19 @@ export async function suspendUser(
   return transition(userId, 'ACTIVE', 'SUSPENDED', 'ACCOUNT_SUSPENDED', true, audit);
 }
 
-/** INACTIVE → ACTIVE (does not restore old sessions). */
+/** INACTIVE/SUSPENDED → ACTIVE (does not restore old sessions). */
 export async function reactivateUser(
   userId: string,
   audit?: AuditRequestContext,
 ): Promise<PublicUser> {
-  return transition(userId, 'INACTIVE', 'ACTIVE', 'ACCOUNT_REACTIVATED', false, audit);
+  return transition(
+    userId,
+    ['INACTIVE', 'SUSPENDED'],
+    'ACTIVE',
+    'ACCOUNT_REACTIVATED',
+    false,
+    audit,
+  );
 }
 
 export type UserPasswordResetResult = {

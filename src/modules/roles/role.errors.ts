@@ -40,6 +40,14 @@ export function roleAssignmentNotFoundError(): AppError {
   });
 }
 
+export function selfRoleAssignmentDeniedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.SELF_ROLE_ASSIGNMENT_DENIED,
+    message: 'Users cannot assign roles to themselves. A separate authorized administrator must assign the role.',
+    statusCode: 403,
+  });
+}
+
 /**
  * A system invariant, not a privilege: the PLATFORM_ADMIN role is the only
  * role that can administer identity/authority, so the last ACTIVE assignment

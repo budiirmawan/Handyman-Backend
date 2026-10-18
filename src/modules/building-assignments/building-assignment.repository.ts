@@ -95,6 +95,22 @@ async function listByUser(userId: string): Promise<UserBuildingAssignmentRecord[
   return result.rows.map(mapAssignmentRow);
 }
 
+async function listByUserInBuildings(
+  userId: string,
+  buildingIds: string[],
+): Promise<UserBuildingAssignmentRecord[]> {
+  if (buildingIds.length === 0) {
+    return [];
+  }
+  const result = await getPool().query<AssignmentRow>(
+    `SELECT ${ASSIGNMENT_SELECT} FROM user_building_assignments
+     WHERE user_id = $1 AND building_id = ANY($2::uuid[])
+     ORDER BY assigned_at DESC`,
+    [userId, buildingIds],
+  );
+  return result.rows.map(mapAssignmentRow);
+}
+
 async function listActiveByUser(
   userId: string,
 ): Promise<UserBuildingAssignmentRecord[]> {
@@ -141,5 +157,6 @@ export const buildingAssignmentRepository = {
   listActiveByUser,
   listByBuilding,
   listByUser,
+  listByUserInBuildings,
   updateStatus,
 };

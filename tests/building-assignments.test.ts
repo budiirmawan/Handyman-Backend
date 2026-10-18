@@ -12,13 +12,14 @@ import {
   buildingAssignmentService,
   resolveBuildingsForUser,
 } from '../src/modules/building-assignments';
-import { createAdminSession, createPlainSession } from './helpers/access';
+import { createAdminUser, createPlainSession } from './helpers/access';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminToken = '';
+let adminUserId = '';
 
 before(async () => {
   const db = await ensureTestDatabase();
@@ -31,7 +32,9 @@ before(async () => {
   await pool.query(
     'TRUNCATE users, roles, clients, properties, buildings, user_building_assignments CASCADE',
   );
-  adminToken = await createAdminSession();
+  const admin = await createAdminUser();
+  adminToken = admin.token;
+  adminUserId = admin.userId;
   database = db;
 });
 
@@ -81,6 +84,10 @@ async function createBuilding(
   });
 }
 
+async function grantAdminBuildingScope(buildingId: string) {
+  await buildingAssignmentService.createAssignment(adminUserId, { buildingId });
+}
+
 async function createUser() {
   return userService.createUser({
     email: `user-${randomUUID().slice(0, 8).toLowerCase()}@example.com`,
@@ -97,6 +104,7 @@ describe('POST /api/v1/users/:userId/buildings', () => {
     const { property } = await createClientAndProperty();
     const building = await createBuilding(property.id);
     const user = await createUser();
+    await grantAdminBuildingScope(building.id);
 
     const response = await api()
       .post(`/api/v1/users/${user.id}/buildings`)
@@ -115,6 +123,7 @@ describe('POST /api/v1/users/:userId/buildings', () => {
     }
     const { property } = await createClientAndProperty();
     const building = await createBuilding(property.id);
+    await grantAdminBuildingScope(building.id);
     const response = await api()
       .post(`/api/v1/users/${randomUUID()}/buildings`)
       .set(authHeaders())
@@ -123,7 +132,7 @@ describe('POST /api/v1/users/:userId/buildings', () => {
     assert.equal(response.body.error.code, 'USER_NOT_FOUND');
   });
 
-  it('rejects an unknown building', async (t) => {
+  it('does not disclose whether an out-of-scope building exists', async (t) => {
     if (!requireDatabase(t)) {
       return;
     }
@@ -132,11 +141,11 @@ describe('POST /api/v1/users/:userId/buildings', () => {
       .post(`/api/v1/users/${user.id}/buildings`)
       .set(authHeaders())
       .send({ buildingId: randomUUID() });
-    assert.equal(response.status, 404);
-    assert.equal(response.body.error.code, 'BUILDING_NOT_FOUND');
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, 'BUILDING_ACCESS_DENIED');
   });
 
-  it('rejects assigning an INACTIVE building', async (t) => {
+  it('does not disclose the status of an out-of-scope inactive building', async (t) => {
     if (!requireDatabase(t)) {
       return;
     }
@@ -147,8 +156,8 @@ describe('POST /api/v1/users/:userId/buildings', () => {
       .post(`/api/v1/users/${user.id}/buildings`)
       .set(authHeaders())
       .send({ buildingId: building.id });
-    assert.equal(response.status, 400);
-    assert.equal(response.body.error.code, 'BUILDING_NOT_AVAILABLE');
+    assert.equal(response.status, 403);
+    assert.equal(response.body.error.code, 'BUILDING_ACCESS_DENIED');
   });
 
   it('rejects a duplicate ACTIVE assignment for the same user + building', async (t) => {
@@ -158,6 +167,7 @@ describe('POST /api/v1/users/:userId/buildings', () => {
     const { property } = await createClientAndProperty();
     const building = await createBuilding(property.id);
     const user = await createUser();
+    await grantAdminBuildingScope(building.id);
 
     await api()
       .post(`/api/v1/users/${user.id}/buildings`)
@@ -184,6 +194,8 @@ describe('multiple buildings and cross-property support', () => {
     const buildingA = await createBuilding(property.id);
     const buildingB = await createBuilding(property.id);
     const user = await createUser();
+    await grantAdminBuildingScope(buildingA.id);
+    await grantAdminBuildingScope(buildingB.id);
 
     const a = await api()
       .post(`/api/v1/users/${user.id}/buildings`)
@@ -276,6 +288,7 @@ describe('deactivation', () => {
     const { property } = await createClientAndProperty();
     const building = await createBuilding(property.id);
     const user = await createUser();
+    await grantAdminBuildingScope(building.id);
 
     await buildingAssignmentService.createAssignment(user.id, { buildingId: building.id });
     let resolved = await resolveBuildingsForUser(user.id);
@@ -299,6 +312,7 @@ describe('deactivation', () => {
     const { property } = await createClientAndProperty();
     const building = await createBuilding(property.id);
     const user = await createUser();
+    await grantAdminBuildingScope(building.id);
     const response = await api()
       .delete(`/api/v1/users/${user.id}/buildings/${building.id}`)
       .set(authHeaders());
@@ -350,6 +364,7 @@ describe('RBAC', () => {
     const { property } = await createClientAndProperty();
     const building = await createBuilding(property.id);
     const user = await createUser();
+    await grantAdminBuildingScope(building.id);
     const response = await api()
       .post(`/api/v1/users/${user.id}/buildings`)
       .set(authHeaders())

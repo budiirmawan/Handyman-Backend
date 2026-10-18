@@ -13,6 +13,37 @@ import type {
   RecordAuditEventInput,
 } from './audit.types';
 
+const SENSITIVE_AUDIT_KEY =
+  /(password|passwd|pwd|hash|token|secret|credential|authorization|api[_-]?key)/i;
+
+/** Defense in depth for historical or future metadata accidentally containing credentials. */
+export function sanitizeAuditMetadata(
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitize = (value: unknown, key?: string, depth = 0): unknown => {
+    if (key && SENSITIVE_AUDIT_KEY.test(key)) {
+      return '[REDACTED]';
+    }
+    if (depth > 8) {
+      return '[TRUNCATED]';
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitize(item, undefined, depth + 1));
+    }
+    if (typeof value === 'object' && value !== null) {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([childKey, child]) => [
+          childKey,
+          sanitize(child, childKey, depth + 1),
+        ]),
+      );
+    }
+    return value;
+  };
+
+  return sanitize(metadata) as Record<string, unknown>;
+}
+
 export function toPublicAuditEvent(record: AuditEventRecord): PublicAuditEvent {
   return {
     id: record.id,
@@ -24,7 +55,7 @@ export function toPublicAuditEvent(record: AuditEventRecord): PublicAuditEvent {
     requestId: record.requestId,
     ipAddress: record.ipAddress,
     userAgent: record.userAgent,
-    metadata: record.metadata,
+    metadata: sanitizeAuditMetadata(record.metadata),
     createdAt: record.createdAt.toISOString(),
   };
 }

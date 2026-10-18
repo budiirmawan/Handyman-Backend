@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewRole,
@@ -80,8 +81,12 @@ async function createRole(input: NewRole): Promise<RoleRecord> {
   return mapRoleRow(result.rows[0]);
 }
 
-async function findById(id: string): Promise<RoleRecord | null> {
-  const result = await getPool().query<RoleRow>(
+async function findById(
+  id: string,
+  client?: PoolClient,
+): Promise<RoleRecord | null> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query<RoleRow>(
     `SELECT ${ROLE_SELECT} FROM roles WHERE id = $1`,
     [id],
   );
@@ -123,8 +128,10 @@ async function updateStatus(id: string, status: RoleStatus): Promise<RoleRecord 
 async function createAssignment(
   userId: string,
   roleId: string,
+  client?: PoolClient,
 ): Promise<UserRoleAssignmentRecord> {
-  const result = await getPool().query<AssignmentRow>(
+  const queryable = client ?? getPool();
+  const result = await queryable.query<AssignmentRow>(
     `INSERT INTO user_role_assignments (id, user_id, role_id)
      VALUES ($1, $2, $3)
      RETURNING ${ASSIGNMENT_SELECT}`,
@@ -137,8 +144,10 @@ async function createAssignment(
 async function findActiveAssignment(
   userId: string,
   roleId: string,
+  client?: PoolClient,
 ): Promise<UserRoleAssignmentRecord | null> {
-  const result = await getPool().query<AssignmentRow>(
+  const queryable = client ?? getPool();
+  const result = await queryable.query<AssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM user_role_assignments
      WHERE user_id = $1 AND role_id = $2 AND status = 'ACTIVE'`,
     [userId, roleId],
@@ -151,8 +160,10 @@ async function findActiveAssignment(
 async function revokeAssignment(
   userId: string,
   roleId: string,
+  client?: PoolClient,
 ): Promise<boolean> {
-  const result = await getPool().query(
+  const queryable = client ?? getPool();
+  const result = await queryable.query(
     `UPDATE user_role_assignments
         SET status = 'REVOKED', updated_at = NOW()
       WHERE user_id = $1 AND role_id = $2 AND status = 'ACTIVE'`,
@@ -169,13 +180,19 @@ async function revokeAssignment(
 async function countActiveAssignments(
   roleId: string,
   excludeUserId?: string,
+  client?: PoolClient,
 ): Promise<number> {
-  const result = await getPool().query<{ count: string }>(
-    `SELECT count(*)::text AS count
-       FROM user_role_assignments
-      WHERE role_id = $1
-        AND status = 'ACTIVE'
-        AND ($2::uuid IS NULL OR user_id <> $2::uuid)`,
+  const queryable = client ?? getPool();
+  const result = await queryable.query<{ count: string }>(
+    `SELECT count(DISTINCT ura.user_id)::text AS count
+       FROM user_role_assignments ura
+       JOIN roles r ON r.id = ura.role_id
+       JOIN users u ON u.id = ura.user_id
+      WHERE ura.role_id = $1
+        AND ura.status = 'ACTIVE'
+        AND r.status = 'ACTIVE'
+        AND u.status = 'ACTIVE'
+        AND ($2::uuid IS NULL OR ura.user_id <> $2::uuid)`,
     [roleId, excludeUserId ?? null],
   );
 
@@ -190,8 +207,10 @@ async function countActiveAssignments(
  */
 async function listActivePermissionCodesForRole(
   roleId: string,
+  client?: PoolClient,
 ): Promise<string[]> {
-  const result = await getPool().query<{ code: string }>(
+  const queryable = client ?? getPool();
+  const result = await queryable.query<{ code: string }>(
     `SELECT p.code
        FROM role_permission_assignments rpa
        JOIN permissions p ON p.id = rpa.permission_id

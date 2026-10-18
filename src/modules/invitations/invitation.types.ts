@@ -8,6 +8,17 @@ export const INVITATION_STATUSES = ['PENDING', 'ACCEPTED', 'REVOKED'] as const;
 
 export type InvitationStatus = (typeof INVITATION_STATUSES)[number];
 
+/** Expiry is derived from expires_at; it is not persisted as a status value. */
+export type PublicInvitationStatus = InvitationStatus | 'EXPIRED';
+
+export const INVITATION_LIST_STATUSES = [
+  'PENDING',
+  'ACCEPTED',
+  'REVOKED',
+  'EXPIRED',
+] as const;
+export type InvitationListStatus = (typeof INVITATION_LIST_STATUSES)[number];
+
 export function isInvitationStatus(value: unknown): value is InvitationStatus {
   return (
     typeof value === 'string' &&
@@ -33,7 +44,7 @@ export type InvitationRecord = {
 export type PublicInvitation = {
   id: string;
   email: string;
-  status: InvitationStatus;
+  status: PublicInvitationStatus;
   expiresAt: string;
   invitedByUserId: string | null;
   acceptedByUserId: string | null;

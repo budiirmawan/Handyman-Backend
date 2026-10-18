@@ -144,6 +144,7 @@ export async function changePassword(
     eventType: 'PASSWORD_CHANGED',
     outcome: 'SUCCESS',
     userId: input.userId,
+    actorUserId: audit.actorUserId ?? input.userId,
     sessionId: input.sessionId,
     requestId: audit.requestId ?? null,
     ipAddress: audit.ipAddress ?? null,

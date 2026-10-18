@@ -62,7 +62,7 @@ export async function changePasswordHandler(
         currentPassword: body.currentPassword,
         newPassword: body.newPassword,
       },
-      auditContextFromRequest(req),
+      { ...auditContextFromRequest(req), actorUserId: req.auth.userId },
     );
     sendSuccess(res, result);
   } catch (error) {
