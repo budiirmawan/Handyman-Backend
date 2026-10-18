@@ -7,8 +7,8 @@ not executed against production**.
 
 - Branch: `arena/95af75ae-handyman-backend`
 - Base: `0b72d7c5bff5f978740f17191821c4b26351a25d` (`main`)
-- Commit: `PENDING`
-- Pull request: `PENDING`
+- Commit: `8101b2d90dc213c296cd3e1439ea5ca6f5b8dda1`
+- Pull request: https://github.com/budiirmawan/Handyman-Backend/pull/40 (not merged)
 
 ---
 
