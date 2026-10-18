@@ -47,3 +47,46 @@ export function privilegedAccountResetDeniedError(): AppError {
     statusCode: 403,
   });
 }
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — a protected (PLATFORM_ADMIN) account may
+ * only be transitioned, or have its credential/notification channel changed,
+ * by an actor that also holds PLATFORM_ADMIN. A `user.manage` grant alone must
+ * never let a normal administrator disable, hijack or lock out an owner.
+ */
+export function privilegedAccountProtectedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.PRIVILEGED_ACCOUNT_PROTECTED,
+    message:
+      'Only an owner may modify an account holding PLATFORM_ADMIN.',
+    statusCode: 403,
+  });
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — the last ACTIVE PLATFORM_ADMIN account
+ * cannot be deactivated or suspended (that would leave the installation with
+ * no authority at all). Assign a second owner first.
+ */
+export function lastOwnerAccountProtectedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.LAST_OWNER_ACCOUNT_PROTECTED,
+    message:
+      'The last active owner account cannot be deactivated or suspended. Assign PLATFORM_ADMIN to another account first.',
+    statusCode: 409,
+  });
+}
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — an administrator cannot apply a
+ * lifecycle transition to their own account. Self-suspension would otherwise
+ * revoke the very session used to perform it and leave no recovery path.
+ */
+export function selfAccountActionDeniedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.SELF_ACCOUNT_ACTION_DENIED,
+    message:
+      'An administrator cannot deactivate or suspend their own account.',
+    statusCode: 403,
+  });
+}

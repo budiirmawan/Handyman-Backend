@@ -70,6 +70,23 @@ export async function changePasswordHandler(
   }
 }
 
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — authentication-only status endpoint for
+ * the forced password change. Reachable while the change is still pending.
+ */
+export async function passwordStatusHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const status = await authService.getPasswordStatus(req.auth.userId);
+    sendSuccess(res, status);
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function logoutHandler(
   req: Request,
   res: Response,

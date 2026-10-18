@@ -56,8 +56,12 @@ async function createUser(
   return mapUserRow(result.rows[0]);
 }
 
-async function findById(id: string): Promise<UserRecord | null> {
-  const result = await getPool().query<UserRow>(
+async function findById(
+  id: string,
+  client?: PoolClient,
+): Promise<UserRecord | null> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query<UserRow>(
     `SELECT ${USER_SELECT} FROM users WHERE id = $1`,
     [id],
   );
@@ -83,8 +87,10 @@ async function findByEmail(
 async function updateStatus(
   id: string,
   status: UserStatus,
+  client?: PoolClient,
 ): Promise<UserRecord | null> {
-  const result = await getPool().query<UserRow>(
+  const queryable = client ?? getPool();
+  const result = await queryable.query<UserRow>(
     `UPDATE users SET status = $2, updated_at = NOW()
      WHERE id = $1
      RETURNING ${USER_SELECT}`,
@@ -128,8 +134,13 @@ async function updateWhatsAppContact(
  * True when the user currently holds the given ACTIVE role code. Used for the
  * owner-target password-reset guard without importing the roles module.
  */
-async function hasActiveRole(userId: string, roleCode: string): Promise<boolean> {
-  const result = await getPool().query<{ present: boolean }>(
+async function hasActiveRole(
+  userId: string,
+  roleCode: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query<{ present: boolean }>(
     `SELECT EXISTS (
        SELECT 1
          FROM user_role_assignments ura
@@ -200,7 +211,37 @@ async function listUsers(filters: ListUsersFilters): Promise<ListUsersResult> {
   };
 }
 
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — counts the ACTIVE holders of a role code
+ * whose ACCOUNT is also ACTIVE, optionally excluding one user. A suspended or
+ * deactivated owner assignment does not count: it cannot log in or exercise
+ * authority. Used by the account-lifecycle guard so the last USABLE owner
+ * account can never be deactivated or suspended.
+ */
+async function countActiveRoleHolders(
+  roleCode: string,
+  options: { excludeUserId?: string } = {},
+  client?: PoolClient,
+): Promise<number> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query<{ count: string }>(
+    `SELECT count(DISTINCT ura.user_id)::text AS count
+       FROM user_role_assignments ura
+       JOIN roles r ON r.id = ura.role_id
+       JOIN users u ON u.id = ura.user_id
+      WHERE ura.status = 'ACTIVE'
+        AND r.status = 'ACTIVE'
+        AND u.status = 'ACTIVE'
+        AND r.code = $1
+        AND ($2::uuid IS NULL OR ura.user_id <> $2::uuid)`,
+    [roleCode, options.excludeUserId ?? null],
+  );
+
+  return Number(result.rows[0]?.count ?? '0');
+}
+
 export const userRepository = {
+  countActiveRoleHolders,
   createUser,
   findById,
   findByEmail,

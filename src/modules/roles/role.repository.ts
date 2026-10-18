@@ -182,6 +182,29 @@ async function countActiveAssignments(
   return Number(result.rows[0]?.count ?? '0');
 }
 
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — the ACTIVE permission codes a role would
+ * grant through role_permission_assignments. Used by the assignment guard to
+ * treat any authority-defining role (not only PLATFORM_ADMIN by name) as
+ * privileged, so a role name can never become a shortcut to escalation.
+ */
+async function listActivePermissionCodesForRole(
+  roleId: string,
+): Promise<string[]> {
+  const result = await getPool().query<{ code: string }>(
+    `SELECT p.code
+       FROM role_permission_assignments rpa
+       JOIN permissions p ON p.id = rpa.permission_id
+      WHERE rpa.role_id = $1
+        AND rpa.status = 'ACTIVE'
+        AND p.status = 'ACTIVE'
+      ORDER BY p.code ASC`,
+    [roleId],
+  );
+
+  return result.rows.map((row) => row.code);
+}
+
 async function listActiveRolesForUser(userId: string): Promise<RoleRecord[]> {
   const result = await getPool().query<RoleRow>(
     `SELECT
@@ -203,6 +226,7 @@ async function listActiveRolesForUser(userId: string): Promise<RoleRecord[]> {
 }
 
 export const roleRepository = {
+  listActivePermissionCodesForRole,
   countActiveAssignments,
   createAssignment,
   createRole,

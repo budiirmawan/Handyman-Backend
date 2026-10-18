@@ -29,11 +29,22 @@ export type {
 
 export { requirePermission } from './rbac.middleware';
 
-export { authService, changePassword, login } from './auth.service';
+export {
+  authService,
+  changePassword,
+  getPasswordStatus,
+  login,
+} from './auth.service';
 export type {
   ChangePasswordInput,
   LoginInput,
+  PasswordStatus,
 } from './auth.service';
+export {
+  PASSWORD_CHANGE_ALLOWED_OPERATIONS,
+  enforcePasswordChange,
+  isPasswordChangeAllowed,
+} from './password-change.middleware';
 
 export {
   parseChangePasswordBody,

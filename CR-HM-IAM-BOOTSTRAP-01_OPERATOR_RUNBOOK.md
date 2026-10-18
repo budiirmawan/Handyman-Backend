@@ -56,8 +56,14 @@ environment variable or pipe.
 pkg update
 pkg install nodejs-lts jq curl openssh
 npm install -g @railway/cli
-railway --version
+railway --version          # must be a current release; `railway upgrade` otherwise
 railway login --browserless
+
+# `railway ssh` authenticates with an SSH key registered to your Railway
+# account (current CLI). Generate one on the phone if you do not have one:
+[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -C "termux-operator"
+railway ssh keys add --key ~/.ssh/id_ed25519.pub --name "termux-operator"
+railway ssh keys            # confirm the key is listed
 ```
 
 `railway login --browserless` prints a device-code URL. Complete it in your
@@ -91,8 +97,33 @@ Open an interactive shell **inside the running backend container**:
 
 ```bash
 railway ssh --service <backend-service> --environment production
-# If your CLI requires it: railway ssh -s <backend-service> -e production
+# Equivalent short form: railway ssh -s <backend-service> -e production
+# On a flaky mobile network use the persistent session:
+#   railway ssh --session production
 ```
+
+Two facts that this procedure depends on (verified against the Railway CLI
+documentation, 2026):
+
+- `railway ssh` uses your system SSH client and **autodetects PTY
+  allocation**: a PTY is allocated only when **both stdin and stdout are
+  terminals**. Running it from Termux with no pipes does allocate a PTY, so
+  `/dev/tty` exists. Piping input or output into it does **not** allocate a
+  PTY.
+- `railway run` / `railway shell` execute **on your phone**, not in the
+  container. They cannot reach a private Railway database and are never a
+  substitute here.
+
+**TTY preflight (mandatory).** Inside the container shell, before anything
+else:
+
+```bash
+node -e "require('fs').openSync('/dev/tty','r'); require('fs').openSync('/dev/tty','w'); console.log('TTY_OK')"
+```
+
+`TTY_OK` must print. If it throws `ENXIO`/`ENOENT`, the shell has no
+controlling terminal: **stop** — the bootstrap would fail closed by design.
+Use one of the alternatives in §3.2.
 
 Inside the container verify the Railway identity:
 
@@ -120,32 +151,57 @@ If `Schema ready` is `no`, apply the migration first (§5). If
 `Users in database` is not `0`, **stop**: this database already has accounts
 and the bootstrap will refuse.
 
-### 3.2 Safe alternative if `railway ssh` is not available
+### 3.2 Alternatives when `railway ssh` (or its PTY) is not available
 
-Use a controlled one-shot execution inside Railway only:
+Order of preference:
 
-1. Open the Railway dashboard in the phone browser.
-2. Select the production project → environment → **backend web service**.
-3. Open the service **Shell** (web terminal). This is a TTY inside the same
-   private network, so it can reach PostgreSQL without a public endpoint.
-4. Run the same `node dist/database/cli.js ...` commands there.
+1. **Persistent tmux session** — `railway ssh --session production`. Railway
+   installs tmux in the container if it is missing; the PTY is allocated the
+   same way as above, and a dropped mobile connection does not kill the
+   bootstrap prompt.
+2. **Railway dashboard web shell** — dashboard → production project →
+   environment → **backend web service** → Shell. It is a browser terminal
+   inside the same private network and always has a TTY.
+3. **Allocate a PTY explicitly** inside a non-interactive `railway ssh`
+   command (only needed if the autodetection above does not apply):
+
+   ```bash
+   railway ssh -- \
+     script -qec 'node dist/database/cli.js bootstrap-owner --email <email> --display-name "<name>"' /dev/null
+   # `script` allocates a PTY, so /dev/tty exists for the hidden prompt.
+   # Only the non-secret identity flags appear in that command line.
+   ```
+
+   The slim Debian production image ships `script` (util-linux). If it is
+   missing, use option 1 or 2 — do **not** invent a non-interactive password
+   source.
 
 Do **not** enable a PostgreSQL TCP proxy or `0.0.0.0` binding to make the
-database reachable from Termux. `railway run` from Termux executes locally and
-will not reach a private Railway database; it is not a substitute for a
-container shell.
+database reachable from Termux.
 
 ---
 
-## 4. Minimum authorized database privileges
+## 4. Database roles and minimum privileges
 
-Use the Railway PostgreSQL **Query** tab (or a `psql` session inside the
-database container) for these grants. Do not grant to `PUBLIC`.
+This procedure uses **two** database roles. They are different authorities and
+must not be conflated:
 
-The application runtime role needs only DML + connect privileges:
+| Purpose | Role | Privileges used |
+|---|---|---|
+| Migration 0452 (DDL) | privileged **migration role** — the database owner / `postgres`, or a dedicated `<migration_role>` | `CREATE ON SCHEMA public`, `ALTER TABLE` on `authentication_audit_events` (the migration replaces one CHECK constraint), `CREATE TABLE` for `iam_bootstrap_state`, write on `schema_migrations` |
+| Owner bootstrap + runtime | restricted application role — **`hm_app`** in this deployment | `CONNECT`, `USAGE` on `public`, `SELECT/INSERT/UPDATE/DELETE` on the IAM tables, `SELECT` on `schema_migrations`, sequence `USAGE` |
+
+**Migration 0452 must never run as `hm_app`.** It is deliberately not granted
+`CREATE`/`ALTER`; running `migrate` with that role fails closed (the DDL
+transaction rolls back and nothing is recorded). Conversely, the bootstrap
+does **not** need DDL: it runs as `hm_app` with only the DML below.
+
+### 4.1 Grants for the application role (`hm_app`)
+
+Run these in the Railway PostgreSQL **Query** tab (or `psql` inside the
+database service). Do not grant to `PUBLIC`.
 
 ```sql
--- Replace placeholders. Never paste the role password into chat.
 GRANT CONNECT ON DATABASE "<database_name>" TO "<runtime_role>";
 GRANT USAGE ON SCHEMA public TO "<runtime_role>";
 
@@ -164,19 +220,18 @@ GRANT SELECT ON TABLE schema_migrations TO "<runtime_role>";
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "<runtime_role>";
 ```
 
-The bootstrap additionally needs (already covered above):
+Why each bootstrap statement is covered:
 
-- `SELECT to_regclass(...)` — catalogue read,
-- `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE` — requires an UPDATE/DELETE/
-  TRUNCATE privilege on `users` (granted above),
-- `pg_advisory_xact_lock(...)` — available to all roles by default.
+- `SELECT to_regclass(...)` and `SELECT count(*) FROM users` — catalogue +
+  table read,
+- `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE` — requires an
+  `UPDATE`/`DELETE`/`TRUNCATE` privilege on `users` (granted above),
+- inserts into `user_credentials`, `roles`, `permissions`,
+  `role_permission_assignments`, `user_role_assignments`, `users`,
+  `iam_bootstrap_state` and `authentication_audit_events`,
+- `pg_advisory_xact_lock(...)` — available to every role; no grant needed.
 
-Migration `0452` requires DDL. If migrations run under a separate migration
-role, grant it `CREATE ON SCHEMA public` and table ownership/ALTER rights on
-`authentication_audit_events` (the migration replaces one CHECK constraint).
-If the current deployment uses the Railway `postgres` superuser for
-migrations, no extra grant is needed. **Do not change production credentials
-as part of this CR.**
+`bootstrap-status` needs only `SELECT` on `users` and `iam_bootstrap_state`.
 
 For tables created later, either re-run the grants or set defaults:
 
@@ -185,28 +240,90 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "<runtime_role>";
 ```
 
+**Do not change production credentials as part of this CR.**
+
 ---
 
-## 5. Apply the additive migration
+## 5. Backup, verify, then migrate (migration role)
 
-Still inside the container shell:
+### 5.1 Backup before touching the schema
+
+1. Railway dashboard → **PostgreSQL** service → **Backups** → create a
+   backup/snapshot now. Note its timestamp and confirm it reached `Completed`.
+2. Record the restore procedure and who can execute it. Bootstrap is
+   one-time; the only undo for a completed bootstrap is a restore.
+
+### 5.2 Verify the pre-migration state (read-only)
+
+Inside the container shell (this uses the runtime `hm_app` credentials already
+injected by Railway; it needs `SELECT` only):
 
 ```bash
-node dist/database/cli.js migrate
+node dist/database/cli.js status
+```
+
+Expected: the current migration count (`451` once this release is deployed and
+`0452` is pending — `452` only after §5.3). The command must not show
+`0452_create_iam_owner_bootstrap_state` as applied yet.
+
+Also confirm the empty identity state (Run in the Query tab):
+
+```sql
+SELECT (SELECT count(*) FROM users) AS users,
+       (SELECT count(*) FROM roles) AS roles,
+       (SELECT to_regclass('public.iam_bootstrap_state')) AS bootstrap_table;
+-- users = 0, roles = 0, bootstrap_table = NULL
+```
+
+If either count is not `0`, **stop**: this database is not the expected fresh
+production state.
+
+### 5.3 Run the migration with the migration role
+
+The container's `DB_*` variables point at `hm_app`. Override them **for this
+one command only**, typing the migration password at a hidden prompt so it
+never enters shell history or argv:
+
+```bash
+read -r -s -p 'Migration role name: ' MIGRATION_ROLE; echo
+read -r -s -p 'Migration role password: ' MIGRATION_PW; echo
+
+DB_USER="$MIGRATION_ROLE" DB_PASSWORD="$MIGRATION_PW" \
+  node dist/database/cli.js migrate
+
+unset MIGRATION_ROLE MIGRATION_PW
+```
+
+Do not export the password for the rest of the session and do not add these
+variables to Railway service variables.
+
+Expected: `Applied 0452_create_iam_owner_bootstrap_state` (or
+`No pending migrations` if already applied). The migration is additive and
+transactional; an interrupted run can be retried.
+
+### 5.4 Post-migration verification
+
+```bash
+node dist/database/cli.js status    # back on hm_app: 452 applied, latest 0452
 node dist/database/cli.js bootstrap-status
 ```
 
-Expected: `Applied 0452_create_iam_owner_bootstrap_state` (or
-`No pending migrations` if already applied), then the status block from §3.1.
-The migration is additive and transactional; an interrupted run can be
-retried.
+`bootstrap-status` must show `Schema ready: yes`, `Users in database: 0`,
+`Bootstrap completed: no`.
 
 ---
 
 ## 6. Create the first Owner
 
-Run from the interactive container shell. The password is prompted twice and
-is **not echoed**:
+Run this **as the application role (`hm_app`)** — the container already has
+its `DB_*` variables, so no override is needed. The bootstrap needs only DML;
+do not run it as the migration/superuser role.
+
+Preflight (must print `TTY_OK`, see §3.1). If it does not, use §3.2 — the CLI
+fails closed rather than reading a password from stdin, a pipe or an
+environment variable.
+
+The password is prompted twice and is **not echoed**:
 
 ```bash
 node dist/database/cli.js bootstrap-owner \
@@ -225,10 +342,13 @@ Rules:
 
 - Never add `--password`. The CLI rejects it before connecting.
 - Never export the password as an environment variable.
-- Never pipe it with `echo`/`printf`.
+- Never pipe it with `echo`/`printf`; piped stdin has no TTY and the CLI
+  aborts.
 - If the policy rejects the password, the prompt retries (up to 3 attempts)
   without creating any state.
 - Ctrl-C aborts before any database write.
+- The prompt reads `/dev/tty`; it works under `railway ssh` (interactive) and
+  under the `script` wrapper in §3.2, not under `railway run`.
 
 Successful output (no secret material):
 
@@ -247,6 +367,11 @@ First-owner bootstrap complete.
 The whole operation is one transaction: a crash, Ctrl-C or database error
 leaves **zero** users, credentials, roles or audit rows from this run. Simply
 rerun. After commit, `bootstrap-status` reports `Bootstrap completed: yes`.
+
+The Owner credential is created with `must_change_password = false` because
+the operator chose the password directly at the hidden prompt. Accounts
+created later through an administrative reset start with
+`must_change_password = true` and are gated (see §9.1).
 
 ---
 
@@ -366,12 +491,19 @@ curl -sS "$API/api/v1/auth/me" -H "Authorization: Bearer $CARE_TOKEN" | jq '{
   roles: [.data.access.roles[].code],
   buildings: .data.scope.buildingIds,
   careCapability: (.data.access.permissions | index("handyman.care.building") != null),
-  cannotManageUsers: (.data.access.permissions | index("user.manage") == null)
+  cannotManageUsers: (.data.access.permissions | index("user.manage") == null),
+  cannotTenantManage: (.data.access.permissions | index("tenant_company.manage") == null)
 }'
 ```
 
 Expected: `roles: ["CUSTOMER_CARE"]`, the scoped Building ids, care capability
-`true`, user management `false`.
+`true`, user management and tenant-wide management `false`.
+
+The Customer Care role deliberately does **not** hold
+`tenant_company.manage`: that coarse code gates dispatch release/cancel, BAST
+customer acceptance, customer-payment recording, lifecycle triage/diagnosis
+and material purchasing. The Care persona mediates requests through
+`handyman.care.building` + `service_request.manage` instead (§9).
 
 ---
 
@@ -404,6 +536,49 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
 
 All four must print `403`.
 
+### 9.1 Mandatory password change (server-enforced)
+
+Reset a throwaway account's password (as Owner), log in with the temporary
+password and confirm the gate:
+
+```bash
+TEMP_TOKEN=...   # session token from the login with the temporary password
+
+# Allowed: the state and the own identity.
+curl -sS "$API/api/v1/auth/password/status" -H "Authorization: Bearer $TEMP_TOKEN"
+# → {"data":{"mustChangePassword":true}}
+
+# Refused: everything else, including read-only administration.
+curl -sS -o /dev/null -w '%{http_code}\n' "$API/api/v1/users" \
+  -H "Authorization: Bearer $TEMP_TOKEN"
+# → 403  (error.code = PASSWORD_CHANGE_REQUIRED)
+
+# Allowed: logout with that same token.
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$API/api/v1/auth/logout" \
+  -H "Authorization: Bearer $TEMP_TOKEN"
+```
+
+### 9.2 Privileged-account protection
+
+As a **SYSTEM_ADMIN** (not the Owner), all of these must return `403` with
+`PRIVILEGED_ACCOUNT_PROTECTED`:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+  "$API/api/v1/users/<owner-user-id>/suspend" -H "Authorization: Bearer $SYSADMIN_TOKEN"
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+  "$API/api/v1/users/<owner-user-id>/deactivate" -H "Authorization: Bearer $SYSADMIN_TOKEN"
+curl -sS -o /dev/null -w '%{http_code}\n' -X PATCH \
+  "$API/api/v1/users/<owner-user-id>/whatsapp-contact" \
+  -H "Authorization: Bearer $SYSADMIN_TOKEN" -H 'content-type: application/json' \
+  -d '{"whatsappPhone":"+628123456789","consent":"OPT_IN"}'
+```
+
+As the **Owner**, suspending/deactivating your own account must return `403`
+`SELF_ACCOUNT_ACTION_DENIED`. A `SYSTEM_ADMIN` with `role.manage` (a deliberate
+delegation by the Owner) must still receive `403
+PRIVILEGED_ROLE_ASSIGNMENT_DENIED` when assigning `PLATFORM_ADMIN`.
+
 Finally confirm the bootstrap cannot be repeated:
 
 ```bash
@@ -430,7 +605,9 @@ unset TEMP_PW
 
 Result: `{ "reset": true, "mustChangePassword": true }`. **Every** session for
 that user is already revoked; they must log in with the temporary password and
-change it:
+change it. Until the change succeeds, every other authenticated operation
+returns `403 PASSWORD_CHANGE_REQUIRED` (only `GET /auth/password/status`,
+`POST /auth/password`, `POST /auth/logout` and `GET /auth/me` stay reachable):
 
 ```bash
 # As the user:
@@ -479,3 +656,25 @@ again”. That row is the one-time guard; removing it damages the audit trail.
 - Do not grant `PLATFORM_ADMIN` to a Customer Care / Operations / Manager /
   Mobile account “just to test”; test escalation with the real scoped roles.
 - Do not change production credentials as part of this CR.
+
+---
+
+## 13. Remaining blockers (not solved by this runbook)
+
+| Class | Blocker | Effect on this procedure |
+|---|---|---|
+| Security | No MFA for the Owner; login throttling is per-instance in memory | Single-credential Owner. Accept the residual risk for the first window and schedule MFA |
+| Resilience | No second Owner by default | After §9, assign `PLATFORM_ADMIN` to a second trusted person so Owner recovery does not depend on one phone/password |
+| Delivery | No automated invitation-token or reset-notice channel (`EMAIL_PROVIDER=noop`, no WhatsApp template) | Hand tokens over out-of-band; never paste them into chat |
+| Frontend | No user-management, forced-change or role-assignment screens | Operator uses the documented API calls in §8–§10 until the UI ships |
+| Frontend | `mustChangePassword` is served by `GET /auth/password/status`, not by `/auth/me` (whose shape is frozen) | The client must call the status endpoint after login |
+| Authorization | `tenant_company.manage` remains the coarse gate for OPERATIONS and the Owner on dispatch/tenant-transport surfaces | Keep those accounts to explicit persona roles; a dedicated dispatch permission is a follow-up CR |
+| Data | The last-owner guards are enforced in one process transaction with an advisory lock | Two application replicas are safe (the lock is database-wide); a manual SQL edit is not |
+| Data | `SUSPENDED` → `ACTIVE` has no API path (reactivate accepts `INACTIVE` only) | Reserve suspension for security incidents; reinstatement needs a controlled DBA update. Self/owner suspension is blocked server-side |
+| Platform | Railway plan/CLI must support SSH with an interactive PTY | Verified in §3.1 before any write; fall back to the dashboard shell |
+
+Resetting a **protected** account is denied to a non-owner; suspending,
+deactivating or changing the WhatsApp contact of a protected account is
+equally denied (`403 PRIVILEGED_ACCOUNT_PROTECTED`). The last active Owner
+account cannot be deactivated or suspended, and an administrator cannot apply
+a lifecycle transition to their own account (`403 SELF_ACCOUNT_ACTION_DENIED`).

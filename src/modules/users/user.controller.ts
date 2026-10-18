@@ -147,7 +147,11 @@ export async function updateUserWhatsAppContactHandler(
   try {
     const id = parseUserIdParam(Array.isArray(req.params.id) ? '' : req.params.id);
     const input = parseUpdateUserWhatsAppContactBody(req.body);
-    const user = await userService.updateUserWhatsAppContact(id, input);
+    const user = await userService.updateUserWhatsAppContact(
+      id,
+      input,
+      req.auth.userId,
+    );
     sendSuccess(res, user);
   } catch (error) {
     next(error);

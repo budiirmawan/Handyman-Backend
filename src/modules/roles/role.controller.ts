@@ -61,7 +61,11 @@ export async function assignRoleHandler(
   try {
     const userId = parseRoleUserIdParam(paramString(req.params.userId));
     const { roleId } = parseAssignRoleBody(req.body);
-    const role = await roleService.assignRoleToUser(userId, roleId);
+    const role = await roleService.assignRoleToUser(
+      userId,
+      roleId,
+      req.auth.userId,
+    );
     sendSuccess(res, role, 201);
   } catch (error) {
     next(error);
@@ -80,7 +84,11 @@ export async function revokeRoleHandler(
   try {
     const userId = parseRoleUserIdParam(paramString(req.params.userId));
     const roleId = parseRoleIdParam(paramString(req.params.roleId));
-    const role = await roleService.revokeRoleFromUser(userId, roleId);
+    const role = await roleService.revokeRoleFromUser(
+      userId,
+      roleId,
+      req.auth.userId,
+    );
     sendSuccess(res, role);
   } catch (error) {
     next(error);

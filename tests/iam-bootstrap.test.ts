@@ -55,6 +55,8 @@ let careUserId = '';
 let careEmail = '';
 let careToken = '';
 let systemAdminToken = '';
+let systemAdminUserId = '';
+let systemAdminEmail = '';
 
 before(async () => {
   if (EMBEDDED_DATABASE) {
@@ -682,6 +684,8 @@ describe('CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap', () => {
       'SYSTEM_ADMIN',
     );
     systemAdminToken = systemAdmin.token;
+    systemAdminUserId = systemAdmin.userId;
+    systemAdminEmail = email;
 
     const resetOwner = await api()
       .post(`${API_PREFIX}/users/${ownerUserId}/password-reset`)
@@ -709,6 +713,268 @@ describe('CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap', () => {
       .get(`${API_PREFIX}/users`)
       .set(auth(systemAdminToken));
     assert.equal(listUsers.status, 200);
+  });
+
+  it('prevents a System Admin from suspending or hijacking the Owner account', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const suspendOwner = await api()
+      .post(`${API_PREFIX}/users/${ownerUserId}/suspend`)
+      .set(auth(systemAdminToken))
+      .send({});
+    assert.equal(suspendOwner.status, 403);
+    assert.equal(suspendOwner.body.error.code, 'PRIVILEGED_ACCOUNT_PROTECTED');
+
+    const deactivateOwner = await api()
+      .post(`${API_PREFIX}/users/${ownerUserId}/deactivate`)
+      .set(auth(systemAdminToken))
+      .send({});
+    assert.equal(deactivateOwner.status, 403);
+    assert.equal(deactivateOwner.body.error.code, 'PRIVILEGED_ACCOUNT_PROTECTED');
+
+    const hijackContact = await api()
+      .patch(`${API_PREFIX}/users/${ownerUserId}/whatsapp-contact`)
+      .set(auth(systemAdminToken))
+      .send({ whatsappPhone: '+628123456789', consent: 'OPT_IN' });
+    assert.equal(hijackContact.status, 403);
+    assert.equal(hijackContact.body.error.code, 'PRIVILEGED_ACCOUNT_PROTECTED');
+
+    const ownerStillActive = await api()
+      .get(`${API_PREFIX}/users/${ownerUserId}`)
+      .set(auth(systemAdminToken));
+    assert.equal(ownerStillActive.status, 200);
+    assert.equal(ownerStillActive.body.data.status, 'ACTIVE');
+
+    // The same administrator can still manage an ordinary account, so the
+    // guard is targeted rather than a blanket denial.
+    const ordinary = await api()
+      .post(`${API_PREFIX}/users`)
+      .set(auth(ownerToken))
+      .send({
+        email: `ordinary-${randomUUID().slice(0, 8)}@example.com`,
+        displayName: 'Ordinary Lifecycle',
+      });
+    assert.equal(ordinary.status, 201);
+    const ordinaryId = ordinary.body.data.id as string;
+
+    assert.equal(
+      (
+        await api()
+          .post(`${API_PREFIX}/users/${ordinaryId}/deactivate`)
+          .set(auth(systemAdminToken))
+          .send({})
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await api()
+          .post(`${API_PREFIX}/users/${ordinaryId}/reactivate`)
+          .set(auth(systemAdminToken))
+          .send({})
+      ).status,
+      200,
+    );
+  });
+
+  it('refuses an owner-initiated self-suspension', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const selfSuspend = await api()
+      .post(`${API_PREFIX}/users/${ownerUserId}/suspend`)
+      .set(auth(ownerToken))
+      .send({});
+    assert.equal(selfSuspend.status, 403);
+    assert.equal(selfSuspend.body.error.code, 'SELF_ACCOUNT_ACTION_DENIED');
+
+    const selfDeactivate = await api()
+      .post(`${API_PREFIX}/users/${ownerUserId}/deactivate`)
+      .set(auth(ownerToken))
+      .send({});
+    assert.equal(selfDeactivate.status, 403);
+    assert.equal(selfDeactivate.body.error.code, 'SELF_ACCOUNT_ACTION_DENIED');
+
+    const me = await api().get(`${API_PREFIX}/auth/me`).set(auth(ownerToken));
+    assert.equal(me.status, 200);
+    assert.equal(me.body.data.user.status, 'ACTIVE');
+  });
+
+  it('denies privilege escalation through a delegated role.manage grant', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const created = await api()
+      .post(`${API_PREFIX}/roles`)
+      .set(auth(ownerToken))
+      .send({ code: 'DELEGATED_ADMIN', name: 'Delegated Administrator' });
+    assert.equal(created.status, 201);
+    const delegatedRoleId = created.body.data.id as string;
+
+    const ownerPermissions = await api()
+      .get(`${API_PREFIX}/roles/${await roleId('PLATFORM_ADMIN')}/permissions`)
+      .set(auth(ownerToken));
+    const roleManage = (ownerPermissions.body.data as { id: string; code: string }[])
+      .find((permission) => permission.code === 'role.manage');
+    assert.ok(roleManage, 'the owner role must carry role.manage');
+
+    const granted = await api()
+      .post(`${API_PREFIX}/roles/${delegatedRoleId}/permissions`)
+      .set(auth(ownerToken))
+      .send({ permissionId: roleManage.id });
+    assert.ok(granted.status < 300, 'owner may delegate role.manage');
+
+    const assigned = await api()
+      .post(`${API_PREFIX}/users/${systemAdminUserId}/roles`)
+      .set(auth(ownerToken))
+      .send({ roleId: delegatedRoleId });
+    assert.equal(assigned.status, 201);
+
+    // The delegated administrator now holds role.manage but still cannot
+    // assign PLATFORM_ADMIN (defense in depth beyond the route permission).
+    const escalate = await api()
+      .post(`${API_PREFIX}/users/${systemAdminUserId}/roles`)
+      .set(auth(systemAdminToken))
+      .send({ roleId: await roleId('PLATFORM_ADMIN') });
+    assert.equal(escalate.status, 403);
+    assert.equal(
+      escalate.body.error.code,
+      'PRIVILEGED_ROLE_ASSIGNMENT_DENIED',
+    );
+
+    const stillOwner = await api()
+      .get(`${API_PREFIX}/auth/me`)
+      .set(auth(ownerToken));
+    assert.equal(stillOwner.status, 200);
+    assert.deepEqual(
+      stillOwner.body.data.access.roles.map((role: { code: string }) => role.code),
+      ['PLATFORM_ADMIN'],
+    );
+  });
+
+  it('enforces the mandatory password change on every other operation', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const reset = await api()
+      .post(`${API_PREFIX}/users/${systemAdminUserId}/password-reset`)
+      .set(auth(ownerToken))
+      .send({ newPassword: 'TempSystemPass456' });
+    assert.equal(reset.status, 200);
+
+    const tempSession = await login(systemAdminEmail, 'TempSystemPass456');
+    assert.equal(tempSession.status, 200);
+    const tempToken = tempSession.body.data.sessionToken as string;
+
+    const status = await api()
+      .get(`${API_PREFIX}/auth/password/status`)
+      .set(auth(tempToken));
+    assert.equal(status.status, 200);
+    assert.deepEqual(status.body.data, { mustChangePassword: true });
+
+    // Reading the own effective context is allowed while the change is pending.
+    assert.equal(
+      (await api().get(`${API_PREFIX}/auth/me`).set(auth(tempToken))).status,
+      200,
+    );
+
+    // Every other authenticated operation is refused server-side.
+    const blocked = await api()
+      .get(`${API_PREFIX}/users`)
+      .set(auth(tempToken));
+    assert.equal(blocked.status, 403);
+    assert.equal(blocked.body.error.code, 'PASSWORD_CHANGE_REQUIRED');
+
+    const blockedMutation = await api()
+      .post(`${API_PREFIX}/users/${systemAdminUserId}/suspend`)
+      .set(auth(tempToken))
+      .send({});
+    assert.equal(blockedMutation.status, 403);
+    assert.equal(
+      blockedMutation.body.error.code,
+      'PASSWORD_CHANGE_REQUIRED',
+    );
+
+    // Logout stays reachable with a second session (the first is kept for the
+    // change flow below).
+    const logoutSession = await login(systemAdminEmail, 'TempSystemPass456');
+    assert.equal(logoutSession.status, 200);
+    assert.equal(
+      (
+        await api()
+          .post(`${API_PREFIX}/auth/logout`)
+          .set(auth(logoutSession.body.data.sessionToken as string))
+          .send({})
+      ).status,
+      200,
+    );
+
+    const wrongCurrent = await api()
+      .post(`${API_PREFIX}/auth/password`)
+      .set(auth(tempToken))
+      .send({
+        currentPassword: 'DefinitelyWrong123',
+        newPassword: 'FinalSystemPass789',
+      });
+    assert.equal(wrongCurrent.status, 401);
+
+    const changed = await api()
+      .post(`${API_PREFIX}/auth/password`)
+      .set(auth(tempToken))
+      .send({
+        currentPassword: 'TempSystemPass456',
+        newPassword: 'FinalSystemPass789',
+      });
+    assert.equal(changed.status, 200);
+
+    const cleared = await api()
+      .get(`${API_PREFIX}/auth/password/status`)
+      .set(auth(tempToken));
+    assert.deepEqual(cleared.body.data, { mustChangePassword: false });
+    assert.equal(
+      (await api().get(`${API_PREFIX}/users`).set(auth(tempToken))).status,
+      200,
+    );
+    assert.equal((await login(systemAdminEmail, 'TempSystemPass456')).status, 401);
+    assert.equal((await login(systemAdminEmail, 'FinalSystemPass789')).status, 200);
+  });
+
+  it('denies Customer Care dispatch, BAST and payment mutations', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const email = `care2-${randomUUID().slice(0, 8)}@example.com`;
+    const care = await onboardUser(
+      ownerToken,
+      email,
+      'CareSecondPass123',
+      'CUSTOMER_CARE',
+    );
+
+    const me = await api().get(`${API_PREFIX}/auth/me`).set(auth(care.token));
+    assert.equal(me.status, 200);
+    const permissions = me.body.data.access.permissions as string[];
+    assert.ok(permissions.includes('handyman.care.building'));
+    assert.ok(permissions.includes('tenant_company.read'));
+    assert.ok(permissions.includes('service_request.manage'));
+    assert.equal(permissions.includes('tenant_company.manage'), false);
+
+    const scopeId = randomUUID();
+    for (const [path, body] of [
+      [`${API_PREFIX}/handyman/execution-scopes/${scopeId}/dispatch/release`, {}],
+      [`${API_PREFIX}/handyman/execution-scopes/${scopeId}/dispatch/cancel`, {}],
+      [`${API_PREFIX}/handyman/bast/${randomUUID()}/accept`, {}],
+      [`${API_PREFIX}/handyman/bast/${randomUUID()}/sign-off`, {}],
+      [`${API_PREFIX}/handyman/execution-scopes/${scopeId}/customer-payments`, {
+        amount: 1000,
+        idempotencyKey: randomUUID(),
+      }],
+      [`${API_PREFIX}/handyman/execution-scopes/${scopeId}/customer-payments/${randomUUID()}/confirm`, {}],
+      [`${API_PREFIX}/handyman/requests/${randomUUID()}/triage`, {}],
+    ] as [string, Record<string, unknown>][]) {
+      const response = await api()
+        .post(path)
+        .set(auth(care.token))
+        .send(body);
+      assert.equal(response.status, 403, `${path} must be denied`);
+      assert.equal(response.body.error.code, 'PERMISSION_DENIED', path);
+    }
   });
 
   it('reports the completed bootstrap and the one-owner state', async (t) => {

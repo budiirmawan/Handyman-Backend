@@ -2,8 +2,8 @@
 
 **First Owner Account & User Management**
 
-Status: implementation complete, tested locally, **not merged, not deployed,
-not executed against production**.
+Status: implementation complete, hardening pass applied and tested locally,
+**not merged, not deployed, not executed against production**.
 
 - Branch: `arena/95af75ae-handyman-backend`
 - Base: `0b72d7c5bff5f978740f17191821c4b26351a25d` (`main`)
@@ -155,6 +155,25 @@ Role/permission details: see
 
 ---
 
+## 3A. Production security hardening (second pass)
+
+| Issue found | Fix | Enforcement point |
+|---|---|---|
+| `SYSTEM_ADMIN` (or any `user.manage` holder) could suspend/deactivate the Owner — denial of service and lockout | Owner targets are **protected**: only an actor holding `PLATFORM_ADMIN` may transition or change the contact of an owner account | `user-lifecycle.service.transition`, `user.service.updateUserWhatsAppContact`, `privileged-account.guard.ts` |
+| Owner could suspend their own account, revoking the session used to do it (and `SUSPENDED` has no reactivation path) | Self-transitions denied with `403 SELF_ACCOUNT_ACTION_DENIED` | `user-lifecycle.service.transition` |
+| No last-owner guard on account status | Last **usable** owner (ACTIVE account + ACTIVE assignment) cannot be deactivated/suspended → `409 LAST_OWNER_ACCOUNT_PROTECTED`, checked under `pg_advisory_xact_lock(724196033)` | `user-lifecycle.service.transition` |
+| A delegated `role.manage` holder could assign `PLATFORM_ADMIN` | Assignment/revocation of any authority-defining role (owner role or grants `role.manage`/`permission.manage`) requires an owner actor → `403 PRIVILEGED_ROLE_ASSIGNMENT_DENIED` | `role.service.assertPrivilegedRoleMutationAuthorized` |
+| An owner's WhatsApp notification channel was editable with `user.manage` alone | Same protected-account rule on `PATCH /users/{id}/whatsapp-contact` | `user.service` |
+| `must_change_password` was stored but never enforced | Enforced in the authentication middleware on every request; only password change, status, logout and `/auth/me` remain reachable → `403 PASSWORD_CHANGE_REQUIRED` | `password-change.middleware.ts`, `session.service.resolveSessionContext` |
+| No contract to read the forced-change state (`/auth/me` shape is frozen) | New `GET /auth/password/status` → `{ mustChangePassword }` | `auth.routes`, OpenAPI |
+| `CUSTOMER_CARE` inherited `tenant_company.manage`, reaching dispatch release, BAST customer acceptance, payment recording, triage and material purchasing | Removed the coarse grant from the canonical role (smallest correction, no invented permission); care keeps `handyman.care.building` + `service_request.manage` + reads | `iam-canonical-roles.ts`, verified for 7 mutation routes |
+| Runbook assumed `railway ssh` always provides a TTY and that one DB role runs migrations and the app | Runbook now documents PTY autodetection, a mandatory `/dev/tty` preflight, tmux and `script` fallbacks, separate migration vs `hm_app` roles, and a backup + schema verification gate | `CR-HM-IAM-BOOTSTRAP-01_OPERATOR_RUNBOOK.md` §2–§6, §13 |
+
+No second session mechanism, no relaxed session invalidation and no new
+superuser were introduced. The one-time bootstrap transaction is unchanged.
+
+---
+
 ## 4. Files changed
 
 ### New
@@ -167,7 +186,10 @@ Role/permission details: see
 | `src/modules/iam-bootstrap/owner-bootstrap.cli.ts` | Strict argv parser, `--password` refusal |
 | `src/modules/iam-bootstrap/password-prompt.ts` | `/dev/tty` raw-mode no-echo input |
 | `src/modules/iam-bootstrap/index.ts` | Operator-only exports |
-| `tests/iam-bootstrap.test.ts` | 14 focused tests (17 assertions/suites total) |
+| `src/modules/users/privileged-account.guard.ts` | Owner/self-account authorization guard |
+| `src/modules/auth/password-change.middleware.ts` | Forced-change allowlist + enforcement |
+| `tests/iam-bootstrap.test.ts` | 22 focused tests (19 cases + 2 suites) |
+| `CR-HM-IAM-BOOTSTRAP-01_MULTI_PERSONA_CONTRACT.md` | Owner multi-application + separation-of-duties contract |
 | `CR-HM-IAM-BOOTSTRAP-01_OPERATOR_RUNBOOK.md` | Termux + Railway procedure |
 | `CR-HM-IAM-BOOTSTRAP-01_ROLE_PERMISSION_MATRIX.md` | Role/permission matrix |
 | `CR-HM-IAM-BOOTSTRAP-01_DELIVERY_REPORT.md` | This report |
@@ -183,8 +205,9 @@ Role/permission details: see
 | Auth | `auth.service.ts`, `auth.controller.ts`, `auth.routes.ts`, `auth.validation.ts`, `auth/index.ts`, `credential.service.ts`, `credential.repository.ts`, `credential.types.ts`, `session.service.ts`, `session.repository.ts` |
 | Users | `user.repository.ts`, `user.service.ts`, `user.validation.ts`, `user.controller.ts`, `user.routes.ts`, `user-lifecycle.service.ts`, `user.errors.ts`, `index.ts` |
 | Roles | `role.repository.ts`, `role.service.ts`, `role.controller.ts`, `role.routes.ts`, `role.errors.ts`, `index.ts` |
-| Errors | `src/shared/errors.ts` (3 new codes) |
-| Contract | `docs/api/openapi.yaml` (GET /users, password-reset, DELETE role, POST /auth/password) |
+| Errors | `src/shared/errors.ts` (9 new codes total; 5 added by the hardening pass) |
+| Hardening | `user-lifecycle.service.ts`, `user.service.ts`, `user.controller.ts`, `user.repository.ts`, `role.service.ts`, `role.controller.ts`, `role.repository.ts`, `session.service.ts`, `session.types.ts`, `authentication.middleware.ts`, `auth.service.ts`, `auth.controller.ts`, `auth.routes.ts`, `auth.errors.ts`, `user.errors.ts`, `role.errors.ts`, `iam-canonical-roles.ts` |
+| Contract | `docs/api/openapi.yaml` (GET /users, password-reset, DELETE role, POST /auth/password, GET /auth/password/status) |
 | Scripts | `package.json` (`db:bootstrap-*`) |
 | Tests | `tests/deployment-cors-production.test.ts`, `tests/deployment-portability.test.ts` (canonical registry 451 / latest 0452); `tests/mobile-auth-contract.test.ts` (`/auth/*` path lock now includes `POST /auth/password`) |
 
@@ -199,7 +222,7 @@ ASENTRA_USE_EMBEDDED_POSTGRES=true NODE_ENV=test LOG_LEVEL=error \
   npx tsx --test --test-concurrency=1 tests/iam-bootstrap.test.ts
 ```
 
-Result: **17 pass, 0 fail, 0 skipped** (14 test cases, 2 suites).
+Result: **22 pass, 0 fail, 0 skipped** (19 test cases, 2 suites).
 
 Coverage:
 
@@ -230,6 +253,21 @@ Coverage:
     PRIVILEGED_ACCOUNT_RESET_DENIED`) or assign `PLATFORM_ADMIN`/create roles
     (`403`), but can list users (`200`).
 17. Completed status + exactly one active `PLATFORM_ADMIN`.
+18. Mandatory password change: `GET /auth/password/status` reports `true`;
+    `/auth/me` and logout stay reachable; `GET /users` and a lifecycle
+    mutation return `403 PASSWORD_CHANGE_REQUIRED`; a wrong current password
+    is `401`; a successful change clears the flag and reopens the surface.
+19. System Admin cannot suspend, deactivate or change the WhatsApp contact of
+    the Owner (`403 PRIVILEGED_ACCOUNT_PROTECTED`) while ordinary accounts
+    still transition normally.
+20. Owner self-suspend/self-deactivate → `403 SELF_ACCOUNT_ACTION_DENIED`
+    and the account remains ACTIVE.
+21. A delegated role carrying `role.manage` still cannot assign
+    `PLATFORM_ADMIN` (`403 PRIVILEGED_ROLE_ASSIGNMENT_DENIED`); the owner set
+    is unchanged.
+22. Customer Care is denied dispatch release/cancel, BAST accept/sign-off,
+    customer-payment record/confirm and lifecycle triage (all
+    `403 PERMISSION_DENIED`), and holds no `tenant_company.manage`.
 
 Static/build:
 
@@ -263,6 +301,15 @@ NODE_ENV=test LOG_LEVEL=error npx tsx --test --test-concurrency=1 \
 | `openapi-contract` | **6 / 6 pass** | every documented endpoint exists in the runtime router (exercises the 4 new operations) |
 | `mobile-auth-contract` | **18 / 18 pass** | `/auth/*` path lock updated to include `POST /auth/password`; no refresh route or token field added |
 | `openapi-saas-route-parity` | **14 / 15 pass** | the single failure (`no broken local $ref`) is **pre-existing at base `0b72d7c`** and unrelated to IAM — see blocker 13 |
+
+Additional suites re-run for the hardening pass:
+
+| Suite | Result | What it protects |
+|---|---|---|
+| `handyman-care-building-authority` | **16 / 16 pass** | `handyman.care.building` still works, Building scope still enforced, suspended accounts still `401` |
+| `deployment-portability` | **9 / 9 pass** | 451 canonical migrations, latest `0452_`, lock and rollback behaviour |
+| `openapi-contract` | **6 / 6 pass** | the new `/auth/password/status` operation exists in the runtime router |
+| `mobile-auth-contract` | **18 / 18 pass** | `/auth/*` path lock includes the status endpoint; no refresh or token leakage |
 
 Not run (deliberately): full repository test suite, production bootstrap,
 Railway mutation, credential changes.
@@ -339,13 +386,34 @@ The backend now supports the flows; the frontend does not yet expose them.
 | 1 | PR not merged and image not deployed | Merge after review; deploy Railway backend |
 | 2 | Migration 0452 not applied to production | Run `migrate` from the container shell; verify readiness |
 | 3 | Owner bootstrap not executed | Execute runbook §6–§9 (human operator, TTY) |
-| 4 | `must_change_password` is stored but **not enforced** at login and not surfaced by `/auth/me` (its exact contract is asserted by existing mobile tests) | Follow-up CR: add a credential-status field or a dedicated endpoint + login gate; update mobile contract tests |
+| 4 | ~~`must_change_password` not enforced~~ **RESOLVED** — enforced in authentication middleware; state served by `GET /auth/password/status` (`/auth/me` stays frozen) | Frontend must call the status endpoint after login (multi-persona contract §6) |
 | 5 | No automated delivery of invitation tokens or reset notices (`EMAIL_PROVIDER=noop`, no WhatsApp template) | Operator hands tokens over out-of-band until messaging is implemented |
-| 6 | Railway SSH/TTY availability not verified in this CR | Confirm on the production plan before the window; fallback is the Railway dashboard web shell |
-| 7 | Customer Care relies on the coarse `tenant_company.manage` gate, which also reaches dispatch-release routes | Add a dedicated dispatch permission/guard in a follow-up CR; document interim risk |
-| 8 | A SYSTEM_ADMIN can suspend/deactivate the Owner (`user.manage`) — denial of service, though password reset is blocked | Follow-up: protect `PLATFORM_ADMIN` targets in lifecycle transitions |
+| 6 | Railway plan/CLI SSH/PTY support is **not verified against the live plan from Arena** | Run runbook §3.1 preflight (`TTY_OK`) before any write; the dashboard web shell is the fallback |
+| 7 | ~~Customer Care reaches dispatch release via `tenant_company.manage`~~ **RESOLVED for CUSTOMER_CARE** — the coarse grant was removed and 7 mutation routes are test-verified as `403`. **Residual:** `OPERATIONS` and `PLATFORM_ADMIN` still reach dispatch/tenant-transport through the same coarse code | A dedicated dispatch permission is still the long-term fix; keep operational accounts to explicit persona roles |
+| 8 | ~~SYSTEM_ADMIN can suspend/deactivate the Owner~~ **RESOLVED** — protected-account, self-action and last-usable-owner guards are enforced transactionally | None for this path; see the MFA and second-Owner items below |
 | 9 | No MFA for the Owner; single in-memory login throttle per instance | Security hardening roadmap |
 | 10 | Release evidence docs still cite “450 migrations, latest 0451” | Update deployment/go-no-go evidence after 0452 is applied |
 | 11 | No second Owner by default | After bootstrap, assign `PLATFORM_ADMIN` to a second trusted person so Owner recovery does not depend on one account |
 | 12 | Restore, not rerun, is the only undo for a completed bootstrap | Confirm backup/restore rehearsal before the window |
+| 14 | Frontend has no screens for user listing, role assignment, forced password change or the new denial codes | Ship the UI changes described in the multi-persona contract §6–§7; the API is ready |
+| 15 | A `SUSPENDED` account has **no API path back to ACTIVE** (`reactivate` accepts `INACTIVE` only), so suspension is effectively permanent for ordinary users | Keep suspension for security cases only; a return to service needs a controlled, audited DBA update or a follow-up CR. Owner/self-suspension is now blocked, so this cannot lock out the installation |
 | 13 | **Pre-existing** OpenAPI defect: 3 `$ref`s in `HandymanStatusVisibilityReadView` examples do not resolve (`.../stages/properties/assignment`, `.../stages/properties/readiness`, `.../slaMilestones`) | Unrelated to IAM; fails `openapi-saas-route-parity` identically at base `0b72d7c`. Fix in the owning CR before claiming a fully green OpenAPI suite |
+
+---
+
+## 9. Readiness verdict
+
+**READY for a controlled first-Owner bootstrap**, after the merge and deploy
+of this PR and with all of the following true:
+
+1. migration `0452` applied with the migration role (not `hm_app`),
+2. `bootstrap-status` shows `Schema ready: yes`, `Users in database: 0`,
+   `Bootstrap completed: no`,
+3. the `/dev/tty` preflight (`TTY_OK`) passes in the shell used for the
+   bootstrap,
+4. a recent PostgreSQL backup exists and the restore path is known.
+
+**NOT READY** for unattended/continuous operation until the residual risks are
+accepted or closed: no MFA, no second Owner, no automated invitation/reset
+delivery, no frontend screens, and the coarse `tenant_company.manage` gate for
+`OPERATIONS`/`PLATFORM_ADMIN`.

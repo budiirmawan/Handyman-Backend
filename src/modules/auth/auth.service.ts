@@ -8,7 +8,11 @@ import {
   userRepository,
   userStatusCanLogin,
 } from '../users';
-import { authRateLimitedError, invalidCredentialsError } from './auth.errors';
+import {
+  authRateLimitedError,
+  invalidCredentialsError,
+} from './auth.errors';
+import { invalidSessionError } from './session.errors';
 import { credentialRepository } from './credential.repository';
 import { credentialService } from './credential.service';
 import {
@@ -156,7 +160,26 @@ export async function changePassword(
   return { changed: true };
 }
 
+export type PasswordStatus = {
+  mustChangePassword: boolean;
+};
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — the forced-change state as a minimal,
+ * secret-free contract. The state is read live from the credential row; no
+ * password data, hash or timestamp is exposed.
+ */
+export async function getPasswordStatus(userId: string): Promise<PasswordStatus> {
+  const credential = await credentialService.getCredentialByUserId(userId);
+  if (!credential) {
+    throw invalidSessionError();
+  }
+
+  return { mustChangePassword: credential.mustChangePassword };
+}
+
 export const authService = {
   changePassword,
+  getPasswordStatus,
   login,
 };

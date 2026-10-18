@@ -304,6 +304,7 @@ describe('CR-BE-MOB-CONTRACT-01 PART 01 — auth/session OpenAPI contract', () =
         '/auth/me',
         '/auth/me/buildings',
         '/auth/password',
+        '/auth/password/status',
       ],
       'no refresh/extra auth route may be documented',
     );

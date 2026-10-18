@@ -53,3 +53,19 @@ export function lastOwnerRoleRequiredError(): AppError {
     statusCode: 409,
   });
 }
+
+/**
+ * CR-HM-IAM-BOOTSTRAP-01 HARDENING — defense in depth for privilege
+ * escalation through role assignment. Even if a role that carries
+ * `role.manage` / `permission.manage` is (mis)granted to a non-owner, that
+ * administrator still cannot assign PLATFORM_ADMIN or any other
+ * authority-defining role. Only an owner may.
+ */
+export function privilegedRoleAssignmentDeniedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.PRIVILEGED_ROLE_ASSIGNMENT_DENIED,
+    message:
+      'Only an owner may assign or revoke PLATFORM_ADMIN or a role that defines authority.',
+    statusCode: 403,
+  });
+}

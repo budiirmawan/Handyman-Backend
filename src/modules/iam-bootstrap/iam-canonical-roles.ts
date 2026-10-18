@@ -72,8 +72,17 @@ export const SYSTEM_ADMIN_ROLE: CanonicalRoleDefinition = {
  * by migration 0450 and withheld from PLATFORM_ADMIN by the foundation seed.
  * Granting it through this canonical role is a deliberate bootstrap act; the
  * runtime still requires an ACTIVE assignment to the exact Building under the
- * server-derived Client. `tenant_company.*` is the existing coarse gate used
- * by the Handyman care/BAST transport; it does not replace Building scope.
+ * server-derived Client.
+ *
+ * SECURITY HARDENING — the generic `tenant_company.manage` grant is
+ * deliberately NOT part of this role. That coarse code is the shared gate for
+ * dispatch release/cancel, BAST customer accept/reject/sign-off, customer
+ * payment recording, lifecycle triage/diagnosis/referral, inspector
+ * assignment and material purchasing. Granting it to a tenant-facing persona
+ * would hand over operational and financial mutations that are outside the
+ * Customer Care remit. The role keeps `tenant_company.read` (building-scoped
+ * reads) and the dedicated Care capability; tenant service-request handling
+ * stays under `service_request.manage`, which is its own authoritative code.
  */
 export const CUSTOMER_CARE_ROLE: CanonicalRoleDefinition = {
   code: 'CUSTOMER_CARE',
@@ -82,7 +91,6 @@ export const CUSTOMER_CARE_ROLE: CanonicalRoleDefinition = {
     'Mediates tenant requests and Handyman care for explicitly assigned Buildings.',
   permissions: [
     'tenant_company.read',
-    'tenant_company.manage',
     'handyman.care.building',
     'work_order.read',
     'work_request.read',

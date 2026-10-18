@@ -42,4 +42,10 @@ export type AuthContext = {
   userId: string;
   sessionId: string;
   user: PublicUser;
+  /**
+   * CR-HM-IAM-BOOTSTRAP-01 HARDENING — authoritative credential state read on
+   * every request. When true, only the password-change recovery surface is
+   * reachable (enforced by `enforcePasswordChange`).
+   */
+  mustChangePassword: boolean;
 };

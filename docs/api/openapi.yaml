@@ -10760,6 +10760,37 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /auth/password/status:
+    get:
+      operationId: getPasswordStatus
+      summary: Read the mandatory password-change state
+      description: >
+        Authentication only; returns no credential material. When
+        `mustChangePassword` is true the account was reset by an
+        administrator and every authenticated operation except
+        `POST /auth/password`, `GET /auth/password/status`, `POST /auth/logout`
+        and `GET /auth/me` is refused with `403 PASSWORD_CHANGE_REQUIRED`.
+        The flag is read live from the credential row, so completing the
+        change takes effect on the next request without a new session.
+      tags: [Authentication]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current forced-change state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [mustChangePassword]
+                        properties:
+                          mustChangePassword: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /auth/password:
     post:
       operationId: changePassword
@@ -10769,7 +10800,9 @@ paths:
         (`currentPassword`) plus `newPassword`; the existing password
         policy/bcrypt implementation is reused and only the new hash is
         stored. Clears `must_change_password` and revokes every OTHER active
-        session for the user, while the calling session stays valid. A wrong
+        session for the user, while the calling session stays valid. This is
+        one of the four operations reachable while a forced change is
+        pending (`GET /auth/password/status` reports that state). A wrong
         current password returns 401 `INVALID_PASSWORD`; neither password is
         logged or returned.
       tags: [Authentication]

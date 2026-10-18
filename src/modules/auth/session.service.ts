@@ -6,6 +6,7 @@ import {
   userService,
   userStatusCanLogin,
 } from '../users';
+import { credentialRepository } from './credential.repository';
 import { invalidSessionError, sessionExpiredError } from './session.errors';
 import { sessionRepository } from './session.repository';
 import {
@@ -68,6 +69,14 @@ export async function resolveSessionContext(rawToken: string): Promise<AuthConte
     throw invalidSessionError();
   }
 
+  // CR-HM-IAM-BOOTSTRAP-01 HARDENING — a session is only meaningful for an
+  // account that still has a credential, and the forced-change flag is read
+  // live (never cached in the token) so a reset takes effect immediately.
+  const credential = await credentialRepository.findByUserId(session.userId);
+  if (!credential) {
+    throw invalidSessionError();
+  }
+
   const user = toPublicUser(userRecord);
 
   const now = new Date();
@@ -81,6 +90,7 @@ export async function resolveSessionContext(rawToken: string): Promise<AuthConte
     userId: session.userId,
     sessionId: session.id,
     user,
+    mustChangePassword: credential.mustChangePassword,
   };
 }
 

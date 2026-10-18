@@ -80,7 +80,7 @@ create.
 
 | Permission | Why |
 |---|---|
-| `tenant_company.read`, `tenant_company.manage` | Existing coarse gate used by the Handyman care/BAST transport |
+| `tenant_company.read` | Building-scoped reads across the Handyman transport |
 | `handyman.care.building` | Dedicated Authority-A capability (migration 0450); runtime still requires the exact ACTIVE Building assignment |
 | `work_order.read`, `work_request.read` | See operational work affecting the tenant |
 | `finding.read` | See complaints/defects raised for the Building |
@@ -88,16 +88,24 @@ create.
 | `service_request.read`, `service_request.manage` | Handle tenant service requests |
 
 **Deliberately withheld:** user/role/permission administration, dispatch
-release (see caveat below), QC, BAST issuance, financial execution,
-`platform.*`.
+release, QC, BAST issuance, financial execution, `platform.*`, and — since
+the security-hardening pass — the coarse `tenant_company.manage` code.
 
-**Known coarse-gate caveat:** the existing Handyman transport gates dispatch
-release and BAST customer acceptance on the same `tenant_company.manage`
-code. There is no separate dispatch permission in the catalogue, and this CR
-does not invent one. Until a dedicated dispatch capability exists, a
-Customer Care account can technically call dispatch-release routes; the
-service-side Building/assignment/state checks still apply. Tracked as a
-hardening item.
+**Why `tenant_company.manage` was removed (hardening):** that single code
+gates dispatch release/cancel, BAST customer accept/reject/sign-off,
+customer-payment recording, lifecycle triage/diagnosis/referral, inspector
+assignment and material purchasing. A tenant-facing care persona must not
+inherit those operational/financial mutations through a shared gate. Removing
+the grant is the smallest correction (no new, invented privilege) and keeps
+tenant/Building isolation untouched: `handyman.care.building` plus the Care
+resolver still require an ACTIVE assignment to the exact Building.
+
+**Verified denial set:** `POST …/dispatch/release`, `POST …/dispatch/cancel`,
+`POST /handyman/bast/{id}/accept`, `POST /handyman/bast/{id}/sign-off`,
+`POST …/customer-payments`, `POST …/customer-payments/{id}/confirm`,
+`POST /handyman/requests/{id}/triage` all return `403 PERMISSION_DENIED` for
+`CUSTOMER_CARE` (focused test `CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap`,
+case 18).
 
 ### 3.3 OPERATIONS — `OPERATIONS`
 
@@ -203,3 +211,70 @@ no “show password” capability by design.
 | `PASSWORD_CHANGED` | An authenticated user changes their own password |
 
 Metadata contains ids/codes only — never passwords, hashes or tokens.
+
+## 7. Authorization hardening (P0 security pass)
+
+### 7.1 Protected (owner) accounts
+
+A target account is **protected** while it holds an ACTIVE `PLATFORM_ADMIN`
+assignment. Protected targets may only be modified by an actor that also holds
+it — `user.manage` alone is never sufficient.
+
+| Operation on a protected account | Non-owner administrator (e.g. `SYSTEM_ADMIN`) |
+|---|---|
+| `POST /users/{id}/suspend` | `403 PRIVILEGED_ACCOUNT_PROTECTED` |
+| `POST /users/{id}/deactivate` | `403 PRIVILEGED_ACCOUNT_PROTECTED` |
+| `PATCH /users/{id}/whatsapp-contact` | `403 PRIVILEGED_ACCOUNT_PROTECTED` |
+| `POST /users/{id}/password-reset` | `403 PRIVILEGED_ACCOUNT_RESET_DENIED` |
+| Assign/revoke `PLATFORM_ADMIN` or any role granting `role.manage` / `permission.manage` | `403 PRIVILEGED_ROLE_ASSIGNMENT_DENIED` |
+
+Additional invariants, enforced inside one transaction with an advisory lock:
+
+- an administrator cannot suspend/deactivate **their own** account
+  (`403 SELF_ACCOUNT_ACTION_DENIED`),
+- the last **usable** owner account (ACTIVE assignment **and** ACTIVE account)
+  cannot be deactivated or suspended (`409 LAST_OWNER_ACCOUNT_PROTECTED`),
+- the last ACTIVE `PLATFORM_ADMIN` **role assignment** cannot be revoked
+  (`409 LAST_OWNER_ROLE_REQUIRED`).
+
+The lifecycle check runs under `pg_advisory_xact_lock(724196033)`; the
+one-time bootstrap uses its own key `724196032`.
+
+### 7.2 Privilege escalation through role assignment
+
+Role assignment is authorization-checked **twice**: the route requires
+`role.manage`, and the service re-checks that an actor assigning a privileged
+role (owner role, or any role whose ACTIVE grants include `role.manage` or
+`permission.manage`) is themselves an owner. A delegated administrator
+therefore holds `role.manage` without being able to mint an owner.
+
+### 7.3 Mandatory password change
+
+`user_credentials.must_change_password` is enforced in the authentication
+middleware on **every** request (no second session mechanism, no cached flag).
+While true, only these are reachable:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/auth/password` | Set the new password (current password re-verified) |
+| `GET` | `/auth/password/status` | Read `{ mustChangePassword }` |
+| `POST` | `/auth/logout` | End the session |
+| `GET` | `/auth/me` | Read-only identity/effective context |
+
+Everything else returns `403 PASSWORD_CHANGE_REQUIRED`. Session invalidation
+is unchanged: admin reset revokes **all** sessions before writing the hash;
+self change revokes **all other** sessions and keeps the caller's.
+
+### 7.4 Error codes added by the hardening pass
+
+| Code | Status | Meaning |
+|---|---|---|
+| `PRIVILEGED_ACCOUNT_PROTECTED` | 403 | Non-owner attempted a lifecycle/contact change on an owner account |
+| `PRIVILEGED_ACCOUNT_RESET_DENIED` | 403 | Non-owner attempted a credential reset on an owner account |
+| `PRIVILEGED_ROLE_ASSIGNMENT_DENIED` | 403 | Non-owner attempted to assign/revoke an authority-defining role |
+| `SELF_ACCOUNT_ACTION_DENIED` | 403 | Administrator attempted a lifecycle transition on their own account |
+| `LAST_OWNER_ACCOUNT_PROTECTED` | 409 | Attempted to deactivate/suspend the last usable owner account |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | Forced password change still pending |
+
+See `CR-HM-IAM-BOOTSTRAP-01_MULTI_PERSONA_CONTRACT.md` for how these map to
+the Owner's multi-application access.
