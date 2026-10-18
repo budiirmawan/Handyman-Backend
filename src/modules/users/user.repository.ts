@@ -70,6 +70,19 @@ async function findById(
   return row ? mapUserRow(row) : null;
 }
 
+/** Locks an account row while creating a session so lifecycle changes cannot race login. */
+async function findByIdForUpdate(
+  id: string,
+  client: PoolClient,
+): Promise<UserRecord | null> {
+  const result = await client.query<UserRow>(
+    `SELECT ${USER_SELECT} FROM users WHERE id = $1 FOR UPDATE`,
+    [id],
+  );
+  const row = result.rows[0];
+  return row ? mapUserRow(row) : null;
+}
+
 async function findByEmail(
   email: string,
   client?: PoolClient,
@@ -244,6 +257,7 @@ export const userRepository = {
   countActiveRoleHolders,
   createUser,
   findById,
+  findByIdForUpdate,
   findByEmail,
   hasActiveRole,
   listUsers,

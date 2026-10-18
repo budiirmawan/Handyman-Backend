@@ -321,12 +321,13 @@ describe('CR-HM-BE-CORS-PRODUCTION-01 — application regression', () => {
   });
 
   it('keeps the canonical migration registry append-only', () => {
-    // CR-HM-IAM-BOOTSTRAP-01 appended one additive migration: the one-time
-    // first-owner bootstrap state + audit vocabulary. Nothing was rewritten.
-    assert.equal(migrations.length, 451);
+    // CR-HM-IAM-BOOTSTRAP-01 added the first-owner state, and
+    // CR-HM-BE-IAM-ADMIN-02 added role/building IAM audit event vocabulary.
+    // Both are additive; no existing migration was rewritten.
+    assert.equal(migrations.length, 452);
     assert.equal(
       migrations[migrations.length - 1].id,
-      '0452_create_iam_owner_bootstrap_state',
+      '0453_extend_iam_admin_audit_events',
     );
   });
 });

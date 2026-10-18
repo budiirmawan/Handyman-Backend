@@ -10867,13 +10867,45 @@ paths:
       operationId: listAuthAuditEvents
       summary: List authentication audit events
       description: >
-        Paginated authentication audit trail. Requires the
-        `auth.audit.read` permission. `meta.limit`, `meta.offset` and
-        `meta.total` follow the platform pagination contract.
+        Paginated IAM/security audit trail. Requires `auth.audit.read`.
+        Each successful IAM mutation records actorUserId, target userId (or
+        invitation/building identifiers in safe metadata), outcome and the
+        persisted createdAt timestamp. Metadata redacts keys containing
+        password/hash/token/secret/credential/authorization material. No
+        credential hash, password or raw invitation/session token is exposed.
+        `meta.limit`, `meta.offset` and `meta.total` follow the pagination contract.
       tags: [Authentication]
+      x-required-permission: auth.audit.read
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED]
       security:
         - bearerAuth: []
       parameters:
+        - name: eventType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [LOGIN_SUCCESS, LOGIN_FAILED, LOGOUT, INVITATION_CREATED, INVITATION_ACCEPTED, INVITATION_REVOKED, ACCOUNT_DEACTIVATED, ACCOUNT_REACTIVATED, ACCOUNT_SUSPENDED, OWNER_BOOTSTRAPPED, PASSWORD_RESET, PASSWORD_CHANGED, ROLE_ASSIGNED, ROLE_REVOKED, BUILDING_ASSIGNED, BUILDING_REVOKED]
+        - name: userId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: actorUserId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: outcome
+          in: query
+          required: false
+          schema: { type: string, enum: [SUCCESS, FAILURE] }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
       responses:
@@ -10945,8 +10977,11 @@ paths:
       operationId: createUser
       summary: Create a user
       description: >
-        Requires `user.manage`. Creates a user with a normalized email
-        (trimmed + lowercased); status defaults to ACTIVE.
+        Administrative-only (`user.manage`) identity creation; this endpoint
+        is not public registration. It creates a normalized email identity
+        (trimmed + lowercased) without any credential or password and must not
+        be used in place of the invitation acceptance flow for a login-ready
+        account. Use `POST /invitations` for governed user provisioning.
       tags: [Users]
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -11097,8 +11132,14 @@ paths:
     post:
       operationId: deactivateUser
       summary: Deactivate a user
-      description: Requires `user.manage`. Revokes active sessions for the user.
+      description: >
+        Requires `user.manage`. ACTIVE → INACTIVE; revokes the user's active
+        sessions, audits actor/target/outcome/time, and blocks further login.
+        Self-action is denied. Only a PLATFORM_ADMIN actor may change a
+        PLATFORM_ADMIN target; removing the last usable Owner is refused.
       tags: [Users]
+      x-required-permission: user.manage
+      x-error-codes: [AUTHENTICATION_REQUIRED, PERMISSION_DENIED, USER_NOT_FOUND, INVALID_ACCOUNT_STATE, SELF_ACCOUNT_ACTION_DENIED, PRIVILEGED_ACCOUNT_PROTECTED, LAST_OWNER_ACCOUNT_PROTECTED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -11122,8 +11163,14 @@ paths:
     post:
       operationId: suspendUser
       summary: Suspend a user
-      description: Requires `user.manage`. Revokes active sessions for the user.
+      description: >
+        Requires `user.manage`. ACTIVE → SUSPENDED; revokes active sessions
+        and the account cannot authenticate. Self-action is denied. Only a
+        PLATFORM_ADMIN actor may change a PLATFORM_ADMIN target; last-usable-
+        Owner lockout is refused. The status transition is durably audited.
       tags: [Users]
+      x-required-permission: user.manage
+      x-error-codes: [AUTHENTICATION_REQUIRED, PERMISSION_DENIED, USER_NOT_FOUND, INVALID_ACCOUNT_STATE, SELF_ACCOUNT_ACTION_DENIED, PRIVILEGED_ACCOUNT_PROTECTED, LAST_OWNER_ACCOUNT_PROTECTED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -11147,8 +11194,13 @@ paths:
     post:
       operationId: reactivateUser
       summary: Reactivate a user
-      description: Requires `user.manage`.
+      description: >
+        Requires `user.manage`. INACTIVE or SUSPENDED → ACTIVE; records
+        `ACCOUNT_REACTIVATED`. Previously revoked sessions are never restored;
+        the user must authenticate again after reactivation.
       tags: [Users]
+      x-required-permission: user.manage
+      x-error-codes: [AUTHENTICATION_REQUIRED, PERMISSION_DENIED, USER_NOT_FOUND, INVALID_ACCOUNT_STATE, PRIVILEGED_ACCOUNT_PROTECTED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -11285,9 +11337,17 @@ paths:
       operationId: assignRoleToUser
       summary: Assign an ACTIVE role to a user
       description: >
-        Requires `role.manage`. Returns the assigned role. Rejects unknown
-        users, unknown/inactive roles, and duplicate active assignments.
+        Requires `role.manage`. Assigns an existing ACTIVE role by roleId;
+        canonical roles are read from `GET /roles`. Duplicate assignments
+        return 409. A caller cannot assign any role to themselves (403
+        `SELF_ROLE_ASSIGNMENT_DENIED`). Roles that define IAM/Building
+        administration and PLATFORM_ADMIN itself can only be assigned by an
+        existing PLATFORM_ADMIN owner (403
+        `PRIVILEGED_ROLE_ASSIGNMENT_DENIED`); role names never grant
+        permissions without the governed role_permission_assignments.
       tags: [Roles & Permissions]
+      x-required-permission: role.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, ROLE_NOT_FOUND, ROLE_INACTIVE, ROLE_ALREADY_ASSIGNED, USER_NOT_FOUND, PRIVILEGED_ROLE_ASSIGNMENT_DENIED, SELF_ROLE_ASSIGNMENT_DENIED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -11340,16 +11400,21 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /users/{userId}/roles/{roleId}:
     delete:
       operationId: revokeRoleFromUser
       summary: Revoke an ACTIVE role assignment
       description: >
         Requires `role.manage`. Revokes one CURRENTLY ACTIVE user-role
         assignment; a missing or already-revoked assignment returns 404
-        `ROLE_ASSIGNMENT_NOT_FOUND`. The LAST active `PLATFORM_ADMIN`
-        assignment cannot be revoked (409 `LAST_OWNER_ROLE_REQUIRED`) so the
-        installation always retains identity/role administration authority.
+        `ROLE_ASSIGNMENT_NOT_FOUND`. Assignment mutations are transactionally
+        serialized. The last usable ACTIVE user's `PLATFORM_ADMIN` assignment
+        cannot be revoked (409 `LAST_OWNER_ROLE_REQUIRED`) so the installation
+        always retains identity/role administration authority. Revoking a
+        privileged role still requires an existing PLATFORM_ADMIN actor.
       tags: [Roles & Permissions]
+      x-required-permission: role.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, ROLE_NOT_FOUND, USER_NOT_FOUND, ROLE_ASSIGNMENT_NOT_FOUND, PRIVILEGED_ROLE_ASSIGNMENT_DENIED, LAST_OWNER_ROLE_REQUIRED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -11882,9 +11947,17 @@ paths:
       operationId: assignBuildingToUser
       summary: Assign a Building to a user
       description: >
-        Requires `building.manage`. Creates an ACTIVE User ↔ Building
-        assignment (the BE-02G source for `GET /auth/me/buildings`).
+        Requires `building.manage`. Creates an ACTIVE, explicit User ↔
+        Building assignment (the BE-02G source for `GET /auth/me/buildings`).
+        A PLATFORM_ADMIN owner may administer any Building assignment but
+        gains no Building data access from that permission alone. Any other
+        actor must already have an ACTIVE assignment to the exact target
+        Building; same-Client sibling access is not enough. This prevents
+        cross-tenant/sibling scope delegation and never grants all Buildings
+        automatically. The mutation records actor, target, Building and time.
       tags: [Building Assignments]
+      x-required-permission: building.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, USER_NOT_FOUND, BUILDING_NOT_FOUND, BUILDING_NOT_AVAILABLE, USER_BUILDING_ALREADY_ASSIGNED, BUILDING_ACCESS_DENIED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -11913,9 +11986,14 @@ paths:
       operationId: listUserBuildings
       summary: List a user's Building assignments
       description: >
-        Requires `building.read`. For the authenticated user's own accessible
-        set prefer `GET /auth/me/buildings` (authentication only).
+        Requires `building.read`. An authenticated PLATFORM_ADMIN may see the
+        target's complete assignment history; all other actors receive only
+        rows for exact Buildings they themselves can access (no same-Client
+        expansion). For the authenticated user's own ACTIVE accessible set
+        prefer `GET /auth/me/buildings` (authentication only).
       tags: [Building Assignments]
+      x-required-permission: building.read
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, USER_NOT_FOUND]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -11941,8 +12019,15 @@ paths:
     delete:
       operationId: deactivateBuildingAssignment
       summary: Deactivate a user's Building assignment
-      description: Requires `building.manage`.
+      description: >
+        Requires `building.manage`. A PLATFORM_ADMIN owner may revoke any
+        Building assignment. Other actors must have explicit ACTIVE access to
+        the exact Building being revoked; otherwise 403
+        `BUILDING_ACCESS_DENIED`. The assignment is retained as INACTIVE and a
+        `BUILDING_REVOKED` audit event records actor, target and Building.
       tags: [Building Assignments]
+      x-required-permission: building.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, USER_NOT_FOUND, USER_BUILDING_ASSIGNMENT_NOT_FOUND, BUILDING_ACCESS_DENIED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/UserIdPath"
@@ -21271,11 +21356,15 @@ paths:
       operationId: createInvitation
       summary: Create an invitation
       description: >
-        Creates a PENDING invitation. The raw token is returned exactly
-        once in this response and is never stored or returned again.
-        Rejects an existing user email and an existing valid pending
-        invitation. Requires `user.manage`. No idempotency key and no
-        optimistic concurrency.
+        Creates a PENDING invitation for a new email. The raw token is
+        returned exactly once in the 201 response and is never persisted;
+        only a SHA-256 hash is stored. A per-email transaction lock prevents
+        concurrent duplicate pending invitations. Rejects an existing user
+        email and an existing unexpired PENDING invitation. Since invitation
+        mail is not wired, `delivery.available` and `delivery.sent` are always
+        false; with `EMAIL_PROVIDER=noop` the response explicitly states that
+        email delivery is unavailable. The authorized administrator must use
+        the token for controlled out-of-band handoff. Requires `user.manage`.
       tags: [Users]
       x-required-permission: user.manage
       x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, USER_EMAIL_ALREADY_EXISTS, INVITATION_ALREADY_PENDING]
@@ -21289,7 +21378,7 @@ paths:
               $ref: "#/components/schemas/CreateInvitationRequest"
       responses:
         "201":
-          description: Invitation created. Token is disclosed once.
+          description: Invitation created. Token is disclosed once; delivery is reported as unavailable (controlled handoff).
           content:
             application/json:
               schema:
@@ -21307,14 +21396,132 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+    get:
+      operationId: listInvitations
+      summary: List invitation status (bounded)
+      description: >
+        Requires `user.manage`. Returns token-free invitation metadata.
+        Status `EXPIRED` is derived from an unaccepted PENDING row whose
+        `expiresAt` is in the past; it is not a stored database status.
+        Supports exact email/status filters and page/pageSize pagination
+        (defaults 1/50, pageSize 1–200). No token hash is returned.
+      tags: [Users]
+      x-required-permission: user.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: email
+          in: query
+          required: false
+          schema: { type: string, format: email }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [PENDING, ACCEPTED, REVOKED, EXPIRED] }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Invitation page; no token or token hash.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PublicInvitation" }
+                      meta: { $ref: "#/components/schemas/PaginationMeta" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /invitations/{id}:
+    get:
+      operationId: getInvitation
+      summary: Read an invitation's lifecycle state
+      description: >
+        Requires `user.manage`. Returns only public invitation metadata
+        (id/email/status/expiry/actors/timestamps). Never returns the raw
+        token or token hash. A PENDING invitation past expiry is projected
+        as EXPIRED.
+      tags: [Users]
+      x-required-permission: user.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, INVITATION_NOT_FOUND]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Token-free invitation status.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PublicInvitation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /invitations/validate:
+    post:
+      operationId: validateInvitation
+      summary: Validate an invitation token before acceptance
+      description: >
+        Public token-based validation; no session or RBAC. A valid token
+        authorizes only this read. Unknown tokens return 404 without email
+        lookup. Expired/revoked tokens cannot be accepted; accepted tokens
+        cannot be reused. The response never contains a token hash.
+      tags: [Authentication]
+      security: []
+      x-error-codes: [VALIDATION_ERROR, INVALID_INVITATION_TOKEN, INVITATION_EXPIRED, INVITATION_REVOKED, INVITATION_ALREADY_ACCEPTED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ValidateInvitationRequest" }
+      responses:
+        "200":
+          description: The invitation is PENDING and unexpired.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/InvitationValidation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /invitations/accept:
     post:
       operationId: acceptInvitation
       summary: Accept an invitation
       description: >
-        Public token acceptance. No bearer session. Creates the user and
-        marks the invitation ACCEPTED atomically. Password policy is the
-        shared policy (8 to 72 characters). Does not return the token hash.
+        Public token acceptance. No bearer session. The candidate supplies
+        their own `displayName` and `password`; existing password policy and
+        bcrypt credential services are reused. Under a locked invitation
+        row, creates an ACTIVE user + credential and marks the invitation
+        ACCEPTED atomically. Does not return a session, password, hash or
+        token. The candidate must then use `POST /auth/login`. Rejected for
+        unknown, expired, revoked, reused or conflicting invitation state.
       tags: [Authentication]
       security: []
       x-error-codes: [VALIDATION_ERROR, PASSWORD_POLICY_VIOLATION, INVALID_INVITATION_TOKEN, INVITATION_EXPIRED, INVITATION_REVOKED, INVITATION_ALREADY_ACCEPTED, USER_EMAIL_ALREADY_EXISTS]
@@ -21351,10 +21558,12 @@ paths:
       operationId: revokeInvitation
       summary: Revoke an invitation
       description: >
-        Revokes a PENDING invitation. An already REVOKED invitation is
-        returned unchanged (idempotent success, not an error). An ACCEPTED
-        invitation is 409. Requires `user.manage`. No Idempotency-Key
-        header and no optimistic concurrency.
+        Requires `user.manage`. Transactionally locks the invitation row and
+        revokes a PENDING invitation (including an expired PENDING row). An
+        already REVOKED invitation is returned unchanged; an ACCEPTED
+        invitation returns 409 `INVITATION_ALREADY_ACCEPTED`. The row lock
+        serializes acceptance versus revoke, so only one terminal transition
+        wins. No Idempotency-Key header is required.
       tags: [Users]
       x-required-permission: user.manage
       x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, INVITATION_NOT_FOUND, INVITATION_ALREADY_ACCEPTED]
@@ -91784,7 +91993,11 @@ components:
 
     AuditEvent:
       type: object
-      description: One persisted authentication audit event.
+      description: >
+        One persisted authentication/IAM audit event. userId identifies the
+        target; actorUserId identifies the principal performing the action;
+        createdAt is the persisted event time. Secret/hash/token values are
+        never exposed.
       required:
         [id, eventType, outcome, createdAt]
       properties:
@@ -91792,7 +92005,8 @@ components:
           $ref: "#/components/schemas/Uuid"
         eventType:
           type: string
-          description: e.g. LOGIN, LOGOUT, LOGIN_FAILED, INVITATION_ACCEPTED.
+          enum: [LOGIN_SUCCESS, LOGIN_FAILED, LOGOUT, INVITATION_CREATED, INVITATION_ACCEPTED, INVITATION_REVOKED, ACCOUNT_DEACTIVATED, ACCOUNT_REACTIVATED, ACCOUNT_SUSPENDED, OWNER_BOOTSTRAPPED, PASSWORD_RESET, PASSWORD_CHANGED, ROLE_ASSIGNED, ROLE_REVOKED, BUILDING_ASSIGNED, BUILDING_REVOKED]
+          description: Canonical IAM authentication/security event type.
         outcome:
           type: string
           enum: [SUCCESS, FAILURE]
@@ -91821,6 +92035,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
+          description: Sensitive keys containing password/hash/token/secret/credential/authorization are replaced with [REDACTED] at the public read boundary.
         createdAt:
           type: string
           format: date-time
@@ -93105,10 +93320,12 @@ components:
     InvitationCreated:
       type: object
       description: >
-        One-time invitation disclosure. `invitationToken` is not part of
-        PublicInvitation and is never returned again. The token hash is
-        never returned.
-      required: [id, email, status, expiresAt, invitationToken]
+        One-time controlled handoff. `invitationToken` is disclosed only in
+        the creation response and is not part of PublicInvitation; only its
+        SHA-256 hash is persisted. `delivery.available` and `.sent` are false
+        because automated invitation email is not wired (including
+        EMAIL_PROVIDER=noop).
+      required: [id, email, status, expiresAt, invitationToken, delivery]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
         email: { type: string, format: email }
@@ -93116,18 +93333,33 @@ components:
           type: string
           enum: [PENDING]
         expiresAt: { type: string, format: date-time }
-        invitationToken: { type: string }
+        invitationToken:
+          type: string
+          description: Secret bearer token disclosed exactly once; do not log or persist client-side.
+        delivery: { $ref: "#/components/schemas/InvitationDeliveryStatus" }
+    InvitationDeliveryStatus:
+      type: object
+      required: [available, method, provider, sent, note]
+      properties:
+        available: { type: boolean, enum: [false] }
+        method: { type: string, enum: [CONTROLLED_ONE_TIME_HANDOFF] }
+        provider: { type: string, description: Configured EMAIL_PROVIDER discriminator. }
+        sent: { type: boolean, enum: [false] }
+        note: { type: string, description: Explicit operator instruction; no email was sent. }
     PublicInvitation:
       type: object
+      description: Token-free invitation lifecycle projection; EXPIRED is derived from a past expiresAt while stored status is PENDING.
       required: [id, email, status, expiresAt, invitedByUserId, acceptedByUserId, acceptedAt, revokedAt, createdAt, updatedAt]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
         email: { type: string, format: email }
         status:
           type: string
-          enum: [PENDING, ACCEPTED, REVOKED]
+          enum: [PENDING, ACCEPTED, REVOKED, EXPIRED]
         expiresAt: { type: string, format: date-time }
-        invitedByUserId: { $ref: "#/components/schemas/Uuid" }
+        invitedByUserId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
         acceptedByUserId:
           allOf: [{ $ref: "#/components/schemas/Uuid" }]
           nullable: true
@@ -93135,6 +93367,20 @@ components:
         revokedAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    ValidateInvitationRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 256 }
+    InvitationValidation:
+      type: object
+      required: [tokenValid, invitationId, email, status, expiresAt]
+      properties:
+        tokenValid: { type: boolean, enum: [true] }
+        invitationId: { $ref: "#/components/schemas/Uuid" }
+        email: { type: string, format: email }
+        status: { type: string, enum: [PENDING] }
+        expiresAt: { type: string, format: date-time }
     AcceptInvitationRequest:
       type: object
       required: [token, displayName, password]

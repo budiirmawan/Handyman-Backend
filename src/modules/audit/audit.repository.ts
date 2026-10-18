@@ -84,6 +84,7 @@ export async function insertAuditEvent(
 export type AuditListFilters = {
   eventType?: AuditEventType;
   userId?: string;
+  actorUserId?: string;
   outcome?: AuditOutcome;
   from?: Date;
   to?: Date;
@@ -110,6 +111,11 @@ export async function listAuditEvents(
   if (filters.userId) {
     params.push(filters.userId);
     where.push(`user_id = $${params.length}`);
+  }
+
+  if (filters.actorUserId) {
+    params.push(filters.actorUserId);
+    where.push(`actor_user_id = $${params.length}`);
   }
 
   if (filters.outcome) {

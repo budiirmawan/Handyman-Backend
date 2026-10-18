@@ -1,9 +1,10 @@
+import type { PoolClient } from 'pg';
 import { getAppConfig } from '../../config';
+import { withTransaction } from '../../database';
 import { logger } from '../../shared/logger';
 import {
   toPublicUser,
   userRepository,
-  userService,
   userStatusCanLogin,
 } from '../users';
 import { credentialRepository } from './credential.repository';
@@ -20,17 +21,25 @@ import type { AuthContext, SessionResult } from './session.types';
  * once; only its hash is persisted.
  */
 export async function createSessionForUser(userId: string): Promise<SessionResult> {
-  const user = await userService.getUserById(userId);
-
   const sessionConfig = getAppConfig().session;
   const sessionToken = generateSessionToken(sessionConfig.tokenBytes);
   const tokenHash = hashSessionToken(sessionToken);
   const expiresAt = new Date(Date.now() + sessionConfig.ttlMs);
 
-  const session = await sessionRepository.createSession({
-    userId,
-    tokenHash,
-    expiresAt,
+  // Lock the user row while creating the session. Account lifecycle transitions
+  // take the same row lock and revoke sessions in their status transaction, so
+  // a concurrent login cannot create a session after a suspension that later
+  // becomes usable again on reactivation.
+  const { user, session } = await withTransaction(async (client) => {
+    const record = await userRepository.findByIdForUpdate(userId, client);
+    if (!record || !userStatusCanLogin(record.status)) {
+      throw invalidSessionError();
+    }
+    const created = await sessionRepository.createSession(
+      { userId, tokenHash, expiresAt },
+      client,
+    );
+    return { user: toPublicUser(record), session: created };
   });
 
   logger.info('Session created', {
@@ -114,8 +123,15 @@ export async function revokeSessionById(id: string): Promise<void> {
  * Revokes all active sessions for a user. Used by account lifecycle so that
  * deactivated/suspended accounts cannot keep using an existing session.
  */
-export async function revokeActiveSessionsForUser(userId: string): Promise<void> {
-  const count = await sessionRepository.revokeActiveByUserId(userId, new Date());
+export async function revokeActiveSessionsForUser(
+  userId: string,
+  client?: PoolClient,
+): Promise<void> {
+  const count = await sessionRepository.revokeActiveByUserId(
+    userId,
+    new Date(),
+    client,
+  );
 
   if (count > 0) {
     logger.info('Sessions revoked for user', {

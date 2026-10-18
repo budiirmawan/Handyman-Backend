@@ -12,6 +12,7 @@ export {
   auditService,
   listEvents,
   recordEvent,
+  sanitizeAuditMetadata,
   toPublicAuditEvent,
 } from './audit.service';
 

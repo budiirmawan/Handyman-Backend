@@ -21,6 +21,11 @@ export const AUDIT_EVENT_TYPES = [
   'OWNER_BOOTSTRAPPED',
   'PASSWORD_RESET',
   'PASSWORD_CHANGED',
+  // CR-HM-BE-IAM-ADMIN-02 — administrative IAM events (migration 0453).
+  'ROLE_ASSIGNED',
+  'ROLE_REVOKED',
+  'BUILDING_ASSIGNED',
+  'BUILDING_REVOKED',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

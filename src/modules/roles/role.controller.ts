@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
+import { auditContextFromRequest } from '../audit';
 import { roleService } from './role.service';
 import {
   parseAssignRoleBody,
@@ -10,6 +11,10 @@ import {
 
 function paramString(value: string | string[]): string {
   return Array.isArray(value) ? '' : value;
+}
+
+function roleAudit(req: Request) {
+  return { ...auditContextFromRequest(req), actorUserId: req.auth.userId };
 }
 
 export async function createRoleHandler(
@@ -65,6 +70,7 @@ export async function assignRoleHandler(
       userId,
       roleId,
       req.auth.userId,
+      roleAudit(req),
     );
     sendSuccess(res, role, 201);
   } catch (error) {
@@ -88,6 +94,7 @@ export async function revokeRoleHandler(
       userId,
       roleId,
       req.auth.userId,
+      roleAudit(req),
     );
     sendSuccess(res, role);
   } catch (error) {

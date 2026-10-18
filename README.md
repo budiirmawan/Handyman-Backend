@@ -142,26 +142,37 @@ npm run db:seed      # Apply idempotent RBAC bootstrap data
 GET  /api/v1/health
 GET  /api/v1/health/database
 POST /api/v1/users
+GET  /api/v1/users
 GET  /api/v1/users/:id
 POST /api/v1/auth/login
 GET  /api/v1/auth/me
+GET  /api/v1/auth/password/status
+POST /api/v1/auth/password
 POST /api/v1/auth/logout
 POST /api/v1/roles
 GET  /api/v1/roles
 GET  /api/v1/roles/:id
-POST /api/v1/users/:userId/roles
-GET  /api/v1/users/:userId/roles
+POST   /api/v1/users/:userId/roles
+GET    /api/v1/users/:userId/roles
+DELETE /api/v1/users/:userId/roles/:roleId
 POST /api/v1/permissions
 GET  /api/v1/permissions
 GET  /api/v1/permissions/:id
 POST /api/v1/roles/:roleId/permissions
 GET  /api/v1/roles/:roleId/permissions
 POST /api/v1/invitations
+GET  /api/v1/invitations
+GET  /api/v1/invitations/:id
+POST /api/v1/invitations/validate
 POST /api/v1/invitations/accept
 POST /api/v1/invitations/:id/revoke
 POST /api/v1/users/:id/deactivate
 POST /api/v1/users/:id/suspend
 POST /api/v1/users/:id/reactivate
+POST /api/v1/users/:id/password-reset
+POST /api/v1/users/:userId/buildings
+GET  /api/v1/users/:userId/buildings
+DELETE /api/v1/users/:userId/buildings/:buildingId
 GET  /api/v1/auth/audit-events
 GET  /api/v1/auth/me/buildings
 ```
@@ -173,10 +184,12 @@ require the listed permission.
 
 | Endpoint | Required permission |
 |---|---|
-| `GET /api/v1/users/:id` | `user.read` |
-| `POST /api/v1/users` | `user.manage` |
+| `GET /api/v1/users`, `GET /api/v1/users/:id` | `user.read` |
+| `POST /api/v1/users`, `POST /api/v1/invitations`, `GET /api/v1/invitations`, `GET /api/v1/invitations/:id`, `POST /api/v1/invitations/:id/revoke`, lifecycle/password-reset routes | `user.manage` |
 | `GET /api/v1/roles`, `GET /api/v1/roles/:id`, `GET /api/v1/users/:userId/roles` | `role.read` |
-| `POST /api/v1/roles`, `POST /api/v1/users/:userId/roles` | `role.manage` |
+| `POST /api/v1/roles`, `POST /api/v1/users/:userId/roles`, `DELETE /api/v1/users/:userId/roles/:roleId` | `role.manage` |
+| `POST /api/v1/users/:userId/buildings`, `DELETE /api/v1/users/:userId/buildings/:buildingId` | `building.manage` |
+| `GET /api/v1/users/:userId/buildings` | `building.read` |
 | `GET /api/v1/permissions`, `GET /api/v1/permissions/:id`, `GET /api/v1/roles/:roleId/permissions` | `permission.read` |
 | `POST /api/v1/permissions`, `POST /api/v1/roles/:roleId/permissions` | `permission.manage` |
 | `POST /api/v1/invitations`, `POST /api/v1/invitations/:id/revoke` | `user.manage` |
@@ -235,6 +248,21 @@ Audit & Security (BE-01H), and Effective User Context (BE-01I:
 Passwords, raw session tokens, and raw invitation tokens are never stored in
 plaintext or returned by any API.
 
-Deferred: Client, Subscription/Entitlement, Property, Building, Organization,
-Position, Data Scope, Available Workspace, Configuration, and all operational
-domains.
+Deferred in the original BE-01I wave: Client, Subscription/Entitlement,
+Property, Building, Organization, Position, Data Scope, Available Workspace,
+Configuration, and all operational domains. Later Backend modules and the
+IAM Admin change request add further capabilities beyond that original wave.
+
+## IAM Admin Provisioning & Lifecycle (CR-HM-BE-IAM-ADMIN-02)
+
+Invitation lifecycle tracking, token-based acceptance, canonical role
+assignment/revocation, explicit Building scope, account lifecycle, forced
+password change, session revocation, and IAM audit are documented in the
+[Frontend API handoff](docs/api/CR-HM-BE-IAM-ADMIN-02_FRONTEND_HANDOFF.md),
+[operator runbook](docs/change-requests/CR-HM-BE-IAM-ADMIN-02_OPERATOR_RUNBOOK.md),
+and canonical [OpenAPI](docs/api/openapi.yaml).
+
+Invitation creation currently uses controlled one-time token handoff, not
+email delivery. `delivery.available` and `delivery.sent` are false even with
+SMTP configured; with `EMAIL_PROVIDER=noop`, the response explicitly reports
+that delivery is unavailable. Never infer an email was sent.

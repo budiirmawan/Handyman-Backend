@@ -66,6 +66,16 @@ export function parseAuditQuery(query: Record<string, unknown>): AuditListFilter
     }
   }
 
+  const actorUserIdRaw = readSingleParam(query.actorUserId);
+  let actorUserId: string | undefined;
+  if (actorUserIdRaw !== undefined && actorUserIdRaw !== '') {
+    if (!UUID_PATTERN.test(actorUserIdRaw)) {
+      details.push({ field: 'actorUserId', message: 'actorUserId must be a valid UUID.' });
+    } else {
+      actorUserId = actorUserIdRaw;
+    }
+  }
+
   const from = readDate(query.from, 'from', details);
   const to = readDate(query.to, 'to', details);
 
@@ -79,6 +89,7 @@ export function parseAuditQuery(query: Record<string, unknown>): AuditListFilter
   return {
     ...(eventType === undefined ? {} : { eventType }),
     ...(userId === undefined ? {} : { userId }),
+    ...(actorUserId === undefined ? {} : { actorUserId }),
     ...(outcome === undefined ? {} : { outcome }),
     ...(from === undefined ? {} : { from }),
     ...(to === undefined ? {} : { to }),

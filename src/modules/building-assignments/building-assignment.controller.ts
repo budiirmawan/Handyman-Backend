@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
+import { auditContextFromRequest } from '../audit';
 import { buildingAssignmentService } from './building-assignment.service';
 import {
   parseAssignmentBuildingIdParam,
@@ -9,6 +10,10 @@ import {
 
 function paramString(value: string | string[]): string {
   return Array.isArray(value) ? '' : value;
+}
+
+function assignmentAudit(req: Request) {
+  return { ...auditContextFromRequest(req), actorUserId: req.auth.userId };
 }
 
 export async function createAssignmentHandler(
@@ -23,6 +28,7 @@ export async function createAssignmentHandler(
       userId,
       input,
       req.auth.userId,
+      assignmentAudit(req),
     );
     sendSuccess(res, assignment, 201);
   } catch (error) {
@@ -37,7 +43,10 @@ export async function listUserBuildingsHandler(
 ): Promise<void> {
   try {
     const userId = parseAssignmentUserIdParam(paramString(req.params.userId));
-    const assignments = await buildingAssignmentService.listUserAssignments(userId);
+    const assignments = await buildingAssignmentService.listUserAssignments(
+      userId,
+      req.auth.userId,
+    );
     sendSuccess(res, assignments);
   } catch (error) {
     next(error);
@@ -57,6 +66,8 @@ export async function deactivateAssignmentHandler(
     const assignment = await buildingAssignmentService.deactivateAssignment(
       userId,
       buildingId,
+      req.auth.userId,
+      assignmentAudit(req),
     );
     sendSuccess(res, assignment);
   } catch (error) {

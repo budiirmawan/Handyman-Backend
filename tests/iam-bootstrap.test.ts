@@ -14,6 +14,10 @@ import {
   parseBootstrapOwnerArgs,
 } from '../src/modules/iam-bootstrap';
 import { credentialService } from '../src/modules/auth';
+import { recordEvent } from '../src/modules/audit';
+import { buildingService } from '../src/modules/buildings';
+import { clientService } from '../src/modules/clients';
+import { propertyService } from '../src/modules/properties';
 import { userService } from '../src/modules/users';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
@@ -34,6 +38,7 @@ const API_PREFIX = '/api/v1';
 
 process.env.NODE_ENV = 'test';
 process.env.LOG_LEVEL = 'error';
+process.env.EMAIL_PROVIDER = 'noop';
 process.env.DB_NAME = DB_NAME;
 
 if (EMBEDDED_DATABASE) {
@@ -132,24 +137,94 @@ async function roleId(code: string): Promise<string> {
   return id;
 }
 
+async function createBuildingRealm(label: string) {
+  const suffix = randomUUID().slice(0, 8).toUpperCase();
+  const client = await clientService.createClient({
+    code: `IAM_${suffix}`,
+    name: `IAM ${label} Client`,
+  });
+  const property = await propertyService.createProperty({
+    clientId: client.id,
+    code: `IAM_PROP_${suffix}`,
+    name: `IAM ${label} Property`,
+  });
+  const building = await buildingService.createBuilding({
+    propertyId: property.id,
+    code: `IAM_BLD_${suffix}`,
+    name: `IAM ${label} Building`,
+  });
+  return { client, property, building };
+}
+
 async function onboardUser(
   adminToken: string,
   email: string,
   password: string,
   roleCode: string,
-): Promise<{ userId: string; token: string }> {
+): Promise<{ userId: string; token: string; invitationId: string }> {
   const invitation = await api()
     .post(`${API_PREFIX}/invitations`)
     .set(auth(adminToken))
     .send({ email });
   assert.equal(invitation.status, 201);
+  assert.equal(invitation.body.data.delivery.available, false);
+  assert.equal(invitation.body.data.delivery.sent, false);
+  assert.equal(
+    invitation.body.data.delivery.method,
+    'CONTROLLED_ONE_TIME_HANDOFF',
+  );
+  assert.match(invitation.body.data.delivery.note, /EMAIL_PROVIDER=noop/);
+  assert.equal('tokenHash' in invitation.body.data, false);
+  const invitationToken = invitation.body.data.invitationToken as string;
+  const invitationId = invitation.body.data.id as string;
+
+  const validated = await api()
+    .post(`${API_PREFIX}/invitations/validate`)
+    .send({ token: invitationToken });
+  assert.equal(validated.status, 200);
+  assert.equal(validated.body.data.tokenValid, true);
+  assert.equal(validated.body.data.email, email.toLowerCase());
+  assert.equal(validated.body.data.status, 'PENDING');
+  assert.equal('tokenHash' in validated.body.data, false);
+
+  const tracked = await api()
+    .get(`${API_PREFIX}/invitations/${invitationId}`)
+    .set(auth(adminToken));
+  assert.equal(tracked.status, 200);
+  assert.equal(tracked.body.data.status, 'PENDING');
+  assert.equal('invitationToken' in tracked.body.data, false);
+  assert.equal('tokenHash' in tracked.body.data, false);
+
+  const listed = await api()
+    .get(`${API_PREFIX}/invitations?email=${encodeURIComponent(email)}&status=PENDING&page=1&pageSize=10`)
+    .set(auth(adminToken));
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.meta.total, 1);
+  assert.equal(listed.body.data[0].id, invitationId);
+
+  const duplicate = await api()
+    .post(`${API_PREFIX}/invitations`)
+    .set(auth(adminToken))
+    .send({ email });
+  assert.equal(duplicate.status, 409);
+  assert.equal(duplicate.body.error.code, 'INVITATION_ALREADY_PENDING');
 
   const accepted = await api().post(`${API_PREFIX}/invitations/accept`).send({
-    token: invitation.body.data.invitationToken,
+    token: invitationToken,
     displayName: `${roleCode} Persona`,
     password,
   });
   assert.equal(accepted.status, 200);
+  assert.equal('password' in accepted.body.data.user, false);
+  assert.equal('passwordHash' in accepted.body.data.user, false);
+
+  const reused = await api().post(`${API_PREFIX}/invitations/accept`).send({
+    token: invitationToken,
+    displayName: `${roleCode} Persona`,
+    password,
+  });
+  assert.equal(reused.status, 409);
+  assert.equal(reused.body.error.code, 'INVITATION_ALREADY_ACCEPTED');
 
   const userId = accepted.body.data.user.id as string;
   const assigned = await api()
@@ -161,7 +236,11 @@ async function onboardUser(
   const session = await login(email, password);
   assert.equal(session.status, 200);
 
-  return { userId, token: session.body.data.sessionToken as string };
+  return {
+    userId,
+    token: session.body.data.sessionToken as string,
+    invitationId,
+  };
 }
 
 describe('CR-HM-IAM-BOOTSTRAP-01 — operator CLI argument safety', () => {
@@ -520,6 +599,177 @@ describe('CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap', () => {
     careUserId = care.userId;
     careToken = care.token;
 
+    const realm = await createBuildingRealm('Care Allowed');
+    const sibling = await buildingService.createBuilding({
+      propertyId: realm.property.id,
+      code: `IAM_SIB_${randomUUID().slice(0, 8).toUpperCase()}`,
+      name: 'Unassigned Sibling Building',
+    });
+    const otherTenant = await createBuildingRealm('Care Denied');
+
+    const assignedBuilding = await api()
+      .post(`${API_PREFIX}/users/${careUserId}/buildings`)
+      .set(auth(ownerToken))
+      .send({ buildingId: realm.building.id });
+    assert.equal(assignedBuilding.status, 201);
+    assert.equal(assignedBuilding.body.data.buildingId, realm.building.id);
+
+    const ownerBuildingContext = await api()
+      .get(`${API_PREFIX}/auth/me/buildings`)
+      .set(auth(ownerToken));
+    assert.equal(ownerBuildingContext.status, 200);
+    assert.deepEqual(ownerBuildingContext.body.data, []);
+
+    const careBuildingContext = await api()
+      .get(`${API_PREFIX}/auth/me/buildings`)
+      .set(auth(care.token));
+    assert.equal(careBuildingContext.status, 200);
+    assert.deepEqual(
+      careBuildingContext.body.data.map((entry: { building: { id: string } }) => entry.building.id),
+      [realm.building.id],
+    );
+
+    const permittedWorkspace = await api()
+      .get(`${API_PREFIX}/handyman/care/buildings/${realm.building.id}/authority`)
+      .set(auth(care.token));
+    assert.equal(permittedWorkspace.status, 200);
+
+    for (const unauthorizedBuildingId of [sibling.id, otherTenant.building.id]) {
+      const deniedWorkspace = await api()
+        .get(`${API_PREFIX}/handyman/care/buildings/${unauthorizedBuildingId}/authority`)
+        .set(auth(care.token));
+      assert.equal(deniedWorkspace.status, 403);
+      assert.equal(
+        deniedWorkspace.body.error.code,
+        'HANDYMAN_CARE_AUTHORITY_DENIED',
+      );
+    }
+
+    const scopeManager = await onboardUser(
+      ownerToken,
+      `scope-manager-${randomUUID().slice(0, 8)}@example.com`,
+      'ScopeManagerPass123',
+      'SYSTEM_ADMIN',
+    );
+    const scopeManagerAssignment = await api()
+      .post(`${API_PREFIX}/users/${scopeManager.userId}/buildings`)
+      .set(auth(ownerToken))
+      .send({ buildingId: realm.building.id });
+    assert.equal(scopeManagerAssignment.status, 201);
+
+    for (const unauthorizedBuildingId of [sibling.id, otherTenant.building.id]) {
+      const crossScopeAssignment = await api()
+        .post(`${API_PREFIX}/users/${careUserId}/buildings`)
+        .set(auth(scopeManager.token))
+        .send({ buildingId: unauthorizedBuildingId });
+      assert.equal(crossScopeAssignment.status, 403);
+      assert.equal(crossScopeAssignment.body.error.code, 'BUILDING_ACCESS_DENIED');
+    }
+
+    const visibleCareScope = await api()
+      .get(`${API_PREFIX}/users/${careUserId}/buildings`)
+      .set(auth(scopeManager.token));
+    assert.equal(visibleCareScope.status, 200);
+    assert.deepEqual(
+      visibleCareScope.body.data.map((assignment: { buildingId: string }) => assignment.buildingId),
+      [realm.building.id],
+    );
+
+    const targetAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?userId=${careUserId}&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.equal(targetAudit.status, 200);
+    const targetEventTypes = (targetAudit.body.data as { eventType: string }[])
+      .map((event) => event.eventType);
+    for (const eventType of ['INVITATION_ACCEPTED', 'ROLE_ASSIGNED', 'BUILDING_ASSIGNED']) {
+      assert.ok(targetEventTypes.includes(eventType), `${eventType} must be audited`);
+    }
+    const roleAssignmentEvent = (targetAudit.body.data as {
+      eventType: string; userId: string; actorUserId: string | null; outcome: string; createdAt: string;
+    }[]).find((event) => event.eventType === 'ROLE_ASSIGNED');
+    assert.ok(roleAssignmentEvent);
+    assert.equal(roleAssignmentEvent.userId, careUserId);
+    assert.equal(roleAssignmentEvent.actorUserId, ownerUserId);
+    assert.equal(roleAssignmentEvent.outcome, 'SUCCESS');
+    assert.ok(Number.isFinite(Date.parse(roleAssignmentEvent.createdAt)));
+    const buildingAssignmentEvent = (targetAudit.body.data as {
+      eventType: string; userId: string; actorUserId: string | null; outcome: string; createdAt: string;
+    }[]).find((event) => event.eventType === 'BUILDING_ASSIGNED');
+    assert.ok(buildingAssignmentEvent);
+    assert.equal(buildingAssignmentEvent.userId, careUserId);
+    assert.equal(buildingAssignmentEvent.actorUserId, ownerUserId);
+    assert.equal(buildingAssignmentEvent.outcome, 'SUCCESS');
+    assert.ok(Number.isFinite(Date.parse(buildingAssignmentEvent.createdAt)));
+
+    const actorAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?actorUserId=${ownerUserId}&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.equal(actorAudit.status, 200);
+    const actorEventTypes = (actorAudit.body.data as { eventType: string }[])
+      .map((event) => event.eventType);
+    for (const eventType of ['INVITATION_CREATED', 'ROLE_ASSIGNED', 'BUILDING_ASSIGNED']) {
+      assert.ok(actorEventTypes.includes(eventType), `${eventType} must identify the Owner actor`);
+    }
+    const invitationCreatedEvent = (actorAudit.body.data as {
+      eventType: string; userId: string | null; actorUserId: string | null;
+      outcome: string; createdAt: string; metadata: Record<string, unknown>;
+    }[]).find((event) =>
+      event.eventType === 'INVITATION_CREATED' &&
+      event.metadata.invitationId === care.invitationId,
+    );
+    assert.ok(invitationCreatedEvent);
+    assert.equal(invitationCreatedEvent.userId, null);
+    assert.equal(invitationCreatedEvent.actorUserId, ownerUserId);
+    assert.equal(invitationCreatedEvent.outcome, 'SUCCESS');
+    assert.equal(invitationCreatedEvent.metadata.targetEmail, careEmail);
+    assert.ok(Number.isFinite(Date.parse(invitationCreatedEvent.createdAt)));
+
+    await recordEvent({
+
+      eventType: 'LOGIN_FAILED',
+      outcome: 'FAILURE',
+      userId: careUserId,
+      actorUserId: ownerUserId,
+      metadata: {
+        password: 'dummy-test-secret',
+        passwordHash: 'dummy-test-bcrypt-hash',
+        invitationToken: 'dummy-test-token',
+        safeReason: 'audit-redaction-probe',
+      },
+    });
+    const redactedAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?userId=${careUserId}&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.equal(redactedAudit.status, 200);
+    const redactedProbe = (redactedAudit.body.data as { metadata: Record<string, unknown> }[])
+      .find((event) => event.metadata.safeReason === 'audit-redaction-probe');
+    assert.ok(redactedProbe);
+    assert.equal(redactedProbe.metadata.password, '[REDACTED]');
+    assert.equal(redactedProbe.metadata.passwordHash, '[REDACTED]');
+    assert.equal(redactedProbe.metadata.invitationToken, '[REDACTED]');
+    assert.equal(JSON.stringify(redactedAudit.body).includes('dummy-test-secret'), false);
+    assert.equal(JSON.stringify(redactedAudit.body).includes('dummy-test-bcrypt-hash'), false);
+
+    const revokedBuildingScope = await api()
+      .delete(`${API_PREFIX}/users/${careUserId}/buildings/${realm.building.id}`)
+      .set(auth(ownerToken));
+    assert.equal(revokedBuildingScope.status, 200);
+    assert.equal(revokedBuildingScope.body.data.status, 'INACTIVE');
+    const deniedAfterScopeRevoke = await api()
+      .get(`${API_PREFIX}/handyman/care/buildings/${realm.building.id}/authority`)
+      .set(auth(care.token));
+    assert.equal(deniedAfterScopeRevoke.status, 403);
+    assert.equal(deniedAfterScopeRevoke.body.error.code, 'HANDYMAN_CARE_AUTHORITY_DENIED');
+
+    const buildingRevokeAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?userId=${careUserId}&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.ok(
+      (buildingRevokeAudit.body.data as { eventType: string }[])
+        .some((event) => event.eventType === 'BUILDING_REVOKED'),
+      'Building scope revocation must be audited',
+    );
+
     const me = await api()
       .get(`${API_PREFIX}/auth/me`)
       .set(auth(careToken));
@@ -563,6 +813,93 @@ describe('CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap', () => {
       .set(auth(careToken))
       .send({ newPassword: 'TakeoverPass123' });
     assert.equal(resetOwner.status, 403);
+  });
+
+  it('serializes duplicate invitations and enforces revoke/expiry-safe one-time token lifecycle', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const email = `invite-race-${randomUUID().slice(0, 8)}@example.com`;
+    const create = () =>
+      api()
+        .post(`${API_PREFIX}/invitations`)
+        .set(auth(ownerToken))
+        .send({ email });
+    const [first, second] = await Promise.all([create(), create()]);
+    const results = [first, second];
+    assert.equal(results.filter((response) => response.status === 201).length, 1);
+    assert.equal(results.filter((response) => response.status === 409).length, 1);
+    const created = results.find((response) => response.status === 201)!;
+    const invitationId = created.body.data.id as string;
+    const token = created.body.data.invitationToken as string;
+
+    const stored = await pool!.query<{ token_hash: string }>(
+      'SELECT token_hash FROM user_invitations WHERE id = $1',
+      [invitationId],
+    );
+    assert.equal(stored.rows.length, 1);
+    assert.notEqual(stored.rows[0].token_hash, token);
+    assert.equal(stored.rows[0].token_hash.length, 64);
+
+    const revoked = await api()
+      .post(`${API_PREFIX}/invitations/${invitationId}/revoke`)
+      .set(auth(ownerToken));
+    assert.equal(revoked.status, 200);
+    assert.equal(revoked.body.data.status, 'REVOKED');
+
+    const invitationRevokeAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?actorUserId=${ownerUserId}&eventType=INVITATION_REVOKED&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.equal(invitationRevokeAudit.status, 200);
+    assert.ok(
+      (invitationRevokeAudit.body.data as { metadata: Record<string, unknown> }[])
+        .some((event) => event.metadata.invitationId === invitationId),
+    );
+
+    const validateRevoked = await api()
+      .post(`${API_PREFIX}/invitations/validate`)
+      .send({ token });
+    assert.equal(validateRevoked.status, 400);
+    assert.equal(validateRevoked.body.error.code, 'INVITATION_REVOKED');
+
+    const acceptRevoked = await api()
+      .post(`${API_PREFIX}/invitations/accept`)
+      .send({ token, displayName: 'Revoked Candidate', password: 'RevokedPass123' });
+    assert.equal(acceptRevoked.status, 400);
+    assert.equal(acceptRevoked.body.error.code, 'INVITATION_REVOKED');
+
+    const afterRevoke = await create();
+    assert.equal(afterRevoke.status, 201, 'revocation permits a new invitation for the email');
+    await api()
+      .post(`${API_PREFIX}/invitations/${afterRevoke.body.data.id}/revoke`)
+      .set(auth(ownerToken));
+
+    const expiredEmail = `invite-expired-${randomUUID().slice(0, 8)}@example.com`;
+    const pending = await api()
+      .post(`${API_PREFIX}/invitations`)
+      .set(auth(ownerToken))
+      .send({ email: expiredEmail });
+    assert.equal(pending.status, 201);
+    await pool!.query(
+      'UPDATE user_invitations SET expires_at = NOW() - INTERVAL \'1 second\' WHERE id = $1',
+      [pending.body.data.id],
+    );
+    const expiredRead = await api()
+      .get(`${API_PREFIX}/invitations/${pending.body.data.id}`)
+      .set(auth(ownerToken));
+    assert.equal(expiredRead.body.data.status, 'EXPIRED');
+
+    const expiredList = await api()
+      .get(`${API_PREFIX}/invitations?email=${encodeURIComponent(expiredEmail)}&status=EXPIRED`)
+      .set(auth(ownerToken));
+    assert.equal(expiredList.status, 200);
+    assert.equal(expiredList.body.meta.total, 1);
+    assert.equal(expiredList.body.data[0].status, 'EXPIRED');
+
+    const expiredValidation = await api()
+      .post(`${API_PREFIX}/invitations/validate`)
+      .send({ token: pending.body.data.invitationToken });
+    assert.equal(expiredValidation.status, 400);
+    assert.equal(expiredValidation.body.error.code, 'INVITATION_EXPIRED');
   });
 
   it('resets a password, invalidates sessions and forces a self-service change', async (t) => {
@@ -633,8 +970,79 @@ describe('CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap', () => {
     );
     assert.equal(cleared.rows[0].must_change_password, false);
 
+    const credentialAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?userId=${careUserId}&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.equal(credentialAudit.status, 200);
+    const passwordEvents = (credentialAudit.body.data as {
+      eventType: string; userId: string; actorUserId: string | null;
+    }[]).filter((event) => ['PASSWORD_RESET', 'PASSWORD_CHANGED'].includes(event.eventType));
+    assert.deepEqual(
+      passwordEvents.map((event) => event.eventType).sort(),
+      ['PASSWORD_CHANGED', 'PASSWORD_RESET'],
+    );
+    assert.ok(passwordEvents.every((event) => event.userId === careUserId));
+    const changedEvent = passwordEvents.find((event) => event.eventType === 'PASSWORD_CHANGED');
+    assert.equal(changedEvent?.actorUserId, careUserId);
+
     assert.equal((await login(careEmail, 'CareResetPass456')).status, 401);
     assert.equal((await login(careEmail, 'CareFinalPass789')).status, 200);
+  });
+
+  it('suspends and reactivates an account while invalidating every prior session', async (t) => {
+    if (!requireDatabase(t)) return;
+
+    const session = await login(careEmail, 'CareFinalPass789');
+    assert.equal(session.status, 200);
+    const sessionToken = session.body.data.sessionToken as string;
+
+    const suspended = await api()
+      .post(`${API_PREFIX}/users/${careUserId}/suspend`)
+      .set(auth(ownerToken));
+    assert.equal(suspended.status, 200);
+    assert.equal(suspended.body.data.status, 'SUSPENDED');
+
+    const activeSessions = await pool!.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM user_sessions
+       WHERE user_id = $1 AND status = 'ACTIVE'`,
+      [careUserId],
+    );
+    assert.equal(activeSessions.rows[0].count, 0);
+
+    const denied = await api()
+      .get(`${API_PREFIX}/auth/me`)
+      .set(auth(sessionToken));
+    assert.equal(denied.status, 401);
+    assert.equal(denied.body.error.code, 'INVALID_SESSION');
+
+    const reactivated = await api()
+      .post(`${API_PREFIX}/users/${careUserId}/reactivate`)
+      .set(auth(ownerToken));
+    assert.equal(reactivated.status, 200);
+    assert.equal(reactivated.body.data.status, 'ACTIVE');
+
+    const oldStillDenied = await api()
+      .get(`${API_PREFIX}/auth/me`)
+      .set(auth(sessionToken));
+    assert.equal(oldStillDenied.status, 401, 'reactivation must not restore old sessions');
+
+    const fresh = await login(careEmail, 'CareFinalPass789');
+    assert.equal(fresh.status, 200);
+    careToken = fresh.body.data.sessionToken as string;
+
+    const lifecycleAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?userId=${careUserId}&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.equal(lifecycleAudit.status, 200);
+    const transitions = (lifecycleAudit.body.data as {
+      eventType: string; userId: string; actorUserId: string | null;
+    }[]).filter((event) => ['ACCOUNT_SUSPENDED', 'ACCOUNT_REACTIVATED'].includes(event.eventType));
+    assert.deepEqual(
+      transitions.map((event) => event.eventType).sort(),
+      ['ACCOUNT_REACTIVATED', 'ACCOUNT_SUSPENDED'],
+    );
+    assert.ok(transitions.every((event) => event.userId === careUserId));
+    assert.ok(transitions.every((event) => event.actorUserId === ownerUserId));
   });
 
   it('revokes role assignments and protects the last Owner', async (t) => {
@@ -646,6 +1054,14 @@ describe('CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap', () => {
       .set(auth(ownerToken));
     assert.equal(revoked.status, 200);
     assert.equal(revoked.body.data.code, 'CUSTOMER_CARE');
+
+    const revokeAudit = await api()
+      .get(`${API_PREFIX}/auth/audit-events?userId=${careUserId}&eventType=ROLE_REVOKED&limit=100&offset=0`)
+      .set(auth(ownerToken));
+    assert.equal(revokeAudit.status, 200);
+    assert.equal(revokeAudit.body.data[0].userId, careUserId);
+    assert.equal(revokeAudit.body.data[0].actorUserId, ownerUserId);
+    assert.equal(revokeAudit.body.data[0].outcome, 'SUCCESS');
 
     const repeated = await api()
       .delete(`${API_PREFIX}/users/${careUserId}/roles/${careRoleId}`)
@@ -839,6 +1255,13 @@ describe('CR-HM-IAM-BOOTSTRAP-01 — first-owner bootstrap', () => {
       escalate.body.error.code,
       'PRIVILEGED_ROLE_ASSIGNMENT_DENIED',
     );
+
+    const selfEscalate = await api()
+      .post(`${API_PREFIX}/users/${systemAdminUserId}/roles`)
+      .set(auth(systemAdminToken))
+      .send({ roleId: await roleId('MOBILE_STAFF') });
+    assert.equal(selfEscalate.status, 403);
+    assert.equal(selfEscalate.body.error.code, 'SELF_ROLE_ASSIGNMENT_DENIED');
 
     const stillOwner = await api()
       .get(`${API_PREFIX}/auth/me`)

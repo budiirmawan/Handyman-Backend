@@ -1,3 +1,6 @@
+import { recordEvent, type AuditRequestContext } from '../audit';
+import { contextAccessService } from '../context-access';
+import { PROTECTED_ROLE_CODE } from '../users/privileged-account.guard';
 import { clientRepository } from '../clients';
 import {
   buildingNotAvailableError,
@@ -36,11 +39,34 @@ export function toPublicAssignment(
   };
 }
 
+/**
+ * Owner may administer scope across the installation without acquiring any
+ * Building data access; every other administrative actor is limited to the
+ * exact Buildings they themselves can access (no same-Client shortcut).
+ * `undefined` actor denotes a trusted in-process service call; HTTP controllers
+ * always supply the authenticated actor id.
+ */
+async function assertActorCanManageBuilding(
+  actorUserId: string | undefined,
+  buildingId: string,
+): Promise<void> {
+  if (!actorUserId) {
+    return;
+  }
+  if (await userRepository.hasActiveRole(actorUserId, PROTECTED_ROLE_CODE)) {
+    return;
+  }
+  await contextAccessService.assertBuildingAccess(actorUserId, buildingId);
+}
+
 export async function createAssignment(
   userId: string,
   input: CreateUserBuildingAssignmentInput,
   assignedByUserId?: string,
+  audit: AuditRequestContext = {},
 ): Promise<PublicUserBuildingAssignment> {
+  await assertActorCanManageBuilding(assignedByUserId, input.buildingId);
+
   const user = await userRepository.findById(userId);
   if (!user) {
     throw userNotFoundError();
@@ -70,17 +96,48 @@ export async function createAssignment(
   };
 
   const record = await buildingAssignmentRepository.createAssignment(newAssignment);
+
+  await recordEvent({
+    eventType: 'BUILDING_ASSIGNED',
+    outcome: 'SUCCESS',
+    userId,
+    actorUserId: assignedByUserId ?? null,
+    requestId: audit.requestId ?? null,
+    ipAddress: audit.ipAddress ?? null,
+    userAgent: audit.userAgent ?? null,
+    metadata: {
+      assignmentId: record.id,
+      buildingId: building.id,
+    },
+  });
+
   return toPublicAssignment(record);
 }
 
 export async function listUserAssignments(
   userId: string,
+  actorUserId?: string,
 ): Promise<PublicUserBuildingAssignment[]> {
   const user = await userRepository.findById(userId);
   if (!user) {
     throw userNotFoundError();
   }
-  const records = await buildingAssignmentRepository.listByUser(userId);
+
+  let records: UserBuildingAssignmentRecord[];
+  if (
+    actorUserId &&
+    !(await userRepository.hasActiveRole(actorUserId, PROTECTED_ROLE_CODE))
+  ) {
+    const accessibleBuildingIds =
+      await contextAccessService.getAccessibleBuildingIds(actorUserId);
+    records = await buildingAssignmentRepository.listByUserInBuildings(
+      userId,
+      accessibleBuildingIds,
+    );
+  } else {
+    records = await buildingAssignmentRepository.listByUser(userId);
+  }
+
   return records.map(toPublicAssignment);
 }
 
@@ -134,7 +191,11 @@ export async function resolveBuildingsForUser(
 export async function deactivateAssignment(
   userId: string,
   buildingId: string,
+  assignedByUserId?: string,
+  audit: AuditRequestContext = {},
 ): Promise<PublicUserBuildingAssignment> {
+  await assertActorCanManageBuilding(assignedByUserId, buildingId);
+
   const user = await userRepository.findById(userId);
   if (!user) {
     throw userNotFoundError();
@@ -150,7 +211,23 @@ export async function deactivateAssignment(
 
   const status: UserBuildingAssignmentStatus = 'INACTIVE';
   const record = await buildingAssignmentRepository.updateStatus(assignment.id, status);
-  return toPublicAssignment(record as UserBuildingAssignmentRecord);
+  const mapped = toPublicAssignment(record as UserBuildingAssignmentRecord);
+
+  await recordEvent({
+    eventType: 'BUILDING_REVOKED',
+    outcome: 'SUCCESS',
+    userId,
+    actorUserId: assignedByUserId ?? null,
+    requestId: audit.requestId ?? null,
+    ipAddress: audit.ipAddress ?? null,
+    userAgent: audit.userAgent ?? null,
+    metadata: {
+      assignmentId: assignment.id,
+      buildingId,
+    },
+  });
+
+  return mapped;
 }
 
 export const buildingAssignmentService = {

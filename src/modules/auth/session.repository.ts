@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type { CreateSessionInput, SessionRecord, SessionStatus } from './session.types';
 
@@ -40,8 +41,12 @@ function mapSessionRow(row: SessionRow): SessionRecord {
   };
 }
 
-async function createSession(input: CreateSessionInput): Promise<SessionRecord> {
-  const result = await getPool().query<SessionRow>(
+async function createSession(
+  input: CreateSessionInput,
+  client?: PoolClient,
+): Promise<SessionRecord> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query<SessionRow>(
     `INSERT INTO user_sessions (id, user_id, token_hash, expires_at, last_used_at)
      VALUES ($1, $2, $3, $4, NOW())
      RETURNING ${SESSION_SELECT}`,
@@ -68,8 +73,10 @@ async function findByTokenHash(tokenHash: string): Promise<SessionRecord | null>
 async function revokeActiveByUserId(
   userId: string,
   revokedAt: Date,
+  client?: PoolClient,
 ): Promise<number> {
-  const result = await getPool().query(
+  const queryable = client ?? getPool();
+  const result = await queryable.query(
     `UPDATE user_sessions
      SET status = 'REVOKED', revoked_at = $2, updated_at = NOW()
      WHERE user_id = $1 AND status = 'ACTIVE'`,

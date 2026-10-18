@@ -23,9 +23,16 @@ import { userRepository } from './user.repository';
  *     so it cannot race with a concurrent revocation of the actor's role.
  */
 export const PROTECTED_ROLE_CODE = 'PLATFORM_ADMIN';
+/**
+ * Permissions that can define or administer identity and Building authority.
+ * Roles carrying any of these may only be granted/revoked by a PLATFORM_ADMIN
+ * owner; this prevents delegated role managers from self-escalating.
+ */
 export const AUTHORITY_DEFINING_PERMISSIONS: readonly string[] = [
   'role.manage',
   'permission.manage',
+  'user.manage',
+  'building.manage',
 ];
 
 export async function isPrivilegedAccount(
