@@ -543,12 +543,33 @@ function readCorsOrigins(raw: string | undefined, environment: NodeEnv): string[
 
 function isHttpOrigin(value: string): boolean {
   try {
+    // CR-HM-BE-CORS-PRODUCTION-01 — the WHATWG URL parser accepts `*` inside
+    // a host (for example `https://*.vercel.app`), so a wildcard pattern is
+    // rejected explicitly. CORS is an EXACT-origin allowlist: a wildcard must
+    // fail the configuration instead of silently widening or silently
+    // disabling the browser policy.
+    if (value.includes('*')) {
+      return false;
+    }
+
     const url = new URL(value);
+    // CR-HM-BE-CORS-PRODUCTION-01 — a host is case-insensitive, so an
+    // origin that differs from the URL parser output only by host case is
+    // still the exact same origin. It is accepted and normalized to
+    // `url.origin` (the lowercase form a browser actually sends in the
+    // `Origin` header) instead of failing the production boot. A path,
+    // query, fragment or embedded credential is still rejected.
+    const sameOrigin =
+      value === url.origin ||
+      value === `${url.origin}/` ||
+      value.toLowerCase() === url.origin ||
+      value.toLowerCase() === `${url.origin}/`;
+
     return (
       (url.protocol === 'http:' || url.protocol === 'https:') &&
       url.username === '' &&
       url.password === '' &&
-      (value === url.origin || value === `${url.origin}/`)
+      sameOrigin
     );
   } catch {
     return false;

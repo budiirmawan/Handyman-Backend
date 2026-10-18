@@ -133,6 +133,19 @@ tags:
       immutable attribution provenance. It is never a local User, never a
       Tenant PIC, and never a session; an actor-bearing assertion is never
       downgraded to legacy tenant-origin semantics.
+  - name: Customer Care Discovery
+    description: >-
+      CR-HM-BM-CARE-DISCOVERY-01 — Standalone Customer Care discovery.
+      Read-only, Backend-session authenticated (bearerAuth) surfaces for a
+      Customer Care user who signs in to the Frontend with a Backend account.
+      Every route requires the dedicated `handyman.care.building` permission
+      and an ACTIVE assignment to the exact ACTIVE Building; a BM workspace
+      token, a Tenant login and Tenant impersonation are rejected. The Client
+      is derived server-side from the caller's own Building -> Property ->
+      Client chain. Responses are bounded allow-list projections: no
+      commercial value, personnel identity, note, amount or signature digest
+      is exposed. Discovery never decides a quotation, variation, BAST or
+      payment.
   - name: Health
     description: Runtime / readiness probes (public).
   - name: Authentication
@@ -4489,6 +4502,250 @@ paths:
           $ref: "#/components/responses/NotFound"
         409:
           $ref: "#/components/responses/Conflict"
+  # ------------------------------------------------------------------
+  # CR-HM-BM-CARE-DISCOVERY-01 — Standalone Customer Care discovery.
+  #
+  # Contract exposure only. These four routes were already registered in
+  # src/modules/handyman-care-standalone-discovery/ before this change; no
+  # route, method, business rule or authority was added, removed or changed.
+  # ------------------------------------------------------------------
+  /handyman/care/buildings:
+    get:
+      operationId: listStandaloneCareBuildings
+      summary: List the caller's assigned Customer Care Building scopes
+      tags: [Customer Care Discovery]
+      description: >-
+        CR-HM-BM-CARE-DISCOVERY-01. Read-only. Requires a Backend session for
+        an ACTIVE user, the dedicated `handyman.care.building` permission and
+        an ACTIVE assignment to the exact ACTIVE Building.
+        `tenant_company.read`/`tenant_company.manage` are not substitutes and
+        are not additionally required. A BM workspace token, a Tenant login and
+        Tenant impersonation are rejected. The Client is derived server-side
+        from the caller's own Building -> Property -> Client chain; no
+        caller-supplied Client, actor or tenant identity is accepted. Only
+        Buildings from the caller's active assignment set with an active
+        lineage are returned; a sibling Building in the same Client is not
+        sufficient. Cache-Control is no-store.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The caller's exact active, assigned Building scopes; possibly empty.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanCareStandaloneBuilding' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks `handyman.care.building`,
+            or HANDYMAN_CARE_AUTHORITY_DENIED when the actor is not an ACTIVE
+            user with an active assignment to the exact ACTIVE Building. The
+            denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/requests:
+    get:
+      operationId: listStandaloneCareRequests
+      summary: List the Customer Care requests of one exact Building
+      tags: [Customer Care Discovery]
+      description: >-
+        CR-HM-BM-CARE-DISCOVERY-01. Read-only. Requires a Backend session for
+        an ACTIVE user, the dedicated `handyman.care.building` permission and
+        an ACTIVE assignment to the exact selected ACTIVE Building, with an
+        active Client/Property/Building lineage. The Client is derived
+        server-side; the request rows' authoritative Client, Building and
+        attribution ownership must match, so a sibling Building in the same
+        Client is not sufficient. The response is an allow-list projection
+        and never serializes the canonical request row wholesale. Ordering is
+        createdAt descending with the request id as the deterministic
+        tie-breaker. Unknown query keys (including a caller-supplied
+        `clientId`), malformed values and a non-empty GET body are rejected
+        with 400. When neither `page` nor `pageSize` is supplied the
+        unpaginated list contract is used and `meta` is the standard empty
+        object. Cache-Control is no-store.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - name: status
+          in: query
+          required: false
+          description: Optional exact request-status narrowing filter.
+          schema: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
+        - name: spaceId
+          in: query
+          required: false
+          description: Optional exact space filter.
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: The Building-scoped request list; possibly empty.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanCareStandaloneRequest' }
+                      meta:
+                        oneOf:
+                          - $ref: '#/components/schemas/HandymanCareStandalonePaginationMeta'
+                          - type: object
+                            description: Empty metadata when pagination was not requested.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks `handyman.care.building`,
+            or HANDYMAN_CARE_AUTHORITY_DENIED when the actor has no ACTIVE
+            assignment to the exact ACTIVE Building or its active
+            Client/Property lineage cannot be established. The denial is
+            non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/requests/{requestId}:
+    get:
+      operationId: getStandaloneCareRequestDetail
+      summary: Read one Customer Care request and its safe progress projection
+      tags: [Customer Care Discovery]
+      description: >-
+        CR-HM-BM-CARE-DISCOVERY-01. Read-only. Requires a Backend session for
+        an ACTIVE user, the dedicated `handyman.care.building` permission and
+        an ACTIVE assignment to the exact selected ACTIVE Building. A request
+        that is absent or not owned by the selected Building and the
+        server-derived Client is reported as
+        HANDYMAN_SERVICE_REQUEST_NOT_FOUND; existence is never enumerated.
+        The request is an allow-list projection and the progress block is a
+        bounded projection of existing read services. Cache-Control is
+        no-store.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - name: requestId
+          in: path
+          required: true
+          description: Handyman service request id.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The request and its safe progress projection.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareStandaloneRequestDetail' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks `handyman.care.building`,
+            or HANDYMAN_CARE_AUTHORITY_DENIED when the actor has no ACTIVE
+            assignment to the exact ACTIVE Building. The denial is
+            non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: HANDYMAN_SERVICE_REQUEST_NOT_FOUND for an absent or out-of-scope request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/requests/{requestId}/progress:
+    get:
+      operationId: getStandaloneCareRequestProgress
+      summary: Read only the request id, status and safe progress projection
+      tags: [Customer Care Discovery]
+      description: >-
+        CR-HM-BM-CARE-DISCOVERY-01. Read-only. Same authority as the request
+        detail route: a Backend session for an ACTIVE user, the dedicated
+        `handyman.care.building` permission and an ACTIVE assignment to the
+        exact selected ACTIVE Building. The response carries the request id,
+        the persisted request status and the same safe progress projection as
+        the detail route; no status is inferred or advanced. A request that is
+        absent or not owned by the selected Building and the server-derived
+        Client is reported as HANDYMAN_SERVICE_REQUEST_NOT_FOUND. Cache-Control
+        is no-store.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - name: requestId
+          in: path
+          required: true
+          description: Handyman service request id.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The request id, status and safe progress projection.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareStandaloneProgress' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks `handyman.care.building`,
+            or HANDYMAN_CARE_AUTHORITY_DENIED when the actor has no ACTIVE
+            assignment to the exact ACTIVE Building. The denial is
+            non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: HANDYMAN_SERVICE_REQUEST_NOT_FOUND for an absent or out-of-scope request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /handyman/care/properties/{propertyId}/catalogue/services:
     get:
       operationId: careCatalogueServices
@@ -121446,3 +121703,221 @@ components:
       required: [status]
       properties:
         status: { $ref: "#/components/schemas/ModuleStatus" }
+
+    # ------------------------------------------------------------------
+    # CR-HM-BM-CARE-DISCOVERY-01 — Standalone Customer Care discovery
+    # projections. Allow-list shapes only: no commercial value, personnel
+    # identity, note, amount or signature digest is exposed.
+    # ------------------------------------------------------------------
+    HandymanCareStandaloneBuilding:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, property]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        property:
+          type: object
+          additionalProperties: false
+          required: [id, code, name]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+    HandymanCareStandaloneRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [id, buildingId, spaceId, serviceCatalogId, serviceVariantId,
+         description, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: string, format: uuid, nullable: true }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid, nullable: true }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanCareStandalonePaginationMeta:
+      type: object
+      description: >-
+        Pagination metadata emitted in `meta` when `page` or `pageSize` is
+        supplied. The empty `meta` object is used for the unpaginated list.
+      additionalProperties: false
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 200 }
+        total: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    HandymanCareStandaloneTriage:
+      type: object
+      additionalProperties: false
+      required: [disposition, recordedAt]
+      properties:
+        disposition: { $ref: '#/components/schemas/HandymanTriageDisposition' }
+        recordedAt: { type: string, format: date-time, nullable: true }
+    HandymanCareStandaloneInspection:
+      type: object
+      additionalProperties: false
+      required: [result, inspectedAt]
+      properties:
+        result: { $ref: '#/components/schemas/HandymanInspectionResult' }
+        inspectedAt: { type: string, format: date-time, nullable: true }
+    HandymanCareStandaloneDiagnosis:
+      type: object
+      additionalProperties: false
+      required: [scopeClassification, diagnosedAt]
+      properties:
+        scopeClassification: { $ref: '#/components/schemas/HandymanScopeClassification' }
+        diagnosedAt: { type: string, format: date-time, nullable: true }
+    HandymanCareStandaloneQuotationVersion:
+      type: object
+      additionalProperties: false
+      required: [versionNumber, status, updatedAt]
+      properties:
+        versionNumber: { type: integer, minimum: 1 }
+        status: { type: string }
+        updatedAt: { type: string, format: date-time }
+    HandymanCareStandaloneQuotation:
+      type: object
+      additionalProperties: false
+      required: [versions]
+      properties:
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCareStandaloneQuotationVersion' }
+    HandymanCareStandaloneScopeVariation:
+      type: object
+      additionalProperties: false
+      required: [status, variationType, tenantDecisionOutcome, updatedAt]
+      properties:
+        status: { type: string }
+        variationType: { type: string, enum: [ADD, REDUCE] }
+        tenantDecisionOutcome: { type: string, nullable: true }
+        updatedAt: { type: string, format: date-time }
+    HandymanCareStandaloneDispatchRelease:
+      type: object
+      additionalProperties: false
+      required: [status, releasedAt]
+      properties:
+        status: { type: string }
+        releasedAt: { type: string, format: date-time, nullable: true }
+    HandymanCareStandaloneWorkSession:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string }
+    HandymanCareStandaloneQualityControlRun:
+      type: object
+      additionalProperties: false
+      required: [status, updatedAt]
+      properties:
+        status: { type: string }
+        updatedAt: { type: string, format: date-time }
+    HandymanCareStandaloneBast:
+      type: object
+      additionalProperties: false
+      required: [status, issuedAt, acceptedAt, rejectedAt, voidedAt]
+      properties:
+        status: { type: string }
+        issuedAt: { type: string, format: date-time, nullable: true }
+        acceptedAt: { type: string, format: date-time, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        voidedAt: { type: string, format: date-time, nullable: true }
+    HandymanCareStandaloneWarranty:
+      type: object
+      additionalProperties: false
+      required: [status, claimStatus, reworkStatus, chargeableAdditionalWorkStatus]
+      properties:
+        status: { type: string }
+        claimStatus: { type: string }
+        reworkStatus: { type: string }
+        chargeableAdditionalWorkStatus: { type: string }
+    HandymanCareStandaloneExecution:
+      type: object
+      additionalProperties: false
+      required:
+        [scopeVariations, dispatchRelease, workSessions, qualityControlRuns,
+         bast, paymentStatuses, warranty]
+      properties:
+        scopeVariations:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCareStandaloneScopeVariation' }
+        dispatchRelease:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneDispatchRelease'
+          nullable: true
+        workSessions:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCareStandaloneWorkSession' }
+        qualityControlRuns:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCareStandaloneQualityControlRun' }
+        bast:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneBast'
+          nullable: true
+        paymentStatuses:
+          type: array
+          nullable: true
+          description: >-
+            Persisted customer payment statuses, or null when the existing
+            reader has no ledger transaction. An empty array means a ledger
+            transaction exists but returned no payment rows.
+          items:
+            type: string
+            enum: [PENDING, CONFIRMED, REJECTED]
+        warranty:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneWarranty'
+          nullable: true
+    HandymanCareStandaloneProgressBlock:
+      type: object
+      additionalProperties: false
+      required: [triage, inspection, diagnosis, quotation, execution]
+      description: >-
+        Bounded projection of the existing read services. A null triage,
+        inspection, diagnosis or quotation means the optional read returned no
+        record; a null execution means the request has no authoritative
+        execution-scope link.
+      properties:
+        triage:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneTriage'
+          nullable: true
+        inspection:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneInspection'
+          nullable: true
+        diagnosis:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneDiagnosis'
+          nullable: true
+        quotation:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneQuotation'
+          nullable: true
+        execution:
+          allOf:
+            - $ref: '#/components/schemas/HandymanCareStandaloneExecution'
+          nullable: true
+    HandymanCareStandaloneRequestDetail:
+      type: object
+      additionalProperties: false
+      required: [request, progress]
+      properties:
+        request: { $ref: '#/components/schemas/HandymanCareStandaloneRequest' }
+        progress: { $ref: '#/components/schemas/HandymanCareStandaloneProgressBlock' }
+    HandymanCareStandaloneProgress:
+      type: object
+      additionalProperties: false
+      required: [requestId, status, progress]
+      properties:
+        requestId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
+        progress: { $ref: '#/components/schemas/HandymanCareStandaloneProgressBlock' }

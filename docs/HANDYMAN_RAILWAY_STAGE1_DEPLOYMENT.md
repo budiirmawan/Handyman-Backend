@@ -111,6 +111,16 @@ This is one application-wide runtime role, not per-Care-user database roles.
 3. Set exact HTTPS `CORS_ORIGINS`, `LOG_LEVEL=info`, providers `noop`, and
    `SCHEDULER_ENABLED=false` until authorized activation. See matrix for the
    complete settings. No JWT/session signing secret is used by this flow.
+   CR-HM-BE-CORS-PRODUCTION-01 confirms the production Vercel origin, so the
+   value is exactly:
+
+   ```
+   CORS_ORIGINS=https://handyman-frontend-alpha.vercel.app
+   ```
+
+   No wildcard, no trailing slash, no path. The operator handoff and the
+   reproducible preflight command are
+   `docs/CR-HM-BE-CORS-PRODUCTION-01_CORS_DEPLOYMENT_HANDOFF.md`.
 4. Set one API replica (also specified in `railway.json`); disable autoscaling,
    multi-region copies and deployment overlap. A process singleton prevents
    duplicate timers **inside one process only**. Dispatcher claims exist, but
@@ -220,18 +230,25 @@ An authorized administrator, **not Arena**, must provision/verify:
 Frontend owner configures their existing API base URL to `https://<api-domain>`
 using their actual variable name (not established by this Backend-only audit).
 HTTPS everywhere. Prefer stable custom domain over platform service URLs.
-Check the **real browser** Network panel and preflight, not just curl:
+Check the **real browser** Network panel and preflight, not just curl. The
+production pair is confirmed by CR-HM-BE-CORS-PRODUCTION-01, so the check is
+reproducible as written:
 
 ```sh
 curl --silent --show-error --include -X OPTIONS \
-  'https://<api-domain>/api/v1/auth/login' \
-  -H 'Origin: https://<actual-vercel-origin>' \
+  'https://handyman-backend-production-8b01.up.railway.app/api/v1/auth/login' \
+  -H 'Origin: https://handyman-frontend-alpha.vercel.app' \
   -H 'Access-Control-Request-Method: POST' \
-  -H 'Access-Control-Request-Headers: authorization,content-type,x-request-id'
+  -H 'Access-Control-Request-Headers: authorization,content-type,x-request-id,idempotency-key'
 ```
 
-Expect exact allow-origin, permitted methods/headers, no wildcard and no
-allow-credentials. Login returns `data.sessionToken`; send it only in
+Expect exact allow-origin, permitted methods/headers including
+`Idempotency-Key`, no wildcard and no allow-credentials. Repeat the same
+request with a sibling Vercel preview origin (for example
+`https://handyman-frontend-alpha-1a2b3c.vercel.app`): it must return **no**
+allow-origin header. Use the stable custom domain instead of the platform
+service URL when one is approved; the origin allowlist is unchanged by the
+API host. Login returns `data.sessionToken`; send it only in
 Authorization headers, never URL/query/logs. Do not put live tokens/passwords
 in shared curl history or screenshots. Logout must revoke that session.
 
