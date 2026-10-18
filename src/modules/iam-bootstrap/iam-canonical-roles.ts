@@ -40,11 +40,12 @@ export type CanonicalRoleDefinition = {
 /**
  * SYSTEM_ADMIN — account administration without authority definition.
  *
- * It can create/inspect users, assign EXISTING roles, scope users to
- * Buildings and read the authentication audit. It deliberately does NOT hold
- * `role.manage` or `permission.manage`: a System Admin cannot mint a new role,
- * attach a permission to a role, or hand out PLATFORM_ADMIN. Role/permission
- * definition and privileged assignment stay with the Owner.
+ * It can create/inspect users, change account lifecycle, reset passwords,
+ * scope users to Buildings and read the authentication audit. It deliberately
+ * does NOT hold `role.manage` or `permission.manage`: a System Admin cannot
+ * assign any role, mint a new role, attach a permission to a role, or hand out
+ * PLATFORM_ADMIN. Role/permission definition and assignment stay with the
+ * Owner.
  */
 export const SYSTEM_ADMIN_ROLE: CanonicalRoleDefinition = {
   code: 'SYSTEM_ADMIN',
