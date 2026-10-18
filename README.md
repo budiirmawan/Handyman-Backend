@@ -84,7 +84,7 @@ Leave `DB_PASSWORD` empty when the local role accepts trust/peer auth.
 | `DB_USER` | `postgres` | PostgreSQL user |
 | `DB_PASSWORD` | _(empty)_ | Set locally; never commit |
 | `DB_SSL` | `false` | `true` or `false` |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` (empty in production) | Browser origins |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` (empty in production) | Exact browser origins; comma-separated, no wildcard. Production value: `https://handyman-frontend-alpha.vercel.app` |
 | `JSON_BODY_LIMIT` | `1mb` | Max JSON body size |
 | `SESSION_TTL_MINUTES` | `480` | Session lifetime in minutes |
 | `SESSION_TOKEN_BYTES` | `32` | Random bytes per opaque session token |

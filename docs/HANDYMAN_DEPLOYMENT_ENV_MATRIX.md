@@ -21,7 +21,7 @@ Inject variables into the process through Railway/Coolify; an operator-only
 | `DB_USER` | postgres | dedicated runtime role, not owner | dedicated runtime role |
 | `DB_PASSWORD` | empty | runtime-role secret | rotated/new runtime-role secret |
 | `DB_SSL` | false; true/false/1/0 | decide from actual network/certificate requirements | same, based on transport |
-| `CORS_ORIGINS` | production: **empty** (no browser origins); comma-separated exact HTTP(S) origins; no wildcard | **actual HTTPS Vercel production origin** | identical Vercel origin |
+| `CORS_ORIGINS` | production: **empty** (no browser origins); comma-separated exact HTTP(S) origins; no wildcard | `https://handyman-frontend-alpha.vercel.app` | identical Vercel origin |
 | `EVIDENCE_STORAGE_DRIVER` | local; only local accepted | local | local |
 | `EVIDENCE_STORAGE_DIR` | `.data/evidence`; Docker pins `/app/.data/evidence` | `/app/.data/evidence` with Railway Volume at that exact mount | same container path backed by persistent bind/named volume |
 | `SCHEDULER_ENABLED` | true in production; false in development; always false in test | false while provisioning; true only for the sole approved active instance | false on migration target; true only after exclusive activation |
@@ -70,11 +70,26 @@ endpoints use identical TLS behavior. Public backup connections may need
 `PGSSLMODE=verify-full` and a trusted `PGSSLROOTCERT` independently of API config.
 
 Browser requests use `Authorization: Bearer <sessionToken>`, JSON or multipart
-content, optionally `X-Request-ID`. CORS allows Content-Type, Authorization and
-X-Request-ID; exposes X-Request-ID; credentials are **false**. Exact Vercel origin
-is not supplied in this request and must be obtained from the operator; no
-Frontend repository inspection was performed. Do not wildcard Vercel previews.
-An unlisted Origin lacks allow-origin headers; CORS is not authentication.
+content, optionally `X-Request-ID` and, on the duplicate-risky command routes,
+`Idempotency-Key`. CORS allows Content-Type, Authorization, X-Request-ID and
+Idempotency-Key; exposes X-Request-ID; credentials are **false**. `If-Match`
+is not allowed: no registered route reads an `If-Match` precondition.
+
+CR-HM-BE-CORS-PRODUCTION-01 confirms the production Vercel origin as
+`https://handyman-frontend-alpha.vercel.app`, so the Railway/Biznet value is
+exactly:
+
+```
+CORS_ORIGINS=https://handyman-frontend-alpha.vercel.app
+```
+
+The allowlist is exact: a wildcard (`*` or `https://*.vercel.app`), a path, a
+query, a fragment or embedded credentials are rejected at configuration time,
+and `Access-Control-Allow-Origin: *` can never be produced. Do not wildcard
+Vercel previews — a preview host is a different origin and is refused. An
+unlisted Origin lacks allow-origin headers; CORS is not authentication. The
+operator handoff, including the reproducible HTTPS preflight command, is
+`docs/CR-HM-BE-CORS-PRODUCTION-01_CORS_DEPLOYMENT_HANDOFF.md`.
 
 Use stable `https://<api-domain>` through either proxy. Domain is a platform/DNS
 setting, not a Backend variable. The Vercel owner must verify their existing API

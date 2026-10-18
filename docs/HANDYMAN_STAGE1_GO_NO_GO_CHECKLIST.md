@@ -78,8 +78,14 @@ production data change or deployment was performed from Arena.
   required by the existing routes. No automatic production seed.
 - [ ] Actual Vercel production origin confirmed; exact `CORS_ORIGINS` set. Actual
   Frontend API config/domain confirmed by Frontend owner without modifying it here.
-- [ ] Browser HTTPS preflight allows Content-Type, Authorization, X-Request-ID;
-  no wildcard credentials; sibling preview origins remain unlisted unless approved.
+  CR-HM-BE-CORS-PRODUCTION-01 confirms the origin as
+  `https://handyman-frontend-alpha.vercel.app`, so the Railway value is exactly
+  `CORS_ORIGINS=https://handyman-frontend-alpha.vercel.app` — no wildcard, no
+  trailing slash, no path. Handoff and the reproducible preflight command:
+  `docs/CR-HM-BE-CORS-PRODUCTION-01_CORS_DEPLOYMENT_HANDOFF.md`.
+- [ ] Browser HTTPS preflight allows Content-Type, Authorization, X-Request-ID
+  and Idempotency-Key; no wildcard credentials; sibling preview origins remain
+  unlisted unless approved.
 - [ ] POST `/api/v1/auth/login` → GET `/api/v1/auth/me` identifies actual staff.
 - [ ] GET Care buildings → authorized request list → detail → progress.
 - [ ] Evidence selection lists ACTIVE exact-request-owned submissions; intake upload
@@ -124,7 +130,7 @@ below is not a reason to weaken authentication.
 | Storage config/local bytes | PASS | temp-root storage tests, transfer round-trip, corruption/missing/hash/traversal/symlink/nonempty destination rejection |
 | Metadata export SQL | PASS | SELECT branches executed against disposable migrated DB; key/sha256/size columns confirmed |
 | Scheduler boot/stop guards | PASS | existing focused scheduler tests; test environment forced off |
-| CORS | PASS | exact synthetic HTTPS Vercel-shaped origin preflight + disallowed sibling origin + wildcard rejection; actual live origin unknown |
+| CORS | PASS | exact synthetic HTTPS Vercel-shaped origin preflight + disallowed sibling origin + wildcard rejection; `tests/deployment-cors-production.test.ts` covers the confirmed production origin `https://handyman-frontend-alpha.vercel.app`, the `Idempotency-Key` preflight and the refused sibling preview origin. Live Railway/Vercel preflight still SKIPPED below |
 | Care HTTP | PASS (LOCAL) | embedded real DB, existing discovery/communication auth and denial tests; external DB intake scope/file API tests also pass |
 | Native database dump/restore | SKIPPED | pg_dump/pg_restore/psql clients unavailable; runbook requires actual rehearsal |
 | Railway/Biznet/Vercel integration, mounted-volume redeploy | SKIPPED | unauthorized/unavailable live infrastructure; never claimed tested |
