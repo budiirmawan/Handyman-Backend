@@ -226,9 +226,157 @@ async function findBuildingCareRequestById(
   return result.rows[0] ? mapRequest(result.rows[0]) : null;
 }
 
+/**
+ * CR-HM-CC-TENANT-REQUEST-GATEWAY-01 intake readers.
+ *
+ * Every query below is keyed by the Server-derived (clientId, buildingId)
+ * pair the caller obtained from `resolveBuildingCareAuthority` — the SQL
+ * never trusts a caller-supplied Client. Each reader returns only ACTIVE,
+ * currently-effective rows, so the response doubles as the eligibility
+ * contract for the staff-assisted create.
+ */
+export type StandaloneCareTenantRecord = {
+  id: string;
+  tenantCode: string;
+  tenantName: string;
+  pics: { id: string; picName: string; isPrimary: boolean }[];
+};
+
+export type StandaloneCareFloorRecord = {
+  id: string;
+  code: string;
+  name: string;
+  levelNumber: number;
+};
+
+export type StandaloneCareUnitRecord = {
+  id: string;
+  code: string;
+  name: string;
+  floorId: string;
+  floorCode: string;
+  levelNumber: number;
+  roomId: string;
+  roomCode: string;
+};
+
+/** ACTIVE tenant companies holding an ACTIVE, currently-effective context
+ * in this exact Building, with their ACTIVE PICs nested for selection. */
+async function listBuildingCareTenants(
+  clientId: string,
+  buildingId: string,
+): Promise<StandaloneCareTenantRecord[]> {
+  const result = await getPool().query<StandaloneCareTenantRecord>(`
+    SELECT tc.id,
+           tc.tenant_code AS "tenantCode",
+           tc.tenant_name AS "tenantName",
+           COALESCE((
+             SELECT jsonb_agg(
+                      jsonb_build_object(
+                        'id', tp.id,
+                        'picName', tp.pic_name,
+                        'isPrimary', tp.is_primary
+                      )
+                      ORDER BY tp.is_primary DESC, tp.pic_name ASC, tp.id ASC
+                    )
+               FROM tenant_pics tp
+              WHERE tp.tenant_company_id = tc.id
+                AND tp.status = 'ACTIVE'
+           ), '[]'::jsonb) AS pics
+      FROM tenant_companies tc
+     WHERE tc.client_id = $1
+       AND tc.status = 'ACTIVE'
+       AND EXISTS (
+         SELECT 1
+           FROM tenant_building_contexts tbc
+          WHERE tbc.tenant_company_id = tc.id
+            AND tbc.building_id = $2
+            AND tbc.status = 'ACTIVE'
+            AND (tbc.effective_from IS NULL
+                 OR tbc.effective_from <= statement_timestamp())
+            AND (tbc.effective_until IS NULL
+                 OR tbc.effective_until >= statement_timestamp())
+       )
+     ORDER BY tc.tenant_code ASC, tc.id ASC`,
+    [clientId, buildingId],
+  );
+  return result.rows;
+}
+
+/** ACTIVE Floors of the exact Building — the Tower -> Floor step (the
+ * Building itself is the tower scope carried by the route path). */
+async function listBuildingCareFloors(
+  buildingId: string,
+): Promise<StandaloneCareFloorRecord[]> {
+  const result = await getPool().query<StandaloneCareFloorRecord>(`
+    SELECT f.id,
+           f.code,
+           f.name,
+           f.level_number AS "levelNumber"
+      FROM floors f
+     WHERE f.building_id = $1
+       AND f.status = 'ACTIVE'
+     ORDER BY f.level_number ASC, f.id ASC`,
+    [buildingId],
+  );
+  return result.rows;
+}
+
+/** Unit (= Space) selection for ONE tenant in the exact Building: only
+ * spaces whose ACTIVE, currently-effective tenant relationship and whose
+ * full ACTIVE Space -> Room -> Area -> Floor chain resolve inside this
+ * Building. Optional floor narrowing keeps the Tower -> Floor -> Unit
+ * cascade server-validated end to end. */
+async function listBuildingCareUnits(
+  clientId: string,
+  buildingId: string,
+  tenantCompanyId: string,
+  floorId?: string,
+): Promise<StandaloneCareUnitRecord[]> {
+  const values: unknown[] = [clientId, buildingId, tenantCompanyId];
+  let floorClause = '';
+  if (floorId !== undefined) {
+    values.push(floorId);
+    floorClause = 'AND f.id = $4';
+  }
+  const result = await getPool().query<StandaloneCareUnitRecord>(`
+    SELECT s.id,
+           s.code,
+           s.name,
+           f.id AS "floorId",
+           f.code AS "floorCode",
+           f.level_number AS "levelNumber",
+           r.id AS "roomId",
+           r.code AS "roomCode"
+      FROM tenant_space_relationships tsr
+      JOIN spaces s ON s.id = tsr.space_id AND s.status = 'ACTIVE'
+      JOIN rooms r ON r.id = s.room_id AND r.status = 'ACTIVE'
+      JOIN areas a ON a.id = r.area_id AND a.status = 'ACTIVE'
+      JOIN floors f ON f.id = a.floor_id AND f.status = 'ACTIVE'
+      JOIN tenant_companies tc ON tc.id = tsr.tenant_company_id
+     WHERE tc.client_id = $1
+       AND tc.status = 'ACTIVE'
+       AND tsr.building_id = $2
+       AND tsr.tenant_company_id = $3
+       AND tsr.status = 'ACTIVE'
+       AND (tsr.effective_from IS NULL
+            OR tsr.effective_from <= statement_timestamp())
+       AND (tsr.effective_until IS NULL
+            OR tsr.effective_until >= statement_timestamp())
+       AND f.building_id = $2
+       ${floorClause}
+     ORDER BY f.level_number ASC, s.code ASC, s.id ASC`,
+    values,
+  );
+  return result.rows;
+}
+
 export const handymanCareStandaloneDiscoveryRepository = {
   findActiveBuildingLineage,
   findBuildingCareRequestById,
   listActiveBuildingLineages,
+  listBuildingCareFloors,
   listBuildingCareRequests,
+  listBuildingCareTenants,
+  listBuildingCareUnits,
 };

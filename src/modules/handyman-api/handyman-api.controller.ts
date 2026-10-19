@@ -51,7 +51,8 @@ const upload = multer({
   limits: { fileSize: HANDYMAN_INTAKE_MAX_FILE_BYTES, files: 1 },
 });
 
-function runSingleFileUpload(
+/** Exported for the Care staff gateway's evidence attachment transport. */
+export function runSingleFileUpload(
   req: Request,
   res: Response,
 ): Promise<Express.Multer.File> {

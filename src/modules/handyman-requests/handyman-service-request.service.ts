@@ -247,6 +247,7 @@ export async function createHandymanServiceRequest(
     assertUuid(input.serviceVariantId, 'serviceVariantId');
   }
   const attribution = await handymanChannelAttributionRepository.findById(
+    undefined,
     input.channelAttributionId,
   );
   if (!attribution) throw handymanChannelAttributionNotFoundError();
@@ -268,6 +269,43 @@ export async function createHandymanServiceRequest(
     buildingId: attribution.buildingId,
   });
   return createFromAuthorizedAttribution(input, attribution);
+}
+
+/**
+ * CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — transactional create from an ALREADY
+ * authorized attribution row.
+ *
+ * The Backend Customer Care staff gateway creates the immutable attribution
+ * and the canonical request inside ONE caller-owned transaction (the generic
+ * idempotency claim transaction). This helper performs the same frozen
+ * PART 03 rules as the local-User path — exact-Building authority for the
+ * acting staff user (BE-02G), shared catalogue/variant validation, the
+ * one-request-per-attribution uniqueness wall and the INTAKE insert — but
+ * accepts an existing transaction client so attribution + request commit or
+ * roll back together. It invents no second persistence path: the request row,
+ * its server-issued UUID and its initial `INTAKE` state come from the same
+ * `insertRequest` used by every other intake seam.
+ */
+export async function createHandymanServiceRequestForAttribution(
+  input: CreateHandymanServiceRequestInput,
+  actorUserId: string,
+  client: PoolClient,
+): Promise<PublicHandymanServiceRequest> {
+  assertUuid(input.channelAttributionId, 'channelAttributionId');
+  assertUuid(input.serviceCatalogId, 'serviceCatalogId');
+  if (input.serviceVariantId !== undefined) {
+    assertUuid(input.serviceVariantId, 'serviceVariantId');
+  }
+  const attribution = await handymanChannelAttributionRepository.findById(
+    client,
+    input.channelAttributionId,
+  );
+  if (!attribution) throw handymanChannelAttributionNotFoundError();
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: attribution.clientId,
+    buildingId: attribution.buildingId,
+  });
+  return createFromAuthorizedAttribution(input, attribution, client);
 }
 
 /**
@@ -448,6 +486,7 @@ export async function getHandymanServiceRequestDetail(
 
 export const handymanServiceRequestService = {
   createHandymanServiceRequest,
+  createHandymanServiceRequestForAttribution,
   createCareHandymanServiceRequest,
   listHandymanServiceRequests,
   listHandymanServiceRequestsPage,

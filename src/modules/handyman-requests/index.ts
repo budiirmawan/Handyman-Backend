@@ -5,6 +5,7 @@
 export { handymanServiceRequestRepository } from './handyman-service-request.repository';
 export {
   createHandymanServiceRequest,
+  createHandymanServiceRequestForAttribution,
   createCareHandymanServiceRequest,
   getHandymanServiceRequestDetail,
   handymanServiceRequestService,

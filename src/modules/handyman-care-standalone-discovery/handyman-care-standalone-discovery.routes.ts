@@ -17,6 +17,10 @@ import {
   HANDYMAN_CARE_BUILDING_PERMISSION,
 } from '../handyman-care-authority';
 import { isValidUuid } from '../clients';
+import { handymanIntakeEvidenceService } from '../handyman-evidence';
+import { parseIdempotencyKeyRequired } from '../request-idempotency';
+import { parseHandymanIntakeEvidenceKindField } from '../handyman-api/handyman-api.validation';
+import { runSingleFileUpload } from '../handyman-api/handyman-api.controller';
 import {
   assertStandaloneCareRequestStatus,
   getStandaloneCareRequestDetail,
@@ -24,6 +28,15 @@ import {
   listStandaloneCareBuildings,
   listStandaloneCareRequests,
 } from './handyman-care-standalone-discovery.service';
+import {
+  assertBuildingCareRequest,
+  createBuildingCareRequest,
+  listBuildingCareCatalogueServices,
+  listBuildingCareFloors,
+  listBuildingCareTenants,
+  listBuildingCareUnits,
+} from './handyman-care-tenant-request-gateway.service';
+import { parseCreateBuildingCareRequestBody } from './handyman-care-tenant-request-gateway.validation';
 
 const AUTHZ = [
   authenticationMiddleware,
@@ -95,6 +108,207 @@ function parseQueryUuid(value: unknown, field: string): string | undefined {
 
 export function createHandymanCareStandaloneDiscoveryRouter(): Router {
   const router = Router();
+
+  /**
+   * CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted Tenant request
+   * creation gateway. Same AUTHZ chain as the discovery reads (Backend
+   * Bearer session + dedicated `handyman.care.building`), plus the
+   * server-side Authority A/lineage/tenant-scope resolution in the service.
+   * Requires the standard `Idempotency-Key` header. The response is the
+   * canonical Backend-issued request id + INTAKE projection — the same row
+   * the Operations queue discovers.
+   */
+  router.post(
+    '/handyman/care/buildings/:buildingId/requests',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        const buildingId = parseUuid(req.params.buildingId, 'buildingId');
+        const body = parseCreateBuildingCareRequestBody(req.body);
+        const idempotencyKey = parseIdempotencyKeyRequired(
+          req.header('Idempotency-Key'),
+        );
+        const result = await createBuildingCareRequest({
+          actorUserId: req.auth?.userId ?? '',
+          buildingId,
+          idempotencyKey,
+          body,
+        });
+        sendSuccess(res, result.responseBody, result.responseStatus);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Tenant/PIC discovery for the authorized Building (selection step). */
+  router.get(
+    '/handyman/care/buildings/:buildingId/tenants',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        assertAllowedQuery(req.query as Record<string, unknown>, []);
+        assertEmptyReadBody(req.body);
+        sendSuccess(
+          res,
+          await listBuildingCareTenants({
+            actorUserId: req.auth?.userId ?? '',
+            buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+          }),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Floor selection for the authorized Building. */
+  router.get(
+    '/handyman/care/buildings/:buildingId/floors',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        assertAllowedQuery(req.query as Record<string, unknown>, []);
+        assertEmptyReadBody(req.body);
+        sendSuccess(
+          res,
+          await listBuildingCareFloors({
+            actorUserId: req.auth?.userId ?? '',
+            buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+          }),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Eligible Unit (= tenant Space) selection: `tenantCompanyId` required,
+   * optional `floorId` narrows the Tower -> Floor -> Unit cascade. */
+  router.get(
+    '/handyman/care/buildings/:buildingId/units',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        const query = req.query as Record<string, unknown>;
+        assertAllowedQuery(query, ['tenantCompanyId', 'floorId']);
+        assertEmptyReadBody(req.body);
+        const buildingId = parseUuid(req.params.buildingId, 'buildingId');
+        if (typeof query.tenantCompanyId !== 'string') {
+          throw AppError.validation('Request validation failed.', [
+            {
+              field: 'tenantCompanyId',
+              message: 'tenantCompanyId is required.',
+            },
+          ]);
+        }
+        const floorId = parseQueryUuid(query.floorId, 'floorId');
+        sendSuccess(
+          res,
+          await listBuildingCareUnits({
+            actorUserId: req.auth?.userId ?? '',
+            buildingId,
+            tenantCompanyId: query.tenantCompanyId.trim().toLowerCase(),
+            ...(floorId === undefined ? {} : { floorId }),
+          }),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Building-scoped ACTIVE service catalogue for the derived Client. */
+  router.get(
+    '/handyman/care/buildings/:buildingId/catalogue/services',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        assertAllowedQuery(req.query as Record<string, unknown>, []);
+        assertEmptyReadBody(req.body);
+        sendSuccess(
+          res,
+          await listBuildingCareCatalogueServices({
+            actorUserId: req.auth?.userId ?? '',
+            buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+          }),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Bounded intake-evidence metadata for one request in this Building. */
+  router.get(
+    '/handyman/care/buildings/:buildingId/requests/:requestId/intake-evidence',
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        assertAllowedQuery(req.query as Record<string, unknown>, []);
+        assertEmptyReadBody(req.body);
+        const actorUserId = req.auth?.userId ?? '';
+        const { requestId } = await assertBuildingCareRequest({
+          actorUserId,
+          buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+          requestId: parseUuid(req.params.requestId, 'requestId'),
+        });
+        sendSuccess(
+          res,
+          await handymanIntakeEvidenceService.listHandymanIntakeEvidence(
+            requestId,
+            actorUserId,
+          ),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Bounded PHOTO/VIDEO intake attachment — same evidence convention as
+   * the customer-facing surface, reached through the Care Building
+   * authority; the request lifecycle is never mutated. */
+  router.post(
+    '/handyman/care/buildings/:buildingId/requests/:requestId/intake-evidence',
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        const actorUserId = req.auth?.userId ?? '';
+        // Exact-Building authority BEFORE the upload is consumed.
+        const { requestId } = await assertBuildingCareRequest({
+          actorUserId,
+          buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+          requestId: parseUuid(req.params.requestId, 'requestId'),
+        });
+        const file = await runSingleFileUpload(req, res);
+        const evidenceKind = parseHandymanIntakeEvidenceKindField(
+          req.body?.evidenceKind,
+        );
+        sendSuccess(
+          res,
+          await handymanIntakeEvidenceService.recordHandymanIntakeEvidence(
+            {
+              handymanRequestId: requestId,
+              evidenceKind,
+              fileName: file.originalname,
+              mimeType: file.mimetype,
+              content: file.buffer,
+            },
+            actorUserId,
+          ),
+          201,
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get(
     '/handyman/care/buildings',

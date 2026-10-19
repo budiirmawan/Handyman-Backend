@@ -58,9 +58,10 @@ async function create(
 }
 
 async function findById(
+  executor: Pick<PoolClient, 'query'> = getPool(),
   id: string,
 ): Promise<HandymanChannelAttributionRecord | null> {
-  const result = await getPool().query<HandymanChannelAttributionRecord>(
+  const result = await executor.query<HandymanChannelAttributionRecord>(
     `SELECT ${SELECT} FROM handyman_channel_attributions WHERE id = $1`,
     [id],
   );

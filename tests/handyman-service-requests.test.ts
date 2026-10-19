@@ -324,6 +324,7 @@ describe('CR-HM-02 PART 03 — attribution-bound handyman request intake', () =>
     if (!requireDatabase(t)) return;
     const f = await attributedFixture();
     const before1 = await handymanChannelAttributionRepository.findById(
+      undefined,
       f.attribution.id,
     );
     const service = await serviceEntry(f.client.id);
@@ -333,6 +334,7 @@ describe('CR-HM-02 PART 03 — attribution-bound handyman request intake', () =>
       description: 'No attribution mutation expected.',
     }, adminUserId);
     const after1 = await handymanChannelAttributionRepository.findById(
+      undefined,
       f.attribution.id,
     );
     assert.ok(before1 && after1);

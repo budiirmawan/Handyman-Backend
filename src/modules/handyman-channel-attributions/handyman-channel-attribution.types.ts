@@ -21,6 +21,7 @@ import type {
 
 export const HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_CHANNELS = [
   'BM_SUPER_APP',
+  'CUSTOMER_CARE_BACKEND',
 ] as const;
 export type HandymanChannelAttributionOriginChannel =
   (typeof HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_CHANNELS)[number];
