@@ -15,3 +15,17 @@ export function tenantCompanyCodeAlreadyExistsError(): AppError {
     statusCode: 409,
   });
 }
+
+/**
+ * CR-HM-MASTER-IND-01 — one identity document identifies exactly one party
+ * per Client. The message never echoes the stored party, so a caller cannot
+ * use the conflict response to enumerate other tenants.
+ */
+export function tenantIdentityDocumentAlreadyExistsError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.TENANT_IDENTITY_DOCUMENT_ALREADY_EXISTS,
+    message:
+      'A tenant party with this identity document already exists for this client.',
+    statusCode: 409,
+  });
+}

@@ -12,6 +12,8 @@ import {
 } from '../handyman-requests';
 import { executeHandymanIdempotent } from '../handyman-audit';
 import { computeRequestFingerprint } from '../request-idempotency';
+import { hasCurrentUnitPartyRole } from '../apartment-master';
+import { handymanRequestPartyService } from '../handyman-request-parties';
 import { handymanServiceVariantService } from '../handyman-catalog';
 import { serviceCatalogService } from '../service-catalog';
 import { tenantBuildingContextRepository } from '../tenant-building-contexts';
@@ -165,6 +167,68 @@ async function resolveCreateScope(input: {
 }
 
 /**
+ * CR-HM-MASTER-IND-01 — resolves the two independent commercial parties.
+ *
+ * Defaults are the represented Tenant (the pre-existing behavior). A party
+ * that differs is accepted ONLY when it is an ACTIVE party of the same Client
+ * AND either holds a currently-effective Unit role on the selected Unit or has
+ * an ACTIVE, currently-effective Building context. Every failure collapses
+ * into the same non-enumerating Care denial, so a caller cannot use this
+ * selection to enumerate other tenants or Units.
+ */
+async function resolveDesignatedParties(input: {
+  clientId: string;
+  buildingId: string;
+  representedTenantId: string;
+  spaceId: string | null;
+  approvalTenantCompanyId?: string;
+  costResponsibleTenantCompanyId?: string;
+}): Promise<{
+  approvalTenantCompanyId: string;
+  costResponsibleTenantCompanyId: string;
+}> {
+  const approval = input.approvalTenantCompanyId ?? input.representedTenantId;
+  const costResponsibility =
+    input.costResponsibleTenantCompanyId ?? input.representedTenantId;
+
+  for (const partyId of new Set([approval, costResponsibility])) {
+    if (partyId === input.representedTenantId) continue;
+
+    const company = await tenantCompanyRepository.findById(partyId);
+    if (
+      !company ||
+      company.status !== 'ACTIVE' ||
+      company.clientId !== input.clientId
+    ) {
+      throw careAuthorityDeniedError();
+    }
+
+    if (input.spaceId !== null) {
+      const holdsUnitRole = await hasCurrentUnitPartyRole({
+        clientId: input.clientId,
+        buildingId: input.buildingId,
+        unitId: input.spaceId,
+        tenantCompanyId: partyId,
+      });
+      if (!holdsUnitRole) throw careAuthorityDeniedError();
+    } else {
+      const partyContext = await tenantBuildingContextRepository.findActive(
+        partyId,
+        input.buildingId,
+      );
+      if (!partyContext || !isEffectiveNow(partyContext)) {
+        throw careAuthorityDeniedError();
+      }
+    }
+  }
+
+  return {
+    approvalTenantCompanyId: approval,
+    costResponsibleTenantCompanyId: costResponsibility,
+  };
+}
+
+/**
  * Creates the canonical Handyman Request for the represented Tenant/PIC.
  * Returns the stored 201 payload plus `replayed` so the transport can keep
  * the idempotent contract truthful without reserializing anything else.
@@ -187,6 +251,25 @@ export async function createBuildingCareRequest(input: {
     tenantCompanyId: input.body.tenantCompanyId,
   });
 
+  // CR-HM-MASTER-IND-01 — approval and cost responsibility are resolved
+  // BEFORE the idempotency claim, exactly like the tenant scope, so a denied
+  // designation never touches the idempotency store.
+  const parties = await resolveDesignatedParties({
+    clientId: authority.scope.clientId,
+    buildingId: authority.scope.buildingId,
+    representedTenantId: input.body.tenantCompanyId,
+    spaceId: input.body.spaceId ?? null,
+    ...(input.body.approvalTenantCompanyId === undefined
+      ? {}
+      : { approvalTenantCompanyId: input.body.approvalTenantCompanyId }),
+    ...(input.body.costResponsibleTenantCompanyId === undefined
+      ? {}
+      : {
+        costResponsibleTenantCompanyId:
+          input.body.costResponsibleTenantCompanyId,
+      }),
+  });
+
   const normalized = {
     buildingId: authority.scope.buildingId,
     tenantCompanyId: input.body.tenantCompanyId,
@@ -195,6 +278,8 @@ export async function createBuildingCareRequest(input: {
     serviceCatalogId: input.body.serviceCatalogId,
     serviceVariantId: input.body.serviceVariantId ?? null,
     description: input.body.description ?? null,
+    approvalTenantCompanyId: parties.approvalTenantCompanyId,
+    costResponsibleTenantCompanyId: parties.costResponsibleTenantCompanyId,
   };
   const requestFingerprint = computeRequestFingerprint(normalized);
 
@@ -237,6 +322,21 @@ export async function createBuildingCareRequest(input: {
             : { description: normalized.description }),
         },
         input.actorUserId,
+        client,
+      );
+
+      // CR-HM-MASTER-IND-01 — explicit customer-side designations, recorded
+      // in the SAME transaction (and therefore the same idempotency claim) as
+      // the canonical request. Creator and represented Tenant are unchanged.
+      await handymanRequestPartyService.recordRequestParties(
+        {
+          clientId: attribution.clientId,
+          requestId: request.id,
+          actorUserId: input.actorUserId,
+          approvalTenantCompanyId: normalized.approvalTenantCompanyId,
+          costResponsibleTenantCompanyId:
+            normalized.costResponsibleTenantCompanyId,
+        },
         client,
       );
 
@@ -348,6 +448,39 @@ export async function listBuildingCareCatalogueServices(input: {
       ),
     })),
   );
+}
+
+/**
+ * CR-HM-MASTER-IND-01 — approval / cost-responsibility designations for one
+ * request in the authorized Building. Same non-disclosure rule as the other
+ * request-scoped Care reads: a request outside this Building/Client is a
+ * standard 404, never an existence oracle.
+ */
+export async function listBuildingCareRequestParties(input: {
+  actorUserId: string;
+  buildingId: string;
+  requestId: string;
+}) {
+  const { authority } = await requireActiveAssignedBuilding(
+    input.actorUserId,
+    input.buildingId,
+  );
+  const record =
+    await handymanCareStandaloneDiscoveryRepository.findBuildingCareRequestById(
+      authority.scope.clientId,
+      authority.scope.buildingId,
+      input.requestId,
+    );
+  if (!record) throw handymanServiceRequestNotFoundError();
+  const parties = await handymanRequestPartyService.listRequestParties(
+    record.id,
+    authority.scope.clientId,
+  );
+  return {
+    requestId: record.id,
+    buildingId: record.buildingId,
+    parties,
+  };
 }
 
 /**

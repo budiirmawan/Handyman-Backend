@@ -1,11 +1,19 @@
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
+  IDENTITY_DOCUMENT_PATTERNS,
+  INDIVIDUAL_IDENTITY_DOCUMENT_TYPES,
+  LEGAL_ENTITY_IDENTITY_DOCUMENT_TYPES,
   TENANT_COMPANY_STATUSES,
+  TENANT_PARTY_KINDS,
   isTenantCompanyStatus,
+  isTenantIdentityDocumentType,
+  isTenantPartyKind,
   type CreateTenantCompanyInput,
   type TenantCompanyListFilters,
   type TenantCompanyStatus,
+  type TenantIdentityDocumentType,
+  type TenantPartyKind,
   type UpdateTenantCompanyInput,
 } from './tenant-company.types';
 
@@ -24,6 +32,87 @@ export function isValidTenantCompanyCode(value: string): boolean {
   return value.length >= 2 && value.length <= 64 && CODE_PATTERN.test(value);
 }
 
+/** Identity documents are stored uppercase, without surrounding/inner spaces. */
+export function normalizeIdentityDocumentNumber(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, '');
+}
+
+/** Identity fields after transport parsing (create or update). */
+export type PartyIdentityFields = {
+  legalName?: string | null;
+  identityDocumentType?: TenantIdentityDocumentType | null;
+  identityDocumentNumber?: string | null;
+};
+
+/**
+ * CR-HM-MASTER-IND-01 — one authoritative party-shape rule, shared by the
+ * create and update paths (and therefore by every entry point).
+ *
+ *  - identity document type and number are all-or-nothing;
+ *  - INDIVIDUAL accepts KTP / PASSPORT / KITAS and MUST be identified —
+ *    an unnamed/undocumented physical customer is not operable master data;
+ *  - LEGAL_ENTITY accepts NPWP / NIB and keeps them optional;
+ *  - an INDIVIDUAL must not carry a separate `legalName` (one physical
+ *    person, one name — no fictitious legal entity).
+ */
+export function assertPartyIdentity(
+  partyKind: TenantPartyKind,
+  fields: PartyIdentityFields,
+): void {
+  const details: Detail[] = [];
+  const type = fields.identityDocumentType ?? null;
+  const number = fields.identityDocumentNumber ?? null;
+
+  if ((type === null) !== (number === null)) {
+    details.push({
+      field: type === null ? 'identityDocumentType' : 'identityDocumentNumber',
+      message:
+        'identityDocumentType and identityDocumentNumber must be supplied together.',
+    });
+  }
+
+  const allowed: readonly TenantIdentityDocumentType[] =
+    partyKind === 'INDIVIDUAL'
+      ? INDIVIDUAL_IDENTITY_DOCUMENT_TYPES
+      : LEGAL_ENTITY_IDENTITY_DOCUMENT_TYPES;
+
+  if (type !== null && !allowed.includes(type)) {
+    details.push({
+      field: 'identityDocumentType',
+      message: `identityDocumentType for a ${partyKind} party must be one of: ${allowed.join(', ')}.`,
+    });
+  }
+
+  if (type !== null && number !== null) {
+    const pattern = IDENTITY_DOCUMENT_PATTERNS[type];
+    if (!pattern.test(number)) {
+      details.push({
+        field: 'identityDocumentNumber',
+        message: `identityDocumentNumber is not a valid ${type} number.`,
+      });
+    }
+  }
+
+  if (partyKind === 'INDIVIDUAL') {
+    if (fields.legalName !== undefined && fields.legalName !== null) {
+      details.push({
+        field: 'legalName',
+        message:
+          'legalName is not accepted for an INDIVIDUAL party; tenantName is the person name.',
+      });
+    }
+    if (type === null || number === null) {
+      details.push({
+        field: 'identityDocumentType',
+        message:
+          'An INDIVIDUAL party requires identityDocumentType and identityDocumentNumber.',
+      });
+    }
+  }
+
+  if (details.length) fail(details);
+}
+
 export function parseTenantCompanyIdParam(raw: string): string {
   const value = raw.trim().toLowerCase();
   if (!isValidUuid(value)) fail([{ field: 'tenantCompanyId', message: 'Tenant company id must be a valid UUID.' }]);
@@ -40,31 +129,65 @@ export function parseCreateTenantCompanyBody(body: unknown): Omit<CreateTenantCo
   const details: Detail[] = [];
   const tenantCode = code(body.tenantCode, details);
   const tenantName = requiredString(body.tenantName, 'tenantName', 160, details);
+  const partyKind = readPartyKind(body.partyKind, details) ?? 'LEGAL_ENTITY';
   const legalName = optionalString(body.legalName, 'legalName', 255, details);
+  const identity = readIdentity(body, details);
   const email = optionalEmail(body.email, details);
   const phone = optionalPhone(body.phone, details);
   const address = optionalString(body.address, 'address', 512, details);
   const status = readStatus(body.status, details);
   if (!tenantCode || !tenantName || details.length) fail(details);
-  return { tenantCode, tenantName, ...(legalName ? { legalName } : {}), ...(email ? { email } : {}),
+  assertPartyIdentity(partyKind, {
+    legalName: legalName ?? null,
+    ...identity,
+  });
+  // `partyKind` is only echoed when the caller supplied it: the create
+  // contract stays byte-compatible for existing LEGAL_ENTITY callers, and the
+  // repository applies the LEGAL_ENTITY default.
+  return { tenantCode, tenantName,
+    ...(body.partyKind === undefined ? {} : { partyKind }),
+    ...(legalName ? { legalName } : {}),
+    ...(identity.identityDocumentType
+      ? {
+        identityDocumentType: identity.identityDocumentType,
+        identityDocumentNumber: identity.identityDocumentNumber ?? undefined,
+      }
+      : {}),
+    ...(email ? { email } : {}),
     ...(phone ? { phone } : {}), ...(address ? { address } : {}), ...(status ? { status } : {}) };
 }
 
 export function parseUpdateTenantCompanyBody(body: unknown): UpdateTenantCompanyInput {
   if (!object(body)) fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
-  if (body.clientId !== undefined || body.tenantCode !== undefined) {
-    const field = body.clientId !== undefined ? 'clientId' : 'tenantCode';
-    fail([{ field, message: 'This field is immutable and cannot be updated.' }]);
+  if (
+    body.clientId !== undefined ||
+    body.tenantCode !== undefined ||
+    body.partyKind !== undefined
+  ) {
+    const field = body.clientId !== undefined
+      ? 'clientId'
+      : body.tenantCode !== undefined
+        ? 'tenantCode'
+        : 'partyKind';
+    fail([{
+      field,
+      message:
+        field === 'partyKind'
+          ? 'partyKind is immutable; a physical customer does not change kind.'
+          : 'This field is immutable and cannot be updated.',
+    }]);
   }
   const details: Detail[] = [];
   const tenantName = body.tenantName === undefined ? undefined : requiredString(body.tenantName, 'tenantName', 160, details);
   const legalName = nullableString(body.legalName, 'legalName', 255, details);
+  const identity = readIdentity(body, details, true);
   const email = body.email === null ? null : optionalEmail(body.email, details);
   const phone = body.phone === null ? null : optionalPhone(body.phone, details);
   const address = nullableString(body.address, 'address', 512, details);
   const status = readStatus(body.status, details);
   if (details.length) fail(details);
   return { ...(tenantName !== undefined ? { tenantName } : {}), ...(legalName !== undefined ? { legalName } : {}),
+    ...identity,
     ...(email !== undefined ? { email } : {}), ...(phone !== undefined ? { phone } : {}),
     ...(address !== undefined ? { address } : {}), ...(status !== undefined ? { status } : {}) };
 }
@@ -73,8 +196,70 @@ export function parseTenantCompanyListQuery(query: Record<string, unknown>): Ten
   const details: Detail[] = [];
   const search = optionalString(query.search, 'search', 160, details);
   const status = readStatus(query.status, details);
+  const partyKind = readPartyKind(query.partyKind, details);
   if (details.length) fail(details);
-  return { ...(search ? { search } : {}), ...(status ? { status } : {}) };
+  return { ...(search ? { search } : {}), ...(status ? { status } : {}),
+    ...(partyKind ? { partyKind } : {}) };
+}
+
+/**
+ * Reads the identity pair. On update (`allowNull`) a JSON null clears a
+ * value; `assertPartyIdentity` re-checks the merged record in the service.
+ */
+function readIdentity(
+  body: Record<string, unknown>,
+  details: Detail[],
+  allowNull = false,
+): {
+  identityDocumentType?: TenantIdentityDocumentType | null;
+  identityDocumentNumber?: string | null;
+} {
+  const rawType = body.identityDocumentType;
+  const rawNumber = body.identityDocumentNumber;
+  const result: {
+    identityDocumentType?: TenantIdentityDocumentType | null;
+    identityDocumentNumber?: string | null;
+  } = {};
+
+  if (rawType === null && allowNull) {
+    result.identityDocumentType = null;
+  } else if (rawType !== undefined && rawType !== null) {
+    if (typeof rawType !== 'string' || !isTenantIdentityDocumentType(rawType.trim().toUpperCase())) {
+      details.push({
+        field: 'identityDocumentType',
+        message: `identityDocumentType must be one of: KTP, PASSPORT, KITAS, NPWP, NIB.`,
+      });
+    } else {
+      result.identityDocumentType = rawType.trim().toUpperCase() as TenantIdentityDocumentType;
+    }
+  }
+
+  if (rawNumber === null && allowNull) {
+    result.identityDocumentNumber = null;
+  } else if (rawNumber !== undefined && rawNumber !== null) {
+    if (typeof rawNumber !== 'string' || !rawNumber.trim()) {
+      details.push({
+        field: 'identityDocumentNumber',
+        message: 'identityDocumentNumber must be a non-empty string.',
+      });
+    } else {
+      result.identityDocumentNumber = normalizeIdentityDocumentNumber(rawNumber);
+    }
+  }
+
+  return result;
+}
+
+function readPartyKind(value: unknown, details: Detail[]): TenantPartyKind | undefined {
+  if (value === undefined || value === null) return;
+  if (!isTenantPartyKind(value)) {
+    details.push({
+      field: 'partyKind',
+      message: `partyKind must be one of: ${TENANT_PARTY_KINDS.join(', ')}.`,
+    });
+    return;
+  }
+  return value;
 }
 
 function code(value: unknown, details: Detail[]): string | undefined {

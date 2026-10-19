@@ -199,6 +199,22 @@ export async function listServiceCatalogEntries(
   return records.map(toPublic);
 }
 
+/** Distinct Service-Category vocabulary the caller may administer. */
+export async function listServiceCatalogCategories(
+  filters: { clientId?: string; status?: 'ACTIVE' | 'INACTIVE' },
+  actorUserId: string,
+): Promise<string[]> {
+  const accessibleClientIds = await getAccessibleClientIds(actorUserId);
+  if (filters.clientId && !accessibleClientIds.includes(filters.clientId)) {
+    return [];
+  }
+  return serviceCatalogRepository.listCategories(
+    undefined,
+    accessibleClientIds,
+    filters,
+  );
+}
+
 /**
  * Updates editable, non-identity fields (`name`, `description`, `category`).
  * `code` and `clientId` are immutable (governance §5/§11); `status` is not
@@ -294,6 +310,7 @@ export async function deactivateServiceCatalogEntry(
 
 export const serviceCatalogService = {
   createServiceCatalogEntry,
+  listServiceCatalogCategories,
   getServiceCatalogEntry,
   listServiceCatalogEntries,
   updateServiceCatalogEntry,

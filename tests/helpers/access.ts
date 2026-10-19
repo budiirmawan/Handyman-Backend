@@ -268,6 +268,13 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   // BE-14A — Tenant Company
   { code: 'tenant_company.read', name: 'Read Tenant Companies' },
   { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
+  // CR-HM-MASTER-IND-01 — effective-dated Unit Owner/Occupant/PIC roles.
+  // Reference-master authority (the service_catalog.* precedent): granted to
+  // PLATFORM_ADMIN by default. Unit reads/writes themselves reuse
+  // `space.read` / `space.manage`, and occupancy history reuses
+  // `tenant_company.read` — no capability is duplicated.
+  { code: 'unit_party.read', name: 'Read Unit Owner/Occupant/PIC Assignments' },
+  { code: 'unit_party.manage', name: 'Manage Unit Owner/Occupant/PIC Assignments' },
   // CR-HM-FIN-AUTH-01 — the test administrator is a deliberately
   // provisioned actor and therefore holds the dedicated financial
   // authorities. Production does NOT inherit these: the foundation

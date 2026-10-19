@@ -2,8 +2,13 @@ import { buildingAccessDeniedError, contextAccessService } from '../context-acce
 import {
   tenantCompanyCodeAlreadyExistsError,
   tenantCompanyNotFoundError,
+  tenantIdentityDocumentAlreadyExistsError,
 } from './tenant-company.errors';
 import { tenantCompanyRepository } from './tenant-company.repository';
+import {
+  assertPartyIdentity,
+  type PartyIdentityFields,
+} from './tenant-company.validation';
 import type {
   CreateTenantCompanyInput,
   PublicTenantCompany,
@@ -27,10 +32,24 @@ export async function createTenantCompany(input: CreateTenantCompanyInput, userI
   if (await tenantCompanyRepository.findByCodeForClient(input.clientId, input.tenantCode)) {
     throw tenantCompanyCodeAlreadyExistsError();
   }
+  // CR-HM-MASTER-IND-01 — identity uniqueness is checked before the insert so
+  // the API returns a stable 409; the partial unique index remains the final
+  // race-proof authority and is mapped below.
+  if (input.identityDocumentType && input.identityDocumentNumber) {
+    const existing = await tenantCompanyRepository.findByIdentityDocument(
+      input.clientId,
+      input.identityDocumentType,
+      input.identityDocumentNumber,
+    );
+    if (existing) throw tenantIdentityDocumentAlreadyExistsError();
+  }
   try {
     return toPublic(await tenantCompanyRepository.create(input));
   } catch (error) {
-    if (isUniqueViolation(error)) throw tenantCompanyCodeAlreadyExistsError();
+    if (isCodeUniqueViolation(error)) throw tenantCompanyCodeAlreadyExistsError();
+    if (isIdentityUniqueViolation(error)) {
+      throw tenantIdentityDocumentAlreadyExistsError();
+    }
     throw error;
   }
 }
@@ -51,15 +70,60 @@ export async function updateTenantCompany(id: string, input: UpdateTenantCompany
   const existing = await tenantCompanyRepository.findById(id);
   if (!existing) throw tenantCompanyNotFoundError();
   await assertClientAccess(userId, existing.clientId);
-  const updated = await tenantCompanyRepository.update(id, input);
-  if (!updated) throw tenantCompanyNotFoundError();
-  return toPublic(updated);
+
+  // Party shape is validated on the MERGED record, so a partial PATCH can
+  // never leave an INDIVIDUAL without an identity document or with a legal
+  // name (or a LEGAL_ENTITY with a half-supplied document pair).
+  const merged: PartyIdentityFields = {
+    legalName: input.legalName === undefined ? existing.legalName : input.legalName,
+    identityDocumentType: input.identityDocumentType === undefined
+      ? existing.identityDocumentType
+      : input.identityDocumentType,
+    identityDocumentNumber: input.identityDocumentNumber === undefined
+      ? existing.identityDocumentNumber
+      : input.identityDocumentNumber,
+  };
+  assertPartyIdentity(existing.partyKind, merged);
+
+  if (
+    merged.identityDocumentType &&
+    merged.identityDocumentNumber &&
+    (merged.identityDocumentType !== existing.identityDocumentType ||
+      merged.identityDocumentNumber !== existing.identityDocumentNumber)
+  ) {
+    const duplicate = await tenantCompanyRepository.findByIdentityDocument(
+      existing.clientId,
+      merged.identityDocumentType,
+      merged.identityDocumentNumber,
+    );
+    if (duplicate && duplicate.id !== existing.id) {
+      throw tenantIdentityDocumentAlreadyExistsError();
+    }
+  }
+
+  try {
+    const updated = await tenantCompanyRepository.update(id, input);
+    if (!updated) throw tenantCompanyNotFoundError();
+    return toPublic(updated);
+  } catch (error) {
+    if (isIdentityUniqueViolation(error)) {
+      throw tenantIdentityDocumentAlreadyExistsError();
+    }
+    throw error;
+  }
 }
 
-function isUniqueViolation(error: unknown): boolean {
+function isCodeUniqueViolation(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
   const candidate = error as { code?: string; constraint?: string };
   return candidate.code === '23505' && candidate.constraint === 'tenant_companies_client_code_unique';
+}
+
+function isIdentityUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: string; constraint?: string };
+  return candidate.code === '23505' &&
+    candidate.constraint === 'tenant_companies_identity_document_unique';
 }
 
 export const tenantCompanyService = { createTenantCompany, getTenantCompany, listTenantCompanies, updateTenantCompany };
