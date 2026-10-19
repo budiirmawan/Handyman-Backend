@@ -5,6 +5,7 @@ import { migration0450HandymanCareBuildingAuthorityPermission } from './0450_han
 import { migration0451HandymanCareCommunications } from './0451_handyman_care_communications';
 import { migration0452CreateIamOwnerBootstrapState } from './0452_create_iam_owner_bootstrap_state';
 import { migration0453ExtendIamAdminAuditEvents } from './0453_extend_iam_admin_audit_events';
+import { migration0454ExtendClientAuditEvents } from './0454_extend_client_audit_events';
 import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
 import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
 import { migration0443SeparateHandymanVariationQcAuthority } from './0443_separate_handyman_variation_qc_authority';
@@ -945,4 +946,5 @@ export const migrations: readonly Migration[] = [
   migration0451HandymanCareCommunications,
   migration0452CreateIamOwnerBootstrapState,
   migration0453ExtendIamAdminAuditEvents,
+  migration0454ExtendClientAuditEvents,
 ];

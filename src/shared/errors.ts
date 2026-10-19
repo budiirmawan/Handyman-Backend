@@ -35,6 +35,11 @@ export const ERROR_CODES = {
   CLIENT_NOT_FOUND: 'CLIENT_NOT_FOUND',
   CLIENT_CODE_ALREADY_EXISTS: 'CLIENT_CODE_ALREADY_EXISTS',
   CLIENT_INACTIVE: 'CLIENT_INACTIVE',
+  // CR-HM-BE-CLIENT-MASTER-01 — the caller holds `client.read`/`client.manage`
+  // but the addressed Client is outside the caller's authorized Client reach.
+  // The Owner (PLATFORM_ADMIN) is installation-wide; every other caller is
+  // limited to the Clients reachable through ACTIVE Building assignments.
+  CLIENT_ACCESS_DENIED: 'CLIENT_ACCESS_DENIED',
   SUBSCRIPTION_NOT_FOUND: 'SUBSCRIPTION_NOT_FOUND',
   SUBSCRIPTION_CODE_ALREADY_EXISTS: 'SUBSCRIPTION_CODE_ALREADY_EXISTS',
   SUBSCRIPTION_NOT_ACTIVE: 'SUBSCRIPTION_NOT_ACTIVE',

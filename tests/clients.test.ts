@@ -5,7 +5,7 @@ import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { normalizeClientCode } from '../src/modules/clients';
-import { createAdminSession, createPlainSession } from './helpers/access';
+import { createOwnerSession, createPlainSession } from './helpers/access';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
@@ -22,7 +22,10 @@ before(async () => {
   pool = await initDatabase(db);
   await migrateUp(pool);
   await pool.query('TRUNCATE users, roles, clients CASCADE');
-  adminToken = await createAdminSession();
+  // CR-HM-BE-CLIENT-MASTER-01 — the registry read/write surface is the
+  // production-shaped Owner (PLATFORM_ADMIN), not an arbitrary role that
+  // merely holds every permission code.
+  adminToken = await createOwnerSession();
   database = db;
 });
 
@@ -280,6 +283,49 @@ describe('PATCH /api/v1/clients/:id', () => {
     assert.equal(response.body.data.name, 'Omega Corporation');
     assert.equal(response.body.data.taxId, 'ID-999');
     assert.equal(response.body.data.status, 'INACTIVE');
+  });
+
+  it('rejects a code change (immutable identity)', async (t) => {
+    if (!requireDatabase(t)) {
+      return;
+    }
+
+    const created = await api()
+      .post('/api/v1/clients')
+      .set(authHeaders())
+      .send({ code: 'IMMUTABLE', name: 'Immutable Corp' });
+    const id = created.body.data.id as string;
+
+    const response = await api()
+      .patch(`/api/v1/clients/${id}`)
+      .set(authHeaders())
+      .send({ code: 'RENAMED' });
+
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+    assert.equal(
+      (await api().get(`/api/v1/clients/${id}`).set(authHeaders())).body.data.code,
+      'IMMUTABLE',
+    );
+  });
+
+  it('rejects an empty update body', async (t) => {
+    if (!requireDatabase(t)) {
+      return;
+    }
+
+    const created = await api()
+      .post('/api/v1/clients')
+      .set(authHeaders())
+      .send({ code: 'EMPTY_PATCH', name: 'Empty Patch Corp' });
+
+    const response = await api()
+      .patch(`/api/v1/clients/${created.body.data.id}`)
+      .set(authHeaders())
+      .send({});
+
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
   });
 
   it('returns 404 CLIENT_NOT_FOUND for an unknown client', async (t) => {

@@ -61,6 +61,13 @@ export type NewClient = {
   status: ClientStatus;
 };
 
+/**
+ * `code` is deliberately absent: the machine-readable Client code is the
+ * stable commercial identity created by POST /clients and is IMMUTABLE after
+ * creation (Properties are keyed by `client_id + code`, and downstream
+ * configuration/commercial tables reference the Client by id). The update
+ * validator rejects a supplied `code` rather than silently ignoring it.
+ */
 export type UpdateClientInput = {
   name?: string;
   legalName?: string;
@@ -68,3 +75,56 @@ export type UpdateClientInput = {
   description?: string;
   status?: ClientStatus;
 };
+
+/**
+ * CR-HM-BE-CLIENT-MASTER-01 — Client registry read reach.
+ *
+ * `ALL`        — installation-wide (the Owner / PLATFORM_ADMIN);
+ * `RESTRICTED` — exactly the Clients reachable through the caller's ACTIVE,
+ *                currently-accessible Building assignments; an empty array is
+ *                valid and matches NOTHING.
+ *
+ * Resolution lives in `client.scope.ts` (the only file that depends on the
+ * BE-02G context resolver). The pure helpers stay here so the service does not
+ * import the context-access module graph.
+ */
+export type ClientReadScope =
+  | { mode: 'ALL' }
+  | { mode: 'RESTRICTED'; clientIds: readonly string[] };
+
+/** The repository filter for this scope: `null` means installation-wide. */
+export function scopeToClientIds(
+  scope: ClientReadScope | undefined,
+): readonly string[] | null {
+  if (!scope || scope.mode === 'ALL') {
+    return null;
+  }
+
+  return scope.clientIds;
+}
+
+/** True when the scope authorizes the exact Client id. */
+export function isClientInScope(
+  scope: ClientReadScope | undefined,
+  clientId: string,
+): boolean {
+  if (!scope || scope.mode === 'ALL') {
+    return true;
+  }
+
+  return scope.clientIds.includes(clientId);
+}
+
+/**
+ * CR-HM-BE-CLIENT-MASTER-01 — optional registry filters for GET /clients.
+ *
+ * Filters are additive and never widen authorization: they are applied AFTER
+ * the caller's authorized Client reach (see `client.scope.ts`). No filter can
+ * be used to discover a Client outside that reach.
+ */
+export type ClientListFilters = {
+  status?: ClientStatus;
+  /** Case-insensitive literal substring match over `code` and `name`. */
+  search?: string;
+};
+
