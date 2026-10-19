@@ -502,10 +502,22 @@ tags:
       underlying assignments and are read-only for mobile context resolution.
   - name: Clients
     description: >
-      Client (Company & Client) records (CR-BE-MOB-CONTRACT-01 PART 02).
-      The reachable Client → Property → Building hierarchy for the
-      authenticated user is exposed authoritatively in `GET /auth/me` →
-      `context.clients`; these routes administer the Client registry.
+      Client (Company & Client) records (CR-BE-MOB-CONTRACT-01 PART 02,
+      extended by CR-HM-BE-CLIENT-MASTER-01). The operational Client →
+      Property → Building hierarchy for the authenticated user is exposed
+      authoritatively in `GET /auth/me` → `context.clients` and is derived from
+      ACTIVE Building assignments (`scope.clientIds` stays empty until the
+      first Building assignment exists).
+
+      These routes administer the Client REGISTRY. Creation requires
+      `client.manage` and always returns a server-generated UUID — that 201
+      `data.id` is the authoritative id for `POST /properties`, including the
+      very first Client provisioned by a PLATFORM_ADMIN Owner with zero
+      Building scope (no direct SQL, no guessed UUID, no public registration).
+      Reads require `client.read` and are data-scoped: the Owner sees the
+      installation-wide registry; every other caller sees only Clients
+      reachable through ACTIVE Building assignments (`403
+      CLIENT_ACCESS_DENIED` for an existing but unreachable Client).
   - name: Properties
     description: >
       Property records under a Client (CR-BE-MOB-CONTRACT-01 PART 02).
@@ -10885,7 +10897,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [LOGIN_SUCCESS, LOGIN_FAILED, LOGOUT, INVITATION_CREATED, INVITATION_ACCEPTED, INVITATION_REVOKED, ACCOUNT_DEACTIVATED, ACCOUNT_REACTIVATED, ACCOUNT_SUSPENDED, OWNER_BOOTSTRAPPED, PASSWORD_RESET, PASSWORD_CHANGED, ROLE_ASSIGNED, ROLE_REVOKED, BUILDING_ASSIGNED, BUILDING_REVOKED]
+            enum: [LOGIN_SUCCESS, LOGIN_FAILED, LOGOUT, INVITATION_CREATED, INVITATION_ACCEPTED, INVITATION_REVOKED, ACCOUNT_DEACTIVATED, ACCOUNT_REACTIVATED, ACCOUNT_SUSPENDED, OWNER_BOOTSTRAPPED, PASSWORD_RESET, PASSWORD_CHANGED, ROLE_ASSIGNED, ROLE_REVOKED, BUILDING_ASSIGNED, BUILDING_REVOKED, CLIENT_CREATED, CLIENT_UPDATED]
         - name: userId
           in: query
           required: false
@@ -11571,8 +11583,26 @@ paths:
     post:
       operationId: createClient
       summary: Create a Client
-      description: Requires `client.manage`.
+      description: >
+        Requires `client.manage` (CR-HM-BE-CLIENT-MASTER-01).
+
+        Registers a Client — the top-level tenant/commercial boundary — and
+        returns the authoritative, Backend-issued UUID in `data.id`. This is
+        the first-Client bootstrap path: a PLATFORM_ADMIN Owner whose
+        `/auth/me` → `scope.clientIds` is still EMPTY may create the first
+        Client, then create a Property under `data.id`. No pre-existing Client
+        scope, seeded row, or direct SQL is required.
+
+        The id is ALWAYS generated server-side; a client-supplied `id` is
+        ignored. `code` is normalized to uppercase and is immutable after
+        creation. Creation is audited as `CLIENT_CREATED`. A non-owner holding
+        an explicitly granted `client.manage` may create a Client but does NOT
+        gain any read reach over it (visibility is data-scoped, see GET
+        /clients).
       tags: [Clients]
+      x-required-permission: client.manage
+      x-error-codes:
+        [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, CLIENT_CODE_ALREADY_EXISTS]
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -11581,7 +11611,7 @@ paths:
             schema: { $ref: "#/components/schemas/CreateClientRequest" }
       responses:
         "201":
-          description: Client created.
+          description: Client created. `data.id` is the authoritative Client id used for Property provisioning.
           content:
             application/json:
               schema:
@@ -11598,13 +11628,60 @@ paths:
       operationId: listClients
       summary: List Clients
       description: >
-        Requires `client.read`. For the authenticated user's reachable
-        hierarchy prefer `GET /auth/me` → `context.clients`.
+        Requires `client.read` (CR-HM-BE-CLIENT-MASTER-01).
+
+        The response is limited to the caller's authorized Client reach:
+
+        * the Owner (an ACTIVE `PLATFORM_ADMIN` role) sees the
+          installation-wide registry — required for the first-Client bootstrap;
+        * every other caller sees only the Clients reachable through their
+          ACTIVE Building assignments. An empty reach yields an empty array,
+          never the global registry.
+
+        Optional filters: exact `status` and a literal (non-wildcard),
+        case-insensitive `search` over `code` and `name`. Pagination is
+        opt-in: without `page`/`pageSize` the historical unbounded array
+        response is returned with `meta: {}`; sending either parameter returns
+        one bounded page plus `meta: { page, pageSize, total, totalPages }`.
+        Filters are applied AFTER authorization and can never widen reach.
+        Only the BUSINESS Client lifecycle (`ACTIVE` | `INACTIVE`) is exposed:
+        the shared `clients` table is also the SaaS customer registry
+        (CR-BE-SAAS-01), whose PROSPECT / TRIAL / GRACE / SUSPENDED /
+        TERMINATED states are platform-plane states and never appear here.
+        For the OPERATIONAL Client → Property → Building hierarchy prefer
+        `GET /auth/me` → `context.clients` (Building-derived, unchanged).
       tags: [Clients]
-      security: [{ bearerAuth: [] }]
+      x-required-permission: client.read
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Exact Client status filter.
+          schema: { $ref: "#/components/schemas/ClientStatus" }
+        - name: search
+          in: query
+          required: false
+          description: >
+            Literal, case-insensitive substring match over `code` and `name`
+            (1–120 characters after trimming). LIKE metacharacters are
+            escaped, so `%` and `_` are matched literally.
+          schema: { type: string, maxLength: 120 }
+        - name: page
+          in: query
+          required: false
+          description: 1-based page. Supplying `page` or `pageSize` opts into pagination.
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          description: Page size (1–200, default 50).
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
       responses:
         "200":
-          description: Client list.
+          description: Client list (one bounded page when pagination was requested).
           content:
             application/json:
               schema:
@@ -11615,6 +11692,9 @@ paths:
                       data:
                         type: array
                         items: { $ref: "#/components/schemas/PublicClient" }
+                      meta:
+                        $ref: "#/components/schemas/MobilePaginationMeta"
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
@@ -11622,8 +11702,18 @@ paths:
     get:
       operationId: getClient
       summary: Get a Client by id
-      description: Requires `client.read`.
+      description: >
+        Requires `client.read` (CR-HM-BE-CLIENT-MASTER-01). The Owner
+        (PLATFORM_ADMIN) may read any Client; every other caller is limited to
+        Clients reachable through their ACTIVE Building assignments. An
+        existing but unreachable Client is denied with `403
+        CLIENT_ACCESS_DENIED`; an unknown id remains `404 CLIENT_NOT_FOUND`.
+        A SaaS-only lifecycle row (PROSPECT/TRIAL/GRACE/SUSPENDED/TERMINATED)
+        is not a business Client and is reported as `404 CLIENT_NOT_FOUND`.
       tags: [Clients]
+      x-required-permission: client.read
+      x-error-codes:
+        [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, CLIENT_ACCESS_DENIED, CLIENT_NOT_FOUND]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/ClientIdPath"
@@ -11645,8 +11735,22 @@ paths:
     patch:
       operationId: updateClient
       summary: Update a Client
-      description: Requires `client.manage`.
+      description: >
+        Requires `client.manage` (CR-HM-BE-CLIENT-MASTER-01). Same reach rule
+        as GET /clients/{clientId}: the Owner is installation-wide, every other
+        caller is limited to reachable Clients (`403 CLIENT_ACCESS_DENIED`
+        otherwise).
+
+        `code` is IMMUTABLE and is rejected with `400 VALIDATION_ERROR` when
+        supplied. At least one updatable field is required. `status` is the
+        Client lifecycle (`ACTIVE` | `INACTIVE`); deactivation is reversible
+        and does not delete the Client or its Properties, but an INACTIVE
+        Client is rejected by Property creation (`400 CLIENT_INACTIVE`).
+        Successful updates are audited as `CLIENT_UPDATED`.
       tags: [Clients]
+      x-required-permission: client.manage
+      x-error-codes:
+        [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, CLIENT_ACCESS_DENIED, CLIENT_NOT_FOUND]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/ClientIdPath"
@@ -86866,24 +86970,43 @@ components:
 
     CreateClientRequest:
       type: object
+      description: >
+        Client registration body. `code` is normalized to uppercase and stored
+        as the stable, machine-readable identity; `id` is never accepted from
+        the client (server-generated UUID).
       required: [code, name]
+      additionalProperties: true
       properties:
-        code: { type: string }
-        name: { type: string }
-        legalName: { type: string }
-        taxId: { type: string }
-        description: { type: string }
-        status: { $ref: "#/components/schemas/ClientStatus" }
+        code:
+          type: string
+          description: >
+            Machine-readable Client code. Normalized to uppercase; must start
+            with a letter and contain only uppercase letters, digits and
+            underscores (2–64 characters). Duplicate codes are rejected with
+            409 `CLIENT_CODE_ALREADY_EXISTS`.
+          pattern: "^[A-Za-z][A-Za-z0-9_]*$"
+          minLength: 2
+          maxLength: 64
+        name: { type: string, minLength: 1, maxLength: 160 }
+        legalName: { type: string, maxLength: 255 }
+        taxId: { type: string, maxLength: 64 }
+        description: { type: string, maxLength: 512 }
+        status:
+          allOf:
+            - $ref: "#/components/schemas/ClientStatus"
+          description: Defaults to ACTIVE.
 
     UpdateClientRequest:
       type: object
+      description: >
+        Mutable Client identity/status fields. `code` is intentionally absent
+        and is rejected if supplied (immutable identity).
       minProperties: 1
       properties:
-        code: { type: string }
-        name: { type: string }
-        legalName: { type: string, nullable: true }
-        taxId: { type: string, nullable: true }
-        description: { type: string, nullable: true }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        legalName: { type: string, maxLength: 255, nullable: true }
+        taxId: { type: string, maxLength: 64, nullable: true }
+        description: { type: string, maxLength: 512, nullable: true }
         status: { $ref: "#/components/schemas/ClientStatus" }
 
     PublicProperty:
@@ -92005,7 +92128,7 @@ components:
           $ref: "#/components/schemas/Uuid"
         eventType:
           type: string
-          enum: [LOGIN_SUCCESS, LOGIN_FAILED, LOGOUT, INVITATION_CREATED, INVITATION_ACCEPTED, INVITATION_REVOKED, ACCOUNT_DEACTIVATED, ACCOUNT_REACTIVATED, ACCOUNT_SUSPENDED, OWNER_BOOTSTRAPPED, PASSWORD_RESET, PASSWORD_CHANGED, ROLE_ASSIGNED, ROLE_REVOKED, BUILDING_ASSIGNED, BUILDING_REVOKED]
+          enum: [LOGIN_SUCCESS, LOGIN_FAILED, LOGOUT, INVITATION_CREATED, INVITATION_ACCEPTED, INVITATION_REVOKED, ACCOUNT_DEACTIVATED, ACCOUNT_REACTIVATED, ACCOUNT_SUSPENDED, OWNER_BOOTSTRAPPED, PASSWORD_RESET, PASSWORD_CHANGED, ROLE_ASSIGNED, ROLE_REVOKED, BUILDING_ASSIGNED, BUILDING_REVOKED, CLIENT_CREATED, CLIENT_UPDATED]
           description: Canonical IAM authentication/security event type.
         outcome:
           type: string

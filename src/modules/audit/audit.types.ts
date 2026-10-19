@@ -26,6 +26,11 @@ export const AUDIT_EVENT_TYPES = [
   'ROLE_REVOKED',
   'BUILDING_ASSIGNED',
   'BUILDING_REVOKED',
+  // CR-HM-BE-CLIENT-MASTER-01 — Client registry lifecycle events
+  // (migration 0454). A Client is the top-level tenant/commercial boundary,
+  // so its creation and update are security-relevant administrative acts.
+  'CLIENT_CREATED',
+  'CLIENT_UPDATED',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

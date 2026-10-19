@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { getPool } from '../../src/database';
+import { seedFoundationAccess } from '../../src/database/seeds/foundation-access.seed';
 import { credentialService } from '../../src/modules/auth';
 import {
   permissionRepository,
   permissionService,
 } from '../../src/modules/permissions';
-import { roleService } from '../../src/modules/roles';
+import { roleRepository, roleService } from '../../src/modules/roles';
 import { userService } from '../../src/modules/users';
 import { api } from './http';
 
@@ -658,4 +660,59 @@ export async function createSessionWithPermissions(
   });
 
   return login.body.data.sessionToken as string;
+}
+
+/**
+ * CR-HM-BE-CLIENT-MASTER-01 — creates a production-shaped Owner session.
+ *
+ * The first-owner bootstrap creates the canonical access catalogue and assigns
+ * `PLATFORM_ADMIN` to the owner. Tests need the same shape to exercise the
+ * installation-wide Client registry reach: without it, a role that merely
+ * carries every permission code is NOT the Owner (the protected-role check is
+ * on the `PLATFORM_ADMIN` role code, exactly as in production).
+ *
+ * `seedFoundationAccess` is the authoritative, idempotent catalogue/first-role
+ * seam shared with `db:seed` and the owner bootstrap — no test-only permission
+ * list is invented here.
+ */
+export async function createOwnerUser(): Promise<{
+  token: string;
+  userId: string;
+}> {
+  const client = await getPool().connect();
+  try {
+    await seedFoundationAccess(client);
+  } finally {
+    client.release();
+  }
+
+  const ownerRole = await roleRepository.findByCode('PLATFORM_ADMIN');
+  if (!ownerRole) {
+    throw new Error('PLATFORM_ADMIN role must exist after seedFoundationAccess');
+  }
+
+  const suffix = randomUUID().slice(0, 8).toLowerCase();
+  const password = 'OwnerPass123';
+
+  const user = await userService.createUser({
+    email: `owner-${suffix}@example.com`,
+    displayName: 'Platform Owner',
+  });
+  await credentialService.createInitialCredential({
+    userId: user.id,
+    password,
+  });
+  await roleService.assignRoleToUser(user.id, ownerRole.id);
+
+  const login = await api().post('/api/v1/auth/login').send({
+    email: user.email,
+    password,
+  });
+
+  return { token: login.body.data.sessionToken as string, userId: user.id };
+}
+
+/** Convenience wrapper returning only the Owner session token. */
+export async function createOwnerSession(): Promise<string> {
+  return (await createOwnerUser()).token;
 }
