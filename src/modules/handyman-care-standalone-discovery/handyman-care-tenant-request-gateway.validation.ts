@@ -1,0 +1,171 @@
+import { AppError } from '../../shared/errors';
+import { isValidUuid } from '../clients';
+import {
+  NON_ACCEPTED_IDENTITY_FIELDS,
+  assertNoSuppliedRecordingIdentity,
+} from '../handyman-care-authority';
+
+/**
+ * CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — transport validation for
+ * `POST /api/v1/handyman/care/buildings/{buildingId}/requests`.
+ *
+ * Authority rules at the edge:
+ * - only the bounded selection/field keys below are accepted; any other
+ *   context key (clientId, buildingId, originChannel, createdByUserId, ...)
+ *   is rejected, never silently ignored — the service derives every one of
+ *   them server-side;
+ * - a supplied recording identity (`tenantPicId` is a REPRESENTED customer
+ *   selection and stays accepted; actor/creator spellings such as
+ *   `recordedByUserId`, `actorUserId`, `careActorId` are rejected) per the
+ *   Care authority SD-19 rule — presenting one is a rejected request, not a
+ *   silently-ignored one;
+ * - malformed UUIDs are rejected here; unknown TENANT/UNIT/SERVICE ids are
+ *   rejected by the service against the server-derived Building scope.
+ */
+
+const ALLOWED_BODY_KEYS = [
+  'tenantCompanyId',
+  'tenantPicId',
+  'spaceId',
+  'serviceCatalogId',
+  'serviceVariantId',
+  'description',
+] as const;
+
+export type CreateBuildingCareRequestBody = {
+  tenantCompanyId: string;
+  tenantPicId?: string;
+  spaceId?: string;
+  serviceCatalogId: string;
+  serviceVariantId?: string;
+  description?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function fail(details: { field: string; message: string }[]): never {
+  throw AppError.validation('Request validation failed.', details);
+}
+
+function readRequiredUuid(
+  value: unknown,
+  field: string,
+  details: { field: string; message: string }[],
+): string | undefined {
+  if (typeof value !== 'string' || !isValidUuid(value.trim())) {
+    details.push({
+      field,
+      message: `${field} is required and must be a valid UUID.`,
+    });
+    return undefined;
+  }
+  return value.trim().toLowerCase();
+}
+
+function readOptionalUuid(
+  value: unknown,
+  field: string,
+  details: { field: string; message: string }[],
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !isValidUuid(value.trim())) {
+    details.push({ field, message: `${field} must be a valid UUID.` });
+    return undefined;
+  }
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Actor-identity spellings that must never be supplied (SD-19): presenting
+ * one is a rejected request, not a silently-ignored one.
+ *
+ * EXCEPTION for this gateway: `tenantPicId` / `tenant_pic_id` stay ACCEPTED
+ * here as the REPRESENTED-customer selection — the staff picks an authorized
+ * PIC of the selected Tenant exactly like they pick the Tenant/Unit, and the
+ * service re-validates it (ACTIVE PIC of that Tenant) inside the creation
+ * transaction. It can never become the acting identity: `createdByUserId`
+ * is always the authenticated session user, and the represented PIC
+ * persists in its own `tenant_pic_id` column. Every other recording/actor
+ * spelling (including `tenantId`) remains rejected.
+ */
+const FORBIDDEN_ACTOR_IDENTITY_FIELDS: readonly string[] =
+  NON_ACCEPTED_IDENTITY_FIELDS.filter(
+    (field) => field !== 'tenantPicId' && field !== 'tenant_pic_id',
+  );
+
+export function parseCreateBuildingCareRequestBody(
+  body: unknown,
+): CreateBuildingCareRequestBody {
+  if (!isRecord(body)) {
+    fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
+  }
+  // SD-19: a caller-supplied actor/creator identity is rejected outright.
+  assertNoSuppliedRecordingIdentity(FORBIDDEN_ACTOR_IDENTITY_FIELDS, [body]);
+
+  const unknown = Object.keys(body).filter(
+    (key) => !(ALLOWED_BODY_KEYS as readonly string[]).includes(key),
+  );
+  if (unknown.length > 0) {
+    fail([
+      {
+        field: unknown[0],
+        message: 'Unexpected request field; only tenant/unit/service selection and description are accepted.',
+      },
+    ]);
+  }
+
+  const details: { field: string; message: string }[] = [];
+  const tenantCompanyId = readRequiredUuid(
+    body.tenantCompanyId,
+    'tenantCompanyId',
+    details,
+  );
+  const serviceCatalogId = readRequiredUuid(
+    body.serviceCatalogId,
+    'serviceCatalogId',
+    details,
+  );
+  const tenantPicId = readOptionalUuid(body.tenantPicId, 'tenantPicId', details);
+  const spaceId = readOptionalUuid(body.spaceId, 'spaceId', details);
+  const serviceVariantId = readOptionalUuid(
+    body.serviceVariantId,
+    'serviceVariantId',
+    details,
+  );
+
+  let description: string | undefined;
+  if (body.description !== undefined && body.description !== null) {
+    if (typeof body.description !== 'string') {
+      details.push({
+        field: 'description',
+        message: 'description must be a string.',
+      });
+    } else {
+      const trimmed = body.description.trim();
+      if (trimmed.length === 0) {
+        description = undefined;
+      } else if (trimmed.length > 1000) {
+        details.push({
+          field: 'description',
+          message: 'description must be 1-1000 characters when provided.',
+        });
+      } else {
+        description = trimmed;
+      }
+    }
+  }
+
+  if (!tenantCompanyId || !serviceCatalogId || details.length) {
+    fail(details);
+  }
+  return {
+    tenantCompanyId,
+    ...(tenantPicId === undefined ? {} : { tenantPicId }),
+    ...(spaceId === undefined ? {} : { spaceId }),
+    serviceCatalogId,
+    ...(serviceVariantId === undefined ? {} : { serviceVariantId }),
+    ...(description === undefined ? {} : { description }),
+  };
+}

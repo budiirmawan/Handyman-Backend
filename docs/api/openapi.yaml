@@ -4642,6 +4642,90 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: createBuildingCareRequest
+      summary: Create the canonical Handyman Request for an authorized Tenant
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted Tenant request
+        creation. An authenticated CUSTOMER_CARE staff member (Backend
+        Bearer session + dedicated `handyman.care.building` permission +
+        ACTIVE assignment to the exact ACTIVE Building) creates the
+        authoritative Handyman Request on behalf of an authorized
+        Tenant/PIC. Client, Building, tenant scope, Tower/Floor/Unit and
+        catalogue selection are resolved server-side; the represented
+        Tenant/PIC persist separately from the actual creator
+        (`createdByUserId` is always the authenticated session user — no
+        Tenant impersonation, no BM HMAC handoff credential, no `hcw_`
+        session). The Backend issues the request UUID and its initial
+        `INTAKE` lifecycle state, and the same row is discovered by the
+        Handyman Operations intake queue under the same id. Channel/source
+        attribution is recorded as `originChannel=CUSTOMER_CARE_BACKEND`
+        on the immutable channel attribution (creation audit trail; no
+        audit-event vocabulary is invented). Requires the standard
+        `Idempotency-Key` header: the same actor + key + identical
+        submission replays the original 201 body with zero additional
+        writes; the same key with a different submission fails 409
+        `IDEMPOTENCY_CONFLICT`. Wrong Building or Tenant scope fails
+        non-enumerating 403 `HANDYMAN_CARE_AUTHORITY_DENIED`; unknown
+        Unit/PIC identifiers fail 400 attribution validation and unknown
+        service identifiers fail 404 `SERVICE_CATALOG_NOT_FOUND`.
+        Cache-Control is no-store.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - $ref: '#/components/parameters/RequestIdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanCareRequestCreateBody'
+      responses:
+        '201':
+          description: >-
+            The canonical Handyman Request in its initial INTAKE state, or
+            the idempotent replay of the original result for the same
+            actor/operation/key/fingerprint.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanCareStandaloneRequest'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or the submitted Tenant Company is unknown, cross-Client
+            or bound to another Building. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >-
+            IDEMPOTENCY_CONFLICT when the Idempotency-Key replays with a
+            different submission; HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS or
+            origin-reference conflicts are also 409.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /handyman/care/buildings/{buildingId}/requests/{requestId}:
     get:
       operationId: getStandaloneCareRequestDetail
@@ -4756,6 +4840,346 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/tenants:
+    get:
+      operationId: listBuildingCareTenants
+      summary: List authorized Tenant companies and PICs of one Building
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — Tenant/PIC discovery for the
+        staff-assisted create. Read-only; same Backend session +
+        `handyman.care.building` + exact ACTIVE Building authority as the
+        other Care discovery readers, with the Client derived server-side.
+        Returns only ACTIVE Tenant Companies holding an ACTIVE,
+        currently-effective context in this exact Building, each with its
+        ACTIVE PICs (id, picName, isPrimary only — no linked user ids and
+        no contact PII). The response doubles as the eligibility contract:
+        everything listed here can be submitted to
+        `POST /handyman/care/buildings/{buildingId}/requests`. Unknown
+        query keys and a non-empty GET body are rejected 400.
+        Cache-Control is no-store.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+      responses:
+        '200':
+          description: Authorized Tenant companies with their active PICs; possibly empty.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/HandymanCareTenantSelection'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or its active Client/Property lineage cannot be
+            established. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/floors:
+    get:
+      operationId: listBuildingCareFloors
+      summary: List the ACTIVE Floors of one authorized Building
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — Floor step of the
+        Tower -> Floor -> Unit selection cascade (the Building selected on
+        the route path is the tower scope). Read-only under the same Care
+        Building authority; returns the ACTIVE floors of that exact
+        Building ordered by level number. Unknown query keys and a
+        non-empty GET body are rejected 400. Cache-Control is no-store.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+      responses:
+        '200':
+          description: ACTIVE floors of the authorized Building; possibly empty.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/HandymanCareFloorSelection'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or its active Client/Property lineage cannot be
+            established. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/units:
+    get:
+      operationId: listBuildingCareUnits
+      summary: List the eligible Units (tenant Spaces) of one Tenant
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — Unit step of the
+        Tower -> Floor -> Unit selection cascade and the Unit/Tenant
+        eligibility contract. Read-only under the same Care Building
+        authority. Returns only Units (= existing `spaces.id`) whose
+        ACTIVE, currently-effective tenant relationship and whose full
+        ACTIVE Space -> Room -> Area -> Floor chain resolve inside this
+        exact Building for the selected Tenant. The Tenant scope uses the
+        same non-enumerating 403 denial as the create endpoint: an unknown
+        or foreign `tenantCompanyId` is rejected before any Unit is
+        disclosed. Unknown query keys and a non-empty GET body are
+        rejected 400. Cache-Control is no-store.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - name: tenantCompanyId
+          in: query
+          required: true
+          description: Authorized Tenant whose eligible Units are listed.
+          schema: { type: string, format: uuid }
+        - name: floorId
+          in: query
+          required: false
+          description: Optional Floor narrowing for the Tower -> Floor -> Unit cascade.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Eligible units for the tenant in this Building; possibly empty.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/HandymanCareUnitSelection'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or its active Client/Property lineage cannot be
+            established. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/catalogue/services:
+    get:
+      operationId: listBuildingCareCatalogueServices
+      summary: Read the building-scoped Handyman service catalogue
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — building-scoped service
+        catalogue for the staff-assisted create. Read-only under the same
+        Care Building authority; the Client is derived server-side from
+        the caller's own Building -> Property -> Client chain (no
+        caller-supplied clientId) and only ACTIVE service entries with
+        their ACTIVE Handyman variants are composed — the same item shape
+        as `GET /handyman/catalogue/services`. This is the authorized
+        selection pool for `serviceCatalogId`/`serviceVariantId`.
+        Unknown query keys and a non-empty GET body are rejected 400.
+        Cache-Control is no-store.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+      responses:
+        '200':
+          description: Active services with their active Handyman variants for the derived Client.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/HandymanCatalogueServiceItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or its active Client/Property lineage cannot be
+            established. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/requests/{requestId}/intake-evidence:
+    parameters:
+      - $ref: '#/components/parameters/BuildingIdPath'
+      - name: requestId
+        in: path
+        required: true
+        description: Handyman request id inside the exact Building.
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listBuildingCareRequestIntakeEvidence
+      summary: List intake evidence metadata for one Care-scoped request
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — bounded intake-evidence reader
+        reached through the Care Building authority. The request must
+        belong to the exact selected Building/Client (a request outside it
+        returns the standard 404, never an existence oracle). Records
+        expose metadata only — never internal storage keys — and file
+        bytes remain governed by the shared evidence file-content
+        convention. Cache-Control is no-store.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Intake evidence records for the request; possibly empty.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/HandymanIntakeEvidence'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or its active Client/Property lineage cannot be
+            established. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    post:
+      operationId: uploadBuildingCareRequestIntakeEvidence
+      summary: Attach PHOTO/VIDEO intake evidence through the Care Building authority
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — supported intake-evidence
+        attachment for the staff-assisted flow, reusing the existing
+        multipart evidence convention (field `file`, single file, 50 MB
+        cap, PHOTO/VIDEO MIME policy, server-side SHA-256 integrity).
+        Exact-Building Care authority is asserted BEFORE the upload is
+        consumed; the request in the path is the only context authority
+        and uploading never mutates the request lifecycle (status stays
+        `INTAKE`). The recorder persisted is the authenticated staff
+        session user (`submittedByUserId`), not the represented Tenant/PIC.
+      tags: [Customer Care Discovery]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, evidenceKind]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Max 50 MB; MIME type must match the evidenceKind policy.
+                evidenceKind:
+                  type: string
+                  enum: [PHOTO, VIDEO]
+                  description: >-
+                    PHOTO: image/jpeg, image/png, image/webp. VIDEO (bounded
+                    Handyman intake policy): video/mp4, video/quicktime,
+                    video/webm. Max 50 MB for both kinds.
+      responses:
+        '201':
+          description: Intake evidence recorded with server-side integrity metadata.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanIntakeEvidence'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED when the session lacks
+            `handyman.care.building`, or HANDYMAN_CARE_AUTHORITY_DENIED when
+            the actor is not an ACTIVE user assigned to the exact ACTIVE
+            Building or its active Client/Property lineage cannot be
+            established. The denial is non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /handyman/care/properties/{propertyId}/catalogue/services:
@@ -122314,6 +122738,94 @@ components:
         status: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    HandymanCareRequestCreateBody:
+      type: object
+      description: >-
+        CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted create body.
+        Only the authorized Tenant/Unit/service selection and the problem
+        description are accepted. Any other context key (clientId,
+        buildingId, originChannel, createdByUserId, status, ...) and any
+        recording-identity spelling other than the represented `tenantPicId`
+        selection (recordedByUserId, actorUserId, careActorId, tenantId,
+        ...) is rejected 400 — never silently ignored. Client, Building and
+        the acting creator are derived server-side from the session;
+        `tenantPicId` identifies the REPRESENTED customer and is validated
+        as an ACTIVE PIC of `tenantCompanyId`, so it can never become the
+        acting identity.
+      additionalProperties: false
+      required: [tenantCompanyId, serviceCatalogId]
+      properties:
+        tenantCompanyId:
+          type: string
+          format: uuid
+          description: >-
+            ACTIVE Tenant Company that holds an ACTIVE, currently-effective
+            context in this exact Building under the server-derived Client.
+        tenantPicId:
+          type: string
+          format: uuid
+          description: Optional represented PIC of the tenant (must be ACTIVE and belong to it).
+        spaceId:
+          type: string
+          format: uuid
+          description: Optional Unit (space) with an active tenant relationship in this Building.
+        serviceCatalogId:
+          type: string
+          format: uuid
+          description: ACTIVE service entry of the server-derived Client.
+        serviceVariantId:
+          type: string
+          format: uuid
+          description: Optional ACTIVE variant of the selected service.
+        description:
+          type: string
+          minLength: 1
+          maxLength: 1000
+          description: Problem description recorded verbatim (trimmed).
+    HandymanCareTenantPicSelection:
+      type: object
+      additionalProperties: false
+      required: [id, picName, isPrimary]
+      properties:
+        id: { type: string, format: uuid }
+        picName: { type: string }
+        isPrimary: { type: boolean }
+    HandymanCareTenantSelection:
+      type: object
+      additionalProperties: false
+      required: [id, tenantCode, tenantName, pics]
+      properties:
+        id: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+        pics:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanCareTenantPicSelection' }
+    HandymanCareFloorSelection:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, levelNumber]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        levelNumber: { type: integer }
+    HandymanCareUnitSelection:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, floorId, floorCode, levelNumber, roomId, roomCode]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The Unit — the existing spaces.id (submitted as `spaceId`).
+        code: { type: string }
+        name: { type: string }
+        floorId: { type: string, format: uuid }
+        floorCode: { type: string }
+        levelNumber: { type: integer }
+        roomId: { type: string, format: uuid }
+        roomCode: { type: string }
     HandymanCareStandalonePaginationMeta:
       type: object
       description: >-

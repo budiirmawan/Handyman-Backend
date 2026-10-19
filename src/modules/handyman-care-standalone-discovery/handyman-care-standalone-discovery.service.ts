@@ -62,7 +62,7 @@ function projectRequest(record: StandaloneCareRequestRecord) {
   };
 }
 
-async function requireActiveAssignedBuilding(
+export async function requireActiveAssignedBuilding(
   actorUserId: string,
   buildingId: string,
 ) {

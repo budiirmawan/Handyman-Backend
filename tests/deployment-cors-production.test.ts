@@ -321,13 +321,15 @@ describe('CR-HM-BE-CORS-PRODUCTION-01 — application regression', () => {
   });
 
   it('keeps the canonical migration registry append-only', () => {
-    // CR-HM-IAM-BOOTSTRAP-01 added the first-owner state, and
-    // CR-HM-BE-IAM-ADMIN-02 added role/building IAM audit event vocabulary.
-    // Both are additive; no existing migration was rewritten.
-    assert.equal(migrations.length, 452);
+    // CR-HM-IAM-BOOTSTRAP-01 added the first-owner state,
+    // CR-HM-BE-IAM-ADMIN-02 added role/building IAM audit event vocabulary,
+    // CR-HM-BE-CLIENT-MASTER-01 appended 0454, and
+    // CR-HM-CC-TENANT-REQUEST-GATEWAY-01 appends 0455 (Backend Customer
+    // Care origin channel). All additive; no existing migration rewritten.
+    assert.equal(migrations.length, 454);
     assert.equal(
       migrations[migrations.length - 1].id,
-      '0453_extend_iam_admin_audit_events',
+      '0455_handyman_care_backend_origin_channel',
     );
   });
 });

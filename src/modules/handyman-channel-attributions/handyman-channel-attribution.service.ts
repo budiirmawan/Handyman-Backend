@@ -316,7 +316,7 @@ export async function createChannelAttribution(
 export async function getChannelAttribution(
   id: string,
 ): Promise<PublicHandymanChannelAttribution> {
-  const record = await handymanChannelAttributionRepository.findById(id);
+  const record = await handymanChannelAttributionRepository.findById(undefined, id);
   if (!record) throw handymanChannelAttributionNotFoundError();
   return toPublicHandymanChannelAttribution(record);
 }

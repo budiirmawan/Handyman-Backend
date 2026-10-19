@@ -505,11 +505,16 @@ describe('CR-HM-BM-CARE-DISCOVERY-01 real Backend-session HTTP discovery', () =>
     assert.ok(scope);
 
     const before = await businessSnapshot();
+    // CR-HM-CC-TENANT-REQUEST-GATEWAY-01 adds the staff-assisted create at
+    // this path; a lifecycle/status field is still never caller-writable —
+    // the submission is rejected before any mutation (status stays a
+    // Backend-issued state).
     const unsupportedWrite = await api()
       .post(`${V1}/handyman/care/buildings/${main.building.id}/requests`)
       .set(auth(care.token))
       .send({ status: 'APPROVED' });
-    assert.equal(unsupportedWrite.status, 404);
+    assert.equal(unsupportedWrite.status, 400, JSON.stringify(unsupportedWrite.body));
+    assert.equal(unsupportedWrite.body.error.code, 'VALIDATION_ERROR');
     const detail = await api()
       .get(requestPath(main.building.id, main.request.id))
       .set(auth(care.token));
