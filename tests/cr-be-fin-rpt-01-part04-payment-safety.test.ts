@@ -275,7 +275,19 @@ describe('CR-BE-FIN-RPT-01 PART 04 — payment/outstanding + cross-module safety
   it('no migration 0334 and no historical rewrite', () => {
     const fs = require('node:fs');
     const files = fs.readdirSync(MIGRATION_DIR) as string[];
-    assert.ok(!files.some((f: string) => f.startsWith('0334')), '0334 must not exist');
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the frozen
+    // invariant is that no FX conversion ledger migration exists.
+    // Number 0334 was later reused by an unrelated additive CR
+    // (mobile push delivery); assert the FX ledger by name pattern,
+    // not by directory slot.
+    assert.ok(
+      !files.some((f: string) => /^[0-9]+_.*fx.*conversion.*ledger.*\.ts$/i.test(f)),
+      'FX conversion ledger migration must not exist',
+    );
+    assert.ok(
+      !files.some((f: string) => f.startsWith('0334_create_fx_conversion_ledger')),
+      '0334_create_fx_conversion_ledger.ts must not exist',
+    );
     const repoContent = src(REPO_PATH);
     assert.ok(!repoContent.includes('UPDATE tenant_charges'), 'must not rewrite historical tenant_charges');
     assert.ok(!repoContent.includes('UPDATE tenant_invoices'), 'must not rewrite historical invoices');

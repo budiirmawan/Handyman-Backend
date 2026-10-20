@@ -375,6 +375,7 @@ async function spacelessIssuedFixture() {
   const f = await attributedFixture();
   const attributionNoSpace = await createChannelAttribution({
     tenantCompanyId: f.company.id,
+    tenantPicId: f.pic.id,
     buildingId: f.building.id,
     originChannel: 'BM_SUPER_APP',
     originReference: `bm-handoff:BM_SUPER_APP:${randomUUID()}`,
@@ -428,7 +429,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     const scope = decision.executionScope;
     assert.ok(scope);
@@ -451,7 +452,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     const scope = decision.executionScope!;
     assert.equal(scope.clientId, f.client.id);
@@ -460,7 +461,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     assert.equal(scope.quotationId, f.bundle.quotation.id);
     assert.equal(scope.approvedQuotationVersionId, f.version.id);
     assert.equal(scope.quotationDecisionId, decision.id);
-    assert.equal(scope.createdByUserId, adminUserId);
+    assert.equal(scope.createdByUserId, f.linkedUser.id);
   });
 
   it('3: customer + location snapshot server-derived', async (t) => {
@@ -469,7 +470,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     const scope = decision.executionScope!;
     assert.equal(scope.tenantCompanyId, f.company.id);
@@ -487,7 +488,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     assert.equal(read.tenantCompanyId, f.company.id);
   });
 
-  it('4: NULL tenantPic remains NULL', async (t) => {
+  it('4: NULL tenantPic fails closed — no decider without active PIC', async (t) => {
     if (!requireDatabase(t)) return;
     const g = await attributedFixture();
     const attributionNoPic = await createChannelAttribution({
@@ -535,12 +536,19 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     await issueHandymanQuotationVersion(
       version.id, { validUntil: FUTURE() }, adminUserId,
     );
-    const decision = await decideHandymanQuotation(
-      version.id,
-      { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+    // CR-HM-SEC-01: decisions require an active Tenant PIC designation on
+    // the request itself. A PIC-less request has NO authorized decider —
+    // even the company's designated PIC user fails closed.
+    await assert.rejects(
+      decideHandymanQuotation(
+        version.id,
+        { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
+        g.linkedUser.id,
+      ),
+      (e: unknown) =>
+        errorCode(e) === 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN',
     );
-    assert.equal(decision.executionScope?.tenantPicId, null);
+    assert.equal(await scopeCount(version.id), 0);
   });
 
   it('5: REJECT creates zero execution scope', async (t) => {
@@ -549,7 +557,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'REJECT', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     assert.equal(decision.executionScope, null);
     assert.equal(await scopeCount(f.version.id), 0);
@@ -572,7 +580,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
         decideHandymanQuotation(
           f.version.id,
           { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-          adminUserId,
+          f.linkedUser.id,
         ),
         (e: unknown) =>
           errorCode(e) === 'HANDYMAN_QUOTATION_INVALID_TRANSITION',
@@ -595,11 +603,11 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     const key = `k-${randomUUID()}`;
     const first = await decideHandymanQuotation(
       f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
+      f.linkedUser.id,
     );
     const replay = await decideHandymanQuotation(
       f.version.id, { decision: 'APPROVE', idempotencyKey: key },
-      adminUserId,
+      f.linkedUser.id,
     );
     assert.equal(replay.id, first.id);
     assert.equal(
@@ -626,7 +634,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
             decision: 'APPROVE',
             idempotencyKey: `k-${randomUUID()}-c${i}`,
           },
-          adminUserId,
+          f.linkedUser.id,
         ),
       ),
     );
@@ -670,7 +678,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
       decideHandymanQuotation(
         f.version.id,
         { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-        adminUserId,
+        f.linkedUser.id,
       ),
       (e: unknown) =>
         errorCode(e) === 'HANDYMAN_EXECUTION_SCOPE_LOCATION_INCONSISTENT',
@@ -700,7 +708,7 @@ describe('CR-HM-06 PART 05 — approved execution scope', () => {
     const decision = await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}` },
-      adminUserId,
+      f.linkedUser.id,
     );
     const after = {
       workOrders: await tableCount('work_orders'),

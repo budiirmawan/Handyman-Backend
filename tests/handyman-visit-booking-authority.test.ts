@@ -59,6 +59,10 @@ before(async () => {
     CREATE TEMP TABLE properties(id uuid, client_id uuid);
     CREATE TEMP TABLE buildings(id uuid, property_id uuid, status text, timezone text);
     CREATE TEMP TABLE users(id uuid, status text);
+    CREATE TEMP TABLE user_credentials(id uuid, user_id uuid,
+      password_hash text, must_change_password boolean NOT NULL DEFAULT false,
+      password_changed_at timestamptz, created_at timestamptz,
+      updated_at timestamptz);
     CREATE TEMP TABLE user_building_assignments(user_id uuid, building_id uuid, status text);
     -- PART 01D-2A: the proposal path reads pending tenant slot choices. Empty here, so the
     -- proposal behaves exactly as before (no pending choice to match).
@@ -124,7 +128,7 @@ after(async () => {
 beforeEach(async () => {
   permissions.clear();
   permissions.set(id.operator,['tenant_company.read','tenant_company.manage']);
-  await db.query(`TRUNCATE clients,properties,buildings,users,user_building_assignments,
+  await db.query(`TRUNCATE clients,properties,buildings,users,user_credentials,user_building_assignments,
     handyman_service_requests,handyman_visit_appointments,operational_events,
     organizations,vendors,handyman_provider_contexts,handyman_worker_contexts,workforce_profiles,
     vendor_workforce_bindings,workforce_building_assignments`);
@@ -132,6 +136,9 @@ beforeEach(async () => {
   await db.query('INSERT INTO properties VALUES ($1,$2)',[id.property,id.client]);
   await db.query("INSERT INTO buildings VALUES ($1,$2,'ACTIVE','Asia/Jakarta')",[id.building,id.property]);
   await db.query("INSERT INTO users VALUES ($1,'ACTIVE'),($2,'ACTIVE')",[id.operator,id.inspector]);
+  await db.query(`INSERT INTO user_credentials(id,user_id,password_hash,must_change_password)
+    SELECT gen_random_uuid(), u, 'test-hash', false
+      FROM unnest(ARRAY[$1::uuid,$2::uuid]) AS u`,[id.operator,id.inspector]);
   await db.query("INSERT INTO user_building_assignments VALUES ($1,$3,'ACTIVE'),($2,$3,'ACTIVE')",[id.operator,id.inspector,id.building]);
   await db.query('INSERT INTO organizations VALUES ($1,$2)',[id.organization,id.client]);
   await db.query("INSERT INTO vendors VALUES ($1,$2,'ACTIVE')",[id.vendor,id.client]);

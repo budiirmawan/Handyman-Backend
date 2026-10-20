@@ -35,6 +35,7 @@ import {
   crewFixture,
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
+import { arrangeGuardedBast } from './helpers/handyman-guarded-bast';
 
 /**
  * CR-HM-17 TRANSPORT GAP — PART 06 B7 WARRANTY
@@ -92,43 +93,24 @@ async function crHm15RowCounts(): Promise<Record<string, number>> {
 }
 
 async function seedStartedWarranty() {
-  const { realm, chain, scope } = await baseFixture();
-  const crew = await crewFixture(realm);
-  await assignHandymanExecutionScopeCrew(
-    {
-      executionScopeId: scope.id,
-      providerContextId: crew.providerContext.id,
-      crewId: crew.crew.id,
-    },
-    adminUserId,
-  );
-  const prepared = await prepareHandymanBast(adminUserId, {
-    executionScopeId: scope.id,
-    idempotencyKey: `prep-${id()}`,
-  });
-  await issueHandymanBast(adminUserId, {
-    bastId: prepared.bast.id,
-    idempotencyKey: `issue-${id()}`,
-  });
-  const accepted = await acceptHandymanBast(adminUserId, {
-    bastId: prepared.bast.id,
-    idempotencyKey: `accept-${id()}`,
-    signatureDigest: `sig-${id()}`,
-  });
+  // Current-generation arrangement: guarded Supervisor QC PASS (pinned
+  // checklist + completed work session + verified bytes) precedes BAST
+  // PREPARE/ISSUE/ACCEPT, exactly as the merged 0439–0445 gates demand.
+  const f = await arrangeGuardedBast({ adminUserId, q, until: 'ACCEPTED' });
   const started = await startHandymanServiceWarranty(
     {
-      executionScopeId: scope.id,
+      executionScopeId: f.scope.id,
       idempotencyKey: `start-warranty-${id()}`,
     },
     adminUserId,
   );
   return {
-    realm,
-    chain,
-    scope,
-    bast: accepted.bast,
+    realm: f.realm,
+    scope: f.scope,
+    bast: f.bast,
     warranty: started.warranty,
-    leadUserId: crew.leadUser.id,
+    leadUserId: f.crew.leadUser.id,
+    supervisorUserId: f.supervisorUserId,
   };
 }
 
@@ -713,11 +695,11 @@ describe('CR-HM-17 GAP PART 06 — B7 Service Warranty Customer Care Transport',
     // Field-worker rework execution and warranty lifecycle calculation routes are NOT exposed
     for (const unexposedPath of [
       `/api/v1/handyman/service-warranties/${warranty.id}/start`,
-      `/api/v1/handyman/service-warranties/${warranty.id}/expire`,
+      // The rework start/complete/verify ladder is the J11 finance-close
+      // field lane (authentication-only by design) and EXPIRE is its
+      // manager command — mounted app-wide but never on this Customer
+      // Care transport; pinned at source level below.
       `/api/v1/handyman/service-warranty-reworks/${id()}/propose`,
-      `/api/v1/handyman/service-warranty-reworks/${id()}/start`,
-      `/api/v1/handyman/service-warranty-reworks/${id()}/complete`,
-      `/api/v1/handyman/service-warranty-reworks/${id()}/verify`,
       `/api/v1/handyman/chargeable-additional-works/${id()}/propose`,
     ]) {
       const res = await request(app)
@@ -725,6 +707,23 @@ describe('CR-HM-17 GAP PART 06 — B7 Service Warranty Customer Care Transport',
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ idempotencyKey: id() });
       assert.equal(res.status, 404);
+    }
+
+    // EXPIRE is a J11 finance-close manager command (mounted on the
+    // close lane by design); the Customer Care warranty transport must
+    // still never mount it — pinned at source level below.
+    const ccRoutesFile = path.resolve(
+      __dirname,
+      '../src/modules/handyman-service-warranty-api/'
+        + 'handyman-service-warranty-api.routes.ts',
+    );
+    const ccRoutesSrc = require('node:fs').readFileSync(
+      ccRoutesFile, 'utf8',
+    ) as string;
+    for (const forbidden of ['/expire', '/start', '/complete',
+      '/verify', '/propose']) {
+      assert.ok(!ccRoutesSrc.includes(forbidden),
+        `CC warranty transport must not mount ${forbidden}`);
     }
 
     // Source firewall check on src/modules/handyman-service-warranty-api

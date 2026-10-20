@@ -54,7 +54,23 @@ export function createHandymanFieldEvidenceRouter(): Router {
   return handymanFieldEvidenceRouter;
 }
 
-handymanFieldEvidenceRouter.use(authenticationMiddleware);
+// CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — scope the transport
+// authentication wall to THIS router's own path families. A path-less
+// router.use(auth) intercepts every later-mounted /api/v1 route:
+// unknown routes must 404 (frozen error contract), not 401, and
+// per-route auth is the codebase convention.
+handymanFieldEvidenceRouter.use(
+  '/handyman/field/evidence',
+  authenticationMiddleware,
+);
+handymanFieldEvidenceRouter.use(
+  '/handyman/field/execution-scopes/:executionScopeId/evidence',
+  authenticationMiddleware,
+);
+handymanFieldEvidenceRouter.use(
+  '/handyman/field/requests/:handymanRequestId/evidence',
+  authenticationMiddleware,
+);
 
 handymanFieldEvidenceRouter.post(
   '/handyman/field/evidence/upload',

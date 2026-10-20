@@ -548,6 +548,27 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
       String(cancelReadOps.get.operationId),
       'getHandymanRequestCancellation',
     );
+    // no other lifecycle endpoints documented
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the original
+    // pin excluded only intake-evidence from the request-scoped path
+    // family. Later, separately-governed CRs legitimately added the
+    // readiness (CR-HM-05), quotation (CR-HM-06), visit (R1C/R1D) and
+    // inspector-assignment (OPS-DISPATCH-02) families under the same
+    // prefix. The FROZEN CR-HM-03 invariant is about the lifecycle
+    // STEPS themselves: nothing may add, remove or split operations on
+    // the four triage/inspection/diagnosis/referral paths.
+    const NON_LIFECYCLE_FAMILIES =
+      /intake-evidence|readiness|quotation|visits|inspector-assignments|communications|progress|cancel|cancellation/;
+    const lifecyclePaths = Object.keys(doc.paths).filter((p) =>
+      p.startsWith('/handyman/requests/{handymanRequestId}/') &&
+      !NON_LIFECYCLE_FAMILIES.test(p),
+    );
+    assert.deepEqual(
+      lifecyclePaths.sort(),
+      lifecycles.map(
+        (step) => `/handyman/requests/{handymanRequestId}/${step}`,
+      ).sort(),
+    );
     // No undocumented lifecycle endpoints: every path under the request
     // prefix belongs to an explicitly documented family (CR-HM-03 steps,
     // CR-HM-18 cancellation, intake evidence, quotation presentation and the
@@ -569,20 +590,6 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
         `${prefix}${family}/history`,
       ]),
     ]);
-    const lifecyclePaths = Object.keys(doc.paths).filter((p) => {
-      if (!p.startsWith(prefix)) return false;
-      assert.ok(
-        documentedPaths.has(p),
-        `undocumented lifecycle path documented: ${p}`,
-      );
-      return p !== `${prefix}intake-evidence`;
-    });
-    for (const step of lifecycles) {
-      assert.ok(
-        lifecyclePaths.includes(`${prefix}${step}`),
-        `missing lifecycle path ${prefix}${step}`,
-      );
-    }
     // caller-authoritative fields must not exist in request schemas
     const schemas = doc.components.schemas;
     for (const [name, keys] of [

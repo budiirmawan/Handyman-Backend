@@ -784,27 +784,25 @@ describe('CR-HM-13 PART 04 — payment allocation', () => {
       assert.ok(!source.includes(forbidden),
         `module source must not mention ${forbidden}`);
     }
-    // CR-HM-18: 'invoice' is no longer a forbidden token. Migration 0458 made
-    // allocation invoice-BOUND (a finalized, line-linked single-scope invoice
-    // must fund the charge line), so the module must read the invoice and
-    // refuse to allocate when it is not finalizable. The firewall stays
-    // meaningful by pinning the gate itself and by keeping invoice WRITES
-    // forbidden.
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — 'invoice' is no
+    // longer a blanket-forbidden token: the CR-HM-17 invoice gate
+    // (matrix §12, frozen) is part of the allocation authority — once a
+    // scope is invoiced, allocations only flow through charge lines
+    // linked to the FINALIZED single-scope invoice. The invariant that
+    // remains is READ-ONLY over the invoice substrate: allocation must
+    // never write tenant invoices.
+    assert.ok(
+      !/INSERT INTO tenant_invoice|UPDATE tenant_invoice|DELETE FROM tenant_invoice/i
+        .test(source),
+      'allocation must never write the tenant invoice substrate',
+    );
+
+    // Migration 0458 made allocation invoice-BOUND: a finalized,
+    // line-linked single-scope invoice must fund the charge line.
     assert.ok(source.includes('tenant_invoices'),
       'invoice-bound allocation gate must read tenant_invoices');
     assert.ok(source.includes("invoice.status !== 'FINALIZED'"),
       'allocation must refuse a non-FINALIZED invoice');
-    for (const write of [
-      'INSERT INTO tenant_invoices',
-      'UPDATE tenant_invoices',
-      'DELETE FROM tenant_invoices',
-      'INSERT INTO tenant_invoice_lines',
-      'UPDATE tenant_invoice_lines',
-      'DELETE FROM tenant_invoice_lines',
-    ]) {
-      assert.ok(!source.includes(write),
-        `allocations never write invoices (${write})`);
-    }
     // Allocations write ONLY their own table: payments, charge lines,
     // anchors and the ledger transaction are read-only here.
     for (const write of [

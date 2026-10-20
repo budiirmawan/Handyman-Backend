@@ -56,6 +56,14 @@ before(async () => {
     CREATE TEMP TABLE properties(id uuid, client_id uuid);
     CREATE TEMP TABLE buildings(id uuid, property_id uuid, status text, timezone text);
     CREATE TEMP TABLE users(id uuid, status text);
+    /* CR-HM-IAM-BOOTSTRAP-01 HARDENING made resolveSessionContext read
+       user_credentials live (forced password-change flag); this mocked
+       TEMP harness predates that seam, so every authenticated request
+       500s on the missing relation. */
+    CREATE TEMP TABLE user_credentials(id uuid, user_id uuid,
+      password_hash text, must_change_password boolean DEFAULT FALSE,
+      password_changed_at timestamptz, created_at timestamptz DEFAULT NOW(),
+      updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE user_building_assignments(user_id uuid, building_id uuid, status text);
     CREATE TEMP TABLE handyman_service_requests(id uuid, client_id uuid, channel_attribution_id uuid,
       tenant_company_id uuid, tenant_pic_id uuid, building_id uuid, space_id uuid, service_catalog_id uuid,
@@ -68,6 +76,44 @@ before(async () => {
     CREATE TEMP TABLE handyman_request_inspections(id uuid, client_id uuid, handyman_request_id uuid UNIQUE,
       channel_attribution_id uuid, building_id uuid, inspection_result text, inspection_notes text,
       inspected_by_user_id uuid, inspected_at timestamptz DEFAULT NOW());
+    /* CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the
+       inspector-eligibility resolver reads capacity reservations
+       (migration 0431) and the assignment ladder persists into
+       handyman_inspector_assignments (migration 0438). The mocked
+       TEMP harness predates both tables, so every eligibility /
+       assignment command failed with a 500 (relation does not
+       exist) instead of the bounded 409/201 contract. Both TEMP
+       tables are added with the exact columns the service reads. */
+    CREATE TEMP TABLE handyman_visit_capacity_reservations(
+      id uuid, appointment_id uuid, client_id uuid, resource_type text,
+      resource_id uuid, start_at timestamptz, end_at timestamptz,
+      active boolean DEFAULT TRUE, released_at timestamptz,
+      created_at timestamptz DEFAULT NOW());
+    CREATE TEMP TABLE handyman_inspector_assignments(
+      id uuid, client_id uuid, handyman_request_id uuid,
+      visit_appointment_id uuid, inspector_user_id uuid, status text,
+      assigned_by_user_id uuid, assigned_at timestamptz DEFAULT NOW(),
+      supersedes_assignment_id uuid, reassignment_reason text,
+      version integer DEFAULT 1, created_at timestamptz DEFAULT NOW(),
+      updated_at timestamptz DEFAULT NOW());
+    /* Migration 0434 tenant-slot consents/bindings — the proposal path
+       consults the pending tenant choice; without these TEMP tables the
+       two happy-path proposal tests 500 on a missing relation (the
+       documented NOT TESTED margin in the E2E matrix §4/§16). */
+    CREATE TEMP TABLE handyman_visit_tenant_slot_consents(
+      id uuid, handyman_request_id uuid, kind text,
+      selected_start_at timestamptz, selected_end_at timestamptz,
+      tenant_company_id uuid, building_id uuid,
+      accepted_at timestamptz DEFAULT NOW());
+    CREATE TEMP TABLE handyman_visit_tenant_slot_bindings(
+      consent_id uuid, appointment_id uuid);
+    /* The visits read-model reports the fail-closed BM slot-consent
+       authority (handoff integration registry, migrations 0375/0425).
+       Empty registry = bookingEnabled/confirmationEnabled false — the
+       exact contract this test asserts. */
+    CREATE TEMP TABLE handyman_handoff_integrations(
+      id uuid DEFAULT gen_random_uuid(), integration_code text,
+      status text, tenant_slot_choice_scope boolean DEFAULT FALSE);
     CREATE TEMP TABLE organizations(id uuid, client_id uuid);
     CREATE TEMP TABLE vendors(id uuid, client_id uuid, status text);
     CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text);
@@ -125,14 +171,20 @@ beforeEach(async () => {
   resolvingUser = '';
   permissions.clear();
   permissions.set(id.operator,['tenant_company.read','tenant_company.manage']);
-  await db.query(`TRUNCATE clients,properties,buildings,users,user_building_assignments,
+  await db.query(`TRUNCATE clients,properties,buildings,users,user_credentials,user_building_assignments,
     handyman_service_requests,handyman_visit_appointments,handyman_request_inspections,operational_events,
     organizations,vendors,handyman_provider_contexts,handyman_worker_contexts,workforce_profiles,
-    vendor_workforce_bindings,workforce_building_assignments`);
+    vendor_workforce_bindings,workforce_building_assignments,handyman_visit_capacity_reservations,
+    handyman_inspector_assignments,handyman_visit_tenant_slot_consents,
+    handyman_visit_tenant_slot_bindings,handyman_handoff_integrations`);
   await db.query('INSERT INTO clients VALUES ($1),($2)',[id.client,id.otherClient]);
   await db.query('INSERT INTO properties VALUES ($1,$2)',[id.property,id.client]);
   await db.query("INSERT INTO buildings VALUES ($1,$3,'ACTIVE','Asia/Jakarta'),($2,$3,'ACTIVE','Asia/Jakarta')",[id.building,id.sibling,id.property]);
   await db.query("INSERT INTO users VALUES ($1,'ACTIVE'),($2,'ACTIVE')",[id.operator,id.inspector]);
+  await db.query(
+    'INSERT INTO user_credentials (id,user_id,password_hash,must_change_password) VALUES ($1,$2,\'x\',FALSE),($3,$4,\'x\',FALSE)',
+    [randomUUID(), id.operator, randomUUID(), id.inspector],
+  );
   await db.query("INSERT INTO user_building_assignments VALUES ($1,$3,'ACTIVE'),($2,$3,'ACTIVE')",[id.operator,id.inspector,id.building]);
   await db.query('INSERT INTO organizations VALUES ($1,$2)',[id.organization,id.client]);
   await db.query("INSERT INTO vendors VALUES ($1,$2,'ACTIVE')",[id.vendor,id.client]);

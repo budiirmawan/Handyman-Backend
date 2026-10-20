@@ -20,7 +20,19 @@ export function createHandymanMaterialPurchasingRouter(): Router {
   return handymanMaterialPurchasingRouter;
 }
 
-handymanMaterialPurchasingRouter.use(authenticationMiddleware);
+// CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — scope the transport
+// authentication wall to THIS router's own path families (see the
+// field-evidence router note). A path-less router.use(auth) would
+// 401 every later-mounted /api/v1 route, including unknown routes
+// that must 404.
+handymanMaterialPurchasingRouter.use(
+  '/handyman/field/execution-scopes/:executionScopeId/material-purchases',
+  authenticationMiddleware,
+);
+handymanMaterialPurchasingRouter.use(
+  '/handyman/execution-scopes/:executionScopeId/material-purchases',
+  authenticationMiddleware,
+);
 
 // ============================================================================
 // Field Worker Material & Purchasing Endpoints
