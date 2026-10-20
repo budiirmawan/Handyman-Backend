@@ -79,7 +79,6 @@ export function createHandymanLifecycleApiRouter(): Router {
     auth,
     manage,
     postHandymanDiagnosisHandler,
-  postHandymanRequestCancelHandler,
   );
   router.get(
     '/handyman/requests/:handymanRequestId/diagnosis',
