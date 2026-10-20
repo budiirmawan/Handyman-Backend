@@ -1,4 +1,8 @@
 # Handyman E2E Persona & Capability Matrix — CR-HM-E2E-LIFECYCLE-01
+> **Last update: CR-HM-18 FULL-CAPABILITY-E2E-CLOSURE-01** (`arena/69511628-handyman-backend`).
+> J01 cancellation and J12 dispute adjudication are implemented and proven; J04 and J11
+> were reclassified after evidence repair (see §1, §16, §17). Migrations 0459–0460 are
+> additive and development-only until the final release.
 
 - **Repository**: `budiirmawan/Handyman-Backend` (backend only; no consumer-repo changes)
 - **Scope**: complete persona & capability journey J01–J12 across Tenant, Customer Care, Inspector, PIC Pekerjaan, Dispatcher, Operations Manager, Supervisor QC, Finance, BM, Provider, Manager
@@ -19,18 +23,18 @@ All routes are under `/api/v1`. RBAC shorthand: `read` = `tenant_company.read`, 
 
 | Journey | Before this CR | After this CR | Primary evidence |
 |---|---|---|---|
-| J01 Request / Triage | COMPLETE (core) | **PARTIAL** — tenant-request cancel is `MISSING` | `handyman-api`, `handyman-lifecycle-api`, `handyman-care-workspace` |
+| J01 Request / Triage | COMPLETE (core) | **COMPLETE** — `CANCELLED` terminal state + cancel/cancellation commands (CR-HM-18, 0459) | `handyman-api`, `handyman-lifecycle-api` (10/10), `handyman-care-tenant-request-gateway-http` (9/9), `handyman-e2e-capability-closure` (J01 + J01-H) |
 | J02 Inspection Appointment / Diagnosis | COMPLETE | **COMPLETE** — inspector-assignment HTTP sub-surface `NOT TESTED` (stale harness) | `handyman-lifecycle-api`, `handyman-appointment-contract`, `handyman-inspector-assignments-api` |
 | J03 Scope / Quotation / Tenant Approval | COMPLETE | **COMPLETE** | `handyman-quotations-api`, `handyman-scope-assignments-api` |
-| J04 Execution Appointment / Dispatch | COMPLETE | **PARTIAL** — scope-assignment HTTP suite `NOT TESTED` (stale fixture); assignment proven via service in new E2E | `handyman-dispatch-api`, `handyman-arrival-verification-api` |
+| J04 Execution Appointment / Dispatch | COMPLETE | **COMPLETE** — stale fixture repaired in CR-HM-18; assignment HTTP surface now tested | `handyman-dispatch-api`, `handyman-arrival-verification-api`, `handyman-scope-assignments-api` (10/10) |
 | J05 Work Session | COMPLETE | **COMPLETE** | `handyman-work-sessions-api` |
 | J06 Variation ADD / REDUCE | COMPLETE | **COMPLETE** (pre-existing suites; not re-run in this CR) | `handyman-scope-variations` |
 | J07 Material Purchasing / Usage / Return | COMPLETE | **COMPLETE** (pre-existing suites; not re-run in this CR) | `handyman-material-execution-api`, `handyman-material-purchasing` |
 | J08 Supervisor QC / Defect / Rework | COMPLETE | **COMPLETE** | `handyman-evidence-qc-api`, migrations 0442/0444 |
 | J09 BAST / Customer Acceptance | COMPLETE | **COMPLETE** | `handyman-bast-api`, `handyman-bast-worker-api`, migration 0445 |
 | J10 Invoice / Payment / Finance | PARTIAL (open/charge/allocate/correct service-only) | **COMPLETE** in this repo (+ 1 repaired cap defect) | `handyman-customer-ledger-api` (existing) + `handyman-finance-close-api` (new) |
-| J11 Manager Close / Warranty | PARTIAL (warranty start/expire + field rework service-only) | **PARTIAL** — warranty/rework COMPLETE; manager-close aggregate `MISSING` (authority decision) | `handyman-service-warranty-api` (existing) + `handyman-finance-close-api` (new) |
-| J12 BM Fee / Settlement / Reporting | PARTIAL (entitlement/settlement/financial-read/commercial authoring service-only) | **PARTIAL** — core COMPLETE; dispute adjudication `MISSING` (deliberately not invented) | `handyman-finance-close-api` (new), `handyman-sla-status-api` |
+| J11 Manager Close / Warranty | PARTIAL (warranty start/expire + field rework service-only) | **COMPLETE** — warranty/rework COMPLETE; Manager close is the shipped `final-close` aggregate (readiness with blocker codes + immutable close), not a missing command | `handyman-service-warranty-api`, `handyman-finance-close-api`, `handyman-e2e-finance-close-api`, `handyman-e2e-financial-reconciliation-close` |
+| J12 BM Fee / Settlement / Reporting | PARTIAL (entitlement/settlement/financial-read/commercial authoring service-only) | **COMPLETE** — dispute adjudication `RELEASED`/`UPHELD` ships in CR-HM-18 (0460) | `handyman-finance-close-api`, `handyman-settlement-part03` (3/3), `handyman-e2e-capability-closure` (J12 + J12-H), `handyman-sla-status-api` |
 
 Persona handoffs verified end-to-end over HTTP in `tests/handyman-e2e-finance-close-api.test.ts` (J10–J12) and by the pre-existing focused suites for J01–J09 (see §16 for exact PASS/FAIL evidence, including pre-existing failures that are byte-identical on clean `main`).
 
@@ -74,15 +78,15 @@ Denied actions return bounded errors (401 unauthenticated, 403 RBAC/building, 40
 | J11 | Operations → start warranty from ACCEPTED BAST (new §13); Tenant → claim approve + rework authorize (existing); Crew Lead → propose/start/complete/verify rework (new) | warranties/coverages (0419), claims (0420), reworks (0421) + append-only events | Tenant (verified rework) / terminal EXPIRED |
 | J12 | BM → author commercial + pricing/BM-fee terms (new §14); Finance → derive entitlements → prepare/include/reconcile/settle (new) | agreements/pricing facts (0406–0409), entitlement facts (0416/0417), settlement units/events/inclusions/reconciliations (0418) | BM/Provider reporting (financial reads); **no fund movement** |
 
-## 3. J01 — Request / Triage — PARTIAL
+## 3. J01 — Request / Triage — COMPLETE (CR-HM-18)
 
 - **Trigger/prerequisite**: Tenant request via BM Super App handoff (`POST /handoff/assertions`, `POST /handoff/channel-attributions`) or Customer Care (`POST /handyman/requests/care`, `POST /handyman/care/requests` via workspace session); staff intake `POST /handyman/requests`.
 - **States**: request `INTAKE → … → REFERRED` (terminal referral) / diagnosis path continues to J02. Triage dispositions recorded append-only (`handyman_request_triage_decisions`, migration 0380).
 - **Commands/actors**: triage `POST /handyman/requests/:handymanRequestId/triage` (`manage` + Building); referral `POST …/referral` (OUT_OF_SCOPE → FM boundary); intake evidence `POST …/intake-evidence`.
 - **Reads**: `GET /handyman/requests`, `GET /handyman/requests/:id`, `GET …/triage`, `GET …/intake-evidence`, care projections, operations queue `GET /handyman/operations/queue` (all `read` + scope wall).
 - **Handoff**: triage DIAGNOSIS → J02; referral is a terminal exit with full audit.
-- **MISSING sub-item**: there is **no tenant-request `CANCELLED` status and no cancel command**. Cancellation today exists only for dispatch releases (`POST …/dispatch/cancel`) and visit proposals. Inventing a request-cancel vocabulary requires a product authority decision (see §17).
-- **Tests**: `tests/handyman-lifecycle-api.test.ts` (9 PASS / 1 pre-existing FAIL — stale exact OpenAPI surface assertion), care workspace + handoff suites.
+- **Cancellation (CR-HM-18, migration `0459`)**: `POST /handyman/requests/:handymanRequestId/cancel` (`manage` + exact Building) and the Care lane `POST /handyman/care/buildings/:buildingId/requests/:requestId/cancel` (`handyman.care.building` + ACTIVE Building assignment) move a request to the terminal `CANCELLED` state. Allowed from `INTAKE`, `TRIAGE`, `INSPECTION_REQUIRED`, `DIAGNOSIS`, `READY_FOR_NEXT_STEP`; `REFERRED` is never overwritten (`409 …_CANCEL_NOT_ALLOWED`); once the request owns an execution scope (approved quotation) cancellation is refused (`409 …_CANCEL_COMMITTED`) because post-commitment endings stay with the scope/variation/final-close authorities. The fact is append-only (`handyman_request_cancellations`, UNIQUE request + UNIQUE key, UPDATE/DELETE trigger), the actor is always `req.auth`, replays return the original fact with `replayed: true`, and a key already bound to another cancellation is `409 …_CANCELLATION_KEY_CONFLICT`. Read-back is `GET /handyman/requests/:handymanRequestId/cancellation`. Emits `HANDYMAN_REQUEST_CANCELLED`.
+- **Tests**: `tests/handyman-e2e-capability-closure.test.ts` — `J01` (INTAKE, replay, double-cancel, smuggling, cross-Building 403 with nothing persisted, REFERRED refusal, commitment refusal, append-only) and `J01-H` (READY_FOR_NEXT_STEP cancellation, concurrent double-cancel → exactly one fact and one audit event, key reuse across requests, post-commitment refusal leaves the scope assignable). Plus `handyman-lifecycle-api` (10/10) and `handyman-care-tenant-request-gateway-http` (9/9, case 9 = Care cancellation).
 
 ## 4. J02 — Inspection Appointment / Diagnosis — COMPLETE
 
@@ -113,7 +117,7 @@ Denied actions return bounded errors (401 unauthenticated, 403 RBAC/building, 40
 - **Handoff**: APPROVED quotation → execution scope (AUTHORIZED) → J04 assignment/dispatch.
 - **Tests**: quotations-api, commercial-inbox, scope-assignment suites.
 
-## 6. J04 — Execution Appointment / Dispatch — PARTIAL
+## 6. J04 — Execution Appointment / Dispatch — COMPLETE (CR-HM-18 fixture repair)
 
 - **Commands**: crew assignment (`handyman-scope-assignments-api`, migration 0439 hardening: workforce must be building-eligible), dispatch `GET …/dispatch/readiness`, `POST …/dispatch/release`, `POST …/dispatch/cancel` (`handyman-dispatch-api`, migrations 0440–0441), arrival verification `POST/GET /handyman/execution-scopes/:executionScopeId/arrival-verification`.
 - **Internal transitions**: dispatch IN_PROGRESS / COMPLETED are driven by work-session check-in/complete (J05) — deliberately not separate HTTP commands.
@@ -123,7 +127,7 @@ Denied actions return bounded errors (401 unauthenticated, 403 RBAC/building, 40
   - `GET /handyman/execution-scopes/:executionScopeId/assignment` — bounded current view: assignment facts + CURRENT lead identity composed live from the internal Lead resolver (the resolver is deliberately **not** a standalone endpoint).
   - `POST /handyman/execution-scopes/:executionScopeId/assignment/reassign` — body `{providerContextId, crewId, expectedVersion, reason, idempotencyKey?}`; supersedes the old row (history in `handyman_execution_scope_assignment_history`, migration 0439) and activates the new crew.
   - Eligibility (service + DB): ACTIVE provider context and crew under the scope's Client, CURRENT crew Lead with linked user, and — since migration 0439 — the Lead's workforce profile must hold an ACTIVE workforce **Building** assignment for the scope's Building (`assignBuildingToWorkforce`). The new E2E suite arranges this and the assignment path is exercised end-to-end (crew assignment → derivation/settlement/warranty all resolve the same ACTIVE assignment and Lead).
-  - Suite status: `tests/handyman-scope-assignments-api.test.ts` currently fails 0/10 at fixture time with `HANDYMAN_WORKFORCE_BINDING_REQUIRED` (its fixture predates the 0439 building-eligibility requirement — same root cause proven on clean `main` for sibling suites, §16), so the assignment **HTTP** surface is `NOT TESTED` by that suite; the underlying service path is covered by the new E2E suite.
+  - Suite status (CR-HM-18): the fixture now honours every eligibility rule the production services enforce — an ACTIVE workforce **Building** placement for the Lead and each member, an ACTIVE user Building assignment for the Lead and second member, and a quotation approval recorded by the ACTIVE Tenant PIC (the tenant-decision authority added after the fixture was written). `tests/handyman-scope-assignments-api.test.ts` is **10/10 PASS** (it previously skipped/failed 10/10), and the reassignment case now sends the hardened `{expectedVersion, reason}` body. The OpenAPI pin was narrowed from "the whole execution-scopes namespace" to "assignment-shaped paths", because that namespace legitimately grew work-session/settlement/BAST commands in later CRs.
 - **Tests**: dispatch-api, arrival-verification, scope-assignments-api suites.
 
 ## 7. J05 — Work Session — COMPLETE
@@ -178,7 +182,7 @@ New seams this CR (`src/modules/handyman-finance-close-api/`, all `manage` + ser
 - **Persistence/audit**: `handyman_customer_transactions`, `handyman_charge_lines` (+ composition basis), `handyman_customer_payments`, `handyman_payment_allocations`, `handyman_ledger_corrections` — all append-only with idempotency keys (migrations 0410–0414).
 - **Tests**: new E2E suite tests 1–3 (§16); `handyman-ledger-corrections` 6/6, `handyman-customer-transaction` 6/6, scope-guard suites PASS.
 
-## 13. J11 — Manager Close / Warranty — PARTIAL (warranty COMPLETE; manager-close aggregate MISSING)
+## 13. J11 — Manager Close / Warranty — COMPLETE
 
 New seams this CR:
 
@@ -192,10 +196,14 @@ New seams this CR:
 Existing customer-side seams (unchanged): warranty/claim/rework reads, claim open/submit/approve/reject/withdraw, **rework authorize (ACCEPT) stays customer-side**, chargeable additional-work accept/reject (`handyman-service-warranty-api`).
 
 - **Ladder**: `REWORK_DRAFT → REWORK_AUTHORIZED → REWORK_IN_PROGRESS → REWORK_COMPLETE → REWORK_VERIFIED`; verify binds same-client/scope evidence (+ optional PASSED QC run). Warranty head: `ACTIVE → CLAIM_OPEN → CLAIM_APPROVED → REWORK_IN_PROGRESS → REWORK_COMPLETE`, `EXPIRED` terminal.
-- **MISSING (authority decision, deliberately not invented)**: there is no overall request/scope **"manager close"** aggregate command. Terminals that exist: settlement `SETTLED` (J12), warranty `EXPIRED`/claim terminals, scope `AUTHORIZED`. A Manager persona close that aggregates finance + warranty requires a product decision on its prerequisites; the backend does not fabricate one.
+- **Manager close aggregate — PRESENT (reclassified in CR-HM-18)**: the Manager close is the shipped final-close command, not a missing capability:
+  - `GET /handyman/execution-scopes/:executionScopeId/final-close/readiness` (`read`) returns `eligibleForFinalClose` plus the exact blocker list (final invoice unpaid, active crew, completed work sessions, QC pass, accepted BAST, open defects, open settlement exceptions after adjudication, warranty state, …), so the UI never re-derives readiness;
+  - `POST /handyman/execution-scopes/:executionScopeId/final-close` (`manage`) performs the close as an immutable event over an `AUTHORIZED` scope and refuses with the blocker codes when anything is outstanding.
+  The earlier "aggregate is MISSING" note described this repository **before** the final-close command landed (migration `0458`); it is superseded. The close consumes — never rewrites — the settlement (J12), warranty (J11), QC (J08) and BAST (J09) terminals, which is exactly the aggregation the note asked for.
+- **Evidence**: `tests/handyman-e2e-financial-reconciliation-close.test.ts` (2/2, incl. blocker assertions and 403 for a foreign Building) and `tests/handyman-e2e-finance-close-api.test.ts` (6/6).
 - **Tests**: new E2E suite tests 4–5 — genuine guarded QC PASS → BAST accept (HTTP) → warranty start/expire (HTTP); claim approve (HTTP) → Lead propose/start/complete/verify (HTTP, Lead holds **no** RBAC permissions) → persisted event chain `PROPOSE, ACCEPT, START, COMPLETE, VERIFY`; non-Lead office actor is denied rework start (403).
 
-## 14. J12 — BM Fee / Settlement / Reporting — PARTIAL (core COMPLETE; repaired this CR)
+## 14. J12 — BM Fee / Settlement / Reporting — COMPLETE (CR-HM-18 dispute adjudication)
 
 New seams this CR (`manage` unless noted):
 
@@ -216,6 +224,9 @@ New seams this CR (`manage` unless noted):
 
 ---
 
+- **Dispute adjudication (CR-HM-18, migration `0460`)**: `POST /handyman/execution-scopes/:executionScopeId/settlement/dispute/resolution` (`handyman.settlement.manage`) records ONE append-only decision per `DISPUTED` exception: `RELEASED` clears the hold for include/reconcile/settle and for the Manager final-close blocker; `UPHELD` sustains it (a ledger correction stays the only unblock). It never moves money, never changes the unit state, refuses a `SETTLED` unit, is replay-safe on `idempotencyKey`, and 404s a foreign/unknown exception. The `0418` anchor guard is replaced function-only so the database agrees with the service.
+- **Evidence**: `tests/handyman-e2e-capability-closure.test.ts` `J12` (strict allow-list, RELEASED ladder to `SETTLED`, one-decision rule, append-only, UPHELD still blocking) and `J12-H` (403 without `handyman.settlement.manage`, foreign exception 404, unknown scope 404, real decision lands).
+
 ## 15. Repairs implemented in this CR
 
 1. **New transport module** `src/modules/handyman-finance-close-api/` (validation/controller/routes/index), registered once in `src/routes/index.ts`. Thin transport only — every command delegates to the owning CR-HM-12/13/14/15 service; strict per-endpoint body allow-lists reject smuggled authority fields with 400.
@@ -227,6 +238,38 @@ New seams this CR (`manage` unless noted):
 No merged capability was duplicated; Dispatch, Commercial Inbox, QC and Worker BAST surfaces are untouched.
 
 ## 16. Test evidence
+
+### 16.0 CR-HM-18 re-run (disposable embedded PostgreSQL, focused suites only)
+
+Every number below was produced in this CR; no full-suite run was performed.
+"Previous" is what this document recorded before CR-HM-18.
+
+| Suite | CR-HM-18 | Previous | Note |
+|---|---|---|---|
+| `handyman-e2e-capability-closure` | **4/4 PASS** | (did not exist) | `J01`, `J01-H`, `J12`, `J12-H` |
+| `handyman-care-tenant-request-gateway-http` | **9/9 PASS** | 8/8 | new Care cancellation case |
+| `handyman-lifecycle-api` | **10/10 PASS** | 9 PASS / 1 FAIL | self-boots embedded PG (was 10 SKIPPED without an external DB); OpenAPI pin rewritten to documented families |
+| `handyman-e2e-finance-close-api` | **6/6 PASS** | 0/6 FAIL | duplicate workforce placement in fixture (pre-existing) |
+| `handyman-e2e-financial-reconciliation-close` | **2/2 PASS** | 2/2 | final-close blockers still exclude released disputes |
+| `handyman-settlement-part03` | **3/3 PASS** | — | REVERSED/ADJUSTED exceptions still block |
+| `handyman-scope-assignments-api` | **10/10 PASS** | 0 SKIPPED / 10 FAIL | embedded PG + 0439 eligibility + PIC-approved quotation + hardened reassign body |
+| `handyman-payment-allocation` | **6/6 PASS** | 5 PASS / 1 FAIL | embedded PG; firewall pin updated for the 0458 invoice gate |
+| `handyman-payment-allocation-scope-guard` | **2/2 PASS** | 0 SKIPPED | embedded PG + PIC-approved quotation |
+| `openapi-asset-equipment-closure` | **14/14 PASS** | 11 PASS / 3 FAIL | real `$ref` resolution; asset-failures documented by PART 04; census refreshed |
+| `openapi-security-operations-closure` | **12/12 PASS** | 10 PASS / 2 FAIL | same |
+| `openapi-utility-management-closure` | **11/11 PASS** | 9 PASS / 2 FAIL | same |
+| `mobile-openapi-completeness` | **5/5 PASS** | 3 PASS / 2 FAIL | registry = live express stack ∪ source declarations; `$ref` pointer resolution |
+| `handyman-notification-contract-part02` | **6/6 PASS** | 6/6 | 13-entry contract (+`HANDYMAN_REQUEST_CANCELLED`) |
+| `handyman-audit-integration-part03` | **9/9 PASS** | 9/9 | 16-entry contract |
+| `npm run typecheck` | **PASS** | PASS | |
+| `docs/api/openapi.yaml` | parses, **1415 paths** | 1414 | +4 operations (cancel, cancellation, Care cancel, dispute resolution) |
+
+Shared probe: `tests/helpers/openapi-census.ts` (path normalization, express stack walk incl.
+array-registered paths, full JSON-pointer `$ref` resolution). `tests/helpers/embedded-test-db.ts`
+boots a throwaway cluster so a suite can never silently SKIP again.
+
+Superseded/historical numbers above (the earlier regression table and the "pre-existing failures"
+list) are retained as history; several entries there are now green and are marked in §17.
 
 **New suite** (`NODE_ENV=test npx tsx --test --test-concurrency=1 tests/handyman-e2e-finance-close-api.test.ts`, embedded PostgreSQL 18, port 55541):
 
@@ -247,18 +290,18 @@ No merged capability was duplicated; Dispatch, Commercial Inbox, QC and Worker B
 | `handyman-customer-transaction` | 6/6 PASS | — |
 | `handyman-ledger-correction-scope-guard` / `handyman-payment-allocation-scope-guard` | PASS | — |
 | `handyman-commercial-agreement` / `handyman-labor-pricing` | 6/6 PASS | — |
-| `handyman-payment-allocation` | 5 PASS / 1 FAIL | 5 PASS / 1 FAIL (same) |
+| `handyman-payment-allocation` | 5 PASS / 1 FAIL → **6/6 PASS (superseded, §16.0)** | 5 PASS / 1 FAIL (same) |
 | `handyman-ledger-read-contract` | 5 PASS / 1 FAIL | 5 PASS / 1 FAIL (same) |
 | `handyman-customer-care-ledger` | 4 PASS / 1 FAIL | 4 PASS / 1 FAIL (same) |
 | `handyman-entitlement-part02-derivation` / `handyman-financial-read-part04` / `handyman-settlement-part03` | 0/3 | 0/3 (same) |
 | `handyman-service-warranty-part01` / `handyman-service-warranty-rework-part03` | 4 PASS / 6 FAIL | identical |
 | `handyman-customer-care-qc-bast` | 0/5 | 0/5 (same) |
 | `handyman-customer-care-transport-certification` | 0/5 | 0/5 (same) |
-| `handyman-lifecycle-api` | 9 PASS / 1 FAIL | 9 PASS / 1 FAIL (same) |
+| `handyman-lifecycle-api` | 9 PASS / 1 FAIL → **10/10 PASS (superseded, §16.0)** | 9 PASS / 1 FAIL (same) |
 | `handyman-material-pricing` / `handyman-bm-fee-prerequisite-configuration` | 5 PASS / 1 FAIL | identical |
 | `migrate.test` | 1 FAIL | 1 FAIL (same) |
 | `handyman-inspector-authority` | 30 PASS / 2 FAIL (mocked TEMP harness lacks 0434 table; not re-run on baseline — code untouched by this CR) | — |
-| `handyman-scope-assignments-api` | 0 PASS / 10 FAIL (0439 fixture staleness, `HANDYMAN_WORKFORCE_BINDING_REQUIRED`) | same root cause proven for sibling suites |
+| `handyman-scope-assignments-api` | 0 PASS / 10 FAIL → **10/10 PASS (superseded, §16.0)** | same root cause proven for sibling suites |
 
 **Pre-existing failures (NOT caused by this CR; byte-identical on clean `main`)** — recorded so they are not mistaken for regressions:
 - Stale fixtures after migration 0439 workforce-building eligibility: crew-assignment fixtures in settlement/entitlement/financial-read/material-pricing suites fail with `HANDYMAN_WORKFORCE_BINDING_REQUIRED` (the newer suites add `assignBuildingToWorkforce` first; the new E2E suite does).
@@ -267,10 +310,32 @@ No merged capability was duplicated; Dispatch, Commercial Inbox, QC and Worker B
 
 ## 17. Remaining gaps & exact consumer-repository handoffs
 
-**Requires a product/authority decision (backend deliberately does not invent):**
-1. Tenant-request `CANCELLED` status + cancel command (J01) — vocabulary, who may cancel at which states, and downstream effects on appointments/quotations.
-2. Overall "Manager close" aggregate (J11) — its prerequisites across settlement/warranty/QC.
-3. Settlement dispute clearing/adjudication (J12).
+### 17.1 Status of the three previously-recorded gaps
+
+| # | Gap (as previously recorded) | CR-HM-18 outcome |
+|---|---|---|
+| 1 | Tenant-request `CANCELLED` + cancel command (J01) | **CLOSED** — frozen vocabulary, state rules, authority, append-only fact, replay/conflict contract, migration `0459`, 3 operations, contract + notification entries |
+| 2 | Overall "Manager close" aggregate (J11) | **ALREADY SHIPPED, reclassified** — `final-close/readiness` + `final-close` (migration `0458`) is the aggregate; the earlier note predated it |
+| 3 | Settlement dispute clearing/adjudication (J12) | **CLOSED** — `RELEASED`/`UPHELD`, append-only, one per dispute, migration `0460`, DB guard aligned |
+
+### 17.2 Still open — requires a product/authority decision (NOT invented)
+
+1. **Post-commitment withdrawal / cancellation with fee** (tenant ends a request after quotation approval). Today: scope close / variation / final close. A withdrawal vocabulary needs commercial policy (fee basis, refund interaction, warranty effect).
+2. **Second-level dispute appeal / adjudication SLA / automatic timeout outcome.** CR-HM-18 records a single internal adjudication.
+3. **Provider payout execution (disbursement).** Settlement records state only; fund movement stays outside the backend by design.
+4. **Cancellation notification delivery.** The contract entry exists; the template `HANDYMAN_REQUEST_CANCELLED` and its subscription rules must be configured by Operations (nothing is auto-created).
+5. **Mobile offline conflict resolution.** `POST /mobile/sync` still echoes operation identifiers only; server-side conflict resolution is a separate product decision.
+
+### 17.3 Test-harness debt (not product gaps)
+
+- `handyman-material-pricing` and the legacy handyman suites that require an external DB keep
+  their historical skip/fail counts; they were not converted in this CR.
+- Historical stale-fixture suites (BAST-without-QC, customer-care-ledger `availableActions`,
+  bm-fee migration listing) remain as recorded below; the production gates are correct and were
+  not weakened. Two of them (`payment-allocation` firewall, `scope-assignments` fixture) are now
+  green and marked in §16.0.
+
+### 17.4 Consumer availability — `BLOCKED OTHER REPO` (unchanged conclusion)
 
 **Consumer availability — `BLOCKED OTHER REPO`:** every backend seam below is live and tested in this repository, but end-user availability is `BLOCKED OTHER REPO` until the consumer repositories integrate them (this CR is backend-only by instruction; no frontend/mobile coding was started):
 
@@ -285,13 +350,19 @@ No merged capability was duplicated; Dispatch, Commercial Inbox, QC and Worker B
 2. Use the auth-only field rework ladder from the worker app with the Crew Lead's own session; rework **authorize** remains the customer-side command.
 3. Treat `GET /handyman/financial-transactions` and pricing reads as read-only reporting inputs (`isFinalCharge: false` facts), not as payment instructions; settlement records state, never fund movement.
 
-**Contract documentation**: the endpoints above are authoritative in this matrix and in the router (`src/modules/handyman-finance-close-api/handyman-finance-close-api.routes.ts`). Since the final gate (§18), all 32 routes are also documented in `docs/api/openapi.yaml` (request/response, permission, scope and error contract per route).
+**Contract documentation**: the endpoints above are authoritative in this matrix and in the router (`src/modules/handyman-finance-close-api/handyman-finance-close-api.routes.ts`). Since the final gate (§18) and CR-HM-18, all 37 routes are also documented in `docs/api/openapi.yaml` (request/response, permission, scope and error contract per route).
 
 **Out of scope by instruction**: no Railway deploy, no production migration, no reset/force-push. Migration 0447 is additive and ships with the code for the normal migration runner.
 
 ## 18. Final contract & authority gate (PR #29)
 
-### 18.1 Endpoint inventory — 32 routes, `src/modules/handyman-finance-close-api/`
+### 18.1 Endpoint inventory — 37 routes, `src/modules/handyman-finance-close-api/`
+
+> The table below was frozen at 32 routes. Since then the same router grew to **37 distinct paths**:
+> final-close + readiness and `invoice-reconciliation` (migration `0458`), `finance/action-inbox`,
+> and CR-HM-18's `settlement/dispute/resolution`. Rows 33–37 document those additions; the
+> request-cancel operations live in `handyman-lifecycle-api` /
+> `handyman-care-standalone-discovery`, not in this router.
 
 All successes are HTTP 200 with the standard `{ success, data }` envelope. The actor is always `req.auth`; strict body allow-lists reject unknown/authority fields with 400. `manage` = `tenant_company.manage`, `read` = `tenant_company.read`. Every mutating route requires `idempotencyKey`: replay with the same payload returns the original result; rebinding the key to a different payload is 409. Money is canonical decimal strings.
 
@@ -316,7 +387,12 @@ All successes are HTTP 200 with the standard `{ success, data }` envelope. The a
 | 17 | `POST /handyman/execution-scopes/{executionScopeId}/ledger-adjustments` | manage | Exact Building via scope | Signed adjustment (optional charge line) |
 | 18 | `POST /handyman/execution-scopes/{executionScopeId}/financial-entitlements/derive` | manage | Exact Building via scope | Derives provider payable + BM fee server-side |
 | 19–23 | `POST .../settlement/prepare|include|reconcile|settle|correction` | manage | Exact Building via scope | Settlement ladder; records state only, never moves funds (`correction` takes `ledgerCorrectionId`) |
-| 24 | `POST /handyman/execution-scopes/{executionScopeId}/settlement/dispute` | manage | Exact Building via scope | Opens dispute HOLD only — adjudication NOT implemented (product decision pending) |
+| 24 | `POST /handyman/execution-scopes/{executionScopeId}/settlement/dispute` | manage | Exact Building via scope | Opens the dispute HOLD (no money effect) |
+| 33 | `POST /handyman/execution-scopes/{executionScopeId}/settlement/dispute/resolution` | `handyman.settlement.manage` | Exact Building via scope | CR-HM-18: one append-only adjudication per dispute (`RELEASED` clears the hold, `UPHELD` sustains it); never moves money; 404 foreign exception, 409 non-DISPUTED/already decided/`SETTLED` |
+| 34 | `GET /handyman/execution-scopes/{executionScopeId}/final-close/readiness` | `handyman.finance.read` | Exact Building via scope | Manager close readiness + ordered blocker codes (0458) |
+| 35 | `POST /handyman/execution-scopes/{executionScopeId}/final-close` | `finding.close` (+ `handyman.finance.read` for the readiness read it composes) | Exact Building via scope | Manager close: immutable close event, refuses while blockers exist |
+| 36 | `GET /handyman/execution-scopes/{executionScopeId}/invoice-reconciliation` | `handyman.finance.read` | Exact Building via scope | DP deducted once, variations, reconciliation history (0458) |
+| 37 | `GET /handyman/finance/action-inbox` | `handyman.finance.read` | Client (read service) | Finance triage inbox (`OPEN_EXCEPTION` clears on `RELEASED`) |
 | 25 | `GET /handyman/execution-scopes/{executionScopeId}/financial-transaction` | read | Exact Building via scope | Read-only transaction view |
 | 26 | `GET /handyman/financial-transactions?clientId&from&to&limit` | read | Client (read service) | Read-only reporting |
 | 27 | `POST /handyman/execution-scopes/{executionScopeId}/service-warranty/start` | manage | Exact Building via scope | Starts warranty; window server-derived |
@@ -353,15 +429,17 @@ Full-suite re-runs were intentionally not repeated; the §16 baseline comparison
 
 ### 18.5 Still PARTIAL — authority decisions required (not invented)
 
-Tenant cancellation policy (J01), manual Manager CLOSE aggregate (J11), and settlement dispute adjudication (J12) remain PARTIAL exactly as in §17; route 24 records the dispute hold only.
+> **Superseded by CR-HM-18 (§17.1):** J01 cancellation, the Manager close aggregate (J11 — shipped as
+> `final-close/readiness` + `final-close` in migration `0458`) and J12 dispute adjudication are all
+> closed. Route 24 still records the hold; route 33 adjudicates it.
 
 ## 19. CR-HM-FIN-AUTH-01 — dedicated Commercial / Finance / Settlement authority
 
 The §18 gate's open question — `tenant_company.manage` is generic, so Finance persona isolation did not exist (proven: a manage-only actor allocated and refunded with HTTP 200) — was decided as **Option B: explicit domain permissions**. Full inventory, permission matrix, provisioning runbook and migration notes: `docs/handyman/CR-HM-FIN-AUTH-01_FINANCE_AUTHORITY.md`.
 
 - New permissions (migration `0448_handyman_finance_authority_permissions`, catalogue + foundation seed, **unassigned by default — not even PLATFORM_ADMIN inherits**): `handyman.commercial.manage`, `handyman.finance.read`, `handyman.finance.manage`, `handyman.settlement.manage`.
-- The §18.1 permission column is superseded for the 32 routes: commercial authoring + warranty start/expire → `handyman.commercial.manage`; ledger open/charge/allocation/refund/reversals/adjustment + entitlement derivation → `handyman.finance.manage`; settlement ladder → `handyman.settlement.manage`; the 4 finance-close reads → `handyman.finance.read`; the 4 rework routes stay auth-only Crew-Lead.
+- The §18.1 permission column is superseded for the 37 routes: commercial authoring + warranty start/expire → `handyman.commercial.manage`; ledger open/charge/allocation/refund/reversals/adjustment + entitlement derivation → `handyman.finance.manage`; settlement ladder → `handyman.settlement.manage`; the 4 finance-close reads → `handyman.finance.read`; the 4 rework routes stay auth-only Crew-Lead.
 - Existing merged surface secured coherently: payment **verification** (confirm/reject on the customer-ledger API) now requires `handyman.finance.manage`; payment **reporting** (record) and customer ledger reads keep `tenant_company.manage` / `.read` so legitimate Customer/Tenant reporting is unbroken.
 - Domain separation is non-implicative: settlement ⊄ refund, commercial ⊄ allocation, finance ⊄ settlement; scope (Client/exact-Building) still binds every grant; rejected mutations persist nothing.
 - Evidence: `tests/handyman-finance-authority.test.ts` (personas A–E, reporting-vs-verification split, spoof 400, cross-scope denial, audit actors, exact persisted totals); E2E lifecycle suite stays 6/6; affected merged suites are at or better than their verified baselines (customer-care-ledger verifier fixtures now carry the Finance grant — tests 1 & 5 failures there are the pre-existing ones from §16).
-- J11 Manager CLOSE and J12 dispute adjudication remain PARTIAL by separate product decision (§18.5 unchanged).
+- J11 Manager CLOSE and J12 dispute adjudication were **closed by CR-HM-18** (§17.1); the authority split recorded here is unchanged and both new commands use it (`handyman.settlement.manage` for adjudication).

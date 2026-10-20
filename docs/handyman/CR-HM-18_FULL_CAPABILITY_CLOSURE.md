@@ -111,7 +111,19 @@ function-only (same pattern as `0447`) so the DB agrees with the service; its
 `down` restores the exact 0418 body. `REVERSED`/`ADJUSTED` exceptions keep
 blocking unchanged.
 
-### 3.3 Repairs
+### 3.3 Hardening added on review
+
+| Concern | Contract now enforced | Evidence |
+|---|---|---|
+| Idempotency key reuse across requests | one key = one intent: `409 HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT`; a storage `23505` is mapped, never surfaced | `J01-H` case 3 |
+| Concurrency | two simultaneous cancels of the same request → exactly one `200`, one `409`, one fact row, one `HANDYMAN_REQUEST_CANCELLED` event (parent row lock) | `J01-H` case 2 |
+| Cancellable states | cancellation also proven from `READY_FOR_NEXT_STEP` (i.e. after triage+diagnosis, before quotation) | `J01-H` case 1 |
+| Post-commitment safety | refusal leaves the request non-cancelled, the scope `AUTHORIZED` and still assignable | `J01-H` case 4 |
+| Adjudication authority | `handyman.settlement.manage` is not implied by finance/commercial/tenant authority → `403`, nothing persisted | `J12-H` (a) |
+| Foreign references | exception of another unit → `404 HANDYMAN_SETTLEMENT_NOT_FOUND`; unknown scope → `404` | `J12-H` (b)(c) |
+| Business-engine reuse | no second engine was written: cancellation reuses the request repository/lock, the operational-event journal and the exact-Building access wall; adjudication reuses the settlement `context/replay/putKey` command harness and extends the existing exception vocabulary | source review + the fact that both suites drive the same public services |
+
+### 3.4 Repairs
 
 1. **`tests/handyman-e2e-finance-close-api.test.ts`** — the suite double-assigned
    the Lead's workforce profile to the Building (`WORKFORCE_BUILDING_ALREADY_ASSIGNED`),
@@ -177,6 +189,13 @@ suite was run.
 | `tests/handyman-notification-contract-part02.test.ts` | **6/6 PASS** | 13-entry contract |
 | `tests/handyman-audit-integration-part03.test.ts` | **9/9 PASS** | 16-entry contract |
 | `npm run typecheck` | **PASS** | |
+| `tests/handyman-scope-assignments-api.test.ts` | **10/10 PASS** | J04 fixture repaired (0439 building placement + PIC-approved quotation + hardened reassign body); previously 0/10 |
+| `tests/handyman-payment-allocation.test.ts` | **6/6 PASS** | self-boots embedded PG; firewall pin updated for the 0458 invoice gate |
+| `tests/handyman-payment-allocation-scope-guard.test.ts` | **2/2 PASS** | self-boots embedded PG; PIC-approved quotation |
+| `tests/openapi-asset-equipment-closure.test.ts` | **14/14 PASS** | real JSON-pointer `$ref` check; asset-failures documented by PART 04; census refreshed |
+| `tests/openapi-security-operations-closure.test.ts` | **12/12 PASS** | same |
+| `tests/openapi-utility-management-closure.test.ts` | **11/11 PASS** | same |
+| `tests/mobile-openapi-completeness.test.ts` | **5/5 PASS** | registry = live express stack ∪ source declarations |
 | `docs/api/openapi.yaml` | parses (OpenAPI 3.0.3), 1415 paths, new `$ref`s resolve | |
 
 Baseline comparisons made during this CR (same disposable DB): at HEAD,
