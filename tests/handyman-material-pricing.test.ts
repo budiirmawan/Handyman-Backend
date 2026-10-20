@@ -40,6 +40,10 @@ import {
   realmFixture,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-12 PART 03 — material pricing basis bound to EXACT
@@ -56,7 +60,19 @@ let pool: Pool | null = null;
 let adminUserId = '';
 let disciplineId = '';
 
+/**
+ * CR-HM-18: the DB-backed cases used to SKIP whenever no external PostgreSQL
+ * was reachable. They now run against a disposable embedded cluster.
+ */
+const EMBEDDED_DIR = '/tmp/hm12-material-pricing-pg';
+const EMBEDDED_PORT = 55574;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -104,7 +120,12 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    embedded = null;
+  }
   pool = null;
   database = null;
 });
