@@ -1,3 +1,5 @@
+import type { AuditRequestContext } from '../audit';
+import { recordEvent } from '../audit';
 import { userNotFoundError, userRepository } from '../users';
 import { buildingAccessDeniedError, contextAccessService } from '../context-access';
 import {
@@ -12,6 +14,7 @@ import {
   tenantPicUserClientMismatchError,
 } from './tenant-pic.errors';
 import { tenantPicRepository } from './tenant-pic.repository';
+import type { TenantVerificationStatus } from '../tenant-companies/tenant-company.types';
 import type {
   CreateTenantPicInput,
   NewTenantPic,
@@ -65,6 +68,7 @@ export async function createTenantPic(
     roleTitle: input.roleTitle ?? null,
     isPrimary,
     status,
+    verificationStatus: input.verificationStatus ?? 'VERIFIED',
   };
   try {
     return toPublic(await tenantPicRepository.create(record));
@@ -139,9 +143,48 @@ function isUniqueViolation(error: unknown, constraint: string): boolean {
   return candidate.code === '23505' && candidate.constraint === constraint;
 }
 
+/**
+ * CR-HM-MASTER-TENANT-BATCH-01 — auditable PIC verification verdict (the PIC
+ * counterpart of the Tenant party verification action).
+ */
+export async function setTenantPicVerification(
+  id: string,
+  status: TenantVerificationStatus,
+  actorUserId: string,
+  audit: AuditRequestContext = {},
+): Promise<PublicTenantPic> {
+  const existing = await tenantPicRepository.findById(id);
+  if (!existing) throw tenantPicNotFoundError();
+  const company = await tenantCompanyRepository.findById(existing.tenantCompanyId);
+  if (!company) throw tenantCompanyNotFoundError();
+  await assertClientAccess(actorUserId, company.clientId);
+  const updated = await tenantPicRepository.setVerificationStatus(id, status);
+  if (!updated) throw tenantPicNotFoundError();
+  if (updated.verificationStatus !== existing.verificationStatus) {
+    await recordEvent({
+      eventType: 'TENANT_VERIFICATION_UPDATED',
+      outcome: 'SUCCESS',
+      userId: actorUserId,
+      actorUserId: audit.actorUserId ?? actorUserId,
+      requestId: audit.requestId ?? null,
+      ipAddress: audit.ipAddress ?? null,
+      userAgent: audit.userAgent ?? null,
+      metadata: {
+        subject: 'TENANT_PIC',
+        tenantPicId: id,
+        tenantCompanyId: existing.tenantCompanyId,
+        from: existing.verificationStatus,
+        to: updated.verificationStatus,
+      },
+    });
+  }
+  return toPublic(updated);
+}
+
 export const tenantPicService = {
   createTenantPic,
   getTenantPic,
   listTenantPics,
+  setTenantPicVerification,
   updateTenantPic,
 };

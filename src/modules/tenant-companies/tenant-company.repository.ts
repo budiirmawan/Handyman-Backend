@@ -5,6 +5,7 @@ import type {
   TenantCompanyListFilters,
   TenantCompanyRecord,
   TenantCompanyStatus,
+  TenantVerificationStatus,
   UpdateTenantCompanyInput,
 } from './tenant-company.types';
 
@@ -14,21 +15,23 @@ const SELECT = `id, client_id AS "clientId", tenant_code AS "tenantCode",
   identity_document_type AS "identityDocumentType",
   identity_document_number AS "identityDocumentNumber",
   email, phone, address,
-  status, created_at AS "createdAt", updated_at AS "updatedAt"`;
+  status, verification_status AS "verificationStatus",
+  created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 async function create(input: CreateTenantCompanyInput): Promise<TenantCompanyRecord> {
   const result = await getPool().query<TenantCompanyRecord>(
     `INSERT INTO tenant_companies
        (id, client_id, tenant_code, tenant_name, party_kind, legal_name,
         identity_document_type, identity_document_number,
-        email, phone, address, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        email, phone, address, status, verification_status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING ${SELECT}`,
     [randomUUID(), input.clientId, input.tenantCode, input.tenantName,
       input.partyKind ?? 'LEGAL_ENTITY', input.legalName ?? null,
       input.identityDocumentType ?? null, input.identityDocumentNumber ?? null,
       input.email ?? null, input.phone ?? null,
-      input.address ?? null, input.status ?? 'ACTIVE'],
+      input.address ?? null, input.status ?? 'ACTIVE',
+      input.verificationStatus ?? 'VERIFIED'],
   );
   return result.rows[0];
 }
@@ -110,8 +113,21 @@ async function update(id: string, input: UpdateTenantCompanyInput): Promise<Tena
   return result.rows[0] ?? null;
 }
 
+async function setVerificationStatus(
+  id: string,
+  verificationStatus: TenantVerificationStatus,
+): Promise<TenantCompanyRecord | null> {
+  const result = await getPool().query<TenantCompanyRecord>(
+    `UPDATE tenant_companies SET verification_status = $1, updated_at = NOW()
+      WHERE id = $2 RETURNING ${SELECT}`,
+    [verificationStatus, id],
+  );
+  return result.rows[0] ?? null;
+}
+
 export const tenantCompanyRepository = {
   create,
+  setVerificationStatus,
   findByCodeForClient,
   findById,
   findByIdentityDocument,

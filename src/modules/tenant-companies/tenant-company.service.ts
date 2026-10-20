@@ -1,8 +1,11 @@
+import type { AuditRequestContext } from '../audit';
+import { recordEvent } from '../audit';
 import { buildingAccessDeniedError, contextAccessService } from '../context-access';
 import {
   tenantCompanyCodeAlreadyExistsError,
   tenantCompanyNotFoundError,
   tenantIdentityDocumentAlreadyExistsError,
+  tenantVerificationRequiredError,
 } from './tenant-company.errors';
 import { tenantCompanyRepository } from './tenant-company.repository';
 import {
@@ -14,6 +17,7 @@ import type {
   PublicTenantCompany,
   TenantCompanyListFilters,
   TenantCompanyRecord,
+  TenantVerificationStatus,
   UpdateTenantCompanyInput,
 } from './tenant-company.types';
 
@@ -126,4 +130,62 @@ function isIdentityUniqueViolation(error: unknown): boolean {
     candidate.constraint === 'tenant_companies_identity_document_unique';
 }
 
-export const tenantCompanyService = { createTenantCompany, getTenantCompany, listTenantCompanies, updateTenantCompany };
+/**
+ * CR-HM-MASTER-TENANT-BATCH-01 — authority guard for approval/billing
+ * designations. Unverified (or rejected) parties must never receive approval
+ * authority or billing authority; the caller maps this to the request-party
+ * vocabulary.
+ */
+export function assertTenantCompanyAuthorityEligible(record: {
+  id: string;
+  verificationStatus: TenantVerificationStatus;
+}): void {
+  if (record.verificationStatus !== 'VERIFIED') {
+    throw tenantVerificationRequiredError();
+  }
+}
+
+/**
+ * Auditable verification verdict. `verificationStatus` is deliberately NOT
+ * part of the PATCH contract: every transition happens here, with an audit
+ * event, under `tenant_company.manage` and the usual Client reach.
+ */
+export async function setTenantCompanyVerification(
+  id: string,
+  status: TenantVerificationStatus,
+  userId: string,
+  audit: AuditRequestContext = {},
+): Promise<PublicTenantCompany> {
+  const existing = await tenantCompanyRepository.findById(id);
+  if (!existing) throw tenantCompanyNotFoundError();
+  await assertClientAccess(userId, existing.clientId);
+  const updated = await tenantCompanyRepository.setVerificationStatus(id, status);
+  if (!updated) throw tenantCompanyNotFoundError();
+  if (updated.verificationStatus !== existing.verificationStatus) {
+    await recordEvent({
+      eventType: 'TENANT_VERIFICATION_UPDATED',
+      outcome: 'SUCCESS',
+      userId,
+      actorUserId: audit.actorUserId ?? userId,
+      requestId: audit.requestId ?? null,
+      ipAddress: audit.ipAddress ?? null,
+      userAgent: audit.userAgent ?? null,
+      metadata: {
+        subject: 'TENANT_COMPANY',
+        tenantCompanyId: id,
+        from: existing.verificationStatus,
+        to: updated.verificationStatus,
+      },
+    });
+  }
+  return toPublic(updated);
+}
+
+export const tenantCompanyService = {
+  assertTenantCompanyAuthorityEligible,
+  createTenantCompany,
+  getTenantCompany,
+  listTenantCompanies,
+  setTenantCompanyVerification,
+  updateTenantCompany,
+};

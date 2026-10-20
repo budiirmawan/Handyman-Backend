@@ -113,6 +113,7 @@ import { createRfqPoConversionRouter } from '../modules/rfq-po-conversions/rfq-p
 import { createPriceCatalogEntryRouter } from '../modules/price-catalog-entries/price-catalog-entry.routes';
 import { createServiceCatalogRouter } from '../modules/service-catalog/service-catalog.routes';
 import { createApartmentMasterRouter } from '../modules/apartment-master/apartment-master.routes';
+import { createTenantImportRouter } from '../modules/tenant-import';
 import { createHandymanCatalogueAdminRouter } from '../modules/handyman-catalog';
 import { createEsgMetricDefinitionRouter } from '../modules/esg-metric-definitions/esg-metric-definition.routes';
 import { createEsgWasteRecordRouter } from '../modules/esg-waste-records/esg-waste-record.routes';
@@ -741,6 +742,9 @@ export function createApiRouter(): Router {
   // CR-HM-MASTER-IND-01 — apartment Unit master administration and
   // effective-dated Owner/Occupant/PIC roles (Unit = existing Space master).
   router.use(createApartmentMasterRouter());
+  // CR-HM-MASTER-TENANT-BATCH-01 — Tenant/PIC batch import lifecycle
+  // (upload → validate → preview → confirm → commit/abort).
+  router.use(createTenantImportRouter());
   // CR-HM-MASTER-IND-01 — catalogue administration transport for the
   // existing Service Variant / Common Material Profile services.
   router.use(createHandymanCatalogueAdminRouter());

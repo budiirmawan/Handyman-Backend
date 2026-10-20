@@ -29,3 +29,12 @@ export function tenantIdentityDocumentAlreadyExistsError(): AppError {
     statusCode: 409,
   });
 }
+
+export function tenantVerificationRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.TENANT_VERIFICATION_REQUIRED,
+    message:
+      'Tenant party is not VERIFIED; unverified parties cannot hold approval or billing authority.',
+    statusCode: 409,
+  });
+}

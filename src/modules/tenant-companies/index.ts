@@ -2,13 +2,16 @@ export {
   tenantCompanyCodeAlreadyExistsError,
   tenantCompanyNotFoundError,
   tenantIdentityDocumentAlreadyExistsError,
+  tenantVerificationRequiredError,
 } from './tenant-company.errors';
 export { tenantCompanyRepository } from './tenant-company.repository';
 export { tenantCompanyService } from './tenant-company.service';
 export {
+  assertTenantCompanyAuthorityEligible,
   createTenantCompany,
   getTenantCompany,
   listTenantCompanies,
+  setTenantCompanyVerification,
   updateTenantCompany,
 } from './tenant-company.service';
 export {
@@ -18,9 +21,11 @@ export {
   TENANT_COMPANY_STATUSES,
   TENANT_IDENTITY_DOCUMENT_TYPES,
   TENANT_PARTY_KINDS,
+  TENANT_VERIFICATION_STATUSES,
   isTenantCompanyStatus,
   isTenantIdentityDocumentType,
   isTenantPartyKind,
+  isTenantVerificationStatus,
 } from './tenant-company.types';
 export {
   assertPartyIdentity,
@@ -41,6 +46,7 @@ export type {
   TenantCompanyStatus,
   TenantIdentityDocumentType,
   TenantPartyKind,
+  TenantVerificationStatus,
   UpdateTenantCompanyInput,
 } from './tenant-company.types';
 export type { PartyIdentityFields as TenantPartyIdentityFields } from './tenant-company.validation';

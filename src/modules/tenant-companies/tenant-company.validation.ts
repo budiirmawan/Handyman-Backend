@@ -9,11 +9,13 @@ import {
   isTenantCompanyStatus,
   isTenantIdentityDocumentType,
   isTenantPartyKind,
+  isTenantVerificationStatus,
   type CreateTenantCompanyInput,
   type TenantCompanyListFilters,
   type TenantCompanyStatus,
   type TenantIdentityDocumentType,
   type TenantPartyKind,
+  type TenantVerificationStatus,
   type UpdateTenantCompanyInput,
 } from './tenant-company.types';
 
@@ -136,6 +138,7 @@ export function parseCreateTenantCompanyBody(body: unknown): Omit<CreateTenantCo
   const phone = optionalPhone(body.phone, details);
   const address = optionalString(body.address, 'address', 512, details);
   const status = readStatus(body.status, details);
+  const verificationStatus = readCreatableVerificationStatus(body.verificationStatus, details);
   if (!tenantCode || !tenantName || details.length) fail(details);
   assertPartyIdentity(partyKind, {
     legalName: legalName ?? null,
@@ -154,7 +157,8 @@ export function parseCreateTenantCompanyBody(body: unknown): Omit<CreateTenantCo
       }
       : {}),
     ...(email ? { email } : {}),
-    ...(phone ? { phone } : {}), ...(address ? { address } : {}), ...(status ? { status } : {}) };
+    ...(phone ? { phone } : {}), ...(address ? { address } : {}), ...(status ? { status } : {}),
+    ...(verificationStatus ? { verificationStatus } : {}) };
 }
 
 export function parseUpdateTenantCompanyBody(body: unknown): UpdateTenantCompanyInput {
@@ -162,17 +166,22 @@ export function parseUpdateTenantCompanyBody(body: unknown): UpdateTenantCompany
   if (
     body.clientId !== undefined ||
     body.tenantCode !== undefined ||
-    body.partyKind !== undefined
+    body.partyKind !== undefined ||
+    body.verificationStatus !== undefined
   ) {
     const field = body.clientId !== undefined
       ? 'clientId'
       : body.tenantCode !== undefined
         ? 'tenantCode'
-        : 'partyKind';
+        : body.partyKind !== undefined
+          ? 'partyKind'
+          : 'verificationStatus';
     fail([{
       field,
       message:
-        field === 'partyKind'
+        field === 'verificationStatus'
+          ? 'verificationStatus is not patchable; use the verification action.'
+          : field === 'partyKind'
           ? 'partyKind is immutable; a physical customer does not change kind.'
           : 'This field is immutable and cannot be updated.',
     }]);
@@ -300,5 +309,36 @@ function optionalPhone(value: unknown, details: Detail[]): string | undefined {
 function readStatus(value: unknown, details: Detail[]): TenantCompanyStatus | undefined {
   if (value === undefined) return;
   if (!isTenantCompanyStatus(value)) { details.push({ field: 'status', message: `Status must be one of: ${TENANT_COMPANY_STATUSES.join(', ')}.` }); return; }
+  return value;
+}
+
+/**
+ * Create-time verification state: PENDING_VERIFICATION (temporary
+ * registration) or VERIFIED (the existing default). REJECTED is only settable
+ * through the auditable verification action.
+ */
+function readCreatableVerificationStatus(
+  value: unknown,
+  details: Detail[],
+): 'PENDING_VERIFICATION' | 'VERIFIED' | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'PENDING_VERIFICATION' || value === 'VERIFIED') return value;
+  details.push({
+    field: 'verificationStatus',
+    message: 'verificationStatus must be PENDING_VERIFICATION or VERIFIED.',
+  });
+  return undefined;
+}
+
+/**
+ * CR-HM-MASTER-TENANT-BATCH-01 — verification action body. Only the three
+ * documented verdicts; REJECTED is settable here (the action is the single
+ * auditable channel) but never through create/PATCH.
+ */
+export function parseTenantVerificationBody(body: unknown): TenantVerificationStatus {
+  const value = object(body) ? body.status : undefined;
+  if (!isTenantVerificationStatus(value)) {
+    fail([{ field: 'status', message: 'status must be PENDING_VERIFICATION, VERIFIED or REJECTED.' }]);
+  }
   return value;
 }

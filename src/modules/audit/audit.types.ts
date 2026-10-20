@@ -31,6 +31,16 @@ export const AUDIT_EVENT_TYPES = [
   // so its creation and update are security-relevant administrative acts.
   'CLIENT_CREATED',
   'CLIENT_UPDATED',
+  // CR-HM-MASTER-TENANT-BATCH-01 — Tenant/PIC batch import lifecycle and
+  // verification actions (migration 0457). The import tables carry the
+  // per-row detail; these events mark the phase transitions and the
+  // verification verdicts.
+  'TENANT_IMPORT_UPLOADED',
+  'TENANT_IMPORT_VALIDATED',
+  'TENANT_IMPORT_CONFIRMED',
+  'TENANT_IMPORT_COMMITTED',
+  'TENANT_IMPORT_ABORTED',
+  'TENANT_VERIFICATION_UPDATED',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
