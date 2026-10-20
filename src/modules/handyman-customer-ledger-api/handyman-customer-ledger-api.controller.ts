@@ -400,6 +400,9 @@ export async function postConfirmCustomerPaymentHandler(
         executionScopeId,
         paymentId,
         idempotencyKey: body.idempotencyKey,
+        ...(body.bankReceiptAttestation
+          ? { bankReceiptAttestation: body.bankReceiptAttestation }
+          : {}),
       },
       actor(req),
     );

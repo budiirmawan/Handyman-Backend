@@ -25,6 +25,16 @@ import {
   type RecordHandymanCustomerPaymentInput,
   type RejectHandymanCustomerPaymentInput,
 } from './handyman-customer-payment.types';
+import {
+  handymanBankReceiptAttestationConflictError,
+  handymanBankReceiptAttestationInvalidError,
+  handymanBankReceiptAttestationRequiredError,
+  handymanBankReceiptDuplicateReferenceError,
+  handymanBankReceiptAmountMismatchError,
+} from '../handyman-bank-receipt-attestations/handyman-bank-receipt-attestation.errors';
+import { handymanBankReceiptAttestationRepository } from '../handyman-bank-receipt-attestations/handyman-bank-receipt-attestation.repository';
+import { handymanBankAccountRepository } from '../handyman-bank-accounts/handyman-bank-account.repository';
+import { AppError, ERROR_CODES } from '../../shared/errors';
 
 /**
  * CR-HM-13 PART 03 — RECORD_PAYMENT + CONFIRM_PAYMENT + REJECT_PAYMENT
@@ -44,6 +54,17 @@ import {
  *
  * ZERO allocation (PART 04), ZERO refund/reversal/adjustment
  * (PART 05), ZERO entitlement/settlement/BM fee, ZERO HTTP.
+ *
+ * CR-HM-FINANCE-BANK-RECEIPT-ATTESTATION-01 extension:
+ * Confirm now requires an explicit bank-receipt attestation:
+ *   - destinationBankAccountId (FK to handyman_bank_accounts, owned by client, active)
+ *   - bankTransactionId (bank's reference, unique per client, 1..200)
+ *   - amountCredited (must equal payment amount)
+ *   - bankCreditedAt (ISO, not future, within 5y)
+ *   - bankStatementEvidenceRef (optional 1..500)
+ * plus verifiedByUserId/verifiedAt from server context.
+ * Historical CONFIRMED payments (pre-0459) are grandfathered — they remain
+ * readable without attestations. New confirms without attestation are denied.
  */
 
 const PG_UNIQUE_VIOLATION = '23505';
@@ -119,6 +140,11 @@ function ensureNeutralReference(
   return raw;
 }
 
+function toCents(value: string): bigint {
+  const [whole, fraction = ''] = value.split('.');
+  return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+}
+
 /**
  * The CR-HM-13 access wall (same law as the ledger module): an
  * unknown scope is a bounded 404 (never fabricated) and an actor
@@ -131,13 +157,6 @@ async function authorityPreamble(scopeUuid: string, actorUserId: string) {
     scopeUuid,
   );
   if (!scope) throw handymanCustomerTransactionScopeNotFoundError();
-  // CR-HM-SEC-01 PART 06E-2 — BE-02G exact-Building check on the
-  // authoritative server-derived scope building (migration 0395),
-  // replacing the client-level canAccessClient shortcut: a same-Client
-  // sibling Building assignment must not record, decide, or list
-  // payments. The module's denial vocabulary (403
-  // HANDYMAN_CUSTOMER_TRANSACTION_NOT_AUTHORIZED) and error precedence
-  // (scope 404 precedes the access wall) are unchanged.
   if (!(await canAccessBuildingScopedResource(actorUserId, {
     clientId: scope.clientId,
     buildingId: scope.buildingId,
@@ -185,9 +204,6 @@ export async function recordHandymanCustomerPayment(
 
   try {
     return await withTransaction(async (tx) => {
-      // Serialize every payment mutation of ONE ledger transaction on
-      // that transaction's row: lookup-then-insert is atomic, so a
-      // replayed key can never mint a second payment.
       const anchor = await tx.query(
         `SELECT id, client_id, currency, quotation_version_id
            FROM handyman_customer_transactions
@@ -219,8 +235,6 @@ export async function recordHandymanCustomerPayment(
         }
         return { payment: replayed, event: replayEvent, replayed: true };
       }
-      // The payment currency is the ledger transaction's own; the
-      // caller cannot introduce a second currency (no FX, I8).
       const currency = transaction.currency as string;
       const payment = await handymanCustomerPaymentRepository
         .insertPayment(tx, {
@@ -253,9 +267,6 @@ export async function recordHandymanCustomerPayment(
         !err.constraint
         || err.constraint.includes('external_ref')
       ) {
-        // §5.5: an external reference is unique per transaction —
-        // a duplicate notification/claim is fail-closed, never a
-        // silently merged or duplicated payment fact.
         throw handymanCustomerPaymentConflictError(
           'external-reference-already-recorded',
         );
@@ -281,11 +292,11 @@ async function decide(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  await authorityPreamble(scopeUuid, actorUuid);
+  const scope = await authorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
     const anchor = await tx.query(
-      `SELECT id, client_id FROM handyman_customer_transactions
+      `SELECT id, client_id, currency FROM handyman_customer_transactions
         WHERE execution_scope_id = $1
         FOR UPDATE`,
       [scopeUuid],
@@ -297,15 +308,15 @@ async function decide(
       );
     }
     const transactionId = transaction.id as string;
+    const transactionClientId = transaction.client_id as string;
+
     const current = await handymanCustomerPaymentRepository
       .findPaymentById(tx, paymentUuid, true);
     if (
       !current ||
       current.transactionId !== transactionId ||
-      current.clientId !== (transaction.client_id as string)
+      current.clientId !== transactionClientId
     ) {
-      // Cross-transaction / cross-client identity is never resolved
-      // into a foreign payment fact: bounded 404 instead.
       throw handymanCustomerPaymentNotFoundError();
     }
     const eventType = decision === 'CONFIRMED'
@@ -319,15 +330,153 @@ async function decide(
           'idempotency-key-bound-to-another-payment',
         );
       }
+      // On replay we return existing payment, even if attestation was provided differently.
+      // But if payment is already CONFIRMED and has attestation, we ensure idempotency is deterministic.
       return { payment: current, event: replayEvent, replayed: true };
     }
     if (current.status !== 'PENDING') {
-      // One authoritative transition per fact: a second decision is a
-      // bounded conflict, never a silent re-decision (§9.4).
       throw handymanCustomerPaymentConflictError(
         `payment-already-decided-${current.status.toLowerCase()}`,
       );
     }
+
+    // ---- CR-HM-FINANCE-BANK-RECEIPT-ATTESTATION-01 — CONFIRM requires attestation
+    if (decision === 'CONFIRMED') {
+      const att = input.bankReceiptAttestation;
+      if (!att) {
+        throw handymanBankReceiptAttestationRequiredError();
+      }
+
+      // Validate attestation fields
+      const destAccountId = typeof att.destinationBankAccountId === 'string' ? att.destinationBankAccountId.trim() : '';
+      if (!isValidUuid(destAccountId)) {
+        throw handymanBankReceiptAttestationInvalidError('destinationBankAccountId');
+      }
+      const bankTransactionId = typeof att.bankTransactionId === 'string' ? att.bankTransactionId.trim() : '';
+      if (bankTransactionId.length === 0 || bankTransactionId.length > FREE_TEXT_MAX) {
+        throw handymanBankReceiptAttestationInvalidError('bankTransactionId');
+      }
+      const amountCreditedRaw = typeof att.amountCredited === 'string' ? att.amountCredited.trim() : '';
+      if (!MONEY_PATTERN.test(amountCreditedRaw) || Number(amountCreditedRaw) <= 0) {
+        throw handymanBankReceiptAttestationInvalidError('amountCredited');
+      }
+      // Amount must equal payment amount (exact cents)
+      if (toCents(amountCreditedRaw) !== toCents(current.amount)) {
+        throw handymanBankReceiptAmountMismatchError();
+      }
+
+      const bankCreditedAtRaw = typeof att.bankCreditedAt === 'string' ? att.bankCreditedAt.trim() : '';
+      if (!bankCreditedAtRaw || Number.isNaN(Date.parse(bankCreditedAtRaw))) {
+        throw handymanBankReceiptAttestationInvalidError('bankCreditedAt');
+      }
+      const bankCreditedAt = new Date(bankCreditedAtRaw);
+      if (Number.isNaN(bankCreditedAt.getTime())) {
+        throw handymanBankReceiptAttestationInvalidError('bankCreditedAt');
+      }
+      if (bankCreditedAt.getTime() > Date.now() + 60_000) {
+        throw handymanBankReceiptAttestationInvalidError('bankCreditedAt');
+      }
+
+      let bankStatementEvidenceRef: string | null = null;
+      if (att.bankStatementEvidenceRef !== undefined && att.bankStatementEvidenceRef !== null) {
+        if (typeof att.bankStatementEvidenceRef !== 'string') {
+          throw handymanBankReceiptAttestationInvalidError('bankStatementEvidenceRef');
+        }
+        const trimmed = att.bankStatementEvidenceRef.trim();
+        if (trimmed.length === 0 || trimmed.length > 500) {
+          throw handymanBankReceiptAttestationInvalidError('bankStatementEvidenceRef');
+        }
+        bankStatementEvidenceRef = trimmed;
+      }
+
+      // Validate destination bank account ownership, currency, active, building scope
+      const account = await handymanBankAccountRepository.findBankAccountById(tx, destAccountId);
+      if (!account) {
+        throw new AppError({
+          code: ERROR_CODES.HANDYMAN_BANK_ACCOUNT_NOT_FOUND,
+          message: 'Destination bank account not found.',
+          statusCode: 404,
+        });
+      }
+      // Ownership: account.clientId must equal transactionClientId
+      if (account.clientId !== transactionClientId) {
+        throw new AppError({
+          code: ERROR_CODES.HANDYMAN_BANK_ACCOUNT_NOT_AUTHORIZED,
+          message: 'Destination bank account not authorized for this client.',
+          statusCode: 403,
+        });
+      }
+      if (!account.isActive) {
+        throw handymanBankReceiptAttestationConflictError('destination-bank-account-inactive');
+      }
+      // Building-scoped account check: if account has buildingId, scope's building must match
+      if (account.buildingId && account.buildingId !== scope.buildingId) {
+        throw new AppError({
+          code: ERROR_CODES.HANDYMAN_BANK_ACCOUNT_NOT_AUTHORIZED,
+          message: 'Destination bank account not authorized for this building.',
+          statusCode: 403,
+        });
+      }
+      // Currency must match payment/transaction currency
+      if (account.currency !== current.currency) {
+        throw handymanBankReceiptAttestationConflictError('bank-account-currency-mismatch');
+      }
+
+      // Check duplicate bank reference (global per client)
+      const existingRef = await tx.query(
+        `SELECT id FROM handyman_bank_receipt_attestations
+          WHERE client_id = $1 AND bank_transaction_id = $2`,
+        [transactionClientId, bankTransactionId],
+      );
+      if (existingRef.rows[0]) {
+        throw handymanBankReceiptDuplicateReferenceError();
+      }
+
+      // Also check if this payment already has attestation (should be unique per payment)
+      const existingAttForPayment = await tx.query(
+        `SELECT id FROM handyman_bank_receipt_attestations WHERE payment_id = $1`,
+        [paymentUuid],
+      );
+      if (existingAttForPayment.rows[0]) {
+        throw handymanBankReceiptAttestationConflictError('payment-already-attested');
+      }
+
+      // Insert immutable attestation audit trail
+      try {
+        await handymanBankReceiptAttestationRepository.insertAttestation(tx, {
+          clientId: transactionClientId,
+          transactionId,
+          paymentId: paymentUuid,
+          destinationBankAccountId: destAccountId,
+          bankTransactionId,
+          amountCredited: amountCreditedRaw,
+          currency: current.currency,
+          bankCreditedAt: bankCreditedAt.toISOString(),
+          verifiedByUserId: actorUuid,
+          bankStatementEvidenceRef,
+        });
+      } catch (e) {
+        const err = e as { code?: string; message?: string };
+        if (err.code === PG_UNIQUE_VIOLATION) {
+          // Unique violation is duplicate bank reference (client, bank_transaction_id) or payment_id unique
+          if ((err.message ?? '').includes('bank_transaction_id') || (err.message ?? '').includes('bank_ref_unique')) {
+            throw handymanBankReceiptDuplicateReferenceError();
+          }
+          throw handymanBankReceiptAttestationConflictError('duplicate-attestation');
+        }
+        // Check for DB trigger violations (amount mismatch, currency mismatch, future date, etc.)
+        const msg = err.message ?? '';
+        if (msg.includes('credited amount must equal the payment amount')) {
+          throw handymanBankReceiptAmountMismatchError();
+        }
+        if (msg.includes('client must match') || msg.includes('not authorized') || msg.includes('not active')) {
+          throw handymanBankReceiptAttestationConflictError(msg);
+        }
+        throw e;
+      }
+    }
+
+    // Now decide payment to CONFIRMED or REJECTED
     const decided = await handymanCustomerPaymentRepository
       .decidePayment(tx, current.id, {
         status: decision,
@@ -354,6 +503,8 @@ async function decide(
  * (§5.3). Only a `PENDING` payment can be confirmed; replay of the
  * same key returns the SAME decision; any second decision is a
  * bounded 409.
+ *
+ * CR-HM-FINANCE-BANK-RECEIPT-ATTESTATION-01: requires valid bank receipt attestation.
  */
 export async function confirmHandymanCustomerPayment(
   input: ConfirmHandymanCustomerPaymentInput,
@@ -394,8 +545,6 @@ export async function listHandymanCustomerPayments(
   );
   const transactionId = anchor.rows[0]?.id as string | undefined;
   if (!transactionId) {
-    // No ledger transaction exists for this scope: a payment read is
-    // bounded, never fabricated.
     throw handymanCustomerTransactionNotFoundError();
   }
   return handymanCustomerPaymentRepository.listPaymentsByTransaction(

@@ -183,6 +183,14 @@ export type ConfirmHandymanCustomerPaymentInput = {
   executionScopeId: string;
   paymentId: string;
   idempotencyKey: string;
+  /** CR-HM-FINANCE-BANK-RECEIPT-ATTESTATION-01 — bank receipt attestation required for CONFIRM. */
+  bankReceiptAttestation?: {
+    destinationBankAccountId: string;
+    bankTransactionId: string;
+    amountCredited: string;
+    bankCreditedAt: string;
+    bankStatementEvidenceRef?: string | null;
+  };
 };
 
 export type RejectHandymanCustomerPaymentInput =
