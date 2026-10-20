@@ -356,14 +356,27 @@ list) are retained as history; several entries there are now green and are marke
 4. **Cancellation notification delivery.** The contract entry exists; the template `HANDYMAN_REQUEST_CANCELLED` and its subscription rules must be configured by Operations (nothing is auto-created).
 5. **Mobile offline conflict resolution.** `POST /mobile/sync` still echoes operation identifiers only; server-side conflict resolution is a separate product decision.
 
-### 17.3 Test-harness debt (not product gaps)
+### 17.3 Test-harness debt — current status after CR-HM-18
 
-- `handyman-material-pricing` and the legacy handyman suites that require an external DB keep
-  their historical skip/fail counts; they were not converted in this CR.
-- Historical stale-fixture suites (BAST-without-QC, customer-care-ledger `availableActions`,
-  bm-fee migration listing) remain as recorded below; the production gates are correct and were
-  not weakened. Two of them (`payment-allocation` firewall, `scope-assignments` fixture) are now
-  green and marked in §16.0.
+| Suite | Status | Exact reason / next action |
+|---|---|---|
+| J04 arrival + assignment (10 suites) | **GREEN — 98/98** | converted to embedded PostgreSQL; fixture laws in §6 |
+| `handyman-dispatch-authority` | **GREEN — 10/10** | PIC-approved quotation fixture |
+| `handyman-material-pricing` | **GREEN — 6/6** | embedded PG |
+| `handyman-payment-allocation` | **GREEN — 6/6** | embedded PG + invoice-gate pin |
+| `handyman-payment-allocation-scope-guard` | **GREEN — 2/2** | embedded PG + PIC approval |
+| `handyman-ledger-read-contract` | **GREEN — 6/6** | embedded PG + direction-aware FK law (0458 inbound invoice binding) |
+| `handyman-customer-care-ledger` | **GREEN — 5/5** | `availableActions` projection allowance + ledger-scoped parity pin |
+| OpenAPI closure / mobile completeness (4 suites) | **GREEN — 42/42** | shared pointer/stack probes; census refreshed to 1,896 operations / 1,827 operational |
+| `handyman-service-warranty-part01` / `-rework-part03` | **FAIL (4/10 + N)** | stale BAST fixtures predate the 0445 guarded-QC gate (`HANDYMAN_BAST_QC_NOT_READY`). Next action: build a genuine QC PASS (assignment → CHECKED_OUT session → checklist → run → item PASS → evidence → finish PASSED) in a shared helper. The runtime gate is correct and must not be weakened; warranty behaviour is proven in `handyman-e2e-finance-close-api` 6/6 |
+| `handyman-customer-care-qc-bast` | **FAIL (0/5)** | same two causes (supervisor-of-Lead QC authority + guarded QC PASS before BAST) |
+| `handyman-customer-care-transport-certification` | **FAIL (0/5)** | its journey now fails at its own first assertion (`list` returns 0 rows for its care actor) — needs a certification re-baseline against the current C6 occupancy scope wall; the `PIC`-approval fixture issue was fixed in this CR |
+| `handyman-inspector-authority` | **30/32** | mocked TEMP schema lacks `user_credentials` — a harness limitation, not a product defect |
+| `migrate.test` | **1 FAIL** | pre-existing on clean `main`; migration runner expectation |
+| bm-fee migration-directory listing | **FAIL** | pinned directory listing vs later migrations |
+
+None of the failures above is a capability regression: every one is either a stale fixture, a stale
+assertion, or a mocked harness. No production gate was relaxed to make a test pass.
 
 ### 17.4 Consumer availability — `BLOCKED OTHER REPO` (unchanged conclusion)
 
