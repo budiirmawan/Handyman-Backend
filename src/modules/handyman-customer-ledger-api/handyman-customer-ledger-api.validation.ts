@@ -245,10 +245,108 @@ export function parseRecordCustomerPaymentBody(
 
 export function parseConfirmCustomerPaymentBody(
   body: unknown,
-): { idempotencyKey: string } {
+): {
+  idempotencyKey: string;
+  bankReceiptAttestation?: {
+    destinationBankAccountId: string;
+    bankTransactionId: string;
+    amountCredited: string;
+    bankCreditedAt: string;
+    bankStatementEvidenceRef?: string | null;
+  } | null;
+} {
   const obj = ensureObject(body);
+  const idempotencyKey = ensureIdempotencyKey(obj.idempotencyKey);
+
+  // CR-HM-FINANCE-BANK-RECEIPT-ATTESTATION-01 — optional at validation layer,
+  // required at service layer (to allow legacy callers to receive 400 with
+  // domain code instead of generic validation, and to keep replay idempotency deterministic).
+  // We parse it here if present, returning null if absent so service can enforce.
+  let bankReceiptAttestation: {
+    destinationBankAccountId: string;
+    bankTransactionId: string;
+    amountCredited: string;
+    bankCreditedAt: string;
+    bankStatementEvidenceRef?: string | null;
+  } | null = null;
+
+  const rawAtt =
+    (obj.bankReceiptAttestation as Record<string, unknown> | undefined) ??
+    (obj.bankReceipt as Record<string, unknown> | undefined) ??
+    (obj.attestation as Record<string, unknown> | undefined);
+
+  // Also support flat top-level fields for convenience
+  const flatCandidate =
+    obj.destinationBankAccountId !== undefined ||
+    obj.bankTransactionId !== undefined ||
+    obj.bankReferenceId !== undefined;
+
+  const src: Record<string, unknown> | null = rawAtt
+    ? (rawAtt as Record<string, unknown>)
+    : flatCandidate
+      ? obj
+      : null;
+
+  if (src) {
+    // We strictly validate structure if the caller attempted to provide attestation
+    const destIdRaw = typeof src.destinationBankAccountId === 'string' ? src.destinationBankAccountId.trim() : '';
+    const bankTxRaw =
+      typeof src.bankTransactionId === 'string'
+        ? src.bankTransactionId.trim()
+        : typeof src.bankReferenceId === 'string'
+          ? src.bankReferenceId.trim()
+          : '';
+    const amountRaw =
+      typeof src.amountCredited === 'string'
+        ? src.amountCredited.trim()
+        : typeof src.amount === 'string'
+          ? src.amount.trim()
+          : '';
+    const creditedAtRaw =
+      typeof src.bankCreditedAt === 'string'
+        ? src.bankCreditedAt.trim()
+        : typeof src.bankCreditDate === 'string'
+          ? src.bankCreditDate.trim()
+          : '';
+
+    // If any of the core fields are present, we treat it as an attestation attempt and validate fully
+    const hasAny = destIdRaw || bankTxRaw || amountRaw || creditedAtRaw;
+    if (hasAny) {
+      if (!isValidUuid(destIdRaw)) {
+        fail('destinationBankAccountId', 'destinationBankAccountId must be a valid UUID.');
+      }
+      if (bankTxRaw.length === 0 || bankTxRaw.length > FREE_TEXT_MAX) {
+        fail('bankTransactionId', 'bankTransactionId must be 1..200 characters.');
+      }
+      if (!MONEY_PATTERN.test(amountRaw) || Number(amountRaw) <= 0) {
+        fail('amountCredited', 'amountCredited must be a positive canonical decimal string (e.g. \"100.00\").');
+      }
+      if (!creditedAtRaw || Number.isNaN(Date.parse(creditedAtRaw))) {
+        fail('bankCreditedAt', 'bankCreditedAt must be a valid ISO-8601 timestamp.');
+      }
+      // Evidence ref optional
+      let evidenceRef: string | null = null;
+      const evRaw = src.bankStatementEvidenceRef ?? src.evidenceRef ?? src.statementRef;
+      if (evRaw !== undefined && evRaw !== null) {
+        if (typeof evRaw !== 'string') fail('bankStatementEvidenceRef', 'bankStatementEvidenceRef must be a string.');
+        const tr = (evRaw as string).trim();
+        if (tr.length === 0 || tr.length > 500) fail('bankStatementEvidenceRef', 'bankStatementEvidenceRef must be 1..500 characters.');
+        evidenceRef = tr;
+      }
+
+      bankReceiptAttestation = {
+        destinationBankAccountId: destIdRaw,
+        bankTransactionId: bankTxRaw,
+        amountCredited: amountRaw,
+        bankCreditedAt: new Date(creditedAtRaw).toISOString(),
+        bankStatementEvidenceRef: evidenceRef,
+      };
+    }
+  }
+
   return {
-    idempotencyKey: ensureIdempotencyKey(obj.idempotencyKey),
+    idempotencyKey,
+    bankReceiptAttestation,
   };
 }
 
