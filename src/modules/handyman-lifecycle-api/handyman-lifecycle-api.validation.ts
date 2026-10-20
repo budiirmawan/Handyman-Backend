@@ -163,3 +163,29 @@ export function parseLifecycleReferralBody(
   if (details.length) fail(details);
   return { referralNote: note };
 }
+
+/**
+ * CR-HM-18 REQUEST-CANCEL-01 — cancellation body parser.
+ *
+ * Caller-owned inputs only: a bounded `reason` plus the single-use
+ * `idempotencyKey`. Actor, status, previous status, client/building and
+ * provenance are server-derived; the parser never spreads the source
+ * object, so smuggled authority fields cannot reach the service.
+ */
+export function parseLifecycleCancellationBody(body: unknown): {
+  reason: string;
+  idempotencyKey: string;
+} {
+  const source = isRecord(body) ? body : {};
+  const details: Detail[] = [];
+  const reason = readText(source.reason, 'reason', true, details, 500);
+  const idempotencyKey = readText(
+    source.idempotencyKey,
+    'idempotencyKey',
+    true,
+    details,
+    200,
+  );
+  if (details.length) fail(details);
+  return { reason, idempotencyKey };
+}

@@ -3729,6 +3729,74 @@ paths:
           $ref: "#/components/responses/NotFound"
         409:
           $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/settlement/dispute/resolution:
+    post:
+      operationId: postHandymanSettlementDisputeResolution
+      summary: Adjudicate an open settlement dispute hold (RELEASED or UPHELD)
+      description: >
+        CR-HM-18 SETTLEMENT-DISPUTE-ADJUDICATION-01 (J12 closure). Closes one
+        existing `DISPUTED` settlement exception with an append-only decision.
+        `RELEASED` clears the hold so include/settle/reconcile and the Manager
+        final-close gate stop treating it as open; `UPHELD` sustains the hold
+        and a ledger correction stays the only way to make the unit settleable.
+        One adjudication per dispute, none on a `SETTLED` unit, replay-safe on
+        `idempotencyKey`. The command never moves funds, never rewrites the
+        exception and never transitions the settlement unit. Strict body
+        allow-list (`exceptionId`, `outcome`, `note`, `idempotencyKey`); actor,
+        amount, currency, unit and status are never caller-controlled. Requires
+        `handyman.settlement.manage` and the owning service's exact-scope
+        authority.
+      tags:
+        - Handyman
+      security:
+        - bearerAuth:
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [exceptionId, outcome, note, idempotencyKey]
+              properties:
+                exceptionId:
+                  type: string
+                  format: uuid
+                  description: The existing DISPUTED settlement exception being adjudicated.
+                outcome:
+                  type: string
+                  enum: [RELEASED, UPHELD]
+                note:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                idempotencyKey:
+                  type: string
+                  description: Caller-supplied idempotency key; replaying the same key with the same payload returns the original result, and rebinding it to a different payload is a 409.
+      responses:
+        200:
+          description: The recorded adjudication (replayed=true on a replay).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanSettlementDisputeResolution"
+        400:
+          $ref: "#/components/responses/BadRequest"
+        401:
+          $ref: "#/components/responses/Unauthorized"
+        403:
+          $ref: "#/components/responses/Forbidden"
+        404:
+          $ref: "#/components/responses/NotFound"
+        409:
+          $ref: "#/components/responses/Conflict"
   /handyman/execution-scopes/{executionScopeId}/settlement/correction:
     post:
       operationId: postHandymanSettlementCorrection
@@ -4784,6 +4852,72 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /handyman/care/buildings/{buildingId}/requests/{requestId}/cancel:
+    post:
+      operationId: cancelBuildingCareRequest
+      summary: Customer Care cancels a tenant request before commercial commitment
+      tags: [Customer Care Discovery]
+      description: >-
+        CR-HM-18 REQUEST-CANCEL-01 (J01 closure). The Building Care actor
+        cancels a tenant request on the tenant's behalf under the same
+        `handyman.care.building` + exact-Building authority that created it.
+        All state rules stay in the owning service: allowed from INTAKE,
+        TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS and READY_FOR_NEXT_STEP only;
+        terminal REFERRED and any request that already owns an execution scope
+        (approved quotation) are refused with 409. The cancellation fact is
+        append-only and replay-safe on `idempotencyKey`; a key already bound
+        to another cancellation is 409
+        HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT. Strict body
+        allow-list (`reason`, `idempotencyKey`); any actor/context key is
+        rejected at the edge (400). Cache-Control is no-store.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - name: requestId
+          in: path
+          required: true
+          description: Handyman service request id.
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelHandymanRequestRequest'
+      responses:
+        '200':
+          description: Request cancelled (terminal CANCELLED) or replayed.
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanRequestCancellation' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            PERMISSION_DENIED without `handyman.care.building`, or
+            HANDYMAN_CARE_AUTHORITY_DENIED for a Building outside the actor's
+            ACTIVE assignment. Non-enumerating.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: HANDYMAN_SERVICE_REQUEST_NOT_FOUND for an absent or out-of-scope request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          $ref: '#/components/responses/Conflict'
   /handyman/care/buildings/{buildingId}/requests/{requestId}/progress:
     get:
       operationId: getStandaloneCareRequestProgress
@@ -7574,6 +7708,90 @@ paths:
                     properties:
                       data:
                         { $ref: "#/components/schemas/HandymanReferralRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /handyman/requests/{handymanRequestId}/cancel:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: cancelHandymanRequest
+      summary: Cancel a Handyman request before commercial commitment
+      description: >
+        CR-HM-18 REQUEST-CANCEL-01 (J01 closure) — the single pre-commitment
+        terminal exit from the frozen CR-HM-03 request vocabulary. Allowed from
+        INTAKE, TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS and
+        READY_FOR_NEXT_STEP only; REFERRED is already terminal and is never
+        overwritten. Refused with 409 HANDYMAN_SERVICE_REQUEST_CANCEL_COMMITTED
+        as soon as the request owns an execution scope (an approved quotation),
+        because post-commitment endings belong to the execution-scope
+        lifecycle. The actor comes from the session; previousStatus, client,
+        building, attribution and timestamps are server-derived. Replays with
+        the same idempotencyKey and reason return the original fact with
+        replayed=true; any other second attempt is 409
+        HANDYMAN_SERVICE_REQUEST_ALREADY_CANCELLED. An idempotency key already
+        bound to a different cancellation is 409
+        HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT (one key = one
+        intent: never a cross-request replay, never a storage error). Requires
+        `tenant_company.manage` plus exact-Building authority.
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelHandymanRequestRequest"
+      responses:
+        "200":
+          description: Request cancelled (terminal `CANCELLED`) or replayed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanRequestCancellation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /handyman/requests/{handymanRequestId}/cancellation:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getHandymanRequestCancellation
+      summary: Read the append-only cancellation fact of one Handyman request
+      description: >
+        CR-HM-18 REQUEST-CANCEL-01 — bounded read of the immutable
+        cancellation record (404 when the request was never cancelled).
+        Requires `tenant_company.read` plus exact-Building authority.
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Existing cancellation record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        { $ref: "#/components/schemas/HandymanRequestCancellation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -86955,6 +87173,53 @@ components:
           { $ref: "#/components/schemas/Uuid", nullable: true }
         diagnosedByUserId: { $ref: "#/components/schemas/Uuid" }
         diagnosedAt: { type: string, format: date-time }
+    CancelHandymanRequestRequest:
+      type: object
+      required: [reason, idempotencyKey]
+      description: >-
+        Caller-owned inputs only. The actor, previous status, client, building,
+        attribution and timestamps are server-derived and structurally ignored
+        when smuggled.
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanSettlementDisputeResolution:
+      type: object
+      description: >-
+        CR-HM-18 — append-only adjudication of a DISPUTED settlement exception
+        (migration 0460). RELEASED clears the hold; UPHELD sustains it. No
+        financial fact is created or modified by this record.
+      required: [id, exceptionId, outcome, note, occurredAt, replayed]
+      properties:
+        id: { type: string, format: uuid }
+        exceptionId: { type: string, format: uuid }
+        outcome: { type: string, enum: [RELEASED, UPHELD] }
+        note: { type: string }
+        occurredAt: { type: string, format: date-time }
+        replayed: { type: boolean }
+    HandymanRequestCancellation:
+      type: object
+      description: >-
+        CR-HM-18 REQUEST-CANCEL-01 — append-only cancellation fact (migration
+        0459). `CANCELLED` is terminal; the record is never updated or deleted.
+      required:
+        [id, clientId, handymanRequestId, channelAttributionId, buildingId,
+         previousStatus, reason, cancelledByUserId, idempotencyKey, occurredAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        channelAttributionId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        previousStatus:
+          type: string
+          enum: [INTAKE, TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS, READY_FOR_NEXT_STEP]
+        reason: { type: string }
+        cancelledByUserId: { $ref: "#/components/schemas/Uuid" }
+        idempotencyKey: { type: string }
+        occurredAt: { type: string, format: date-time }
+        requestStatus: { type: string, enum: [CANCELLED] }
+        replayed: { type: boolean }
     HandymanReferralRecord:
       type: object
       description: >-

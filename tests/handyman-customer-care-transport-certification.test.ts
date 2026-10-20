@@ -534,10 +534,12 @@ describe('CR-HM-17 GAP PART 08 — Customer Care Transport End-to-End Certificat
       { validUntil: new Date(Date.now() + 3_600_000).toISOString() },
       adminUserId,
     );
+    // CR-HM-18: the tenant decision authority requires the ACTIVE Tenant PIC
+    // user of the request, so the approval is recorded by that PIC.
     const decision = await decideHandymanQuotation(
       qVersion.id,
       { decision: 'APPROVE', idempotencyKey: `q-dec-${id()}` },
-      adminUserId,
+      tenantUser.id,
     );
     const scope = decision.executionScope;
 

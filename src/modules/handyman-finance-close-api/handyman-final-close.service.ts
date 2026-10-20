@@ -883,7 +883,11 @@ async function evaluateFinalCloseGates(
        FROM handyman_settlement_exceptions se
        JOIN handyman_settlement_units su ON su.id = se.unit_id
       WHERE su.execution_scope_id = $1
-        AND se.exception_kind = 'DISPUTED'`,
+        AND se.exception_kind = 'DISPUTED'
+        AND NOT EXISTS (
+          SELECT 1 FROM handyman_settlement_dispute_resolutions r
+           WHERE r.exception_id = se.id AND r.outcome = 'RELEASED'
+        )`,
     [executionScopeId],
   );
   const openSettlementExceptions = settlementExcRes.rows[0]?.open_exc ?? 0;

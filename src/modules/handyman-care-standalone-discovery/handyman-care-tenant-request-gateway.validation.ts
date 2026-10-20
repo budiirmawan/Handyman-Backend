@@ -193,3 +193,72 @@ export function parseCreateBuildingCareRequestBody(
       : { costResponsibleTenantCompanyId }),
   };
 }
+
+/**
+ * CR-HM-18 REQUEST-CANCEL-01 — `POST
+ * /api/v1/handyman/care/buildings/{buildingId}/requests/{requestId}/cancel`.
+ *
+ * The Customer Care actor cancels a tenant request on the tenant's behalf
+ * (the same Building Care Authority that created it). Only the two
+ * caller-owned inputs are accepted; actor identities and every
+ * context/authority key are rejected at the edge, exactly like the create
+ * gateway.
+ */
+const CANCEL_ALLOWED_BODY_KEYS = ['reason', 'idempotencyKey'] as const;
+
+export type CancelBuildingCareRequestBody = {
+  reason: string;
+  idempotencyKey: string;
+};
+
+export function parseCancelBuildingCareRequestBody(
+  body: unknown,
+): CancelBuildingCareRequestBody {
+  if (!isRecord(body)) {
+    fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
+  }
+  const source = body as Record<string, unknown>;
+  const details: { field: string; message: string }[] = [];
+  const unknownKeys = Object.keys(source).filter(
+    (key) => !(CANCEL_ALLOWED_BODY_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    fail(
+      unknownKeys.sort().map((field) => ({
+        field,
+        message: `${field} is not an accepted cancellation field.`,
+      })),
+    );
+  }
+  const suppliedIdentity = Object.keys(source).filter((key) =>
+    FORBIDDEN_ACTOR_IDENTITY_FIELDS.includes(key),
+  );
+  if (suppliedIdentity.length > 0) {
+    fail(
+      suppliedIdentity.map((field) => ({
+        field,
+        message: `${field} must never be supplied; the actor is the session.`,
+      })),
+    );
+  }
+  const reason =
+    typeof source.reason === 'string' ? source.reason.trim() : '';
+  if (reason.length < 1 || reason.length > 500) {
+    details.push({
+      field: 'reason',
+      message: 'reason is required (1-500 characters).',
+    });
+  }
+  const idempotencyKey =
+    typeof source.idempotencyKey === 'string'
+      ? source.idempotencyKey.trim()
+      : '';
+  if (idempotencyKey.length < 1 || idempotencyKey.length > 200) {
+    details.push({
+      field: 'idempotencyKey',
+      message: 'idempotencyKey is required (1-200 characters).',
+    });
+  }
+  if (details.length) fail(details);
+  return { reason, idempotencyKey };
+}

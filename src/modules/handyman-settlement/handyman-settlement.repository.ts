@@ -36,7 +36,14 @@ export type Exception = {
 export type CommandKey = { idempotency_key: string; unit_id: string;
   action: Action; result_id: string; actor_user_id: string };
 export type Action = 'PREPARE' | 'INCLUDE' | 'RECONCILE' | 'SETTLE' |
-  'CORRECTION' | 'DISPUTE';
+  'CORRECTION' | 'DISPUTE' | 'DISPUTE_RESOLUTION';
+
+/** CR-HM-18 — append-only adjudication of one DISPUTED exception. */
+export type DisputeResolution = {
+  id: string; unit_id: string; exception_id: string;
+  outcome: 'RELEASED' | 'UPHELD'; note: string;
+  resolved_by_user_id: string; idempotency_key: string; occurred_at: Date;
+};
 
 export async function lockTransaction(tx: PoolClient, scopeId: string) {
   // Same order as PART 02 and the scope/ledger writers: scope then tx.
@@ -146,4 +153,38 @@ export async function getExceptionById(tx: Executor, id: string) {
   const r = await tx.query<Exception>(`SELECT * FROM handyman_settlement_exceptions
     WHERE id=$1`, [id]);
   return r.rows[0] ?? null;
+}
+
+/* ---- CR-HM-18 SETTLEMENT-DISPUTE-ADJUDICATION-01 --------------------- */
+
+export async function getDisputeResolutionById(tx: Executor, id: string) {
+  const r = await tx.query<DisputeResolution>(`SELECT * FROM
+    handyman_settlement_dispute_resolutions WHERE id=$1`, [id]);
+  return r.rows[0] ?? null;
+}
+export async function getDisputeResolutionByException(tx: Executor,
+  exceptionId: string) {
+  const r = await tx.query<DisputeResolution>(`SELECT * FROM
+    handyman_settlement_dispute_resolutions WHERE exception_id=$1`,
+  [exceptionId]);
+  return r.rows[0] ?? null;
+}
+export async function createDisputeResolution(tx: Executor, x: {
+  unitId: string; exceptionId: string; outcome: 'RELEASED' | 'UPHELD';
+  note: string; key: string; actorId: string;
+}) {
+  const r = await tx.query<DisputeResolution>(`INSERT INTO
+    handyman_settlement_dispute_resolutions
+    (id,unit_id,exception_id,outcome,note,resolved_by_user_id,idempotency_key)
+    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+  [randomUUID(),x.unitId,x.exceptionId,x.outcome,x.note,x.actorId,x.key]);
+  return r.rows[0];
+}
+/** Exception ids whose dispute was adjudicated as RELEASED (non-blocking). */
+export async function releasedDisputeExceptionIds(tx: Executor,
+  unitId: string) {
+  const r = await tx.query<{ exception_id: string }>(`SELECT exception_id
+    FROM handyman_settlement_dispute_resolutions
+    WHERE unit_id=$1 AND outcome='RELEASED'`, [unitId]);
+  return new Set(r.rows.map((row) => row.exception_id));
 }

@@ -34,6 +34,7 @@ import {
   postReversePaymentAllocationHandler,
   postSettlementCorrectionHandler,
   postSettlementDisputeHandler,
+  postSettlementDisputeResolutionHandler,
   postSettleSettlementHandler,
   postStartServiceWarrantyHandler,
   postStartServiceWarrantyReworkHandler,
@@ -248,6 +249,13 @@ export function createHandymanFinanceCloseApiRouter(): Router {
     auth,
     settlement,
     postSettlementDisputeHandler,
+  );
+
+  router.post(
+    '/handyman/execution-scopes/:executionScopeId/settlement/dispute/resolution',
+    auth,
+    settlement,
+    postSettlementDisputeResolutionHandler,
   );
   router.get(
     '/handyman/execution-scopes/:executionScopeId/financial-transaction',

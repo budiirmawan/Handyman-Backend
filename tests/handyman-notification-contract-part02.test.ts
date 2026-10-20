@@ -96,7 +96,8 @@ after(async () => {
 
 describe('CR-HM-16 PART 02 — Handyman notification event contract (frozen)', () => {
   it('admits the SLA chain and the certified domain vocabulary with meaning/audience/template', () => {
-    assert.equal(HANDYMAN_NOTIFICATION_CONTRACT.length, 12);
+    // CR-HM-18 REQUEST-CANCEL-01 adds HANDYMAN_REQUEST_CANCELLED (12 → 13).
+    assert.equal(HANDYMAN_NOTIFICATION_CONTRACT.length, 13);
     const seen = new Set<string>();
     for (const entry of HANDYMAN_NOTIFICATION_CONTRACT) {
       assert.ok(!seen.has(entry.eventType), `${entry.eventType} admitted once`);
@@ -109,6 +110,7 @@ describe('CR-HM-16 PART 02 — Handyman notification event contract (frozen)', (
       assert.equal(handymanNotificationContractFor(sla)?.audience, 'SLA_ESCALATION_POLICY');
     }
     assert.ok(isHandymanNotificationEventType('HANDYMAN_QUOTATION_ISSUED'));
+    assert.ok(isHandymanNotificationEventType('HANDYMAN_REQUEST_CANCELLED'));
     assert.ok(!isHandymanNotificationEventType('WORK_ORDER_ASSIGNED'));
     assert.ok(!isHandymanNotificationEventType('HANDYMAN_QUOTATION_APPROVED'));
     assert.equal(handymanNotificationContractFor('NOPE'), undefined);

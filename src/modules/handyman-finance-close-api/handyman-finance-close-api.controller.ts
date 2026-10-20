@@ -39,6 +39,7 @@ import { deriveHandymanFinancialEntitlements } from '../handyman-financial-entit
 import {
   holdHandymanSettlementDispute,
   includeHandymanSettlement,
+  resolveHandymanSettlementDispute,
   prepareHandymanSettlement,
   reconcileHandymanSettlement,
   recordHandymanSettlementCorrection,
@@ -708,6 +709,40 @@ export async function postSettlementDisputeHandler(
       executionScopeId,
       actorUserId,
       requireIdempotencyKey(body),
+    );
+    sendSuccess(res, result, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-18 SETTLEMENT-DISPUTE-ADJUDICATION-01 —
+ * POST /handyman/execution-scopes/:executionScopeId/settlement/dispute/resolution
+ *
+ * Strict allow-list: the caller references an existing DISPUTED exception
+ * and supplies an adjudication outcome + note + idempotencyKey. No amount,
+ * currency, status, unit, actor or ledger fact is caller-controlled.
+ */
+export async function postSettlementDisputeResolutionHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const actorUserId = actor(req);
+    const executionScopeId = p(req.params.executionScopeId);
+    const body = requirePlainBody(req.body);
+    assertOnlyKeys(body, ['exceptionId', 'outcome', 'note', 'idempotencyKey']);
+    const result = await resolveHandymanSettlementDispute(
+      executionScopeId,
+      actorUserId,
+      {
+        exceptionId: requireStringField(body, 'exceptionId'),
+        outcome: requireStringField(body, 'outcome') as 'RELEASED' | 'UPHELD',
+        note: requireStringField(body, 'note'),
+        idempotencyKey: requireIdempotencyKey(body),
+      },
     );
     sendSuccess(res, result, 200);
   } catch (error) {

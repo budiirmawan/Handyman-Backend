@@ -29,6 +29,13 @@ export const HANDYMAN_SERVICE_REQUEST_STATUSES = [
   'DIAGNOSIS',
   'READY_FOR_NEXT_STEP',
   'REFERRED',
+  /**
+   * CR-HM-18 REQUEST-CANCEL-01 — terminal pre-commitment exit. Reachable
+   * from INTAKE/TRIAGE/INSPECTION_REQUIRED/DIAGNOSIS/READY_FOR_NEXT_STEP
+   * only; never from REFERRED and never once an execution scope exists
+   * (see `handyman-request-cancellation.service.ts`).
+   */
+  'CANCELLED',
 ] as const;
 export type HandymanServiceRequestStatus =
   (typeof HANDYMAN_SERVICE_REQUEST_STATUSES)[number];

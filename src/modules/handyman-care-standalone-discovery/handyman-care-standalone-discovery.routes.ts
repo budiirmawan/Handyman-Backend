@@ -18,6 +18,7 @@ import {
 } from '../handyman-care-authority';
 import { isValidUuid } from '../clients';
 import { handymanIntakeEvidenceService } from '../handyman-evidence';
+import { handymanServiceRequestCancellationService } from '../handyman-requests';
 import { parseIdempotencyKeyRequired } from '../request-idempotency';
 import { parseHandymanIntakeEvidenceKindField } from '../handyman-api/handyman-api.validation';
 import { runSingleFileUpload } from '../handyman-api/handyman-api.controller';
@@ -39,7 +40,10 @@ import {
   reportBuildingCareRequestPayment,
   uploadBuildingCareRequestPaymentProof,
 } from './handyman-care-tenant-request-gateway.service';
-import { parseCreateBuildingCareRequestBody } from './handyman-care-tenant-request-gateway.validation';
+import {
+  parseCancelBuildingCareRequestBody,
+  parseCreateBuildingCareRequestBody,
+} from './handyman-care-tenant-request-gateway.validation';
 
 const AUTHZ = [
   authenticationMiddleware,
@@ -334,6 +338,44 @@ export function createHandymanCareStandaloneDiscoveryRouter(): Router {
           ),
           201,
         );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** CR-HM-18 REQUEST-CANCEL-01 — Customer Care cancellation of a tenant
+   * request before commercial commitment, under Building Care Authority
+   * (`handyman.care.building` + exact Building + ACTIVE assignment). The
+   * owning service keeps every state rule (INTAKE/TRIAGE/INSPECTION_REQUIRED/
+   * DIAGNOSIS/READY_FOR_NEXT_STEP → CANCELLED; REFERRED and any
+   * execution-scope-committed request are refused) and the append-only fact.
+   */
+  router.post(
+    '/handyman/care/buildings/:buildingId/requests/:requestId/cancel',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        const actorUserId = req.auth?.userId ?? '';
+        const buildingId = parseUuid(req.params.buildingId, 'buildingId');
+        const requestId = parseUuid(req.params.requestId, 'requestId');
+        const input = parseCancelBuildingCareRequestBody(req.body);
+        await assertBuildingCareRequest({
+          actorUserId,
+          buildingId,
+          requestId,
+        });
+        const result = await handymanServiceRequestCancellationService
+          .cancelHandymanRequest(
+            {
+              handymanRequestId: requestId,
+              reason: input.reason,
+              idempotencyKey: input.idempotencyKey,
+            },
+            actorUserId,
+          );
+        sendSuccess(res, result, 200);
       } catch (error) {
         next(error);
       }

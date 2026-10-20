@@ -98,8 +98,25 @@ async function state(tx: PoolClient, unit: repo.Unit) {
   if (facts.find(f => f.state === 'PAYABLE')) return 'PAYABLE' as const;
   throw conflict();
 }
+/**
+ * CR-HM-18 SETTLEMENT-DISPUTE-ADJUDICATION-01 — "open" is not "recorded".
+ *
+ * The 0418 exception tables stay append-only and are never mutated. A
+ * DISPUTED exception whose adjudication outcome is RELEASED stops counting
+ * as an open blocker (include/settle/reconcile/final close); an UPHELD
+ * dispute keeps blocking exactly as before. Reversal/adjustment exceptions
+ * are financial facts and always remain blocking.
+ */
+async function openExceptions(tx: PoolClient, unit: repo.Unit) {
+  const rows = await repo.exceptions(tx, unit.id);
+  const released = await repo.releasedDisputeExceptionIds(tx, unit.id);
+  if (released.size === 0) return rows;
+  return rows.filter(
+    (row) => !(row.exception_kind === 'DISPUTED' && released.has(row.id)),
+  );
+}
 async function clearExceptions(tx: PoolClient, unit: repo.Unit) {
-  if ((await repo.exceptions(tx, unit.id)).length !== 0) throw variance();
+  if ((await openExceptions(tx, unit)).length !== 0) throw variance();
 }
 
 /** Projection over PART 02 EARNED + immutable corrections, not a
@@ -259,7 +276,7 @@ export async function reconcileHandymanSettlement(scope: string, actor: string,
     const i = await included(tx,unit,e);
     const charged = cents(ledger.totals.chargedNet);
     const held = available(ledger);
-    const exceptions = await repo.exceptions(tx,unit.id);
+    const exceptions = await openExceptions(tx,unit);
     let cause = 'NONE', difference = 0n;
     if (exceptions.length) {
       cause = 'OPEN_EXCEPTION';
@@ -376,4 +393,75 @@ export async function holdHandymanSettlementDispute(scope: string,
       return { id:fact.id,kind:'DISPUTED' as const,replayed:false };
     } catch (err) { mapUnique(err); }
   },false);
+}
+
+/**
+ * CR-HM-18 SETTLEMENT-DISPUTE-ADJUDICATION-01 — close one dispute hold.
+ *
+ * The single adjudication command over a `DISPUTED` settlement exception.
+ * It never moves funds, never rewrites the exception and never transitions
+ * the settlement unit; it records an append-only decision:
+ *
+ *   RELEASED — the hold is cleared, so include/settle/reconcile and the
+ *              Manager final-close gate stop treating it as open;
+ *   UPHELD   — the hold stands (kept blocked) and a ledger correction is
+ *              still the only way to make the unit settleable.
+ *
+ * One adjudication per dispute (0418/0460 UNIQUE), no adjudication of a
+ * SETTLED unit, replay-safe on `idempotencyKey`, and bounded by the same
+ * actor/Client/exact-execution-scope authority as every other settlement
+ * command (`readHandymanLedgerTransactionAt` provides the wall).
+ */
+export async function resolveHandymanSettlementDispute(scope: string,
+  actor: string, input: {
+    exceptionId: string;
+    outcome: 'RELEASED' | 'UPHELD';
+    note: string;
+    idempotencyKey: string;
+  }) {
+  keyInput(scope, actor, input.idempotencyKey);
+  if (typeof input.exceptionId !== 'string' ||
+      !isValidUuid(input.exceptionId) ||
+      (input.outcome !== 'RELEASED' && input.outcome !== 'UPHELD') ||
+      typeof input.note !== 'string' ||
+      input.note.trim().length < 1 || input.note.trim().length > 500) {
+    throw error('HANDYMAN_SETTLEMENT_INVALID',
+      'Invalid dispute adjudication input.', 400);
+  }
+  const note = input.note.trim();
+  return context(scope, actor, async (tx, _ledger, unit) => {
+    assertUnit(unit, _ledger);
+    const prior = await replay(tx, input.idempotencyKey, 'DISPUTE_RESOLUTION',
+      unit, actor);
+    if (prior) {
+      const fact = await repo.getDisputeResolutionById(tx, prior.result_id);
+      if (!fact || fact.exception_id !== input.exceptionId ||
+          fact.outcome !== input.outcome) throw conflict();
+      return { id: fact.id, exceptionId: fact.exception_id,
+        outcome: fact.outcome, note: fact.note,
+        occurredAt: fact.occurred_at.toISOString(), replayed: true };
+    }
+    const exception = await repo.getExceptionById(tx, input.exceptionId);
+    if (!exception || exception.unit_id !== unit.id) {
+      throw error('HANDYMAN_SETTLEMENT_NOT_FOUND',
+        'No settlement dispute exists for this transaction.', 404);
+    }
+    if (exception.exception_kind !== 'DISPUTED') throw conflict();
+    const existing = await repo.getDisputeResolutionByException(tx,
+      exception.id);
+    if (existing) throw conflict();
+    if (await state(tx, unit) === 'SETTLED') throw conflict();
+    try {
+      const fact = await repo.createDisputeResolution(tx, {
+        unitId: unit.id, exceptionId: exception.id,
+        outcome: input.outcome, note,
+        key: input.idempotencyKey, actorId: actor,
+      });
+      await repo.putKey(tx, input.idempotencyKey, unit.id,
+        'DISPUTE_RESOLUTION', fact.id, actor);
+      return { id: fact.id, exceptionId: fact.exception_id,
+        outcome: fact.outcome, note: fact.note,
+        occurredAt: fact.occurred_at.toISOString(), replayed: false };
+    } catch (err) { mapUnique(err); }
+  }, false);
 }

@@ -413,10 +413,23 @@ async function setupApprovedScope(
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
+  // CR-HM-18: the tenant decision authority requires the ACTIVE Tenant PIC
+  // user of the request, so the approval is recorded by that PIC.
+  const picUser = (
+    await q(
+      `SELECT tp.user_id
+         FROM handyman_service_requests r
+         JOIN handyman_channel_attributions a
+           ON a.id = r.channel_attribution_id
+         JOIN tenant_pics tp ON tp.id = a.tenant_pic_id
+        WHERE r.id = $1 AND tp.status = 'ACTIVE'`,
+      [requestId],
+    )
+  ).rows[0]?.user_id as string | undefined;
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE',
     idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, picUser ?? adminUserId);
   return decision.executionScope!.id;
 }
 

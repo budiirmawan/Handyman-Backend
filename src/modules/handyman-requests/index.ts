@@ -147,3 +147,33 @@ export type {
   NewHandymanRequestReferralRecord,
   PublicHandymanRequestReferral,
 } from './handyman-request-referral.types';
+/**
+ * CR-HM-18 REQUEST-CANCEL-01 — pre-commitment cancellation exit
+ * (`CANCELLED` terminal status + append-only cancellation fact).
+ */
+export {
+  handymanRequestCancellationRepository,
+} from './handyman-request-cancellation.repository';
+export {
+  cancelHandymanRequest,
+  getHandymanRequestCancellation,
+  handymanServiceRequestCancellationService,
+} from './handyman-request-cancellation.service';
+export {
+  handymanRequestAlreadyCancelledError,
+  handymanRequestCancelCommittedError,
+  handymanRequestCancelNotAllowedError,
+  handymanRequestCancellationKeyConflictError,
+} from './handyman-request-cancellation.errors';
+export {
+  HANDYMAN_REQUEST_CANCELLABLE_STATUSES,
+  isHandymanRequestCancellableStatus,
+} from './handyman-request-cancellation.types';
+export type {
+  CancelHandymanRequestInput,
+  HandymanRequestCancellableStatus,
+  HandymanRequestCancellationRecord,
+  HandymanRequestCancellationResult,
+  NewHandymanRequestCancellationRecord,
+  PublicHandymanRequestCancellation,
+} from './handyman-request-cancellation.types';

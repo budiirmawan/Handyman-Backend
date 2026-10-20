@@ -1,12 +1,14 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import {
+  handymanServiceRequestCancellationService,
   handymanServiceRequestDiagnosisService,
   handymanServiceRequestInspectionService,
   handymanServiceRequestReferralService,
   handymanServiceRequestTriageService,
 } from '../handyman-requests';
 import {
+  parseLifecycleCancellationBody,
   parseLifecycleDiagnosisBody,
   parseLifecycleHandymanRequestIdParam,
   parseLifecycleInspectionBody,
@@ -191,6 +193,56 @@ export async function getHandymanReferralHandler(
     );
     const record = await handymanServiceRequestReferralService
       .getHandymanRequestReferral(handymanRequestId, req.auth.userId);
+    sendSuccess(res, record, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-18 REQUEST-CANCEL-01 — POST
+ * /handyman/requests/:handymanRequestId/cancel.
+ *
+ * Pre-commitment termination only: the service owns the state rule
+ * (INTAKE/TRIAGE/INSPECTION_REQUIRED/DIAGNOSIS/READY_FOR_NEXT_STEP →
+ * CANCELLED), the execution-scope commitment gate and idempotent replay.
+ */
+export async function postHandymanRequestCancelHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const handymanRequestId = parseLifecycleHandymanRequestIdParam(
+      p(req.params.handymanRequestId),
+    );
+    const input = parseLifecycleCancellationBody(req.body);
+    const record = await handymanServiceRequestCancellationService
+      .cancelHandymanRequest(
+        { ...input, handymanRequestId },
+        req.auth.userId,
+      );
+    sendSuccess(res, record, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-18 REQUEST-CANCEL-01 — GET
+ * /handyman/requests/:handymanRequestId/cancellation (bounded read).
+ */
+export async function getHandymanRequestCancellationHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const handymanRequestId = parseLifecycleHandymanRequestIdParam(
+      p(req.params.handymanRequestId),
+    );
+    const record = await handymanServiceRequestCancellationService
+      .getHandymanRequestCancellation(handymanRequestId, req.auth.userId);
     sendSuccess(res, record, 200);
   } catch (error) {
     next(error);

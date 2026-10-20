@@ -10,6 +10,12 @@ process.env.WHATSAPP_META_APP_SECRET = 'test-secret';
 process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN = 'test-token';
 
 import { createApp } from '../src/app';
+import {
+  extractAllRuntimeRoutes,
+  findBrokenLocalRefs,
+  normalizePath,
+} from './helpers/openapi-census';
+import { findBrokenLocalRefs } from './helpers/openapi-census';
 
 /**
  * INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure.
@@ -21,43 +27,6 @@ import { createApp } from '../src/app';
 const SPEC_PATH = resolve(__dirname, '../docs/api/openapi.yaml');
 const SPEC = parse(readFileSync(SPEC_PATH, 'utf8')) as Record<string, any>;
 
-function normalizePath(p: string): string {
-  return (
-    p
-      .replace(/:([a-zA-Z0-9_]+)/g, '{$1}')
-      .replace(/\{([a-zA-Z0-9_]+)\}/g, '{p}')
-      .replace(/\/+/g, '/')
-      .replace(/\/$/, '') || '/'
-  );
-}
-
-function walkRouter(
-  stack: unknown,
-  prefix = '',
-): Array<{ method: string; path: string }> {
-  const out: Array<{ method: string; path: string }> = [];
-  const s = stack as Array<{
-    route?: { path?: string; methods?: Record<string, unknown> };
-    handle?: { stack?: unknown[] };
-    matchers?: Array<(input: string) => boolean | object>;
-  }>;
-  for (const layer of s ?? []) {
-    if (layer.route?.path) {
-      const full = prefix + layer.route.path || '/';
-      for (const m of Object.keys(layer.route.methods ?? {})) {
-        if (m === '_all') continue;
-        out.push({ method: m.toUpperCase(), path: full });
-      }
-    } else if (layer.handle?.stack) {
-      let layerPrefix = prefix;
-      if (layer.matchers?.[0]?.('/webhooks/notifications/whatsapp')) {
-        layerPrefix = '/webhooks/notifications/whatsapp';
-      }
-      out.push(...walkRouter(layer.handle.stack, layerPrefix));
-    }
-  }
-  return out;
-}
 
 const SCOPED_OPERATIONS: Record<
   string,
@@ -346,11 +315,10 @@ const SCOPED_OPERATIONS: Record<
 };
 
 describe('INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure', () => {
-  const app = createApp() as Express;
-  const runtime = walkRouter((app as any).router?.stack).map((r) => ({
-    ...r,
-    canon: normalizePath(r.path),
-  }));
+  // Shared census probe (CR-HM-18): the local walk missed array-registered
+  // paths and lazy-mount prefixes.
+  createApp();
+  const runtime = extractAllRuntimeRoutes();
 
   const openapi: Array<{
     method: string;
@@ -434,28 +402,9 @@ describe('INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure', () => {
   });
 
   it('6. zero broken $refs in openapi.yaml', () => {
-    const buckets: Record<string, Set<string>> = {};
-    for (const [k, v] of Object.entries(SPEC.components ?? {})) {
-      buckets[k] = new Set(Object.keys((v as Record<string, unknown>) ?? {}));
-    }
-    const broken: string[] = [];
-    function walk(node: unknown): void {
-      if (!node || typeof node !== 'object') return;
-      if (Array.isArray(node)) {
-        for (const item of node) walk(item);
-        return;
-      }
-      const o = node as Record<string, unknown>;
-      if (typeof o.$ref === 'string' && o.$ref.startsWith('#/components/')) {
-        const parts = o.$ref.slice(2).split('/');
-        const bucket = parts[1];
-        const tail = decodeURIComponent(parts.slice(2).join('/'));
-        if (!buckets[bucket]?.has(tail)) broken.push(o.$ref);
-      }
-      for (const v of Object.values(o)) walk(v);
-    }
-    walk(SPEC);
-    assert.deepEqual(broken, []);
+    // CR-HM-18: resolve real JSON pointers instead of top-level bucket names
+    // (legal deep pointers were previously mis-reported as broken).
+    assert.deepEqual(findBrokenLocalRefs(SPEC), [], 'Zero broken $refs allowed');
   });
 
   it('7. permission parity exact', () => {
@@ -564,18 +513,19 @@ describe('INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure', () => {
   it('Census validation after PART 12', () => {
     const platformOpenApi = openapi.filter((o) => o.path.startsWith('/platform'));
     const operationalOpenApi = openapi.filter((o) => !o.path.startsWith('/platform'));
-    assert.equal(openapi.length, 1654, 'Total OpenAPI count must be 1,654 (1598 + 56)');
+    // CR-HM-18 refresh (previous values were PART 12 era totals).
+    assert.equal(openapi.length, 1896, 'Total OpenAPI count must be 1,896');
     assert.equal(platformOpenApi.length, 69);
-    assert.equal(operationalOpenApi.length, 1585, 'Operational OpenAPI count must be 1,585 (1529 + 56)');
+    assert.equal(operationalOpenApi.length, 1827, 'Operational OpenAPI count must be 1,827');
     const inScopeOperational = runtime.filter(
       (r) => !r.path.startsWith('/platform') && r.path !== '/',
     );
-    assert.equal(inScopeOperational.length, 1617);
-    assert.equal(inScopeOperational.length - operationalOpenApi.length, 32);
+    assert.equal(inScopeOperational.length, 1917);
+    assert.equal(inScopeOperational.length - operationalOpenApi.length, 90);
     const documentedCanon = new Set(operationalOpenApi.map((o) => `${o.method} ${o.canon}`));
     const unmappedDistinct = inScopeOperational.filter(
       (r) => !documentedCanon.has(`${r.method} ${r.canon}`),
     );
-    assert.equal(unmappedDistinct.length, 31);
+    assert.equal(unmappedDistinct.length, 89);
   });
 });

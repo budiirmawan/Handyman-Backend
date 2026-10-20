@@ -737,6 +737,104 @@ describe('CR-HM-CC-TENANT-REQUEST-GATEWAY-01 staff-assisted creation gateway', (
       .set(auth(stranger.token));
     assert.equal(foreign.status, 403);
   });
+
+  it('9: Care cancels a pre-commitment request; replay is stable and foreign/committed scope is refused', async () => {
+    const realm = await createRealm('Gateway cancel');
+    const care = await createCareStaff(realm.building.id);
+    const created = await postGateway(
+      care.token,
+      realm.building.id,
+      createBody(realm, 'Tenant withdrew this request'),
+      randomUUID(),
+    );
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const requestId = created.body.data.id as string;
+    const cancelPath = `${V1}/handyman/care/buildings/${realm.building.id}/requests/${requestId}/cancel`;
+    const cancelKey = randomUUID();
+
+    const cancelled = await api()
+      .post(cancelPath)
+      .set(auth(care.token))
+      .send({ reason: 'Tenant withdrew the request.', idempotencyKey: cancelKey });
+    assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+    assert.equal(cancelled.body.data.requestStatus, 'CANCELLED');
+    assert.equal(cancelled.body.data.previousStatus, 'INTAKE');
+    assert.equal(cancelled.body.data.cancelledByUserId, care.userId);
+    assert.equal(cancelled.body.data.replayed, false);
+
+    const row = (
+      await pool.query(
+        `SELECT status FROM handyman_service_requests WHERE id = $1`,
+        [requestId],
+      )
+    ).rows[0];
+    assert.equal(row.status, 'CANCELLED');
+    const facts = (
+      await pool.query(
+        `SELECT count(*)::int AS n FROM handyman_request_cancellations
+          WHERE handyman_request_id = $1`,
+        [requestId],
+      )
+    ).rows[0];
+    assert.equal(facts.n, 1);
+
+    // Replay returns the same fact; a second key cannot cancel twice.
+    const replay = await api()
+      .post(cancelPath)
+      .set(auth(care.token))
+      .send({ reason: 'Tenant withdrew the request.', idempotencyKey: cancelKey });
+    assert.equal(replay.status, 200, JSON.stringify(replay.body));
+    assert.equal(replay.body.data.replayed, true);
+    assert.equal(replay.body.data.id, cancelled.body.data.id);
+
+    const secondKey = await api()
+      .post(cancelPath)
+      .set(auth(care.token))
+      .send({ reason: 'Again.', idempotencyKey: randomUUID() });
+    assert.equal(secondKey.status, 409, JSON.stringify(secondKey.body));
+    assert.equal(
+      secondKey.body.error.code,
+      'HANDYMAN_SERVICE_REQUEST_ALREADY_CANCELLED',
+    );
+
+    // Spoofed actor identity is rejected at the edge.
+    const other = await postGateway(
+      care.token,
+      realm.building.id,
+      createBody(realm, 'Spoof attempt'),
+      randomUUID(),
+    );
+    assert.equal(other.status, 201, JSON.stringify(other.body));
+    const spoofed = await api()
+      .post(
+        `${V1}/handyman/care/buildings/${realm.building.id}/requests/${other.body.data.id}/cancel`,
+      )
+      .set(auth(care.token))
+      .send({
+        reason: 'Spoofed.',
+        idempotencyKey: randomUUID(),
+        actorUserId: randomUUID(),
+      });
+    assert.equal(spoofed.status, 400, JSON.stringify(spoofed.body));
+
+    // Another Building's Care staff cannot cancel this request.
+    const elsewhere = await createRealm('Gateway cancel elsewhere');
+    const stranger = await createCareStaff(elsewhere.building.id);
+    const foreign = await api()
+      .post(
+        `${V1}/handyman/care/buildings/${realm.building.id}/requests/${other.body.data.id}/cancel`,
+      )
+      .set(auth(stranger.token))
+      .send({ reason: 'Not my building.', idempotencyKey: randomUUID() });
+    assert.equal(foreign.status, 403, JSON.stringify(foreign.body));
+    const untouched = (
+      await pool.query(
+        `SELECT status FROM handyman_service_requests WHERE id = $1`,
+        [other.body.data.id],
+      )
+    ).rows[0];
+    assert.equal(untouched.status, 'INTAKE');
+  });
 });
 
 async function createSessionWithoutPermissions(): Promise<string> {

@@ -136,7 +136,8 @@ after(async () => {
 
 describe('CR-HM-16 PART 03 — Handyman audit/integration/reliability contract (frozen)', () => {
   it('freezes the audit vocabulary and the inherited laws', () => {
-    assert.equal(HANDYMAN_AUDIT_EVENT_CONTRACT.length, 15);
+    // CR-HM-18 REQUEST-CANCEL-01 adds HANDYMAN_REQUEST_CANCELLED (15 → 16).
+    assert.equal(HANDYMAN_AUDIT_EVENT_CONTRACT.length, 16);
     const seen = new Set<string>();
     for (const entry of HANDYMAN_AUDIT_EVENT_CONTRACT) {
       assert.ok(!seen.has(entry.eventType), `${entry.eventType} admitted once`);
@@ -148,6 +149,7 @@ describe('CR-HM-16 PART 03 — Handyman audit/integration/reliability contract (
       assert.equal(handymanAuditContractFor(sla)?.factKind, 'SLA');
     }
     assert.ok(isHandymanAuditEventType('HANDYMAN_QUOTATION_ISSUED'));
+    assert.ok(isHandymanAuditEventType('HANDYMAN_REQUEST_CANCELLED'));
     assert.ok(!isHandymanAuditEventType('WORK_ORDER_ASSIGNED'));
     assert.equal(handymanAuditContractFor('NOPE'), undefined);
     // Entity firewall: the Handyman namespace only.

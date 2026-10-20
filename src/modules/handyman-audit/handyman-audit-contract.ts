@@ -92,6 +92,11 @@ export const HANDYMAN_AUDIT_EVENT_CONTRACT: readonly HandymanAuditEventEntry[] =
     meaning: 'A specialist referral was created for a service request.',
   },
   {
+    eventType: 'HANDYMAN_REQUEST_CANCELLED',
+    factKind: 'DOMAIN',
+    meaning: 'A service request was cancelled before commercial commitment.',
+  },
+  {
     eventType: 'HANDYMAN_QUOTATION_ISSUED',
     factKind: 'DOMAIN',
     meaning: 'A quotation was issued and awaits the customer decision window.',

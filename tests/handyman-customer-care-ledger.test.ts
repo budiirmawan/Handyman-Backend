@@ -341,7 +341,19 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       f.executionScopeId,
       careReader.userId,
     );
-    assert.deepEqual(res.body.data, expected);
+    // CR-HM-18: the transport enriches each payment with the derived
+    // `availableActions` projection (UI seam). Facts must be identical; only
+    // that projection is added, and it must be present and array-shaped.
+    const { payments: expectedPayments, ...expectedRest } = expected as
+      Record<string, any> & { payments: any[] };
+    const { payments: actualPayments, ...actualRest } = res.body.data;
+    assert.deepEqual(actualRest, expectedRest);
+    assert.equal(actualPayments.length, expectedPayments.length);
+    actualPayments.forEach((payment: Record<string, any>, index: number) => {
+      const { availableActions, ...facts } = payment;
+      assert.deepEqual(facts, expectedPayments[index]);
+      assert.ok(Array.isArray(availableActions));
+    });
 
     const data = res.body.data;
     assert.equal(data.contractVersion, 'CR-HM-13-PART-06');
@@ -976,9 +988,17 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
         `missing OpenAPI schema ${schemaName}`,
       );
     }
-    const settlementPaths = Object.keys(doc.paths).filter(
-      (p) => p.startsWith('/handyman') && /settlement|entitlement/i.test(p),
+    // CR-HM-18: the firebreak is about THIS transport, not the whole document.
+    // Settlement/entitlement commands exist (CR-HM-14 / finance-close) and are
+    // documented, but no ledger/payment path may expose them.
+    const ledgerPaths = Object.keys(doc.paths).filter(
+      (p) => p.startsWith('/handyman') && /customer-ledger|customer-pay/i.test(p),
     );
-    assert.deepEqual(settlementPaths, []);
+    assert.ok(ledgerPaths.length > 0, 'ledger paths must be documented');
+    assert.deepEqual(
+      ledgerPaths.filter((p) => /settlement|entitlement|final-close/i.test(p)),
+      [],
+      'no ledger/payment path may expose a settlement or entitlement command',
+    );
   });
 });

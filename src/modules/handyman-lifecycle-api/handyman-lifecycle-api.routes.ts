@@ -3,10 +3,12 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   getHandymanDiagnosisHandler,
+  getHandymanRequestCancellationHandler,
   getHandymanInspectionHandler,
   getHandymanReferralHandler,
   getHandymanTriageHandler,
   postHandymanDiagnosisHandler,
+  postHandymanRequestCancelHandler,
   postHandymanInspectionHandler,
   postHandymanReferralHandler,
   postHandymanTriageHandler,
@@ -23,6 +25,8 @@ import {
  *   GET  /handyman/requests/:handymanRequestId/diagnosis  read
  *   POST /handyman/requests/:handymanRequestId/referral   manage
  *   GET  /handyman/requests/:handymanRequestId/referral   read
+ *   POST /handyman/requests/:handymanRequestId/cancel     manage  (CR-HM-18)
+ *   GET  /handyman/requests/:handymanRequestId/cancellation read  (CR-HM-18)
  *
  * Permission token derivation (FROZEN F8 — closest EXISTING Handyman
  * read/manage convention): the only existing Handyman-gated surface is
@@ -33,9 +37,12 @@ import {
  * classification derivation and referral eligibility (the accessible-
  * Client scope can never be smuggled through a session).
  *
+ * CR-HM-18 adds exactly two operations (cancel + bounded cancellation
+ * read) closing the J01 pre-commitment exit.
+ *
  * Out of scope by frozen contract: intake, evidence upload, quotation,
  * work execution, provider/vendor assignment, FM workflow — none of
- * those routes exist here (8 operations, no more).
+ * those routes exist here.
  */
 export function createHandymanLifecycleApiRouter(): Router {
   const router = Router();
@@ -90,6 +97,19 @@ export function createHandymanLifecycleApiRouter(): Router {
     auth,
     read,
     getHandymanReferralHandler,
+  );
+
+  router.post(
+    '/handyman/requests/:handymanRequestId/cancel',
+    auth,
+    manage,
+    postHandymanRequestCancelHandler,
+  );
+  router.get(
+    '/handyman/requests/:handymanRequestId/cancellation',
+    auth,
+    read,
+    getHandymanRequestCancellationHandler,
   );
 
   return router;

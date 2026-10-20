@@ -6,4 +6,5 @@ export {
   settleHandymanSettlement,
   recordHandymanSettlementCorrection,
   holdHandymanSettlementDispute,
+  resolveHandymanSettlementDispute,
 } from './handyman-settlement.service';

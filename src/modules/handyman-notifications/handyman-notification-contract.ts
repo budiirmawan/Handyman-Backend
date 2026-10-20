@@ -58,6 +58,12 @@ export const HANDYMAN_NOTIFICATION_CONTRACT = [
     templateKey: 'HANDYMAN_REFERRAL_CREATED',
   },
   {
+    eventType: 'HANDYMAN_REQUEST_CANCELLED',
+    meaning: 'A service request was cancelled before commercial commitment.',
+    audience: 'SUBSCRIPTION_RULE',
+    templateKey: 'HANDYMAN_REQUEST_CANCELLED',
+  },
+  {
     eventType: 'HANDYMAN_QUOTATION_ISSUED',
     meaning: 'A quotation version was issued and awaits customer decision.',
     audience: 'SUBSCRIPTION_RULE',

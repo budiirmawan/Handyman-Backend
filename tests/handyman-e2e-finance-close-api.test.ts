@@ -178,10 +178,18 @@ after(async () => {
 async function scopedFixture() {
   const { realm, scope } = await baseFixture();
   const crew = await crewFixture(realm);
-  await workforceBuildingAssignmentService.assignBuildingToWorkforce({
-    workforceProfileId: crew.workerContext.workforceProfileId,
-    buildingId: realm.building.id,
-  });
+  // CR-HM-18: `crewFixture` already grants the Lead's workforce profile an
+  // ACTIVE Building assignment (migration 0439 eligibility), so this call is
+  // kept idempotent instead of failing the whole suite with
+  // WORKFORCE_BUILDING_ALREADY_ASSIGNED (pre-existing fixture collision).
+  await workforceBuildingAssignmentService
+    .assignBuildingToWorkforce({
+      workforceProfileId: crew.workerContext.workforceProfileId,
+      buildingId: realm.building.id,
+    })
+    .catch((error: { code?: string }) => {
+      if (error?.code !== 'WORKFORCE_BUILDING_ALREADY_ASSIGNED') throw error;
+    });
   const assignment = await assignHandymanExecutionScopeCrew(
     {
       executionScopeId: scope.id,

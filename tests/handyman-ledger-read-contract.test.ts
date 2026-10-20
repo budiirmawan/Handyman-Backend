@@ -42,6 +42,10 @@ import {
   scopeFixture,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-13 PART 06 — published read contract + firewall verification
@@ -55,7 +59,18 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
 
+/**
+ * CR-HM-18: previously SKIPPED all six cases without an external PostgreSQL.
+ */
+const EMBEDDED_DIR = '/tmp/hm13-ledger-read-contract-pg';
+const EMBEDDED_PORT = 55575;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -104,7 +119,12 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    embedded = null;
+  }
   pool = null;
   database = null;
 });
@@ -867,16 +887,32 @@ describe('CR-HM-13 PART 06 — published read contract + firewall verification',
           AND (tc.table_name = ANY($1::text[]) OR ccu.table_name = ANY($1::text[]))`,
       [LEDGER_TABLES],
     );
+    // CR-HM-18: migration 0458 binds a finalized tenant invoice line to the
+    // handyman charge line it settles (`tenant_invoice_lines.charge_line_id`).
+    // That is a deliberate INBOUND reference (billing points at the ledger),
+    // so the direction law is what must hold: a LEDGER table may never point
+    // into a non-Handyman substrate table, while a substrate table may point
+    // at the ledger. No other substrate coupling is allowed.
+    const LEDGER_TABLE_SET = new Set(LEDGER_TABLES as readonly string[]);
     for (const row of fkTargets.rows) {
       const source = String(row.source);
       const target = String(row.target);
-      const allowed = (table: string) =>
+      const allowedAnchor = (table: string) =>
         table.startsWith('handyman_') ||
         ['clients', 'users', 'roles', 'permissions', 'properties',
           'buildings', 'floors', 'areas', 'rooms', 'spaces',
           'units_of_measure'].includes(table);
-      assert.ok(allowed(source) && allowed(target),
-        `ledger FK ${source} -> ${target} must stay inside the ledger`);
+      if (LEDGER_TABLE_SET.has(source) || source.startsWith('handyman_')) {
+        assert.ok(allowedAnchor(target),
+          `ledger FK ${source} -> ${target} must stay inside the ledger`);
+        continue;
+      }
+      // Inbound: only the invoice→charge-line binding may reference a ledger
+      // table, and only in that direction.
+      assert.equal(source, 'tenant_invoice_lines',
+        `unexpected inbound FK ${source} -> ${target}`);
+      assert.ok(target.startsWith('handyman_'),
+        `inbound FK ${source} -> ${target} must target the ledger`);
     }
     // No audit/outbox/evidence table is financial authority here.
     const ledgerColumns = await q(
