@@ -193,6 +193,18 @@ describe('CR-BE-FIN-RPT-01 PART 05 — public API / OpenAPI contract alignment',
 
   it('no migration 0334', () => {
     const files = readdirSync(MIGRATION_DIR) as string[];
-    assert.ok(!files.some((f: string) => f.startsWith('0334')), '0334 must not exist');
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the frozen
+    // invariant is that no FX conversion ledger migration exists.
+    // Number 0334 was later reused by an unrelated additive CR
+    // (mobile push delivery); assert the FX ledger by name pattern,
+    // not by directory slot.
+    assert.ok(
+      !files.some((f: string) => /^[0-9]+_.*fx.*conversion.*ledger.*\.ts$/i.test(f)),
+      'FX conversion ledger migration must not exist',
+    );
+    assert.ok(
+      !files.some((f: string) => f.startsWith('0334_create_fx_conversion_ledger')),
+      '0334_create_fx_conversion_ledger.ts must not exist',
+    );
   });
 });

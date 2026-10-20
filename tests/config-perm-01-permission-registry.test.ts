@@ -246,9 +246,11 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
     // codes + 1 CR-HM-BAST-HTTP-01 handyman.bast.manage code
     // + 4 CR-HM-FIN-AUTH-01 handyman.{commercial,finance,settlement} codes
     // (migration 0448 — never reconciled into this pin by PR #34)
-    // + 1 CR-HM-BM-CARE-AUTH-01 handyman.care.building code (migration 0450).
-    assert.equal(CATALOGUE.length, 360);
-    assert.equal(CATALOGUE_SET.size, 360, 'catalogue must contain no duplicates');
+    // + 1 CR-HM-BM-CARE-AUTH-01 handyman.care.building code (migration 0450)
+    // + 2 CR-HM-MASTER-IND-01 unit_party.{read,manage} codes (migration 0456 —
+    // reconciled into this pin by CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01).
+    assert.equal(CATALOGUE.length, 362);
+    assert.equal(CATALOGUE_SET.size, 362, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {

@@ -720,6 +720,7 @@ describe('CR-HM-13 PART 03 — provider-neutral payments', () => {
     if (!requireDatabase(t)) return;
     const files = readdirSync(moduleDir).sort();
     assert.deepEqual(files, [
+      'handyman-customer-payment.available-actions.ts',
       'handyman-customer-payment.errors.ts',
       'handyman-customer-payment.repository.ts',
       'handyman-customer-payment.service.ts',

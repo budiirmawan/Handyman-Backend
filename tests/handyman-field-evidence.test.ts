@@ -225,6 +225,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
         status text NOT NULL, assigned_by_user_id uuid NOT NULL,
         assigned_at timestamptz NOT NULL DEFAULT now(),
         supersedes_assignment_id uuid,
+        version integer NOT NULL DEFAULT 1,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );

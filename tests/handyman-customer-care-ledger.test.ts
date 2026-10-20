@@ -1000,5 +1000,21 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       [],
       'no ledger/payment path may expose a settlement or entitlement command',
     );
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the finance-close seams
+    // legitimately own exactly these settlement/entitlement paths under the
+    // dedicated finance transport module (never under customer ledger).
+    const settlementPaths = Object.keys(doc.paths).filter(
+      (p) => p.startsWith('/handyman') && /settlement|entitlement/i.test(p),
+    );
+    assert.deepEqual(settlementPaths.sort(), [
+      '/handyman/execution-scopes/{executionScopeId}/financial-entitlements/derive',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/correction',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/dispute',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/dispute/resolution',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/include',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/prepare',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/reconcile',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/settle',
+    ]);
   });
 });

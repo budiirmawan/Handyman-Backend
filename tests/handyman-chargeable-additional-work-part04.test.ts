@@ -7,17 +7,13 @@ import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
-import { baseFixture, crewFixture, initHandymanFixtures }
+import { initHandymanFixtures }
   from './helpers/handyman-fixtures';
-import { assignHandymanExecutionScopeCrew }
-  from '../src/modules/handyman-scope-assignments';
+import { arrangeGuardedBast }
+  from './helpers/handyman-guarded-bast';
 import { userService } from '../src/modules/users';
 import { AppError, ERROR_CODES } from '../src/shared/errors';
-import {
-  acceptHandymanBast,
-  issueHandymanBast,
-  prepareHandymanBast,
-} from '../src/modules/handyman-bast';
+
 import { startHandymanServiceWarranty }
   from '../src/modules/handyman-service-warranties';
 import {
@@ -143,28 +139,14 @@ async function rawTx(
 
 /** A started ACTIVE warranty (ACCEPTED BAST) plus the scope's crew. */
 async function warrantyFixture() {
-  const { realm, scope } = await baseFixture();
-  const crew = await crewFixture(realm);
-  await assignHandymanExecutionScopeCrew({
-    executionScopeId: scope.id,
-    providerContextId: crew.providerContext.id,
-    crewId: crew.crew.id,
-  }, actor);
-  const prepared = await prepareHandymanBast(actor, {
-    executionScopeId: scope.id, idempotencyKey: id(),
-  });
-  await issueHandymanBast(actor, {
-    bastId: prepared.bast.id, idempotencyKey: id(),
-  });
-  const signed = await acceptHandymanBast(actor, {
-    bastId: prepared.bast.id, idempotencyKey: id(),
-    signatureDigest: `sig-${id()}`,
-  });
+  // BAST ACCEPTED now requires the latest guarded Supervisor QC PASS
+  // (completed Work Session + resolved defects + verified QC bytes).
+  const f = await arrangeGuardedBast({ adminUserId: actor, q, until: 'ACCEPTED' });
   const started = await startHandymanServiceWarranty(
-    { executionScopeId: scope.id, idempotencyKey: id() }, actor);
+    { executionScopeId: f.scope.id, idempotencyKey: id() }, actor);
   return {
-    realm, scope, bast: signed.bast, warranty: started.warranty,
-    leadUserId: crew.leadUser.id,
+    realm: f.realm, scope: f.scope, bast: f.bast, warranty: started.warranty,
+    leadUserId: f.crew.leadUser.id,
   };
 }
 

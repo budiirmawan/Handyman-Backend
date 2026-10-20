@@ -21,7 +21,7 @@ import {createVisitProposal} from '../src/modules/handyman-appointment-contract/
 // to read the minimal fixtures. No application migration or persistent table.
 const id = Object.fromEntries(['client','otherClient','building','sibling','property',
   'request','scope','provider','crew','oldCrew','oldUser','user','oldMember','member',
-  'oldWorker','worker','oldProfile','profile','booking','inspection','vendor','organization'].map(key => [key,randomUUID()]));
+  'oldWorker','worker','oldProfile','profile','booking','inspection','vendor','organization','oldCrewMember'].map(key => [key,randomUUID()]));
 let postgres: EmbeddedPostgres;
 let directory: string;
 let db: Client;
@@ -30,7 +30,7 @@ const tables = ['clients','properties','buildings','users','user_building_assign
   'handyman_service_requests','handyman_execution_scopes','handyman_execution_scope_assignments',
   'handyman_work_crews','handyman_crew_leads','handyman_crew_memberships',
   'handyman_worker_contexts','workforce_profiles','handyman_visit_appointments',
-  'vendors','organizations','handyman_provider_contexts','vendor_workforce_bindings','workforce_building_assignments','operational_events'];
+  'vendors','organizations','handyman_provider_contexts','vendor_workforce_bindings','workforce_building_assignments','operational_events','handyman_execution_scope_assignment_history','handyman_work_sessions','handyman_dispatch_releases'];
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(),'hm-crew-registration-'));
@@ -55,8 +55,19 @@ before(async () => {
     CREATE TEMP TABLE handyman_service_requests(id uuid, client_id uuid, status text, building_id uuid, tenant_company_id uuid);
     CREATE TEMP TABLE handyman_execution_scopes(id uuid, handyman_request_id uuid, client_id uuid, building_id uuid, status text);
     CREATE TEMP TABLE handyman_execution_scope_assignments(execution_scope_id uuid, client_id uuid, handyman_crew_id uuid, handyman_provider_context_id uuid, status text,
-      id uuid, assigned_by_user_id uuid, supersedes_assignment_id uuid, assigned_at timestamptz DEFAULT NOW(), created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
+      id uuid, assigned_by_user_id uuid, supersedes_assignment_id uuid, assigned_at timestamptz DEFAULT NOW(), created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW(),
+      version integer NOT NULL DEFAULT 1);
     CREATE UNIQUE INDEX one_active_test_assignment ON handyman_execution_scope_assignments(execution_scope_id) WHERE status='ACTIVE';
+    CREATE TEMP TABLE handyman_work_sessions(id uuid, execution_scope_id uuid, status text);
+    CREATE TEMP TABLE handyman_dispatch_releases(id uuid, client_id uuid, execution_scope_id uuid, assignment_id uuid,
+      appointment_id uuid, status text, released_by_user_id uuid, released_at timestamptz,
+      cancelled_by_user_id uuid, cancelled_at timestamptz, cancel_reason text,
+      readiness_snapshot jsonb, version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
+    CREATE TEMP TABLE handyman_execution_scope_assignment_history(id uuid, client_id uuid, assignment_id uuid, execution_scope_id uuid,
+      from_provider_context_id uuid, from_crew_id uuid, to_provider_context_id uuid, to_crew_id uuid,
+      action text, reason text, expected_version integer, prior_version integer,
+      actor_user_id uuid, idempotency_key text, created_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE handyman_work_crews(id uuid, client_id uuid, handyman_provider_context_id uuid, status text,
       code text DEFAULT 'CREW', name text DEFAULT 'Test crew', created_by_user_id uuid, created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE handyman_crew_leads(handyman_crew_id uuid, handyman_crew_membership_id uuid, client_id uuid, lead_seq integer,
@@ -116,6 +127,8 @@ beforeEach(async () => {
   await db.query('INSERT INTO handyman_crew_leads(handyman_crew_id,handyman_crew_membership_id,client_id,lead_seq) VALUES ($1,$2,$4,1),($1,$3,$4,2)',[id.crew,id.oldMember,id.member,id.client]);
   await db.query("INSERT INTO handyman_crew_memberships(id,handyman_crew_id,handyman_worker_context_id,client_id,status) VALUES ($1,$3,$4,$6,'ACTIVE'),($2,$3,$5,$6,'ACTIVE')",[id.oldMember,id.member,id.crew,id.oldWorker,id.worker,id.client]);
   await db.query("INSERT INTO handyman_worker_contexts(id,workforce_profile_id,client_id,handyman_provider_context_id,status) VALUES ($1,$3,$5,$6,'ACTIVE'),($2,$4,$5,$6,'ACTIVE')",[id.oldWorker,id.worker,id.oldProfile,id.profile,id.client,id.provider]);
+  await db.query("INSERT INTO handyman_crew_memberships(id,handyman_crew_id,handyman_worker_context_id,client_id,status) VALUES ($1,$2,$3,$4,'ACTIVE')",[id.oldCrewMember,id.oldCrew,id.oldWorker,id.client]);
+  await db.query('INSERT INTO handyman_crew_leads(handyman_crew_id,handyman_crew_membership_id,client_id,lead_seq) VALUES ($1,$2,$3,1)',[id.oldCrew,id.oldCrewMember,id.client]);
   await db.query("INSERT INTO workforce_profiles(id,user_id,status) VALUES ($1,$3,'ACTIVE'),($2,$4,'ACTIVE')",[id.oldProfile,id.profile,id.oldUser,id.user]);
   await db.query('INSERT INTO organizations VALUES ($1,$2)',[id.organization,id.client]);
   await db.query("INSERT INTO vendors VALUES ($1,$2,'ACTIVE')",[id.vendor,id.client]);
@@ -139,14 +152,18 @@ async function assertNoAssignmentOrAudit() {
 test('registered Crew assigns and reassigns atomically without booking or acceptance',async () => {
   const first = await assign();
   assert.equal(first.status,'ACTIVE');
-  const second = await reassignHandymanExecutionScopeCrew(input,id.user);
+  const second = await reassignHandymanExecutionScopeCrew(
+    {...input, crewId:id.oldCrew, expectedVersion:1, reason:'crew rotation'}, id.user);
   assert.equal(second.supersedesAssignmentId,first.id);
   assert.equal(second.status,'ACTIVE');
   assert.equal((await db.query("SELECT count(*)::int AS count FROM handyman_execution_scope_assignments WHERE status='ACTIVE'")).rows[0].count,1);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM operational_events')).rows[0].count,3);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM handyman_visit_appointments')).rows[0].count,0);
-  const lead = await resolveHandymanAssignmentLead(id.scope,id.user);
-  assert.equal(lead?.leadUserId,id.user);
+  // The resolver reports the CURRENT assignment's lead — oldCrew was
+  // registered with oldWorker as its lead, so after the rotation the
+  // authoritative Lead is oldUser (the whole point of the reassign).
+  const lead = await resolveHandymanAssignmentLead(id.scope,id.oldUser);
+  assert.equal(lead?.leadUserId,id.oldUser);
 });
 test('registered no-login helper remains eligible through workforce identity and placement',async () => {
   await db.query('UPDATE workforce_profiles SET user_id=NULL WHERE id=$1',[id.oldProfile]);
@@ -215,7 +232,8 @@ test('failed registration revalidation leaves prior ACTIVE allocation and audit 
   const first = await assign();
   const before = (await db.query('SELECT * FROM handyman_execution_scope_assignments')).rows;
   await db.query("UPDATE vendor_workforce_bindings SET status='INACTIVE' WHERE workforce_profile_id=$1",[id.oldProfile]);
-  await assert.rejects(() => reassignHandymanExecutionScopeCrew(input,id.user));
+  await assert.rejects(() => reassignHandymanExecutionScopeCrew(
+    {...input, crewId:id.oldCrew, expectedVersion:1, reason:'must fail on member revalidation'}, id.user));
   assert.deepEqual((await db.query('SELECT * FROM handyman_execution_scope_assignments')).rows,before);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM operational_events')).rows[0].count,1);
   assert.equal(before[0].id,first.id);

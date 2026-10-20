@@ -61,7 +61,12 @@ it('bootstraps the complete canonical registry and repeats without changes', { t
   await verifyMigrationReadiness(getPool());
   const status = await getMigrationStatus(getPool());
   assert.ok(status.every((s) => s.applied));
-  assert.match(status.at(-1)!.id, /^0455_/);
+  // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the registry
+  // legitimately advanced past 0455 (0456 apartment master data,
+  // 0457 tenant batch import, 0458 E2E financial reconciliation
+  // close). The frozen invariant is that the registry ends on the
+  // current canonical head, not on a hard-coded number.
+  assert.match(status.at(-1)!.id, /^0458_/);
   assert.ok(status.some((s) => /^0450_/.test(s.id)));
   assert.ok(!status.some((s) => /^0449_/.test(s.id)));
   console.log(`Verified ${status.length} canonical migrations; latest ${status.at(-1)!.id}`);

@@ -323,13 +323,18 @@ describe('CR-HM-BE-CORS-PRODUCTION-01 — application regression', () => {
   it('keeps the canonical migration registry append-only', () => {
     // CR-HM-IAM-BOOTSTRAP-01 added the first-owner state,
     // CR-HM-BE-IAM-ADMIN-02 added role/building IAM audit event vocabulary,
-    // CR-HM-BE-CLIENT-MASTER-01 appended 0454, and
-    // CR-HM-CC-TENANT-REQUEST-GATEWAY-01 appends 0455 (Backend Customer
-    // Care origin channel). All additive; no existing migration rewritten.
-    assert.equal(migrations.length, 454);
+    // CR-HM-BE-CLIENT-MASTER-01 appended 0454,
+    // CR-HM-CC-TENANT-REQUEST-GATEWAY-01 appended 0455 (Backend Customer
+    // Care origin channel), CR-HM-MASTER-IND-01 appended 0456 (Indonesian
+    // apartment master data), CR-HM-MASTER-TENANT-BATCH-01 appended 0457
+    // (tenant batch import) and CR-HM-E2E-FINANCIAL-RECONCILIATION
+    // appended 0458 (DP terms, obligation stage, BAST re-preparation,
+    // variation charge composition, Manager FINAL CLOSE). All additive;
+    // no existing migration rewritten.
+    assert.equal(migrations.length, 457);
     assert.equal(
       migrations[migrations.length - 1].id,
-      '0455_handyman_care_backend_origin_channel',
+      '0458_handyman_e2e_financial_reconciliation_close',
     );
   });
 });

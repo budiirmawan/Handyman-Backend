@@ -127,12 +127,18 @@ describe('CR-BE-FIN-RPT-01 PART 01 — currency-safe source foundation', () => {
   it('no migration 0334', () => {
     const migration0334 = join(MIGRATION_DIR, '0334_create_fx_conversion_ledger.ts');
     const alt0334 = join(MIGRATION_DIR, '0334_any.ts');
-    // Check any file starting with 0334
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the FX CR reserved
+    // number 0334 for a conversion ledger that was deliberately never
+    // created. An unrelated later CR (mobile push delivery) took number
+    // 0334 for its own additive migration; the frozen invariant is that
+    // the FX conversion ledger migration does not exist, not that the
+    // number stays unallocated forever.
     const fs = require('node:fs');
     const files = fs.readdirSync(MIGRATION_DIR) as string[];
-    const has0334 = files.some((f: string) => f.startsWith('0334'));
-    assert.ok(!has0334, `migration 0334 must not exist, found: ${files.filter((f: string) => f.startsWith('0334')).join(', ')}`);
+    const hasFxLedger = files.some((f: string) => /^0334.*fx.*conversion.*ledger/i.test(f));
+    assert.ok(!hasFxLedger, `FX conversion ledger migration must not exist, found: ${files.filter((f: string) => /^0334/i.test(f)).join(', ')}`);
     assert.ok(!existsSync(migration0334), '0334_create_fx_conversion_ledger.ts must not exist');
+    assert.ok(!existsSync(alt0334), '0334_any.ts must not exist');
   });
 
   it('no FX import in basic-financial-reporting module', () => {

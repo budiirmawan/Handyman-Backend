@@ -55,6 +55,8 @@ import { tenantPicService } from '../src/modules/tenant-pics';
 import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
+import { assignBuildingToWorkforce }
+  from '../src/modules/workforce-building-assignments';
 import { vendorService } from '../src/modules/vendors';
 import { workforceService } from '../src/modules/workforce';
 import { assignBuildingToWorkforce }
