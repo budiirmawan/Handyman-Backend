@@ -35,6 +35,8 @@ export {
 export {
   HANDYMAN_CUSTOMER_PAYMENT_CHANNELS,
   isHandymanCustomerPaymentChannel,
+  HANDYMAN_CUSTOMER_PAYMENT_OBLIGATION_STAGES,
+  isHandymanCustomerPaymentObligationStage,
   HANDYMAN_CUSTOMER_PAYMENT_STATUSES,
   isHandymanCustomerPaymentStatus,
   HANDYMAN_CUSTOMER_PAYMENT_EVENT_TYPES,
@@ -43,6 +45,7 @@ export {
 
 export type {
   HandymanCustomerPaymentChannel,
+  HandymanCustomerPaymentObligationStage,
   HandymanCustomerPaymentStatus,
   HandymanCustomerPaymentEventType,
   HandymanCustomerPaymentRecord,

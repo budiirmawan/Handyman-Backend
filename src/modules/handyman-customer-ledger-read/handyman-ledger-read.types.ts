@@ -30,8 +30,10 @@ import type {
   HandymanChargeLineKind,
   HandymanCustomerTransactionCurrency,
 } from '../handyman-customer-transactions';
-import type { HandymanCustomerPaymentStatus }
-  from '../handyman-customer-payments';
+import type {
+  HandymanCustomerPaymentObligationStage,
+  HandymanCustomerPaymentStatus,
+} from '../handyman-customer-payments';
 import type {
   HandymanLedgerCorrectionKind,
   HandymanLedgerCorrectionSourceKind,
@@ -80,6 +82,7 @@ export type HandymanLedgerReadPayment = {
   paymentId: string;
   status: HandymanCustomerPaymentStatus;
   channel: string;
+  obligationStage: HandymanCustomerPaymentObligationStage;
   currency: HandymanCustomerTransactionCurrency;
   /** The posted payment fact. */
   amount: string;

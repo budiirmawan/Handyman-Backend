@@ -343,6 +343,67 @@ async function findTransactionEventByIdempotency(
   return result.rows[0] ? mapEvent(result.rows[0]) : null;
 }
 
+async function findEligibleVariationQuotationLine(
+  executor: Executor = getPool(),
+  executionScopeId: string,
+  clientId: string,
+  quotationLineId: string,
+): Promise<{
+  id: string;
+  quotationVersionId: string;
+  lineType: 'LABOR' | 'MATERIAL';
+  description: string;
+  quantity: number;
+  uomId: string;
+  referenceUnitAmount: number | null;
+  finalQuotedUnitAmount: number;
+  lineTotal: number;
+  currency: HandymanCustomerTransactionCurrency;
+  sourceItemId: string | null;
+  createdByUserId: string;
+  createdAt: Date;
+  updatedAt: Date;
+} | null> {
+  const result = await executor.query(
+    `SELECT ql.id, ql.quotation_version_id, ql.line_type, ql.description,
+            ql.quantity, ql.uom_id, ql.reference_unit_amount,
+            ql.final_quoted_unit_amount, ql.line_total, ql.currency,
+            ql.source_item_id, ql.created_by_user_id, ql.created_at, ql.updated_at
+       FROM handyman_quotation_lines ql
+       JOIN handyman_scope_variations v
+         ON v.revised_quotation_version_id = ql.quotation_version_id
+      WHERE ql.id = $1
+        AND v.execution_scope_id = $2
+        AND v.client_id = $3
+        AND v.variation_type = 'ADD'
+        AND v.status = 'FINAL_CHARGE_ELIGIBILITY'
+        AND v.final_charge_eligible = TRUE
+      LIMIT 1`,
+    [quotationLineId, executionScopeId, clientId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id as string,
+    quotationVersionId: row.quotation_version_id as string,
+    lineType: row.line_type as 'LABOR' | 'MATERIAL',
+    description: row.description as string,
+    quantity: Number(row.quantity),
+    uomId: row.uom_id as string,
+    referenceUnitAmount:
+      row.reference_unit_amount === null
+        ? null
+        : Number(row.reference_unit_amount),
+    finalQuotedUnitAmount: Number(row.final_quoted_unit_amount),
+    lineTotal: Number(row.line_total),
+    currency: row.currency as HandymanCustomerTransactionCurrency,
+    sourceItemId: (row.source_item_id as string | null) ?? null,
+    createdByUserId: row.created_by_user_id as string,
+    createdAt: row.created_at as Date,
+    updatedAt: row.updated_at as Date,
+  };
+}
+
 export const handymanCustomerTransactionRepository = {
   createTransaction,
   findTransactionByExecutionScopeId,
@@ -354,4 +415,5 @@ export const handymanCustomerTransactionRepository = {
   findChargeLineBasisByChargeLineId,
   appendTransactionEvent,
   findTransactionEventByIdempotency,
+  findEligibleVariationQuotationLine,
 };

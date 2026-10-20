@@ -171,7 +171,12 @@ async function findHandymanChargeLine(id: string): Promise<{
              tx.execution_scope_id AS "executionScopeId",
              es.tenant_company_id AS "tenantCompanyId", es.building_id AS "buildingId",
              es.space_id AS "spaceId", cl.currency AS "currencyCode",
-             cl.amount::text AS amount
+             (cl.amount - COALESCE((
+               SELECT SUM(c.amount)
+                 FROM handyman_ledger_corrections c
+                WHERE c.correction_kind = 'ADJUSTMENT'
+                  AND c.source_charge_line_id = cl.id
+             ), 0))::numeric(18, 2)::text AS amount
         FROM handyman_charge_lines cl
         JOIN handyman_customer_transactions tx ON tx.id = cl.transaction_id
         JOIN handyman_execution_scopes es ON es.id = tx.execution_scope_id
@@ -199,7 +204,16 @@ async function finalize(id: string, actor: string): Promise<TenantInvoiceRecord 
              (SELECT amount FROM tenant_charges WHERE id = l.tenant_charge_id)
            WHEN source_type = 'UTILITY_BILL' THEN
              (SELECT bill_amount FROM utility_bills WHERE id = l.utility_bill_id)
-           ELSE (SELECT amount FROM handyman_charge_lines WHERE id = l.handyman_charge_line_id)
+           ELSE (
+             SELECT cl.amount - COALESCE((
+               SELECT SUM(c.amount)
+                 FROM handyman_ledger_corrections c
+                WHERE c.correction_kind = 'ADJUSTMENT'
+                  AND c.source_charge_line_id = cl.id
+             ), 0)
+               FROM handyman_charge_lines cl
+              WHERE cl.id = l.handyman_charge_line_id
+           )
          END,
          currency_code = CASE
            WHEN source_type = 'TENANT_CHARGE' THEN
@@ -218,7 +232,22 @@ async function finalize(id: string, actor: string): Promise<TenantInvoiceRecord 
        WHERE id = $1 AND status = 'DRAFT' RETURNING ${SELECT}`, [id, actor],
     );
     const record = result.rows[0] ?? null;
-    if (record) await appendHistory(client, record, 'FINALIZED', actor);
+    if (record) {
+      if (record.handymanExecutionScopeId) {
+        await client.query(
+          `UPDATE handyman_scope_variations
+              SET invoiced = TRUE,
+                  updated_at = NOW()
+            WHERE execution_scope_id = $1
+              AND client_id = $2
+              AND status = 'FINAL_CHARGE_ELIGIBILITY'
+              AND final_charge_eligible = TRUE
+              AND invoiced = FALSE`,
+          [record.handymanExecutionScopeId, record.clientId],
+        );
+      }
+      await appendHistory(client, record, 'FINALIZED', actor);
+    }
     return record;
   });
 }

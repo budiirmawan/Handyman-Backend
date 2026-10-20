@@ -3,9 +3,11 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   getBmFeeConfigurationHandler,
+  getFinalCloseReadinessHandler,
   getFinanceActionInboxHandler,
   getFinancialClientHandler,
   getFinancialTransactionHandler,
+  getInvoiceReconciliationSummaryHandler,
   getPricingContractHandler,
   postAdjustCustomerLedgerHandler,
   postAllocateCustomerPaymentHandler,
@@ -18,6 +20,7 @@ import {
   postCompleteServiceWarrantyReworkHandler,
   postComposeChargeLineHandler,
   postDeriveEntitlementsHandler,
+  postExecuteManagerFinalCloseHandler,
   postExpireServiceWarrantyHandler,
   postIncludeSettlementHandler,
   postLaborPricingBasisHandler,
@@ -74,6 +77,28 @@ export function createHandymanFinanceCloseApiRouter(): Router {
   const financeRead = requirePermission('handyman.finance.read');
   const finance = requirePermission('handyman.finance.manage');
   const settlement = requirePermission('handyman.settlement.manage');
+  const managerClose = requirePermission('finding.close');
+
+  /* J10/J11 — Invoice & DP reconciliation summary + Manager FINAL CLOSE */
+  router.get(
+    '/handyman/execution-scopes/:executionScopeId/invoice-reconciliation',
+    auth,
+    financeRead,
+    getInvoiceReconciliationSummaryHandler,
+  );
+  router.get(
+    '/handyman/execution-scopes/:executionScopeId/final-close/readiness',
+    auth,
+    financeRead,
+    getFinalCloseReadinessHandler,
+  );
+  router.post(
+    '/handyman/execution-scopes/:executionScopeId/final-close',
+    auth,
+    managerClose,
+    financeRead,
+    postExecuteManagerFinalCloseHandler,
+  );
 
   /* J12 — commercial agreement + pricing/BM-fee authoring */
   router.post(

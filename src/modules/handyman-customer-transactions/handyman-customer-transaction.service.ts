@@ -443,10 +443,18 @@ export async function composeHandymanChargeLine(
     undefined,
     scope.approvedQuotationVersionId,
   );
-  const quoteLine = lines.find((line) => line.id === quoteLineUuid);
+  const quoteLine =
+    lines.find((line) => line.id === quoteLineUuid) ??
+    (await handymanCustomerTransactionRepository.findEligibleVariationQuotationLine(
+      undefined,
+      scopeUuid,
+      scope.clientId,
+      quoteLineUuid,
+    ));
   if (!quoteLine) {
     // The charge basis MUST be a line of the scope's anchored approved
-    // quotation version — never an arbitrary or pending snapshot.
+    // quotation version or an authorized final-charge-eligible ADD variation
+    // on the same scope — never an arbitrary or pending snapshot.
     throw handymanCustomerTransactionBasisInvalidError(
       'line-not-on-approved-quotation-version',
     );

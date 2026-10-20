@@ -5,6 +5,7 @@ import type {
   HandymanCustomerPaymentChannel,
   HandymanCustomerPaymentEventRecord,
   HandymanCustomerPaymentEventType,
+  HandymanCustomerPaymentObligationStage,
   HandymanCustomerPaymentRecord,
   HandymanCustomerPaymentStatus,
   NewHandymanCustomerPayment,
@@ -27,8 +28,8 @@ type Executor = Pick<PoolClient, 'query'>;
 
 const PAYMENT_SELECT = `
   SELECT id, client_id, transaction_id, status, amount, currency,
-         channel, provider_name, provider_reference, external_reference,
-         received_at, recorded_by_user_id, decided_at,
+         channel, obligation_stage, provider_name, provider_reference,
+         external_reference, received_at, recorded_by_user_id, decided_at,
          decided_by_user_id, rejection_reason, created_at
     FROM handyman_customer_payments`;
 
@@ -51,6 +52,9 @@ function mapPayment(row: Row): HandymanCustomerPaymentRecord {
     amount: toAmount(row.amount),
     currency: row.currency,
     channel: row.channel as HandymanCustomerPaymentChannel,
+    obligationStage:
+      (row.obligation_stage as HandymanCustomerPaymentObligationStage | undefined) ??
+      'PELUNASAN',
     providerName: row.provider_name ?? null,
     providerReference: row.provider_reference ?? null,
     externalReference: row.external_reference ?? null,
@@ -89,11 +93,11 @@ async function insertPayment(
   const result = await executor.query(
     `INSERT INTO handyman_customer_payments (
        id, client_id, transaction_id, status, amount, currency, channel,
-       provider_name, provider_reference, external_reference,
+       obligation_stage, provider_name, provider_reference, external_reference,
        recorded_by_user_id
-     ) VALUES ($1, $2, $3, 'PENDING', $4, $5, $6, $7, $8, $9, $10)
+     ) VALUES ($1, $2, $3, 'PENDING', $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING id, client_id, transaction_id, status, amount, currency,
-               channel, provider_name, provider_reference,
+               channel, obligation_stage, provider_name, provider_reference,
                external_reference, received_at, recorded_by_user_id,
                decided_at, decided_by_user_id, rejection_reason,
                created_at`,
@@ -104,6 +108,7 @@ async function insertPayment(
       record.amount,
       record.currency,
       record.channel,
+      record.obligationStage,
       record.providerName,
       record.providerReference,
       record.externalReference,
@@ -159,7 +164,7 @@ async function decidePayment(
             rejection_reason = $4
       WHERE id = $1
       RETURNING id, client_id, transaction_id, status, amount, currency,
-                channel, provider_name, provider_reference,
+                channel, obligation_stage, provider_name, provider_reference,
                 external_reference, received_at, recorded_by_user_id,
                 decided_at, decided_by_user_id, rejection_reason,
                 created_at`,

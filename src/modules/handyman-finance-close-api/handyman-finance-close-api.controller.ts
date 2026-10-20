@@ -915,3 +915,70 @@ export async function postVerifyServiceWarrantyReworkHandler(
     next(error);
   }
 }
+
+import {
+  executeHandymanManagerFinalClose,
+  getHandymanFinalCloseReadiness,
+  getHandymanInvoiceReconciliationSummary,
+} from './handyman-final-close.service';
+
+export async function getInvoiceReconciliationSummaryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const actorUserId = actor(req);
+    const executionScopeId = p(req.params.executionScopeId);
+    const result = await getHandymanInvoiceReconciliationSummary(
+      executionScopeId,
+      actorUserId,
+    );
+    sendSuccess(res, result, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getFinalCloseReadinessHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const actorUserId = actor(req);
+    const executionScopeId = p(req.params.executionScopeId);
+    const result = await getHandymanFinalCloseReadiness(
+      executionScopeId,
+      actorUserId,
+    );
+    sendSuccess(res, result, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function postExecuteManagerFinalCloseHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const actorUserId = actor(req);
+    const executionScopeId = p(req.params.executionScopeId);
+    const body = requirePlainBody(req.body);
+    assertOnlyKeys(body, ['reason', 'idempotencyKey']);
+    const result = await executeHandymanManagerFinalClose(
+      {
+        executionScopeId,
+        reason: requireStringField(body, 'reason'),
+        idempotencyKey: requireIdempotencyKey(body),
+      },
+      actorUserId,
+    );
+    sendSuccess(res, result, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+

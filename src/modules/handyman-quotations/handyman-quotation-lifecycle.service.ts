@@ -54,9 +54,102 @@ function toPublicVersion(
     versionNumber: row.versionNumber,
     status: row.status,
     validUntil: row.validUntil ? row.validUntil.toISOString() : null,
+    dpRequired: row.dpRequired ?? false,
+    dpPercentage: row.dpPercentage ?? null,
+    dpAmount: row.dpAmount ?? null,
+    dpTermsNotes: row.dpTermsNotes ?? null,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function resolveIssuedDpTerms(
+  version: HandymanQuotationVersionRecord,
+  totalAmount: number,
+  input: {
+    dpRequired?: boolean;
+    dpPercentage?: number | null;
+    dpAmount?: number | null;
+    dpTermsNotes?: string | null;
+  },
+): {
+  dpRequired: boolean;
+  dpPercentage: number | null;
+  dpAmount: number | null;
+  dpTermsNotes: string | null;
+} {
+  const dpRequired =
+    input.dpRequired !== undefined ? Boolean(input.dpRequired) : version.dpRequired;
+  const dpTermsNotes =
+    input.dpTermsNotes !== undefined
+      ? typeof input.dpTermsNotes === 'string' && input.dpTermsNotes.trim().length > 0
+        ? input.dpTermsNotes.trim()
+        : null
+      : version.dpTermsNotes;
+  if (dpTermsNotes && dpTermsNotes.length > 500) {
+    throw AppError.validation('Quotation DP terms validation failed.', [
+      { field: 'dpTermsNotes', message: 'dpTermsNotes must be at most 500 characters.' },
+    ]);
+  }
+  if (!dpRequired) {
+    return {
+      dpRequired: false,
+      dpPercentage: null,
+      dpAmount: null,
+      dpTermsNotes,
+    };
+  }
+  let dpPercentage =
+    input.dpPercentage !== undefined
+      ? input.dpPercentage === null
+        ? null
+        : Number(input.dpPercentage)
+      : version.dpPercentage;
+  let dpAmount =
+    input.dpAmount !== undefined
+      ? input.dpAmount === null
+        ? null
+        : Number(input.dpAmount)
+      : version.dpAmount;
+
+  if (dpPercentage === null && dpAmount === null) {
+    throw AppError.validation('Quotation DP terms validation failed.', [
+      {
+        field: 'dpPercentage',
+        message: 'dpPercentage or dpAmount is required when dpRequired is true.',
+      },
+    ]);
+  }
+  if (
+    dpPercentage !== null &&
+    (!Number.isFinite(dpPercentage) || dpPercentage <= 0 || dpPercentage > 100)
+  ) {
+    throw AppError.validation('Quotation DP terms validation failed.', [
+      { field: 'dpPercentage', message: 'dpPercentage must be > 0 and <= 100.' },
+    ]);
+  }
+  if (
+    dpAmount !== null &&
+    (!Number.isFinite(dpAmount) || dpAmount <= 0 || dpAmount > totalAmount)
+  ) {
+    throw AppError.validation('Quotation DP terms validation failed.', [
+      {
+        field: 'dpAmount',
+        message: 'dpAmount must be > 0 and at most the quotation total amount.',
+      },
+    ]);
+  }
+  if (dpPercentage !== null && dpAmount === null) {
+    dpAmount = Number(((totalAmount * dpPercentage) / 100).toFixed(2));
+  } else if (dpAmount !== null && dpPercentage === null && totalAmount > 0) {
+    dpPercentage = Number(((dpAmount / totalAmount) * 100).toFixed(2));
+  }
+  return {
+    dpRequired: true,
+    dpPercentage: dpPercentage !== null ? Number(dpPercentage.toFixed(2)) : null,
+    dpAmount: dpAmount !== null ? Number(dpAmount.toFixed(2)) : null,
+    dpTermsNotes,
   };
 }
 
@@ -84,7 +177,13 @@ async function requireAccessibleQuotation(
  */
 export async function issueHandymanQuotationVersion(
   quotationVersionId: string,
-  input: { validUntil: string },
+  input: {
+    validUntil: string;
+    dpRequired?: boolean;
+    dpPercentage?: number | null;
+    dpAmount?: number | null;
+    dpTermsNotes?: string | null;
+  },
   actorUserId: string,
 ): Promise<PublicHandymanQuotationVersion> {
   assertUuid(quotationVersionId, 'quotationVersionId');
@@ -116,6 +215,11 @@ export async function issueHandymanQuotationVersion(
     if (!(validUntilMs > Date.now())) {
       throw handymanQuotationValidityInvalidError();
     }
+    const totalAmount = lines.reduce(
+      (sum, line) => sum + Number(line.lineTotal),
+      0,
+    );
+    const resolvedDpTerms = resolveIssuedDpTerms(version, totalAmount, input);
 
     // Atomic replacement: supersede the thread's current ISSUED version
     // (if any) — only ISSUED versions are ever superseded here, and at
@@ -157,6 +261,7 @@ export async function issueHandymanQuotationVersion(
         version.id,
         'ISSUED',
         new Date(validUntilMs),
+        resolvedDpTerms,
       );
     if (!issued) throw handymanQuotationVersionNotFoundError();
     await recordOperationalEvent(

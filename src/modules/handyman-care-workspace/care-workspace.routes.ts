@@ -137,7 +137,10 @@ export function createCareWorkspaceRouter(): Router {
         match[1], req.params.requestId, req.query, req.body));
     } catch (error) { next(error); }
   });
-  router.post('/handyman/care/requests/:requestId/invoices/:invoiceId/payments/:paymentId/proof', async (req, res, next) => {
+  router.post([
+    '/handyman/care/requests/:requestId/invoices/:invoiceId/payments/:paymentId/proof',
+    '/handyman/care/requests/:requestId/payments/:paymentId/proof',
+  ], async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
       const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
@@ -145,8 +148,9 @@ export function createCareWorkspaceRouter(): Router {
       const principal = await resolveCareWorkspacePrincipal(match[1]);
       if (Object.keys(req.query).length === 0) throw AppError.validation('Selected Care workspace context is required.');
       const selection = parseCareHandymanPaymentProofSelection(req.query);
+      const invoiceId = 'invoiceId' in req.params ? req.params.invoiceId : null;
       await assertCareHandymanPaymentProofContext({ principal, selection,
-        requestId: req.params.requestId, invoiceId: req.params.invoiceId, paymentId: req.params.paymentId });
+        requestId: req.params.requestId, invoiceId, paymentId: req.params.paymentId });
       const file = await new Promise<Express.Multer.File>((resolve, reject) => {
         proofUpload.single('file')(req, res, error => {
           if (error) {
@@ -165,7 +169,7 @@ export function createCareWorkspaceRouter(): Router {
         throw AppError.validation('Only evidenceType and the file field are accepted.');
       }
       const result = await uploadCareHandymanPaymentProof({ principal, selection,
-        requestId: req.params.requestId, invoiceId: req.params.invoiceId, paymentId: req.params.paymentId,
+        requestId: req.params.requestId, invoiceId, paymentId: req.params.paymentId,
         evidenceType: body.evidenceType,
         file: { buffer: file.buffer, mimetype: file.mimetype, originalname: file.originalname, size: file.size } });
       sendSuccess(res, result, result.replayed ? 200 : 201);

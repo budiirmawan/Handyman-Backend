@@ -28,11 +28,13 @@ export {
   loadAuthorizedPaymentProof,
   readHandymanPaymentProofContent,
   toPaymentProofMetadata,
+  uploadExecutionScopePaymentProof,
 } from './handyman-payment-proof.service';
 export type {
   HandymanPaymentProofContent,
   HandymanPaymentProofMetadata,
   HandymanPaymentProofRecord,
+  UploadExecutionScopePaymentProofInput,
 } from './handyman-payment-proof.service';
 
 export {

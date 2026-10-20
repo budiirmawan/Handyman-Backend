@@ -6,7 +6,9 @@ import {
 } from '../handyman-customer-ledger-read';
 import {
   isHandymanCustomerPaymentChannel,
+  isHandymanCustomerPaymentObligationStage,
   type HandymanCustomerPaymentChannel,
+  type HandymanCustomerPaymentObligationStage,
 } from '../handyman-customer-payments';
 
 const MONEY_PATTERN = /^\d{1,16}(\.\d{1,2})$/;
@@ -172,11 +174,29 @@ export function parseCustomerLedgerClientBasisQuery(
 export type ParsedRecordCustomerPaymentBody = {
   amount: string;
   channel: HandymanCustomerPaymentChannel;
+  obligationStage: HandymanCustomerPaymentObligationStage;
   providerName: string | null;
   providerReference: string | null;
   externalReference: string | null;
   idempotencyKey: string;
 };
+
+function parseOptionalObligationStage(
+  value: unknown,
+): HandymanCustomerPaymentObligationStage {
+  if (value === undefined || value === null) return 'PELUNASAN';
+  if (typeof value !== 'string') {
+    fail('obligationStage', 'obligationStage must be one of DP, TERMIN, PELUNASAN.');
+  }
+  const normalized = value.trim().toUpperCase();
+  if (normalized === 'DOWN_PAYMENT') return 'DP';
+  if (normalized === 'INSTALLMENT') return 'TERMIN';
+  if (normalized === 'FINAL_BALANCE') return 'PELUNASAN';
+  if (!isHandymanCustomerPaymentObligationStage(normalized)) {
+    fail('obligationStage', 'obligationStage must be one of DP, TERMIN, PELUNASAN.');
+  }
+  return normalized;
+}
 
 export function parseRecordCustomerPaymentBody(
   body: unknown,
@@ -202,9 +222,14 @@ export function parseRecordCustomerPaymentBody(
     );
   }
 
+  const obligationStage = parseOptionalObligationStage(
+    obj.obligationStage ?? obj.paymentStage ?? obj.paymentType,
+  );
+
   return {
     amount: rawAmount,
     channel: rawChannel,
+    obligationStage,
     providerName: ensureOptionalReference(obj.providerName, 'providerName'),
     providerReference: ensureOptionalReference(
       obj.providerReference,

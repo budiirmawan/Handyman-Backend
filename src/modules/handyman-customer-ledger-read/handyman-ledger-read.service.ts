@@ -276,6 +276,9 @@ function composeTransactionRead(
       paymentId: text(row.paymentId),
       status,
       channel: text(row.channel),
+      obligationStage:
+        (nullableText(row.obligationStage) as HandymanLedgerReadPayment['obligationStage'] | null) ??
+        'PELUNASAN',
       currency: text(row.currency) as HandymanLedgerReadPayment['currency'],
       amount: fromCents(toCents(row.amount)),
       receivedAt: new Date(text(row.receivedAt)).toISOString(),
