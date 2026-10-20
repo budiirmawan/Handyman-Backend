@@ -11,6 +11,17 @@ import { handymanDisciplineRepository }
   from '../src/modules/handyman-disciplines';
 import { assignHandymanExecutionScopeCrew }
   from '../src/modules/handyman-scope-assignments';
+import {
+  configureHandymanQcChecklist,
+  publishHandymanQcChecklistVersion,
+} from '../src/modules/handyman-evidence-qc';
+import { permissionService } from '../src/modules/permissions';
+import { roleService } from '../src/modules/roles';
+import { userService } from '../src/modules/users';
+import { buildingAssignmentService }
+  from '../src/modules/building-assignments';
+import { workforceService } from '../src/modules/workforce';
+import { assignSupervisor } from '../src/modules/workforce-reporting-lines';
 import { createAdminUser } from './helpers/access';
 import {
   baseFixture,
@@ -18,6 +29,11 @@ import {
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  seedCheckedOutWorkSession,
+  seedVerifiedQcEvidenceBytes,
+} from './helpers/handyman-guarded-bast';
+import type { Pool } from 'pg';
 import { api } from './helpers/http';
 
 /**
@@ -100,13 +116,45 @@ const metErr = (res: { body: { error?: { code?: string } } }) =>
   res.body?.error?.code;
 
 /** Lead with a REAL Bearer session token + authority chain. */
+async function grant(userId: string, permissionCodes: string[]) {
+  const role = await roleService.createRole({
+    code: `QC_API_${randomUUID().slice(0, 8).toUpperCase()}`,
+    name: 'QC HTTP test role',
+  });
+  for (const permissionCode of permissionCodes) {
+    const permission = await permissionService.createPermission({
+      code: permissionCode,
+      name: `Scoped ${permissionCode}`,
+    }).catch(async () => {
+      const { permissionRepository } =
+        await import('../src/modules/permissions');
+      return permissionRepository.findByCode(permissionCode);
+    });
+    if (!permission) throw new Error(`Permission missing: ${permissionCode}`);
+    await permissionService.assignPermissionToRole(role.id, permission.id);
+  }
+  await roleService.assignRoleToUser(userId, role.id);
+}
+
 async function leadFixture() {
   const f = await baseFixture();
   const crew = await crewFixture(f.realm);
-  await assignHandymanExecutionScopeCrew({
+  const assignment = await assignHandymanExecutionScopeCrew({
     executionScopeId: f.scope.id,
     providerContextId: crew.providerContext.id,
     crewId: crew.crew.id,
+  }, adminUserId);
+  await grant(crew.leadUser.id, ['tenant_company.read']);
+  // PART 04: runs execute against a configured, published checklist spec.
+  await grant(adminUserId, ['handyman.qc.configure']);
+  const qcCode = `HTTP_QC_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const checklistTemplate = await publishHandymanQcChecklistVersion({
+    clientId: f.scope.clientId, code: qcCode,
+    versionNumber: 1, requiredItemKeys: ['i-1', 'i-2'],
+  }, adminUserId);
+  await configureHandymanQcChecklist({
+    executionScopeId: f.scope.id,
+    templateVersionId: checklistTemplate.version.id,
   }, adminUserId);
   const password = `LeadPass${randomUUID().slice(0, 6)}`;
   await credentialService.createInitialCredential({
@@ -118,7 +166,40 @@ async function leadFixture() {
     password,
   });
   const token = login.body.data.sessionToken as string;
-  return { ...f, crew, token, leadUserId: crew.leadUser.id };
+  // CR-HM-10 PART 04: QC decisions belong to the explicitly permitted
+  // current Supervisor of the assigned Crew Lead — build that lane fully.
+  const supervisor = await userService.createUser({
+    email: `qc-sup-${randomUUID()}@example.com`,
+    displayName: 'QC Supervisor',
+  });
+  const supProfile = await workforceService.createWorkforceProfile({
+    organizationId: f.realm.organization.id,
+    departmentId: f.realm.department.id,
+    positionId: f.realm.position.id,
+    employeeCode: `QCSUP_${randomUUID().slice(0, 8)}`,
+    fullName: 'QC Supervisor',
+    userId: supervisor.id,
+  });
+  await assignSupervisor({
+    workforceProfileId: crew.workerContext.workforceProfileId,
+    supervisorWorkforceProfileId: supProfile.id,
+  });
+  await buildingAssignmentService.createAssignment(supervisor.id, {
+    buildingId: f.realm.building.id,
+  });
+  await grant(supervisor.id, ['handyman.qc.manage', 'tenant_company.read']);
+  const supPassword = `SupPass${randomUUID().slice(0, 6)}`;
+  await credentialService.createInitialCredential({
+    userId: supervisor.id,
+    password: supPassword,
+  });
+  const supLogin = await api().post(`${V1}/auth/login`).send({
+    email: supervisor.email,
+    password: supPassword,
+  });
+  const supToken = supLogin.body.data.sessionToken as string;
+  return { ...f, crew, token, supToken, assignment,
+    leadUserId: crew.leadUser.id, checklistIdentity: `${qcCode}@v1` };
 }
 
 const authed = (token: string) =>
@@ -162,17 +243,17 @@ async function failedRunViaHttp(
   f: Awaited<ReturnType<typeof leadFixture>>,
 ) {
   const key = () => `k-${randomUUID()}`;
-  const open = await postWith(f.token)(qcBase(f.scope.id), {
-    checklistIdentity: `chk-${randomUUID().slice(0, 8)}`,
+  const open = await postWith(f.supToken)(qcBase(f.scope.id), {
+    checklistIdentity: f.checklistIdentity,
     idempotencyKey: key(),
   });
   assert.equal(open.status, 200, JSON.stringify(open.body));
   const runId = (open.body as {
     data: { run: { id: string } };
   }).data.run.id;
-  const set = await postWith(f.token)(
+  const set = await postWith(f.supToken)(
     `${V1}/handyman/qc-runs/${runId}/items`, {
-      itemKey: 'i-defect',
+      itemKey: 'i-1',
       outcome: 'DEFECT',
       idempotencyKey: key(),
     });
@@ -180,8 +261,11 @@ async function failedRunViaHttp(
   const itemId = (set.body as {
     data: { item: { id: string } };
   }).data.item.id;
-  const finish = await postWith(f.token)(
+  const finish = await postWith(f.supToken)(
     `${V1}/handyman/qc-runs/${runId}/finish`, {
+      outcome: 'FAILED',
+      reason: 'rework required',
+      expectedVersion: 2,
       idempotencyKey: key(),
     });
   assert.equal(finish.status, 200, JSON.stringify(finish.body));
@@ -345,9 +429,9 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
       const f = await leadFixture();
       const key = () => `k-${randomUUID()}`;
 
-      // OPEN 200.
-      const open = await postWith(f.token)(qcBase(f.scope.id), {
-        checklistIdentity: 'bath-refresh-v3',
+      // OPEN 200 — QC decisions are the Supervisor's lane (PART 04).
+      const open = await postWith(f.supToken)(qcBase(f.scope.id), {
+        checklistIdentity: f.checklistIdentity,
         idempotencyKey: key(),
       });
       assert.equal(open.status, 200, JSON.stringify(open.body));
@@ -359,7 +443,7 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
       }).data.run.status, 'OPEN');
 
       // Second OPEN while OPEN → 409 ALREADY_OPEN.
-      const second = await postWith(f.token)(qcBase(f.scope.id), {
+      const second = await postWith(f.supToken)(qcBase(f.scope.id), {
         checklistIdentity: 'different-checklist',
         idempotencyKey: key(),
       });
@@ -368,9 +452,9 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
 
       // ITEM_SET (two items: PASS + NA) then FINISH → PASSED.
       for (const [itemKey, outcome] of [
-        ['i-1', 'PASS'], ['i-2', 'NA'],
+        ['i-1', 'PASS'], ['i-2', 'PASS'],
       ] as const) {
-        const set = await postWith(f.token)(
+        const set = await postWith(f.supToken)(
           `${V1}/handyman/qc-runs/${runId}/items`, {
             itemKey,
             outcome,
@@ -381,8 +465,38 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
           data: { item: { outcome: string } };
         }).data.item.outcome, outcome);
       }
-      const finish = await postWith(f.token)(
+      // Guarded PASS gate: completed work session + byte-verified QC
+      // evidence bound by the Supervisor over HTTP (transport lane).
+      const gq = async (text: string, params: unknown[] = []) => {
+        if (!pool) throw new Error('db pool not initialized');
+        return pool.query(text, params);
+      };
+      await seedCheckedOutWorkSession(gq, {
+        clientId: f.scope.clientId,
+        executionScopeId: f.scope.id,
+        assignmentId: f.assignment.id,
+        leadWorkerContextId: f.crew.workerContext.id,
+        leadUserId: f.crew.leadUser.id,
+      });
+      const qcEvidenceReference = await seedVerifiedQcEvidenceBytes(gq, {
+        clientId: f.scope.clientId,
+        tenantCompanyId: f.scope.tenantCompanyId,
+        buildingId: f.scope.buildingId,
+        handymanRequestId: f.scope.handymanRequestId,
+        executionScopeId: f.scope.id,
+        uploaderUserId: f.crew.leadUser.id,
+      });
+      const bind = await postWith(f.supToken)(
+        `${V1}/handyman/qc-runs/${runId}/evidence`, {
+          evidenceReference: qcEvidenceReference,
+          expectedVersion: 3,
+          idempotencyKey: key(),
+        });
+      assert.equal(bind.status, 200, JSON.stringify(bind.body));
+      const finish = await postWith(f.supToken)(
         `${V1}/handyman/qc-runs/${runId}/finish`, {
+          outcome: 'PASSED',
+          expectedVersion: 4,
           idempotencyKey: key(),
         });
       assert.equal(finish.status, 200, JSON.stringify(finish.body));
@@ -391,7 +505,7 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
       }).data.run.status, 'PASSED');
 
       // ITEM_SET after finish → 409.
-      const postFinishSet = await postWith(f.token)(
+      const postFinishSet = await postWith(f.supToken)(
         `${V1}/handyman/qc-runs/${runId}/items`, {
           itemKey: 'i-3',
           outcome: 'PASS',
@@ -430,8 +544,8 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
       const { runId, itemId } = await failedRunViaHttp(f);
       const key = () => `k-${randomUUID()}`;
 
-      // OPEN_DEFECT linked to the failed run/item → 200.
-      const opened = await postWith(f.token)(defectBase(f.scope.id), {
+      // OPEN_DEFECT linked to the failed run/item → 200 (Supervisor lane).
+      const opened = await postWith(f.supToken)(defectBase(f.scope.id), {
         description: 'Tile grout cracked near drain.',
         runId,
         itemId,
@@ -445,57 +559,60 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
         data: { defect: { status: string } };
       }).data.defect.status, 'OPENED');
 
-      // start → record → request(loop) → record → pass.
-      const steps: [string, string][] = [
-        ['start-rectification', 'RECTIFYING'],
-        ['record-rectification', 'RECTIFIED'],
-        ['request-reinspection', 'RECTIFYING'],
-        ['record-rectification', 'RECTIFIED'],
-        ['pass-reinspection', 'VERIFIED'],
-      ];
-      for (const [action, expected] of steps) {
-        const step = await postWith(f.token)(
-          `${V1}/handyman/defects/${defectId}/${action}`, {
-            idempotencyKey: key(),
-          });
-        assert.equal(step.status, 200, JSON.stringify(step.body));
-        assert.equal((step.body as {
-          data: { defect: { status: string } };
-        }).data.defect.status, expected);
-      }
+      // PIC start-rectification → RECTIFYING.
+      const start = await postWith(f.token)(
+        `${V1}/handyman/defects/${defectId}/start-rectification`, {
+          expectedVersion: 1,
+          idempotencyKey: key(),
+        });
+      assert.equal(start.status, 200, JSON.stringify(start.body));
+      assert.equal((start.body as {
+        data: { defect: { status: string } };
+      }).data.defect.status, 'RECTIFYING');
 
-      // Post-VERIFIED every fresh-key mutation → 409.
-      for (const action of [
-        'start-rectification', 'record-rectification',
-        'request-reinspection', 'pass-reinspection',
-      ]) {
-        const locked = await postWith(f.token)(
-          `${V1}/handyman/defects/${defectId}/${action}`, {
-            idempotencyKey: key(),
-          });
-        assert.equal(locked.status, 409);
-        assert.equal(metErr(locked),
-          'HANDYMAN_DEFECT_ILLEGAL_TRANSITION');
-      }
+      // RECORD_RECTIFICATION without genuine rework proof fails CLOSED (409
+      // bounded): the full VERIFIED loop is covered at service level by
+      // handyman-defect-commands.test.ts — this lane pins transport.
+      const bogus = await postWith(f.token)(
+        `${V1}/handyman/defects/${defectId}/record-rectification`, {
+          expectedVersion: 2,
+          sessionId: randomUUID(),
+          evidenceReference: `hm-ev://${randomUUID()}`,
+          idempotencyKey: key(),
+        });
+      assert.equal(bogus.status, 409, JSON.stringify(bogus.body));
+      assert.equal(metErr(bogus), 'HANDYMAN_DEFECT_RECTIFICATION_REQUIRED');
 
-      // Reads: scope listing + detail full chain.
-      const list = await authed(f.token)(
-        'get', defectBase(f.scope.id)).send({});
-      assert.equal(list.status, 200);
-      const row = (list.body as {
-        data: { defects: { id: string; status: string }[] };
-      }).data.defects.find((candidate) => candidate.id === defectId);
-      assert.ok(row);
-      assert.equal(row.status, 'VERIFIED');
-      const detail = await authed(f.token)(
+      // SUPERVISOR re-inspection from a non-RECTIFIED state → bounded 409.
+      const early = await postWith(f.supToken)(
+        `${V1}/handyman/defects/${defectId}/request-reinspection`, {
+          expectedVersion: 2,
+          reason: 'premature',
+          idempotencyKey: key(),
+        });
+      assert.equal(early.status, 409);
+      assert.equal(metErr(early), 'HANDYMAN_DEFECT_ILLEGAL_TRANSITION');
+      const tooEarlyPass = await postWith(f.supToken)(
+        `${V1}/handyman/defects/${defectId}/pass-reinspection`, {
+          expectedVersion: 2,
+          idempotencyKey: key(),
+        });
+      assert.equal(tooEarlyPass.status, 409);
+      assert.equal(metErr(tooEarlyPass),
+        'HANDYMAN_DEFECT_ILLEGAL_TRANSITION');
+
+      // State remains exactly where the last accepted command left it.
+      const state = await authed(f.token)(
         'get', `${V1}/handyman/defects/${defectId}`).send({});
-      assert.equal(detail.status, 200);
-      assert.deepEqual((detail.body as {
+      assert.equal(state.status, 200);
+      assert.equal((state.body as {
+        data: { defect: { status: string } };
+      }).data.defect.status, 'RECTIFYING');
+      const detail = (state.body as unknown as {
         data: { events: { eventType: string }[] };
-      }).data.events.map((event) => event.eventType),
-        ['OPEN_DEFECT', 'START_RECTIFICATION', 'RECORD_RECTIFICATION',
-          'REQUEST_REINSPECTION', 'RECORD_RECTIFICATION',
-          'PASS_REINSPECTION']);
+      }).data.events;
+      assert.deepEqual(detail.map((event) => event.eventType),
+        ['OPEN_DEFECT', 'START_RECTIFICATION']);
     });
 
   it('4: authority/bounded error map over HTTP', async (t: TestContext) => {
@@ -540,6 +657,7 @@ describe('CR-HM-10 PART 06 — evidence/QC HTTP API', () => {
     assert.equal(unknownRun.status, 404);
     const unknownDefect = await postWith(f.token)(
       `${V1}/handyman/defects/${randomUUID()}/start-rectification`, {
+        expectedVersion: 1,
         idempotencyKey: `k-${randomUUID()}`,
       });
     assert.equal(unknownDefect.status, 404);

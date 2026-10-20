@@ -16,7 +16,6 @@ import {
 } from '../src/modules/permissions';
 import { roleService } from '../src/modules/roles';
 import { userService } from '../src/modules/users';
-import { workforceBuildingAssignmentService } from '../src/modules/workforce-building-assignments';
 import { createAdminUser } from './helpers/access';
 import {
   baseFixture,
@@ -167,10 +166,8 @@ describe('CR-HM-FIN-AUTH-01 dedicated finance authority', () => {
   it('domain permissions isolate Commercial, Finance and Settlement; scope still binds; reporting survives', async () => {
     const { realm, scope } = await baseFixture();
     const crew = await crewFixture(realm);
-    await workforceBuildingAssignmentService.assignBuildingToWorkforce({
-      workforceProfileId: crew.workerContext.workforceProfileId,
-      buildingId: realm.building.id,
-    });
+  // NOTE: the shared crewFixture already performs the 0439 workforce_building
+  // placement for the crew's realm building; repeating it hits the ACTIVE-duplicate guard.
     await assignHandymanExecutionScopeCrew(
       { executionScopeId: scope.id, providerContextId: crew.providerContext.id, crewId: crew.crew.id },
       adminId,

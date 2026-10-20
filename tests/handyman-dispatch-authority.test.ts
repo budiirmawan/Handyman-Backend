@@ -281,7 +281,7 @@ async function setupCrew(
 async function setupRequest(
   realm: Awaited<ReturnType<typeof setupRealm>>,
   opts?: { spaceId?: string },
-): Promise<{ requestId: string }> {
+): Promise<{ requestId: string; picUserId: string }> {
   // Create a fresh space hierarchy per request so parallel fixtures do not
   // collide on tenant-space bindings.
   const floor = await floorService.createFloor({
@@ -361,7 +361,7 @@ async function setupRequest(
     disciplineId,
     diagnosis: 'Dispatch authority test diagnosis.',
   }, adminUserId);
-  return { requestId: request.id };
+  return { requestId: request.id, picUserId: linkedUser.id };
 }
 
 async function setupProposedInspectionVisit(
@@ -390,6 +390,7 @@ async function setupProposedInspectionVisit(
 async function setupApprovedScope(
   realm: Awaited<ReturnType<typeof setupRealm>>,
   requestId: string,
+  picUserId: string,
 ): Promise<string> {
   const bundle = await createHandymanQuotation(
     { handymanRequestId: requestId },
@@ -416,7 +417,7 @@ async function setupApprovedScope(
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE',
     idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, picUserId);
   return decision.executionScope!.id;
 }
 
@@ -489,7 +490,7 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     if (!requireDb(t)) return;
     const realm = await setupRealm();
     const inspector = await setupInspectorUser(realm);
-    const { requestId } = await setupRequest(realm);
+    const { requestId, picUserId } = await setupRequest(realm);
     const visitId = await setupProposedInspectionVisit(requestId, inspector.user.id);
 
     // list eligible includes the seeded inspector
@@ -558,7 +559,7 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     const realmB = await setupRealm();
     // Inspector is only placed at realmA's building.
     const inspector = await setupInspectorUser(realmA);
-    const { requestId } = await setupRequest(realmB);
+    const { requestId, picUserId } = await setupRequest(realmB);
     const visitId = await setupProposedInspectionVisit(
       requestId,
       // place PROPOSED visit against a ghost id from realmB building;
@@ -581,8 +582,8 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     const realm = await setupRealm();
     const crew1 = await setupCrew(realm);
     const crew2 = await setupCrew(realm);
-    const { requestId } = await setupRequest(realm);
-    const scopeId = await setupApprovedScope(realm, requestId);
+    const { requestId, picUserId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId, picUserId);
 
     const initial = await assignHandymanExecutionScopeCrew(
       {
@@ -638,8 +639,8 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     if (!requireDb(t)) return;
     const realm = await setupRealm();
     const crew = await setupCrew(realm);
-    const { requestId } = await setupRequest(realm);
-    const scopeId = await setupApprovedScope(realm, requestId);
+    const { requestId, picUserId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId, picUserId);
     await assignHandymanExecutionScopeCrew(
       {
         executionScopeId: scopeId,
@@ -732,7 +733,7 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
   it('P0-D: canonical identity projection reports seams', async (t) => {
     if (!requireDb(t)) return;
     const realm = await setupRealm();
-    const { requestId } = await setupRequest(realm);
+    const { requestId, picUserId } = await setupRequest(realm);
     const proj =
       await handymanIdentityProjectionService.projectHandymanCanonicalIdentity(
         requestId,
@@ -747,8 +748,8 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     if (!requireDb(t)) return;
     const realm = await setupRealm();
     const crew = await setupCrew(realm);
-    const { requestId } = await setupRequest(realm);
-    const scopeId = await setupApprovedScope(realm, requestId);
+    const { requestId, picUserId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId, picUserId);
     await assignHandymanExecutionScopeCrew(
       {
         executionScopeId: scopeId,
@@ -814,8 +815,8 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     const realm = await setupRealm();
     const crew1 = await setupCrew(realm);
     const crew2 = await setupCrew(realm);
-    const { requestId } = await setupRequest(realm);
-    const scopeId = await setupApprovedScope(realm, requestId);
+    const { requestId, picUserId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId, picUserId);
     const initial = await assignHandymanExecutionScopeCrew(
       {
         executionScopeId: scopeId,
@@ -868,8 +869,8 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     // the FOR UPDATE lock on scope guarantee only one release commits.
     const realm = await setupRealm();
     const crew = await setupCrew(realm);
-    const { requestId } = await setupRequest(realm);
-    const scopeId = await setupApprovedScope(realm, requestId);
+    const { requestId, picUserId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId, picUserId);
     await assignHandymanExecutionScopeCrew(
       { executionScopeId: scopeId, providerContextId: crew.providerContext.id, crewId: crew.crew.id },
       adminUserId,
@@ -897,7 +898,7 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     if (!requireDb(t)) return;
     const realm = await setupRealm();
     const inspector = await setupInspectorUser(realm);
-    const { requestId } = await setupRequest(realm);
+    const { requestId, picUserId } = await setupRequest(realm);
     const visitId = await setupProposedInspectionVisit(requestId, inspector.user.id);
     const assigned = await handymanInspectorAssignmentService.assignInspectorToVisit(
       { visitAppointmentId: visitId, inspectorUserId: inspector.user.id },
@@ -923,8 +924,8 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     const realm = await setupRealm();
     const crew1 = await setupCrew(realm);
     const crew2 = await setupCrew(realm);
-    const { requestId } = await setupRequest(realm);
-    const scopeId = await setupApprovedScope(realm, requestId);
+    const { requestId, picUserId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId, picUserId);
     const initial = await assignHandymanExecutionScopeCrew(
       {
         executionScopeId: scopeId,

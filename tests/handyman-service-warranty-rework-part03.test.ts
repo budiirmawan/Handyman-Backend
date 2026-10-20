@@ -7,17 +7,11 @@ import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
-import { baseFixture, crewFixture, initHandymanFixtures }
-  from './helpers/handyman-fixtures';
-import { assignHandymanExecutionScopeCrew }
-  from '../src/modules/handyman-scope-assignments';
+import { initHandymanFixtures } from './helpers/handyman-fixtures';
+import { arrangeGuardedBast, runGuardedQcCycle }
+  from './helpers/handyman-guarded-bast';
 import { userService } from '../src/modules/users';
 import { AppError, ERROR_CODES } from '../src/shared/errors';
-import {
-  acceptHandymanBast,
-  issueHandymanBast,
-  prepareHandymanBast,
-} from '../src/modules/handyman-bast';
 import {
   startHandymanServiceWarranty,
 } from '../src/modules/handyman-service-warranties';
@@ -30,9 +24,6 @@ import {
 } from '../src/modules/handyman-service-warranty-claims';
 import {
   createHandymanEvidenceRecord,
-  openHandymanQcRun,
-  setHandymanQcRunItemOutcome,
-  finishHandymanQcRun,
 } from '../src/modules/handyman-evidence-qc';
 import {
   proposeHandymanServiceWarrantyRework,
@@ -145,54 +136,48 @@ async function evidenceViaAuthority(
   return created.record.id;
 }
 
-/** Real CR-HM-10 QC run finished through its own authority. */
+/** Real CR-HM-10 QC run finished through its own authority: the
+ * assigned Supervisor (0442) on the scope's pinned checklist (0444). */
 async function qcRunViaAuthority(
-  scopeId: string,
+  f: {
+    realm: { client: { id: string }; building: { id: string } };
+    scope: { id: string; tenantCompanyId: string; handymanRequestId: string };
+    supervisorUserId: string;
+    leadUserId: string;
+  },
   item: 'PASS' | 'DEFECT',
-  leadUserId: string,
 ) {
-  const opened = await openHandymanQcRun({
-    executionScopeId: scopeId,
-    checklistIdentity: `QC_${id().slice(0, 8)}`,
-    idempotencyKey: id(),
-  }, leadUserId);
-  await setHandymanQcRunItemOutcome({
-    qcRunId: opened.run.id,
-    itemKey: 'ITEM_1',
-    outcome: item,
-    idempotencyKey: id(),
-  }, leadUserId);
-  const finished = await finishHandymanQcRun({
-    qcRunId: opened.run.id,
-    idempotencyKey: id(),
-  }, leadUserId);
-  return finished.run;
+  const { run } = await runGuardedQcCycle({
+    clientId: f.realm.client.id,
+    tenantCompanyId: f.scope.tenantCompanyId,
+    buildingId: f.realm.building.id,
+    handymanRequestId: f.scope.handymanRequestId,
+    executionScopeId: f.scope.id,
+    adminUserId: actor,
+    supervisorUserId: f.supervisorUserId,
+    uploaderUserId: f.leadUserId,
+    q,
+    item,
+  });
+  return run;
 }
 
-/** A started ACTIVE warranty (ACCEPTED BAST) plus the scope's crew. */
+/**
+ * A started ACTIVE warranty over the CURRENT-generation gates: the
+ * guarded Supervisor QC PASS is the precondition of BAST PREPARE
+ * (0445), so the arrangement composes the same seams as the merged
+ * E2E lifecycle suite (`handyman-e2e-finance-close-api`).
+ */
 async function warrantyFixture() {
-  const { realm, scope } = await baseFixture();
-  const crew = await crewFixture(realm);
-  await assignHandymanExecutionScopeCrew({
-    executionScopeId: scope.id,
-    providerContextId: crew.providerContext.id,
-    crewId: crew.crew.id,
-  }, actor);
-  const prepared = await prepareHandymanBast(actor, {
-    executionScopeId: scope.id, idempotencyKey: id(),
-  });
-  await issueHandymanBast(actor, {
-    bastId: prepared.bast.id, idempotencyKey: id(),
-  });
-  const signed = await acceptHandymanBast(actor, {
-    bastId: prepared.bast.id, idempotencyKey: id(),
-    signatureDigest: `sig-${id()}`,
+  const f = await arrangeGuardedBast({
+    adminUserId: actor, q, until: 'ACCEPTED',
   });
   const started = await startHandymanServiceWarranty(
-    { executionScopeId: scope.id, idempotencyKey: id() }, actor);
+    { executionScopeId: f.scope.id, idempotencyKey: id() }, actor);
   return {
-    realm, scope, bast: signed.bast, warranty: started.warranty,
-    leadUserId: crew.leadUser.id,
+    realm: f.realm, scope: f.scope, bast: f.bast, warranty: started.warranty,
+    supervisorUserId: f.supervisorUserId,
+    leadUserId: f.crew.leadUser.id,
   };
 }
 
@@ -365,8 +350,8 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
 
   it('runs the full free rework ladder and closes the claim on verify',
     async () => {
-      const { scope, warranty, claim, leadUserId } =
-        await approvedClaimFixture();
+      const f = await approvedClaimFixture();
+      const { scope, warranty, claim, leadUserId } = f;
       const proposed = await proposeHandymanServiceWarrantyRework(
         leadUserId, {
           claimId: claim.id, idempotencyKey: id(),
@@ -398,7 +383,7 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       // Verification consumes CR-HM-10 authority READ-ONLY.
       const evidenceId = await evidenceViaAuthority(scope.id, 'RECTIFICATION',
         leadUserId);
-      const qc = await qcRunViaAuthority(scope.id, 'PASS', leadUserId);
+      const qc = await qcRunViaAuthority(f, 'PASS');
       assert.equal(qc.status, 'PASSED');
       const verified = await verifyHandymanServiceWarrantyRework(leadUserId, {
         reworkId: proposed.rework.id, idempotencyKey: id(),
@@ -426,7 +411,8 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
 
   it('requires rework evidence and only consumes a PASSED QC run',
     async () => {
-      const { realm, scope, claim, leadUserId } = await approvedClaimFixture();
+      const f = await approvedClaimFixture();
+      const { realm, scope, claim, leadUserId } = f;
       const proposed = await proposeHandymanServiceWarrantyRework(
         leadUserId, {
           claimId: claim.id, idempotencyKey: id(),
@@ -467,10 +453,8 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
         hasCode(ERROR_CODES.HANDYMAN_SERVICE_WARRANTY_REWORK_EVIDENCE_INVALID),
       );
       // A QC run of another scope, or one that did not pass, is refused.
-      const foreignQc = await qcRunViaAuthority(foreign.scope.id, 'PASS',
-        foreign.leadUserId);
-      const ownFailedQc = await qcRunViaAuthority(scope.id, 'DEFECT',
-        leadUserId);
+      const foreignQc = await qcRunViaAuthority(foreign, 'PASS');
+      const ownFailedQc = await qcRunViaAuthority(f, 'DEFECT');
       assert.equal(ownFailedQc.status, 'FAILED');
       const ownEvidence = await evidenceViaAuthority(scope.id,
         'RECTIFICATION', leadUserId);
@@ -689,28 +673,15 @@ describe('CR-HM-15 PART 03 free rework execution', () => {
       [id(), actor, other.claim.id]),
     /REWORK_DRAFT/);
     // No rework for a claim that is not APPROVED (raw SQL).
-    const submittedFixture = await baseFixture();
-    const prepared = await prepareHandymanBast(actor, {
-      executionScopeId: submittedFixture.scope.id, idempotencyKey: id(),
-    });
-    await issueHandymanBast(actor, {
-      bastId: prepared.bast.id, idempotencyKey: id(),
-    });
-    await acceptHandymanBast(actor, {
-      bastId: prepared.bast.id, idempotencyKey: id(),
-      signatureDigest: `sig-${id()}`,
+    const submittedFixture = await arrangeGuardedBast({
+      adminUserId: actor, q, until: 'ACCEPTED',
     });
     const started = await startHandymanServiceWarranty(
       { executionScopeId: submittedFixture.scope.id, idempotencyKey: id() },
       actor);
-    const submittedCrew = await crewFixture(submittedFixture.realm);
-    await assignHandymanExecutionScopeCrew({
-      executionScopeId: submittedFixture.scope.id,
-      providerContextId: submittedCrew.providerContext.id,
-      crewId: submittedCrew.crew.id,
-    }, actor);
     const otherEvidence = await evidenceViaAuthority(
-      submittedFixture.scope.id, 'DEFECT', submittedCrew.leadUser.id);
+      submittedFixture.scope.id, 'DEFECT',
+      submittedFixture.crew.leadUser.id);
     const pending = await openHandymanServiceWarrantyClaim(actor, {
       warrantyId: started.warranty.id, idempotencyKey: id(),
       evidenceRecordId: otherEvidence,

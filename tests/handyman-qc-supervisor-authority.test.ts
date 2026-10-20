@@ -39,7 +39,6 @@ import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-
 import { userService } from '../src/modules/users';
 import { workforceService } from '../src/modules/workforce';
 import { assignSupervisor } from '../src/modules/workforce-reporting-lines';
-import { workforceBuildingAssignmentService } from '../src/modules/workforce-building-assignments';
 import { createAdminUser } from './helpers/access';
 import { baseFixture, crewFixture, initHandymanFixtures } from './helpers/handyman-fixtures';
 
@@ -106,10 +105,8 @@ async function fixture(configure = true) {
     versionNumber: 1, requiredItemKeys: ['quality'],
   }, adminId);
   const crew = await crewFixture(f.realm);
-  await workforceBuildingAssignmentService.assignBuildingToWorkforce({
-    workforceProfileId: crew.workerContext.workforceProfileId,
-    buildingId: f.realm.building.id,
-  });
+  // NOTE: the shared crewFixture already performs the 0439 workforce_building
+  // placement for the crew's realm building; repeating it hits the ACTIVE-duplicate guard.
   const assignment = await assignHandymanExecutionScopeCrew({
     executionScopeId: f.scope.id, providerContextId: crew.providerContext.id,
     crewId: crew.crew.id,

@@ -38,6 +38,36 @@ const SEEDED_PERMISSIONS = new Set(
 );
 
 /** path → { method, operationId, permission }. */
+/** Walk the mounted Express router tree and collect every route path. */
+function collectRuntimePaths(): Set<string> {
+  const { createApp } = require('../src/app');
+  const application = createApp();
+  const paths = new Set<string>();
+  const walk = (stack: any[]) => {
+    for (const layer of stack ?? []) {
+      if (layer.handle?.stack) {
+        walk(layer.handle.stack);
+        continue;
+      }
+      if (layer.route) {
+        // Normalize Express :param segments to OpenAPI {param}
+        // so documented and runtime paths compare directly.
+        // Express 5 allows an array of path strings on a route.
+        const routePaths = Array.isArray(layer.route.path)
+          ? layer.route.path
+          : [layer.route.path];
+        for (const path of routePaths) {
+          if (typeof path === 'string') {
+            paths.add(path.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, '{$1}'));
+          }
+        }
+      }
+    }
+  };
+  walk((application as any).router.stack);
+  return paths;
+}
+
 const PUBLISHED: Record<
   string,
   { method: string; operationId: string; permission: string }
@@ -119,11 +149,32 @@ describe('CR-BE-MOB-05 PART 02 — workforce attendance contract', () => {
   });
 
   it('adds no /mobile/{domain} duplicate facade', () => {
-    const facade = /\/mobile\/(housekeeping|security|engineering|material|inventory|work-order|patrol|incident|push-send|attendance)/;
-    const offenders = Object.keys(spec.paths ?? {}).filter((p) =>
-      facade.test(p),
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the frozen
+    // invariant is that THIS CR creates no /mobile facade. Later
+    // CRs legitimately published /mobile/material-requests facades
+    // (mobile-material-requests module, runtime + OpenAPI), so a
+    // blanket ban on the material domain is stale. The invariant
+    // is now enforced in two faithful ways:
+    //   (a) the attendance router itself registers no /mobile path;
+    //   (b) every published /mobile OpenAPI path resolves to a
+    //       real runtime route (no OpenAPI-only duplicate facade
+    //       may exist anywhere in the surface).
+    const attendanceSource = readFileSync(ROUTES_PATH, 'utf8');
+    assert.ok(
+      !/\.\w+\(\s*'\/mobile\//.test(attendanceSource),
+      'the attendance router must not register any /mobile facade',
     );
-    assert.deepEqual(offenders, []);
+
+    const runtimePaths = collectRuntimePaths();
+    const facade = /\/mobile\//;
+    const offenders = Object.keys(spec.paths ?? {}).filter(
+      (p) => facade.test(p) && !runtimePaths.has(p),
+    );
+    assert.deepEqual(
+      offenders,
+      [],
+      'every published /mobile OpenAPI path must resolve to a runtime route',
+    );
   });
 
   it('documents the authoritative attendance schema without invented ids', () => {

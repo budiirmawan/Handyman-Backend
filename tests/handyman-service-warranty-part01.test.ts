@@ -7,17 +7,10 @@ import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
-import { baseFixture, initHandymanFixtures }
-  from './helpers/handyman-fixtures';
+import { initHandymanFixtures } from './helpers/handyman-fixtures';
+import { arrangeGuardedBast } from './helpers/handyman-guarded-bast';
 import { userService } from '../src/modules/users';
 import { AppError, ERROR_CODES } from '../src/shared/errors';
-import {
-  acceptHandymanBast,
-  issueHandymanBast,
-  prepareHandymanBast,
-  rejectHandymanBast,
-  voidHandymanBast,
-} from '../src/modules/handyman-bast';
 import {
   startHandymanServiceWarranty,
   expireHandymanServiceWarranty,
@@ -92,56 +85,28 @@ const bastRow = async (bastId: string) =>
                    execution_scope_id
               FROM handyman_bast_documents WHERE id=$1`, [bastId])).rows[0];
 
-/** A scope whose BAST is advanced to the requested status. */
+/**
+ * A scope whose BAST is advanced to the requested status through the
+ * CURRENT-generation gates (0442/0444/0445: ACTIVE crew assignment,
+ * completed work session, versioned PASSED Supervisor QC run with
+ * verified bytes) — the same guarded arrangement the merged E2E
+ * lifecycle suite composes. PREPARE without it is rejected with
+ * HANDYMAN_BAST_QC_NOT_READY, which is exactly what the pre-0445
+ * shortcut relied on being absent; the guards asserted below stay.
+ */
 async function bastFixture(
   status: 'DRAFT' | 'ISSUED' | 'ACCEPTED' | 'REJECTED' | 'VOID' = 'ACCEPTED',
 ) {
-  const { realm, scope } = await baseFixture();
-  const prepared = await prepareHandymanBast(actor, {
-    executionScopeId: scope.id, idempotencyKey: id(),
+  return arrangeGuardedBast({
+    adminUserId: actor, q, until: status,
   });
-  if (status === 'DRAFT') return { realm, scope, bast: prepared.bast };
-  await issueHandymanBast(actor, {
-    bastId: prepared.bast.id, idempotencyKey: id(),
-  });
-  if (status === 'ISSUED') return { realm, scope, bast: prepared.bast };
-  if (status === 'VOID') {
-    await voidHandymanBast(actor, {
-      bastId: prepared.bast.id, idempotencyKey: id(),
-    });
-    return { realm, scope, bast: prepared.bast };
-  }
-  const signed = status === 'ACCEPTED'
-    ? await acceptHandymanBast(actor, { bastId: prepared.bast.id,
-      idempotencyKey: id(), signatureDigest: `sig-${id()}` })
-    : await rejectHandymanBast(actor, { bastId: prepared.bast.id,
-      idempotencyKey: id(), signatureDigest: '' });
-  return { realm, scope, bast: signed.bast };
 }
 
 /** An ACCEPTED BAST reached after the scope's first BAST was VOID. */
 async function acceptedBastAfterVoid() {
-  const { realm, scope } = await baseFixture();
-  const first = await prepareHandymanBast(actor, {
-    executionScopeId: scope.id, idempotencyKey: id(),
+  return arrangeGuardedBast({
+    adminUserId: actor, q, until: 'VOID_THEN_ACCEPTED',
   });
-  await issueHandymanBast(actor, {
-    bastId: first.bast.id, idempotencyKey: id(),
-  });
-  await voidHandymanBast(actor, {
-    bastId: first.bast.id, idempotencyKey: id(),
-  });
-  const second = await prepareHandymanBast(actor, {
-    executionScopeId: scope.id, idempotencyKey: id(),
-  });
-  await issueHandymanBast(actor, {
-    bastId: second.bast.id, idempotencyKey: id(),
-  });
-  const signed = await acceptHandymanBast(actor, {
-    bastId: second.bast.id, idempotencyKey: id(),
-    signatureDigest: `sig-${id()}`,
-  });
-  return { realm, scope, bast: signed.bast };
 }
 
 describe('CR-HM-15 PART 01 service warranty lifecycle guards', () => {

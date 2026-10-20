@@ -341,7 +341,22 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
       f.executionScopeId,
       careReader.userId,
     );
-    assert.deepEqual(res.body.data, expected);
+    // CR-HM-17 P1 FIX02 legitimately composes the B6 payment
+    // availableActions projection in the TRANSPORT (the service read
+    // model is stateless authority and stays pure). Compare the
+    // service-equivalent payload, then assert the projection itself.
+    const actualForParity = JSON.parse(JSON.stringify(res.body.data));
+    const projections = (actualForParity.payments ?? []).map(
+      (payment: { availableActions?: unknown }) => {
+        const actions = payment.availableActions;
+        delete payment.availableActions;
+        return actions;
+      },
+    );
+    assert.deepEqual(actualForParity, expected);
+    // Terminal CONFIRMED payment: no further Care actions; the
+    // projection is transport-side only and must be an empty list.
+    assert.deepEqual(projections, [[]]);
 
     const data = res.body.data;
     assert.equal(data.contractVersion, 'CR-HM-13-PART-06');
@@ -976,9 +991,23 @@ describe('CR-HM-17 GAP PART 05 — Customer Ledger & Payment Transport (B6)', ()
         `missing OpenAPI schema ${schemaName}`,
       );
     }
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the original pin
+    // demanded ZERO settlement/entitlement paths in the whole Handyman
+    // document. The finance-close seams delivered later (matrix §14:
+    // entitlement derivation + settlement ladder) legitimately own
+    // EXACTLY these paths under the dedicated finance transport module —
+    // never under the customer ledger transport (source firewall above).
     const settlementPaths = Object.keys(doc.paths).filter(
       (p) => p.startsWith('/handyman') && /settlement|entitlement/i.test(p),
     );
-    assert.deepEqual(settlementPaths, []);
+    assert.deepEqual(settlementPaths.sort(), [
+      '/handyman/execution-scopes/{executionScopeId}/financial-entitlements/derive',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/correction',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/dispute',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/include',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/prepare',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/reconcile',
+      '/handyman/execution-scopes/{executionScopeId}/settlement/settle',
+    ]);
   });
 });

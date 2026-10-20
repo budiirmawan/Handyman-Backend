@@ -35,7 +35,6 @@ import { roleService } from '../src/modules/roles';
 import { userService } from '../src/modules/users';
 import { workforceService } from '../src/modules/workforce';
 import { assignSupervisor } from '../src/modules/workforce-reporting-lines';
-import { workforceBuildingAssignmentService } from '../src/modules/workforce-building-assignments';
 import {
   createAdminUser,
   createPlainSession,
@@ -174,14 +173,14 @@ after(async () => {
   }
 });
 
-/** Scope + crew arranged through owning services (J03/J04 state). */
+/** Scope + crew arranged through owning services (J03/J04 state).
+ * NOTE: the shared crewFixture already performs the 0439 workforce_building
+ * placement for the realm's building (and the Lead's user_building grant);
+ * repeating assignBuildingToWorkforce here would hit the ACTIVE-placement
+ * duplicate guard. */
 async function scopedFixture() {
   const { realm, scope } = await baseFixture();
   const crew = await crewFixture(realm);
-  await workforceBuildingAssignmentService.assignBuildingToWorkforce({
-    workforceProfileId: crew.workerContext.workforceProfileId,
-    buildingId: realm.building.id,
-  });
   const assignment = await assignHandymanExecutionScopeCrew(
     {
       executionScopeId: scope.id,

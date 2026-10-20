@@ -875,7 +875,25 @@ describe('CR-HM-13 PART 06 — published read contract + firewall verification',
         ['clients', 'users', 'roles', 'permissions', 'properties',
           'buildings', 'floors', 'areas', 'rooms', 'spaces',
           'units_of_measure'].includes(table);
-      assert.ok(allowed(source) && allowed(target),
+      // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — directed
+      // reconciliation of the CR-HM-13 → BE-19D invoice bridge
+      // (migration 0432, frozen): invoice rows may carry SOURCE LINKS
+      // INTO the ledger (tenant_invoices -> handyman_execution_scopes,
+      // tenant_invoice_lines -> handyman_charge_lines). The bridge is
+      // one-directional by design: invoice lines are source links, not
+      // copied money facts, and the ledger remains the sole funds
+      // authority. The firewall therefore forbids the REVERSE: no ledger
+      // table may reference the tenant invoice substrate.
+      const sanctionedInboundBridge =
+        (source === 'tenant_invoices'
+          && target === 'handyman_execution_scopes')
+        || (source === 'tenant_invoice_lines'
+          && target === 'handyman_charge_lines');
+      assert.ok(!/tenant_invoices|tenant_invoice_lines|tenant_charges/.test(source)
+          || sanctionedInboundBridge,
+        `ledger table ${source} must never reference FM/SaaS billing`);
+      assert.ok(
+        (allowed(source) && allowed(target)) || sanctionedInboundBridge,
         `ledger FK ${source} -> ${target} must stay inside the ledger`);
     }
     // No audit/outbox/evidence table is financial authority here.

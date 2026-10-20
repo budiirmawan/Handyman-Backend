@@ -6,6 +6,8 @@ import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { areaService } from '../src/modules/areas';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
+import { workforceBuildingAssignmentService }
+  from '../src/modules/workforce-building-assignments';
 import { buildingService } from '../src/modules/buildings';
 import { clientService } from '../src/modules/clients';
 import { departmentService } from '../src/modules/departments';
@@ -235,6 +237,16 @@ async function crewFixture(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  // CR-HM-04 activation PART 04 hardening (migration 0439): the Lead's
+  // workforce profile must hold an ACTIVE workforce Building assignment for
+  // the scope's Building, and the Lead user must hold an ACTIVE user
+  // Building assignment (requireLogin path). The shared fixture helper in
+  // tests/helpers/handyman-fixtures.ts already arranges both; this inlined
+  // copy predated the requirement.
+  await workforceBuildingAssignmentService.assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: vendor.id,
     workforceProfileId: profile.id,
@@ -248,6 +260,9 @@ async function crewFixture(
       },
       adminUserId,
     );
+  await buildingAssignmentService.createAssignment(linkedUser.id, {
+    buildingId: realm.building.id,
+  });
   const bundle = await handymanWorkCrewService.createHandymanWorkCrew(
     {
       handymanProviderContextId: providerContext.id,
@@ -281,6 +296,13 @@ async function addLinkedMember(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  // Eligibility runs over EVERY ACTIVE member (0439): the Building
+  // workforce placement is required for members too; only the user
+  // Building access (requireLogin) is Lead-specific.
+  await workforceBuildingAssignmentService.assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: provider.vendor.id,
     workforceProfileId: profile.id,
@@ -301,6 +323,12 @@ async function addLinkedMember(
     },
     adminUserId,
   );
+  // Test 3 re-designates this member as the CURRENT Lead; the Lead
+  // resolver applies the requireLogin path (ACTIVE user Building
+  // access), so the member user needs the assignment before promotion.
+  await buildingAssignmentService.createAssignment(linkedUser.id, {
+    buildingId: realm.building.id,
+  });
   return { linkedUser, profile, workerContext };
 }
 
@@ -412,9 +440,15 @@ async function scopeFixture(
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
+  // CR-HM-TENANT-ACTOR-01 (merged after this fixture was written): a
+  // quotation APPROVE is a TENANT decision — the actor must be the user
+  // linked to the request's ACTIVE Tenant PIC (the shared helper in
+  // tests/helpers/handyman-fixtures.ts already follows this authority;
+  // this inlined copy predated it, which is the whole reason the suite
+  // failed 0/10 at fixture time in the E2E matrix §6).
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   return { scope };
@@ -553,6 +587,11 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
       .send({
         providerContextId: crewB.providerContext.id,
         crewId: crewB.crew.id,
+        // CR-HM-04 activation PART 04 hardening (migration 0439):
+        // reassignment is optimistic-concurrency guarded and must state
+        // a reason. The frozen first assignment starts at version 1.
+        expectedVersion: first.body.data.version,
+        reason: 'PART C regression: crew rotation.',
       });
     assert.equal(moved.status, 201, JSON.stringify(moved.body));
     assert.equal(moved.body.data.status, 'ACTIVE');
@@ -801,12 +840,22 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
     };
     assert.ok(app, 'app composes');
 
-    // Exactly the two assignment URL shapes under collection-keyed
-    // execution-scope paths; NO list/collection endpoint.
-    const scopePaths = Object.keys(doc.paths).filter((p) =>
-      p.includes('execution-scopes'),
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — PART C pin
+    // reconciliation. The original "exactly two execution-scopes
+    // collection-keyed paths in the whole document" assertion froze a
+    // world in which PART C owned the namespace. CR-HM-05..17 (arrival
+    // verification, work sessions, materials, QC, BAST, ledger,
+    // settlement, warranty — all separately governed and merged)
+    // legitimately added sibling paths under /handyman/execution-scopes/.
+    // The FROZEN PART C invariants are namespace-local and remain:
+    // the ASSIGNMENT surface is exactly the two URL shapes / three
+    // operations; no execution-scope collection/list API; no standalone
+    // Lead-resolver endpoint; no forbidden downstream word inside the
+    // assignment URL shapes themselves.
+    const assignmentPaths = Object.keys(doc.paths).filter((p) =>
+      /\/assignment(\/reassign)?$/.test(p) && p.includes('execution-scopes'),
     );
-    assert.deepEqual(scopePaths.sort(), [
+    assert.deepEqual(assignmentPaths.sort(), [
       '/handyman/execution-scopes/{executionScopeId}/assignment',
       '/handyman/execution-scopes/{executionScopeId}/assignment/reassign',
     ]);
@@ -819,15 +868,12 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
         `standalone resolver endpoint leaked: ${p}`);
     }
     // ZERO scheduling/arrival/challenge/QR/geofence/work-session/
-    // attendance/payment/BAST/FM APIs inside the PART C surface
-    // (every execution-scope-keyed AND every assignment-named path).
+    // attendance/payment/BAST/FM APIs inside the PART C surface —
+    // scoped to the assignment URL shapes (see the reconciliation note
+    // above; sibling execution-scope paths belong to other CRs).
     const forbiddenPath =
       /schedul|arriv|challenge|qr|geofence|work-?session|attendance|payment|settle|settlement|bast|work-?order|check-?in|fm[-_]/i;
-    // The execution-scope-keyed PART C surface is EXACTLY the two
-    // assignment URL shapes (legacy FM work-order "assignments" live
-    // in a separate pre-existing namespace, untouched by PART C).
-    const partCSurface = Object.keys(doc.paths).filter((p) =>
-      p.includes('execution-scopes'));
+    const partCSurface = assignmentPaths;
     assert.equal(partCSurface.length, 2,
       'PART C surface must be exactly the two assignment URL shapes');
     assert.deepEqual(

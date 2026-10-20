@@ -46,6 +46,13 @@ import {
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
+import {
+  configureGuardedQcChecklist,
+  createGuardedQcSupervisor,
+  runGuardedQcCycle,
+  seedCheckedOutWorkSession,
+  seedVerifiedQcEvidenceBytes,
+} from './helpers/handyman-guarded-bast';
 import { ensureTestDatabase } from './helpers/postgres';
 
 const V1 = '/api/v1';
@@ -163,7 +170,7 @@ after(async () => {
 async function setupScopeWithCrew() {
   const f = await baseFixture();
   const crew = await crewFixture(f.realm);
-  await assignHandymanExecutionScopeCrew(
+  const assignment = await assignHandymanExecutionScopeCrew(
     {
       executionScopeId: f.scope.id,
       providerContextId: crew.providerContext.id,
@@ -172,12 +179,90 @@ async function setupScopeWithCrew() {
     adminUserId,
   );
   const leadToken = await loginUser(crew.leadUser.id, crew.leadUser.email);
+  // 0442/0444 generation: QC decisions run on the permitted Supervisor of
+  // the assigned Lead, over the pinned versioned checklist.
+  const supervisor = await createGuardedQcSupervisor({ realm: f.realm, crew });
+  await configureGuardedQcChecklist({
+    clientId: f.scope.clientId,
+    executionScopeId: f.scope.id,
+    adminUserId,
+  });
   return {
     ...f,
     crew,
+    assignment,
     leadUserId: crew.leadUser.id,
     leadToken,
+    supervisorUserId: supervisor.id,
   };
+}
+
+const guardedQuery = async (sql: string, params: unknown[] = []) =>
+  (await pool.query(sql, params)).rows;
+
+/** Genuine rework proof for one RECORD step (session + verified bytes). */
+async function seedReworkProof(f: Awaited<ReturnType<typeof setupScopeWithCrew>>) {
+  await seedCheckedOutWorkSession(guardedQuery, {
+    clientId: f.scope.clientId,
+    executionScopeId: f.scope.id,
+    assignmentId: f.assignment.id,
+    leadWorkerContextId: f.crew.workerContext.id,
+    leadUserId: f.leadUserId,
+  });
+  return seedVerifiedQcEvidenceBytes(guardedQuery, {
+    clientId: f.scope.clientId,
+    tenantCompanyId: f.scope.tenantCompanyId,
+    buildingId: f.realm.building.id,
+    handymanRequestId: f.scope.handymanRequestId,
+    executionScopeId: f.scope.id,
+    uploaderUserId: f.leadUserId,
+    purpose: 'BEFORE_AFTER_WORK',
+  });
+}
+
+/** Bring the scope to the guarded QC PASS state the BAST gate demands:
+ * completed CHECKED_OUT session + versioned Supervisor PASS run with
+ * verified bytes bound. */
+async function ensureGuardedPass(
+  f: Awaited<ReturnType<typeof setupScopeWithCrew>>,
+) {
+  await seedCheckedOutWorkSession(guardedQuery, {
+    clientId: f.scope.clientId,
+    executionScopeId: f.scope.id,
+    assignmentId: f.assignment.id,
+    leadWorkerContextId: f.crew.workerContext.id,
+    leadUserId: f.leadUserId,
+  });
+  await runGuardedQcCycle({
+    clientId: f.scope.clientId,
+    tenantCompanyId: f.scope.tenantCompanyId,
+    buildingId: f.realm.building.id,
+    handymanRequestId: f.scope.handymanRequestId,
+    executionScopeId: f.scope.id,
+    adminUserId,
+    supervisorUserId: f.supervisorUserId,
+    uploaderUserId: f.leadUserId,
+    q: guardedQuery,
+    item: 'PASS',
+  });
+}
+
+/** One additional FAILED supervisor run on the scope (reinspection vehicle). */
+async function extraGuardedRun(
+  f: Awaited<ReturnType<typeof setupScopeWithCrew>>,
+) {
+  return runGuardedQcCycle({
+    clientId: f.scope.clientId,
+    tenantCompanyId: f.scope.tenantCompanyId,
+    buildingId: f.realm.building.id,
+    handymanRequestId: f.scope.handymanRequestId,
+    executionScopeId: f.scope.id,
+    adminUserId,
+    supervisorUserId: f.supervisorUserId,
+    uploaderUserId: f.leadUserId,
+    q: guardedQuery,
+    item: 'DEFECT',
+  });
 }
 
 describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () => {
@@ -218,86 +303,99 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
       f.leadUserId,
     );
 
-    const openedRun = await openHandymanQcRun(
-      {
-        executionScopeId: f.scope.id,
-        checklistIdentity: 'CHK-PLUMBING-01',
-        idempotencyKey: `qc-open-${randomUUID()}`,
-      },
-      f.leadUserId,
+    // Supervisor-guarded FAILED run with verified bytes and a completed
+    // session (0442–0445 contract); the defect then walks the genuine
+    // rework ladder to VERIFIED.
+    const guarded = await runGuardedQcCycle({
+      clientId: f.scope.clientId,
+      tenantCompanyId: f.scope.tenantCompanyId,
+      buildingId: f.realm.building.id,
+      handymanRequestId: f.scope.handymanRequestId,
+      executionScopeId: f.scope.id,
+      adminUserId,
+      supervisorUserId: f.supervisorUserId,
+      uploaderUserId: f.leadUserId,
+      q: guardedQuery,
+      item: 'DEFECT',
+    });
+    const openedRun = { run: guarded.run };
+    const [defectItemRow] = await guardedQuery(
+      `SELECT id FROM handyman_qc_run_items WHERE run_id = $1`,
+      [guarded.run.id],
     );
-    await setHandymanQcRunItemOutcome(
-      {
-        qcRunId: openedRun.run.id,
-        itemKey: 'item-pressure',
-        outcome: 'PASS',
-        note: 'Pressure nominal',
-        idempotencyKey: `qc-item1-${randomUUID()}`,
-      },
-      f.leadUserId,
-    );
-    const defectItem = await setHandymanQcRunItemOutcome(
-      {
-        qcRunId: openedRun.run.id,
-        itemKey: 'item-seal',
-        outcome: 'DEFECT',
-        note: 'Seal seepage detected',
-        idempotencyKey: `qc-item2-${randomUUID()}`,
-      },
-      f.leadUserId,
-    );
-    await finishHandymanQcRun(
-      {
-        qcRunId: openedRun.run.id,
-        idempotencyKey: `qc-fin-${randomUUID()}`,
-      },
-      f.leadUserId,
-    );
-
     const openedDefect = await openHandymanDefect(
       {
         executionScopeId: f.scope.id,
-        runId: openedRun.run.id,
-        itemId: defectItem.item.id,
+        runId: guarded.run.id,
+        itemId: (defectItemRow as { id: string }).id,
         description: 'Seal seepage around joint',
         idempotencyKey: `def-open-${randomUUID()}`,
       },
-      f.leadUserId,
+      f.supervisorUserId,
     );
+    const defectId = openedDefect.defect.id;
     await startHandymanDefectRectification(
       {
-        defectId: openedDefect.defect.id,
+        defectId,
+        expectedVersion: 1,
         idempotencyKey: `def-start-${randomUUID()}`,
       },
       f.leadUserId,
     );
+    let proof = await seedReworkProof(f);
     await recordHandymanDefectRectification(
       {
-        defectId: openedDefect.defect.id,
+        defectId,
+        expectedVersion: 2,
+        sessionId: (await guardedQuery(
+          `SELECT id FROM handyman_work_sessions
+            WHERE execution_scope_id=$1 ORDER BY started_work_at DESC LIMIT 1`,
+          [f.scope.id],
+        ))[0].id as string,
+        evidenceReference: proof,
         idempotencyKey: `def-rec1-${randomUUID()}`,
       },
       f.leadUserId,
     );
+    await extraGuardedRun(f); // reinspection vehicle #2 (FAILED)
     await requestHandymanDefectReinspection(
       {
-        defectId: openedDefect.defect.id,
+        defectId,
+        expectedVersion: 3,
+        reason: 'Rework completed; reinspect requested.',
         idempotencyKey: `def-reinsp-${randomUUID()}`,
       },
-      f.leadUserId,
+      f.supervisorUserId,
     );
+    const proof2 = await seedReworkProof(f);
     await recordHandymanDefectRectification(
       {
-        defectId: openedDefect.defect.id,
+        defectId,
+        expectedVersion: 4,
+        sessionId: (await guardedQuery(
+          `SELECT id FROM handyman_work_sessions
+            WHERE execution_scope_id=$1 ORDER BY started_work_at DESC LIMIT 1`,
+          [f.scope.id],
+        ))[0].id as string,
+        evidenceReference: proof2,
         idempotencyKey: `def-rec2-${randomUUID()}`,
       },
       f.leadUserId,
     );
+    // vehicle #3 OPEN while the Supervisor approves reinspection.
+    const { run: vehicle3 } = await openHandymanQcRun({
+      executionScopeId: f.scope.id,
+      checklistIdentity: 'HANDYMAN_FINAL@v1',
+      idempotencyKey: `qc-${randomUUID()}`,
+    }, f.supervisorUserId);
+    void vehicle3;
     await passHandymanDefectReinspection(
       {
-        defectId: openedDefect.defect.id,
+        defectId,
+        expectedVersion: 5,
         idempotencyKey: `def-pass-${randomUUID()}`,
       },
-      f.leadUserId,
+      f.supervisorUserId,
     );
 
     // 1. Evidence list by scope
@@ -356,10 +454,10 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
       .get(`${V1}/handyman/execution-scopes/${f.scope.id}/qc-runs`)
       .set('Authorization', `Bearer ${cc.token}`);
     assert.equal(qcListRes.status, 200, JSON.stringify(qcListRes.body));
-    assert.equal(qcListRes.body.data.runs.length, 1);
+    assert.ok(qcListRes.body.data.runs.length >= 3);
     assert.equal(qcListRes.body.data.runs[0].run.id, openedRun.run.id);
     assert.equal(qcListRes.body.data.runs[0].run.status, 'FAILED');
-    assert.equal(qcListRes.body.data.runs[0].items.length, 2);
+    assert.equal(qcListRes.body.data.runs[0].items.length, 1);
 
     // 4. QC run detail
     const qcDetailRes = await api()
@@ -372,7 +470,7 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
       qcDetailRes.body.data.events.map(
         (e: { eventType: string }) => e.eventType,
       ),
-      ['OPEN', 'ITEM_SET', 'ITEM_SET', 'FINISH'],
+      ['OPEN', 'ITEM_SET', 'FINISH'],
     );
 
     // 5. Defects list by scope
@@ -439,10 +537,10 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
     const run = await openHandymanQcRun(
       {
         executionScopeId: f.scope.id,
-        checklistIdentity: 'CHK-01',
+        checklistIdentity: 'HANDYMAN_FINAL@v1',
         idempotencyKey: `qc-${randomUUID()}`,
       },
-      f.leadUserId,
+      f.supervisorUserId,
     );
     const def = await openHandymanDefect(
       {
@@ -450,7 +548,7 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
         description: 'Minor scratch',
         idempotencyKey: `def-${randomUUID()}`,
       },
-      f.leadUserId,
+      f.supervisorUserId,
     );
 
     const routes = [
@@ -469,8 +567,23 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
       const noPerm = await api()
         .get(url)
         .set('Authorization', `Bearer ${plainToken}`);
+      // Evidence GETs carry the tenant_company.read route middleware
+      // (permission first); QC/defect GETs enter the service directly and
+      // hit the building-scoped gate first. Both are 403, different code.
+      const noPermExpected: Record<string, string> = {
+        [`${V1}/handyman/execution-scopes/${f.scope.id}/evidence`]:
+          'PERMISSION_DENIED',
+        [`${V1}/handyman/evidence-records/${ev.record.id}`]:
+          'PERMISSION_DENIED',
+        [`${V1}/handyman/execution-scopes/${f.scope.id}/qc-runs`]:
+          'BUILDING_ACCESS_DENIED',
+        [`${V1}/handyman/qc-runs/${run.run.id}`]: 'BUILDING_ACCESS_DENIED',
+        [`${V1}/handyman/execution-scopes/${f.scope.id}/defects`]:
+          'BUILDING_ACCESS_DENIED',
+        [`${V1}/handyman/defects/${def.defect.id}`]: 'BUILDING_ACCESS_DENIED',
+      };
       assert.equal(noPerm.status, 403, `expected 403 on ${url}`);
-      assert.equal(noPerm.body.error?.code, 'PERMISSION_DENIED');
+      assert.equal(noPerm.body.error?.code, noPermExpected[url]);
 
       const noClient = await api()
         .get(url)
@@ -534,10 +647,10 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
     const run = await openHandymanQcRun(
       {
         executionScopeId: f.scope.id,
-        checklistIdentity: 'CHK-01',
+        checklistIdentity: 'HANDYMAN_FINAL@v1',
         idempotencyKey: `qc-${randomUUID()}`,
       },
-      f.leadUserId,
+      f.supervisorUserId,
     );
     const def = await openHandymanDefect(
       {
@@ -545,7 +658,7 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
         description: 'Grout gap',
         idempotencyKey: `def-${randomUUID()}`,
       },
-      f.leadUserId,
+      f.supervisorUserId,
     );
 
     const postMutations: Array<[string, Record<string, unknown>, string]> = [
@@ -571,58 +684,49 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
         { idempotencyKey: `k-${randomUUID()}` },
         'HANDYMAN_EVIDENCE_NOT_AUTHORIZED',
       ],
+      // CC holds building access but is neither Lead nor Supervisor:
+      // the QC/defect authority gates reject with their domain codes.
       [
         `${V1}/handyman/execution-scopes/${f.scope.id}/qc-runs`,
-        {
-          checklistIdentity: 'CHK-02',
-          idempotencyKey: `k-${randomUUID()}`,
-        },
+        { checklistIdentity: 'CHK-02', idempotencyKey: `k-${randomUUID()}` },
         'HANDYMAN_QC_NOT_AUTHORIZED',
       ],
       [
         `${V1}/handyman/qc-runs/${run.run.id}/items`,
-        {
-          itemKey: 'item-1',
-          outcome: 'PASS',
-          idempotencyKey: `k-${randomUUID()}`,
-        },
+        { itemKey: 'item-1', outcome: 'PASS', idempotencyKey: `k-${randomUUID()}` },
         'HANDYMAN_QC_NOT_AUTHORIZED',
       ],
       [
         `${V1}/handyman/qc-runs/${run.run.id}/finish`,
-        { idempotencyKey: `k-${randomUUID()}` },
+        { outcome: 'PASSED', expectedVersion: 1, idempotencyKey: `k-${randomUUID()}` },
         'HANDYMAN_QC_NOT_AUTHORIZED',
       ],
       [
         `${V1}/handyman/execution-scopes/${f.scope.id}/defects`,
-        {
-          description: 'Customer Care cannot open field defect',
-          idempotencyKey: `k-${randomUUID()}`,
-        },
+        { description: 'Customer Care cannot open field defect', idempotencyKey: `k-${randomUUID()}` },
         'HANDYMAN_DEFECT_NOT_AUTHORIZED',
       ],
       [
         `${V1}/handyman/defects/${def.defect.id}/start-rectification`,
-        { idempotencyKey: `k-${randomUUID()}` },
+        { expectedVersion: 1, idempotencyKey: `k-${randomUUID()}` },
         'HANDYMAN_DEFECT_NOT_AUTHORIZED',
       ],
       [
         `${V1}/handyman/defects/${def.defect.id}/record-rectification`,
-        { idempotencyKey: `k-${randomUUID()}` },
+        { expectedVersion: 1, sessionId: randomUUID(), evidenceReference: 'hm-ev://' + randomUUID(), idempotencyKey: 'k-' + randomUUID() },
         'HANDYMAN_DEFECT_NOT_AUTHORIZED',
       ],
       [
         `${V1}/handyman/defects/${def.defect.id}/request-reinspection`,
-        { idempotencyKey: `k-${randomUUID()}` },
+        { expectedVersion: 1, reason: 'Rework completed; requesting reinspection.', idempotencyKey: 'k-' + randomUUID() },
         'HANDYMAN_DEFECT_NOT_AUTHORIZED',
       ],
       [
         `${V1}/handyman/defects/${def.defect.id}/pass-reinspection`,
-        { idempotencyKey: `k-${randomUUID()}` },
+        { expectedVersion: 1, idempotencyKey: `k-${randomUUID()}` },
         'HANDYMAN_DEFECT_NOT_AUTHORIZED',
       ],
     ];
-
     for (const [url, payload, expectedCode] of postMutations) {
       const res = await api()
         .post(url)
@@ -652,6 +756,7 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
     assert.deepEqual(emptyScopeBast.body.data.signOffs, []);
 
     // Prepare BAST in-process (DRAFT)
+    await ensureGuardedPass(f);
     const prepared = await prepareHandymanBast(f.leadUserId, {
       executionScopeId: f.scope.id,
       idempotencyKey: `prep-${randomUUID()}`,
@@ -812,6 +917,7 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
       { code: 'tenant_company.read', name: 'Read tenant company' },
       { code: 'tenant_company.manage', name: 'Manage tenant company' },
     ]);
+    await ensureGuardedPass(f2);
     const prep2 = await prepareHandymanBast(f2.leadUserId, {
       executionScopeId: f2.scope.id,
       idempotencyKey: `prep2-${randomUUID()}`,
@@ -859,6 +965,7 @@ describe('CR-HM-17 GAP PART 04 — Customer Care QC reads & BAST transport', () 
       ],
     );
 
+    await ensureGuardedPass(f);
     const prepared = await prepareHandymanBast(f.leadUserId, {
       executionScopeId: f.scope.id,
       idempotencyKey: `prep-${randomUUID()}`,

@@ -492,9 +492,19 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
       'recordHandymanRequestTriage',
     ]);
     // no other lifecycle endpoints documented
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 — the original
+    // pin excluded only intake-evidence from the request-scoped path
+    // family. Later, separately-governed CRs legitimately added the
+    // readiness (CR-HM-05), quotation (CR-HM-06), visit (R1C/R1D) and
+    // inspector-assignment (OPS-DISPATCH-02) families under the same
+    // prefix. The FROZEN CR-HM-03 invariant is about the lifecycle
+    // STEPS themselves: nothing may add, remove or split operations on
+    // the four triage/inspection/diagnosis/referral paths.
+    const NON_LIFECYCLE_FAMILIES =
+      /intake-evidence|readiness|quotation|visits|inspector-assignments|communications|progress/;
     const lifecyclePaths = Object.keys(doc.paths).filter((p) =>
       p.startsWith('/handyman/requests/{handymanRequestId}/') &&
-      p !== '/handyman/requests/{handymanRequestId}/intake-evidence',
+      !NON_LIFECYCLE_FAMILIES.test(p),
     );
     assert.deepEqual(
       lifecyclePaths.sort(),

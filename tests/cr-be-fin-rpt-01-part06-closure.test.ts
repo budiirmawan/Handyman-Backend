@@ -282,13 +282,25 @@ describe('CR-BE-FIN-RPT-01 PART 06 — closure, regression evidence & handoff re
     assert.equal(opCount, 1, 'operationId must be unique');
   });
 
-  it('migration: no migration used by FIN-RPT-01, 0333 highest, 0334 absent', () => {
+  it('migration: no migration used by FIN-RPT-01, 0333 present, no FX ledger', () => {
     const files = readdirSync(MIGRATION_DIR) as string[];
-    assert.ok(!files.some((f: string) => f.startsWith('0334')), '0334 must be absent');
+    // CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01 - the frozen
+    // invariants are: (a) CR-BE-FX-01 created no conversion-ledger
+    // migration, and (b) its own authority migration 0333 exists.
+    // The old "0334 absent / highest is 0333" pin is stale: the
+    // migration directory is append-only across CRs and number
+    // 0334 was legitimately reused by an unrelated additive CR
+    // (mobile push delivery). Assert by name pattern, not slot.
+    assert.ok(
+      !files.some((f: string) => /^[0-9]+_.*fx.*conversion.*ledger.*\.ts$/i.test(f)),
+      'FX conversion ledger migration must not exist',
+    );
+    assert.ok(
+      !files.some((f: string) => f.startsWith('0334_create_fx_conversion_ledger')),
+      '0334_create_fx_conversion_ledger.ts must not exist',
+    );
     const has0333 = files.some((f: string) => f.startsWith('0333'));
     assert.ok(has0333, '0333 must exist');
-    const highest = files.filter((f: string) => /^\d{4}_/.test(f)).sort().pop();
-    assert.ok(highest?.startsWith('0333'), `highest migration must be 0333, got ${highest}`);
   });
 
   it('backend handoff readiness: contract frozen / frontend-ready', () => {
