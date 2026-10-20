@@ -10,6 +10,7 @@ process.env.WHATSAPP_META_APP_SECRET = 'test-secret';
 process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN = 'test-token';
 
 import { createApp } from '../src/app';
+import { findBrokenLocalRefs } from './helpers/openapi-census';
 
 /**
  * INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure.
@@ -434,28 +435,9 @@ describe('INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure', () => {
   });
 
   it('6. zero broken $refs in openapi.yaml', () => {
-    const buckets: Record<string, Set<string>> = {};
-    for (const [k, v] of Object.entries(SPEC.components ?? {})) {
-      buckets[k] = new Set(Object.keys((v as Record<string, unknown>) ?? {}));
-    }
-    const broken: string[] = [];
-    function walk(node: unknown): void {
-      if (!node || typeof node !== 'object') return;
-      if (Array.isArray(node)) {
-        for (const item of node) walk(item);
-        return;
-      }
-      const o = node as Record<string, unknown>;
-      if (typeof o.$ref === 'string' && o.$ref.startsWith('#/components/')) {
-        const parts = o.$ref.slice(2).split('/');
-        const bucket = parts[1];
-        const tail = decodeURIComponent(parts.slice(2).join('/'));
-        if (!buckets[bucket]?.has(tail)) broken.push(o.$ref);
-      }
-      for (const v of Object.values(o)) walk(v);
-    }
-    walk(SPEC);
-    assert.deepEqual(broken, []);
+    // CR-HM-18: resolve real JSON pointers instead of top-level bucket names
+    // (legal deep pointers were previously mis-reported as broken).
+    assert.deepEqual(findBrokenLocalRefs(SPEC), [], 'Zero broken $refs allowed');
   });
 
   it('7. permission parity exact', () => {
@@ -564,18 +546,19 @@ describe('INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure', () => {
   it('Census validation after PART 12', () => {
     const platformOpenApi = openapi.filter((o) => o.path.startsWith('/platform'));
     const operationalOpenApi = openapi.filter((o) => !o.path.startsWith('/platform'));
-    assert.equal(openapi.length, 1654, 'Total OpenAPI count must be 1,654 (1598 + 56)');
+    // CR-HM-18 refresh (previous values were PART 12 era totals).
+    assert.equal(openapi.length, 1896, 'Total OpenAPI count must be 1,896');
     assert.equal(platformOpenApi.length, 69);
-    assert.equal(operationalOpenApi.length, 1585, 'Operational OpenAPI count must be 1,585 (1529 + 56)');
+    assert.equal(operationalOpenApi.length, 1827, 'Operational OpenAPI count must be 1,827');
     const inScopeOperational = runtime.filter(
       (r) => !r.path.startsWith('/platform') && r.path !== '/',
     );
-    assert.equal(inScopeOperational.length, 1617);
-    assert.equal(inScopeOperational.length - operationalOpenApi.length, 32);
+    assert.equal(inScopeOperational.length, 1915);
+    assert.equal(inScopeOperational.length - operationalOpenApi.length, 88);
     const documentedCanon = new Set(operationalOpenApi.map((o) => `${o.method} ${o.canon}`));
     const unmappedDistinct = inScopeOperational.filter(
       (r) => !documentedCanon.has(`${r.method} ${r.canon}`),
     );
-    assert.equal(unmappedDistinct.length, 31);
+    assert.equal(unmappedDistinct.length, 90);
   });
 });

@@ -56,6 +56,7 @@ ACTIVE assignment to that building.
 |---|---|---|
 | Cancelled successfully (or retried) | `200`, `requestStatus: CANCELLED`, `replayed: true` on a retry | nothing further |
 | Already cancelled with a different intent | `409 HANDYMAN_SERVICE_REQUEST_ALREADY_CANCELLED` | refresh; the original record stands |
+| Retry reused a key from another cancellation | `409 HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT` | generate a new key for this intent |
 | Approved quotation exists | `409 HANDYMAN_SERVICE_REQUEST_CANCEL_COMMITTED` | use the scope lifecycle |
 | Request is `REFERRED` | `409 HANDYMAN_SERVICE_REQUEST_CANCEL_NOT_ALLOWED` | nothing to cancel |
 | Not your building | `403` (Care: `HANDYMAN_CARE_AUTHORITY_DENIED`) | request access, do not retry |

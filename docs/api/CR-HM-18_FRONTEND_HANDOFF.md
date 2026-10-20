@@ -101,6 +101,7 @@ will refuse anyway (see §2.4) but the UI should not offer an impossible action.
 | `404` | `HANDYMAN_SERVICE_REQUEST_NOT_FOUND` | request unknown or outside scope — do not enumerate |
 | `409` | `HANDYMAN_SERVICE_REQUEST_CANCEL_NOT_ALLOWED` | terminal referral — explain the request is already closed as referred |
 | `409` | `HANDYMAN_SERVICE_REQUEST_ALREADY_CANCELLED` | refresh and show the cancellation banner |
+| `409` | `HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT` | the key belongs to another cancellation — mint a fresh key; never retry blindly |
 | `409` | `HANDYMAN_SERVICE_REQUEST_CANCEL_COMMITTED` | explain: a quotation is approved; the work must be ended through the execution-scope lifecycle (do **not** offer a second cancel) |
 
 ---

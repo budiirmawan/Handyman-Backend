@@ -157,6 +157,7 @@ four operations including the read.)
 | `HANDYMAN_SERVICE_REQUEST_CANCEL_NOT_ALLOWED` | 409 | terminal state that can never be cancelled (`REFERRED`) |
 | `HANDYMAN_SERVICE_REQUEST_ALREADY_CANCELLED` | 409 | already cancelled (different key / different intent) |
 | `HANDYMAN_SERVICE_REQUEST_CANCEL_COMMITTED` | 409 | request owns an execution scope |
+| `HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT` | 409 | the idempotency key is already bound to a different cancellation (one key = one intent; a storage `23505` is never surfaced) |
 
 ---
 

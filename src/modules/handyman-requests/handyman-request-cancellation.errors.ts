@@ -40,3 +40,17 @@ export function handymanRequestCancelCommittedError(): AppError {
     statusCode: 409,
   });
 }
+
+/**
+ * The idempotency key is already bound to a different cancellation fact.
+ * An idempotency key identifies ONE intent; reusing it for another request
+ * must fail closed (409) instead of surfacing a storage error.
+ */
+export function handymanRequestCancellationKeyConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT,
+    message:
+      'This idempotency key was already used for a different cancellation.',
+    statusCode: 409,
+  });
+}

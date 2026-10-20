@@ -163,6 +163,7 @@ export {
   handymanRequestAlreadyCancelledError,
   handymanRequestCancelCommittedError,
   handymanRequestCancelNotAllowedError,
+  handymanRequestCancellationKeyConflictError,
 } from './handyman-request-cancellation.errors';
 export {
   HANDYMAN_REQUEST_CANCELLABLE_STATUSES,

@@ -4865,7 +4865,9 @@ paths:
         TRIAGE, INSPECTION_REQUIRED, DIAGNOSIS and READY_FOR_NEXT_STEP only;
         terminal REFERRED and any request that already owns an execution scope
         (approved quotation) are refused with 409. The cancellation fact is
-        append-only and replay-safe on `idempotencyKey`. Strict body
+        append-only and replay-safe on `idempotencyKey`; a key already bound
+        to another cancellation is 409
+        HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT. Strict body
         allow-list (`reason`, `idempotencyKey`); any actor/context key is
         rejected at the edge (400). Cache-Control is no-store.
       security:
@@ -7732,7 +7734,10 @@ paths:
         building, attribution and timestamps are server-derived. Replays with
         the same idempotencyKey and reason return the original fact with
         replayed=true; any other second attempt is 409
-        HANDYMAN_SERVICE_REQUEST_ALREADY_CANCELLED. Requires
+        HANDYMAN_SERVICE_REQUEST_ALREADY_CANCELLED. An idempotency key already
+        bound to a different cancellation is 409
+        HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT (one key = one
+        intent: never a cross-request replay, never a storage error). Requires
         `tenant_company.manage` plus exact-Building authority.
       tags: [Handyman Lifecycle]
       security: [{ bearerAuth: [] }]

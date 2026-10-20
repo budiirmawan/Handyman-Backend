@@ -196,6 +196,105 @@ async function intakeFixture(label: string) {
   return { realm, chain, company, request };
 }
 
+
+/**
+ * Funded settlement unit carrying a live DISPUTED hold: agreement + BM fee
+ * definitions, customer transaction, charge line, derived entitlements,
+ * confirmed/allocated payment, PAYABLE unit, then the operator hold.
+ * Shared by the J12 hardening cases so no test fabricates settlement rows.
+ */
+async function fundedDisputeFixture() {
+  const { realm, scope } = await baseFixture();
+  const crew = await crewFixture(realm);
+  await assignHandymanExecutionScopeCrew(
+    {
+      executionScopeId: scope.id,
+      providerContextId: crew.providerContext.id,
+      crewId: crew.crew.id,
+    },
+    adminId,
+  );
+  const draft = await prepareHandymanCommercialAgreement(adminId, {
+    clientId: realm.client.id,
+    idempotencyKey: id(),
+  });
+  const version = draft.version.id;
+  await q(
+    `INSERT INTO handyman_bm_fee_rule_definitions
+      (id,agreement_version_id,basis,mode,idempotency_key,created_by_user_id)
+      VALUES($1,$2,'LABOR_ONLY','DEFAULT',$3,$4)`,
+    [id(), version, id(), adminId],
+  );
+  await q(
+    `INSERT INTO handyman_bm_fee_term_definitions
+      (id,agreement_version_id,term_kind,rate_percent,idempotency_key,created_by_user_id)
+      VALUES($1,$2,'PERCENTAGE_OF_BASIS','2.5000',$3,$4)`,
+    [id(), version, id(), adminId],
+  );
+  await q(
+    `INSERT INTO handyman_bm_fee_beneficiary_definitions
+      (id,agreement_version_id,beneficiary_kind,beneficiary_reference_id,
+        idempotency_key,created_by_user_id)
+      VALUES($1,$2,'CLIENT_ORGANIZATION',$3,$4,$5)`,
+    [id(), version, realm.client.id, id(), adminId],
+  );
+  await activateHandymanCommercialAgreementVersion(adminId, {
+    versionId: version,
+    effectiveFrom: new Date(Date.now() - 60_000).toISOString(),
+    idempotencyKey: id(),
+  });
+  await openHandymanCustomerTransaction(
+    { executionScopeId: scope.id, idempotencyKey: id() },
+    adminId,
+  );
+  const line = (
+    await q(
+      `SELECT id FROM handyman_quotation_lines
+        WHERE quotation_version_id = $1 AND line_type = 'LABOR'`,
+      [scope.approvedQuotationVersionId],
+    )
+  ).rows[0];
+  await composeHandymanChargeLine(
+    { executionScopeId: scope.id, quotationLineId: line.id, idempotencyKey: id() },
+    adminId,
+  );
+  await deriveHandymanFinancialEntitlements(scope.id, adminId, id());
+  const payment = await recordHandymanCustomerPayment(
+    {
+      executionScopeId: scope.id,
+      amount: '100.00',
+      channel: 'BANK_TRANSFER',
+      providerName: 'Bank',
+      providerReference: id(),
+      externalReference: id(),
+      idempotencyKey: id(),
+    },
+    adminId,
+  );
+  await confirmHandymanCustomerPayment(
+    { executionScopeId: scope.id, paymentId: payment.payment.id, idempotencyKey: id() },
+    adminId,
+  );
+  await allocateHandymanCustomerPayment(
+    {
+      executionScopeId: scope.id,
+      paymentId: payment.payment.id,
+      chargeLineId: (
+        await q(
+          `SELECT id FROM handyman_charge_lines WHERE transaction_id = $1`,
+          [payment.payment.transactionId],
+        )
+      ).rows[0].id,
+      amount: '100.00',
+      idempotencyKey: id(),
+    },
+    adminId,
+  );
+  const unit = await prepareHandymanSettlement(scope.id, adminId, id());
+  const dispute = await holdHandymanSettlementDispute(scope.id, adminId, id());
+  return { realm, scope, unit, dispute };
+}
+
 describe('CR-HM-18 FULL-CAPABILITY-E2E-CLOSURE-01', () => {
   before(async () => {
     await rm(DIR, { recursive: true, force: true });
@@ -478,6 +577,251 @@ describe('CR-HM-18 FULL-CAPABILITY-E2E-CLOSURE-01', () => {
       ]),
       /append-only/,
     );
+  });
+
+  it('J01-H: cancellable pre-commitment states, concurrency, key reuse and post-commitment safety', async () => {
+    // ---- 1. a DIAGNOSIS-stage request is still cancellable -------------
+    const diag = await intakeFixture('CancelDiagnosis');
+    const diagManager = await personaSession(
+      ['tenant_company.read', 'tenant_company.manage'],
+      diag.realm.building.id,
+      'Diagnosis Cancel Manager',
+    );
+    await handymanServiceRequestTriageService.recordHandymanRequestTriage(
+      {
+        handymanRequestId: diag.request.id,
+        triageDisposition: 'DIAGNOSIS',
+        triageNote: 'Diagnose before any commercial step.',
+      },
+      adminId,
+    );
+    await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis(
+      {
+        handymanRequestId: diag.request.id,
+        disciplineId,
+        diagnosis: 'Fixture diagnosis for cancellation.',
+      },
+      adminId,
+    );
+    assert.equal(
+      (await q('SELECT status FROM handyman_service_requests WHERE id = $1', [diag.request.id]))
+        .rows[0].status,
+      'READY_FOR_NEXT_STEP',
+    );
+    const diagCancel = await api()
+      .post(`${V1}/handyman/requests/${diag.request.id}/cancel`)
+      .set(auth(diagManager.token))
+      .send({ reason: 'Tenant cancelled before quotation.', idempotencyKey: key('cancel') });
+    assert.equal(diagCancel.status, 200, JSON.stringify(diagCancel.body));
+    assert.equal(diagCancel.body.data.previousStatus, 'READY_FOR_NEXT_STEP');
+
+    // ---- 2. concurrent cancellation: exactly one winner ---------------
+    const race = await intakeFixture('CancelRace');
+    const raceManager = await personaSession(
+      ['tenant_company.read', 'tenant_company.manage'],
+      race.realm.building.id,
+      'Race Manager',
+    );
+    const racePath = `${V1}/handyman/requests/${race.request.id}/cancel`;
+    const [first, second] = await Promise.all([
+      api().post(racePath).set(auth(raceManager.token))
+        .send({ reason: 'Concurrent cancel A.', idempotencyKey: key('race') }),
+      api().post(racePath).set(auth(raceManager.token))
+        .send({ reason: 'Concurrent cancel B.', idempotencyKey: key('race') }),
+    ]);
+    const statuses = [first.status, second.status].sort();
+    assert.deepEqual(statuses, [200, 409], JSON.stringify([first.body, second.body]));
+    assert.equal(
+      (await q(
+        `SELECT count(*)::int AS n FROM handyman_request_cancellations
+          WHERE handyman_request_id = $1`,
+        [race.request.id],
+      )).rows[0].n,
+      1,
+    );
+    assert.equal(
+      (await q(
+        `SELECT count(*)::int AS n FROM operational_events
+          WHERE event_type = 'HANDYMAN_REQUEST_CANCELLED' AND entity_id = $1`,
+        [race.request.id],
+      )).rows[0].n,
+      1,
+    );
+    assert.equal(
+      (await q('SELECT status FROM handyman_service_requests WHERE id = $1', [race.request.id]))
+        .rows[0].status,
+      'CANCELLED',
+    );
+
+    // ---- 3. an idempotency key is single-intent -----------------------
+    const reuseTarget = await intakeFixture('CancelKeyReuse');
+    const reuseManager = await personaSession(
+      ['tenant_company.read', 'tenant_company.manage'],
+      reuseTarget.realm.building.id,
+      'Key Reuse Manager',
+    );
+    const sharedKey = await q(
+      `SELECT idempotency_key FROM handyman_request_cancellations
+        WHERE handyman_request_id = $1`,
+      [diag.request.id],
+    );
+    const reused = await api()
+      .post(`${V1}/handyman/requests/${reuseTarget.request.id}/cancel`)
+      .set(auth(reuseManager.token))
+      .send({
+        reason: 'Reusing someone else key.',
+        idempotencyKey: sharedKey.rows[0].idempotency_key,
+      });
+    assert.equal(reused.status, 409, JSON.stringify(reused.body));
+    assert.equal(
+      reused.body.error.code,
+      'HANDYMAN_SERVICE_REQUEST_CANCELLATION_KEY_CONFLICT',
+    );
+    assert.equal(
+      (await q('SELECT status FROM handyman_service_requests WHERE id = $1', [
+        reuseTarget.request.id,
+      ])).rows[0].status,
+      'INTAKE',
+    );
+
+    // ---- 4. post-commitment refusal never damages the live scope ------
+    const committed = await baseFixture();
+    const committedManager = await personaSession(
+      ['tenant_company.read', 'tenant_company.manage'],
+      committed.realm.building.id,
+      'Post Commitment Manager',
+    );
+    for (const attempt of [1, 2]) {
+      const refused = await api()
+        .post(`${V1}/handyman/requests/${committed.scope.handymanRequestId}/cancel`)
+        .set(auth(committedManager.token))
+        .send({
+          reason: `Post-commencement attempt ${attempt}.`,
+          idempotencyKey: key('committed'),
+        });
+      assert.equal(refused.status, 409, JSON.stringify(refused.body));
+      assert.equal(
+        refused.body.error.code,
+        'HANDYMAN_SERVICE_REQUEST_CANCEL_COMMITTED',
+      );
+    }
+    const scopeRow = (
+      await q('SELECT status FROM handyman_execution_scopes WHERE id = $1', [
+        committed.scope.id,
+      ])
+    ).rows[0];
+    assert.equal(scopeRow.status, 'AUTHORIZED');
+    const requestRow = (
+      await q('SELECT status FROM handyman_service_requests WHERE id = $1', [
+        committed.scope.handymanRequestId,
+      ])
+    ).rows[0];
+    assert.notEqual(requestRow.status, 'CANCELLED');
+    const crew = await crewFixture(committed.realm);
+    const stillAssignable = await assignHandymanExecutionScopeCrew(
+      {
+        executionScopeId: committed.scope.id,
+        providerContextId: crew.providerContext.id,
+        crewId: crew.crew.id,
+      },
+      adminId,
+    );
+    assert.equal(stillAssignable.status, 'ACTIVE');
+    assert.equal(
+      (await q(
+        `SELECT count(*)::int AS n FROM handyman_request_cancellations
+          WHERE handyman_request_id = $1`,
+        [committed.scope.handymanRequestId],
+      )).rows[0].n,
+      0,
+    );
+  });
+
+  it('J12-H: adjudication authority, foreign references and bounded conflicts', async () => {
+    const { realm, scope, dispute } = await fundedDisputeFixture();
+    const exceptionId = dispute.id;
+
+    const path = `${V1}/handyman/execution-scopes/${scope.id}/settlement/dispute/resolution`;
+
+    // (a) settlement authority is NOT implied by finance/commercial authority
+    const financeOnly = await personaSession(
+      [
+        'tenant_company.read',
+        'tenant_company.manage',
+        'handyman.finance.read',
+        'handyman.finance.manage',
+        'handyman.commercial.manage',
+      ],
+      realm.building.id,
+      'Finance Without Settlement',
+    );
+    const denied = await api()
+      .post(path)
+      .set(auth(financeOnly.token))
+      .send({
+        exceptionId: exceptionId,
+        outcome: 'RELEASED',
+        note: 'Trying without settlement authority.',
+        idempotencyKey: key('dispute'),
+      });
+    assert.equal(denied.status, 403, JSON.stringify(denied.body));
+    assert.equal(
+      (await q(
+        `SELECT count(*)::int AS n FROM handyman_settlement_dispute_resolutions
+          WHERE exception_id = $1`,
+        [exceptionId],
+      )).rows[0].n,
+      0,
+    );
+
+    // (b) an exception that is not on this scope is invisible (404)
+    const adjudicator = await personaSession(
+      [
+        'tenant_company.read',
+        'tenant_company.manage',
+        'handyman.finance.read',
+        'handyman.finance.manage',
+        'handyman.settlement.manage',
+      ],
+      realm.building.id,
+      'Settlement Adjudicator Hardening',
+    );
+    const foreign = await api()
+      .post(path)
+      .set(auth(adjudicator.token))
+      .send({
+        exceptionId: id(),
+        outcome: 'RELEASED',
+        note: 'Unknown exception.',
+        idempotencyKey: key('dispute'),
+      });
+    assert.equal(foreign.status, 404, JSON.stringify(foreign.body));
+    assert.equal(foreign.body.error.code, 'HANDYMAN_SETTLEMENT_NOT_FOUND');
+
+    // (c) an unknown scope is invisible too (404), never a bypass
+    const unknownScope = await api()
+      .post(`${V1}/handyman/execution-scopes/${id()}/settlement/dispute/resolution`)
+      .set(auth(adjudicator.token))
+      .send({
+        exceptionId: exceptionId,
+        outcome: 'RELEASED',
+        note: 'Unknown scope.',
+        idempotencyKey: key('dispute'),
+      });
+    assert.equal(unknownScope.status, 404, JSON.stringify(unknownScope.body));
+
+    // (d) the real decision still lands, and a settled replay is refused
+    const ok = await api()
+      .post(path)
+      .set(auth(adjudicator.token))
+      .send({
+        exceptionId: exceptionId,
+        outcome: 'UPHELD',
+        note: 'Variance sustained pending ledger correction.',
+        idempotencyKey: key('dispute'),
+      });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.data.outcome, 'UPHELD');
   });
 
   it('J12: settlement dispute adjudication clears or sustains the hold without touching money facts', async () => {

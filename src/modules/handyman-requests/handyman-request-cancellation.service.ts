@@ -10,6 +10,7 @@ import {
   handymanRequestAlreadyCancelledError,
   handymanRequestCancelCommittedError,
   handymanRequestCancelNotAllowedError,
+  handymanRequestCancellationKeyConflictError,
 } from './handyman-request-cancellation.errors';
 import {
   isHandymanRequestCancellableStatus,
@@ -46,6 +47,31 @@ import {
  * returns the original fact (`replayed: true`); anything else on an
  * already-cancelled request is a bounded 409.
  */
+
+/**
+ * Storage-level race mapping. Two concurrent cancellations of the SAME
+ * request serialize on the parent row lock, but a reused idempotency key
+ * across two DIFFERENT requests can still collide on the unique index; the
+ * caller must see a bounded 409, never a raw 23505.
+ */
+function mapCancellationUniqueViolation(error: unknown): never {
+  const candidate = error as { code?: string; constraint?: string } | undefined;
+  if (candidate?.code === '23505') {
+    if (
+      candidate.constraint ===
+      'handyman_request_cancellations_idempotency_key_key'
+    ) {
+      throw handymanRequestCancellationKeyConflictError();
+    }
+    if (
+      candidate.constraint ===
+      'handyman_request_cancellations_handyman_request_id_key'
+    ) {
+      throw handymanRequestAlreadyCancelledError();
+    }
+  }
+  throw error;
+}
 
 function toPublic(
   record: HandymanRequestCancellationRecord,
@@ -139,6 +165,18 @@ export async function cancelHandymanRequest(
       throw handymanRequestCancelCommittedError();
     }
 
+    // 5b) An idempotency key identifies exactly ONE intent. If the key is
+    // already bound to another request's cancellation, fail closed instead
+    // of surfacing a storage unique-violation.
+    if (
+      await handymanRequestCancellationRepository.findByIdempotencyKey(
+        tx,
+        idempotencyKey,
+      )
+    ) {
+      throw handymanRequestCancellationKeyConflictError();
+    }
+
     // 6) Append the fact, then project the terminal status.
     const record = await handymanRequestCancellationRepository
       .insertCancellation(tx, {
@@ -150,7 +188,8 @@ export async function cancelHandymanRequest(
         reason,
         cancelledByUserId: actorUserId,
         idempotencyKey,
-      });
+      })
+      .catch((error: unknown) => mapCancellationUniqueViolation(error));
     await handymanServiceRequestRepository.updateStatus(
       tx,
       request.id,
