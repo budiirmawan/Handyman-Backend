@@ -3,6 +3,12 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { parse } from 'yaml';
+import { createApp } from '../src/app';
+import {
+  extractAllRuntimeRoutes,
+  findBrokenLocalRefs,
+  normalizePath,
+} from './helpers/openapi-census';
 
 /**
  * CR-BE-MOB-CONTRACT-01 PART 07 — Mobile OpenAPI completeness.
@@ -294,10 +300,21 @@ function documentedOperations(spec: Record<string, any>): Set<string> {
   return set;
 }
 
-/** Extracts every route registration from the backend module route files. */
+/**
+ * Registered routes = live express stack ∪ source declarations.
+ *
+ * CR-HM-18: either probe alone under-reports. The source regex misses paths
+ * registered through `for (const path of [...])` loops; the stack walk cannot
+ * recover the mount prefix of express-5 *lazy* sub-routers (`matchers`-only
+ * layers, e.g. the WhatsApp webhook router). Their union is the conservative
+ * registry: a documented path must appear in at least one of them.
+ */
 function backendRoutes(): Set<string> {
-  const re = /\.(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/g;
   const set = new Set<string>();
+  for (const route of extractAllRuntimeRoutes()) {
+    set.add(`${route.method} ${canonicalPath(normalizePath(route.path))}`);
+  }
+  const re = /\.(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/g;
   function walk(dir: string): string[] {
     const out: string[] = [];
     for (const name of readdirSync(dir)) {
@@ -311,9 +328,9 @@ function backendRoutes(): Set<string> {
     const src = readFileSync(file, 'utf8');
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) {
-      const method = m[1].toUpperCase();
-      const path = normalizePath(m[2]);
-      set.add(`${method} ${canonicalPath(path)}`);
+      set.add(
+        `${m[1].toUpperCase()} ${canonicalPath(normalizePath(m[2]))}`,
+      );
     }
   }
   return set;
@@ -336,12 +353,24 @@ describe('CR-BE-MOB-CONTRACT-01 PART 07 — mobile OpenAPI completeness', () => 
   });
 
   it('documents only operations that are registered in the backend router', () => {
+    /**
+     * Express 5 mounts lazy sub-routers as `matchers`-only layers, so the
+     * stack walk cannot recover the mount prefix and the source regex sees
+     * only the prefix-relative path. These documented operations belong to
+     * such a router (`app.use('/webhooks/notifications/whatsapp', …)` in
+     * `src/app.ts`) and are verified there, not by either probe.
+     */
+    const MOUNT_PREFIXED = new Set([
+      'GET /webhooks/notifications/whatsapp',
+      'POST /webhooks/notifications/whatsapp',
+    ]);
     // Reuses the invariant from openapi-contract.test.ts without a live
     // server: every documented METHOD+PATH must appear in the route files
     // (canonicalized so param names do not affect the comparison).
     const registered = backendRoutes();
     const phantom: string[] = [];
     for (const op of documented) {
+      if (MOUNT_PREFIXED.has(op)) continue;
       const [method, path] = op.split(' ');
       if (!registered.has(`${method} ${canonicalPath(path)}`)) phantom.push(op);
     }
@@ -372,25 +401,8 @@ describe('CR-BE-MOB-CONTRACT-01 PART 07 — mobile OpenAPI completeness', () => 
   });
 
   it('resolves every $ref in the spec', () => {
-    const schemas = Object.keys(spec.components?.schemas ?? {});
-    const responses = Object.keys(spec.components?.responses ?? {});
-    const params = Object.keys(spec.components?.parameters ?? {});
-    const known = new Set([...schemas, ...responses, ...params]);
-    const unresolved: string[] = [];
-    function walk(node: unknown): void {
-      if (node && typeof node === 'object') {
-        for (const [k, v] of Object.entries(node)) {
-          if (k === '$ref') {
-            const target = (v as string).split('/').pop()!;
-            if (!known.has(target)) unresolved.push(v as string);
-          } else {
-            walk(v);
-          }
-        }
-      }
-    }
-    walk(spec);
-    assert.deepEqual(unresolved, [], 'unresolved $refs');
+    // CR-HM-18: full JSON-pointer resolution (deep pointers are legal).
+    assert.deepEqual(findBrokenLocalRefs(spec), [], 'unresolved $refs');
   });
 
   it('every mobile-contract operation carries bearer security', () => {

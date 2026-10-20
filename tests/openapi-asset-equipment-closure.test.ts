@@ -11,7 +11,10 @@ process.env.WHATSAPP_META_APP_SECRET = 'test-secret';
 process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN = 'test-token';
 
 import { createApp } from '../src/app';
-import { findBrokenLocalRefs } from './helpers/openapi-census';
+import {
+  extractAllRuntimeRoutes as sharedRuntimeRoutes,
+  findBrokenLocalRefs,
+} from './helpers/openapi-census';
 
 /**
  * INT-LC-19-BE PART 03 — Asset & Equipment Lifecycle OpenAPI Closure.
@@ -52,53 +55,8 @@ function normalizePath(p: string): string {
     .replace(/\/$/, '') || '/';
 }
 
-function walkRouter(
-  stack: unknown,
-  prefix = '',
-): Array<{ method: string; path: string }> {
-  const out: Array<{ method: string; path: string }> = [];
-  const s = stack as Array<{
-    route?: { path?: string; methods?: Record<string, unknown> };
-    handle?: { stack?: unknown[]; regexp?: { source?: string } };
-    matchers?: Array<(input: string) => boolean | object>;
-  }>;
-
-  for (const layer of s || []) {
-    if (layer.route?.path) {
-      const full = (prefix + layer.route.path) || '/';
-      for (const m of Object.keys(layer.route.methods || {})) {
-        if (m === '_all') continue;
-        out.push({ method: m.toUpperCase(), path: full });
-      }
-    } else if (layer.handle?.stack) {
-      let layerPrefix = prefix;
-      if (layer.matchers?.[0]?.('/webhooks/notifications/whatsapp')) {
-        layerPrefix = '/webhooks/notifications/whatsapp';
-      }
-      out.push(...walkRouter(layer.handle.stack, layerPrefix));
-    }
-  }
-  return out;
-}
-
-function extractAllRuntimeRoutes(): Array<{
-  method: string;
-  path: string;
-  canon: string;
-}> {
-  const app = createApp() as Express & { router?: { stack: unknown } };
-  const stack = app.router?.stack;
-  if (!stack) {
-    throw new Error('Could not access express router stack from createApp()');
-  }
-
-  const raw = walkRouter(stack);
-  return raw.map((r) => ({
-    method: r.method,
-    path: r.path,
-    canon: normalizePath(r.path),
-  }));
-}
+// CR-HM-18: runtime routes come from the shared census probe, which also
+// understands array-registered paths and lazy-mount prefixes.
 
 function extractOpenApiOperations(): Array<{
   method: string;
@@ -224,7 +182,7 @@ const ASSET_FAILURES_ROUTES = [
 ];
 
 describe('OpenAPI Asset & Equipment Lifecycle Closure (INT-LC-19-BE PART 03)', () => {
-  const runtime = extractAllRuntimeRoutes();
+  const runtime = sharedRuntimeRoutes();
   const openapi = extractOpenApiOperations();
 
   const platformRuntime = runtime.filter((r) => r.path.startsWith('/platform') || r.path === '/platform');
@@ -498,11 +456,11 @@ describe('OpenAPI Asset & Equipment Lifecycle Closure (INT-LC-19-BE PART 03)', (
     assert.equal(openapi.length, 1896, 'Total OpenAPI operations count must be 1896');
 
     const inScopeOperational = operationalRuntime.filter((r) => r.path !== '/');
-    assert.equal(inScopeOperational.length, 1915, 'In-scope operational runtime routes count must be 1915');
-    assert.equal(inScopeOperational.length - operationalOpenApi.length, 88, 'Arithmetic runtime gap must be 88');
+    assert.equal(inScopeOperational.length, 1917, 'In-scope operational runtime routes count must be 1917');
+    assert.equal(inScopeOperational.length - operationalOpenApi.length, 90, 'Arithmetic runtime gap must be 90');
 
     const distinctOperationalCanon = new Set(inScopeOperational.map((r) => `${r.method} ${r.canon}`));
     const distinctUndoc = [...distinctOperationalCanon].filter((c) => !openApiMap.has(c));
-    assert.equal(distinctUndoc.length, 90, 'Distinct runtime gap must be 90');
+    assert.equal(distinctUndoc.length, 89, 'Distinct runtime gap must be 89');
   });
 });

@@ -49,6 +49,10 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { createAdminUser } from './helpers/access';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-SEC-01 PART 06F-1 (ULTRA-LIGHT) — focused tests for the
@@ -107,7 +111,19 @@ let adminUserId = '';
 let disciplineId = '';
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
+/**
+ * CR-HM-18: this suite used to SKIP every case when no external PostgreSQL
+ * was reachable. It now boots its own disposable cluster.
+ */
+const EMBEDDED_DIR = '/tmp/hm13-payment-allocation-guard-pg';
+const EMBEDDED_PORT = 55573;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -154,9 +170,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -363,9 +384,11 @@ async function scopeFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
+  // CR-HM-18: the tenant decision authority requires the ACTIVE Tenant PIC
+  // user of the request, so the approval is recorded by the PIC.
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   assert.equal(scope.buildingId, realm.buildingA1.id);

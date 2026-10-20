@@ -10,6 +10,11 @@ process.env.WHATSAPP_META_APP_SECRET = 'test-secret';
 process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN = 'test-token';
 
 import { createApp } from '../src/app';
+import {
+  extractAllRuntimeRoutes,
+  findBrokenLocalRefs,
+  normalizePath,
+} from './helpers/openapi-census';
 import { findBrokenLocalRefs } from './helpers/openapi-census';
 
 /**
@@ -22,43 +27,6 @@ import { findBrokenLocalRefs } from './helpers/openapi-census';
 const SPEC_PATH = resolve(__dirname, '../docs/api/openapi.yaml');
 const SPEC = parse(readFileSync(SPEC_PATH, 'utf8')) as Record<string, any>;
 
-function normalizePath(p: string): string {
-  return (
-    p
-      .replace(/:([a-zA-Z0-9_]+)/g, '{$1}')
-      .replace(/\{([a-zA-Z0-9_]+)\}/g, '{p}')
-      .replace(/\/+/g, '/')
-      .replace(/\/$/, '') || '/'
-  );
-}
-
-function walkRouter(
-  stack: unknown,
-  prefix = '',
-): Array<{ method: string; path: string }> {
-  const out: Array<{ method: string; path: string }> = [];
-  const s = stack as Array<{
-    route?: { path?: string; methods?: Record<string, unknown> };
-    handle?: { stack?: unknown[] };
-    matchers?: Array<(input: string) => boolean | object>;
-  }>;
-  for (const layer of s ?? []) {
-    if (layer.route?.path) {
-      const full = prefix + layer.route.path || '/';
-      for (const m of Object.keys(layer.route.methods ?? {})) {
-        if (m === '_all') continue;
-        out.push({ method: m.toUpperCase(), path: full });
-      }
-    } else if (layer.handle?.stack) {
-      let layerPrefix = prefix;
-      if (layer.matchers?.[0]?.('/webhooks/notifications/whatsapp')) {
-        layerPrefix = '/webhooks/notifications/whatsapp';
-      }
-      out.push(...walkRouter(layer.handle.stack, layerPrefix));
-    }
-  }
-  return out;
-}
 
 const SCOPED_OPERATIONS: Record<
   string,
@@ -347,11 +315,10 @@ const SCOPED_OPERATIONS: Record<
 };
 
 describe('INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure', () => {
-  const app = createApp() as Express;
-  const runtime = walkRouter((app as any).router?.stack).map((r) => ({
-    ...r,
-    canon: normalizePath(r.path),
-  }));
+  // Shared census probe (CR-HM-18): the local walk missed array-registered
+  // paths and lazy-mount prefixes.
+  createApp();
+  const runtime = extractAllRuntimeRoutes();
 
   const openapi: Array<{
     method: string;
@@ -553,12 +520,12 @@ describe('INT-LC-19-BE PART 12 — Utility Management OpenAPI Closure', () => {
     const inScopeOperational = runtime.filter(
       (r) => !r.path.startsWith('/platform') && r.path !== '/',
     );
-    assert.equal(inScopeOperational.length, 1915);
-    assert.equal(inScopeOperational.length - operationalOpenApi.length, 88);
+    assert.equal(inScopeOperational.length, 1917);
+    assert.equal(inScopeOperational.length - operationalOpenApi.length, 90);
     const documentedCanon = new Set(operationalOpenApi.map((o) => `${o.method} ${o.canon}`));
     const unmappedDistinct = inScopeOperational.filter(
       (r) => !documentedCanon.has(`${r.method} ${r.canon}`),
     );
-    assert.equal(unmappedDistinct.length, 90);
+    assert.equal(unmappedDistinct.length, 89);
   });
 });

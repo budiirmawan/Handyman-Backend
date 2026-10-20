@@ -32,6 +32,10 @@ import {
   scopeFixture,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-13 PART 04 — payment allocation (FROZEN governance
@@ -50,7 +54,19 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
 
+/**
+ * CR-HM-18: this suite used to SKIP every case when no external PostgreSQL
+ * was reachable. It now boots its own disposable cluster.
+ */
+const EMBEDDED_DIR = '/tmp/hm13-payment-allocation-pg';
+const EMBEDDED_PORT = 55572;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -99,9 +115,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -756,12 +777,33 @@ describe('CR-HM-13 PART 04 — payment allocation', () => {
     }
     for (const forbidden of [
       'gateway', 'refund', 'reversal', 'adjustment', 'settlement',
-      'entitlement', 'payout', 'invoice', 'wallet', 'subscription',
+      'entitlement', 'payout', 'wallet', 'subscription',
       'commission', 'controller', 'routes', 'openapi',
       'handyman_bm_fee_rule',
     ]) {
       assert.ok(!source.includes(forbidden),
         `module source must not mention ${forbidden}`);
+    }
+    // CR-HM-18: 'invoice' is no longer a forbidden token. Migration 0458 made
+    // allocation invoice-BOUND (a finalized, line-linked single-scope invoice
+    // must fund the charge line), so the module must read the invoice and
+    // refuse to allocate when it is not finalizable. The firewall stays
+    // meaningful by pinning the gate itself and by keeping invoice WRITES
+    // forbidden.
+    assert.ok(source.includes('tenant_invoices'),
+      'invoice-bound allocation gate must read tenant_invoices');
+    assert.ok(source.includes("invoice.status !== 'FINALIZED'"),
+      'allocation must refuse a non-FINALIZED invoice');
+    for (const write of [
+      'INSERT INTO tenant_invoices',
+      'UPDATE tenant_invoices',
+      'DELETE FROM tenant_invoices',
+      'INSERT INTO tenant_invoice_lines',
+      'UPDATE tenant_invoice_lines',
+      'DELETE FROM tenant_invoice_lines',
+    ]) {
+      assert.ok(!source.includes(write),
+        `allocations never write invoices (${write})`);
     }
     // Allocations write ONLY their own table: payments, charge lines,
     // anchors and the ledger transaction are read-only here.

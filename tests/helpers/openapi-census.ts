@@ -43,10 +43,17 @@ export function walkRouter(
 
   for (const layer of s || []) {
     if (layer.route?.path) {
-      const full = (prefix + layer.route.path) || '/';
-      for (const m of Object.keys(layer.route.methods || {})) {
-        if (m === '_all') continue;
-        out.push({ method: m.toUpperCase(), path: full });
+      // Express accepts an ARRAY of paths for one handler
+      // (`router.get(['/a', '/b'], h)`, very common for paired URLs).
+      const paths = Array.isArray(layer.route.path)
+        ? (layer.route.path as string[])
+        : [layer.route.path as string];
+      for (const rawPath of paths) {
+        const full = (prefix + rawPath) || '/';
+        for (const m of Object.keys(layer.route.methods || {})) {
+          if (m === '_all') continue;
+          out.push({ method: m.toUpperCase(), path: full });
+        }
       }
     } else if (layer.handle?.stack) {
       let layerPrefix = prefix;
