@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it, type TestContext } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import { parse as parseYaml } from 'yaml';
 import type { DatabaseConfig } from '../src/config';
@@ -45,6 +47,25 @@ import { ensureTestDatabase } from './helpers/postgres';
 
 const HM = '/api/v1/handyman/requests';
 
+/**
+ * CR-HM-18: the suite previously skipped 10/10 whenever no external
+ * PostgreSQL was reachable ("test database unavailable"), so the whole
+ * lifecycle surface was recorded as NOT TESTED at the margin. It now boots
+ * a disposable embedded PostgreSQL like the sibling E2E suites, making the
+ * evidence self-contained.
+ */
+const EMBEDDED_DIR = '/tmp/hm03-lifecycle-api-pg';
+const EMBEDDED_PORT = 55570;
+Object.assign(process.env, {
+  DB_HOST: '127.0.0.1',
+  DB_PORT: String(EMBEDDED_PORT),
+  DB_USER: 'postgres',
+  DB_PASSWORD: '',
+  DB_NAME: 'asentra_test',
+  DB_SSL: 'false',
+});
+let embedded: EmbeddedPostgres | null = null;
+
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let token = '';
@@ -53,6 +74,23 @@ let disciplineIds: Record<string, string> = {};
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 before(async () => {
+  await rm(EMBEDDED_DIR, { recursive: true, force: true });
+  await mkdir(EMBEDDED_DIR, { recursive: true });
+  embedded = new EmbeddedPostgres({
+    databaseDir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+    user: 'postgres',
+    password: '',
+    persistent: true,
+    authMethod: 'trust',
+  });
+  await embedded.initialise();
+  await embedded.start();
+  const adminClient = embedded.getPgClient('postgres', '127.0.0.1');
+  await adminClient.connect();
+  await adminClient.query('CREATE DATABASE asentra_test');
+  await adminClient.end();
+
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -82,9 +120,15 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    await rm(EMBEDDED_DIR, { recursive: true, force: true });
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -450,7 +494,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
     assert.equal(res.body.data.referredByUserId, adminUserId);
   });
 
-  it('10: OpenAPI contains exactly the intended 8-operation CR-HM-03 surface', async (t) => {
+  it('10: OpenAPI contains exactly the intended CR-HM-03 surface + CR-HM-18 cancellation', async (t) => {
     if (!requireDatabase(t)) return;
     const doc = parseYaml(readFileSync(
       join(process.cwd(), 'docs/api/openapi.yaml'),
@@ -480,7 +524,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
         String(ops.get.operationId),
       );
     }
-    // exactly 8 operations, matching the runtime controller names
+    // exactly 8 CR-HM-03 operations, matching the runtime controller names
     assert.deepEqual(operationIds.sort(), [
       'getHandymanRequestDiagnosis',
       'getHandymanRequestInspection',
@@ -491,17 +535,54 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
       'recordHandymanReferral',
       'recordHandymanRequestTriage',
     ]);
-    // no other lifecycle endpoints documented
-    const lifecyclePaths = Object.keys(doc.paths).filter((p) =>
-      p.startsWith('/handyman/requests/{handymanRequestId}/') &&
-      p !== '/handyman/requests/{handymanRequestId}/intake-evidence',
+    // CR-HM-18 REQUEST-CANCEL-01 adds exactly two more lifecycle operations.
+    const cancelOps = doc.paths['/handyman/requests/{handymanRequestId}/cancel'];
+    const cancelReadOps =
+      doc.paths['/handyman/requests/{handymanRequestId}/cancellation'];
+    assert.ok(cancelOps, 'missing /cancel path');
+    assert.ok(cancelReadOps, 'missing /cancellation path');
+    assert.deepEqual(Object.keys(cancelOps).sort(), ['parameters', 'post']);
+    assert.deepEqual(Object.keys(cancelReadOps).sort(), ['get', 'parameters']);
+    assert.equal(String(cancelOps.post.operationId), 'cancelHandymanRequest');
+    assert.equal(
+      String(cancelReadOps.get.operationId),
+      'getHandymanRequestCancellation',
     );
-    assert.deepEqual(
-      lifecyclePaths.sort(),
-      lifecycles.map(
-        (step) => `/handyman/requests/{handymanRequestId}/${step}`,
-      ).sort(),
-    );
+    // No undocumented lifecycle endpoints: every path under the request
+    // prefix belongs to an explicitly documented family (CR-HM-03 steps,
+    // CR-HM-18 cancellation, intake evidence, quotation presentation and the
+    // CR-HM-08 readiness families).
+    const prefix = '/handyman/requests/{handymanRequestId}/';
+    const documentedPaths = new Set<string>([
+      ...lifecycles.map((step) => `${prefix}${step}`),
+      `${prefix}cancel`,
+      `${prefix}cancellation`,
+      `${prefix}quotation`,
+      `${prefix}quotation/presented`,
+      `${prefix}intake-evidence`,
+      ...[
+        'permit-readiness',
+        'scheduling-readiness',
+        'unit-access-readiness',
+      ].flatMap((family) => [
+        `${prefix}${family}`,
+        `${prefix}${family}/history`,
+      ]),
+    ]);
+    const lifecyclePaths = Object.keys(doc.paths).filter((p) => {
+      if (!p.startsWith(prefix)) return false;
+      assert.ok(
+        documentedPaths.has(p),
+        `undocumented lifecycle path documented: ${p}`,
+      );
+      return p !== `${prefix}intake-evidence`;
+    });
+    for (const step of lifecycles) {
+      assert.ok(
+        lifecyclePaths.includes(`${prefix}${step}`),
+        `missing lifecycle path ${prefix}${step}`,
+      );
+    }
     // caller-authoritative fields must not exist in request schemas
     const schemas = doc.components.schemas;
     for (const [name, keys] of [
@@ -512,6 +593,7 @@ describe('CR-HM-03 PART 05A — HTTP + OpenAPI lifecycle surface', () => {
         ['disciplineId', 'diagnosis', 'recommendedServiceCatalogId'],
       ],
       ['RecordHandymanReferralRequest', ['note']],
+      ['CancelHandymanRequestRequest', ['reason', 'idempotencyKey']],
     ] as const) {
       assert.ok(schemas[name], `missing request schema ${name}`);
       assert.deepEqual(
