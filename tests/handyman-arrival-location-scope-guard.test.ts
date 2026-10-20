@@ -21,6 +21,10 @@ import {
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-SEC-01 PART 06B-2 (ULTRA-LIGHT) — focused tests for the
@@ -86,7 +90,19 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
 
+/**
+ * CR-HM-18 J04: previously SKIPPED every case without an external PostgreSQL.
+ * The suite now owns a disposable cluster so the J04 seam has real evidence.
+ */
+const EMBEDDED_DIR = '/tmp/hm04-arrival-location-guard-pg';
+const EMBEDDED_PORT = 55578;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -131,9 +147,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {

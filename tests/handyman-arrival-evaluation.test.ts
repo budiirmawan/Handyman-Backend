@@ -22,6 +22,7 @@ import { saveHandymanBuildingGeospatialPolicy }
   from '../src/modules/handyman-geospatial-policies';
 import {
   assignHandymanExecutionScopeCrew,
+  getHandymanExecutionScopeAssignment,
   reassignHandymanExecutionScopeCrew,
 } from '../src/modules/handyman-scope-assignments';
 import { createAdminUser } from './helpers/access';
@@ -32,6 +33,10 @@ import {
   locationChain,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-07 PART 04B — atomic terminal arrival evaluator. Ten cases
@@ -48,7 +53,19 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
 
+/**
+ * CR-HM-18 J04: previously SKIPPED every case without an external PostgreSQL.
+ * The suite now owns a disposable cluster so the J04 seam has real evidence.
+ */
+const EMBEDDED_DIR = '/tmp/hm04-arrival-evaluation-pg';
+const EMBEDDED_PORT = 55577;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -92,9 +109,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -374,10 +396,18 @@ describe('CR-HM-07 PART 04B — atomic terminal arrival evaluator', () => {
     // actor is no longer the authoritative CURRENT Lead; the caller's
     // claim carries zero weight.
     const otherCrew = await crewFixture(f.realm);
+    // CR-HM-18: reassignment is hardened (expectedVersion + reason + key).
+    const current = await getHandymanExecutionScopeAssignment(
+      f.scope.id,
+      adminUserId,
+    );
     await reassignHandymanExecutionScopeCrew({
       executionScopeId: f.scope.id,
       providerContextId: otherCrew.providerContext.id,
       crewId: otherCrew.crew.id,
+      expectedVersion: current!.version,
+      reason: 'Supersede the assignment with another crew.',
+      idempotencyKey: `reassign-${randomUUID()}`,
     }, adminUserId);
     const result = await evaluateHandymanArrivalVerification({
       executionScopeId: f.scope.id,

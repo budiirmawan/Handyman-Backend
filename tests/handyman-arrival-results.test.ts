@@ -29,6 +29,10 @@ import {
   scopeFixture,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-07 PART 04A — terminal arrival result PERSISTENCE only
@@ -43,7 +47,19 @@ let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
 
+/**
+ * CR-HM-18 J04: previously SKIPPED every case without an external PostgreSQL.
+ * The suite now owns a disposable cluster so the J04 seam has real evidence.
+ */
+const EMBEDDED_DIR = '/tmp/hm04-arrival-results-pg';
+const EMBEDDED_PORT = 55580;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -88,9 +104,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -587,14 +608,19 @@ describe('CR-HM-07 PART 04A — arrival result persistence', () => {
       'arrivalResultConflictError',
       'evaluateHandymanArrivalVerification',
       'findHandymanArrivalResultByChallengeId',
+      // CR-HM-18: bounded scope reads published by the arrival read surface.
+      'getHandymanArrivalVerificationByScope',
       'handymanArrivalResultRepository',
       'handymanArrivalResultService',
       'insertHandymanArrivalVerificationResult',
+      'listHandymanArrivalResultsByExecutionScope',
     ], 'module exports exactly the PART 04A persistence surface plus the PART 04B atomic evaluator');
     assert.deepEqual(
       Object.keys(mod.handymanArrivalResultRepository).sort(), [
         'findHandymanArrivalResultByChallengeId',
         'insertHandymanArrivalVerificationResult',
+        // CR-HM-18: bounded execution-scope listing used by the read surface.
+        'listHandymanArrivalResultsByExecutionScope',
       ],
     );
   });

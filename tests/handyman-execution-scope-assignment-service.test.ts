@@ -50,8 +50,14 @@ import { userService } from '../src/modules/users';
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { vendorService } from '../src/modules/vendors';
 import { workforceService } from '../src/modules/workforce';
+import { assignBuildingToWorkforce }
+  from '../src/modules/workforce-building-assignments';
 import { createAdminUser } from './helpers/access';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-04 Execution Scope Assignment Activation PART B — assignment /
@@ -69,7 +75,19 @@ let adminUserId = '';
 let disciplineId = '';
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
+/**
+ * CR-HM-18 J04: previously SKIPPED every case without an external PostgreSQL.
+ * The suite now owns a disposable cluster so the J04 seam has real evidence.
+ */
+const EMBEDDED_DIR = '/tmp/hm04-assignment-service-pg';
+const EMBEDDED_PORT = 55584;
+let embedded: EmbeddedTestDatabase | null = null;
+
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -104,9 +122,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -188,6 +211,12 @@ async function crewFixture(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  // CR-HM-18: crew eligibility (0439) requires an ACTIVE workforce Building
+  // placement for every member, in addition to the vendor binding.
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: vendor.id,
     workforceProfileId: profile.id,
@@ -210,6 +239,11 @@ async function crewFixture(
     },
     adminUserId,
   );
+  // CR-HM-18: the CURRENT crew Lead must also hold an ACTIVE user Building
+  // assignment (0439 login-capability gate).
+  await buildingAssignmentService.createAssignment(linkedUser.id, {
+    buildingId: realm.building.id,
+  });
   return {
     vendor, providerContext, leadUser: linkedUser, leadProfile: profile,
     workerContext, crew: bundle.crew,
@@ -234,6 +268,12 @@ async function addLinkedMember(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  // CR-HM-18: crew eligibility (0439) requires an ACTIVE workforce Building
+  // placement for every member, in addition to the vendor binding.
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: provider.vendor.id,
     workforceProfileId: profile.id,
@@ -254,6 +294,10 @@ async function addLinkedMember(
     },
     adminUserId,
   );
+  // CR-HM-18: a promoted Lead must hold an ACTIVE user Building assignment.
+  await buildingAssignmentService.createAssignment(linkedUser.id, {
+    buildingId: realm.building.id,
+  });
   return { linkedUser, profile, workerContext };
 }
 
@@ -365,9 +409,24 @@ async function scopeFixture(
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
+  // CR-HM-18: the tenant decision authority requires the ACTIVE Tenant PIC
+  // user of the request, so the approval is recorded by that PIC.
+  const approverId = (
+    await q(
+      `SELECT tp.user_id
+         FROM handyman_quotation_versions v
+         JOIN handyman_quotations q ON q.id = v.quotation_id
+         JOIN handyman_service_requests r ON r.id = q.handyman_request_id
+         JOIN handyman_channel_attributions a
+           ON a.id = r.channel_attribution_id
+         JOIN tenant_pics tp ON tp.id = a.tenant_pic_id
+        WHERE v.id = $1 AND tp.status = 'ACTIVE'`,
+      [version.id],
+    )
+  ).rows[0]?.user_id as string | undefined;
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, approverId ?? adminUserId);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   return { scope };
@@ -557,6 +616,10 @@ describe('CR-HM-04 activation PART B — scope crew assignment', () => {
       executionScopeId: f.scope.id,
       providerContextId: crewB.providerContext.id,
       crewId: crewB.crew.id,
+      // CR-HM-18: reassignment is hardened (version + reason + key).
+      expectedVersion: old.version,
+      reason: 'Crew change for coverage.',
+      idempotencyKey: `reassign-${randomUUID()}`,
     }, adminUserId);
     assert.equal(await assignmentCount(f.scope.id), 2);
     assert.equal(next.status, 'ACTIVE');
@@ -607,6 +670,9 @@ describe('CR-HM-04 activation PART B — scope crew assignment', () => {
         executionScopeId: f.scope.id,
         providerContextId: crewB.providerContext.id,
         crewId: crewB.crew.id,
+        expectedVersion: old.version,
+        reason: 'Crew change against an inactive crew.',
+        idempotencyKey: `reassign-${randomUUID()}`,
       }, adminUserId),
       (e: unknown) => errorCode(e) ===
         'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE',
