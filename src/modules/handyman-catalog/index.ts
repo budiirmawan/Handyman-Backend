@@ -62,3 +62,5 @@ export type {
   NewHandymanCommonMaterialProfile,
   PublicHandymanCommonMaterialProfile,
 } from './handyman-common-material-profile.types';
+
+export { createHandymanCatalogueAdminRouter } from './handyman-catalog-admin.routes';

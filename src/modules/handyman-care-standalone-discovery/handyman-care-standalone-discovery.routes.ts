@@ -33,6 +33,7 @@ import {
   createBuildingCareRequest,
   listBuildingCareCatalogueServices,
   listBuildingCareFloors,
+  listBuildingCareRequestParties,
   listBuildingCareTenants,
   listBuildingCareUnits,
 } from './handyman-care-tenant-request-gateway.service';
@@ -236,6 +237,33 @@ export function createHandymanCareStandaloneDiscoveryRouter(): Router {
           await listBuildingCareCatalogueServices({
             actorUserId: req.auth?.userId ?? '',
             buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+          }),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /**
+   * CR-HM-MASTER-IND-01 — approval / cost-responsibility designations of one
+   * request in this Building. Read-only: parties are recorded at creation
+   * (append-only facts, migration 0456) and are never edited through Care.
+   */
+  router.get(
+    '/handyman/care/buildings/:buildingId/requests/:requestId/parties',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        assertAllowedQuery(req.query as Record<string, unknown>, []);
+        assertEmptyReadBody(req.body);
+        sendSuccess(
+          res,
+          await listBuildingCareRequestParties({
+            actorUserId: req.auth?.userId ?? '',
+            buildingId: parseUuid(req.params.buildingId, 'buildingId'),
+            requestId: parseUuid(req.params.requestId, 'requestId'),
           }),
         );
       } catch (error) {

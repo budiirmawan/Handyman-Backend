@@ -253,6 +253,13 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // BE-14A — Tenant Company
   { code: 'tenant_company.read', name: 'Read Tenant Companies' },
   { code: 'tenant_company.manage', name: 'Manage Tenant Companies' },
+  // CR-HM-MASTER-IND-01 — effective-dated Unit Owner/Occupant/PIC roles.
+  // Reference-master authority (the service_catalog.* precedent): granted to
+  // PLATFORM_ADMIN by default. Unit reads/writes themselves reuse
+  // `space.read` / `space.manage`, and occupancy history reuses
+  // `tenant_company.read` — no capability is duplicated.
+  { code: 'unit_party.read', name: 'Read Unit Owner/Occupant/PIC Assignments' },
+  { code: 'unit_party.manage', name: 'Manage Unit Owner/Occupant/PIC Assignments' },
   // CR-HM-QC-AUTHORITY-01: explicitly granted Handyman QC authority.
   // A reporting line + exact Building access are ALSO required at runtime.
   { code: 'handyman.qc.manage', name: 'Inspect and decide Handyman QC' },

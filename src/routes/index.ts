@@ -112,6 +112,8 @@ import { createRfqRecommendationRouter } from '../modules/rfq-recommendations/rf
 import { createRfqPoConversionRouter } from '../modules/rfq-po-conversions/rfq-po-conversion.routes';
 import { createPriceCatalogEntryRouter } from '../modules/price-catalog-entries/price-catalog-entry.routes';
 import { createServiceCatalogRouter } from '../modules/service-catalog/service-catalog.routes';
+import { createApartmentMasterRouter } from '../modules/apartment-master/apartment-master.routes';
+import { createHandymanCatalogueAdminRouter } from '../modules/handyman-catalog';
 import { createEsgMetricDefinitionRouter } from '../modules/esg-metric-definitions/esg-metric-definition.routes';
 import { createEsgWasteRecordRouter } from '../modules/esg-waste-records/esg-waste-record.routes';
 import { createEsgMetricValueRouter } from '../modules/esg-metric-values/esg-metric-value.routes';
@@ -736,6 +738,12 @@ export function createApiRouter(): Router {
   // CR-BE-SVC-01 PART 01 — Service Catalog Foundation (governed Service master
   // identity; Client-scoped, identity only — no demand/price/lineage behavior).
   router.use(createServiceCatalogRouter());
+  // CR-HM-MASTER-IND-01 — apartment Unit master administration and
+  // effective-dated Owner/Occupant/PIC roles (Unit = existing Space master).
+  router.use(createApartmentMasterRouter());
+  // CR-HM-MASTER-IND-01 — catalogue administration transport for the
+  // existing Service Variant / Common Material Profile services.
+  router.use(createHandymanCatalogueAdminRouter());
   // CR-BE-ESG-01 PART 01 — ESG Metric Definition Foundation (governed ESG
   // metric vocabulary; Client-scoped, identity only — no values/waste/baseline).
   router.use(createEsgMetricDefinitionRouter());

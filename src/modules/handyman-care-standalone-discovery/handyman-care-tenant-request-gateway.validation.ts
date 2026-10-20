@@ -30,6 +30,12 @@ const ALLOWED_BODY_KEYS = [
   'serviceCatalogId',
   'serviceVariantId',
   'description',
+  // CR-HM-MASTER-IND-01 — approval / cost-responsibility parties. Both are
+  // PARTY selections (individual or legal entity from the party master),
+  // never actor identities: they are re-validated server-side against the
+  // represented Tenant and the Unit's current party roles.
+  'approvalTenantCompanyId',
+  'costResponsibleTenantCompanyId',
 ] as const;
 
 export type CreateBuildingCareRequestBody = {
@@ -39,6 +45,8 @@ export type CreateBuildingCareRequestBody = {
   serviceCatalogId: string;
   serviceVariantId?: string;
   description?: string;
+  approvalTenantCompanyId?: string;
+  costResponsibleTenantCompanyId?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -134,6 +142,16 @@ export function parseCreateBuildingCareRequestBody(
     'serviceVariantId',
     details,
   );
+  const approvalTenantCompanyId = readOptionalUuid(
+    body.approvalTenantCompanyId,
+    'approvalTenantCompanyId',
+    details,
+  );
+  const costResponsibleTenantCompanyId = readOptionalUuid(
+    body.costResponsibleTenantCompanyId,
+    'costResponsibleTenantCompanyId',
+    details,
+  );
 
   let description: string | undefined;
   if (body.description !== undefined && body.description !== null) {
@@ -167,5 +185,11 @@ export function parseCreateBuildingCareRequestBody(
     serviceCatalogId,
     ...(serviceVariantId === undefined ? {} : { serviceVariantId }),
     ...(description === undefined ? {} : { description }),
+    ...(approvalTenantCompanyId === undefined
+      ? {}
+      : { approvalTenantCompanyId }),
+    ...(costResponsibleTenantCompanyId === undefined
+      ? {}
+      : { costResponsibleTenantCompanyId }),
   };
 }

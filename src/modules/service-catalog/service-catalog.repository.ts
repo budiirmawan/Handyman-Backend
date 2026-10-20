@@ -148,6 +148,38 @@ async function listScoped(
   return result.rows.map(mapRow);
 }
 
+/**
+ * CR-HM-MASTER-IND-01 — distinct Service-Category values for the caller's
+ * accessible Clients. Categories remain the existing free `category` column
+ * (CR-BE-SVC-01 §4.3 documents the governed category master as a future
+ * promotion); this read only makes the vocabulary administrable today without
+ * inventing a table.
+ */
+async function listCategories(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  accessibleClientIds: string[],
+  filters: { clientId?: string; status?: 'ACTIVE' | 'INACTIVE' },
+): Promise<string[]> {
+  if (accessibleClientIds.length === 0) return [];
+  const conditions = ['client_id = ANY($1::uuid[])'];
+  const values: unknown[] = [accessibleClientIds];
+  if (filters.clientId) {
+    values.push(filters.clientId);
+    conditions.push(`client_id = $${values.length}`);
+  }
+  if (filters.status) {
+    values.push(filters.status);
+    conditions.push(`status = $${values.length}`);
+  }
+  const result = await executor.query<{ category: string }>(
+    `SELECT DISTINCT category FROM service_catalog
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY category ASC`,
+    values,
+  );
+  return result.rows.map((row) => row.category);
+}
+
 async function updateEntry(
   executor: Pick<PoolClient, 'query'> = getPool(),
   id: string,
@@ -205,6 +237,7 @@ export const serviceCatalogRepository = {
   insertEntry,
   findById,
   findByCodeForClient,
+  listCategories,
   listScoped,
   updateEntry,
   deactivate,

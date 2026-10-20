@@ -1,0 +1,913 @@
+openapi: 3.1.0
+info:
+  title: Handyman Backend — Apartment Master Data Indonesia (CR-HM-MASTER-IND-01)
+  version: 1.0.0
+  description: |
+    Authoritative OpenAPI handoff for the Handyman-Operations repository.
+
+    Scope: ONLY the capabilities added or extended by CR-HM-MASTER-IND-01 on
+    top of the merged baseline (PR #43, migration 0455, canonical Handyman
+    Requests, Customer Care Bearer authorization, Operations queue, BM
+    handoff). Everything not listed here is unchanged.
+
+    Conventions (unchanged from the existing Backend):
+      - Base path `/api/v1`, JSON only.
+      - `Authorization: Bearer <session token>` unless `security: []`.
+      - Success envelope `{ success: true, data, meta }`.
+      - Error envelope `{ success: false, error: { code, message, details? } }`.
+      - Lists accept `page` (1-based) and `pageSize` (1..200, default 50) and
+        return `meta: { page, pageSize, total, totalPages }`.
+      - Client scope is NEVER supplied by the caller: it is derived from the
+        addressed Building (Building → Property → Client) or from the parent
+        catalogue entry. A caller must also hold an ACTIVE Building assignment.
+      - Non-enumerating denials: `403 BUILDING_ACCESS_DENIED` and
+        `403 HANDYMAN_CARE_AUTHORITY_DENIED` are identical for “not yours” and
+        “does not exist”.
+servers:
+  - url: https://{backendHost}/api/v1
+    variables:
+      backendHost:
+        default: api.example.com
+tags:
+  - name: Apartment Units
+  - name: Unit Party Roles
+  - name: Catalogue Administration
+  - name: Customer Care Gateway
+  - name: Tenant Party Master
+paths:
+  /buildings/{buildingId}/units:
+    get:
+      tags: [Apartment Units]
+      operationId: listApartmentUnits
+      summary: List Units (existing Space master) of one Building
+      description: |
+        Unit = the authoritative `spaces` row inside Building → Floor → Area →
+        Room → Space. No second physical master exists. Ordered by floor level,
+        then unit code. `floorId` must belong to the addressed Building.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/BuildingId'
+        - name: floorId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+        - name: search
+          in: query
+          description: Case-insensitive substring match on unit code or name.
+          schema: { type: string, maxLength: 120 }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated Units
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/ApartmentUnit' }
+                      meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+  /buildings/{buildingId}/units/{unitId}:
+    parameters:
+      - $ref: '#/components/parameters/BuildingId'
+      - $ref: '#/components/parameters/UnitId'
+    get:
+      tags: [Apartment Units]
+      operationId: getApartmentUnit
+      summary: Read one Unit in the Building
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Unit
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ApartmentUnit' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/UnitNotFound' }
+    patch:
+      tags: [Apartment Units]
+      operationId: updateApartmentUnit
+      summary: Update Unit name / description / status
+      description: |
+        Unit identity (code, room, floor, Building) is immutable. Writes
+        delegate to the existing Space service.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, maxLength: 160 }
+                description: { type: string, maxLength: 512 }
+                status: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Updated Unit
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ApartmentUnit' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/UnitNotFound' }
+  /buildings/{buildingId}/units/{unitId}/occupancies:
+    parameters:
+      - $ref: '#/components/parameters/BuildingId'
+      - $ref: '#/components/parameters/UnitId'
+    get:
+      tags: [Apartment Units]
+      operationId: listApartmentUnitOccupancies
+      summary: Effective-dated occupancy history of one Unit
+      description: |
+        Reads the authoritative BE-14C `tenant_space_relationships` history.
+        ACTIVE and INACTIVE rows are both returned (a Tenant change never
+        erases who occupied the Unit before). `current` is evaluated at
+        statement time, not stored. Writes remain
+        `POST /tenant-companies/{tenantCompanyId}/spaces` and
+        `PATCH /tenant-space-relationships/{id}` (existing endpoints).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated occupancy history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/UnitOccupancy' }
+                      meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/UnitNotFound' }
+  /buildings/{buildingId}/units/{unitId}/parties:
+    parameters:
+      - $ref: '#/components/parameters/BuildingId'
+      - $ref: '#/components/parameters/UnitId'
+    get:
+      tags: [Unit Party Roles]
+      operationId: listUnitPartyRoles
+      summary: Effective-dated Owner / Occupant / PIC assignments of one Unit
+      description: |
+        TENANCY is not part of this collection: tenancy authority stays with
+        BE-14C (`/units/{unitId}/occupancies`). These are the roles the
+        existing master did not carry.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: role
+          in: query
+          schema: { type: string, enum: [OWNER, OCCUPANT, PIC] }
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated role assignments
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/UnitPartyRole' }
+                      meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/UnitNotFound' }
+    post:
+      tags: [Unit Party Roles]
+      operationId: assignUnitPartyRole
+      summary: Assign a party (individual or legal entity) to a Unit role
+      description: |
+        The party comes from the existing Tenant party master
+        (`tenant_companies`, `partyKind` INDIVIDUAL or LEGAL_ENTITY) and must
+        belong to the same Client and be ACTIVE. The Unit must be ACTIVE.
+        One currently-effective assignment per (Unit, role, party); end the
+        existing one instead of stacking duplicates. Requires
+        `unit_party.manage`.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [tenantCompanyId, partyRole]
+              properties:
+                tenantCompanyId: { type: string, format: uuid }
+                partyRole: { type: string, enum: [OWNER, OCCUPANT, PIC] }
+                effectiveFrom: { type: string, format: date-time }
+                effectiveUntil: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Created assignment
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/UnitPartyRole' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/UnitNotFound' }
+        '409':
+          description: The party already holds this role on the Unit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /unit-party-roles/{id}/end:
+    post:
+      tags: [Unit Party Roles]
+      operationId: endUnitPartyRole
+      summary: End an effective-dated Unit party role (history is preserved)
+      description: |
+        Sets `status = INACTIVE` and closes `effectiveUntil` (default: now).
+        Idempotent for an already-ended role. Never deletes the row.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                effectiveUntil: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Ended assignment
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/UnitPartyRole' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: Unknown assignment (or outside the caller's reach).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /service-catalog/categories:
+    get:
+      tags: [Catalogue Administration]
+      operationId: listServiceCatalogCategories
+      summary: Distinct Service-Category vocabulary the caller may administer
+      description: |
+        Categories remain the existing free `category` column of
+        `service_catalog`; no category master table is introduced.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Sorted distinct categories
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { type: string }
+        '400': { $ref: '#/components/responses/ValidationError' }
+  /service-catalog/entries/{serviceCatalogId}/variants:
+    parameters:
+      - $ref: '#/components/parameters/ServiceCatalogId'
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanServiceVariants
+      summary: List Handyman service variants of one catalogue service
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Variants
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/ServiceVariant' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+    post:
+      tags: [Catalogue Administration]
+      operationId: createHandymanServiceVariant
+      summary: Create a Handyman service variant (ACTIVE)
+      description: |
+        The variant's Client is derived from the parent service entry — never
+        supplied. The parent service must be ACTIVE.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, name]
+              properties:
+                code: { type: string, maxLength: 64, pattern: '^[A-Za-z][A-Za-z0-9_-]*$' }
+                name: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 1000 }
+      responses:
+        '201':
+          description: Created variant
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ServiceVariant' }
+        '400':
+          description: Validation failure, or the parent service is not ACTIVE.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: Variant code already exists for the service.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /service-catalog/entries/{serviceCatalogId}/material-profiles:
+    parameters:
+      - $ref: '#/components/parameters/ServiceCatalogId'
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanCommonMaterialProfiles
+      summary: List common material references of one catalogue service
+      description: |
+        References the authoritative inventory-item master. No price is stored
+        here: reference pricing remains the existing price-catalog authority.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: serviceVariantId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Material profiles
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/CommonMaterialProfile'
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+    post:
+      tags: [Catalogue Administration]
+      operationId: createHandymanCommonMaterialProfile
+      summary: Create a common material reference (ACTIVE)
+      description: |
+        Variant/service consistency and same-Client material scope are
+        re-validated by the existing CR-HM-02 service.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [inventoryItemId, commonality, customerMaterialOption]
+              properties:
+                inventoryItemId: { type: string, format: uuid }
+                serviceVariantId: { type: string, format: uuid }
+                specification: { type: string, maxLength: 1000 }
+                compatibility: { type: string, maxLength: 1000 }
+                typicalQuantity: { type: number, exclusiveMinimum: 0 }
+                commonality:
+                  type: string
+                  enum: [COMMON, OCCASIONAL, RARE]
+                customerMaterialOption:
+                  type: string
+                  enum: [PROVIDER_SUPPLIED, CUSTOMER_SUPPLIED, CUSTOMER_CHOICE]
+      responses:
+        '201':
+          description: Created material profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CommonMaterialProfile'
+        '400':
+          description: Validation failure or inactive/mismatched references.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: The material is already associated at this level.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/care/buildings/{buildingId}/requests:
+    post:
+      tags: [Customer Care Gateway]
+      operationId: createBuildingCareRequest
+      summary: Create the canonical Handyman request for a represented Tenant/PIC
+      description: |
+        PR #43 gateway, EXTENDED additively by CR-HM-MASTER-IND-01 with two
+        optional party designations. The response projection, lifecycle
+        (`INTAKE`), Bearer + `handyman.care.building` authority, exact-Building
+        assignment requirement and `Idempotency-Key` contract are unchanged.
+
+        Designated parties must be ACTIVE parties of the same Client and either
+        the represented Tenant itself or a party that currently holds a Unit
+        party role (OWNER/OCCUPANT/PIC) on the selected Unit (or, when no Unit
+        is selected, an ACTIVE current Building context). Any other selection
+        returns the single non-enumerating `403 HANDYMAN_CARE_AUTHORITY_DENIED`
+        and persists nothing.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/BuildingId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCareRequestBody' }
+      responses:
+        '201':
+          description: Canonical request projection (unchanged from PR #43)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CanonicalRequestProjection' }
+        '403':
+          description: Non-enumerating Care authority denial (scope or party).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: Same idempotency key with a different submission.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/care/buildings/{buildingId}/requests/{requestId}/parties:
+    get:
+      tags: [Customer Care Gateway]
+      operationId: listBuildingCareRequestParties
+      summary: Approval and cost-responsibility designations of one request
+      description: |
+        Append-only designations recorded at creation. Independent from the
+        request creator (a Backend user) and from the represented Tenant.
+        A request outside the addressed Building/Client is a standard 404.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/BuildingId'
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Designated parties
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/RequestParties' }
+        '403':
+          description: Non-enumerating Care authority denial.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Request not found in this Building/Client.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /clients/{clientId}/tenant-companies:
+    post:
+      tags: [Tenant Party Master]
+      operationId: createTenantParty
+      summary: Create an individual or legal-entity Tenant party
+      description: |
+        Additive extension of the existing BE-14A endpoint. Omitting
+        `partyKind` keeps the previous LEGAL_ENTITY behavior byte-for-byte.
+        An INDIVIDUAL requires an identity document and must not carry a
+        `legalName`; no fictitious company is created. One identity document
+        identifies exactly one party per Client (409).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTenantPartyBody' }
+      responses:
+        '201':
+          description: Created party
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TenantParty' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: Tenant code or identity document already exists for the Client.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /tenant-companies/{id}:
+    patch:
+      tags: [Tenant Party Master]
+      operationId: updateTenantParty
+      summary: Update a Tenant party (partyKind is immutable)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                tenantName: { type: string, maxLength: 160 }
+                legalName: { type: [string, 'null'], maxLength: 255 }
+                identityDocumentType:
+                  type: [string, 'null']
+                  enum: [KTP, PASSPORT, KITAS, NPWP, NIB, null]
+                identityDocumentNumber: { type: [string, 'null'], maxLength: 64 }
+                email: { type: [string, 'null'], maxLength: 255 }
+                phone: { type: [string, 'null'], maxLength: 32 }
+                address: { type: [string, 'null'], maxLength: 512 }
+                status: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Updated party
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TenantParty' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: Tenant party not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque session token
+  parameters:
+    BuildingId:
+      name: buildingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UnitId:
+      name: unitId
+      in: path
+      required: true
+      description: The Unit identity — the existing `spaces.id`.
+      schema: { type: string, format: uuid }
+    ServiceCatalogId:
+      name: serviceCatalogId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+  responses:
+    ValidationError:
+      description: VALIDATION_ERROR
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    BuildingAccessDenied:
+      description: |
+        BUILDING_ACCESS_DENIED — permission present but no ACTIVE assignment to
+        the exact Building, or the addressed Client is outside the caller's
+        reach. Never distinguishes “not yours” from “does not exist”.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    UnitNotFound:
+      description: APARTMENT_UNIT_NOT_FOUND — unknown, foreign-Client or other-Building Unit.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    CatalogueNotFound:
+      description: SERVICE_CATALOG_ENTRY_NOT_FOUND
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success: { type: boolean, const: true }
+        data: {}
+        meta: { type: object }
+    PaginationMeta:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items: { type: object }
+    ApartmentUnit:
+      type: object
+      required: [id, code, name, status, clientId, buildingId, floorId, roomId]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        areaSqm: { type: [number, 'null'] }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        buildingCode: { type: string }
+        floorId: { type: string, format: uuid }
+        floorCode: { type: string }
+        floorName: { type: string }
+        levelNumber: { type: integer }
+        roomId: { type: string, format: uuid }
+        roomCode: { type: string }
+        areaId: { type: string, format: uuid }
+        areaCode: { type: string }
+    UnitOccupancy:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+        partyKind: { type: string, enum: [INDIVIDUAL, LEGAL_ENTITY] }
+        effectiveFrom: { type: [string, 'null'], format: date-time }
+        effectiveUntil: { type: [string, 'null'], format: date-time }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        current: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    UnitPartyRole:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        unitId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+        partyKind: { type: string, enum: [INDIVIDUAL, LEGAL_ENTITY] }
+        partyRole: { type: string, enum: [OWNER, OCCUPANT, PIC] }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveUntil: { type: [string, 'null'], format: date-time }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateCareRequestBody:
+      type: object
+      additionalProperties: false
+      required: [tenantCompanyId, serviceCatalogId]
+      properties:
+        tenantCompanyId: { type: string, format: uuid }
+        tenantPicId: { type: string, format: uuid }
+        spaceId:
+          type: string
+          format: uuid
+          description: The selected Unit (= spaces.id) in this Building.
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid }
+        description: { type: string, maxLength: 1000 }
+        approvalTenantCompanyId:
+          type: string
+          format: uuid
+          description: Defaults to the represented Tenant.
+        costResponsibleTenantCompanyId:
+          type: string
+          format: uuid
+          description: Defaults to the represented Tenant.
+    CanonicalRequestProjection:
+      type: object
+      description: Unchanged PR #43 projection (no Client/Tenant/PIC/creator ids).
+      properties:
+        id: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: [string, 'null'], format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: [string, 'null'], format: uuid }
+        description: { type: [string, 'null'] }
+        status: { type: string, enum: [INTAKE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RequestParties:
+      type: object
+      properties:
+        requestId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        parties:
+          type: array
+          items: { $ref: '#/components/schemas/RequestParty' }
+    RequestParty:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        requestId: { type: string, format: uuid }
+        partyRole: { type: string, enum: [APPROVAL, COST_RESPONSIBILITY] }
+        tenantCompanyId: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+        partyKind: { type: string, enum: [INDIVIDUAL, LEGAL_ENTITY] }
+        tenantPicId: { type: [string, 'null'], format: uuid }
+        tenantPicName: { type: [string, 'null'] }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    CreateTenantPartyBody:
+      type: object
+      additionalProperties: false
+      required: [tenantCode, tenantName]
+      properties:
+        tenantCode: { type: string, maxLength: 64 }
+        tenantName:
+          type: string
+          maxLength: 160
+          description: Display name; for INDIVIDUAL the person name.
+        partyKind: { type: string, enum: [INDIVIDUAL, LEGAL_ENTITY], default: LEGAL_ENTITY }
+        legalName:
+          type: string
+          maxLength: 255
+          description: LEGAL_ENTITY only; rejected for INDIVIDUAL.
+        identityDocumentType:
+          type: string
+          enum: [KTP, PASSPORT, KITAS, NPWP, NIB]
+        identityDocumentNumber: { type: string, maxLength: 64 }
+        email: { type: string, maxLength: 255 }
+        phone: { type: string, maxLength: 32 }
+        address: { type: string, maxLength: 512 }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+    TenantParty:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        tenantCode: { type: string }
+        tenantName: { type: string }
+        partyKind: { type: string, enum: [INDIVIDUAL, LEGAL_ENTITY] }
+        legalName: { type: [string, 'null'] }
+        identityDocumentType: { type: [string, 'null'] }
+        identityDocumentNumber: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        address: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ServiceVariant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+    CommonMaterialProfile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: [string, 'null'], format: uuid }
+        inventoryItemId: { type: string, format: uuid }
+        specification: { type: [string, 'null'] }
+        compatibility: { type: [string, 'null'] }
+        typicalQuantity: { type: [number, 'null'] }
+        commonality: { type: string, enum: [COMMON, OCCASIONAL, RARE] }
+        customerMaterialOption:
+          type: string
+          enum: [PROVIDER_SUPPLIED, CUSTOMER_SUPPLIED, CUSTOMER_CHOICE]
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
