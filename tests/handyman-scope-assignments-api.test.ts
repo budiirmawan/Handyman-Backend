@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it, type TestContext } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { mkdir, rm } from 'node:fs/promises';
+import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
@@ -43,6 +45,8 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { vendorService } from '../src/modules/vendors';
+import { assignBuildingToWorkforce }
+  from '../src/modules/workforce-building-assignments';
 import { workforceService } from '../src/modules/workforce';
 import { credentialService } from '../src/modules/auth';
 import {
@@ -70,6 +74,24 @@ import { ensureTestDatabase } from './helpers/postgres';
  * geofence/work-session/attendance/payment/BAST/FM APIs.
  */
 
+/**
+ * CR-HM-18: this suite previously skipped 10/10 whenever no external
+ * PostgreSQL was reachable. It now boots a disposable embedded PostgreSQL
+ * like the sibling E2E suites so the assignment surface has self-contained
+ * evidence instead of being recorded as NOT TESTED.
+ */
+const EMBEDDED_DIR = '/tmp/hm04-scope-assignments-pg';
+const EMBEDDED_PORT = 55571;
+Object.assign(process.env, {
+  DB_HOST: '127.0.0.1',
+  DB_PORT: String(EMBEDDED_PORT),
+  DB_USER: 'postgres',
+  DB_PASSWORD: '',
+  DB_NAME: 'asentra_test',
+  DB_SSL: 'false',
+});
+let embedded: EmbeddedPostgres | null = null;
+
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
@@ -78,6 +100,23 @@ let disciplineId = '';
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 before(async () => {
+  await rm(EMBEDDED_DIR, { recursive: true, force: true });
+  await mkdir(EMBEDDED_DIR, { recursive: true });
+  embedded = new EmbeddedPostgres({
+    databaseDir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+    user: 'postgres',
+    password: '',
+    persistent: true,
+    authMethod: 'trust',
+  });
+  await embedded.initialise();
+  await embedded.start();
+  const adminClient = embedded.getPgClient('postgres', '127.0.0.1');
+  await adminClient.connect();
+  await adminClient.query('CREATE DATABASE asentra_test');
+  await adminClient.end();
+
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -113,9 +152,15 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    await rm(EMBEDDED_DIR, { recursive: true, force: true });
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -235,6 +280,15 @@ async function crewFixture(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  // CR-HM-18: crew eligibility (0439) requires an ACTIVE workforce Building
+  // placement and, for the Lead, an ACTIVE user Building assignment.
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
+  });
+  await buildingAssignmentService.createAssignment(linkedUser.id, {
+    buildingId: realm.building.id,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: vendor.id,
     workforceProfileId: profile.id,
@@ -280,6 +334,13 @@ async function addLinkedMember(
     fullName: 'Second Lead Worker',
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
+  });
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
+  });
+  await buildingAssignmentService.createAssignment(linkedUser.id, {
+    buildingId: realm.building.id,
   });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: provider.vendor.id,
@@ -412,9 +473,12 @@ async function scopeFixture(
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
+  // CR-HM-18: the tenant decision authority (added after this fixture was
+  // written) requires the actor to be the ACTIVE Tenant PIC user of the
+  // request, so the approval is recorded by the PIC rather than the admin.
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   return { scope };
@@ -548,11 +612,14 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
       crewA.crew.id,
     );
     assert.equal(first.status, 201);
+    // CR-HM-18: reassignment is hardened (expectedVersion + reason).
     const moved = await api().post(REASSIGN(f.scope.id))
       .set(auth())
       .send({
         providerContextId: crewB.providerContext.id,
         crewId: crewB.crew.id,
+        expectedVersion: first.body.data.version,
+        reason: 'Crew reassignment for coverage.',
       });
     assert.equal(moved.status, 201, JSON.stringify(moved.body));
     assert.equal(moved.body.data.status, 'ACTIVE');
@@ -803,13 +870,19 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
 
     // Exactly the two assignment URL shapes under collection-keyed
     // execution-scope paths; NO list/collection endpoint.
+    // CR-HM-18: the execution-scopes namespace has since grown other
+    // documented commands (work sessions, settlement, BAST), so the pin is
+    // scoped to assignment-shaped paths instead of the whole namespace.
     const scopePaths = Object.keys(doc.paths).filter((p) =>
       p.includes('execution-scopes'),
     );
-    assert.deepEqual(scopePaths.sort(), [
-      '/handyman/execution-scopes/{executionScopeId}/assignment',
-      '/handyman/execution-scopes/{executionScopeId}/assignment/reassign',
-    ]);
+    assert.deepEqual(
+      scopePaths.filter((p) => /\/assignment/i.test(p)).sort(),
+      [
+        '/handyman/execution-scopes/{executionScopeId}/assignment',
+        '/handyman/execution-scopes/{executionScopeId}/assignment/reassign',
+      ],
+    );
     assert.equal(doc.paths['/handyman/execution-scopes'], undefined,
       'no execution-scope collection/list API');
     // NO standalone Lead-resolver endpoint (CR-HM-07 consumes the
@@ -827,7 +900,7 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
     // assignment URL shapes (legacy FM work-order "assignments" live
     // in a separate pre-existing namespace, untouched by PART C).
     const partCSurface = Object.keys(doc.paths).filter((p) =>
-      p.includes('execution-scopes'));
+      p.includes('execution-scopes') && /\/assignment/i.test(p));
     assert.equal(partCSurface.length, 2,
       'PART C surface must be exactly the two assignment URL shapes');
     assert.deepEqual(
