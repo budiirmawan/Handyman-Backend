@@ -18,6 +18,7 @@ import { handymanServiceVariantService } from '../handyman-catalog';
 import { serviceCatalogService } from '../service-catalog';
 import { tenantBuildingContextRepository } from '../tenant-building-contexts';
 import { tenantCompanyRepository } from '../tenant-companies';
+import { tenantVerificationRequiredError } from '../tenant-companies/tenant-company.errors';
 import {
   handymanCareStandaloneDiscoveryRepository,
   type StandaloneCareFloorRecord,
@@ -192,6 +193,13 @@ async function resolveDesignatedParties(input: {
     input.costResponsibleTenantCompanyId ?? input.representedTenantId;
 
   for (const partyId of new Set([approval, costResponsibility])) {
+    // CR-HM-MASTER-TENANT-BATCH-01 — approval/billing authority requires a
+    // VERIFIED party, including the represented-Tenant default. An unverified
+    // temporary registration gets a precise 409 (never approval authority).
+    const designated = await tenantCompanyRepository.findById(partyId);
+    if (designated && designated.verificationStatus !== 'VERIFIED') {
+      throw tenantVerificationRequiredError();
+    }
     if (partyId === input.representedTenantId) continue;
 
     const company = await tenantCompanyRepository.findById(partyId);

@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
+import { auditContextFromRequest } from '../audit';
 import { authenticationRequiredError } from '../auth';
 import { tenantCompanyService } from './tenant-company.service';
 import {
@@ -7,6 +8,7 @@ import {
   parseTenantCompanyClientIdParam,
   parseTenantCompanyIdParam,
   parseTenantCompanyListQuery,
+  parseTenantVerificationBody,
   parseUpdateTenantCompanyBody,
 } from './tenant-company.validation';
 
@@ -41,5 +43,18 @@ export async function updateTenantCompanyHandler(req: Request, res: Response, ne
     const id = parseTenantCompanyIdParam(param(req.params.id));
     const body = parseUpdateTenantCompanyBody(req.body);
     sendSuccess(res, await tenantCompanyService.updateTenantCompany(id, body, req.auth.userId));
+  } catch (error) { next(error); }
+}
+export async function setTenantCompanyVerificationHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.auth) throw authenticationRequiredError();
+    const id = parseTenantCompanyIdParam(param(req.params.id));
+    const status = parseTenantVerificationBody(req.body);
+    sendSuccess(res, await tenantCompanyService.setTenantCompanyVerification(
+      id,
+      status,
+      req.auth.userId,
+      { ...auditContextFromRequest(req), actorUserId: req.auth.userId },
+    ));
   } catch (error) { next(error); }
 }

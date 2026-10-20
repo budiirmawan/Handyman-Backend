@@ -56,6 +56,40 @@ export const LEGAL_ENTITY_IDENTITY_DOCUMENT_TYPES: readonly TenantIdentityDocume
   'NIB',
 ];
 
+/**
+ * CR-HM-MASTER-TENANT-BATCH-01 — explicit verification state.
+ *
+ * TEMPORARY registrations (batch import, quick hand-entry) land as
+ * `PENDING_VERIFICATION` and are operable master data, but unverified data
+ * must never receive approval authority or billing authority (the request
+ * party designation services refuse `TENANT_VERIFICATION_REQUIRED`).
+ * Existing rows default to `VERIFIED` — no existing caller changes behavior.
+ * `REJECTED` is terminal for authority purposes and is set only through the
+ * auditable verification action.
+ */
+export const TENANT_VERIFICATION_STATUSES = [
+  'PENDING_VERIFICATION',
+  'VERIFIED',
+  'REJECTED',
+] as const;
+export type TenantVerificationStatus =
+  (typeof TENANT_VERIFICATION_STATUSES)[number];
+
+export function isTenantVerificationStatus(
+  value: unknown,
+): value is TenantVerificationStatus {
+  return (
+    typeof value === 'string' &&
+    (TENANT_VERIFICATION_STATUSES as readonly string[]).includes(value)
+  );
+}
+
+/** Verification values accepted at create time (never REJECTED). */
+export const CREATABLE_TENANT_VERIFICATION_STATUSES = [
+  'PENDING_VERIFICATION',
+  'VERIFIED',
+] as const;
+
 /** Per-type format rules. Validation lives here so API and services agree. */
 export const IDENTITY_DOCUMENT_PATTERNS: Record<TenantIdentityDocumentType, RegExp> = {
   KTP: /^\d{16}$/,
@@ -78,6 +112,7 @@ export type TenantCompanyRecord = {
   phone: string | null;
   address: string | null;
   status: TenantCompanyStatus;
+  verificationStatus: TenantVerificationStatus;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -100,12 +135,18 @@ export type CreateTenantCompanyInput = {
   phone?: string;
   address?: string;
   status?: TenantCompanyStatus;
+  /**
+   * Optional explicit verification state (default VERIFIED keeps existing
+   * callers byte-identical). REJECTED cannot be set at create.
+   */
+  verificationStatus?: TenantVerificationStatus;
 };
 
 /**
  * Partial update input (PATCH). `clientId`, `tenantCode` and `partyKind` are
  * immutable — a party does not become a different kind of physical customer.
- * Identity document values remain correctable.
+ * Identity document values remain correctable. `verificationStatus` is NOT
+ * patchable here — only the auditable verification action changes it.
  */
 export type UpdateTenantCompanyInput = {
   tenantName?: string;

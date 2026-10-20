@@ -7,6 +7,7 @@ import { migration0452CreateIamOwnerBootstrapState } from './0452_create_iam_own
 import { migration0453ExtendIamAdminAuditEvents } from './0453_extend_iam_admin_audit_events';
 import { migration0454ExtendClientAuditEvents } from './0454_extend_client_audit_events';
 import { migration0455HandymanCareBackendOriginChannel } from './0455_handyman_care_backend_origin_channel';
+import { migration0457TenantBatchImport } from './0457_tenant_batch_import';
 import { migration0456ApartmentMasterData } from './0456_apartment_master_data';
 import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
 import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
@@ -951,4 +952,5 @@ export const migrations: readonly Migration[] = [
   migration0454ExtendClientAuditEvents,
   migration0455HandymanCareBackendOriginChannel,
   migration0456ApartmentMasterData,
+  migration0457TenantBatchImport,
 ];

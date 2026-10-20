@@ -1,3 +1,5 @@
+import type { TenantVerificationStatus } from '../tenant-companies/tenant-company.types';
+
 /** BE-14B — Tenant Company contact with optional existing User binding. */
 export const TENANT_PIC_STATUSES = ['ACTIVE', 'INACTIVE'] as const;
 export type TenantPicStatus = (typeof TENANT_PIC_STATUSES)[number];
@@ -17,6 +19,7 @@ export type TenantPicRecord = {
   roleTitle: string | null;
   isPrimary: boolean;
   status: TenantPicStatus;
+  verificationStatus: TenantVerificationStatus;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -35,6 +38,8 @@ export type CreateTenantPicInput = {
   roleTitle?: string;
   isPrimary?: boolean;
   status?: TenantPicStatus;
+  /** Default VERIFIED (existing callers unchanged); import sets PENDING_VERIFICATION. */
+  verificationStatus?: TenantVerificationStatus;
 };
 
 export type NewTenantPic = {
@@ -46,8 +51,10 @@ export type NewTenantPic = {
   roleTitle: string | null;
   isPrimary: boolean;
   status: TenantPicStatus;
+  verificationStatus: TenantVerificationStatus;
 };
 
+/** `verificationStatus` is NOT patchable — only the verification action sets it. */
 export type UpdateTenantPicInput = {
   userId?: string | null;
   picName?: string;

@@ -5,6 +5,7 @@ import {
   createTenantPicHandler,
   getTenantPicHandler,
   listTenantPicsHandler,
+  setTenantPicVerificationHandler,
   updateTenantPicHandler,
 } from './tenant-pic.controller';
 
@@ -34,6 +35,13 @@ export function createTenantPicRouter(): Router {
     authenticationMiddleware,
     requirePermission('tenant_company.manage'),
     updateTenantPicHandler,
+  );
+  // CR-HM-MASTER-TENANT-BATCH-01 — auditable PIC verification verdict.
+  router.post(
+    '/tenant-pics/:id/verification',
+    authenticationMiddleware,
+    requirePermission('tenant_company.manage'),
+    setTenantPicVerificationHandler,
   );
   return router;
 }

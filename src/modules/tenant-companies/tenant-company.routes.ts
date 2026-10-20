@@ -5,6 +5,7 @@ import {
   createTenantCompanyHandler,
   getTenantCompanyHandler,
   listTenantCompaniesHandler,
+  setTenantCompanyVerificationHandler,
   updateTenantCompanyHandler,
 } from './tenant-company.controller';
 
@@ -15,5 +16,7 @@ export function createTenantCompanyRouter(): Router {
   router.get('/clients/:clientId/tenant-companies', authenticationMiddleware, requirePermission('tenant_company.read'), listTenantCompaniesHandler);
   router.get('/tenant-companies/:id', authenticationMiddleware, requirePermission('tenant_company.read'), getTenantCompanyHandler);
   router.patch('/tenant-companies/:id', authenticationMiddleware, requirePermission('tenant_company.manage'), updateTenantCompanyHandler);
+  // CR-HM-MASTER-TENANT-BATCH-01 — auditable verification verdict.
+  router.post('/tenant-companies/:id/verification', authenticationMiddleware, requirePermission('tenant_company.manage'), setTenantCompanyVerificationHandler);
   return router;
 }

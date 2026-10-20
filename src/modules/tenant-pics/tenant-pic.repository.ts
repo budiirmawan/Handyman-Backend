@@ -5,10 +5,12 @@ import type {
   TenantPicRecord,
   UpdateTenantPicInput,
 } from './tenant-pic.types';
+import type { TenantVerificationStatus } from '../tenant-companies/tenant-company.types';
 
 const SELECT = `id, tenant_company_id AS "tenantCompanyId",
   user_id AS "userId", pic_name AS "picName", email, phone,
   role_title AS "roleTitle", is_primary AS "isPrimary", status,
+  verification_status AS "verificationStatus",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 async function create(input: NewTenantPic): Promise<TenantPicRecord> {
@@ -28,11 +30,12 @@ async function create(input: NewTenantPic): Promise<TenantPicRecord> {
     const result = await client.query<TenantPicRecord>(
       `INSERT INTO tenant_pics
          (id, tenant_company_id, user_id, pic_name, email, phone,
-          role_title, is_primary, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          role_title, is_primary, status, verification_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING ${SELECT}`,
       [randomUUID(), input.tenantCompanyId, input.userId, input.picName,
-        input.email, input.phone, input.roleTitle, input.isPrimary, input.status],
+        input.email, input.phone, input.roleTitle, input.isPrimary, input.status,
+        input.verificationStatus ?? 'VERIFIED'],
     );
     await client.query('COMMIT');
     return result.rows[0];
@@ -110,4 +113,22 @@ async function update(
   }
 }
 
-export const tenantPicRepository = { create, findById, listByTenantCompany, update };
+async function setVerificationStatus(
+  id: string,
+  verificationStatus: TenantVerificationStatus,
+): Promise<TenantPicRecord | null> {
+  const result = await getPool().query<TenantPicRecord>(
+    `UPDATE tenant_pics SET verification_status = $1, updated_at = NOW()
+      WHERE id = $2 RETURNING ${SELECT}`,
+    [verificationStatus, id],
+  );
+  return result.rows[0] ?? null;
+}
+
+export const tenantPicRepository = {
+  create,
+  findById,
+  listByTenantCompany,
+  setVerificationStatus,
+  update,
+};

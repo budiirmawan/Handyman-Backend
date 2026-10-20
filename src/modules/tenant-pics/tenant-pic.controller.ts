@@ -1,6 +1,8 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
+import { auditContextFromRequest } from '../audit';
 import { authenticationRequiredError } from '../auth';
+import { parseTenantVerificationBody } from '../tenant-companies/tenant-company.validation';
 import { tenantPicService } from './tenant-pic.service';
 import {
   parseCreateTenantPicBody,
@@ -74,6 +76,29 @@ export async function updateTenantPicHandler(
     sendSuccess(
       res,
       await tenantPicService.updateTenantPic(id, body, req.auth.userId),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function setTenantPicVerificationHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    if (!req.auth) throw authenticationRequiredError();
+    const id = parseTenantPicIdParam(param(req.params.id));
+    const status = parseTenantVerificationBody(req.body);
+    sendSuccess(
+      res,
+      await tenantPicService.setTenantPicVerification(
+        id,
+        status,
+        req.auth.userId,
+        { ...auditContextFromRequest(req), actorUserId: req.auth.userId },
+      ),
     );
   } catch (error) {
     next(error);
