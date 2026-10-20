@@ -375,8 +375,7 @@ verdicts that later merged migrations superseded. Constraints honored: no consum
 repository touched, no production migration executed (disposable PostgreSQL only,
 `embedded-postgres` per suite), all changes additive, no production gate weakened —
 where an old suite asserted a pre-gate shortcut, **the suite was reconciled to the
-gate**, never the reverse. Commits on `arena/c965a40c-handyman-backend`: 6968951 →
-89868a1 → d7fd542.
+gate**, never the reverse. Commits on `arena/c965a40c-handyman-backend`: HEAD `7194984` (squashed closure-wave repairs + full capability docs).
 
 ### 20.1 Verified P0 repair (product code, the only behavior change)
 
