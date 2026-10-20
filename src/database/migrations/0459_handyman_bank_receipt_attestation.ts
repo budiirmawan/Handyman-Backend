@@ -138,6 +138,12 @@ export const migration0459HandymanBankReceiptAttestation: Migration = {
         FOR EACH ROW EXECUTE FUNCTION handyman_bank_account_building_consistency()
     `);
 
+    // Ensure composite FK target exists for 0412 payments (additive unique index for 0459)
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS handyman_customer_payments_id_txn_client_unique
+        ON handyman_customer_payments (id, transaction_id, client_id)
+    `);
+
     // ---- 2. Immutable bank receipt attestations
     await client.query(`
       CREATE TABLE handyman_bank_receipt_attestations (
@@ -329,5 +335,6 @@ export const migration0459HandymanBankReceiptAttestation: Migration = {
     await client.query(`DROP TRIGGER IF EXISTS handyman_bank_account_building_check ON handyman_bank_accounts`);
     await client.query(`DROP FUNCTION IF EXISTS handyman_bank_account_building_consistency()`);
     await client.query(`DROP TABLE IF EXISTS handyman_bank_accounts`);
+    await client.query(`DROP INDEX IF EXISTS handyman_customer_payments_id_txn_client_unique`);
   },
 };
