@@ -36,6 +36,8 @@ import {
   listBuildingCareRequestParties,
   listBuildingCareTenants,
   listBuildingCareUnits,
+  reportBuildingCareRequestPayment,
+  uploadBuildingCareRequestPaymentProof,
 } from './handyman-care-tenant-request-gateway.service';
 import { parseCreateBuildingCareRequestBody } from './handyman-care-tenant-request-gateway.validation';
 
@@ -332,6 +334,92 @@ export function createHandymanCareStandaloneDiscoveryRouter(): Router {
           ),
           201,
         );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Customer Care payment reporting (DP / TERMIN / PELUNASAN) under
+   * Building Care Authority (`handyman.care.building` + exact Building).
+   * Always records as PENDING; never auto-confirms or marks PAID. */
+  router.post(
+    '/handyman/care/buildings/:buildingId/requests/:requestId/payments',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        const actorUserId = req.auth?.userId ?? '';
+        const buildingId = parseUuid(req.params.buildingId, 'buildingId');
+        const requestId = parseUuid(req.params.requestId, 'requestId');
+        const result = await reportBuildingCareRequestPayment({
+          actorUserId,
+          buildingId,
+          requestId,
+          body: req.body,
+        });
+        sendSuccess(res, result, result.replayed ? 200 : 201);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /** Customer Care payment proof upload (PHOTO / DOCUMENT) for DP, TERMIN,
+   * or PELUNASAN payment under Building Care Authority. */
+  router.post(
+    '/handyman/care/buildings/:buildingId/requests/:requestId/payments/:paymentId/proof',
+    noStore,
+    ...AUTHZ,
+    async (req, res, next) => {
+      try {
+        const actorUserId = req.auth?.userId ?? '';
+        const buildingId = parseUuid(req.params.buildingId, 'buildingId');
+        const requestId = parseUuid(req.params.requestId, 'requestId');
+        const paymentId = parseUuid(req.params.paymentId, 'paymentId');
+        await assertBuildingCareRequest({
+          actorUserId,
+          buildingId,
+          requestId,
+        });
+        let filePayload: {
+          buffer: Buffer;
+          mimetype: string;
+          originalname: string;
+          size: number;
+        };
+        if (
+          req.body &&
+          typeof req.body === 'object' &&
+          req.body.file &&
+          typeof req.body.file === 'object' &&
+          typeof req.body.file.contentBase64 === 'string'
+        ) {
+          const buf = Buffer.from(req.body.file.contentBase64, 'base64');
+          filePayload = {
+            buffer: buf,
+            mimetype: String(req.body.file.mimeType ?? 'image/png'),
+            originalname: String(req.body.file.fileName ?? 'proof.png'),
+            size: buf.byteLength,
+          };
+        } else {
+          const file = await runSingleFileUpload(req, res);
+          filePayload = {
+            buffer: file.buffer,
+            mimetype: file.mimetype,
+            originalname: file.originalname,
+            size: file.size,
+          };
+        }
+        const result = await uploadBuildingCareRequestPaymentProof({
+          actorUserId,
+          buildingId,
+          requestId,
+          paymentId,
+          evidenceType: req.body?.evidenceType ?? 'PHOTO',
+          file: filePayload,
+        });
+        sendSuccess(res, result, result.replayed ? 200 : 201);
       } catch (error) {
         next(error);
       }

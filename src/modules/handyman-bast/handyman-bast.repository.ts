@@ -121,7 +121,7 @@ async function findActiveBastByScopeId(
 ): Promise<HandymanBastRecord | null> {
   const result = await executor.query(
     `${BAST_SELECT}
-      WHERE execution_scope_id = $1 AND status <> 'VOID'
+      WHERE execution_scope_id = $1 AND status NOT IN ('VOID', 'REJECTED')
       ORDER BY created_at DESC LIMIT 1`,
     [executionScopeId],
   );

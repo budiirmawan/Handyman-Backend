@@ -3037,6 +3037,10 @@ export const ERROR_CODES = {
   // outright rather than silently ignored, so no client can believe it was
   // honoured. 400 — a malformed request, not an authorization probe.
   HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED: 'HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED',
+  // CR-HM-E2E-FINANCIAL-RECONCILIATION — Manager FINAL CLOSE authority & gates
+  HANDYMAN_FINAL_CLOSE_NOT_AUTHORIZED: 'HANDYMAN_FINAL_CLOSE_NOT_AUTHORIZED',
+  HANDYMAN_FINAL_CLOSE_GATE_FAILED: 'HANDYMAN_FINAL_CLOSE_GATE_FAILED',
+  HANDYMAN_FINAL_CLOSE_ALREADY_CLOSED: 'HANDYMAN_FINAL_CLOSE_ALREADY_CLOSED',
   /** Generic 409 conflict code (used by PART 11A for "unique effective
    * session" collisions where no domain-specific error is frozen). */
   CONFLICT: 'CONFLICT',

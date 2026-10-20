@@ -27,6 +27,7 @@ import type { HandymanQuotationLineServiceView }
 import {
   parseQuotationApiUuidParam,
   parseQuotationDecisionBody,
+  parseQuotationDpTermsBody,
   parseQuotationIssueBody,
   parseQuotationLineBody,
 } from './handyman-quotations-api.validation';
@@ -97,6 +98,10 @@ type CustomerHandymanQuotationVersionPayload = Pick<
   | 'versionNumber'
   | 'status'
   | 'validUntil'
+  | 'dpRequired'
+  | 'dpPercentage'
+  | 'dpAmount'
+  | 'dpTermsNotes'
   | 'createdAt'
   | 'updatedAt'
 >;
@@ -110,6 +115,10 @@ function toCustomerQuotationVersionPayload(
     versionNumber: version.versionNumber,
     status: version.status,
     validUntil: version.validUntil,
+    dpRequired: version.dpRequired,
+    dpPercentage: version.dpPercentage,
+    dpAmount: version.dpAmount,
+    dpTermsNotes: version.dpTermsNotes,
     createdAt: version.createdAt,
     updatedAt: version.updatedAt,
   };
@@ -230,6 +239,7 @@ export async function postHandymanQuotationHandler(
             p(req.params.handymanRequestId),
             'handymanRequestId',
           ),
+          ...parseQuotationDpTermsBody(req.body),
         },
         actor(req),
       ),
@@ -295,6 +305,7 @@ export async function postHandymanQuotationRevisionHandler(
           'quotationId',
         ),
         actor(req),
+        parseQuotationDpTermsBody(req.body),
       ),
       201,
     );

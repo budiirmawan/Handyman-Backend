@@ -33,6 +33,20 @@ export type HandymanQuotationRecord = {
   updatedAt: Date;
 };
 
+export type HandymanQuotationDpTerms = {
+  dpRequired: boolean;
+  dpPercentage: number | null;
+  dpAmount: number | null;
+  dpTermsNotes: string | null;
+};
+
+export type HandymanQuotationDpTermsInput = {
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
+};
+
 /** Full quotation version database record. */
 export type HandymanQuotationVersionRecord = {
   id: string;
@@ -42,6 +56,10 @@ export type HandymanQuotationVersionRecord = {
   status: HandymanQuotationVersionStatus;
   /** PART 03 expiry handle (PART 01 leaves it NULL). */
   validUntil: Date | null;
+  dpRequired: boolean;
+  dpPercentage: number | null;
+  dpAmount: number | null;
+  dpTermsNotes: string | null;
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -76,7 +94,7 @@ export type PublicHandymanQuotationBundle = {
  */
 export type CreateHandymanQuotationInput = {
   handymanRequestId: string;
-};
+} & HandymanQuotationDpTermsInput;
 
 /** Fully-resolved rows ready for persistence (server-derived). */
 export type NewHandymanQuotation = {
@@ -90,5 +108,9 @@ export type NewHandymanQuotationVersion = {
   versionNumber: number;
   status: HandymanQuotationVersionStatus;
   validUntil: Date | null;
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
   createdByUserId: string;
 };

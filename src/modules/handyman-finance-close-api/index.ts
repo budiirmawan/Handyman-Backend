@@ -11,3 +11,4 @@ export {
   parseHandymanFinanceActionInboxQuery,
 } from './handyman-finance-action-inbox.service';
 export * from './handyman-finance-action-inbox.types';
+export * from './handyman-final-close.service';

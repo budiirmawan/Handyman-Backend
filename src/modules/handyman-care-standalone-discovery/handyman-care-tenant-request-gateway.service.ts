@@ -491,6 +491,16 @@ export async function listBuildingCareRequestParties(input: {
   };
 }
 
+import { getPool } from '../../database';
+import { openHandymanCustomerTransaction } from '../handyman-customer-transactions';
+import {
+  handymanCustomerPaymentConflictError,
+  recordHandymanCustomerPayment,
+  type RecordHandymanCustomerPaymentInput,
+} from '../handyman-customer-payments';
+import { uploadExecutionScopePaymentProof } from '../handyman-payment-proof';
+import { parseRecordCustomerPaymentBody } from '../handyman-customer-ledger-api/handyman-customer-ledger-api.validation';
+
 /**
  * Exact-Building assertion for request-scoped Care reads (intake evidence).
  * Same non-disclosure as the discovery detail read: a request outside the
@@ -500,7 +510,7 @@ export async function assertBuildingCareRequest(input: {
   actorUserId: string;
   buildingId: string;
   requestId: string;
-}): Promise<{ requestId: string }> {
+}): Promise<{ requestId: string; clientId: string; buildingId: string }> {
   const { authority } = await requireActiveAssignedBuilding(
     input.actorUserId,
     input.buildingId,
@@ -512,5 +522,104 @@ export async function assertBuildingCareRequest(input: {
       input.requestId,
     );
   if (!record) throw handymanServiceRequestNotFoundError();
-  return { requestId: record.id };
+  return {
+    requestId: record.id,
+    clientId: authority.scope.clientId,
+    buildingId: authority.scope.buildingId,
+  };
+}
+
+async function resolveRequestExecutionScopeId(
+  clientId: string,
+  requestId: string,
+): Promise<string> {
+  const res = await getPool().query<{ id: string }>(
+    `SELECT id
+       FROM handyman_execution_scopes
+      WHERE handyman_request_id = $1 AND client_id = $2
+      ORDER BY created_at DESC LIMIT 1`,
+    [requestId, clientId],
+  );
+  const scopeId = res.rows[0]?.id;
+  if (!scopeId) {
+    throw handymanCustomerPaymentConflictError(
+      'execution-scope-not-authorized-for-request',
+    );
+  }
+  return scopeId;
+}
+
+export async function reportBuildingCareRequestPayment(input: {
+  actorUserId: string;
+  buildingId: string;
+  requestId: string;
+  body: unknown;
+}) {
+  const { clientId } = await assertBuildingCareRequest({
+    actorUserId: input.actorUserId,
+    buildingId: input.buildingId,
+    requestId: input.requestId,
+  });
+  const parsed = parseRecordCustomerPaymentBody(input.body);
+  const executionScopeId = await resolveRequestExecutionScopeId(
+    clientId,
+    input.requestId,
+  );
+
+  const txCheck = await getPool().query<{ id: string }>(
+    `SELECT id FROM handyman_customer_transactions WHERE execution_scope_id = $1`,
+    [executionScopeId],
+  );
+  if (!txCheck.rows[0]) {
+    await openHandymanCustomerTransaction(
+      {
+        executionScopeId,
+        idempotencyKey: `care-open-tx:${executionScopeId}`,
+      },
+      input.actorUserId,
+    );
+  }
+
+  const recordInput: RecordHandymanCustomerPaymentInput = {
+    executionScopeId,
+    amount: parsed.amount,
+    channel: parsed.channel,
+    obligationStage: parsed.obligationStage,
+    providerName: parsed.providerName,
+    providerReference: parsed.providerReference,
+    externalReference: parsed.externalReference,
+    idempotencyKey: parsed.idempotencyKey,
+  };
+  return recordHandymanCustomerPayment(recordInput, input.actorUserId);
+}
+
+export async function uploadBuildingCareRequestPaymentProof(input: {
+  actorUserId: string;
+  buildingId: string;
+  requestId: string;
+  paymentId: string;
+  evidenceType: unknown;
+  file: {
+    buffer: Buffer;
+    mimetype: string;
+    originalname: string;
+    size: number;
+  };
+}) {
+  const { clientId } = await assertBuildingCareRequest({
+    actorUserId: input.actorUserId,
+    buildingId: input.buildingId,
+    requestId: input.requestId,
+  });
+  const executionScopeId = await resolveRequestExecutionScopeId(
+    clientId,
+    input.requestId,
+  );
+  return uploadExecutionScopePaymentProof({
+    executionScopeId,
+    paymentId: input.paymentId,
+    actorUserId: input.actorUserId,
+    evidenceType: input.evidenceType,
+    file: input.file,
+  });
 }

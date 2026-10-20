@@ -75,9 +75,71 @@ function toPublicVersion(
     versionNumber: row.versionNumber,
     status: row.status,
     validUntil: row.validUntil ? row.validUntil.toISOString() : null,
+    dpRequired: row.dpRequired ?? false,
+    dpPercentage: row.dpPercentage ?? null,
+    dpAmount: row.dpAmount ?? null,
+    dpTermsNotes: row.dpTermsNotes ?? null,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function normalizeDraftDpTerms(input?: {
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
+}): {
+  dpRequired: boolean;
+  dpPercentage: number | null;
+  dpAmount: number | null;
+  dpTermsNotes: string | null;
+} {
+  const dpRequired = Boolean(input?.dpRequired);
+  const dpTermsNotes =
+    typeof input?.dpTermsNotes === 'string' && input.dpTermsNotes.trim().length > 0
+      ? input.dpTermsNotes.trim()
+      : null;
+  if (dpTermsNotes && dpTermsNotes.length > 500) {
+    throw AppError.validation('Quotation DP terms validation failed.', [
+      { field: 'dpTermsNotes', message: 'dpTermsNotes must be at most 500 characters.' },
+    ]);
+  }
+  if (!dpRequired) {
+    return {
+      dpRequired: false,
+      dpPercentage: null,
+      dpAmount: null,
+      dpTermsNotes,
+    };
+  }
+  const dpPercentage =
+    input?.dpPercentage === undefined || input?.dpPercentage === null
+      ? null
+      : Number(input.dpPercentage);
+  const dpAmount =
+    input?.dpAmount === undefined || input?.dpAmount === null
+      ? null
+      : Number(input.dpAmount);
+  if (
+    dpPercentage !== null &&
+    (!Number.isFinite(dpPercentage) || dpPercentage <= 0 || dpPercentage > 100)
+  ) {
+    throw AppError.validation('Quotation DP terms validation failed.', [
+      { field: 'dpPercentage', message: 'dpPercentage must be > 0 and <= 100.' },
+    ]);
+  }
+  if (dpAmount !== null && (!Number.isFinite(dpAmount) || dpAmount <= 0)) {
+    throw AppError.validation('Quotation DP terms validation failed.', [
+      { field: 'dpAmount', message: 'dpAmount must be > 0.' },
+    ]);
+  }
+  return {
+    dpRequired: true,
+    dpPercentage: dpPercentage !== null ? Number(dpPercentage.toFixed(2)) : null,
+    dpAmount: dpAmount !== null ? Number(dpAmount.toFixed(2)) : null,
+    dpTermsNotes,
   };
 }
 
@@ -132,11 +194,13 @@ export async function createHandymanQuotation(
       handymanRequestId: request.id,
       createdByUserId: actorUserId,
     });
+    const dpTerms = normalizeDraftDpTerms(input);
     const version = await handymanQuotationRepository.insertVersion(tx, {
       quotationId: quotation.id,
       versionNumber: 1,
       status: 'DRAFT',
       validUntil: null,
+      ...dpTerms,
       createdByUserId: actorUserId,
     });
     await recordOperationalEvent(
@@ -173,9 +237,16 @@ export async function createHandymanQuotation(
 export async function createHandymanQuotationRevision(
   quotationId: string,
   actorUserId: string,
+  dpTermsInput?: {
+    dpRequired?: boolean;
+    dpPercentage?: number | null;
+    dpAmount?: number | null;
+    dpTermsNotes?: string | null;
+  },
 ): Promise<PublicHandymanQuotationVersion> {
   assertUuid(quotationId, 'quotationId');
   assertUuid(actorUserId, 'actorUserId');
+  const dpTerms = normalizeDraftDpTerms(dpTermsInput);
 
   return withTransaction(async (tx) => {
     const quotation = await handymanQuotationRepository.lockQuotationById(
@@ -195,6 +266,7 @@ export async function createHandymanQuotationRevision(
       versionNumber: nextNumber,
       status: 'DRAFT',
       validUntil: null,
+      ...dpTerms,
       createdByUserId: actorUserId,
     });
     await recordOperationalEvent(

@@ -73,6 +73,22 @@ export function isHandymanCustomerPaymentEventType(
     .includes(value);
 }
 
+export const HANDYMAN_CUSTOMER_PAYMENT_OBLIGATION_STAGES = [
+  'DP',
+  'TERMIN',
+  'PELUNASAN',
+] as const;
+
+export type HandymanCustomerPaymentObligationStage =
+  (typeof HANDYMAN_CUSTOMER_PAYMENT_OBLIGATION_STAGES)[number];
+
+export function isHandymanCustomerPaymentObligationStage(
+  value: string,
+): value is HandymanCustomerPaymentObligationStage {
+  return (HANDYMAN_CUSTOMER_PAYMENT_OBLIGATION_STAGES as readonly string[])
+    .includes(value);
+}
+
 /**
  * The payment fact row. Money/identity fields are frozen once
  * recorded; only the one-way decision projection may change
@@ -87,6 +103,8 @@ export type HandymanCustomerPaymentRecord = {
   amount: string;
   currency: string;
   channel: HandymanCustomerPaymentChannel;
+  /** Commercial obligation stage: DP, TERMIN, or PELUNASAN. */
+  obligationStage: HandymanCustomerPaymentObligationStage;
   /** Bounded free text (<= 200 chars) — never a provider enum. */
   providerName: string | null;
   /** Bounded free text (<= 200 chars) — never a provider object. */
@@ -122,6 +140,7 @@ export type NewHandymanCustomerPayment = {
   amount: string;
   currency: string;
   channel: HandymanCustomerPaymentChannel;
+  obligationStage: HandymanCustomerPaymentObligationStage;
   providerName: string | null;
   providerReference: string | null;
   externalReference: string | null;
@@ -152,6 +171,7 @@ export type RecordHandymanCustomerPaymentInput = {
   executionScopeId: string;
   amount: string;
   channel: string;
+  obligationStage?: string;
   providerName?: string | null;
   providerReference?: string | null;
   externalReference?: string | null;

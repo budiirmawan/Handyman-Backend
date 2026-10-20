@@ -105,6 +105,7 @@ async function readTransactionByScope(
            'paymentId', p.id,
            'status', p.status,
            'channel', p.channel,
+           'obligationStage', p.obligation_stage,
            'currency', p.currency,
            'amount', p.amount::numeric(18, 2)::text,
            'receivedAt', p.received_at,

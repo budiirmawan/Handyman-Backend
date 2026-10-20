@@ -188,6 +188,17 @@ export async function prepareHandymanBast(
     // PREPARE is strictly downstream of the latest genuine Supervisor QC
     // PASS. This does not issue, sign or accept the BAST for the customer.
     const qcRunId = await requireCurrentQcPassForBast(client, scope);
+    const latestBast = await handymanBastRepository.findLatestBastByScopeId(
+      client,
+      executionScopeId,
+    );
+    if (
+      latestBast &&
+      latestBast.status === 'REJECTED' &&
+      latestBast.qcRunId === qcRunId
+    ) {
+      throw handymanBastQcNotReadyError();
+    }
     const bast = await handymanBastRepository.createBast(client, {
       clientId: scope.clientId, executionScopeId, qcRunId,
     });

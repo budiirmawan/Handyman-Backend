@@ -65,6 +65,13 @@ function uuid(value: unknown, field: string): string {
   return value.toLowerCase();
 }
 
+function optionalUuid(value: unknown, field: string): string | null {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  return uuid(value, field);
+}
+
 /** Validate the selected represented scope without trusting any caller-owned
  * tenant/building identity. The current Care grant and occupancy are evaluated
  * in the same statement as the request -> scope -> payment -> invoice join. */
@@ -73,7 +80,7 @@ async function findBoundPayment(
   principal: CareWorkspacePrincipal,
   selection: HandymanPaymentProofSelection,
   requestId: string,
-  invoiceId: string,
+  invoiceId: string | null,
   paymentId: string,
   lockPayment: boolean,
 ) {
@@ -83,7 +90,7 @@ async function findBoundPayment(
     item: {
       clientId: string; requestId: string; executionScopeId: string;
       transactionId: string; paymentId: string; paymentStatus: string;
-      paymentCurrency: string; invoiceId: string; invoiceStatus: string;
+      paymentCurrency: string; invoiceId: string | null; invoiceStatus: string | null;
       tenantCompanyId: string; buildingId: string; spaceId: string | null;
     } | null;
   }>(`
@@ -105,24 +112,30 @@ async function findBoundPayment(
           AND tx.client_id = es.client_id
         JOIN handyman_customer_payments p ON p.transaction_id = tx.id
           AND p.client_id = tx.client_id
-        JOIN tenant_invoices i ON i.handyman_execution_scope_id = es.id
+        LEFT JOIN tenant_invoices i ON i.handyman_execution_scope_id = es.id
           AND i.client_id = es.client_id
+          AND i.tenant_company_id = r.tenant_company_id
+          AND i.building_id = r.building_id
+          AND i.space_id IS NOT DISTINCT FROM r.space_id
+          AND i.currency_code = tx.currency
+          AND i.status = 'FINALIZED'
        WHERE $5::text IS NULL AND $6::integer = 1
-         AND r.id = $10 AND i.id = $11 AND p.id = $12
+         AND r.id = $10 AND p.id = $12
          AND r.tenant_company_id = $7 AND r.building_id = $8
          AND r.space_id IS NOT DISTINCT FROM $9::uuid
-         AND i.tenant_company_id = r.tenant_company_id
-         AND i.building_id = r.building_id
-         AND i.space_id IS NOT DISTINCT FROM r.space_id
-         AND i.currency_code = tx.currency
-         AND i.status = 'FINALIZED'
-         AND EXISTS (
-           SELECT 1 FROM tenant_invoice_lines il
-           WHERE il.invoice_id = i.id AND il.source_type = 'HANDYMAN_CHARGE'
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM tenant_invoice_lines il
-           WHERE il.invoice_id = i.id AND il.source_type <> 'HANDYMAN_CHARGE'
+         AND (
+           $11::uuid IS NULL
+           OR (
+             i.id = $11::uuid
+             AND EXISTS (
+               SELECT 1 FROM tenant_invoice_lines il
+               WHERE il.invoice_id = i.id AND il.source_type = 'HANDYMAN_CHARGE'
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM tenant_invoice_lines il
+               WHERE il.invoice_id = i.id AND il.source_type <> 'HANDYMAN_CHARGE'
+             )
+           )
          )
        LIMIT 1${lockPayment ? ' FOR UPDATE OF p' : ''}
     )
@@ -219,11 +232,11 @@ export async function assertCareHandymanPaymentProofContext(input: {
   principal: CareWorkspacePrincipal;
   selection: HandymanPaymentProofSelection;
   requestId: unknown;
-  invoiceId: unknown;
+  invoiceId?: unknown;
   paymentId: unknown;
 }) {
   const requestId = uuid(input.requestId, 'requestId');
-  const invoiceId = uuid(input.invoiceId, 'invoiceId');
+  const invoiceId = optionalUuid(input.invoiceId, 'invoiceId');
   const paymentId = uuid(input.paymentId, 'paymentId');
   const binding = await findBoundPayment(getPool(), input.principal,
     input.selection, requestId, invoiceId, paymentId, false);
@@ -242,13 +255,13 @@ export async function uploadCareHandymanPaymentProof(input: {
   principal: CareWorkspacePrincipal;
   selection: HandymanPaymentProofSelection;
   requestId: unknown;
-  invoiceId: unknown;
+  invoiceId?: unknown;
   paymentId: unknown;
   evidenceType: unknown;
   file: CareProofUploadFile;
 }) {
   const requestId = uuid(input.requestId, 'requestId');
-  const invoiceId = uuid(input.invoiceId, 'invoiceId');
+  const invoiceId = optionalUuid(input.invoiceId, 'invoiceId');
   const paymentId = uuid(input.paymentId, 'paymentId');
   if (!input.selection || !UUID.test(input.selection.propertyId) ||
       !UUID.test(input.selection.tenantCompanyId) || !UUID.test(input.selection.buildingId) ||

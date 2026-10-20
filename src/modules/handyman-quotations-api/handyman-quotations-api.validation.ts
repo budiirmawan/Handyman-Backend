@@ -21,7 +21,7 @@ import {
 const p = (v: string | string[] | undefined) =>
   (Array.isArray(v) ? v[0] : v) ?? '';
 
-function fail(message: string, details: { field: string; message: string }[]) {
+function fail(message: string, details: { field: string; message: string }[]): never {
   throw AppError.validation(message, details);
 }
 
@@ -42,9 +42,71 @@ export function parseQuotationApiUuidParam(
   return uuid(p(value), field);
 }
 
-/** POST /requests/:id/quotation — request identity comes from the URL. */
-export function parseQuotationCreate(): Record<string, never> {
-  return {};
+export function parseQuotationDpTermsBody(body: unknown): {
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
+} {
+  const src = (body ?? {}) as Record<string, unknown>;
+  const out: {
+    dpRequired?: boolean;
+    dpPercentage?: number | null;
+    dpAmount?: number | null;
+    dpTermsNotes?: string | null;
+  } = {};
+  if (src.dpRequired !== undefined) {
+    if (typeof src.dpRequired !== 'boolean') {
+      return fail('Request validation failed.', [
+        { field: 'dpRequired', message: 'dpRequired must be a boolean.' },
+      ]);
+    }
+    out.dpRequired = src.dpRequired;
+  }
+  if (src.dpPercentage !== undefined) {
+    if (src.dpPercentage === null) {
+      out.dpPercentage = null;
+    } else if (typeof src.dpPercentage === 'number' && Number.isFinite(src.dpPercentage)) {
+      out.dpPercentage = src.dpPercentage;
+    } else {
+      fail('Request validation failed.', [
+        { field: 'dpPercentage', message: 'dpPercentage must be a finite number or null.' },
+      ]);
+    }
+  }
+  if (src.dpAmount !== undefined) {
+    if (src.dpAmount === null) {
+      out.dpAmount = null;
+    } else if (typeof src.dpAmount === 'number' && Number.isFinite(src.dpAmount)) {
+      out.dpAmount = src.dpAmount;
+    } else {
+      fail('Request validation failed.', [
+        { field: 'dpAmount', message: 'dpAmount must be a finite number or null.' },
+      ]);
+    }
+  }
+  if (src.dpTermsNotes !== undefined) {
+    if (src.dpTermsNotes === null) {
+      out.dpTermsNotes = null;
+    } else if (typeof src.dpTermsNotes === 'string') {
+      out.dpTermsNotes = src.dpTermsNotes.trim();
+    } else {
+      fail('Request validation failed.', [
+        { field: 'dpTermsNotes', message: 'dpTermsNotes must be a string or null.' },
+      ]);
+    }
+  }
+  return out;
+}
+
+/** POST /requests/:id/quotation — request identity comes from the URL; optional DP terms may be supplied. */
+export function parseQuotationCreate(body?: unknown): {
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
+} {
+  return parseQuotationDpTermsBody(body);
 }
 
 export function parseQuotationLineBody(
@@ -114,7 +176,13 @@ export function parseQuotationLineBody(
   };
 }
 
-export function parseQuotationIssueBody(body: unknown): { validUntil: string } {
+export function parseQuotationIssueBody(body: unknown): {
+  validUntil: string;
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
+} {
   const src = (body ?? {}) as Record<string, unknown>;
   const validUntil =
     typeof src.validUntil === 'string' ? src.validUntil.trim() : '';
@@ -128,7 +196,10 @@ export function parseQuotationIssueBody(body: unknown): { validUntil: string } {
       { field: 'validUntil', message: 'validUntil must be a valid ISO date.' },
     ]);
   }
-  return { validUntil };
+  return {
+    validUntil,
+    ...parseQuotationDpTermsBody(body),
+  };
 }
 
 export function parseQuotationDecisionBody(body: unknown): {

@@ -17,8 +17,10 @@ import { handymanCustomerPaymentRepository }
   from './handyman-customer-payment.repository';
 import {
   isHandymanCustomerPaymentChannel,
+  isHandymanCustomerPaymentObligationStage,
   type ConfirmHandymanCustomerPaymentInput,
   type HandymanCustomerPaymentCommandResult,
+  type HandymanCustomerPaymentObligationStage,
   type HandymanCustomerPaymentRecord,
   type RecordHandymanCustomerPaymentInput,
   type RejectHandymanCustomerPaymentInput,
@@ -87,6 +89,20 @@ function ensureChannel(value: unknown) {
   return raw;
 }
 
+function ensureObligationStage(
+  value: unknown,
+): HandymanCustomerPaymentObligationStage {
+  if (value === undefined || value === null) return 'PELUNASAN';
+  const raw = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (raw === 'DOWN_PAYMENT') return 'DP';
+  if (raw === 'INSTALLMENT') return 'TERMIN';
+  if (raw === 'FINAL_BALANCE') return 'PELUNASAN';
+  if (!isHandymanCustomerPaymentObligationStage(raw)) {
+    throw handymanCustomerPaymentInvalidError('obligationStage');
+  }
+  return raw;
+}
+
 /** Bounded free text or explicit absence — never a provider enum. */
 function ensureNeutralReference(
   value: unknown,
@@ -151,6 +167,7 @@ export async function recordHandymanCustomerPayment(
   const key = ensureKey(input.idempotencyKey);
   const amount = ensureAmount(input.amount);
   const channel = ensureChannel(input.channel);
+  const obligationStage = ensureObligationStage(input.obligationStage);
   const providerName = ensureNeutralReference(
     input.providerName,
     'providerName',
@@ -212,6 +229,7 @@ export async function recordHandymanCustomerPayment(
           amount,
           currency,
           channel,
+          obligationStage,
           providerName,
           providerReference,
           externalReference,

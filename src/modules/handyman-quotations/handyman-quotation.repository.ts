@@ -30,6 +30,10 @@ type VersionRow = {
   version_number: number;
   status: HandymanQuotationVersionRecord['status'];
   valid_until: Date | null;
+  dp_required?: boolean | null;
+  dp_percentage?: string | number | null;
+  dp_amount?: string | number | null;
+  dp_terms_notes?: string | null;
   created_by_user_id: string;
   created_at: Date;
   updated_at: Date;
@@ -42,6 +46,7 @@ const QUOTATION_SELECT = `
 
 const VERSION_SELECT = `
   SELECT id, quotation_id, version_number, status, valid_until,
+         dp_required, dp_percentage, dp_amount, dp_terms_notes,
          created_by_user_id, created_at, updated_at
     FROM handyman_quotation_versions`;
 
@@ -63,6 +68,16 @@ function mapVersion(row: VersionRow): HandymanQuotationVersionRecord {
     versionNumber: row.version_number,
     status: row.status,
     validUntil: row.valid_until,
+    dpRequired: Boolean(row.dp_required),
+    dpPercentage:
+      row.dp_percentage === null || row.dp_percentage === undefined
+        ? null
+        : Number(row.dp_percentage),
+    dpAmount:
+      row.dp_amount === null || row.dp_amount === undefined
+        ? null
+        : Number(row.dp_amount),
+    dpTermsNotes: row.dp_terms_notes ?? null,
     createdByUserId: row.created_by_user_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -96,9 +111,11 @@ async function insertVersion(
   const result = await executor.query<VersionRow>(
     `INSERT INTO handyman_quotation_versions (
        id, quotation_id, version_number, status, valid_until,
+       dp_required, dp_percentage, dp_amount, dp_terms_notes,
        created_by_user_id
-     ) VALUES ($1, $2, $3, $4, $5, $6)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id, quotation_id, version_number, status, valid_until,
+               dp_required, dp_percentage, dp_amount, dp_terms_notes,
                created_by_user_id, created_at, updated_at`,
     [
       randomUUID(),
@@ -106,6 +123,10 @@ async function insertVersion(
       input.versionNumber,
       input.status,
       input.validUntil,
+      input.dpRequired ?? false,
+      input.dpPercentage ?? null,
+      input.dpAmount ?? null,
+      input.dpTermsNotes ?? null,
       input.createdByUserId,
     ],
   );
@@ -197,16 +218,35 @@ async function updateVersionLifecycle(
   id: string,
   status: HandymanQuotationVersionRecord['status'],
   validUntil: Date | null | undefined,
+  dpTerms?: {
+    dpRequired: boolean;
+    dpPercentage: number | null;
+    dpAmount: number | null;
+    dpTermsNotes: string | null;
+  },
 ): Promise<HandymanQuotationVersionRecord | null> {
   const result = await executor.query<VersionRow>(
     `UPDATE handyman_quotation_versions
         SET status = $2,
             valid_until = COALESCE($3, valid_until),
+            dp_required = COALESCE($4, dp_required),
+            dp_percentage = CASE WHEN $4 IS NULL THEN dp_percentage ELSE $5 END,
+            dp_amount = CASE WHEN $4 IS NULL THEN dp_amount ELSE $6 END,
+            dp_terms_notes = CASE WHEN $4 IS NULL THEN dp_terms_notes ELSE $7 END,
             updated_at = NOW()
       WHERE id = $1
       RETURNING id, quotation_id, version_number, status, valid_until,
+                dp_required, dp_percentage, dp_amount, dp_terms_notes,
                 created_by_user_id, created_at, updated_at`,
-    [id, status, validUntil ?? null],
+    [
+      id,
+      status,
+      validUntil ?? null,
+      dpTerms ? dpTerms.dpRequired : null,
+      dpTerms ? dpTerms.dpPercentage : null,
+      dpTerms ? dpTerms.dpAmount : null,
+      dpTerms ? dpTerms.dpTermsNotes : null,
+    ],
   );
   return result.rows[0] ? mapVersion(result.rows[0]) : null;
 }
