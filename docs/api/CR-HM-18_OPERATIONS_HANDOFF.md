@@ -109,6 +109,14 @@ decision (see §6).
 
 ---
 
+## 3A. Runbook — crew assignment, dispatch and arrival (J04, verified)
+
+1. **Assign** a crew to an AUTHORIZED scope. Eligibility is enforced server-side: the crew Lead needs an ACTIVE user Building assignment, and **every** member needs an ACTIVE workforce Building placement plus a vendor workforce binding. A failure here is a staffing/registration problem, not a UI bug.
+2. **Reassign** with `{expectedVersion, reason}`. A stale version is a `409` — re-read and retry. Reassigning to the same crew is a no-op and writes no history.
+3. An **active work session blocks transfer** of the PIC; end the session first.
+4. **Dispatch readiness** lists every unmet gate (permit, slot consent, access, assignment, certification). Release is refused until each is satisfied; concurrent duplicate releases are serialized to one.
+5. **Arrival verification** is the Lead's own act: request a challenge, then verify with the opaque QR/device location. `MANUAL_REVIEW_REQUIRED` means the desk must decide (no policy or out-of-geofence); it is not a system failure. Reassignment supersedes an active release.
+
 ## 4. What Operations must configure (or the capability is silent)
 
 | Item | Where | Required action |

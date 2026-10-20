@@ -188,7 +188,9 @@ listed so the session can wire them without re-auditing.
 | Capability | Operation |
 |---|---|
 | Crew assignment | `POST/GET /handyman/execution-scopes/:id/assignment`, `POST …/assignment/reassign` |
-| Dispatch | `GET …/dispatch/readiness`, `POST …/dispatch/release`, `POST …/dispatch/cancel` |
+| Dispatch | `GET …/dispatch/readiness` (ordered gate failures), `POST …/dispatch/release`, `POST …/dispatch/cancel` |
+| Arrival (J04) | `POST …/arrival-verification` (challenge token + opaque QR + optional device location → `PASS` / `MANUAL_REVIEW_REQUIRED` / `FAILED` + reason), `GET …/arrival-verification` |
+| Assignment read | `GET …/assignment` returns the CURRENT crew + live Lead identity (`leadWorkerContextId`, `leadUserId`); it carries no snapshot, so a Lead change is reflected on the next read |
 | Work sessions | `GET …/work-sessions/active`, `GET /handyman/work-sessions/:id/time-projection` |
 | Material | `POST …/materials/estimate`, `…/:lineId/approve|issue|purchase|use|return|settle`, `GET …/materials/final-charge-ready` |
 | Variations | `POST/GET …/variations`, `…/:variationId/tenant-decision|operations-review|qc|authorize-scope|final-charge-eligibility` |
@@ -232,6 +234,7 @@ rework ladder `POST /handyman/service-warranty-reworks/:reworkId/authorize`
 5. **404 vs 403**: both are non-enumerating denials; do not attempt to
    distinguish “missing” from “foreign building” in the UI copy.
 6. **`Cache-Control: no-store`** is set on the Care routes; do not cache them.
+7. **Reassignment is versioned**: send `{providerContextId, crewId, expectedVersion, reason, idempotencyKey}`. Read the current version from the assignment GET/assignment response; a stale version returns `409` and a same-crew call is a no-op (no history row).
 
 ---
 

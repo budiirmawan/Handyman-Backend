@@ -128,7 +128,23 @@ Denied actions return bounded errors (401 unauthenticated, 403 RBAC/building, 40
   - `POST /handyman/execution-scopes/:executionScopeId/assignment/reassign` — body `{providerContextId, crewId, expectedVersion, reason, idempotencyKey?}`; supersedes the old row (history in `handyman_execution_scope_assignment_history`, migration 0439) and activates the new crew.
   - Eligibility (service + DB): ACTIVE provider context and crew under the scope's Client, CURRENT crew Lead with linked user, and — since migration 0439 — the Lead's workforce profile must hold an ACTIVE workforce **Building** assignment for the scope's Building (`assignBuildingToWorkforce`). The new E2E suite arranges this and the assignment path is exercised end-to-end (crew assignment → derivation/settlement/warranty all resolve the same ACTIVE assignment and Lead).
   - Suite status (CR-HM-18): the fixture now honours every eligibility rule the production services enforce — an ACTIVE workforce **Building** placement for the Lead and each member, an ACTIVE user Building assignment for the Lead and second member, and a quotation approval recorded by the ACTIVE Tenant PIC (the tenant-decision authority added after the fixture was written). `tests/handyman-scope-assignments-api.test.ts` is **10/10 PASS** (it previously skipped/failed 10/10), and the reassignment case now sends the hardened `{expectedVersion, reason}` body. The OpenAPI pin was narrowed from "the whole execution-scopes namespace" to "assignment-shaped paths", because that namespace legitimately grew work-session/settlement/BAST commands in later CRs.
-- **Tests**: dispatch-api, arrival-verification, scope-assignments-api suites.
+- **Tests (CR-HM-18 J04 completion — all on disposable embedded PostgreSQL, real HTTP where the suite is an API suite):**
+
+| Suite | Result | What it proves |
+|---|---|---|
+| `handyman-scope-assignments-api` | 10/10 | assign → read (live Lead) → reassign (expectedVersion + reason) → RBAC read/manage split → smuggling ignored → 404/409 fidelity → OpenAPI parity |
+| `handyman-execution-scope-assignment-service` | 10/10 | one ACTIVE row + audit event, cross-client/INACTIVE/non-loginable rejection, second-assign conflict, atomic supersede, full rollback, dynamic Lead resolution, fail-closed resolver |
+| `handyman-execution-scope-assignments` | 10/10 | persisted assignment facts + immutable/append-only history + schema surface (incl. the `version` OCC column) |
+| `handyman-execution-scope-assignment-scope-guard` | 4/4 | exact-Building authority on write and read; same-Client sibling building is 403 with zero mutation |
+| `handyman-dispatch-authority` | 10/10 | inspector eligibility, dispatch readiness gates, release requires all gates, concurrent duplicate release serialized, active-session blocks transfer, reassignment supersedes the release |
+| `handyman-arrival-challenges` | 10/10 | authoritative Lead issues exactly one PENDING challenge; non-Lead/cross-building denied; zero QR/GPS/result side effects |
+| `handyman-arrival-evaluation` | 10/10 | PASS/MANUAL_REVIEW/FAILED evaluation, no-policy → MANUAL_REVIEW, superseded actor → `ACTOR_ASSIGNMENT_INVALID` |
+| `handyman-arrival-results` | 10/10 | append-only results, client/binding/FK consistency, no raw provider payload/secret/FM coupling |
+| `handyman-arrival-verification-api` | 10/10 | HTTP seam: challenge → verify, bounded enums, 401/403/404/409/400 fidelity |
+| `handyman-arrival-locations` / `-scope-guard` / `-location-scope-guard` | 10/10 · 2/2 · 2/2 | expected-location snapshot + geospatial policy scope walls |
+
+  Total **98 passing cases**; every one of these suites previously SKIPPED (0/N) or failed at fixture time, so J04's HTTP seam was effectively `NOT TESTED` before this CR.
+- **Fixture laws now encoded (do not regress):** the CURRENT crew Lead needs an ACTIVE user Building assignment, every member needs an ACTIVE workforce Building placement (0439), and a quotation approval must be recorded by the ACTIVE Tenant PIC user of the request (tenant-decision authority). Reassignment always sends `{expectedVersion, reason, idempotencyKey}`; same-crew reassign is a documented no-op.
 
 ## 7. J05 — Work Session — COMPLETE
 
@@ -263,6 +279,20 @@ Every number below was produced in this CR; no full-suite run was performed.
 | `handyman-audit-integration-part03` | **9/9 PASS** | 9/9 | 16-entry contract |
 | `npm run typecheck` | **PASS** | PASS | |
 | `docs/api/openapi.yaml` | parses, **1415 paths** | 1414 | +4 operations (cancel, cancellation, Care cancel, dispute resolution) |
+
+### 16.0b J04 completion run (CR-HM-18 continuation)
+
+`handyman-arrival-challenges` 10/10 · `handyman-arrival-evaluation` 10/10 ·
+`handyman-arrival-locations` 10/10 · `handyman-arrival-location-scope-guard` 2/2 ·
+`handyman-arrival-results` 10/10 · `handyman-arrival-scope-guard` 2/2 ·
+`handyman-arrival-verification-api` 10/10 ·
+`handyman-execution-scope-assignment-scope-guard` 4/4 ·
+`handyman-execution-scope-assignment-service` 10/10 ·
+`handyman-execution-scope-assignments` 10/10 ·
+`handyman-scope-assignments-api` 10/10 · `handyman-dispatch-authority` 10/10 —
+**98/98 PASS, 0 skipped** (previously 50 skipped + 6 failures). Re-verified at the
+same HEAD: capability-closure 4/4, care gateway 9/9, lifecycle 10/10, settlement 3/3,
+finance-close 6/6, reconciliation-close 2/2, audit 9/9, notification 6/6.
 
 Shared probe: `tests/helpers/openapi-census.ts` (path normalization, express stack walk incl.
 array-registered paths, full JSON-pointer `$ref` resolution). `tests/helpers/embedded-test-db.ts`

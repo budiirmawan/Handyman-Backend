@@ -68,6 +68,21 @@ scope `AUTHORIZED` · ACTIVE assignment · dispatch `RELEASED`/`IN_PROGRESS` ·
 active crew membership for the session user · ACTIVE workforce profile and user ·
 ACTIVE building · the user holds an ACTIVE building assignment.
 
+### 3.1b Arrival verification (Lead only, before check-in)
+
+`POST /handyman/execution-scopes/{executionScopeId}/arrival-verification` with
+`{challengeToken, qrOpaqueCode, deviceLocation?}` returns
+`PASS` · `MANUAL_REVIEW_REQUIRED` · `FAILED` plus a bounded `primaryReason`
+(`NO_GEOSPATIAL_POLICY`, geofence/QR/actor mismatches). Rules the app must honour:
+
+- the challenge is **single-use** and issued to the CURRENT Lead — a superseded
+  Lead gets `ACTOR_ASSIGNMENT_INVALID`; never cache a challenge token;
+- `MANUAL_REVIEW_REQUIRED` is a **successful call** (HTTP 200) that needs a desk
+  decision — show it as "waiting for review", do not retry;
+- the result is append-only and carries no provider payload, raw GPS blob or
+  FM/work-order coupling — never synthesise one client-side;
+- reading is `GET …/arrival-verification` (bounded, scope-walled).
+
 ### 3.2 Work session (check-in → check-out)
 
 `POST /handyman/execution-scopes/{id}/work-sessions` (check-in) ·
