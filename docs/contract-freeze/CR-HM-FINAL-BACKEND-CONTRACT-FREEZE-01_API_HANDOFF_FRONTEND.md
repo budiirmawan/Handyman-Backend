@@ -104,3 +104,10 @@ Every row is in OpenAPI under the given `operationId` (the formerly route-only o
 | POST | `/handyman/service-warranty-claims/{claimId}/submit` | `submitHandymanServiceWarrantyClaim` |
 | POST | `/handyman/service-warranty-claims/{claimId}/withdraw` | `withdrawHandymanServiceWarrantyClaim` |
 | GET | `/handyman/sla/subjects/{subjectType}/{subjectId}` | `getHandymanSubjectSla` |
+
+
+## Cross-repo gap-closure erratum (2026-10-21, #52 baseline)
+
+Staff Care creation already records CUSTOMER_CARE_BACKEND (BM exchange remains BM_SUPER_APP). Cancellation fact GET is not eligibility; canonical cancel enforces pre-commitment guards. No customer decision impersonation. B1–B4 exact report text remains access-blocked.
+
+See [audit, exact deltas and test evidence](../e2e/CR-HM-BACKEND-CROSS-REPO-E2E-GAP-CLOSURE-01.md), especially §7. Spec erratum hash: `b5edd56f696b3f75ff5f2b5f17ac02366fbab36322908c580faf2f2fc9d10948`; previous header hash is historical. No runtime/DTO/migration change. FG-03/FG-04 remain open; no FINAL FREEZE or live E2E PASS.

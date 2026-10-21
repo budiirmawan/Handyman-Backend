@@ -33,13 +33,14 @@ import { recordVariationQc, confirmVariationFinalChargeEligibility }
   from '../src/modules/handyman-scope-variations';
 import { prepareHandymanBast, issueHandymanBast, acceptHandymanBast,
   voidHandymanBast } from '../src/modules/handyman-bast';
+import { credentialService } from '../src/modules/auth';
+import { api } from './helpers/http';
 import { permissionService } from '../src/modules/permissions';
 import { roleService } from '../src/modules/roles';
 import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
 import { userService } from '../src/modules/users';
 import { workforceService } from '../src/modules/workforce';
 import { assignSupervisor } from '../src/modules/workforce-reporting-lines';
-import { workforceBuildingAssignmentService } from '../src/modules/workforce-building-assignments';
 import { createAdminUser } from './helpers/access';
 import { baseFixture, crewFixture, initHandymanFixtures } from './helpers/handyman-fixtures';
 
@@ -106,10 +107,7 @@ async function fixture(configure = true) {
     versionNumber: 1, requiredItemKeys: ['quality'],
   }, adminId);
   const crew = await crewFixture(f.realm);
-  await workforceBuildingAssignmentService.assignBuildingToWorkforce({
-    workforceProfileId: crew.workerContext.workforceProfileId,
-    buildingId: f.realm.building.id,
-  });
+  // crewFixture already creates the active workforce/building binding.
   const assignment = await assignHandymanExecutionScopeCrew({
     executionScopeId: f.scope.id, providerContextId: crew.providerContext.id,
     crewId: crew.crew.id,
@@ -242,6 +240,21 @@ async function variationExecution(f: QcFixture) {
   return { id, evidence };
 }
 
+async function failedDefect(f: QcFixture) {
+  const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
+  const item = await setHandymanQcRunItemOutcome({ qcRunId: run.id,
+    itemKey: 'quality', outcome: 'DEFECT', expectedVersion: 1,
+    idempotencyKey: key() }, f.supervisor.id);
+  await finishHandymanQcRun(fail(run.id, item.runVersion),
+    f.supervisor.id);
+  const { defect } = await openHandymanDefect({
+    executionScopeId: f.scope.id, runId: run.id,
+    itemId: item.item.id, description: 'Repair faulty seal',
+    idempotencyKey: key(),
+  }, f.supervisor.id);
+  return { run, defect };
+}
+
 describe('Supervisor QC is distinct from execution and inspection', () => {
   it('permits assigned supervisor and PIC reads, but denies PIC self-QC', async () => {
     const f = await fixture();
@@ -269,6 +282,52 @@ describe('Supervisor QC is distinct from execution and inspection', () => {
     await assert.rejects(openHandymanDefect({ executionScopeId: f.scope.id,
       description: 'Self-verification', idempotencyKey: key() },
     f.crew.leadUser.id), (e) => code(e) === 'HANDYMAN_DEFECT_NOT_AUTHORIZED');
+  });
+
+  it('HTTP defect discovery needs current PIC assignment, not tenant_company.read', async () => {
+    const f = await fixture();
+    const { defect } = await failedDefect(f);
+    const permissions = await permissionService.resolvePermissionsForUser(f.crew.leadUser.id);
+    assert.equal(permissions.includes('tenant_company.read'), false);
+    assert.equal(permissions.includes('handyman.qc.manage'), false);
+    const password = `LeadPass${randomUUID()}`;
+    await credentialService.createInitialCredential({ userId: f.crew.leadUser.id, password });
+    const login = await api().post('/api/v1/auth/login').send({
+      email: f.crew.leadUser.email, password,
+    });
+    assert.equal(login.status, 200);
+    const authorization = `Bearer ${login.body.data.sessionToken}`;
+    const listPath = `/api/v1/handyman/execution-scopes/${f.scope.id}/defects`;
+    const detailPath = `/api/v1/handyman/defects/${defect.id}`;
+    const list = await api().get(listPath).set('Authorization', authorization);
+    assert.equal(list.status, 200);
+    assert.equal(list.body.data.defects[0].id, defect.id);
+    const detail = await api().get(detailPath).set('Authorization', authorization);
+    assert.equal(detail.status, 200);
+    assert.equal(detail.body.data.defect.id, defect.id);
+    assert.equal((await api().get(listPath)).status, 401);
+    const foreign = await fixture();
+    const foreignDefect = await failedDefect(foreign);
+    for (const path of [
+      `/api/v1/handyman/execution-scopes/${foreign.scope.id}/defects`,
+      `/api/v1/handyman/defects/${foreignDefect.defect.id}`,
+    ]) {
+      const denied = await api().get(path).set('Authorization', authorization);
+      assert.equal(denied.status, 403);
+      assert.equal(denied.body.error.code, 'BUILDING_ACCESS_DENIED');
+    }
+    const selfQc = await api().post(`${detailPath}/pass-reinspection`)
+      .set('Authorization', authorization)
+      .send({ expectedVersion: 1, idempotencyKey: key() });
+    assert.equal(selfQc.status, 403);
+    assert.equal(selfQc.body.error.code, 'HANDYMAN_DEFECT_NOT_AUTHORIZED');
+    await getPool().query(`UPDATE handyman_execution_scope_assignments
+      SET status = 'SUPERSEDED' WHERE id = $1`, [f.assignment.id]);
+    for (const path of [listPath, detailPath]) {
+      const denied = await api().get(path).set('Authorization', authorization);
+      assert.equal(denied.status, 403);
+      assert.equal(denied.body.error.code, 'HANDYMAN_DEFECT_NOT_AUTHORIZED');
+    }
   });
 
   it('denies inspector, broad Operations permission, and unassigned supervisor', async () => {
@@ -585,21 +644,6 @@ describe('Additive migration on existing QC aggregates', () => {
 });
 
 describe('Defect repair and Supervisor reinspection provenance', () => {
-  async function failedDefect(f: QcFixture) {
-    const { run } = await openHandymanQcRun(open(f.scope.id), f.supervisor.id);
-    const item = await setHandymanQcRunItemOutcome({ qcRunId: run.id,
-      itemKey: 'quality', outcome: 'DEFECT', expectedVersion: 1,
-      idempotencyKey: key() }, f.supervisor.id);
-    await finishHandymanQcRun(fail(run.id, item.runVersion),
-      f.supervisor.id);
-    const { defect } = await openHandymanDefect({
-      executionScopeId: f.scope.id, runId: run.id,
-      itemId: item.item.id, description: 'Repair faulty seal',
-      idempotencyKey: key(),
-    }, f.supervisor.id);
-    return { run, defect };
-  }
-
   it('requires a completed PIC session and fresh bytes; only the Supervisor verifies, then new QC may PASS', async () => {
     const f = await fixture();
     const { run, defect } = await failedDefect(f);
