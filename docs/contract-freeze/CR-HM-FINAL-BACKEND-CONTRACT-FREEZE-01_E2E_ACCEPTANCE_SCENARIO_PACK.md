@@ -1,7 +1,10 @@
 # E2E Acceptance Scenario Pack — Four-Repository Integration
 
 Purpose: the sequential acceptance script for Frontend → Operations → Mobile
-against Freeze Candidate v1.0. Each scenario names the persona, the exact
+against Freeze Candidate **v1.2** (CR-HM-BACKEND-CONTRACT-FREEZE-03; supersedes
+the v1.0/v1.1 pins — scenarios unchanged, authority expectations per the v1.2
+handoffs: PIC-personal tenant decisions, BE-02G exact-Building walls, staff
+transports never impersonate the PIC). Each scenario names the persona, the exact
 operations (see consumer handoffs for the full tables), the state that must be
 observable afterwards, and the negative checks. **No scenario is marked PASS
 by this document** — PASS is recorded per repository during integration and

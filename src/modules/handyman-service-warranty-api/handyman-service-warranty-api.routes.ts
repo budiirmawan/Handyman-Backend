@@ -35,9 +35,14 @@ import {
  *   POST /handyman/chargeable-additional-works/:workId/accept
  *   POST /handyman/chargeable-additional-works/:workId/reject
  *
- * Reads require `tenant_company.read` + `canAccessClient`.
- * Customer claim & decision commands require `tenant_company.manage` +
- * `canAccessClient` + `idempotencyKey`.
+ * Reads require `tenant_company.read` + exact-Building access to the
+ * warranty scope's server-derived Building (BE-02G — the former
+ * client-level `canAccessClient` wall was replaced by CR-HM-SEC-01
+ * PART 06D-1; a same-Client sibling-Building assignment does NOT
+ * suffice). Customer claim & decision commands require
+ * `tenant_company.manage` + the same exact-Building wall +
+ * `idempotencyKey`; the recorded actor is always the staff user and the
+ * Tenant PIC is never impersonated.
  * Field-worker rework execution commands (`propose`, `start`, `complete`,
  * `verify`) and warranty lifecycle calculation commands (`start`, `expire`)
  * are NOT exposed.

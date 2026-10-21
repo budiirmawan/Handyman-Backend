@@ -1,12 +1,25 @@
-# API Handoff — Frontend (Customer Care / Tenant-PIC Web) · Freeze Candidate v1.0
+# API Handoff — Frontend (Customer Care / Tenant-PIC Web) · Freeze Candidate v1.2
 
-**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1494 paths/1985 ops; 269/269 Handyman ops documented — FG-01 CLOSED by CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
-Detailed payloads for cancellation/dispute: `docs/api/CR-HM-18_FRONTEND_HANDOFF.md`. This handoff governs where the two differ.
+**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 · **Version: Freeze Candidate v1.2** (CR-HM-BACKEND-CONTRACT-FREEZE-03; lineage v1.0 freeze-01 → v1.1 freeze-02/PR #51 → v1.2 freeze-03) · **Backend baseline**: `main@38e779f` (PR #51 merged; PR #48/#50 long merged) · **Spec**: `docs/api/openapi.yaml` SHA-256 `f2ffec3f0bc3e4aa5db74265caeb0738b530aee0c43ca9c4e299866831d70352` (1494 paths/1985 ops/**2256 schemas**; 269/269 Handyman ops documented **and** permission/error/security-annotated — FG-01+FG-02 CLOSED) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
+Detailed payloads for cancellation/dispute: `docs/api/CR-HM-18_FRONTEND_HANDOFF.md`. This handoff governs where the two differ. Full freeze-03 change matrix: `CR-HM-BACKEND-CONTRACT-FREEZE-03_CHANGELOG.md`.
+
+## 0. What changed in v1.2 (freeze-03) — action required
+
+Wire behavior is **unchanged** (regenerated clients stay compatible), but freeze-03 corrected descriptions that were wrong in v1.1 and completed the missing metadata. Read these before building:
+
+1. **Request status enum now includes `CANCELLED`** (`HandymanServiceRequestStatus`; it reaches you already today from list/detail/projection/visibility payloads — render it as a terminal state). `listCareWorkspaceRequests?status=` accepts it too.
+2. **Tenant decisions are PIC-personal — v1.1 prose was wrong for variations.** `decideHandymanQuotation` and `recordHandymanVariationTenantDecision` succeed **only** when the caller is the platform User linked to the request's immutable Tenant PIC (own session, `tenant_company.manage` + exact-Building). There is **no** Care/Operations "record the tenant's decision" call; any other actor gets 403 `HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN`. If your UX assumed staff-side recording, rework it: the PIC's own session must call (see §1).
+3. **BAST sign-off stays staff-side, with a sharp edge:** `signatureDigest` is optional in the schema but **required by the service on ACCEPT** (409 `HANDYMAN_BAST_SIGNATURE_REQUIRED` when missing/blank/>512 chars); `evidenceRecordId` is optional but must belong to the same execution scope when sent. The recorded actor is the staff user; the customer signature is attested data — the response never claims the PIC personally signed.
+4. **Exact-Building, not Client-wide:** roughly 30 Customer-Care reads/commands that v1.1 described as `canAccessClient` in fact require an assignment to the resource's **exact Building** (BE-02G). A Care account assigned to another Building of the same Client sees denied/empty results — provision assignments accordingly.
+5. **Finance & projection payloads are now fully typed**: the 32 finance-close results (agreements/pricing/ledger/settlement/warranty) and the complete `CareHandymanOperationalProjection` tree (versions, appointments, evidence, QC, BAST, invoice/paymentStatus, warranty, timeline) have closed schemas with exact enums — regenerate types instead of hand-mirroring. Money/quantities are decimal **strings**; `invoiceDate`/`dueDate` are date strings.
+6. **Errors/permissions are machine-readable everywhere now**: every Handyman operation has `x-error-codes`; 179 have `x-required-permission`. Note `HANDYMAN_VARIATION_ROLE_FORBIDDEN` is the real variation role code (v1.1 prose named a nonexistent `HANDYMAN_VARIATION_FORBIDDEN`), and Care-communications 404s are the generic `NOT_FOUND` by design.
 
 ## 1. Authentication & identity
 
 - `POST /api/v1/auth/login {email,password}` → opaque `sessionToken`; send `Authorization: Bearer <token>` on every call. 401 = no/invalid session; session TTL 480 min default.
-- There is **no direct Tenant login**. Tenant/PIC decisions are bound through the Customer Care actor: Care acts with `handyman.care.building` + ACTIVE building assignment; Tenant/PIC identity on decisions is server-bound (request parties), never sent as client fields. Sending actor/status/client/building fields on Care routes → 400.
+- There is **no direct Tenant login** and **no Care impersonation**: Customer Care creates/manages requests *on behalf of* represented Tenant/PIC parties (server-resolved), but never authenticates *as* them. Care acts with `handyman.care.building` + ACTIVE assignment to the exact Building; represented Tenant/PIC identity is server-bound (request parties), never sent as client fields. Sending actor/status/client/building fields on Care routes → 400.
+- **Two decision endpoints are PIC-personal** and cannot be executed by Care at all: `decideHandymanQuotation` and `recordHandymanVariationTenantDecision` require the session of the platform User **linked to the request's Tenant PIC** (plus `tenant_company.manage` + exact-Building access). Care/Operations sessions receive 403 `HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN`. Plan the tenant-facing flow accordingly — the PIC-linked user must sign in with their own platform credentials to decide.
+- Staff-recorded customer-consent transports (BAST accept/reject/sign-off, warranty claim open/submit/withdraw, rework authorize, chargeable accept/reject, payment record) are different by design: the **staff user is the recorded actor**, the represented tenant is server-resolved, and signatures/consents are attested data. Never present them as the PIC's own authenticated act.
 - Envelope `{success:true,data,meta?}` / `{success:false,error:{code,message,details?,requestId}}`. Render errors from `error.code` only.
 
 ## 2. Permissions for this lane
@@ -25,7 +38,7 @@ Cross-scope IDs return 404-shaped responses; inaccessible buildings 403 `BUILDIN
 - Request: `INTAKE → TRIAGE → INSPECTION_REQUIRED → DIAGNOSIS → READY_FOR_NEXT_STEP`, terminal exits `REFERRED`, `CANCELLED` (pre-commitment only; 409 `HANDYMAN_SERVICE_REQUEST_CANCEL_COMMITTED` once a quotation is approved).
 - Visit: proposal → tenant-confirmed (not authoritative before confirmation).
 - Quotation decision: bind to the exact presented version; APPROVE creates the execution scope.
-- BAST: `DRAFT → ISSUED → ACCEPTED | REJECTED | VOID`; ACCEPT requires `signatureDigest` + same-scope `evidenceRecordId`.
+- BAST: `DRAFT → ISSUED → ACCEPTED | REJECTED | VOID`; ACCEPT requires `signatureDigest` (service-enforced — 409 `HANDYMAN_BAST_SIGNATURE_REQUIRED` when missing) and accepts an optional `evidenceRecordId` that must belong to the same scope when supplied.
 - Warranty claim: open → submit → approve/reject; withdraw while open.
 - `availableActions` on read payloads is a transport projection — render from it, but writes are always re-authorized (stale action → 403/409 is normal).
 

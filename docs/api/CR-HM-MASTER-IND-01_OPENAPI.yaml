@@ -1,3 +1,11 @@
+# ---------------------------------------------------------------------------
+# HISTORICAL WAVE HANDOFF — SUPERSEDED (CR-HM-BACKEND-CONTRACT-FREEZE-03 note)
+# This file was the delta handoff for the CR-HM-MASTER-IND-01 wave only.
+# For current integration use the merged authoritative contract:
+#   docs/api/openapi.yaml  (Handyman freeze lineage v1.2, FREEZE CANDIDATE)
+# Do not implement new consumers against this snapshot; where it disagrees
+# with docs/api/openapi.yaml, the merged contract wins.
+# ---------------------------------------------------------------------------
 openapi: 3.1.0
 info:
   title: Handyman Backend — Apartment Master Data Indonesia (CR-HM-MASTER-IND-01)

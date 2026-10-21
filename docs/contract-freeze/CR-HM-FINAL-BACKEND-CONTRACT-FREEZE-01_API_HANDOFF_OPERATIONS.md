@@ -1,7 +1,19 @@
-# API Handoff — Operations (BM Operations / Finance / Admin Console) · Freeze Candidate v1.0
+# API Handoff — Operations (BM Operations / Finance / Admin Console) · Freeze Candidate v1.2
 
-**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1494 paths/1985 ops; 269/269 Handyman ops documented — FG-01 CLOSED by CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
-Companions: `docs/api/CR-HM-18_OPERATIONS_HANDOFF.md`, `docs/api/CR-HM-MASTER-IND-01_OPENAPI.yaml` + `docs/api/CR-HM-MASTER-TENANT-BATCH-01_OPENAPI.yaml` (provenance; their paths are now merged into the main spec), finance detail in `docs/handyman/CR-HM-FIN-DISCOVERY-02_OPERATIONS_HANDOFF.md` / `CR-HM-FIN-DOCUMENTS-01_OPERATIONS_HANDOFF.md`.
+**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 · **Version: Freeze Candidate v1.2** (CR-HM-BACKEND-CONTRACT-FREEZE-03; lineage v1.0 → v1.1/PR #51 → v1.2) · **Backend baseline**: `main@38e779f` (PR #51 merged) · **Spec**: `docs/api/openapi.yaml` SHA-256 `f2ffec3f0bc3e4aa5db74265caeb0738b530aee0c43ca9c4e299866831d70352` (1494 paths/1985 ops/**2256 schemas**; 269/269 Handyman ops documented **and** permission/error/security-annotated — FG-01+FG-02 CLOSED) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
+Companions: `docs/api/CR-HM-18_OPERATIONS_HANDOFF.md`, `docs/api/CR-HM-MASTER-IND-01_OPENAPI.yaml` + `docs/api/CR-HM-MASTER-TENANT-BATCH-01_OPENAPI.yaml` (**historical snapshots — bannered superseded in freeze-03; integrate against `docs/api/openapi.yaml` only**), finance detail in `docs/handyman/CR-HM-FIN-DISCOVERY-02_OPERATIONS_HANDOFF.md` / `CR-HM-FIN-DOCUMENTS-01_OPERATIONS_HANDOFF.md`. Full freeze-03 change matrix: `CR-HM-BACKEND-CONTRACT-FREEZE-03_CHANGELOG.md`.
+
+## 0. What changed in v1.2 (freeze-03) — action required
+
+Wire behavior is **unchanged**; freeze-03 completed metadata and corrected prose. Operations-relevant deltas:
+
+1. **Tenant decisions are NOT Operations commands.** Freeze-02 prose wrongly presented `recordHandymanVariationTenantDecision` as an Operations recording endpoint. Runtime law (unchanged since ship): it and `decideHandymanQuotation` are **PIC-personal** — the PIC-linked platform user's own session only; Operations receives 403 `HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN`. Remove any "record tenant decision" console action for variations/quotations; Operations retains review → revised-quotation → authorize-scope → final-charge (all service-enforced `tenant_company.manage`, now annotated).
+2. **Permissions/errors are machine-readable for all 269 ops** (179 `x-required-permission`, 269 `x-error-codes`). Service-enforced permissions that v1.1 left only in prose are annotated now: QC checklist publish/list/bind (`handyman.qc.configure`), variation review/revised-quotation/authorize/final-charge (`tenant_company.manage`) + operations list (`tenant_company.read`), material approve/reconcile (`tenant_company.manage`) + operations list (`tenant_company.read`). The other 90 ops are composite-authority (Crew Lead/session/HMAC) — intentionally unannotated; follow their descriptions.
+3. **Manager FINAL CLOSE needs BOTH guards**: `finding.close` AND `handyman.finance.read` (the annotation names the first; the description carries both).
+4. **Finance results are fully typed**: commercial agreements/pricing/BM-fee, transactions/charge-lines/allocations/corrections, entitlement derivation, financial reads, and the six settlement literal results (`{unitId,state,replayed}`, `{id,outcome,cause,variance,replayed}`, `{id,kind,replayed}`) have closed schemas with exact enums. Money stays decimal strings. Settlement `cause` ∈ `NONE|INCLUSION_MISMATCH|LEDGER_BASIS_MISMATCH|FUNDING_SHORTFALL|OPEN_EXCEPTION`; correction `kind` ∈ `REVERSED|ADJUSTED`; dispute `kind` is `DISPUTED`.
+5. **Request status enum includes `CANCELLED`** everywhere (queue/list/detail/visibility) — terminal, pre-commitment only. Exact-Building wording was corrected on ~30 reads/commands (Client-wide assignment never suffices where BE-02G applies).
+6. **Tenant slot-choice is server-to-server HMAC**: `acceptTenantSlotChoice` now documents its `tenantSlotAssertionSignature` scheme (`x-handyman-tenant-slot-signature`). The signing secret must never reach browser code; no user session exists on this door.
+7. **Error-code corrections to code against:** `HANDYMAN_VARIATION_ROLE_FORBIDDEN` (not the never-existing `…_FORBIDDEN`); BAST ACCEPT without `signatureDigest` → 409 `HANDYMAN_BAST_SIGNATURE_REQUIRED`; 15 finance/warranty ops refuse bad input with domain `*_VALIDATION` codes, not `VALIDATION_ERROR`.
 
 ## 1. Authentication
 
@@ -15,7 +27,7 @@ Companions: `docs/api/CR-HM-18_OPERATIONS_HANDOFF.md`, `docs/api/CR-HM-MASTER-IN
 | Master data: units/parties | `space.read`, `unit_party.read` | `space.manage`, `unit_party.manage` |
 | Tenant batch import | `tenant_company.read` | `tenant_company.manage` |
 | Catalogue administration | `service_catalog.read` | `service_catalog.manage` |
-| QC | `tenant_company.read` (reads) | `handyman.qc.manage` (commands; + ACTIVE supervisor reporting line, not a crew member), `handyman.qc.configure` (checklist publish/bind) |
+| QC | composite: exact-Building + (`tenant_company.read` **or** current assignment PIC/Lead **or** QC Supervisor) — see each read's description | `handyman.qc.manage` (commands; + ACTIVE supervisor reporting line, not a crew member), `handyman.qc.configure` (checklist publish/list/bind — service-enforced, annotated in freeze-03) |
 | Commercial agreements / pricing / BM-fee | `handyman.finance.read` | `handyman.commercial.manage` |
 | Ledger / payments / allocations / corrections | `handyman.finance.read` | `handyman.finance.manage` |
 | Settlement ladder + dispute adjudication | `handyman.finance.read` | `handyman.settlement.manage` (**never** implied by finance/tenant permissions — 0448 split) |
@@ -36,7 +48,7 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 
 ## 5. Endpoint table (this lane; generated from the runtime route census)
 
-Every row is in OpenAPI under the given `operationId` (the formerly route-only operations — dispatch, inspector assignments, visits/slot-confirm, material-purchases, variations, final-close — were documented by CR-HM-BACKEND-CONTRACT-FREEZE-02 with exact source-derived schemas; FG-01 CLOSED). Service-enforced permissions (field/operations lanes) are stated in each operation's description where no route-level `x-required-permission` exists.
+Every row is in OpenAPI under the given `operationId` (the formerly route-only operations — dispatch, inspector assignments, visits/slot-confirm, material-purchases, variations, final-close — were documented by CR-HM-BACKEND-CONTRACT-FREEZE-02 with exact source-derived schemas; FG-01 CLOSED). Freeze-03 completed the metadata: single-permission authority is machine-readable via `x-required-permission` (179 ops, incl. 11 service-enforced); the remaining composite-authority ops (Crew Lead / workspace session / HMAC) state their rule in each description and deliberately carry no permission annotation. Every op declares `x-error-codes` and an explicit `security` decision.
 
 | Method | Path | operationId / OpenAPI status |
 |---|---|---|
