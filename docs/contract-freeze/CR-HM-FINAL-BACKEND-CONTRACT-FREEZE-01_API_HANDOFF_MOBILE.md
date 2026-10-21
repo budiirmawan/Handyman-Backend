@@ -78,3 +78,10 @@ Every row is in OpenAPI under the given `operationId` — including the 28 field
 | POST | `/handyman/service-warranty-reworks/{reworkId}/complete` | `postHandymanServiceWarrantyReworkComplete` |
 | POST | `/handyman/service-warranty-reworks/{reworkId}/start` | `postHandymanServiceWarrantyReworkStart` |
 | GET | `/handyman/work-sessions/{sessionId}/time-projection` | `getHandymanWorkSessionTimeProjection` |
+
+
+## Cross-repo gap-closure erratum (2026-10-21, #52 baseline)
+
+Current field PIC/Crew Lead already has GET /handyman/execution-scopes/{executionScopeId}/defects and GET /handyman/defects/{defectId} without tenant_company.read. Consume data.defects[].id and version; do not add Care permission or Supervisor commands. HTTP negative tests cover superseded assignment and foreign Building. BD-7–BD-12 numbering remains unverified pending report text.
+
+See [audit, exact deltas and test evidence](../e2e/CR-HM-BACKEND-CROSS-REPO-E2E-GAP-CLOSURE-01.md), especially §7. Spec erratum hash: `b5edd56f696b3f75ff5f2b5f17ac02366fbab36322908c580faf2f2fc9d10948`; previous header hash is historical. No runtime/DTO/migration change. FG-03/FG-04 remain open; no FINAL FREEZE or live E2E PASS.

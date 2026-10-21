@@ -225,3 +225,10 @@ Every row is in OpenAPI under the given `operationId` (the formerly route-only o
 | POST | `/handyman/worker-contexts` | `createHandymanWorkerContext` |
 | GET | `/handyman/worker-contexts/{workerContextId}` | `getHandymanWorkerContext` |
 | POST | `/handyman/worker-contexts/{workerContextId}/status` | `setHandymanWorkerContextStatus` |
+
+
+## Cross-repo gap-closure erratum (2026-10-21, #52 baseline)
+
+Use merged confirm DTO, not draft PR #47 bank attestation. Reinspection requires reason + expectedVersion + idempotencyKey and Supervisor authority. Tenant PIC userId binding is optional; personal decisions require the linked customer session. Metadata/composite authority is unchanged.
+
+See [audit, exact deltas and test evidence](../e2e/CR-HM-BACKEND-CROSS-REPO-E2E-GAP-CLOSURE-01.md), especially §7. Spec erratum hash: `b5edd56f696b3f75ff5f2b5f17ac02366fbab36322908c580faf2f2fc9d10948`; previous header hash is historical. No runtime/DTO/migration change. FG-03/FG-04 remain open; no FINAL FREEZE or live E2E PASS.

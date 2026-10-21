@@ -10377,8 +10377,8 @@ paths:
       operationId: listHandymanDefectsByScope
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_DEFECT_NOT_AUTHORIZED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
-      summary: Customer Care per-scope defect listing
-      description: "CR-HM-17 GAP PART 04 — authenticated read-only Customer Care projection over CR-HM-10; requires `tenant_company.read` + exact-Building access to the execution scope's server-derived Building (BE-02G — a same-Client sibling-Building assignment does NOT suffice). Authoritative defect records and current statuses; no defect command authority is granted. Field POST commands remain CURRENT Crew-Lead-only."
+      summary: Assigned PIC, Supervisor or staff per-scope defect listing
+      description: "Authenticated defect discovery for the CURRENT assigned PIC (Crew Lead), appointed Supervisor, or staff with tenant_company.read. Every lane requires exact-Building access to the scope's server-derived Client/Building; a same-Client sibling-Building assignment does not suffice. PIC does NOT require tenant_company.read. Returns defect identifiers and current statuses for permitted rework; reads grant no mutation authority. PIC may start/record rectification only; Supervisor QC decisions remain separately guarded by handyman.qc.manage and the current reporting line."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       responses:
@@ -10515,7 +10515,7 @@ paths:
       operationId: getHandymanDefectDetail
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_DEFECT_NOT_AUTHORIZED, HANDYMAN_DEFECT_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
-      summary: Customer Care defect detail
+      summary: Assigned PIC, Supervisor or staff defect detail
       description: "Read-only defect and append-only rework/reinspection history. Exact Building access and PIC/Supervisor or tenant_company.read staff; read does not grant either PIC or Supervisor command authority."
       parameters:
         - $ref: '#/components/parameters/DefectIdPath'
