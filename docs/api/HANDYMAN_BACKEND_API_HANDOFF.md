@@ -27,10 +27,10 @@
 
 Data scope everywhere: exact Building assignment (`user_building_assignments`); no same-Client shortcut. SaaS isolation: every Handyman fact is Client-scoped; cross-tenant reads are 404-shaped, never filtered lists.
 
-## 3. Endpoint map by persona (normative detail: `docs/api/openapi.yaml` — 1411 paths, 174 `/handyman`)
+## 3. Endpoint map by persona (normative detail: `docs/api/openapi.yaml` — 1432 paths, 1918 operations, 179 `/handyman` paths; freeze candidate CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0, see `docs/contract-freeze/`)
 
 **BM Super App / Customer Care web (staff & customer lanes)**
-- J01 requests: `POST /handyman/requests[/care]`, `POST …/triage`, `GET /handyman/operations/queue`, care workspace (`handyman-care-workspace`). Request `CANCELLED` does **not** exist (product decision pending).
+- J01 requests: `POST /handyman/requests[/care]`, `POST …/triage`, `GET /handyman/operations/queue`, care workspace (`handyman-care-workspace`). Request `CANCELLED` **exists** (migration `0459`, PR #48): `POST /handyman/requests/{handymanRequestId}/cancel`, `GET …/cancellation`, Care `POST /handyman/care/buildings/{buildingId}/requests/{requestId}/cancel` — exact payloads/errors in `docs/api/CR-HM-18_FRONTEND_HANDOFF.md` §2. Settlement dispute adjudication likewise exists (migration `0460`): `POST /handyman/execution-scopes/{executionScopeId}/settlement/dispute/resolution` (`RELEASED|UPHELD`).
 - J02: visit proposals + `POST /handyman/visit-appointments/:id/inspector[/reassign|/revoke]`, tenant slot consent (`POST /handyman/integrations/tenant-slot-choices`, `POST /handyman/requests/:id/visits/:appointmentId/confirm` — the appointment is not authoritative until the tenant confirms), `POST …/inspection`, `POST …/diagnosis`.
 - J03: `POST …/quotation`, `POST /handyman/quotations/:id/versions` (accepts **DP terms** `dpRequired/dpPercentage/dpAmount/dpTermsNotes` while DRAFT), issue, `POST /handyman/quotations/:id/approve|reject`.
 - J04: `POST /handyman/execution-scopes/:id/assignment[/reassign]` (body: `providerContextId`, `crewId`, `expectedVersion`, `reason`), dispatch readiness/release/cancel, arrival verification.
@@ -58,6 +58,6 @@ Data scope everywhere: exact Building assignment (`user_building_assignments`); 
 
 ## 5. Schema requirements for consumers
 
-- Consumers never own tables, migrations, or direct DB access; all Handyman persistence is this repository (457 migrations, head `0458_handyman_e2e_financial_reconciliation_close`; production execution deferred to the platform release).
+- Consumers never own tables, migrations, or direct DB access; all Handyman persistence is this repository (459 registered migrations, head `0460_handyman_settlement_dispute_adjudication`, `0449` intentionally unclaimed/reserved; production execution deferred to the platform release — pending order in `docs/contract-freeze/CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01_SCHEMA_FREEZE_CANDIDATE.md`).
 - IDs to keep and echo: `handymanRequestId`, `executionScopeId`, `bastId`, `transactionId`, `chargeLineId`, `paymentId`, `allocationId`, `warrantyId`, `claimId`, `reworkId`, `qcRunId`, `evidenceRecordId`, `settlementId`, plus every `idempotencyKey` issued. FK-only references; no derived state stored client-side beyond caches.
 - Contract source of truth: `docs/api/openapi.yaml` (parses, all operationIds unique). Any new seam appears here first; matrix §20 records capability verdicts. Integration questions should cite path + `error.code`.

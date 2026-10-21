@@ -94,10 +94,28 @@ describe('OpenAPI contract foundation (docs/api/openapi.yaml)', () => {
     );
     assert.ok(documented.length > 0, 'at least one path must be documented');
 
+    // The WhatsApp provider webhook is the one documented surface mounted
+    // OUTSIDE the versioned API prefix (src/app.ts mounts it at
+    // `/webhooks/notifications/whatsapp`, before the JSON parser) and only
+    // when WHATSAPP_WEBHOOK_ENABLED=true with its secrets. Enable it with
+    // test-only secrets so this probe verifies its real mount instead of
+    // probing a non-existent `/api/v1/webhooks/...` URL.
+    const savedWebhookEnv = {
+      enabled: process.env.WHATSAPP_WEBHOOK_ENABLED,
+      secret: process.env.WHATSAPP_META_APP_SECRET,
+      token: process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN,
+    };
+    process.env.WHATSAPP_WEBHOOK_ENABLED = 'true';
+    process.env.WHATSAPP_META_APP_SECRET = 'openapi-contract-test-secret';
+    process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN =
+      'openapi-contract-test-verify-token';
+
     const request = api();
 
     for (const { method, path } of documented) {
-      const url = `${API_PREFIX}${path}`;
+      const url = path.startsWith('/webhooks/')
+        ? path
+        : `${API_PREFIX}${path}`;
       let response: Awaited<ReturnType<typeof request.get>>;
 
       if (method === 'get') {
@@ -120,6 +138,16 @@ describe('OpenAPI contract foundation (docs/api/openapi.yaml)', () => {
         `${method.toUpperCase()} ${path} is documented but not registered (got 404)`,
       );
     }
+
+    if (savedWebhookEnv.enabled === undefined)
+      delete process.env.WHATSAPP_WEBHOOK_ENABLED;
+    else process.env.WHATSAPP_WEBHOOK_ENABLED = savedWebhookEnv.enabled;
+    if (savedWebhookEnv.secret === undefined)
+      delete process.env.WHATSAPP_META_APP_SECRET;
+    else process.env.WHATSAPP_META_APP_SECRET = savedWebhookEnv.secret;
+    if (savedWebhookEnv.token === undefined)
+      delete process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN;
+    else process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN = savedWebhookEnv.token;
   });
 
   it('documents the governed IAM invitation, role, Building, lifecycle and audit contract', () => {

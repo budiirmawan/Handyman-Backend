@@ -2,7 +2,7 @@
 
 **Repository**: `budiirmawan/Handyman-Backend` (backend ONLY).  
 **Branch**: `arena/c965a40c-handyman-backend` · **Date**: 2026-10-21 · **CR**: CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01  
-**Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/handyman/HANDYMAN_E2E_PERSONA_CAPABILITY_MATRIX.md` (§20), `docs/api/openapi.yaml` (1411 paths, 174 `/handyman`).  
+**Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/handyman/HANDYMAN_E2E_PERSONA_CAPABILITY_MATRIX.md` (§20), `docs/api/openapi.yaml` (1432 paths, 1918 operations, 179 `/handyman` paths; freeze candidate CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0).  
 **Claim boundary**: Backend-repository evidence only. **No cross-repository E2E PASS is claimed;** Frontend availability waits on the Handyman-Frontend repo integrating these contracts.
 
 ## Audience
@@ -21,7 +21,7 @@ All amounts are server-derived; bodies carry references + `idempotencyKey` only.
 
 | Journey | Endpoint | Method | Gate | Notes |
 |---|---|---|---|---|
-| J01 intake | `POST /handyman/requests[/care]` | POST | care actor session | Request `CANCELLED` does **not** exist (product decision pending) |
+| J01 intake | `POST /handyman/requests[/care]` | POST | care actor session | Request `CANCELLED` exists (0459): cancel via `POST /handyman/care/buildings/{buildingId}/requests/{requestId}/cancel` (`handyman.care.building`) or staff `POST /handyman/requests/{handymanRequestId}/cancel` (`tenant_company.manage`); see `docs/api/CR-HM-18_FRONTEND_HANDOFF.md` §2 |
 | J01 intake | `POST …/triage` | POST | care actor session | channel attribution recorded, never re-derived client-side |
 | J01 reads | `GET /handyman/operations/queue` | GET | `tenant_company.read` + building | care workspace queue |
 | J02 visits | `POST /handyman/visit-appointments/:id/inspector\|/reassign\|/revoke` | POST | care actor session | scoped appointment proposals only (R1C) |

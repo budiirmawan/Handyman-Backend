@@ -2,7 +2,7 @@
 
 **Repository**: `budiirmawan/Handyman-Backend` (backend ONLY).  
 **Branch**: `arena/c965a40c-handyman-backend` · **Date**: 2026-10-21 · **CR**: CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01  
-**Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/api/openapi.yaml` (1411 paths, 174 `/handyman`).  
+**Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/api/openapi.yaml` (1432 paths, 1918 operations, 179 `/handyman` paths; freeze candidate CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0).  
 **Claim boundary**: Backend-repository evidence only. **No cross-repository E2E PASS is claimed;** worker-app availability waits on the Handyman-Mobile repo integrating these contracts.
 
 ## Audience
