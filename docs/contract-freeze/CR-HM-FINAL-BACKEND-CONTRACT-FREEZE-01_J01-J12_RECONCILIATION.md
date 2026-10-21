@@ -6,6 +6,12 @@ route-file `requirePermission(...)` scan, migration registry inspection, and the
 focused suites listed in the freeze candidate. `EXISTING` = HTTP seam + service
 authority + persistence + focused evidence in this repository.
 
+**Freeze-02 amendment (CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51, 2026-10-21):**
+every "route-only (FG-01)" note below is historical — all 67 operations are now
+documented in `docs/api/openapi.yaml` (269/269 parity) with the operationIds
+cited in the three consumer handoffs. Journey verdicts are unchanged; no
+production behavior changed.
+
 | Journey | Verdict | Source (modules) | OpenAPI | RBAC (route files) | Schema | Evidence |
 |---|---|---|---|---|---|---|
 | J01 Master data (Client/Property/Building/Unit/Tenant/PIC/Provider) | EXISTING | `clients`, `properties`, `buildings`, `spaces`, `tenant-companies`, `tenant-pics`, `tenant-import`, `apartment-master`, `vendors` | units/parties/tenant-import/verification merged into main spec **by this CR** (was supplemental-only) | `tenant_company.read|manage`, `space.read|manage`, `unit_party.read|manage` | 0012–0019, 0456, 0457 | `cr-hm-be-client-master-01` 10/10, `cr-hm-master-ind-01` 9/9, `cr-hm-master-tenant-batch-01` 9/9 |

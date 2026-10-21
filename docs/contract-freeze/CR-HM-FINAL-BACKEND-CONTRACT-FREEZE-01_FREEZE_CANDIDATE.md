@@ -5,10 +5,10 @@
 | Repository | `budiirmawan/Handyman-Backend` **only** |
 | Baseline | `main` @ `8b80f9268b173a525eb74fd9cae85740e0b7d228` (PR #50 merge; PR #48 and PR #50 verified MERGED via `gh pr list`) |
 | Contract version | **Freeze Candidate v1.0** (this document set) |
-| OpenAPI | `docs/api/openapi.yaml` — OpenAPI 3.0.3, **1432 paths / 1918 operations / 179 `/handyman` paths / 202 `/handyman` operations**, all `operationId`s unique, all local `$ref`s resolve (verified 2026-10-20) |
-| OpenAPI SHA-256 | `14f7d38e6d9a94d6c27a24c9f6f1099c38d3661015fe8815718d393bb3ecfc97` — hash of the file **as merged by this CR** (was 1415 paths/1896 ops at baseline; this CR's master-data merge accounts for the delta). Recompute at merge time; any later spec edit invalidates this pin. |
+| OpenAPI | `docs/api/openapi.yaml` — OpenAPI 3.0.3, **1494 paths / 1985 operations / 2202 schemas / 241 `/handyman` paths / 269 `/handyman` operations**, all `operationId`s unique, all local `$ref`s resolve (verified 2026-10-21; freeze-01 pin was 1432/1918, CR-HM-BACKEND-CONTRACT-FREEZE-02 added the 67 formerly route-only Handyman operations) |
+| OpenAPI SHA-256 | `99b089144a25322de4ccf17f56ae0078ff486789bd829aa19f5f7dc67e0d4a6b` — hash of the file **as amended by CR-HM-BACKEND-CONTRACT-FREEZE-02** (PR #51). Recompute at merge time; any later spec edit invalidates this pin. |
 | Migrations | **459 registered** in `src/database/migrations/index.ts`, head `0460_handyman_settlement_dispute_adjudication`; `0449` intentionally unclaimed/reserved (0450 header) |
-| Runtime census | 1985 runtime routes total; **269 Handyman operations**; 202 documented in OpenAPI, **67 route-only** (gap FG-01); 0 OpenAPI Handyman operations missing from runtime |
+| Runtime census | **269 Handyman runtime operations; 269 documented in OpenAPI, 0 route-only (FG-01 CLOSED 2026-10-21)**; 0 OpenAPI Handyman operations missing from runtime |
 | Status | **FREEZE CANDIDATE — NOT FINAL FREEZE** |
 
 ## 1. What is frozen in this candidate
@@ -33,7 +33,7 @@
 | `tests/cr-hm-master-tenant-batch-01.test.ts` (0457 Tenant/PIC batch) | 9/9 |
 | `tests/cr-hm-be-client-master-01.test.ts` (Client master) | 10/10 |
 | `tests/openapi-contract.test.ts` | 7/7 **after this CR's fix** (was 6/7 on baseline — FG-07) |
-| Runtime↔OpenAPI census (`tests/helpers/openapi-census.ts`) | 269 Handyman ops; 67 route-only; 0 phantom |
+| Runtime↔OpenAPI census (`tests/helpers/openapi-census.ts`) | Freeze-01: 269 Handyman ops; 67 route-only; 0 phantom → **Freeze-02 (PR #51): 269/269 documented; 0 missing; 0 phantom; 0 duplicate operationIds; 0 broken refs; focused OpenAPI/contract suites 31/31; `npx tsc --noEmit` PASS** |
 
 No full-suite run was performed (per instructions; 833 test files). No production migration, deployment, or cross-repository verification was performed.
 
@@ -43,12 +43,13 @@ No full-suite run was performed (per instructions; 833 test files). No productio
 2. **OpenAPI contract test fix (FG-07 closed):** `tests/openapi-contract.test.ts` probed the WhatsApp webhook under `/api/v1` although `src/app.ts` mounts it outside the prefix and only when enabled; the test now enables it with test-only secrets and probes its real mount. No production gate changed.
 3. **Stale handoff correction (FG-08 closed):** `docs/api/HANDYMAN_BACKEND_API_HANDOFF*.md` claimed request `CANCELLED` did not exist and cited 1411 paths/457 migrations/head 0458; corrected to the merged PR #48/#50 reality.
 4. This document set (reconciliation, schema candidate, gap register, scenario pack, three versioned consumer handoffs).
+5. **FG-01 closure (CR-HM-BACKEND-CONTRACT-FREEZE-02, this PR):** the 67 formerly route-only Handyman operations (Care authority/communications/standalone payments & proof, dispatch, canonical identity, visits/inspector/slot-consent, finance close & invoice reconciliation, material-purchases, scope variations, field evidence, field feed, worker profile) are now defined in `docs/api/openapi.yaml` with exact schemas derived from the route validation, service input/return types and error-code sources — no invented schemas, no production behavior change. The three consumer handoffs now cite the new `operationId`s for every row. Migration-collision reconciliation (FG-05) is documentation-only: PR #47 remains OPEN/unmerged, its `0459` number stays taken by `0459_handyman_request_cancellation`, renumber ≥0461 if revived; no historical migration was touched.
 
 ## 4. Why this is NOT a FINAL FREEZE
 
 Per the strict instruction, FINAL FREEZE requires consumer contract compatibility and staging E2E, neither verifiable from this repository:
 
-- FG-01: 67 registered Handyman operations are route-only (not in OpenAPI) — enumerated exactly in the consumer handoffs.
+- FG-01: **CLOSED** by CR-HM-BACKEND-CONTRACT-FREEZE-02 (this PR) — 269/269 Handyman operations documented; see gap register.
 - FG-03: Frontend #33, Operations #22/#23, Mobile #14 are **reported** merged in their repositories; this CR did not and cannot verify them (one-repository rule).
 - FG-04: staging migration status and staging E2E have not been run; the pending-migration subset for any real environment is unknown until `npm run db:migrate:status` is run there (read-only).
 - FG-05: open PR #47 (bank-receipt attestation) is excluded and now collides on migration number 0459.

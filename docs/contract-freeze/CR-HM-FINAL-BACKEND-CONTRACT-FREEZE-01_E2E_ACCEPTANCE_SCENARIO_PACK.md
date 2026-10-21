@@ -36,5 +36,6 @@ duplicate facts; every error body matches `{success:false,error:{code,…}}`
 and the consumer renders from `error.code`, never from message text.
 
 Exit criteria for FINAL FREEZE: S0–S11 PASS on staging with all four
-repositories at their integrated builds; FG-01/FG-03/FG-04 closed; results
+repositories at their integrated builds; FG-03/FG-04 closed (FG-01 closed
+2026-10-21 by CR-HM-BACKEND-CONTRACT-FREEZE-02); results
 appended to this pack as a dated evidence table (build SHAs per repository).

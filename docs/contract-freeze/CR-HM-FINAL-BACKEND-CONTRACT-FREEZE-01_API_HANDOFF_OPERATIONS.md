@@ -1,6 +1,6 @@
 # API Handoff — Operations (BM Operations / Finance / Admin Console) · Freeze Candidate v1.0
 
-**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1432 paths/1918 ops) · **Status: CANDIDATE, not final freeze** (FG-01/FG-03/FG-04).
+**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1494 paths/1985 ops; 269/269 Handyman ops documented — FG-01 CLOSED by CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
 Companions: `docs/api/CR-HM-18_OPERATIONS_HANDOFF.md`, `docs/api/CR-HM-MASTER-IND-01_OPENAPI.yaml` + `docs/api/CR-HM-MASTER-TENANT-BATCH-01_OPENAPI.yaml` (provenance; their paths are now merged into the main spec), finance detail in `docs/handyman/CR-HM-FIN-DISCOVERY-02_OPERATIONS_HANDOFF.md` / `CR-HM-FIN-DOCUMENTS-01_OPERATIONS_HANDOFF.md`.
 
 ## 1. Authentication
@@ -36,7 +36,7 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 
 ## 5. Endpoint table (this lane; generated from the runtime route census)
 
-`route-only` = registered and live, not yet in `openapi.yaml` (FG-01).
+Every row is in OpenAPI under the given `operationId` (the formerly route-only operations — dispatch, inspector assignments, visits/slot-confirm, material-purchases, variations, final-close — were documented by CR-HM-BACKEND-CONTRACT-FREEZE-02 with exact source-derived schemas; FG-01 CLOSED). Service-enforced permissions (field/operations lanes) are stated in each operation's description where no route-level `x-required-permission` exists.
 
 | Method | Path | operationId / OpenAPI status |
 |---|---|---|
@@ -82,18 +82,18 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 | POST | `/handyman/execution-scopes/{executionScopeId}/customer-transaction` | `postHandymanCustomerTransactionOpen` |
 | GET | `/handyman/execution-scopes/{executionScopeId}/defects` | `listHandymanDefectsByScope` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/defects` | `openHandymanDefect` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/dispatch/cancel` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/execution-scopes/{executionScopeId}/dispatch/readiness` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/execution-scopes/{executionScopeId}/dispatch/release` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/dispatch/release` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/dispatch/cancel` | `cancelHandymanDispatch` |
+| GET | `/handyman/execution-scopes/{executionScopeId}/dispatch/readiness` | `getHandymanDispatchReadiness` |
+| GET | `/handyman/execution-scopes/{executionScopeId}/dispatch/release` | `getHandymanDispatchRelease` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/dispatch/release` | `releaseHandymanDispatch` |
 | GET | `/handyman/execution-scopes/{executionScopeId}/evidence` | `listHandymanEvidenceRecordsByScope` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/evidence` | `createHandymanEvidenceRecord` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/final-close` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/execution-scopes/{executionScopeId}/final-close/readiness` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/final-close` | `executeHandymanManagerFinalClose` |
+| GET | `/handyman/execution-scopes/{executionScopeId}/final-close/readiness` | `getHandymanFinalCloseReadiness` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/financial-entitlements/derive` | `postHandymanFinancialEntitlementsDerive` |
 | GET | `/handyman/execution-scopes/{executionScopeId}/financial-ledger` | `getHandymanExecutionScopeFinancialLedger` |
 | GET | `/handyman/execution-scopes/{executionScopeId}/financial-transaction` | `getHandymanFinancialTransaction` |
-| GET | `/handyman/execution-scopes/{executionScopeId}/invoice-reconciliation` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/execution-scopes/{executionScopeId}/invoice-reconciliation` | `getHandymanInvoiceReconciliationSummary` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/ledger-adjustments` | `postHandymanLedgerAdjustment` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/ledger-refunds` | `postHandymanLedgerRefund` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/ledger-reversals/allocation` | `postHandymanLedgerAllocationReversal` |
@@ -107,12 +107,12 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 | POST | `/handyman/execution-scopes/{executionScopeId}/material-lines/{lineId}/use` | `useHandymanMaterialExecutionLine` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/material-lines/estimate` | `estimateHandymanMaterialExecutionLine` |
 | GET | `/handyman/execution-scopes/{executionScopeId}/material-lines/final-charge-ready` | `getHandymanMaterialFinalChargeReadyProjection` |
-| GET | `/handyman/execution-scopes/{executionScopeId}/material-purchases` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/approve` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/issue` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/purchase` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reconcile` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/return` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/execution-scopes/{executionScopeId}/material-purchases` | `listOperationsHandymanMaterialPurchases` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/approve` | `approveHandymanMaterialPurchase` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/issue` | `issueHandymanMaterialPurchaseOperations` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/purchase` | `recordHandymanSupplierPurchaseOperations` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reconcile` | `reconcileHandymanMaterialPurchase` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/return` | `returnHandymanMaterialPurchaseOperations` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/payment-allocations` | `postHandymanPaymentAllocation` |
 | GET | `/handyman/execution-scopes/{executionScopeId}/qc-checklist` | `getHandymanQcChecklistBinding` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/qc-checklist` | `bindHandymanQcChecklistVersion` |
@@ -127,12 +127,12 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 | POST | `/handyman/execution-scopes/{executionScopeId}/settlement/prepare` | `postHandymanSettlementPrepare` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/settlement/reconcile` | `postHandymanSettlementReconcile` |
 | POST | `/handyman/execution-scopes/{executionScopeId}/settlement/settle` | `postHandymanSettlementSettle` |
-| GET | `/handyman/execution-scopes/{executionScopeId}/variations` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/authorize-scope` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/final-charge-eligibility` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/operations-review` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/qc` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/revised-quotation` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/execution-scopes/{executionScopeId}/variations` | `listOperationsHandymanVariations` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/authorize-scope` | `authorizeHandymanVariationScope` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/final-charge-eligibility` | `recordHandymanVariationFinalChargeEligibility` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/operations-review` | `reviewHandymanVariationOperations` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/qc` | `recordHandymanVariationQcOperations` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/revised-quotation` | `issueHandymanVariationRevisedQuotation` |
 | GET | `/handyman/finance/action-inbox` | `listHandymanFinanceActionInbox` |
 | GET | `/handyman/financial-transactions` | `getHandymanFinancialTransactions` |
 | GET | `/handyman/operations/commercial-inbox` | `listHandymanOperationsCommercialInbox` |
@@ -161,12 +161,12 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 | GET | `/handyman/requests/{handymanRequestId}` | `getHandymanServiceRequestDetail` |
 | POST | `/handyman/requests/{handymanRequestId}/cancel` | `cancelHandymanRequest` |
 | GET | `/handyman/requests/{handymanRequestId}/cancellation` | `getHandymanRequestCancellation` |
-| GET | `/handyman/requests/{handymanRequestId}/canonical-identity` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/requests/{handymanRequestId}/canonical-identity` | `getHandymanCanonicalIdentity` |
 | GET | `/handyman/requests/{handymanRequestId}/diagnosis` | `getHandymanRequestDiagnosis` |
 | POST | `/handyman/requests/{handymanRequestId}/diagnosis` | `recordHandymanDiagnosis` |
 | GET | `/handyman/requests/{handymanRequestId}/inspection` | `getHandymanRequestInspection` |
 | POST | `/handyman/requests/{handymanRequestId}/inspection` | `recordHandymanInspection` |
-| GET | `/handyman/requests/{handymanRequestId}/inspector-assignments/history` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/requests/{handymanRequestId}/inspector-assignments/history` | `listHandymanInspectorAssignmentHistory` |
 | GET | `/handyman/requests/{handymanRequestId}/intake-evidence` | `listHandymanIntakeEvidence` |
 | POST | `/handyman/requests/{handymanRequestId}/intake-evidence` | `uploadHandymanIntakeEvidence` |
 | GET | `/handyman/requests/{handymanRequestId}/permit-readiness` | `getHandymanPermitReadiness` |
@@ -185,9 +185,9 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 | GET | `/handyman/requests/{handymanRequestId}/unit-access-readiness` | `getHandymanUnitAccessReadiness` |
 | POST | `/handyman/requests/{handymanRequestId}/unit-access-readiness` | `createHandymanUnitAccessReadiness` |
 | GET | `/handyman/requests/{handymanRequestId}/unit-access-readiness/history` | `listHandymanUnitAccessReadinessHistory` |
-| GET | `/handyman/requests/{handymanRequestId}/visits` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/requests/{handymanRequestId}/visits` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/requests/{handymanRequestId}/visits/{appointmentId}/cancel-proposal` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/requests/{handymanRequestId}/visits` | `listHandymanVisitProposals` |
+| POST | `/handyman/requests/{handymanRequestId}/visits` | `proposeHandymanVisitAppointment` |
+| POST | `/handyman/requests/{handymanRequestId}/visits/{appointmentId}/cancel-proposal` | `cancelHandymanVisitProposal` |
 | POST | `/handyman/requests/care` | `createCareHandymanServiceRequest` |
 | POST | `/handyman/scheduling-readiness/{readinessId}/supersede` | `supersedeHandymanSchedulingReadiness` |
 | GET | `/handyman/service-warranties/{warrantyId}` | `getHandymanServiceWarrantyById` |
@@ -200,11 +200,11 @@ Request `INTAKE→TRIAGE→INSPECTION_REQUIRED→DIAGNOSIS→READY_FOR_NEXT_STEP
 | POST | `/handyman/service-warranty-reworks/{reworkId}/authorize` | `authorizeHandymanServiceWarrantyRework` |
 | POST | `/handyman/service-warranty-reworks/{reworkId}/verify` | `postHandymanServiceWarrantyReworkVerify` |
 | POST | `/handyman/unit-access-readiness/{readinessId}/supersede` | `supersedeHandymanUnitAccessReadiness` |
-| GET | `/handyman/visit-appointments/{visitAppointmentId}/inspector` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/visit-appointments/{visitAppointmentId}/inspector` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/visit-appointments/{visitAppointmentId}/inspector/eligible` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/visit-appointments/{visitAppointmentId}/inspector/reassign` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/visit-appointments/{visitAppointmentId}/inspector/revoke` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/visit-appointments/{visitAppointmentId}/inspector` | `getHandymanInspectorAssignment` |
+| POST | `/handyman/visit-appointments/{visitAppointmentId}/inspector` | `assignHandymanInspector` |
+| GET | `/handyman/visit-appointments/{visitAppointmentId}/inspector/eligible` | `listEligibleHandymanInspectors` |
+| POST | `/handyman/visit-appointments/{visitAppointmentId}/inspector/reassign` | `reassignHandymanInspector` |
+| POST | `/handyman/visit-appointments/{visitAppointmentId}/inspector/revoke` | `revokeHandymanInspectorAssignment` |
 | POST | `/handyman/work-crews` | `createHandymanWorkCrew` |
 | GET | `/handyman/work-crews/{crewId}` | `getHandymanWorkCrew` |
 | POST | `/handyman/work-crews/{crewId}/lead` | `designateHandymanCrewLead` |

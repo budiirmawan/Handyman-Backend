@@ -1,6 +1,6 @@
 # API Handoff — Frontend (Customer Care / Tenant-PIC Web) · Freeze Candidate v1.0
 
-**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1432 paths/1918 ops) · **Status: CANDIDATE, not final freeze** (see gap register FG-01/FG-03/FG-04).
+**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1494 paths/1985 ops; 269/269 Handyman ops documented — FG-01 CLOSED by CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
 Detailed payloads for cancellation/dispute: `docs/api/CR-HM-18_FRONTEND_HANDOFF.md`. This handoff governs where the two differ.
 
 ## 1. Authentication & identity
@@ -35,7 +35,7 @@ Cross-scope IDs return 404-shaped responses; inaccessible buildings 403 `BUILDIN
 
 ## 5. Endpoint table (this lane; generated from the runtime route census)
 
-`route-only` = registered and live, not yet in `openapi.yaml` (FG-01); its exact contract is the route's validation module + this handoff. All other rows are in OpenAPI under the given `operationId`.
+Every row is in OpenAPI under the given `operationId` (the formerly route-only operations were documented by CR-HM-BACKEND-CONTRACT-FREEZE-02 with exact source-derived schemas; FG-01 CLOSED). Request/response payloads, status codes and `x-error-codes` in the spec are authoritative; route validation modules remain the runtime source.
 
 | Method | Path | operationId / OpenAPI status |
 |---|---|---|
@@ -44,20 +44,20 @@ Cross-scope IDs return 404-shaped responses; inaccessible buildings 403 `BUILDIN
 | POST | `/handyman/bast/{bastId}/reject` | `rejectHandymanBast` |
 | POST | `/handyman/bast/{bastId}/sign-off` | `signOffHandymanBast` |
 | GET | `/handyman/care/buildings` | `listStandaloneCareBuildings` |
-| GET | `/handyman/care/buildings/{buildingId}/authority` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/care/buildings/{buildingId}/authority` | `getBuildingCareAuthority` |
 | GET | `/handyman/care/buildings/{buildingId}/catalogue/services` | `listBuildingCareCatalogueServices` |
 | GET | `/handyman/care/buildings/{buildingId}/floors` | `listBuildingCareFloors` |
 | GET | `/handyman/care/buildings/{buildingId}/requests` | `listStandaloneCareRequests` |
 | POST | `/handyman/care/buildings/{buildingId}/requests` | `createBuildingCareRequest` |
 | GET | `/handyman/care/buildings/{buildingId}/requests/{requestId}` | `getStandaloneCareRequestDetail` |
 | POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/cancel` | `cancelBuildingCareRequest` |
-| GET | `/handyman/care/buildings/{buildingId}/requests/{requestId}/communications` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/communications` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/care/buildings/{buildingId}/requests/{requestId}/communications` | `listHandymanCareCommunications` |
+| POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/communications` | `recordHandymanCareCommunication` |
 | GET | `/handyman/care/buildings/{buildingId}/requests/{requestId}/intake-evidence` | `listBuildingCareRequestIntakeEvidence` |
 | POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/intake-evidence` | `uploadBuildingCareRequestIntakeEvidence` |
 | GET | `/handyman/care/buildings/{buildingId}/requests/{requestId}/parties` | `listBuildingCareRequestParties` |
-| POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/payments` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/payments/{paymentId}/proof` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/payments` | `reportBuildingCareRequestPayment` |
+| POST | `/handyman/care/buildings/{buildingId}/requests/{requestId}/payments/{paymentId}/proof` | `uploadBuildingCareRequestPaymentProof` |
 | GET | `/handyman/care/buildings/{buildingId}/requests/{requestId}/progress` | `getStandaloneCareRequestProgress` |
 | GET | `/handyman/care/buildings/{buildingId}/tenants` | `listBuildingCareTenants` |
 | GET | `/handyman/care/buildings/{buildingId}/units` | `listBuildingCareUnits` |
@@ -73,19 +73,19 @@ Cross-scope IDs return 404-shaped responses; inaccessible buildings 403 `BUILDIN
 | GET | `/handyman/care/requests` | `listCareWorkspaceRequests` |
 | GET | `/handyman/care/requests/{requestId}` | `getCareWorkspaceRequestDetail` |
 | POST | `/handyman/care/requests/{requestId}/invoices/{invoiceId}/payments/{paymentId}/proof` | `uploadCareHandymanCustomerPaymentProof` |
-| POST | `/handyman/care/requests/{requestId}/payments/{paymentId}/proof` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/care/requests/{requestId}/payments/{paymentId}/proof` | `uploadCareWorkspaceRequestPaymentProof` |
 | GET | `/handyman/care/requests/{requestId}/projection` | `getCareWorkspaceOperationalProjection` |
 | DELETE | `/handyman/care/session` | `revokeCareWorkspaceSession` |
 | POST | `/handyman/care/session` | `admitCareWorkspace` |
 | POST | `/handyman/chargeable-additional-works/{workId}/accept` | `acceptHandymanChargeableAdditionalWork` |
 | POST | `/handyman/chargeable-additional-works/{workId}/reject` | `rejectHandymanChargeableAdditionalWork` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/payment-proof` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/tenant-decision` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/payment-proof` | `uploadHandymanCustomerPaymentProof` |
+| POST | `/handyman/execution-scopes/{executionScopeId}/variations/{variationId}/tenant-decision` | `recordHandymanVariationTenantDecision` |
 | GET | `/handyman/execution-scopes/{id}/status-visibility` | `getHandymanExecutionScopeStatusVisibility` |
-| POST | `/handyman/integrations/tenant-slot-choices` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/integrations/tenant-slot-choices` | `acceptTenantSlotChoice` |
 | GET | `/handyman/quotation-versions/{quotationVersionId}/decision` | `getHandymanQuotationDecision` |
 | POST | `/handyman/quotation-versions/{quotationVersionId}/decision` | `decideHandymanQuotation` |
-| POST | `/handyman/requests/{handymanRequestId}/visits/{appointmentId}/confirm` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/requests/{handymanRequestId}/visits/{appointmentId}/confirm` | `confirmHandymanTenantSlotVisit` |
 | GET | `/handyman/requests/{id}/status-visibility` | `getHandymanRequestStatusVisibility` |
 | POST | `/handyman/service-warranties/{warrantyId}/claims` | `openHandymanServiceWarrantyClaim` |
 | POST | `/handyman/service-warranty-claims/{claimId}/submit` | `submitHandymanServiceWarrantyClaim` |

@@ -1,6 +1,6 @@
 # API Handoff — Mobile (Worker Field App) · Freeze Candidate v1.0
 
-**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1432 paths/1918 ops) · **Status: CANDIDATE, not final freeze** (FG-01/FG-03/FG-04).
+**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1494 paths/1985 ops; 269/269 Handyman ops documented — FG-01 CLOSED by CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
 Companions: `MOBILE_API_HANDOFF.md`, `docs/api/CR-HM-18_MOBILE_HANDOFF.md`, `docs/api/HANDYMAN_BACKEND_API_HANDOFF_MOBILE.md`.
 
 ## 1. Authentication
@@ -22,7 +22,7 @@ Same platform session: `POST /api/v1/auth/login {email,password}` → `Authoriza
 
 ## 4. Endpoint table (this lane; generated from the runtime route census)
 
-`route-only` = registered and live, not yet in `openapi.yaml` (FG-01) — 28 of this lane's 44 operations; their exact contract is the route's validation module + `MOBILE_API_HANDOFF.md`. This lane has the largest OpenAPI debt and is integrated **last** in the sequence.
+Every row is in OpenAPI under the given `operationId` — including the 28 field-lane operations (evidence upload/presign/bytes/confirm/content, field feed, scope/request detail, field material-purchases and variations, worker profile) documented by CR-HM-BACKEND-CONTRACT-FREEZE-02 with exact source-derived schemas (FG-01 CLOSED). This lane is still integrated **last** in the sequence.
 
 | Method | Path | operationId / OpenAPI status |
 |---|---|---|
@@ -37,36 +37,36 @@ Same platform session: `POST /api/v1/auth/login {email,password}` → `Authoriza
 | POST | `/handyman/execution-scopes/{executionScopeId}/work-sessions/start-work` | `startWorkHandymanWorkSession` |
 | POST | `/handyman/field/bast/{bastId}/issue` | `issueHandymanBastWorker` |
 | POST | `/handyman/field/bast/{bastId}/void` | `voidHandymanBastWorker` |
-| GET | `/handyman/field/evidence/{evidenceId}` | route-only — not yet in `openapi.yaml` |
-| PUT | `/handyman/field/evidence/{evidenceId}/bytes` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/evidence/{evidenceId}/confirm` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/evidence/{evidenceId}/content` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/evidence/presign` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/evidence/upload` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/execution-scopes/{executionScopeId}` | route-only — not yet in `openapi.yaml` |
+| GET | `/handyman/field/evidence/{evidenceId}` | `getHandymanFieldEvidence` |
+| PUT | `/handyman/field/evidence/{evidenceId}/bytes` | `putHandymanFieldEvidenceBytes` |
+| POST | `/handyman/field/evidence/{evidenceId}/confirm` | `confirmHandymanFieldEvidenceUpload` |
+| GET | `/handyman/field/evidence/{evidenceId}/content` | `getHandymanFieldEvidenceContent` |
+| POST | `/handyman/field/evidence/presign` | `presignHandymanFieldEvidenceUpload` |
+| POST | `/handyman/field/evidence/upload` | `uploadHandymanFieldEvidence` |
+| GET | `/handyman/field/execution-scopes/{executionScopeId}` | `getHandymanFieldExecutionScopeDetail` |
 | GET | `/handyman/field/execution-scopes/{executionScopeId}/bast` | `getHandymanWorkerExecutionScopeBast` |
 | POST | `/handyman/field/execution-scopes/{executionScopeId}/bast/prepare` | `prepareHandymanBastWorker` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/evidence/upload` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/issue` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/purchase` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/return` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/usage` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/requests` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/execution-scopes/{executionScopeId}/materials` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/execution-scopes/{executionScopeId}/quotation-snapshot` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/execution-scopes/{executionScopeId}/variations` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/{variationId}/execution` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/{variationId}/propose` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/{variationId}/qc` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/findings` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/proposals` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/me/profile` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/my-jobs` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/requests/{handymanRequestId}` | route-only — not yet in `openapi.yaml` |
-| POST | `/handyman/field/requests/{handymanRequestId}/evidence/upload` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/work-orders/{executionScopeId}` | route-only — not yet in `openapi.yaml` |
-| GET | `/handyman/field/workers/{workerContextId}/profile` | route-only — not yet in `openapi.yaml` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/evidence/upload` | `uploadHandymanScopeFieldEvidence` |
+| GET | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases` | `listFieldHandymanMaterialPurchases` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/issue` | `issueHandymanMaterialPurchaseField` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/purchase` | `recordHandymanSupplierPurchaseField` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/return` | `returnHandymanMaterialPurchaseField` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/usage` | `recordHandymanMaterialPurchaseUsage` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/material-purchases/requests` | `submitHandymanMaterialPurchaseRequest` |
+| GET | `/handyman/field/execution-scopes/{executionScopeId}/materials` | `getHandymanFieldScopeMaterials` |
+| GET | `/handyman/field/execution-scopes/{executionScopeId}/quotation-snapshot` | `getHandymanFieldQuotationSnapshot` |
+| GET | `/handyman/field/execution-scopes/{executionScopeId}/variations` | `listFieldHandymanVariations` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/{variationId}/execution` | `recordHandymanVariationExecution` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/{variationId}/propose` | `proposeHandymanVariationFromFinding` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/{variationId}/qc` | `recordHandymanVariationQcField` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/findings` | `reportHandymanVariationFinding` |
+| POST | `/handyman/field/execution-scopes/{executionScopeId}/variations/proposals` | `submitHandymanVariationProposal` |
+| GET | `/handyman/field/me/profile` | `getMyHandymanWorkerProfile` |
+| GET | `/handyman/field/my-jobs` | `getMyHandymanFieldJobs` |
+| GET | `/handyman/field/requests/{handymanRequestId}` | `getHandymanFieldRequestDetail` |
+| POST | `/handyman/field/requests/{handymanRequestId}/evidence/upload` | `uploadHandymanRequestFieldEvidence` |
+| GET | `/handyman/field/work-orders/{executionScopeId}` | `getHandymanFieldWorkOrderDetail` |
+| GET | `/handyman/field/workers/{workerContextId}/profile` | `getHandymanWorkerProfile` |
 | POST | `/handyman/service-warranty-reworks/{reworkId}/complete` | `postHandymanServiceWarrantyReworkComplete` |
 | POST | `/handyman/service-warranty-reworks/{reworkId}/start` | `postHandymanServiceWarrantyReworkStart` |
 | GET | `/handyman/work-sessions/{sessionId}/time-projection` | `getHandymanWorkSessionTimeProjection` |
