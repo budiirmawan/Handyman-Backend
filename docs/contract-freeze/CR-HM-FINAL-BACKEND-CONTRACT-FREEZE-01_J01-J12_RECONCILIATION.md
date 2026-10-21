@@ -6,6 +6,14 @@ route-file `requirePermission(...)` scan, migration registry inspection, and the
 focused suites listed in the freeze candidate. `EXISTING` = HTTP seam + service
 authority + persistence + focused evidence in this repository.
 
+**Freeze-03 addendum (2026-10-21):** re-verified on `main@38e779f` + freeze-03
+— journey statuses below are unchanged (freeze-03 is documentation/schema-shape
+only; J01–J12 functionality and all 459 migrations preserved). The reconciliation
+delta is metadata: every journey operation now carries `x-error-codes`, explicit
+`security`, and `x-required-permission` wherever a single permission names the
+authority; see `CR-HM-BACKEND-CONTRACT-FREEZE-03_CHANGELOG.md` §5 for the exact
+per-operation matrix.
+
 **Freeze-02 amendment (CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51, 2026-10-21):**
 every "route-only (FG-01)" note below is historical — all 67 operations are now
 documented in `docs/api/openapi.yaml` (269/269 parity) with the operationIds

@@ -16,7 +16,12 @@ import {
  *   GET /handyman/requests/:id/status-visibility
  *   GET /handyman/execution-scopes/:id/status-visibility
  *
- * All routes are read-only and require `tenant_company.read` + `canAccessClient`.
+ * All routes are read-only and require `tenant_company.read`. Subject and
+ * status-visibility reads additionally enforce the BE-02G exact-Building
+ * guard on the subject lineage's server-derived Building (a same-Client
+ * sibling-Building assignment does NOT suffice); provider-performance
+ * enforces `canAccessClient` plus exact-Building access when a
+ * `buildingId` is supplied.
  */
 export function createHandymanSlaStatusApiRouter(): Router {
   const router = Router();

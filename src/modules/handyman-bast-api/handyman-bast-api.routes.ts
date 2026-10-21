@@ -18,8 +18,11 @@ import {
  *   POST /handyman/bast/:bastId/reject
  *   POST /handyman/bast/:bastId/sign-off
  *
- * Reads require `tenant_company.read` + `canAccessClient`.
- * Customer sign-off requires `tenant_company.manage` + `canAccessClient`.
+ * Reads require `tenant_company.read` + exact-Building access to the
+ * BAST scope's server-derived Building (BE-02G — the former client-level
+ * `canAccessClient` wall was replaced by CR-HM-SEC-01; a same-Client
+ * sibling-Building assignment does NOT suffice). Customer sign-off
+ * requires `tenant_company.manage` + the same exact-Building wall.
  * Worker/provider BAST commands (`prepare`, `issue`, `void`) are NOT exposed
  * on this Customer Care surface — they live on the separate, Building-scoped
  * worker transport (`handyman-bast-worker-api`, CR-HM-BAST-HTTP-01) gated by

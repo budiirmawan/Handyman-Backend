@@ -1,7 +1,15 @@
-# API Handoff — Mobile (Worker Field App) · Freeze Candidate v1.0
+# API Handoff — Mobile (Worker Field App) · Freeze Candidate v1.2
 
-**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0 · **Backend baseline**: `main@8b80f92` (PR #48/#50 merged) · **Spec**: `docs/api/openapi.yaml` (1494 paths/1985 ops; 269/269 Handyman ops documented — FG-01 CLOSED by CR-HM-BACKEND-CONTRACT-FREEZE-02, PR #51) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
-Companions: `MOBILE_API_HANDOFF.md`, `docs/api/CR-HM-18_MOBILE_HANDOFF.md`, `docs/api/HANDYMAN_BACKEND_API_HANDOFF_MOBILE.md`.
+**Contract**: CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 · **Version: Freeze Candidate v1.2** (CR-HM-BACKEND-CONTRACT-FREEZE-03; lineage v1.0 → v1.1/PR #51 → v1.2) · **Backend baseline**: `main@38e779f` (PR #51 merged) · **Spec**: `docs/api/openapi.yaml` SHA-256 `f2ffec3f0bc3e4aa5db74265caeb0738b530aee0c43ca9c4e299866831d70352` (1494 paths/1985 ops/**2256 schemas**; 269/269 Handyman ops documented **and** permission/error/security-annotated — FG-01+FG-02 CLOSED) · **Status: CANDIDATE, not final freeze** (FG-03/FG-04 still open).
+Companions: `MOBILE_API_HANDOFF.md`, `docs/api/CR-HM-18_MOBILE_HANDOFF.md`, `docs/api/HANDYMAN_BACKEND_API_HANDOFF_MOBILE.md`. Full freeze-03 change matrix: `CR-HM-BACKEND-CONTRACT-FREEZE-03_CHANGELOG.md`.
+
+## 0. What changed in v1.2 (freeze-03) — field-lane impact is documentation-only
+
+**No field-lane behavior changed.** The field lane remains authentication-only with service-enforced CURRENT Crew Lead / assigned-worker authority; freeze-03 deliberately did **not** attach `x-required-permission` to composite-authority field ops (a single RBAC permission would be false) — keep rendering authority from re-reads, never from a permission claim. Deltas that affect generated types/rendering:
+
+1. `requestStatus` fields in the field feed/scope/request payloads are now bound to the frozen `HandymanServiceRequestStatus` enum, which includes **`CANCELLED`** (terminal; a cancelled request must disappear from actionable queues on re-read).
+2. Every field operation now declares `x-error-codes` and explicit `security` in the spec; confirm-upload checksum/size failure is `HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED` (an earlier prose name never existed). The warranty-rework lifecycle commands return the typed `HandymanServiceWarrantyReworkCommandResult` (rework + event + head statuses + `replayed`) — Mobile's slice stays start/complete per §2/§4; propose/verify actor rules are stated on those operations and are unchanged.
+3. Event `metadata` bags (QC/defect/material/variation events) are documented as opaque audit data — ignore unknown keys; never branch business logic on them.
 
 ## 1. Authentication
 

@@ -22,9 +22,13 @@ import {
  *   POST /handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/confirm
  *   POST /handyman/execution-scopes/:executionScopeId/customer-payments/:paymentId/reject
  *
- * Reads require `tenant_company.read` + `canAccessClient`.
- * Payment REPORTING (record) requires `tenant_company.manage` +
- * `canAccessClient` + single-use `idempotencyKey` — reporting a payment
+ * Scope reads require `tenant_company.read` + exact-Building access to
+ * the scope's server-derived Building (BE-02G — the former client-level
+ * `canAccessClient` wall was replaced by CR-HM-SEC-01); the client-basis
+ * read (`GET /handyman/customer-ledger`) keeps `canAccessClient` plus the
+ * exact requested Building check.
+ * Payment REPORTING (record) requires `tenant_company.manage` + the same
+ * exact-Building wall + single-use `idempotencyKey` — reporting a payment
  * is a Customer/Tenant action, not Finance verification.
  * Payment VERIFICATION (confirm / reject) requires
  * `handyman.finance.manage` (CR-HM-FIN-AUTH-01) + scope: generic
