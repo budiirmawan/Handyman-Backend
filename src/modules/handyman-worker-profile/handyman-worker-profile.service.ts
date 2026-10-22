@@ -1,5 +1,6 @@
 import { getPool } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
+import { logger } from '../../shared/logger';
 import { contextAccessService } from '../context-access/context-access.service';
 import { permissionService } from '../permissions';
 import { workforceSkillRepository } from '../workforce-skills/workforce-skill.repository';
@@ -52,14 +53,42 @@ interface CoreWorkerRow {
   binding_effective_until: Date | string | null;
 }
 
+/**
+ * CR-HM-WORKER-PROFILE-FIX-01 — production-schema core projection.
+ *
+ * Every column below exists in the canonical migration registry; the
+ * projection derives the Mobile contract fields from the authorities that
+ * actually model them and NEVER fabricates a column:
+ *
+ *   workerCode        vendor_workforce_bindings.vendor_personnel_code
+ *                     (0060) with workforce_profiles.employee_code (0024)
+ *                     as the fallback when the provider binding is absent.
+ *   providerCode      vendors.vendor_code (0054) — provider contexts (0384)
+ *                     carry no code of their own.
+ *   clientId          handyman_worker_contexts.client_id (0385); the profile
+ *                     is client-scoped through organization (0020/0024),
+ *                     never through a nonexistent profile column.
+ *   email / phone     users.email / users.whatsapp_phone (0002/0301). The
+ *                     profile master models no contact columns.
+ *   employmentType    derived from workforce_profiles.workforce_type
+ *                     (0024/0031): EXTERNAL → VENDOR, OUTSOURCED →
+ *                     OUTSOURCED, CONTRACT → CONTRACT, else INTERNAL.
+ *
+ * Client isolation is structural: provider context, vendor and organization
+ * are all pinned to wc.client_id, and the profile is pinned through its
+ * organization, so a cross-client row can never be projected.
+ */
 const CORE_WORKER_SELECT = `
   SELECT
     wc.id AS worker_context_id,
-    COALESCE(wc.worker_code, 'WKR') AS worker_code,
+    COALESCE(
+      NULLIF(btrim(vwb.vendor_personnel_code), ''),
+      wp.employee_code
+    ) AS worker_code,
     wc.status AS worker_status,
     wc.client_id,
     pc.id AS provider_context_id,
-    COALESCE(pc.provider_code, 'PROV') AS provider_code,
+    v.vendor_code AS provider_code,
     pc.status AS provider_status,
     v.id AS vendor_id,
     v.status AS vendor_status,
@@ -70,31 +99,39 @@ const CORE_WORKER_SELECT = `
     wp.user_id,
     wp.employee_code,
     wp.full_name,
-    wp.email,
-    wp.phone,
+    u.email AS email,
+    u.whatsapp_phone AS phone,
     wp.workforce_type,
-    COALESCE(wp.employment_type, 'VENDOR') AS employment_type,
+    CASE wp.workforce_type
+      WHEN 'EXTERNAL' THEN 'VENDOR'
+      WHEN 'OUTSOURCED' THEN 'OUTSOURCED'
+      WHEN 'CONTRACT' THEN 'CONTRACT'
+      ELSE 'INTERNAL'
+    END AS employment_type,
     vwb.status AS binding_status,
     vwb.effective_from AS binding_effective_from,
     vwb.effective_until AS binding_effective_until
   FROM handyman_worker_contexts wc
   JOIN workforce_profiles wp
     ON wp.id = wc.workforce_profile_id
-   AND wp.client_id = wc.client_id
+  JOIN organizations o
+    ON o.id = wp.organization_id
+   AND o.client_id = wc.client_id
   JOIN handyman_provider_contexts pc
     ON pc.id = wc.handyman_provider_context_id
    AND pc.client_id = wc.client_id
   JOIN vendors v
     ON v.id = pc.vendor_id
    AND v.client_id = wc.client_id
-  JOIN organizations o
-    ON o.id = v.organization_id
-   AND o.client_id = wc.client_id
+  LEFT JOIN users u
+    ON u.id = wp.user_id
   LEFT JOIN LATERAL (
-    SELECT b.status, b.effective_from, b.effective_until
+    SELECT b.status,
+           b.effective_from,
+           b.effective_until,
+           b.vendor_personnel_code
       FROM vendor_workforce_bindings b
-     WHERE b.client_id = wc.client_id
-       AND b.vendor_id = v.id
+     WHERE b.vendor_id = v.id
        AND b.workforce_profile_id = wp.id
      ORDER BY (b.status = 'ACTIVE') DESC, b.created_at DESC
      LIMIT 1
@@ -118,14 +155,18 @@ async function buildWorkerProfileProjection(
     joined_at: Date | string;
     is_crew_lead: boolean;
   }>(
+    // handyman_work_crews (0386) is provider-scoped, NOT building-scoped and
+    // carries no code/name fallback or membership join timestamp: the crew
+    // building is therefore surfaced as NULL rather than invented, and the
+    // membership creation instant is the authoritative "joined at".
     `SELECT
        c.id AS crew_id,
-       COALESCE(c.code, 'CREW') AS crew_code,
-       COALESCE(c.name, 'Handyman Crew') AS crew_name,
-       c.building_id,
+       c.code AS crew_code,
+       c.name AS crew_name,
+       NULL::uuid AS building_id,
        c.status AS crew_status,
        cm.status AS membership_status,
-       cm.joined_at,
+       cm.created_at AS joined_at,
        (latest_lead.handyman_crew_membership_id = cm.id) AS is_crew_lead
      FROM handyman_crew_memberships cm
      JOIN handyman_work_crews c
@@ -141,41 +182,54 @@ async function buildWorkerProfileProjection(
      ) latest_lead ON TRUE
      WHERE cm.client_id = $1
        AND cm.handyman_worker_context_id = $2
-     ORDER BY (cm.status = 'ACTIVE') DESC, cm.joined_at DESC`,
+     ORDER BY (cm.status = 'ACTIVE') DESC, cm.created_at DESC`,
     [core.client_id, core.worker_context_id],
   );
 
-  // 2. Building assignments
+  // 2. Building assignments.
+  // workforce_building_assignments (0030) models ONLY the profile → building
+  // placement plus an optional validity window: it has no client_id,
+  // property_id, assignment_role, is_primary or assigned_at column. Client
+  // scope is proven structurally through building → property → client (0018),
+  // and "primary" is DERIVED from the earliest ACTIVE placement instead of
+  // being read from a column that does not exist.
   const bldRes = await pool.query<{
     building_id: string;
     building_code: string;
     building_name: string;
     property_id: string;
-    assignment_role: string;
-    is_primary: boolean;
     status: string;
     effective_from: Date | string | null;
     effective_until: Date | string | null;
   }>(
     `SELECT
        wba.building_id,
-       COALESCE(b.code, 'BLD') AS building_code,
-       COALESCE(b.name, 'Building') AS building_name,
-       wba.property_id,
-       COALESCE(wba.assignment_role, 'HANDYMAN') AS assignment_role,
-       COALESCE(wba.is_primary, TRUE) AS is_primary,
+       b.code AS building_code,
+       b.name AS building_name,
+       b.property_id,
        wba.status,
        wba.effective_from,
        wba.effective_until
      FROM workforce_building_assignments wba
      JOIN buildings b
        ON b.id = wba.building_id
-      AND b.client_id = wba.client_id
-     WHERE wba.client_id = $1
-       AND wba.workforce_profile_id = $2
-     ORDER BY (wba.status = 'ACTIVE') DESC, wba.is_primary DESC, b.code ASC`,
+     JOIN properties p
+       ON p.id = b.property_id
+      AND p.client_id = $1
+     WHERE wba.workforce_profile_id = $2
+       AND EXISTS (
+         SELECT 1
+           FROM workforce_profiles wp
+           JOIN organizations o
+             ON o.id = wp.organization_id
+          WHERE wp.id = wba.workforce_profile_id
+            AND o.client_id = $1
+       )
+     ORDER BY (wba.status = 'ACTIVE') DESC, wba.created_at ASC, b.code ASC`,
     [core.client_id, core.workforce_profile_id],
   );
+  const primaryBuildingId = bldRes.rows.find((r) => r.status === 'ACTIVE')
+    ?.building_id;
 
   // 3. Inspection appointments & work session counts
   const inspCountsRes = await pool.query<{
@@ -206,8 +260,15 @@ async function buildWorkerProfileProjection(
       active_count: string;
       completed_count: string;
     }>(
+      // handyman_work_sessions (0401) status vocabulary: CHECKED_IN,
+      // IN_PROGRESS, PAUSED, MATERIAL_RUN, COMPLETED, CHECKED_OUT. The old
+      // 'WORK_COMPLETED' filter matched no legal state; COMPLETED sessions are
+      // still non-terminal until CHECKED_OUT.
       `SELECT
-         COUNT(*) FILTER (WHERE status IN ('CHECKED_IN', 'IN_PROGRESS', 'WORK_COMPLETED'))::text AS active_count,
+         COUNT(*) FILTER (
+           WHERE status IN ('CHECKED_IN', 'IN_PROGRESS', 'PAUSED',
+                            'MATERIAL_RUN', 'COMPLETED')
+         )::text AS active_count,
          COUNT(*) FILTER (WHERE status = 'CHECKED_OUT')::text AS completed_count
        FROM handyman_work_sessions
        WHERE client_id = $1
@@ -243,7 +304,10 @@ async function buildWorkerProfileProjection(
     authorizedRoles.push('INSPECTOR');
   }
 
-  // 5. Effective skills & skill validity windows
+  // 5. Effective skills & skill validity windows.
+  // workforce_skill_assignments (0026) is client-agnostic; the skill master
+  // (0025) carries client_id. Every skill read is pinned to the worker's
+  // client so a stale cross-client assignment can never surface here.
   let effectiveSkills: Awaited<
     ReturnType<typeof workforceSkillRepository.listEffectiveSkills>
   > = [];
@@ -253,6 +317,7 @@ async function buildWorkerProfileProjection(
     effectiveSkills = await workforceSkillRepository.listEffectiveSkills(
       core.workforce_profile_id,
       now,
+      core.client_id,
     );
     const allSkillRows = await pool.query<{
       skill_id: string;
@@ -270,11 +335,13 @@ async function buildWorkerProfileProjection(
          wsa.valid_from,
          wsa.valid_until
        FROM workforce_skill_assignments wsa
-       JOIN skills s ON s.id = wsa.skill_id
+       JOIN skills s
+         ON s.id = wsa.skill_id
+        AND s.client_id = $2
        WHERE wsa.workforce_profile_id = $1
          AND wsa.status = 'ACTIVE'
        ORDER BY s.code ASC`,
-      [core.workforce_profile_id],
+      [core.workforce_profile_id, core.client_id],
     );
     skillValidityWindows = allSkillRows.rows.map((r) => ({
       skillId: r.skill_id,
@@ -285,7 +352,14 @@ async function buildWorkerProfileProjection(
       expiresAt: toIsoOrNull(r.valid_until),
       isExpired: Boolean(r.valid_until && new Date(r.valid_until) < now),
     }));
-  } catch {
+  } catch (error) {
+    // A worker without skills (or an environment without the skill tables
+    // populated) still yields a valid profile: skills are optional.
+    logger.warn('Handyman worker profile skills could not be projected.', {
+      operation: 'handyman_worker_profile.skills',
+      result: 'degraded',
+      errorMessage: error instanceof Error ? error.message : 'unknown error',
+    });
     effectiveSkills = [];
     skillValidityWindows = [];
   }
@@ -332,7 +406,19 @@ async function buildWorkerProfileProjection(
       expiryDate: toIsoOrNull(r.expiry_date),
       status: r.status,
     }));
-  } catch {
+  } catch (error) {
+    // Certifications are Optional by contract: a provider with no license /
+    // certification rows (or no vendor registry row) still returns a valid
+    // profile instead of failing the whole projection.
+    logger.warn(
+      'Handyman worker profile certifications could not be projected.',
+      {
+        operation: 'handyman_worker_profile.certifications',
+        result: 'degraded',
+        errorMessage:
+          error instanceof Error ? error.message : 'unknown error',
+      },
+    );
     providerLicensesAndCertifications = [];
   }
 
@@ -348,11 +434,21 @@ async function buildWorkerProfileProjection(
     is_lead: boolean;
     assigned_at: Date | string;
   }>(
+    // handyman_service_requests (0378) models no request_code / title column:
+    // the display handle is derived from the request's own authoritative
+    // origin_reference (falling back to a deterministic id prefix) and the
+    // title from its modeled description.
     `SELECT
        es.id AS execution_scope_id,
        es.handyman_request_id,
-       COALESCE(sr.request_code, 'HM-REQ') AS request_code,
-       COALESCE(sr.title, 'Handyman Work Order') AS title,
+       COALESCE(
+         NULLIF(btrim(sr.origin_reference), ''),
+         'HM-' || upper(substr(es.handyman_request_id::text, 1, 8))
+       ) AS request_code,
+       COALESCE(
+         NULLIF(btrim(sr.description), ''),
+         'Handyman Work Order'
+       ) AS title,
        es.building_id,
        es.status AS scope_status,
        a.status AS assignment_status,
@@ -445,8 +541,13 @@ async function buildWorkerProfileProjection(
         buildingCode: r.building_code,
         buildingName: r.building_name,
         propertyId: r.property_id,
-        assignmentRole: r.assignment_role,
-        isPrimary: Boolean(r.is_primary),
+        // A workforce building placement carries no role column (0030); the
+        // contract value is the Handyman placement category, not row data.
+        assignmentRole: 'HANDYMAN',
+        // Derived: the earliest ACTIVE placement is the primary one. Only a
+        // real placement is ever flagged, never an inactive history row.
+        isPrimary:
+          r.status === 'ACTIVE' && r.building_id === primaryBuildingId,
         status: r.status,
         effectiveFrom: toIsoOrNull(r.effective_from),
         effectiveUntil: toIsoOrNull(r.effective_until),

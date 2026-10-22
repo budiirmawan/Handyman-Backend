@@ -17,6 +17,20 @@ import { propertyRepository } from '../src/modules/properties/property.repositor
 import { clientRepository } from '../src/modules/clients/client.repository';
 import { permissionService } from '../src/modules/permissions';
 
+/**
+ * CR-HM-FIELD-AUTHORITY-01 P1 — Worker Profile Projection.
+ *
+ * CR-HM-WORKER-PROFILE-FIX-01: the fixture schema below is now a
+ * column-faithful subset of the canonical migration registry (see the
+ * migrations cited on each table). It previously declared columns that
+ * production never had (worker_code, provider_code, workforce_profiles
+ * .client_id/email/phone/employment_type, vendor_workforce_bindings
+ * .client_id, workforce_building_assignments.client_id/property_id/...,
+ * handyman_service_requests.request_code/title), which is exactly why the
+ * column drift escaped review. Keeping the fixture aligned means future
+ * drift fails HERE as well as in the migration-backed regression suite
+ * (handyman-worker-profile-schema-regression.test.ts).
+ */
 describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
   let pg: EmbeddedPostgres;
   let dbDir: string;
@@ -92,24 +106,34 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
 
     const pool = getPool();
     await pool.query(`
+      -- 0001/0012/0017/0018 — master chain: client → property → building
       CREATE TABLE clients(id uuid PRIMARY KEY, status text NOT NULL);
       CREATE TABLE properties(id uuid PRIMARY KEY, client_id uuid NOT NULL, status text NOT NULL);
-      CREATE TABLE buildings(id uuid PRIMARY KEY, client_id uuid NOT NULL, property_id uuid NOT NULL, code text NOT NULL, name text NOT NULL, status text NOT NULL);
-      CREATE TABLE users(id uuid PRIMARY KEY, status text NOT NULL, full_name text NOT NULL, email text NOT NULL);
+      CREATE TABLE buildings(id uuid PRIMARY KEY, property_id uuid NOT NULL, code text NOT NULL, name text NOT NULL, status text NOT NULL);
+      -- 0002 + 0301 — users own the login identity AND the only modeled phone
+      CREATE TABLE users(
+        id uuid PRIMARY KEY, email text NOT NULL, display_name text NOT NULL,
+        status text NOT NULL, whatsapp_phone text
+      );
+      -- 0019 — access is derived through building → property → client
       CREATE TABLE user_building_assignments(
-        id uuid PRIMARY KEY, user_id uuid NOT NULL, client_id uuid NOT NULL,
-        property_id uuid NOT NULL, building_id uuid NOT NULL,
-        assignment_role text NOT NULL DEFAULT 'FIELD', status text NOT NULL,
+        id uuid PRIMARY KEY, user_id uuid NOT NULL, building_id uuid NOT NULL,
+        status text NOT NULL DEFAULT 'ACTIVE',
         assigned_by_user_id uuid, assigned_at timestamptz NOT NULL DEFAULT now(),
-        unassigned_at timestamptz, notes text,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0020
       CREATE TABLE organizations(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, code text NOT NULL, name text NOT NULL,
-        organization_type text NOT NULL DEFAULT 'VENDOR', description text,
-        status text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+        description text, status text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
-      CREATE TABLE vendors(id uuid PRIMARY KEY, client_id uuid NOT NULL, organization_id uuid NOT NULL, status text NOT NULL);
+      -- 0054 — vendor_code is the only provider code authority
+      CREATE TABLE vendors(
+        id uuid PRIMARY KEY, client_id uuid NOT NULL, vendor_code text NOT NULL,
+        vendor_name text NOT NULL, status text NOT NULL
+      );
+      -- 0062
       CREATE TABLE vendor_licenses_certifications(
         id uuid PRIMARY KEY,
         vendor_id uuid NOT NULL,
@@ -120,44 +144,46 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
         issue_date timestamptz,
         expiry_date timestamptz,
         status text NOT NULL DEFAULT 'ACTIVE',
-        document_reference text,
+        document_reference uuid,
         notes text,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0384 — no provider_code column exists
       CREATE TABLE handyman_provider_contexts(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, vendor_id uuid NOT NULL,
-        provider_code text NOT NULL DEFAULT 'PROV', status text NOT NULL,
-        notes text, created_by_user_id uuid,
+        status text NOT NULL, created_by_user_id uuid NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0024/0031 — no client_id, email, phone or employment_type column
       CREATE TABLE workforce_profiles(
-        id uuid PRIMARY KEY, client_id uuid NOT NULL, organization_id uuid NOT NULL,
+        id uuid PRIMARY KEY, organization_id uuid NOT NULL,
         department_id uuid, team_id uuid, position_id uuid,
         user_id uuid, employee_code text NOT NULL, full_name text NOT NULL,
-        email text, phone text,
-        workforce_type text NOT NULL DEFAULT 'EXTERNAL',
-        employment_type text NOT NULL DEFAULT 'VENDOR',
-        status text NOT NULL, notes text,
+        workforce_type text NOT NULL DEFAULT 'INTERNAL',
+        status text NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0060 — no client_id column; personnel code carries the worker code
       CREATE TABLE vendor_workforce_bindings(
-        id uuid PRIMARY KEY, client_id uuid NOT NULL, vendor_id uuid NOT NULL,
-        workforce_profile_id uuid NOT NULL, status text NOT NULL,
+        id uuid PRIMARY KEY, vendor_id uuid NOT NULL,
+        workforce_profile_id uuid NOT NULL, vendor_personnel_code text NOT NULL,
+        status text NOT NULL,
         effective_from timestamptz, effective_until timestamptz,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0030 — no client_id/property_id/assignment_role/is_primary/assigned_at
       CREATE TABLE workforce_building_assignments(
-        id uuid PRIMARY KEY, client_id uuid NOT NULL, workforce_profile_id uuid NOT NULL,
-        property_id uuid NOT NULL, building_id uuid NOT NULL,
-        assignment_role text NOT NULL DEFAULT 'HANDYMAN', is_primary boolean NOT NULL DEFAULT true,
-        status text NOT NULL, assigned_by_user_id uuid,
+        id uuid PRIMARY KEY, workforce_profile_id uuid NOT NULL,
+        building_id uuid NOT NULL,
+        status text NOT NULL,
         effective_from timestamptz, effective_until timestamptz,
-        assigned_at timestamptz NOT NULL DEFAULT now(), unassigned_at timestamptz, notes text,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0025/0026 — the skill master is client-scoped
       CREATE TABLE skills(
         id uuid PRIMARY KEY,
+        client_id uuid NOT NULL,
         code text NOT NULL,
         name text NOT NULL,
         category text NOT NULL,
@@ -174,57 +200,65 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0385 — no worker_code column exists
       CREATE TABLE handyman_worker_contexts(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, handyman_provider_context_id uuid NOT NULL,
-        workforce_profile_id uuid NOT NULL, worker_code text NOT NULL DEFAULT 'WKR',
-        status text NOT NULL, notes text, created_by_user_id uuid,
+        workforce_profile_id uuid NOT NULL,
+        status text NOT NULL, created_by_user_id uuid NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0386 — no building_id column; memberships have no joined_at
       CREATE TABLE handyman_work_crews(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, handyman_provider_context_id uuid NOT NULL,
-        building_id uuid, code text NOT NULL, name text NOT NULL, status text NOT NULL,
-        notes text, created_by_user_id uuid NOT NULL,
+        code text NOT NULL, name text NOT NULL, status text NOT NULL,
+        created_by_user_id uuid NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
       CREATE TABLE handyman_crew_memberships(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, handyman_crew_id uuid NOT NULL,
         handyman_worker_context_id uuid NOT NULL, status text NOT NULL,
-        joined_at timestamptz NOT NULL DEFAULT now(), left_at timestamptz,
         created_by_user_id uuid NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );
       CREATE TABLE handyman_crew_leads(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, handyman_crew_id uuid NOT NULL,
-        handyman_crew_membership_id uuid NOT NULL, lead_seq int NOT NULL,
+        handyman_crew_membership_id uuid NOT NULL, lead_seq bigserial NOT NULL,
         designated_by_user_id uuid NOT NULL, designated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0378 — no request_code/title/property_id/priority column exists
       CREATE TABLE handyman_service_requests(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, tenant_company_id uuid NOT NULL,
-        property_id uuid NOT NULL, building_id uuid NOT NULL,
-        request_code text NOT NULL, title text NOT NULL, description text NOT NULL,
-        priority text NOT NULL, status text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+        building_id uuid NOT NULL,
+        origin_channel text NOT NULL, origin_reference text, description text,
+        status text NOT NULL, created_by_user_id uuid,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
         UNIQUE (id, client_id)
       );
+      -- 0395 — commercial amounts are NOT part of the scope row here
       CREATE TABLE handyman_execution_scopes(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, handyman_request_id uuid NOT NULL,
         tenant_company_id uuid NOT NULL, building_id uuid NOT NULL,
-        status text NOT NULL DEFAULT 'IN_PROGRESS',
-        approved_total_amount numeric(18,2) NOT NULL DEFAULT 850000.00
+        status text NOT NULL DEFAULT 'AUTHORIZED'
       );
+      -- 0396 — no assignment_seq column
       CREATE TABLE handyman_execution_scope_assignments(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
         handyman_provider_context_id uuid NOT NULL,
-        handyman_crew_id uuid NOT NULL, assignment_seq int NOT NULL DEFAULT 1,
+        handyman_crew_id uuid NOT NULL,
         status text NOT NULL, assigned_by_user_id uuid NOT NULL,
         assigned_at timestamptz NOT NULL DEFAULT now(),
         supersedes_assignment_id uuid,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
+      -- 0401 — bounded status vocabulary (CHECKED_IN … CHECKED_OUT)
       CREATE TABLE handyman_work_sessions(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+        assignment_id uuid, lead_worker_id uuid,
         lead_user_id uuid NOT NULL, status text NOT NULL
       );
+      -- 0431
       CREATE TABLE handyman_visit_appointments(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, building_id uuid NOT NULL,
         tenant_company_id uuid NOT NULL, handyman_request_id uuid NOT NULL,
@@ -242,23 +276,16 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       [propertyId, clientId, otherPropertyId, otherClientId],
     );
     await pool.query(
-      `INSERT INTO buildings VALUES ($1, $2, $3, 'BLD-A', 'Tower Alpha', 'ACTIVE'), ($4, $5, $6, 'BLD-B', 'Tower Beta', 'ACTIVE')`,
-      [
-        buildingId,
-        clientId,
-        propertyId,
-        otherBuildingId,
-        otherClientId,
-        otherPropertyId,
-      ],
+      `INSERT INTO buildings VALUES ($1, $2, 'BLD-A', 'Tower Alpha', 'ACTIVE'), ($3, $4, 'BLD-B', 'Tower Beta', 'ACTIVE')`,
+      [buildingId, propertyId, otherBuildingId, otherPropertyId],
     );
     await pool.query(
-      `INSERT INTO users VALUES
-        ($1, 'ACTIVE', 'Budi Santoso', 'budi.pic@example.com'),
-        ($2, 'ACTIVE', 'Hendra Wijaya', 'hendra.helper@example.com'),
-        ($3, 'ACTIVE', 'Indra Pratama', 'indra.insp@example.com'),
-        ($4, 'ACTIVE', 'Rina Ops', 'rina.ops@example.com'),
-        ($5, 'ACTIVE', 'Other Tenant User', 'other@example.com')`,
+      `INSERT INTO users (id, status, display_name, email, whatsapp_phone) VALUES
+        ($1, 'ACTIVE', 'Budi Santoso', 'budi.pic@example.com', '+628111000111'),
+        ($2, 'ACTIVE', 'Hendra Wijaya', 'hendra.helper@example.com', '+628111000222'),
+        ($3, 'ACTIVE', 'Indra Pratama', 'indra.insp@example.com', '+628111000333'),
+        ($4, 'ACTIVE', 'Rina Ops', 'rina.ops@example.com', '+628111000444'),
+        ($5, 'ACTIVE', 'Other Tenant User', 'other@example.com', '+628111000555')`,
       [
         picUserId,
         helperUserId,
@@ -268,28 +295,24 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       ],
     );
     await pool.query(
-      `INSERT INTO user_building_assignments (id, user_id, client_id, property_id, building_id, status) VALUES
-        ($1, $2, $3, $4, $5, 'ACTIVE'),
-        ($6, $7, $3, $4, $5, 'ACTIVE'),
-        ($8, $9, $3, $4, $5, 'ACTIVE'),
-        ($10, $11, $3, $4, $5, 'ACTIVE'),
-        ($12, $13, $14, $15, $16, 'ACTIVE')`,
+      `INSERT INTO user_building_assignments (id, user_id, building_id, status) VALUES
+        ($1, $2, $5, 'ACTIVE'),
+        ($3, $4, $5, 'ACTIVE'),
+        ($6, $7, $5, 'ACTIVE'),
+        ($8, $9, $5, 'ACTIVE'),
+        ($10, $11, $12, 'ACTIVE')`,
       [
         randomUUID(),
         picUserId,
-        clientId,
-        propertyId,
-        buildingId,
         randomUUID(),
         helperUserId,
+        buildingId,
         randomUUID(),
         inspectorUserId,
         randomUUID(),
         opsUserId,
         randomUUID(),
         otherTenantUserId,
-        otherClientId,
-        otherPropertyId,
         otherBuildingId,
       ],
     );
@@ -299,8 +322,9 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       [orgId, clientId],
     );
     await pool.query(
-      `INSERT INTO vendors VALUES ($1, $2, $3, 'ACTIVE')`,
-      [vendorId, clientId, orgId],
+      `INSERT INTO vendors (id, client_id, vendor_code, vendor_name, status)
+       VALUES ($1, $2, 'PROV-KTM-01', 'PT Karya Teknik Mandiri', 'ACTIVE')`,
+      [vendorId, clientId],
     );
     await pool.query(
       `INSERT INTO vendor_licenses_certifications (
@@ -309,21 +333,20 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       [licenseId, vendorId],
     );
     await pool.query(
-      `INSERT INTO handyman_provider_contexts (id, client_id, vendor_id, provider_code, status)
-       VALUES ($1, $2, $3, 'PROV-KTM-01', 'ACTIVE')`,
-      [providerCtxId, clientId, vendorId],
+      `INSERT INTO handyman_provider_contexts (id, client_id, vendor_id, status, created_by_user_id)
+       VALUES ($1, $2, $3, 'ACTIVE', $4)`,
+      [providerCtxId, clientId, vendorId, opsUserId],
     );
 
     await pool.query(
       `INSERT INTO workforce_profiles (
-        id, client_id, organization_id, user_id, employee_code, full_name, email, phone, workforce_type, employment_type, status
+        id, organization_id, user_id, employee_code, full_name, workforce_type, status
       ) VALUES
-        ($1, $2, $3, $4, 'EMP-PIC-001', 'Budi Santoso', 'budi.pic@example.com', '+628111000111', 'EXTERNAL', 'VENDOR', 'ACTIVE'),
-        ($5, $2, $3, $6, 'EMP-HLP-002', 'Hendra Wijaya', 'hendra.helper@example.com', '+628111000222', 'EXTERNAL', 'VENDOR', 'ACTIVE'),
-        ($7, $2, $3, $8, 'EMP-INS-003', 'Indra Pratama', 'indra.insp@example.com', '+628111000333', 'EXTERNAL', 'VENDOR', 'ACTIVE')`,
+        ($1, $2, $3, 'EMP-PIC-001', 'Budi Santoso', 'EXTERNAL', 'ACTIVE'),
+        ($4, $2, $5, 'EMP-HLP-002', 'Hendra Wijaya', 'EXTERNAL', 'ACTIVE'),
+        ($6, $2, $7, 'EMP-INS-003', 'Indra Pratama', 'EXTERNAL', 'ACTIVE')`,
       [
         picWfId,
-        clientId,
         orgId,
         picUserId,
         helperWfId,
@@ -333,13 +356,14 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       ],
     );
     await pool.query(
-      `INSERT INTO vendor_workforce_bindings (id, client_id, vendor_id, workforce_profile_id, status, effective_from) VALUES
-        ($1, $2, $3, $4, 'ACTIVE', '2025-06-01T00:00:00Z'),
-        ($5, $2, $3, $6, 'ACTIVE', '2025-06-01T00:00:00Z'),
-        ($7, $2, $3, $8, 'ACTIVE', '2025-06-01T00:00:00Z')`,
+      `INSERT INTO vendor_workforce_bindings (
+        id, vendor_id, workforce_profile_id, vendor_personnel_code, status, effective_from
+      ) VALUES
+        ($1, $2, $3, 'WKR-PIC-01', 'ACTIVE', '2025-06-01T00:00:00Z'),
+        ($4, $2, $5, 'WKR-HLP-02', 'ACTIVE', '2025-06-01T00:00:00Z'),
+        ($6, $2, $7, 'WKR-INS-03', 'ACTIVE', '2025-06-01T00:00:00Z')`,
       [
         randomUUID(),
-        clientId,
         vendorId,
         picWfId,
         randomUUID(),
@@ -349,15 +373,13 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       ],
     );
     await pool.query(
-      `INSERT INTO workforce_building_assignments (id, client_id, workforce_profile_id, property_id, building_id, assignment_role, is_primary, status) VALUES
-        ($1, $2, $3, $4, $5, 'HANDYMAN_LEAD', true, 'ACTIVE'),
-        ($6, $2, $7, $4, $5, 'HANDYMAN_HELPER', true, 'ACTIVE'),
-        ($8, $2, $9, $4, $5, 'HANDYMAN_INSPECTOR', true, 'ACTIVE')`,
+      `INSERT INTO workforce_building_assignments (id, workforce_profile_id, building_id, status) VALUES
+        ($1, $2, $3, 'ACTIVE'),
+        ($4, $5, $3, 'ACTIVE'),
+        ($6, $7, $3, 'ACTIVE')`,
       [
         randomUUID(),
-        clientId,
         picWfId,
-        propertyId,
         buildingId,
         randomUUID(),
         helperWfId,
@@ -367,10 +389,10 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
     );
 
     await pool.query(
-      `INSERT INTO skills (id, code, name, category, status) VALUES
-        ($1, 'SKL-PLUMB-01', 'Commercial Plumbing & Piping', 'TECHNICAL', 'ACTIVE'),
-        ($2, 'SKL-ELEC-01', 'Low Voltage Electrical Repair', 'TECHNICAL', 'ACTIVE')`,
-      [skillPlumbingId, skillElectricalId],
+      `INSERT INTO skills (id, client_id, code, name, category, status) VALUES
+        ($1, $3, 'SKL-PLUMB-01', 'Commercial Plumbing & Piping', 'TECHNICAL', 'ACTIVE'),
+        ($2, $3, 'SKL-ELEC-01', 'Low Voltage Electrical Repair', 'TECHNICAL', 'ACTIVE')`,
+      [skillPlumbingId, skillElectricalId, clientId],
     );
     await pool.query(
       `INSERT INTO workforce_skill_assignments (id, workforce_profile_id, skill_id, proficiency_level, valid_from, valid_until, status) VALUES
@@ -386,10 +408,10 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
     );
 
     await pool.query(
-      `INSERT INTO handyman_worker_contexts (id, client_id, handyman_provider_context_id, workforce_profile_id, worker_code, status) VALUES
-        ($1, $2, $3, $4, 'WKR-PIC-01', 'ACTIVE'),
-        ($5, $2, $3, $6, 'WKR-HLP-02', 'ACTIVE'),
-        ($7, $2, $3, $8, 'WKR-INS-03', 'ACTIVE')`,
+      `INSERT INTO handyman_worker_contexts (id, client_id, handyman_provider_context_id, workforce_profile_id, status, created_by_user_id) VALUES
+        ($1, $2, $3, $4, 'ACTIVE', $9),
+        ($5, $2, $3, $6, 'ACTIVE', $9),
+        ($7, $2, $3, $8, 'ACTIVE', $9)`,
       [
         picWorkerCtxId,
         clientId,
@@ -399,13 +421,14 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
         helperWfId,
         inspWorkerCtxId,
         inspWfId,
+        opsUserId,
       ],
     );
 
     await pool.query(
-      `INSERT INTO handyman_work_crews (id, client_id, handyman_provider_context_id, building_id, code, name, status, created_by_user_id)
-       VALUES ($1, $2, $3, $4, 'CRW-ALPHA', 'Crew Alpha Plumbing & MEP', 'ACTIVE', $5)`,
-      [crewId, clientId, providerCtxId, buildingId, opsUserId],
+      `INSERT INTO handyman_work_crews (id, client_id, handyman_provider_context_id, code, name, status, created_by_user_id)
+       VALUES ($1, $2, $3, 'CRW-ALPHA', 'Crew Alpha Plumbing & MEP', 'ACTIVE', $4)`,
+      [crewId, clientId, providerCtxId, opsUserId],
     );
     await pool.query(
       `INSERT INTO handyman_crew_memberships (id, client_id, handyman_crew_id, handyman_worker_context_id, status, created_by_user_id) VALUES
@@ -422,26 +445,26 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       ],
     );
     await pool.query(
-      `INSERT INTO handyman_crew_leads (id, client_id, handyman_crew_id, handyman_crew_membership_id, lead_seq, designated_by_user_id)
-       VALUES ($1, $2, $3, $4, 1, $5)`,
+      `INSERT INTO handyman_crew_leads (id, client_id, handyman_crew_id, handyman_crew_membership_id, designated_by_user_id)
+       VALUES ($1, $2, $3, $4, $5)`,
       [randomUUID(), clientId, crewId, picMemId, opsUserId],
     );
 
     await pool.query(
       `INSERT INTO handyman_service_requests (
-        id, client_id, tenant_company_id, property_id, building_id, request_code, title, description, priority, status
-      ) VALUES ($1, $2, $3, $4, $5, 'HM-REQ-2026-101', 'Replace pantry pressure valve', 'Leaking valve under sink', 'HIGH', 'IN_EXECUTION')`,
-      [requestId, clientId, tenantCompanyId, propertyId, buildingId],
+        id, client_id, tenant_company_id, building_id, origin_channel, origin_reference, description, status
+      ) VALUES ($1, $2, $3, $4, 'BM_SUPER_APP', 'HM-REQ-2026-101', 'Replace pantry pressure valve', 'DIAGNOSIS')`,
+      [requestId, clientId, tenantCompanyId, buildingId],
     );
     await pool.query(
-      `INSERT INTO handyman_execution_scopes (id, client_id, handyman_request_id, tenant_company_id, building_id, status, approved_total_amount)
-       VALUES ($1, $2, $3, $4, $5, 'IN_PROGRESS', 950000.00)`,
+      `INSERT INTO handyman_execution_scopes (id, client_id, handyman_request_id, tenant_company_id, building_id, status)
+       VALUES ($1, $2, $3, $4, $5, 'AUTHORIZED')`,
       [scopeId, clientId, requestId, tenantCompanyId, buildingId],
     );
     await pool.query(
       `INSERT INTO handyman_execution_scope_assignments (
-        id, client_id, execution_scope_id, handyman_provider_context_id, handyman_crew_id, assignment_seq, status, assigned_by_user_id
-      ) VALUES ($1, $2, $3, $4, $5, 1, 'ACTIVE', $6)`,
+        id, client_id, execution_scope_id, handyman_provider_context_id, handyman_crew_id, status, assigned_by_user_id
+      ) VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6)`,
       [randomUUID(), clientId, scopeId, providerCtxId, crewId, opsUserId],
     );
     await pool.query(
@@ -548,16 +571,32 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
             workerCode: string;
             employeeCode: string;
             fullName: string;
+            email: string | null;
+            phone: string | null;
+            workforceType: string;
+            employmentType: string;
           };
           providerAssociation: {
             providerCode: string;
+            providerStatus: string;
             organizationName: string;
             bindingStatus: string;
           };
           roleAndAssignmentContext: {
             authorizedRoles: string[];
-            crewMemberships: Array<{ crewCode: string; isCrewLead: boolean }>;
-            buildingAssignments: Array<{ buildingCode: string }>;
+            crewMemberships: Array<{
+              crewCode: string;
+              crewName: string;
+              buildingId: string | null;
+              isCrewLead: boolean;
+              joinedAt: string;
+            }>;
+            buildingAssignments: Array<{
+              buildingCode: string;
+              propertyId: string;
+              assignmentRole: string;
+              isPrimary: boolean;
+            }>;
           };
           skillsAndCategories: {
             serviceCategories: string[];
@@ -581,11 +620,20 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
     const p = body.data.profile;
     assert.equal(p.workerIdentity.userId, picUserId);
     assert.equal(p.workerIdentity.workerContextId, picWorkerCtxId);
+    // workerCode is the vendor personnel code (0054/0060 authority).
     assert.equal(p.workerIdentity.workerCode, 'WKR-PIC-01');
     assert.equal(p.workerIdentity.employeeCode, 'EMP-PIC-001');
     assert.equal(p.workerIdentity.fullName, 'Budi Santoso');
+    // Contact identity comes from the user identity master (0002/0301).
+    assert.equal(p.workerIdentity.email, 'budi.pic@example.com');
+    assert.equal(p.workerIdentity.phone, '+628111000111');
+    assert.equal(p.workerIdentity.workforceType, 'EXTERNAL');
+    // Derived from workforce_type (no employment_type column exists).
+    assert.equal(p.workerIdentity.employmentType, 'VENDOR');
 
+    // providerCode is the vendor registry code (0054).
     assert.equal(p.providerAssociation.providerCode, 'PROV-KTM-01');
+    assert.equal(p.providerAssociation.providerStatus, 'ACTIVE');
     assert.equal(
       p.providerAssociation.organizationName,
       'PT Karya Teknik Mandiri',
@@ -597,10 +645,28 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       'CREW_MEMBER',
     ]);
     assert.equal(p.roleAndAssignmentContext.crewMemberships.length, 1);
+    assert.equal(
+      p.roleAndAssignmentContext.crewMemberships[0]?.crewCode,
+      'CRW-ALPHA',
+    );
+    // Crews are not building-scoped (0386): never invented.
+    assert.equal(p.roleAndAssignmentContext.crewMemberships[0]?.buildingId, null);
     assert.equal(p.roleAndAssignmentContext.crewMemberships[0]?.isCrewLead, true);
     assert.equal(
       p.roleAndAssignmentContext.buildingAssignments[0]?.buildingCode,
       'BLD-A',
+    );
+    assert.equal(
+      p.roleAndAssignmentContext.buildingAssignments[0]?.propertyId,
+      propertyId,
+    );
+    assert.equal(
+      p.roleAndAssignmentContext.buildingAssignments[0]?.assignmentRole,
+      'HANDYMAN',
+    );
+    assert.equal(
+      p.roleAndAssignmentContext.buildingAssignments[0]?.isPrimary,
+      true,
     );
 
     assert.deepEqual(p.skillsAndCategories.serviceCategories, ['TECHNICAL']);
@@ -624,10 +690,51 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       p.workHistorySummary.recentWorkOrders[0]?.roleInJob,
       'PIC_PEKERJAAN',
     );
-    // Commercial firewall check: no approved_total_amount or invoice fields in recentWorkOrders
+    // Display handle comes from the modeled origin_reference; the title from
+    // the modeled description.
+    assert.equal(
+      p.workHistorySummary.recentWorkOrders[0]?.requestCode,
+      'HM-REQ-2026-101',
+    );
+    assert.equal(
+      p.workHistorySummary.recentWorkOrders[0]?.title,
+      'Replace pantry pressure valve',
+    );
+    // Commercial firewall check: no amount or invoice fields in recentWorkOrders
     const serialized = JSON.stringify(p.workHistorySummary);
     assert.equal(serialized.includes('950000'), false);
     assert.equal(serialized.includes('approvedTotalAmount'), false);
+  });
+
+  it('returns a valid profile for a worker without skills or certifications', async () => {
+    const res = await fetch(`${baseUrl}/handyman/field/me/profile`, {
+      headers: { Authorization: `Bearer ${helperUserId}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      data: {
+        profile: {
+          skillsAndCategories: { effectiveSkills: unknown[] };
+          certificationsAndExpiry: { skillValidityWindows: unknown[] };
+          roleAndAssignmentContext: { authorizedRoles: string[] };
+        };
+      };
+    };
+    const p = body.data.profile;
+    assert.deepEqual(p.skillsAndCategories.effectiveSkills, []);
+    assert.deepEqual(p.certificationsAndExpiry.skillValidityWindows, []);
+    assert.deepEqual(p.roleAndAssignmentContext.authorizedRoles, [
+      'CREW_MEMBER',
+    ]);
+  });
+
+  it('returns a controlled 404 (never 500) for an actor without a worker context', async () => {
+    const res = await fetch(`${baseUrl}/handyman/field/me/profile`, {
+      headers: { Authorization: `Bearer ${opsUserId}` },
+    });
+    assert.equal(res.status, 404);
+    const body = (await res.json()) as { error: { code: string } };
+    assert.equal(body.error.code, 'HANDYMAN_WORKER_PROFILE_NOT_FOUND');
   });
 
   it('enforces role and tenant boundaries on GET /handyman/field/workers/:workerContextId/profile', async () => {
