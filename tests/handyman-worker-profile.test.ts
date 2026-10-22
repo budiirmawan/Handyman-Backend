@@ -604,6 +604,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
           };
           certificationsAndExpiry: {
             individualCertificateNumberModeled: boolean;
+            individualCertifications: Array<Record<string, unknown>>;
             skillValidityWindows: Array<{ skillCode: string; isExpired: boolean }>;
             providerLicensesAndCertifications: Array<{ number: string }>;
           };
@@ -674,7 +675,10 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
 
     assert.equal(
       p.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
+    );
+    assert.ok(
+      Array.isArray(p.certificationsAndExpiry.individualCertifications),
     );
     assert.equal(p.certificationsAndExpiry.skillValidityWindows.length, 2);
     assert.equal(

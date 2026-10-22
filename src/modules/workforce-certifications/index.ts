@@ -1,3 +1,4 @@
+export { workforceCertificationController } from './workforce-certification.controller';
 export {
   workforceCertificationAlreadyActiveError,
   workforceCertificationClientMismatchError,
@@ -6,6 +7,7 @@ export {
   workforceCertificationForbiddenError,
   workforceCertificationInvalidFileReferenceError,
   workforceCertificationNotFoundError,
+  workforceCertificationSelfVerificationForbiddenError,
   workforceCertificationStatusDateMismatchError,
   workforceCertificationVerificationActorRequiredError,
 } from './workforce-certification.errors';
@@ -15,12 +17,15 @@ export {
   type ReferencedDocumentContext,
   type WorkforceProfileClientContext,
 } from './workforce-certification.repository';
+export { createWorkforceCertificationRouter } from './workforce-certification.routes';
 export { workforceCertificationService } from './workforce-certification.service';
 export {
   WORKFORCE_CERTIFICATION_EXPIRY_STATUSES,
   WORKFORCE_CERTIFICATION_STATUSES,
   WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES,
   type CreateWorkforceCertificationInput,
+  type DeactivateWorkforceCertificationInput,
+  type ListExpiringWorkforceCertificationsFilter,
   type ListWorkforceCertificationsFilter,
   type UpdateWorkforceCertificationInput,
   type VerifyWorkforceCertificationInput,
@@ -36,6 +41,8 @@ export {
   isSafeCertificationFileReference,
   validateCertificationIdParam,
   validateCreateWorkforceCertificationInput,
+  validateDeactivateWorkforceCertificationInput,
+  validateListExpiringWorkforceCertificationsFilter,
   validateListWorkforceCertificationsFilter,
   validateSafeCertificationFileReference,
   validateUpdateWorkforceCertificationInput,

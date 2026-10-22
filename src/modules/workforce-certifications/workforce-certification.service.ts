@@ -15,6 +15,7 @@ import {
   workforceCertificationDocumentMismatchError,
   workforceCertificationForbiddenError,
   workforceCertificationNotFoundError,
+  workforceCertificationSelfVerificationForbiddenError,
   workforceCertificationStatusDateMismatchError,
   workforceCertificationVerificationActorRequiredError,
 } from './workforce-certification.errors';
@@ -24,6 +25,8 @@ import {
 } from './workforce-certification.repository';
 import type {
   CreateWorkforceCertificationInput,
+  DeactivateWorkforceCertificationInput,
+  ListExpiringWorkforceCertificationsFilter,
   ListWorkforceCertificationsFilter,
   UpdateWorkforceCertificationInput,
   VerifyWorkforceCertificationInput,
@@ -101,13 +104,21 @@ async function isActorCrewLeadForWorkforceProfile(
   return Boolean(result.rows[0]);
 }
 
+function resolveActorId(actor?: WorkforceCertificationActor): string | null {
+  return actor?.id ?? actor?.userId ?? null;
+}
+
 async function resolveActorPermissions(
   actor: WorkforceCertificationActor,
 ): Promise<string[]> {
   if (Array.isArray(actor.permissions) && actor.permissions.length > 0) {
     return [...actor.permissions];
   }
-  return permissionService.resolvePermissionsForUser(actor.id);
+  const actorId = resolveActorId(actor);
+  if (!actorId) {
+    return [];
+  }
+  return permissionService.resolvePermissionsForUser(actorId);
 }
 
 async function ensureWorkforceProfileAndReadAccess(
@@ -122,21 +133,22 @@ async function ensureWorkforceProfileAndReadAccess(
     throw workforceProfileNotFoundError();
   }
 
-  if (actor) {
+  const actorId = resolveActorId(actor);
+  if (actor && actorId) {
     const canAccessClient = await contextAccessService.canAccessClient(
-      actor.id,
+      actorId,
       profile.clientId,
     );
     if (!canAccessClient) {
       throw buildingAccessDeniedError();
     }
 
-    if (profile.userId !== actor.id) {
+    if (profile.userId !== actorId) {
       const perms = await resolveActorPermissions(actor);
       const hasReadPerm = READ_PERMISSIONS.some((p) => perms.includes(p));
       if (!hasReadPerm) {
         const isCrewLead = await isActorCrewLeadForWorkforceProfile(
-          actor.id,
+          actorId,
           profile.clientId,
           profile.id,
         );
@@ -164,9 +176,10 @@ async function ensureWorkforceProfileAndManageAccess(
     throw workforceProfileNotFoundError();
   }
 
-  if (actor) {
+  const actorId = resolveActorId(actor);
+  if (actor && actorId) {
     const canAccessClient = await contextAccessService.canAccessClient(
-      actor.id,
+      actorId,
       profile.clientId,
     );
     if (!canAccessClient) {
@@ -207,6 +220,7 @@ async function ensureSkillInClient(
 async function ensureDocumentInClient(
   documentId: string,
   clientId: string,
+  actor?: WorkforceCertificationActor,
 ): Promise<void> {
   const doc =
     await workforceCertificationRepository.findDocumentContext(documentId);
@@ -218,6 +232,10 @@ async function ensureDocumentInClient(
   }
   if (doc.status === 'INACTIVE') {
     throw workforceCertificationDocumentInvalidError();
+  }
+  const actorId = resolveActorId(actor);
+  if (actorId && doc.buildingId !== null) {
+    await contextAccessService.assertBuildingAccess(actorId, doc.buildingId);
   }
 }
 
@@ -252,6 +270,7 @@ function resolveVerificationAuditFields(
     verifiedByUserId: string | null;
     verifiedAt: string | null;
   },
+  profileOwnerUserId?: string | null,
 ): {
   verifiedByUserId: string | null;
   verifiedAt: string | null;
@@ -263,12 +282,14 @@ function resolveVerificationAuditFields(
     };
   }
 
+  const actorId = resolveActorId(actor);
+
   if (
     existing &&
     existing.verificationStatus === verificationStatus &&
     existing.verifiedByUserId &&
     existing.verifiedAt &&
-    !actor
+    !actorId
   ) {
     return {
       verifiedByUserId: existing.verifiedByUserId,
@@ -276,12 +297,16 @@ function resolveVerificationAuditFields(
     };
   }
 
-  if (!actor?.id) {
+  if (!actorId) {
     throw workforceCertificationVerificationActorRequiredError();
   }
 
+  if (profileOwnerUserId && actorId === profileOwnerUserId) {
+    throw workforceCertificationSelfVerificationForbiddenError();
+  }
+
   return {
-    verifiedByUserId: actor.id,
+    verifiedByUserId: actorId,
     verifiedAt: new Date().toISOString(),
   };
 }
@@ -307,6 +332,95 @@ export const workforceCertificationService = {
     return workforceCertificationRepository.listCurrentByWorkforceProfileId(
       workforceProfileId,
     );
+  },
+
+  async listExpiringWorkforceCertifications(
+    filter: ListExpiringWorkforceCertificationsFilter = {},
+    actor?: WorkforceCertificationActor,
+  ): Promise<WorkforceCertificationRecord[]> {
+    const withinDays = filter.withinDays ?? 30;
+    const includeExpired = filter.includeExpired ?? false;
+    const actorId = resolveActorId(actor);
+
+    if (!actor || !actorId) {
+      if (filter.workforceProfileId) {
+        const profile =
+          await workforceCertificationRepository.findWorkforceProfileClientContext(
+            filter.workforceProfileId,
+          );
+        if (!profile) {
+          throw workforceProfileNotFoundError();
+        }
+        if (filter.clientId && filter.clientId !== profile.clientId) {
+          throw workforceCertificationClientMismatchError();
+        }
+        return workforceCertificationRepository.listExpiring({
+          clientIds: [profile.clientId],
+          withinDays,
+          includeExpired,
+          workforceProfileId: filter.workforceProfileId,
+          verificationStatus: filter.verificationStatus,
+        });
+      }
+      if (!filter.clientId) {
+        return [];
+      }
+      return workforceCertificationRepository.listExpiring({
+        clientIds: [filter.clientId],
+        withinDays,
+        includeExpired,
+        verificationStatus: filter.verificationStatus,
+      });
+    }
+
+    const perms = await resolveActorPermissions(actor);
+    const hasReadPerm = READ_PERMISSIONS.some((p) => perms.includes(p));
+    if (!hasReadPerm) {
+      throw workforceCertificationForbiddenError(
+        'Actor is not authorized to read expiring workforce certifications.',
+      );
+    }
+
+    const accessibleClientIds =
+      await contextAccessService.getAccessibleClientIds(actorId);
+
+    if (filter.clientId && !accessibleClientIds.includes(filter.clientId)) {
+      throw buildingAccessDeniedError();
+    }
+
+    if (filter.workforceProfileId) {
+      const profile =
+        await workforceCertificationRepository.findWorkforceProfileClientContext(
+          filter.workforceProfileId,
+        );
+      if (!profile) {
+        throw workforceProfileNotFoundError();
+      }
+      if (!accessibleClientIds.includes(profile.clientId)) {
+        throw buildingAccessDeniedError();
+      }
+      if (filter.clientId && filter.clientId !== profile.clientId) {
+        throw workforceCertificationClientMismatchError();
+      }
+      return workforceCertificationRepository.listExpiring({
+        clientIds: [profile.clientId],
+        withinDays,
+        includeExpired,
+        workforceProfileId: filter.workforceProfileId,
+        verificationStatus: filter.verificationStatus,
+      });
+    }
+
+    const targetClientIds = filter.clientId
+      ? [filter.clientId]
+      : accessibleClientIds;
+
+    return workforceCertificationRepository.listExpiring({
+      clientIds: targetClientIds,
+      withinDays,
+      includeExpired,
+      verificationStatus: filter.verificationStatus,
+    });
   },
 
   async getWorkforceCertificationById(
@@ -335,6 +449,7 @@ export const workforceCertificationService = {
       workforceProfileId,
       actor,
     );
+    const actorId = resolveActorId(actor);
 
     const skillId = input.skillId ?? null;
     if (skillId !== null) {
@@ -343,7 +458,7 @@ export const workforceCertificationService = {
 
     const documentId = input.documentId ?? null;
     if (documentId !== null) {
-      await ensureDocumentInClient(documentId, profile.clientId);
+      await ensureDocumentInClient(documentId, profile.clientId, actor);
     }
 
     const fileReference =
@@ -359,9 +474,15 @@ export const workforceCertificationService = {
 
     const verificationStatus: WorkforceCertificationVerificationStatus =
       input.verificationStatus ?? 'PENDING_VERIFICATION';
+    if (verificationStatus === 'VERIFIED' && status !== 'ACTIVE') {
+      throw workforceCertificationStatusDateMismatchError();
+    }
+
     const verificationAudit = resolveVerificationAuditFields(
       verificationStatus,
       actor,
+      undefined,
+      profile.userId,
     );
 
     if (status === 'ACTIVE') {
@@ -393,7 +514,7 @@ export const workforceCertificationService = {
         documentId,
         fileReference,
         notes: input.notes ?? null,
-        createdByUserId: actor?.id ?? null,
+        createdByUserId: actorId,
       });
     } catch (err) {
       if (isPgUniqueViolation(err)) {
@@ -402,13 +523,13 @@ export const workforceCertificationService = {
       throw err;
     }
 
-    if (actor) {
+    if (actorId) {
       await recordOperationalEvent({
         clientId: profile.clientId,
         eventType: 'WORKFORCE_CERTIFICATION_CREATED',
         entityType: 'WORKFORCE_CERTIFICATION',
         entityId: created.id,
-        actorUserId: actor.id,
+        actorUserId: actorId,
         summary: `Workforce certification ${created.certificateNumber} created`,
         metadata: {
           workforceProfileId,
@@ -434,6 +555,7 @@ export const workforceCertificationService = {
       workforceProfileId,
       actor,
     );
+    const actorId = resolveActorId(actor);
 
     const existing =
       await workforceCertificationRepository.findByIdInWorkforceProfile(
@@ -454,7 +576,7 @@ export const workforceCertificationService = {
     }
 
     if (input.documentId !== undefined && input.documentId !== null) {
-      await ensureDocumentInClient(input.documentId, profile.clientId);
+      await ensureDocumentInClient(input.documentId, profile.clientId, actor);
     }
 
     const nextFileReference =
@@ -512,10 +634,14 @@ export const workforceCertificationService = {
     } = {};
 
     if (input.verificationStatus !== undefined) {
+      if (input.verificationStatus === 'VERIFIED' && nextStatus !== 'ACTIVE') {
+        throw workforceCertificationStatusDateMismatchError();
+      }
       const audit = resolveVerificationAuditFields(
         input.verificationStatus,
         actor,
         existing,
+        profile.userId,
       );
       verificationPatch = {
         verificationStatus: input.verificationStatus,
@@ -562,13 +688,13 @@ export const workforceCertificationService = {
       throw workforceCertificationNotFoundError();
     }
 
-    if (actor) {
+    if (actorId) {
       await recordOperationalEvent({
         clientId: profile.clientId,
         eventType: 'WORKFORCE_CERTIFICATION_UPDATED',
         entityType: 'WORKFORCE_CERTIFICATION',
         entityId: updated.id,
-        actorUserId: actor.id,
+        actorUserId: actorId,
         summary: `Workforce certification ${updated.certificateNumber} updated`,
         metadata: {
           workforceProfileId,
@@ -591,6 +717,7 @@ export const workforceCertificationService = {
       workforceProfileId,
       actor,
     );
+    const actorId = resolveActorId(actor);
 
     const existing =
       await workforceCertificationRepository.findByIdInWorkforceProfile(
@@ -601,9 +728,18 @@ export const workforceCertificationService = {
       throw workforceCertificationNotFoundError();
     }
 
+    if (
+      input.verificationStatus === 'VERIFIED' &&
+      (existing.status !== 'ACTIVE' || existing.isExpired)
+    ) {
+      throw workforceCertificationStatusDateMismatchError();
+    }
+
     const audit = resolveVerificationAuditFields(
       input.verificationStatus,
       actor,
+      undefined,
+      profile.userId,
     );
 
     const updated = await workforceCertificationRepository.update(
@@ -620,13 +756,13 @@ export const workforceCertificationService = {
       throw workforceCertificationNotFoundError();
     }
 
-    if (actor) {
+    if (actorId) {
       await recordOperationalEvent({
         clientId: profile.clientId,
         eventType: 'WORKFORCE_CERTIFICATION_VERIFIED',
         entityType: 'WORKFORCE_CERTIFICATION',
         entityId: updated.id,
-        actorUserId: actor.id,
+        actorUserId: actorId,
         summary: `Workforce certification ${updated.certificateNumber} verification status set to ${updated.verificationStatus}`,
         metadata: {
           workforceProfileId,
@@ -642,12 +778,26 @@ export const workforceCertificationService = {
   async deactivateWorkforceCertification(
     workforceProfileId: string,
     certificationId: string,
-    actor?: WorkforceCertificationActor,
+    actorOrInput?: WorkforceCertificationActor | DeactivateWorkforceCertificationInput,
+    maybeActor?: WorkforceCertificationActor,
   ): Promise<WorkforceCertificationRecord> {
+    let input: DeactivateWorkforceCertificationInput = {};
+    let actor: WorkforceCertificationActor | undefined = maybeActor;
+
+    if (
+      actorOrInput &&
+      ('id' in actorOrInput || 'userId' in actorOrInput)
+    ) {
+      actor = actorOrInput as WorkforceCertificationActor;
+    } else if (actorOrInput) {
+      input = actorOrInput as DeactivateWorkforceCertificationInput;
+    }
+
     const profile = await ensureWorkforceProfileAndManageAccess(
       workforceProfileId,
       actor,
     );
+    const actorId = resolveActorId(actor);
 
     const existing =
       await workforceCertificationRepository.findByIdInWorkforceProfile(
@@ -662,6 +812,7 @@ export const workforceCertificationService = {
       certificationId,
       {
         status: 'INACTIVE',
+        ...(input.notes !== undefined ? { notes: input.notes } : {}),
       },
     );
 
@@ -669,13 +820,13 @@ export const workforceCertificationService = {
       throw workforceCertificationNotFoundError();
     }
 
-    if (actor) {
+    if (actorId) {
       await recordOperationalEvent({
         clientId: profile.clientId,
         eventType: 'WORKFORCE_CERTIFICATION_DEACTIVATED',
         entityType: 'WORKFORCE_CERTIFICATION',
         entityId: updated.id,
-        actorUserId: actor.id,
+        actorUserId: actorId,
         summary: `Workforce certification ${updated.certificateNumber} deactivated`,
         metadata: {
           workforceProfileId,

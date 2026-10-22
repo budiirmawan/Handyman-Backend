@@ -62887,6 +62887,316 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------------------------
+  # CR-HM-WORKER-COMPETENCY-01 PART 02 — WORKFORCE CERTIFICATIONS
+  # (`src/modules/workforce-certifications`).
+  #
+  # Individual worker certifications with certificate number, issuing authority,
+  # issue/expiry window, verification lifecycle, and document reference.
+  # Reads require `skill.read`; mutations require `skill.manage`.
+  # ---------------------------------------------------------------------------
+
+  /workforce/certifications/expiring:
+    get:
+      operationId: listExpiringWorkforceCertifications
+      summary: List Workforce Certifications approaching expiry
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 02. Lists individual workforce
+        certifications expiring within `withinDays` (default 30, 1..365),
+        scoped to the caller's accessible Clients via `contextAccessService`.
+        Requires `skill.read`.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.read
+      parameters:
+        - name: withinDays
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+        - name: includeExpired
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: clientId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: workforceProfileId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: verificationStatus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PENDING_VERIFICATION, VERIFIED, REJECTED]
+      responses:
+        "200":
+          description: Expiring Workforce Certifications within the caller's accessible Clients.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceCertificationRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/certifications:
+    get:
+      operationId: listWorkforceCertifications
+      summary: List Workforce Certifications for a Workforce Profile
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 02. Lists individual certifications for
+        the given Workforce Profile. Requires `skill.read` and Client access.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVE, EXPIRED, INACTIVE]
+        - name: verificationStatus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PENDING_VERIFICATION, VERIFIED, REJECTED]
+        - name: skillId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: currentOnly
+          in: query
+          required: false
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Workforce Certifications for the profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceCertificationRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    post:
+      operationId: createWorkforceCertification
+      summary: Create an individual Workforce Certification
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 02. Creates a workforce certification
+        with required `certificateNumber`, `certificateName`,
+        `issuingAuthority`, and `issueDate`. Requires `skill.manage` and Client
+        access. Self-verification by the certificate owner is forbidden
+        (403 `WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN`).
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkforceCertificationRequest"
+      responses:
+        "201":
+          description: The created Workforce Certification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceCertificationRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workforce/{workforceId}/certifications/{certificationId}:
+    get:
+      operationId: getWorkforceCertification
+      summary: Get a Workforce Certification by ID
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 02. Reads a single workforce
+        certification belonging to the specified Workforce Profile. Requires
+        `skill.read` and Client access.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.read
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - name: certificationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The Workforce Certification record.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceCertificationRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+    patch:
+      operationId: updateWorkforceCertification
+      summary: Update a Workforce Certification
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 02. Updates metadata, validity window,
+        document link, or status of an existing Workforce Certification.
+        Requires `skill.manage` and Client access.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - name: certificationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkforceCertificationRequest"
+      responses:
+        "200":
+          description: The updated Workforce Certification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceCertificationRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workforce/{workforceId}/certifications/{certificationId}/verify:
+    post:
+      operationId: verifyWorkforceCertification
+      summary: Verify or reject a Workforce Certification
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 02. Sets verificationStatus to
+        `VERIFIED`, `REJECTED`, or `PENDING_VERIFICATION` and records verifier
+        audit fields. Requires `skill.manage` and Client access. The
+        certificate owner cannot verify their own certificate (403
+        `WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN`), and an expired
+        or inactive certificate cannot be marked `VERIFIED` (400
+        `WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH`).
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - name: certificationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyWorkforceCertificationRequest"
+      responses:
+        "200":
+          description: The verified or rejected Workforce Certification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceCertificationRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workforce/{workforceId}/certifications/{certificationId}/deactivate:
+    post:
+      operationId: deactivateWorkforceCertification
+      summary: Deactivate a Workforce Certification
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 02. Transitions the certification to
+        `INACTIVE` while preserving audit history. Requires `skill.manage` and
+        Client access.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: skill.manage
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - name: certificationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeactivateWorkforceCertificationRequest"
+      responses:
+        "200":
+          description: The deactivated Workforce Certification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceCertificationRecord"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   # ---------------------------------------------------------------------------
   # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 09 — BE-03E WORKFORCE SHIFT
   # ASSIGNMENT (`src/modules/workforce-shifts`).
@@ -129872,9 +130182,17 @@ components:
                   validUntil: { type: string, format: date-time, nullable: true }
         certificationsAndExpiry:
           type: object
-          required: [individualCertificateNumberModeled, skillValidityWindows, providerLicensesAndCertifications]
+          required:
+            - individualCertificateNumberModeled
+            - individualCertifications
+            - skillValidityWindows
+            - providerLicensesAndCertifications
           properties:
-            individualCertificateNumberModeled: { type: boolean, enum: [false] }
+            individualCertificateNumberModeled: { type: boolean, enum: [true] }
+            individualCertifications:
+              type: array
+              items:
+                $ref: "#/components/schemas/HandymanWorkerIndividualCertificationView"
             skillValidityWindows:
               type: array
               items:
@@ -129926,6 +130244,180 @@ components:
                   assignmentStatus: { type: string }
                   roleInJob: { type: string, enum: [PIC_PEKERJAAN, CREW_MEMBER] }
                   assignedAt: { type: string, format: date-time }
+    HandymanWorkerIndividualCertificationView:
+      type: object
+      additionalProperties: false
+      required:
+        - certificationId
+        - workforceProfileId
+        - skillId
+        - skillCode
+        - skillName
+        - certificateNumber
+        - certificateName
+        - issuingAuthority
+        - issueDate
+        - expiryDate
+        - status
+        - expiryStatus
+        - isExpired
+        - daysUntilExpiry
+        - isValidForRequirement
+        - verificationStatus
+        - verifiedByUserId
+        - verifiedAt
+        - hasDocument
+        - documentId
+        - fileReference
+        - documentReference
+      properties:
+        certificationId: { type: string, format: uuid }
+        workforceProfileId: { type: string, format: uuid }
+        skillId: { type: string, format: uuid, nullable: true }
+        skillCode: { type: string, nullable: true }
+        skillName: { type: string, nullable: true }
+        certificateNumber: { type: string }
+        certificateName: { type: string }
+        issuingAuthority: { type: string }
+        issueDate: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [ACTIVE, EXPIRED, INACTIVE] }
+        expiryStatus: { type: string, enum: [VALID, EXPIRED, NOT_APPLICABLE] }
+        isExpired: { type: boolean }
+        daysUntilExpiry: { type: integer, nullable: true }
+        isValidForRequirement: { type: boolean }
+        verificationStatus: { type: string, enum: [PENDING_VERIFICATION, VERIFIED, REJECTED] }
+        verifiedByUserId: { type: string, format: uuid, nullable: true }
+        verifiedAt: { type: string, format: date-time, nullable: true }
+        hasDocument: { type: boolean }
+        documentId: { type: string, format: uuid, nullable: true }
+        fileReference: { type: string, nullable: true }
+        documentReference:
+          type: object
+          nullable: true
+          required: [id, documentNumber, documentType, title, fileReference, status]
+          properties:
+            id: { type: string, format: uuid }
+            documentNumber: { type: string }
+            documentType: { type: string }
+            title: { type: string }
+            fileReference: { type: string }
+            status: { type: string }
+    WorkforceCertificationRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - clientId
+        - workforceProfileId
+        - skillId
+        - skill
+        - certificateNumber
+        - certificateName
+        - issuingAuthority
+        - issueDate
+        - expiryDate
+        - status
+        - expiryStatus
+        - isExpired
+        - daysUntilExpiry
+        - isValidForRequirement
+        - verificationStatus
+        - verifiedByUserId
+        - verifiedAt
+        - hasDocument
+        - documentId
+        - fileReference
+        - documentReference
+        - notes
+        - createdByUserId
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        workforceProfileId: { type: string, format: uuid }
+        skillId: { type: string, format: uuid, nullable: true }
+        skill:
+          type: object
+          nullable: true
+          required: [id, code, name, category, status]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name: { type: string }
+            category: { type: string }
+            status: { type: string }
+        certificateNumber: { type: string }
+        certificateName: { type: string }
+        issuingAuthority: { type: string }
+        issueDate: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [ACTIVE, EXPIRED, INACTIVE] }
+        expiryStatus: { type: string, enum: [VALID, EXPIRED, NOT_APPLICABLE] }
+        isExpired: { type: boolean }
+        daysUntilExpiry: { type: integer, nullable: true }
+        isValidForRequirement: { type: boolean }
+        verificationStatus: { type: string, enum: [PENDING_VERIFICATION, VERIFIED, REJECTED] }
+        verifiedByUserId: { type: string, format: uuid, nullable: true }
+        verifiedAt: { type: string, format: date-time, nullable: true }
+        hasDocument: { type: boolean }
+        documentId: { type: string, format: uuid, nullable: true }
+        fileReference: { type: string, nullable: true }
+        documentReference:
+          type: object
+          nullable: true
+          required: [id, documentNumber, documentType, title, fileReference, status]
+          properties:
+            id: { type: string, format: uuid }
+            documentNumber: { type: string }
+            documentType: { type: string }
+            title: { type: string }
+            fileReference: { type: string }
+            status: { type: string }
+        notes: { type: string, nullable: true }
+        createdByUserId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateWorkforceCertificationRequest:
+      type: object
+      required: [certificateNumber, certificateName, issuingAuthority, issueDate]
+      properties:
+        skillId: { type: string, format: uuid, nullable: true }
+        certificateNumber: { type: string }
+        certificateName: { type: string }
+        issuingAuthority: { type: string }
+        issueDate: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [ACTIVE, EXPIRED, INACTIVE] }
+        verificationStatus: { type: string, enum: [PENDING_VERIFICATION, VERIFIED, REJECTED] }
+        documentId: { type: string, format: uuid, nullable: true }
+        fileReference: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+    UpdateWorkforceCertificationRequest:
+      type: object
+      properties:
+        skillId: { type: string, format: uuid, nullable: true }
+        certificateNumber: { type: string }
+        certificateName: { type: string }
+        issuingAuthority: { type: string }
+        issueDate: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [ACTIVE, EXPIRED, INACTIVE] }
+        verificationStatus: { type: string, enum: [PENDING_VERIFICATION, VERIFIED, REJECTED] }
+        documentId: { type: string, format: uuid, nullable: true }
+        fileReference: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+    VerifyWorkforceCertificationRequest:
+      type: object
+      required: [verificationStatus]
+      properties:
+        verificationStatus: { type: string, enum: [PENDING_VERIFICATION, VERIFIED, REJECTED] }
+        notes: { type: string, nullable: true }
+    DeactivateWorkforceCertificationRequest:
+      type: object
+      properties:
+        notes: { type: string, nullable: true }
     HandymanWorkerProfileResult:
       type: object
       additionalProperties: false

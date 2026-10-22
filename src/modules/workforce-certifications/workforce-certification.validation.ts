@@ -4,6 +4,8 @@ import {
   WORKFORCE_CERTIFICATION_STATUSES,
   WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES,
   type CreateWorkforceCertificationInput,
+  type DeactivateWorkforceCertificationInput,
+  type ListExpiringWorkforceCertificationsFilter,
   type ListWorkforceCertificationsFilter,
   type UpdateWorkforceCertificationInput,
   type VerifyWorkforceCertificationInput,
@@ -494,10 +496,12 @@ export function validateVerifyWorkforceCertificationInput(
   const payload = body as Record<string, unknown>;
   const details: string[] = [];
 
+  const rawVerificationStatus = payload.verificationStatus ?? payload.decision;
+
   if (
-    typeof payload.verificationStatus !== 'string' ||
+    typeof rawVerificationStatus !== 'string' ||
     !WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.includes(
-      payload.verificationStatus as WorkforceCertificationVerificationStatus,
+      rawVerificationStatus as WorkforceCertificationVerificationStatus,
     )
   ) {
     details.push(
@@ -527,9 +531,44 @@ export function validateVerifyWorkforceCertificationInput(
 
   return {
     verificationStatus:
-      payload.verificationStatus as WorkforceCertificationVerificationStatus,
+      rawVerificationStatus as WorkforceCertificationVerificationStatus,
     ...(notes !== undefined ? { notes } : {}),
   };
+}
+
+export function validateDeactivateWorkforceCertificationInput(
+  body: unknown,
+): DeactivateWorkforceCertificationInput {
+  if (body === undefined || body === null) {
+    return {};
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    throw AppError.validation('Request body must be a JSON object.');
+  }
+  const payload = body as Record<string, unknown>;
+  const details: string[] = [];
+  let notes: string | null | undefined;
+
+  if (payload.notes !== undefined) {
+    if (payload.notes === null) {
+      notes = null;
+    } else if (typeof payload.notes !== 'string') {
+      details.push('notes must be a string or null.');
+    } else {
+      const trimmed = payload.notes.trim();
+      if (trimmed.length > 2000) {
+        details.push('notes must be at most 2000 characters.');
+      } else {
+        notes = trimmed.length > 0 ? trimmed : null;
+      }
+    }
+  }
+
+  if (details.length > 0) {
+    throw AppError.validation('Request validation failed.', details);
+  }
+
+  return notes !== undefined ? { notes } : {};
 }
 
 export function validateListWorkforceCertificationsFilter(
@@ -595,6 +634,94 @@ export function validateListWorkforceCertificationsFilter(
       filter.currentOnly = false;
     } else {
       details.push('currentOnly must be a boolean.');
+    }
+  }
+
+  if (details.length > 0) {
+    throw AppError.validation('Request validation failed.', details);
+  }
+
+  return filter;
+}
+
+export function validateListExpiringWorkforceCertificationsFilter(
+  query: unknown,
+): ListExpiringWorkforceCertificationsFilter {
+  if (!query || typeof query !== 'object' || Array.isArray(query)) {
+    return { withinDays: 30, includeExpired: false };
+  }
+
+  const params = query as Record<string, unknown>;
+  const details: string[] = [];
+  const filter: ListExpiringWorkforceCertificationsFilter = {
+    withinDays: 30,
+    includeExpired: false,
+  };
+
+  const rawWithinDays = params.withinDays ?? params.days;
+  if (rawWithinDays !== undefined) {
+    const parsed =
+      typeof rawWithinDays === 'number'
+        ? rawWithinDays
+        : typeof rawWithinDays === 'string' && /^\d+$/.test(rawWithinDays)
+          ? Number.parseInt(rawWithinDays, 10)
+          : Number.NaN;
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 365) {
+      details.push('withinDays must be an integer between 1 and 365.');
+    } else {
+      filter.withinDays = parsed;
+    }
+  }
+
+  if (params.includeExpired !== undefined) {
+    if (params.includeExpired === true || params.includeExpired === 'true') {
+      filter.includeExpired = true;
+    } else if (
+      params.includeExpired === false ||
+      params.includeExpired === 'false'
+    ) {
+      filter.includeExpired = false;
+    } else {
+      details.push('includeExpired must be a boolean.');
+    }
+  }
+
+  if (params.clientId !== undefined) {
+    if (
+      typeof params.clientId !== 'string' ||
+      !UUID_PATTERN.test(params.clientId)
+    ) {
+      details.push('clientId must be a valid UUID.');
+    } else {
+      filter.clientId = params.clientId;
+    }
+  }
+
+  const rawWorkforceProfileId = params.workforceProfileId ?? params.workforceId;
+  if (rawWorkforceProfileId !== undefined) {
+    if (
+      typeof rawWorkforceProfileId !== 'string' ||
+      !UUID_PATTERN.test(rawWorkforceProfileId)
+    ) {
+      details.push('workforceProfileId must be a valid UUID.');
+    } else {
+      filter.workforceProfileId = rawWorkforceProfileId;
+    }
+  }
+
+  if (params.verificationStatus !== undefined) {
+    if (
+      typeof params.verificationStatus !== 'string' ||
+      !WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.includes(
+        params.verificationStatus as WorkforceCertificationVerificationStatus,
+      )
+    ) {
+      details.push(
+        `verificationStatus must be one of: ${WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.join(', ')}.`,
+      );
+    } else {
+      filter.verificationStatus =
+        params.verificationStatus as WorkforceCertificationVerificationStatus;
     }
   }
 

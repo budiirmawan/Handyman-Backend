@@ -26,7 +26,8 @@ export type WorkforceCertificationExpiryStatus =
   (typeof WORKFORCE_CERTIFICATION_EXPIRY_STATUSES)[number];
 
 export type WorkforceCertificationActor = {
-  id: string;
+  id?: string;
+  userId?: string;
   email?: string;
   displayName?: string | null;
   status?: string;
@@ -64,9 +65,13 @@ export type WorkforceCertificationRecord = {
   expiryDate: string | null;
   status: WorkforceCertificationStatus;
   expiryStatus: WorkforceCertificationExpiryStatus;
+  isExpired: boolean;
+  daysUntilExpiry: number | null;
+  isValidForRequirement: boolean;
   verificationStatus: WorkforceCertificationVerificationStatus;
   verifiedByUserId: string | null;
   verifiedAt: string | null;
+  hasDocument: boolean;
   documentId: string | null;
   fileReference: string | null;
   documentReference: WorkforceCertificationDocumentSummary | null;
@@ -109,9 +114,21 @@ export type VerifyWorkforceCertificationInput = {
   notes?: string | null;
 };
 
+export type DeactivateWorkforceCertificationInput = {
+  notes?: string | null;
+};
+
 export type ListWorkforceCertificationsFilter = {
   status?: WorkforceCertificationStatus;
   verificationStatus?: WorkforceCertificationVerificationStatus;
   skillId?: string;
   currentOnly?: boolean;
+};
+
+export type ListExpiringWorkforceCertificationsFilter = {
+  withinDays?: number;
+  includeExpired?: boolean;
+  clientId?: string;
+  workforceProfileId?: string;
+  verificationStatus?: WorkforceCertificationVerificationStatus;
 };

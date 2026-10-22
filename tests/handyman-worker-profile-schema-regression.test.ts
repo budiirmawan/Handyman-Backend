@@ -385,10 +385,13 @@ describe('CR-HM-WORKER-PROFILE-FIX-01: worker profile over the canonical schema'
     );
     assert.ok(windows.some((w: { isExpired: boolean }) => w.isExpired === true));
 
-    // Certifications — optional, provider-scoped.
+    // Certifications — optional, provider-scoped + individual worker certifications.
     assert.equal(
       profile.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
+    );
+    assert.ok(
+      Array.isArray(profile.certificationsAndExpiry.individualCertifications),
     );
     assert.equal(
       profile.certificationsAndExpiry.providerLicensesAndCertifications.length,
@@ -429,6 +432,10 @@ describe('CR-HM-WORKER-PROFILE-FIX-01: worker profile over the canonical schema'
     assert.deepEqual(profile.skillsAndCategories.effectiveSkills, []);
     assert.deepEqual(
       profile.certificationsAndExpiry.skillValidityWindows,
+      [],
+    );
+    assert.deepEqual(
+      profile.certificationsAndExpiry.individualCertifications,
       [],
     );
     // The provider certification is still projected for a worker with no

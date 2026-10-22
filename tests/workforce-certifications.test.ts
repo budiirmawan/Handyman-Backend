@@ -4,6 +4,7 @@ import { after, before, describe, it, type TestContext } from 'node:test';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
+import { credentialService, sessionService } from '../src/modules/auth';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import {
@@ -14,6 +15,11 @@ import {
   readHandymanWorkerProfileByContextId,
   readMyHandymanWorkerProfileProjection,
 } from '../src/modules/handyman-worker-profile/handyman-worker-profile.service';
+import {
+  permissionRepository,
+  permissionService,
+} from '../src/modules/permissions';
+import { roleService } from '../src/modules/roles';
 import { skillService } from '../src/modules/skills';
 import { userService } from '../src/modules/users';
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
@@ -27,7 +33,7 @@ import {
   type WorkforceCertificationActor,
 } from '../src/modules/workforce-certifications';
 import { AppError, ERROR_CODES } from '../src/shared/errors';
-import { createAdminUser } from './helpers/access';
+import { createAdminUser, createOwnerUser } from './helpers/access';
 import {
   startEmbeddedTestDatabase,
   type EmbeddedTestDatabase,
@@ -37,6 +43,7 @@ import {
   initHandymanFixtures,
   realmFixture,
 } from './helpers/handyman-fixtures';
+import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
 const EMBEDDED_DIR = '/tmp/hm-workforce-certifications-pg';
@@ -294,7 +301,11 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
     );
     assert.equal(
       mobileProfile.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
+    );
+    assert.deepEqual(
+      mobileProfile.certificationsAndExpiry.individualCertifications,
+      [],
     );
     assert.ok(
       Array.isArray(mobileProfile.certificationsAndExpiry.skillValidityWindows),
@@ -872,7 +883,10 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
     );
     assert.equal(
       leadProfile.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
+    );
+    assert.ok(
+      leadProfile.certificationsAndExpiry.individualCertifications.length >= 1,
     );
 
     const helperProfileByLead = await readHandymanWorkerProfileByContextId(
@@ -882,6 +896,674 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
     assert.equal(
       helperProfileByLead.workerIdentity.workforceProfileId,
       helperWorkforceProfileIdA,
+    );
+  });
+});
+
+describe('CR-HM-WORKER-COMPETENCY-01 PART 02 — REST API & Worker Profile Integration', () => {
+  let managerTokenA = '';
+  let readOnlyTokenA = '';
+  let noPermTokenA = '';
+  let leadTokenA = '';
+  let helperTokenA = '';
+  let platformAdminToken = '';
+  let uncertifiedUserTokenA = '';
+  let uncertifiedWorkforceProfileIdA = '';
+  let uncertifiedWorkerContextIdA = '';
+
+  async function assignPermissionsToUser(
+    userId: string,
+    codes: string[],
+  ): Promise<void> {
+    const role = await roleService.createRole({
+      code: `ROLE_${suffix()}`,
+      name: `Role ${suffix()}`,
+    });
+    for (const code of codes) {
+      let perm = await permissionRepository.findByCode(code);
+      if (!perm) {
+        perm = await permissionRepository.create({
+          code,
+          name: code,
+        });
+      }
+      await permissionService.assignPermissionToRole(role.id, perm.id);
+    }
+    await roleService.assignRoleToUser(userId, role.id);
+  }
+
+  async function issueSessionToken(userId: string): Promise<string> {
+    await credentialService
+      .createInitialCredential({
+        userId,
+        password: 'TestPassword123!',
+      })
+      .catch(() => {
+        // credential may already exist
+      });
+    const session = await sessionService.createSessionForUser(userId);
+    return session.sessionToken;
+  }
+
+  before(async () => {
+    if (!database || !pool) return;
+
+    // 1. Manager in Client A with skill.read + skill.manage
+    await assignPermissionsToUser(managerUserIdA, [
+      'skill.read',
+      'skill.manage',
+    ]);
+    managerTokenA = await issueSessionToken(managerUserIdA);
+
+    // 2. Read-only user in Client A with skill.read only
+    const readOnlyUser = await userService.createUser({
+      email: `readonly-a-${suffix().toLowerCase()}@example.com`,
+      displayName: 'Read Only User A',
+    });
+    await buildingAssignmentService.createAssignment(readOnlyUser.id, {
+      buildingId: realmA.building.id,
+    });
+    await assignPermissionsToUser(readOnlyUser.id, ['skill.read']);
+    readOnlyTokenA = await issueSessionToken(readOnlyUser.id);
+
+    // 3. Authenticated user in Client A with no skill permissions
+    const noPermUser = await userService.createUser({
+      email: `noperm-a-${suffix().toLowerCase()}@example.com`,
+      displayName: 'No Perm User A',
+    });
+    await buildingAssignmentService.createAssignment(noPermUser.id, {
+      buildingId: realmA.building.id,
+    });
+    noPermTokenA = await issueSessionToken(noPermUser.id);
+
+    // 4. Lead worker & helper worker sessions in Client A
+    // Grant skill.read + skill.manage to leadUser to also test that even a user
+    // holding skill.manage is forbidden from self-verifying their own certificate!
+    await assignPermissionsToUser(crewA.leadUser.id, [
+      'skill.read',
+      'skill.manage',
+    ]);
+    leadTokenA = await issueSessionToken(crewA.leadUser.id);
+    helperTokenA = await issueSessionToken(helperUserIdA);
+
+    // 5. Uncertified worker in Client A (0 certificates) for mobile profile HTTP test
+    const uncertifiedUser = await userService.createUser({
+      email: `uncert-a-${suffix().toLowerCase()}@example.com`,
+      displayName: 'Uncertified Worker A',
+    });
+    const uncertifiedProfile = await workforceService.createWorkforceProfile({
+      organizationId: realmA.organization.id,
+      departmentId: realmA.department.id,
+      positionId: realmA.position.id,
+      employeeCode: `UNC_${suffix()}`,
+      fullName: 'Uncertified Worker A',
+      workforceType: 'EXTERNAL',
+      userId: uncertifiedUser.id,
+    });
+    uncertifiedWorkforceProfileIdA = uncertifiedProfile.id;
+    await assignBuildingToWorkforce({
+      workforceProfileId: uncertifiedProfile.id,
+      buildingId: realmA.building.id,
+    });
+    await vendorWorkforceService.createVendorWorkforceBinding({
+      vendorId: crewA.vendor.id,
+      workforceProfileId: uncertifiedProfile.id,
+      vendorPersonnelCode: `VP_UNC_${suffix()}`,
+    });
+    const uncertifiedContext =
+      await handymanWorkerContextService.createHandymanWorkerContext(
+        {
+          handymanProviderContextId: crewA.providerContext.id,
+          workforceProfileId: uncertifiedProfile.id,
+        },
+        adminUserId,
+      );
+    uncertifiedWorkerContextIdA = uncertifiedContext.id;
+    await addHandymanCrewMember(
+      {
+        handymanCrewId: crewA.crew.id,
+        handymanWorkerContextId: uncertifiedContext.id,
+      },
+      adminUserId,
+    );
+    await buildingAssignmentService.createAssignment(uncertifiedUser.id, {
+      buildingId: realmA.building.id,
+    });
+    uncertifiedUserTokenA = await issueSessionToken(uncertifiedUser.id);
+
+    // 6. PLATFORM_ADMIN without any worker context
+    const owner = await createOwnerUser();
+    platformAdminToken = owner.token;
+  });
+
+  it('supports full HTTP CRUD, verify/reject, self-verification block, expired-verification block, and deactivate', async (t) => {
+    if (!ready(t)) return;
+
+    const certNumber = `CERT-HTTP-${suffix()}`;
+    const expiringSoonDate = new Date(
+      Date.now() + 10 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    // 1. Create certificate via POST /api/v1/workforce/:workforceId/certifications
+    const createRes = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        skillId: skillIdA,
+        certificateNumber: certNumber,
+        certificateName: 'Sertifikat Kompetensi K3 Teknisi Listrik',
+        issuingAuthority: 'BNSP / Kemnaker RI',
+        issueDate: ISSUE_DATE,
+        expiryDate: expiringSoonDate,
+        documentId: documentIdA,
+        notes: 'Dokumen asli telah diperiksa saat onboarding.',
+      });
+    assert.equal(
+      createRes.status,
+      201,
+      `expected 201, got ${createRes.status}: ${JSON.stringify(createRes.body)}`,
+    );
+    const created = createRes.body.data;
+    assert.ok(created.id);
+    assert.equal(created.workforceProfileId, crewA.profile.id);
+    assert.equal(created.clientId, realmA.client.id);
+    assert.equal(created.certificateNumber, certNumber);
+    assert.equal(created.status, 'ACTIVE');
+    assert.equal(created.expiryStatus, 'VALID');
+    assert.equal(created.isExpired, false);
+    assert.ok(
+      typeof created.daysUntilExpiry === 'number' &&
+        created.daysUntilExpiry >= 9 &&
+        created.daysUntilExpiry <= 11,
+    );
+    assert.equal(created.verificationStatus, 'PENDING_VERIFICATION');
+    assert.equal(created.isValidForRequirement, false);
+    assert.equal(created.hasDocument, true);
+    assert.equal(created.documentId, documentIdA);
+    assert.ok(created.documentReference.documentNumber.startsWith('DOC-A-'));
+
+    // 2. Missing certificateNumber is rejected with 400 VALIDATION_ERROR
+    const missingNumRes = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        certificateName: 'No Number Cert',
+        issuingAuthority: 'BNSP',
+        issueDate: ISSUE_DATE,
+      });
+    assert.equal(missingNumRes.status, 400);
+    assert.equal(missingNumRes.body.error.code, 'VALIDATION_ERROR');
+
+    // 3. Duplicate ACTIVE certificateNumber on same worker returns 409
+    const dupRes = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        certificateNumber: certNumber,
+        certificateName: 'Duplicate Active Cert',
+        issuingAuthority: 'BNSP',
+        issueDate: ISSUE_DATE,
+      });
+    assert.equal(dupRes.status, 409);
+    assert.equal(
+      dupRes.body.error.code,
+      ERROR_CODES.WORKFORCE_CERTIFICATION_ALREADY_ACTIVE,
+    );
+
+    // 4. List certificates via GET /api/v1/workforce/:workforceId/certifications
+    const listRes = await api()
+      .get(
+        `/api/v1/workforce/${crewA.profile.id}/certifications?status=ACTIVE&skillId=${skillIdA}`,
+      )
+      .set('Authorization', `Bearer ${readOnlyTokenA}`);
+    assert.equal(listRes.status, 200);
+    assert.ok(
+      listRes.body.data.some(
+        (c: { id: string }) => c.id === created.id,
+      ),
+    );
+
+    // 5. Get certificate detail via GET /api/v1/workforce/:workforceId/certifications/:certificationId
+    const detailRes = await api()
+      .get(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${created.id}`,
+      )
+      .set('Authorization', `Bearer ${readOnlyTokenA}`);
+    assert.equal(detailRes.status, 200);
+    assert.equal(detailRes.body.data.id, created.id);
+    assert.equal(detailRes.body.data.certificateNumber, certNumber);
+
+    // 6. Update certificate metadata via PATCH /api/v1/workforce/:workforceId/certifications/:certificationId
+    const patchRes = await api()
+      .patch(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${created.id}`,
+      )
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        certificateName: 'Sertifikat Kompetensi K3 Teknisi Listrik (Level Madya)',
+        notes: 'Diperbarui ke kualifikasi Level Madya.',
+      });
+    assert.equal(patchRes.status, 200);
+    assert.equal(
+      patchRes.body.data.certificateName,
+      'Sertifikat Kompetensi K3 Teknisi Listrik (Level Madya)',
+    );
+    assert.equal(
+      patchRes.body.data.notes,
+      'Diperbarui ke kualifikasi Level Madya.',
+    );
+
+    // 7. Self-verification is forbidden (403 WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN)
+    // even when the certificate owner holds `skill.manage`!
+    const selfVerifyRes = await api()
+      .post(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${created.id}/verify`,
+      )
+      .set('Authorization', `Bearer ${leadTokenA}`)
+      .send({
+        verificationStatus: 'VERIFIED',
+        notes: 'Mencoba verifikasi sertifikat milik sendiri.',
+      });
+    assert.equal(selfVerifyRes.status, 403);
+    assert.equal(
+      selfVerifyRes.body.error.code,
+      ERROR_CODES.WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN,
+    );
+
+    // Self-verification via create or patch is also forbidden
+    const selfCreateVerifiedRes = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${leadTokenA}`)
+      .send({
+        certificateNumber: `CERT-SELF-${suffix()}`,
+        certificateName: 'Self Verified Create',
+        issuingAuthority: 'BNSP',
+        issueDate: ISSUE_DATE,
+        verificationStatus: 'VERIFIED',
+      });
+    assert.equal(selfCreateVerifiedRes.status, 403);
+    assert.equal(
+      selfCreateVerifiedRes.body.error.code,
+      ERROR_CODES.WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN,
+    );
+
+    // 8. Authorized manager verifies the certificate via POST .../verify
+    const verifyRes = await api()
+      .post(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${created.id}/verify`,
+      )
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        verificationStatus: 'VERIFIED',
+        notes: 'Diverifikasi oleh Workforce Manager A.',
+      });
+    assert.equal(verifyRes.status, 200);
+    assert.equal(verifyRes.body.data.verificationStatus, 'VERIFIED');
+    assert.equal(verifyRes.body.data.verifiedByUserId, managerUserIdA);
+    assert.ok(typeof verifyRes.body.data.verifiedAt === 'string');
+    assert.equal(verifyRes.body.data.isValidForRequirement, true);
+
+    // 9. Authorized manager can also reject a certificate via POST .../verify
+    const rejectRes = await api()
+      .post(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${created.id}/verify`,
+      )
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        verificationStatus: 'REJECTED',
+        notes: 'Stempel penerbit perlu konfirmasi ulang.',
+      });
+    assert.equal(rejectRes.status, 200);
+    assert.equal(rejectRes.body.data.verificationStatus, 'REJECTED');
+    assert.equal(rejectRes.body.data.isValidForRequirement, false);
+
+    // Re-verify back to VERIFIED so it remains active & verified for subsequent checks
+    const reVerifyRes = await api()
+      .post(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${created.id}/verify`,
+      )
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        verificationStatus: 'VERIFIED',
+        notes: 'Konfirmasi penerbit selesai, valid.',
+      });
+    assert.equal(reVerifyRes.status, 200);
+    assert.equal(reVerifyRes.body.data.isValidForRequirement, true);
+
+    // 10. Expired certificate cannot be marked VERIFIED and is never valid for requirements
+    const expiredCreateRes = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        certificateNumber: `CERT-HTTP-EXP-${suffix()}`,
+        certificateName: 'Sertifikat Lama Kedaluwarsa',
+        issuingAuthority: 'BNSP',
+        issueDate: EARLY_ISSUE_DATE,
+        expiryDate: PAST_DATE,
+      });
+    assert.equal(expiredCreateRes.status, 201);
+    assert.equal(expiredCreateRes.body.data.status, 'EXPIRED');
+    assert.equal(expiredCreateRes.body.data.isExpired, true);
+    assert.equal(expiredCreateRes.body.data.isValidForRequirement, false);
+
+    const verifyExpiredRes = await api()
+      .post(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${expiredCreateRes.body.data.id}/verify`,
+      )
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        verificationStatus: 'VERIFIED',
+      });
+    assert.equal(verifyExpiredRes.status, 400);
+    assert.equal(
+      verifyExpiredRes.body.error.code,
+      ERROR_CODES.WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH,
+    );
+
+    // 11. Deactivate certificate via POST /api/v1/workforce/:workforceId/certifications/:certificationId/deactivate
+    const toDeactivateRes = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        certificateNumber: `CERT-DEACT-${suffix()}`,
+        certificateName: 'Sertifikat Sementara',
+        issuingAuthority: 'BNSP',
+        issueDate: ISSUE_DATE,
+      });
+    assert.equal(toDeactivateRes.status, 201);
+
+    const deactivateRes = await api()
+      .post(
+        `/api/v1/workforce/${crewA.profile.id}/certifications/${toDeactivateRes.body.data.id}/deactivate`,
+      )
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        notes: 'Sertifikat digantikan oleh sertifikat baru.',
+      });
+    assert.equal(deactivateRes.status, 200);
+    assert.equal(deactivateRes.body.data.status, 'INACTIVE');
+    assert.equal(deactivateRes.body.data.expiryStatus, 'NOT_APPLICABLE');
+    assert.equal(deactivateRes.body.data.isValidForRequirement, false);
+    assert.equal(
+      deactivateRes.body.data.notes,
+      'Sertifikat digantikan oleh sertifikat baru.',
+    );
+
+    // Verify audit events were recorded in operational_events
+    const auditEvents = await pool!.query<{ event_type: string }>(
+      `SELECT event_type
+         FROM operational_events
+        WHERE entity_type = 'WORKFORCE_CERTIFICATION'
+          AND entity_id IN ($1, $2)`,
+      [created.id, toDeactivateRes.body.data.id],
+    );
+    const eventTypes = new Set(auditEvents.rows.map((r) => r.event_type));
+    assert.ok(eventTypes.has('WORKFORCE_CERTIFICATION_CREATED'));
+    assert.ok(eventTypes.has('WORKFORCE_CERTIFICATION_UPDATED'));
+    assert.ok(eventTypes.has('WORKFORCE_CERTIFICATION_VERIFIED'));
+    assert.ok(eventTypes.has('WORKFORCE_CERTIFICATION_DEACTIVATED'));
+  });
+
+  it('lists expiring certificates via GET /api/v1/workforce/certifications/expiring with strict Client isolation', async (t) => {
+    if (!ready(t)) return;
+
+    // Create an expiring certificate in Client B (via owner/platform admin or direct service)
+    const expiringBDate = new Date(
+      Date.now() + 7 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const certB =
+      await workforceCertificationService.createWorkforceCertification(
+        crewB.profile.id,
+        {
+          certificateNumber: `CERT-B-EXP-${suffix()}`,
+          certificateName: 'Client B Expiring Cert',
+          issuingAuthority: 'BNSP',
+          issueDate: ISSUE_DATE,
+          expiryDate: expiringBDate,
+        },
+      );
+
+    // Client A read-only user queries GET /api/v1/workforce/certifications/expiring?withinDays=30
+    const expiringResA = await api()
+      .get('/api/v1/workforce/certifications/expiring?withinDays=30')
+      .set('Authorization', `Bearer ${readOnlyTokenA}`);
+    assert.equal(expiringResA.status, 200);
+    assert.ok(Array.isArray(expiringResA.body.data));
+    assert.ok(expiringResA.body.data.length >= 1);
+    // Every returned certificate must belong to Client A — never Client B!
+    for (const c of expiringResA.body.data) {
+      assert.equal(c.clientId, realmA.client.id);
+      assert.notEqual(c.id, certB.id);
+      assert.equal(c.status, 'ACTIVE');
+      assert.equal(c.isExpired, false);
+    }
+
+    // Including already expired certificates via includeExpired=true
+    const withExpiredRes = await api()
+      .get(
+        `/api/v1/workforce/certifications/expiring?withinDays=30&includeExpired=true&workforceProfileId=${crewA.profile.id}`,
+      )
+      .set('Authorization', `Bearer ${readOnlyTokenA}`);
+    assert.equal(withExpiredRes.status, 200);
+    assert.ok(
+      withExpiredRes.body.data.some(
+        (c: { status: string }) => c.status === 'EXPIRED',
+      ),
+    );
+
+    // Client A user explicitly filtering by Client B's clientId is rejected with 403 BUILDING_ACCESS_DENIED
+    const crossClientFilterRes = await api()
+      .get(
+        `/api/v1/workforce/certifications/expiring?clientId=${realmB.client.id}`,
+      )
+      .set('Authorization', `Bearer ${readOnlyTokenA}`);
+    assert.equal(crossClientFilterRes.status, 403);
+    assert.equal(
+      crossClientFilterRes.body.error.code,
+      ERROR_CODES.BUILDING_ACCESS_DENIED,
+    );
+
+    // Client A user explicitly filtering by Client B's workforceProfileId is rejected with 403 BUILDING_ACCESS_DENIED
+    const crossProfileFilterRes = await api()
+      .get(
+        `/api/v1/workforce/certifications/expiring?workforceProfileId=${crewB.profile.id}`,
+      )
+      .set('Authorization', `Bearer ${readOnlyTokenA}`);
+    assert.equal(crossProfileFilterRes.status, 403);
+    assert.equal(
+      crossProfileFilterRes.body.error.code,
+      ERROR_CODES.BUILDING_ACCESS_DENIED,
+    );
+  });
+
+  it('enforces HTTP authentication, RBAC permissions, and cross-client isolation on all routes', async (t) => {
+    if (!ready(t)) return;
+
+    // 1. Unauthenticated -> 401
+    const unauthRes = await api().get(
+      `/api/v1/workforce/${crewA.profile.id}/certifications`,
+    );
+    assert.equal(unauthRes.status, 401);
+
+    // 2. Authenticated user without skill.read -> 403 on GET routes
+    const noPermList = await api()
+      .get(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${noPermTokenA}`);
+    assert.equal(noPermList.status, 403);
+
+    const noPermExpiring = await api()
+      .get('/api/v1/workforce/certifications/expiring')
+      .set('Authorization', `Bearer ${noPermTokenA}`);
+    assert.equal(noPermExpiring.status, 403);
+
+    // 3. Authenticated user with skill.read only -> 403 on POST/PATCH/verify/deactivate
+    const readOnlyCreate = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${readOnlyTokenA}`)
+      .send({
+        certificateNumber: `CERT-RO-${suffix()}`,
+        certificateName: 'Read Only Attempt',
+        issuingAuthority: 'BNSP',
+        issueDate: ISSUE_DATE,
+      });
+    assert.equal(readOnlyCreate.status, 403);
+
+    // 4. Manager in Client A (holding skill.read + skill.manage) cannot read or mutate Client B workforce certifications
+    const crossClientRead = await api()
+      .get(`/api/v1/workforce/${crewB.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`);
+    assert.equal(crossClientRead.status, 403);
+    assert.equal(
+      crossClientRead.body.error.code,
+      ERROR_CODES.BUILDING_ACCESS_DENIED,
+    );
+
+    const crossClientCreate = await api()
+      .post(`/api/v1/workforce/${crewB.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        certificateNumber: `CERT-XB-${suffix()}`,
+        certificateName: 'Cross Client Create',
+        issuingAuthority: 'BNSP',
+        issueDate: ISSUE_DATE,
+      });
+    assert.equal(crossClientCreate.status, 403);
+    assert.equal(
+      crossClientCreate.body.error.code,
+      ERROR_CODES.BUILDING_ACCESS_DENIED,
+    );
+
+    // 5. Manager in Client A cannot link a Client B document to a Client A certification
+    const crossDocCreate = await api()
+      .post(`/api/v1/workforce/${crewA.profile.id}/certifications`)
+      .set('Authorization', `Bearer ${managerTokenA}`)
+      .send({
+        certificateNumber: `CERT-XDOC-${suffix()}`,
+        certificateName: 'Cross Client Document Link',
+        issuingAuthority: 'BNSP',
+        issueDate: ISSUE_DATE,
+        documentId: documentIdB,
+      });
+    assert.equal(crossDocCreate.status, 409);
+    assert.equal(
+      crossDocCreate.body.error.code,
+      ERROR_CODES.WORKFORCE_CERTIFICATION_DOCUMENT_MISMATCH,
+    );
+  });
+
+  it('integrates individual certifications into mobile worker profile endpoints while keeping uncertified workers and PLATFORM_ADMIN safe', async (t) => {
+    if (!ready(t)) return;
+
+    // 1. Certified worker (Lead Worker A) calls GET /api/v1/handyman/field/me/profile
+    const meRes = await api()
+      .get('/api/v1/handyman/field/me/profile')
+      .set('Authorization', `Bearer ${leadTokenA}`);
+    assert.equal(
+      meRes.status,
+      200,
+      `expected 200, got ${meRes.status}: ${JSON.stringify(meRes.body)}`,
+    );
+    const leadProfile = meRes.body.data.profile;
+    assert.equal(
+      leadProfile.certificationsAndExpiry.individualCertificateNumberModeled,
+      true,
+    );
+    assert.ok(
+      Array.isArray(
+        leadProfile.certificationsAndExpiry.individualCertifications,
+      ),
+    );
+    assert.ok(
+      leadProfile.certificationsAndExpiry.individualCertifications.length >= 1,
+    );
+    // Verify required fields on individualCertifications entry
+    const verifiedCert =
+      leadProfile.certificationsAndExpiry.individualCertifications.find(
+        (c: { verificationStatus: string; status: string }) =>
+          c.status === 'ACTIVE' && c.verificationStatus === 'VERIFIED',
+      );
+    assert.ok(verifiedCert, 'expected at least one ACTIVE VERIFIED cert');
+    assert.equal(verifiedCert.workforceProfileId, crewA.profile.id);
+    assert.ok(typeof verifiedCert.certificationId === 'string');
+    assert.ok(typeof verifiedCert.certificateNumber === 'string');
+    assert.ok(typeof verifiedCert.certificateName === 'string');
+    assert.ok(typeof verifiedCert.issuingAuthority === 'string');
+    assert.equal(verifiedCert.expiryStatus, 'VALID');
+    assert.equal(verifiedCert.isExpired, false);
+    assert.equal(verifiedCert.isValidForRequirement, true);
+    assert.equal(verifiedCert.hasDocument, true);
+    assert.ok(verifiedCert.documentReference);
+
+    // Existing skillValidityWindows and providerLicensesAndCertifications remain intact
+    assert.ok(
+      Array.isArray(leadProfile.certificationsAndExpiry.skillValidityWindows),
+    );
+    assert.ok(
+      Array.isArray(
+        leadProfile.certificationsAndExpiry.providerLicensesAndCertifications,
+      ),
+    );
+
+    // 2. Scoped worker profile GET /api/v1/handyman/field/workers/:workerContextId/profile
+    const helperContextRes = await api()
+      .get(`/api/v1/handyman/field/workers/${helperWorkerContextIdA}/profile`)
+      .set('Authorization', `Bearer ${leadTokenA}`);
+    assert.equal(helperContextRes.status, 200);
+    const helperProfile = helperContextRes.body.data.profile;
+    assert.equal(
+      helperProfile.certificationsAndExpiry.individualCertificateNumberModeled,
+      true,
+    );
+    assert.equal(
+      helperProfile.certificationsAndExpiry.individualCertifications.length,
+      1,
+    );
+    assert.equal(
+      helperProfile.certificationsAndExpiry.individualCertifications[0]
+        .workforceProfileId,
+      helperWorkforceProfileIdA,
+    );
+
+    // 3. Worker WITHOUT any certificates still receives HTTP 200 with an empty individualCertifications list
+    const uncertMeRes = await api()
+      .get('/api/v1/handyman/field/me/profile')
+      .set('Authorization', `Bearer ${uncertifiedUserTokenA}`);
+    assert.equal(uncertMeRes.status, 200);
+    assert.equal(
+      uncertMeRes.body.data.profile.workerIdentity.workforceProfileId,
+      uncertifiedWorkforceProfileIdA,
+    );
+    assert.equal(
+      uncertMeRes.body.data.profile.certificationsAndExpiry
+        .individualCertificateNumberModeled,
+      true,
+    );
+    assert.deepEqual(
+      uncertMeRes.body.data.profile.certificationsAndExpiry
+        .individualCertifications,
+      [],
+    );
+
+    const uncertByContextRes = await api()
+      .get(
+        `/api/v1/handyman/field/workers/${uncertifiedWorkerContextIdA}/profile`,
+      )
+      .set('Authorization', `Bearer ${leadTokenA}`);
+    assert.equal(uncertByContextRes.status, 200);
+    assert.deepEqual(
+      uncertByContextRes.body.data.profile.certificationsAndExpiry
+        .individualCertifications,
+      [],
+    );
+
+    // 4. PLATFORM_ADMIN without worker context receives controlled 404 HANDYMAN_WORKER_PROFILE_NOT_FOUND, never 500
+    const adminMeRes = await api()
+      .get('/api/v1/handyman/field/me/profile')
+      .set('Authorization', `Bearer ${platformAdminToken}`);
+    assert.equal(adminMeRes.status, 404);
+    assert.equal(
+      adminMeRes.body.error.code,
+      ERROR_CODES.HANDYMAN_WORKER_PROFILE_NOT_FOUND,
     );
   });
 });

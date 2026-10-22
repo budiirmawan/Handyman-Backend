@@ -61,6 +61,7 @@ export type WorkforceProfileClientContext = {
 export type ReferencedDocumentContext = {
   id: string;
   clientId: string;
+  buildingId: string | null;
   status: string;
   documentNumber: string;
   documentType: string;
@@ -150,6 +151,24 @@ function mapRow(
   const docSummary = mapDocumentSummary(row);
   const effectiveFileReference =
     row.file_reference ?? docSummary?.fileReference ?? null;
+  const expiryStatus = resolveWorkforceCertificationExpiryStatus(
+    row.status,
+    expiryDate,
+    now,
+  );
+  const isExpired = expiryStatus === 'EXPIRED';
+  const daysUntilExpiry =
+    expiryDate !== null && row.status !== 'INACTIVE'
+      ? Math.ceil(
+          (new Date(expiryDate).getTime() - now.getTime()) /
+            (24 * 60 * 60 * 1000),
+        )
+      : null;
+  const isValidForRequirement =
+    row.status === 'ACTIVE' &&
+    expiryStatus === 'VALID' &&
+    row.verification_status === 'VERIFIED';
+  const hasDocument = Boolean(row.document_id || effectiveFileReference);
 
   return {
     id: row.id,
@@ -163,14 +182,14 @@ function mapRow(
     issueDate: toIso(row.issue_date),
     expiryDate,
     status: row.status,
-    expiryStatus: resolveWorkforceCertificationExpiryStatus(
-      row.status,
-      expiryDate,
-      now,
-    ),
+    expiryStatus,
+    isExpired,
+    daysUntilExpiry,
+    isValidForRequirement,
     verificationStatus: row.verification_status,
     verifiedByUserId: row.verified_by_user_id,
     verifiedAt: toNullableIso(row.verified_at),
+    hasDocument,
     documentId: row.document_id,
     fileReference: effectiveFileReference,
     documentReference: docSummary,
@@ -214,8 +233,10 @@ const SELECT_WITH_RELATIONS = `
     FROM workforce_certifications wc
     LEFT JOIN skills s
       ON s.id = wc.skill_id
+     AND s.client_id = wc.client_id
     LEFT JOIN documents d
       ON d.id = wc.document_id
+     AND d.client_id = wc.client_id
 `;
 
 export const workforceCertificationRepository = {
@@ -258,6 +279,7 @@ export const workforceCertificationRepository = {
     const result = await query<{
       id: string;
       client_id: string;
+      building_id: string | null;
       status: string;
       document_number: string;
       document_type: string;
@@ -266,6 +288,7 @@ export const workforceCertificationRepository = {
     }>(
       `SELECT id,
               client_id,
+              building_id,
               status,
               document_number,
               document_type,
@@ -282,6 +305,7 @@ export const workforceCertificationRepository = {
     return {
       id: row.id,
       clientId: row.client_id,
+      buildingId: row.building_id,
       status: row.status,
       documentNumber: row.document_number,
       documentType: row.document_type,
@@ -377,6 +401,51 @@ export const workforceCertificationRepository = {
     return this.listByWorkforceProfileId(workforceProfileId, {
       currentOnly: true,
     });
+  },
+
+  async listExpiring(params: {
+    clientIds: string[];
+    withinDays: number;
+    includeExpired?: boolean;
+    workforceProfileId?: string;
+    verificationStatus?: WorkforceCertificationVerificationStatus;
+  }): Promise<WorkforceCertificationRecord[]> {
+    if (params.clientIds.length === 0) {
+      return [];
+    }
+
+    const queryParams: unknown[] = [params.clientIds, params.withinDays];
+    const conditions: string[] = [
+      'wc.client_id = ANY($1::uuid[])',
+      'wc.expiry_date IS NOT NULL',
+      `wc.expiry_date <= (NOW() + ($2::int * INTERVAL '1 day'))`,
+    ];
+
+    if (params.includeExpired) {
+      conditions.push(`wc.status IN ('ACTIVE', 'EXPIRED')`);
+    } else {
+      conditions.push(`wc.status = 'ACTIVE'`);
+      conditions.push(`wc.expiry_date >= NOW()`);
+    }
+
+    if (params.workforceProfileId) {
+      queryParams.push(params.workforceProfileId);
+      conditions.push(`wc.workforce_profile_id = $${queryParams.length}`);
+    }
+
+    if (params.verificationStatus) {
+      queryParams.push(params.verificationStatus);
+      conditions.push(`wc.verification_status = $${queryParams.length}`);
+    }
+
+    const result = await query<WorkforceCertificationRow>(
+      `${SELECT_WITH_RELATIONS}
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY wc.expiry_date ASC, wc.issue_date DESC, wc.id ASC`,
+      queryParams,
+    );
+    const now = new Date();
+    return result.rows.map((row) => mapRow(row, now));
   },
 
   async create(params: {

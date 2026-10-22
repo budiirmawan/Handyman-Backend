@@ -597,7 +597,40 @@ Read-only projection of authoritative worker profile facts without fabricating u
         ]
       },
       "certificationsAndExpiry": {
-        "individualCertificateNumberModeled": false,
+        "individualCertificateNumberModeled": true,
+        "individualCertifications": [
+          {
+            "certificationId": "uuid",
+            "workforceProfileId": "uuid",
+            "skillId": "uuid",
+            "skillCode": "SKL-PLUMB-01",
+            "skillName": "Commercial Plumbing & Piping",
+            "certificateNumber": "CERT-K3-PLUMB-2026-001",
+            "certificateName": "Sertifikat Kompetensi K3 Teknisi Plambing",
+            "issuingAuthority": "BNSP / Kemnaker RI",
+            "issueDate": "2025-01-15T00:00:00.000Z",
+            "expiryDate": "2028-01-15T00:00:00.000Z",
+            "status": "ACTIVE",
+            "expiryStatus": "VALID",
+            "isExpired": false,
+            "daysUntilExpiry": 450,
+            "isValidForRequirement": true,
+            "verificationStatus": "VERIFIED",
+            "verifiedByUserId": "uuid",
+            "verifiedAt": "2025-01-16T09:00:00.000Z",
+            "hasDocument": true,
+            "documentId": "uuid",
+            "fileReference": "workforce-certifications/2026/cert-k3-plumb-001.pdf",
+            "documentReference": {
+              "id": "uuid",
+              "documentNumber": "DOC-2026-001",
+              "documentType": "COMPLIANCE_CERTIFICATE",
+              "title": "Sertifikat K3 Plambing",
+              "fileReference": "workforce-certifications/2026/cert-k3-plumb-001.pdf",
+              "status": "ACTIVE"
+            }
+          }
+        ],
         "skillValidityWindows": [
           {
             "skillId": "uuid",
@@ -648,8 +681,16 @@ Read-only projection of authoritative worker profile facts without fabricating u
 ```
 - **Note on Modeled vs Unmodeled Profile Attributes**:
   - Individual skill validity windows (`validFrom`, `validUntil` / `expiresAt`, `proficiencyLevel`) are projected from `workforce_skill_assignments` + `skills` (client-scoped through `skills.client_id`).
+  - Individual worker certifications (`individualCertifications[]`) are projected from `workforce_certifications` (`0461_create_workforce_certifications`, client-scoped via `workforce_certifications.client_id`) with `individualCertificateNumberModeled: true`. Each entry includes `certificationId`, `workforceProfileId`, `skillId`, `skillCode`, `skillName`, `certificateNumber`, `certificateName`, `issuingAuthority`, `issueDate`, `expiryDate`, `status`, `expiryStatus`, `isExpired`, `daysUntilExpiry`, `isValidForRequirement`, `verificationStatus`, `verifiedByUserId`, `verifiedAt`, `hasDocument`, `documentId`, `fileReference`, and `documentReference`. Workers without individual certificates receive `200` with `individualCertifications: []`.
   - Employer/provider licenses & certifications (`recordType`, `name`, `number`, `issuingAuthority`, `issueDate`, `expiryDate`, `status`) are projected from `vendor_licenses_certifications`. They are OPTIONAL: a worker (or provider) without certificates still returns `200` with an empty array.
-  - Individual per-worker certificate serial numbers and star ratings are not separately modeled in the database schema (`individualCertificateNumberModeled: false`) and are never fabricated.
+  - Administration & verification of individual worker certifications are exposed on:
+    - `GET /api/v1/workforce/:workforceId/certifications` (`skill.read`)
+    - `GET /api/v1/workforce/:workforceId/certifications/:certificationId` (`skill.read`)
+    - `POST /api/v1/workforce/:workforceId/certifications` (`skill.manage`)
+    - `PATCH /api/v1/workforce/:workforceId/certifications/:certificationId` (`skill.manage`)
+    - `POST /api/v1/workforce/:workforceId/certifications/:certificationId/verify` (`skill.manage`, self-verification prohibited via `403 WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN`)
+    - `POST /api/v1/workforce/:workforceId/certifications/:certificationId/deactivate` (`skill.manage`)
+    - `GET /api/v1/workforce/certifications/expiring` (`skill.read`)
 - **CR-HM-WORKER-PROFILE-FIX-01 — schema-fidelity notes (response shape UNCHANGED)**:
   - `workerCode` = `vendor_workforce_bindings.vendor_personnel_code` of the current vendor binding, falling back to `workforce_profiles.employee_code`. No `worker_code` column exists on `handyman_worker_contexts`.
   - `providerCode` = `vendors.vendor_code`. No `provider_code` column exists on `handyman_provider_contexts`.

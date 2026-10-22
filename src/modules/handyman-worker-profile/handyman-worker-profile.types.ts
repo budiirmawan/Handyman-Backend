@@ -6,6 +6,38 @@ export type HandymanWorkerAuthorizedRole =
   | 'CREW_MEMBER'
   | 'INSPECTOR';
 
+export interface HandymanWorkerIndividualCertificationView {
+  certificationId: string;
+  workforceProfileId: string;
+  skillId: string | null;
+  skillCode: string | null;
+  skillName: string | null;
+  certificateNumber: string;
+  certificateName: string;
+  issuingAuthority: string;
+  issueDate: string;
+  expiryDate: string | null;
+  status: 'ACTIVE' | 'EXPIRED' | 'INACTIVE';
+  expiryStatus: 'VALID' | 'EXPIRED' | 'NOT_APPLICABLE';
+  isExpired: boolean;
+  daysUntilExpiry: number | null;
+  isValidForRequirement: boolean;
+  verificationStatus: 'PENDING_VERIFICATION' | 'VERIFIED' | 'REJECTED';
+  verifiedByUserId: string | null;
+  verifiedAt: string | null;
+  hasDocument: boolean;
+  documentId: string | null;
+  fileReference: string | null;
+  documentReference: {
+    id: string;
+    documentNumber: string;
+    documentType: string;
+    title: string;
+    fileReference: string;
+    status: string;
+  } | null;
+}
+
 export interface HandymanWorkerProfileProjection {
   workerIdentity: {
     userId: string;
@@ -71,7 +103,8 @@ export interface HandymanWorkerProfileProjection {
     }>;
   };
   certificationsAndExpiry: {
-    individualCertificateNumberModeled: false;
+    individualCertificateNumberModeled: true;
+    individualCertifications: HandymanWorkerIndividualCertificationView[];
     skillValidityWindows: Array<{
       skillId: string;
       skillCode: string;

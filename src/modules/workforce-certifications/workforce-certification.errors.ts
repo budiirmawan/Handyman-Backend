@@ -71,6 +71,15 @@ export function workforceCertificationVerificationActorRequiredError(): AppError
   });
 }
 
+export function workforceCertificationSelfVerificationForbiddenError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN,
+    message:
+      'Certificate owner is not allowed to verify or reject their own certification.',
+    statusCode: 403,
+  });
+}
+
 export function workforceCertificationForbiddenError(
   message = 'Actor is not authorized to access or manage this workforce certification.',
 ): AppError {

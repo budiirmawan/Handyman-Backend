@@ -368,7 +368,154 @@ async function buildWorkerProfileProjection(
     new Set<SkillCategory>(effectiveSkills.map((s) => s.category)),
   );
 
-  // 6. Provider / employer licenses & certifications
+  // 6. Provider / employer licenses & certifications + individual workforce certifications
+  let individualCertifications: HandymanWorkerProfileProjection['certificationsAndExpiry']['individualCertifications'] =
+    [];
+  try {
+    const indivCertRes = await pool.query<{
+      id: string;
+      workforce_profile_id: string;
+      skill_id: string | null;
+      skill_code: string | null;
+      skill_name: string | null;
+      certificate_number: string;
+      certificate_name: string;
+      issuing_authority: string;
+      issue_date: Date | string;
+      expiry_date: Date | string | null;
+      status: 'ACTIVE' | 'EXPIRED' | 'INACTIVE';
+      verification_status: 'PENDING_VERIFICATION' | 'VERIFIED' | 'REJECTED';
+      verified_by_user_id: string | null;
+      verified_at: Date | string | null;
+      document_id: string | null;
+      file_reference: string | null;
+      doc_id: string | null;
+      doc_number: string | null;
+      doc_type: string | null;
+      doc_title: string | null;
+      doc_file_reference: string | null;
+      doc_status: string | null;
+    }>(
+      `SELECT
+         wc.id,
+         wc.workforce_profile_id,
+         wc.skill_id,
+         s.code AS skill_code,
+         s.name AS skill_name,
+         wc.certificate_number,
+         wc.certificate_name,
+         wc.issuing_authority,
+         wc.issue_date,
+         wc.expiry_date,
+         wc.status,
+         wc.verification_status,
+         wc.verified_by_user_id,
+         wc.verified_at,
+         wc.document_id,
+         wc.file_reference,
+         d.id AS doc_id,
+         d.document_number AS doc_number,
+         d.document_type AS doc_type,
+         d.title AS doc_title,
+         d.file_reference AS doc_file_reference,
+         d.status AS doc_status
+       FROM workforce_certifications wc
+       LEFT JOIN skills s
+         ON s.id = wc.skill_id
+        AND s.client_id = wc.client_id
+       LEFT JOIN documents d
+         ON d.id = wc.document_id
+        AND d.client_id = wc.client_id
+       WHERE wc.workforce_profile_id = $1
+         AND wc.client_id = $2
+       ORDER BY (wc.status = 'ACTIVE') DESC, wc.expiry_date ASC NULLS LAST, wc.issue_date DESC, wc.id ASC`,
+      [core.workforce_profile_id, core.client_id],
+    );
+
+    individualCertifications = indivCertRes.rows.map((r) => {
+      const issueDate = toIsoOrNull(r.issue_date) ?? now.toISOString();
+      const expiryDate = toIsoOrNull(r.expiry_date);
+      const expiryStatus: 'VALID' | 'EXPIRED' | 'NOT_APPLICABLE' =
+        r.status === 'INACTIVE'
+          ? 'NOT_APPLICABLE'
+          : r.status === 'EXPIRED' ||
+              (expiryDate !== null &&
+                new Date(expiryDate).getTime() < now.getTime())
+            ? 'EXPIRED'
+            : 'VALID';
+      const isExpired = expiryStatus === 'EXPIRED';
+      const daysUntilExpiry =
+        expiryDate !== null && r.status !== 'INACTIVE'
+          ? Math.ceil(
+              (new Date(expiryDate).getTime() - now.getTime()) /
+                (24 * 60 * 60 * 1000),
+            )
+          : null;
+      const isValidForRequirement =
+        r.status === 'ACTIVE' &&
+        expiryStatus === 'VALID' &&
+        r.verification_status === 'VERIFIED';
+      const documentReference =
+        r.doc_id &&
+        r.doc_number &&
+        r.doc_type &&
+        r.doc_title &&
+        r.doc_file_reference &&
+        r.doc_status
+          ? {
+              id: r.doc_id,
+              documentNumber: r.doc_number,
+              documentType: r.doc_type,
+              title: r.doc_title,
+              fileReference: r.doc_file_reference,
+              status: r.doc_status,
+            }
+          : null;
+      const effectiveFileReference =
+        r.file_reference ?? documentReference?.fileReference ?? null;
+      const hasDocument = Boolean(r.document_id || effectiveFileReference);
+
+      return {
+        certificationId: r.id,
+        workforceProfileId: r.workforce_profile_id,
+        skillId: r.skill_id,
+        skillCode: r.skill_code,
+        skillName: r.skill_name,
+        certificateNumber: r.certificate_number,
+        certificateName: r.certificate_name,
+        issuingAuthority: r.issuing_authority,
+        issueDate,
+        expiryDate,
+        status: r.status,
+        expiryStatus,
+        isExpired,
+        daysUntilExpiry,
+        isValidForRequirement,
+        verificationStatus: r.verification_status,
+        verifiedByUserId: r.verified_by_user_id,
+        verifiedAt: toIsoOrNull(r.verified_at),
+        hasDocument,
+        documentId: r.document_id,
+        fileReference: effectiveFileReference,
+        documentReference,
+      };
+    });
+  } catch (error) {
+    // Individual certifications are optional by contract: a worker without
+    // certifications (or a minimal test environment without the table) still
+    // receives a valid profile with an empty list.
+    logger.warn(
+      'Handyman worker profile individual certifications could not be projected.',
+      {
+        operation: 'handyman_worker_profile.individual_certifications',
+        result: 'degraded',
+        errorMessage:
+          error instanceof Error ? error.message : 'unknown error',
+      },
+    );
+    individualCertifications = [];
+  }
+
   let providerLicensesAndCertifications: HandymanWorkerProfileProjection['certificationsAndExpiry']['providerLicensesAndCertifications'] =
     [];
   try {
@@ -566,7 +713,8 @@ async function buildWorkerProfileProjection(
       })),
     },
     certificationsAndExpiry: {
-      individualCertificateNumberModeled: false,
+      individualCertificateNumberModeled: true,
+      individualCertifications,
       skillValidityWindows,
       providerLicensesAndCertifications,
     },
@@ -597,13 +745,14 @@ async function buildWorkerProfileProjection(
 export async function readMyHandymanWorkerProfileProjection(
   actorUserId: string,
 ): Promise<HandymanWorkerProfileProjection> {
+  const validActorUserId = assertUuid(actorUserId, 'actorUserId');
   const pool = getPool();
   const res = await pool.query<CoreWorkerRow>(
     `${CORE_WORKER_SELECT}
      WHERE wp.user_id = $1
      ORDER BY (wc.status = 'ACTIVE') DESC, wc.created_at DESC
      LIMIT 1`,
-    [actorUserId],
+    [validActorUserId],
   );
   const core = res.rows[0];
   if (!core) {
