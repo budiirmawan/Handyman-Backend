@@ -647,9 +647,18 @@ Read-only projection of authoritative worker profile facts without fabricating u
 }
 ```
 - **Note on Modeled vs Unmodeled Profile Attributes**:
-  - Individual skill validity windows (`validFrom`, `validUntil` / `expiresAt`, `proficiencyLevel`) are projected from `workforce_skill_assignments` + `skills`.
-  - Employer/provider licenses & certifications (`recordType`, `name`, `number`, `issuingAuthority`, `issueDate`, `expiryDate`, `status`) are projected from `vendor_licenses_certifications`.
+  - Individual skill validity windows (`validFrom`, `validUntil` / `expiresAt`, `proficiencyLevel`) are projected from `workforce_skill_assignments` + `skills` (client-scoped through `skills.client_id`).
+  - Employer/provider licenses & certifications (`recordType`, `name`, `number`, `issuingAuthority`, `issueDate`, `expiryDate`, `status`) are projected from `vendor_licenses_certifications`. They are OPTIONAL: a worker (or provider) without certificates still returns `200` with an empty array.
   - Individual per-worker certificate serial numbers and star ratings are not separately modeled in the database schema (`individualCertificateNumberModeled: false`) and are never fabricated.
+- **CR-HM-WORKER-PROFILE-FIX-01 — schema-fidelity notes (response shape UNCHANGED)**:
+  - `workerCode` = `vendor_workforce_bindings.vendor_personnel_code` of the current vendor binding, falling back to `workforce_profiles.employee_code`. No `worker_code` column exists on `handyman_worker_contexts`.
+  - `providerCode` = `vendors.vendor_code`. No `provider_code` column exists on `handyman_provider_contexts`.
+  - `email` / `phone` = `users.email` / `users.whatsapp_phone` of the linked login identity (both nullable; `workforce_profiles` models no contact columns).
+  - `employmentType` is derived from `workforce_profiles.workforce_type` (`EXTERNAL` → `VENDOR`, `OUTSOURCED` → `OUTSOURCED`, `CONTRACT` → `CONTRACT`, else `INTERNAL`).
+  - `crewMemberships[].buildingId` is always `null`: Handyman crews are provider-scoped, not building-scoped. `crewMemberships[].joinedAt` is the membership creation instant.
+  - `buildingAssignments[]`: `propertyId` is resolved through the building; `assignmentRole` is the constant placement category `HANDYMAN`; `isPrimary` is derived from the earliest ACTIVE placement (a workforce building placement stores no role/primary/assigned-at columns).
+  - `recentWorkOrders[].requestCode` is derived from `handyman_service_requests.origin_reference` (falling back to a deterministic `HM-<id-prefix>` handle) and `title` from `description`; the request table models neither a code nor a title column. Recent work orders remain strictly non-commercial.
+  - An authenticated actor with no Handyman worker context (including `PLATFORM_ADMIN`) receives `404 HANDYMAN_WORKER_PROFILE_NOT_FOUND` — never `500`, and no profile is fabricated.
 
 
 ---

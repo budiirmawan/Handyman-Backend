@@ -186,7 +186,7 @@ export async function crewFixture(
     buildingId: realm.building.id,
   });
   return {
-    vendor, providerContext, leadUser: linkedUser,
+    vendor, providerContext, leadUser: linkedUser, profile,
     workerContext, crew: bundle.crew,
   };
 }

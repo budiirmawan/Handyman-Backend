@@ -129768,7 +129768,7 @@ components:
         materials: { $ref: "#/components/schemas/HandymanFieldMaterials" }
     HandymanWorkerProfile:
       type: object
-      description: "Source: HandymanWorkerProfileProjection (handyman-worker-profile.types.ts)."
+      description: "Source: HandymanWorkerProfileProjection (handyman-worker-profile.types.ts). Contract shape unchanged by CR-HM-WORKER-PROFILE-FIX-01; every value is resolved from a column that exists in the canonical migration registry."
       required: [workerIdentity, providerAssociation, roleAndAssignmentContext, skillsAndCategories, certificationsAndExpiry, workHistorySummary]
       properties:
         workerIdentity:
@@ -129778,13 +129778,23 @@ components:
             userId: { type: string, format: uuid }
             workforceProfileId: { type: string, format: uuid }
             workerContextId: { type: string, format: uuid }
-            workerCode: { type: string }
+            workerCode:
+              type: string
+              description: "vendor_workforce_bindings.vendor_personnel_code, falling back to workforce_profiles.employee_code. Neither handyman_worker_contexts nor workforce_profiles models a worker_code column."
             employeeCode: { type: string }
             fullName: { type: string }
-            email: { type: string, nullable: true }
-            phone: { type: string, nullable: true }
+            email:
+              type: string
+              nullable: true
+              description: "users.email of the linked login identity (workforce_profiles models no contact columns)."
+            phone:
+              type: string
+              nullable: true
+              description: "users.whatsapp_phone — the only modeled phone number on the identity master."
             workforceType: { type: string }
-            employmentType: { type: string }
+            employmentType:
+              type: string
+              description: "Derived from workforce_profiles.workforce_type: EXTERNAL→VENDOR, OUTSOURCED→OUTSOURCED, CONTRACT→CONTRACT, else INTERNAL. No employment_type column exists."
             workerStatus: { type: string }
         providerAssociation:
           type: object
@@ -129792,7 +129802,9 @@ components:
           properties:
             clientId: { type: string, format: uuid }
             providerContextId: { type: string, format: uuid }
-            providerCode: { type: string }
+            providerCode:
+              type: string
+              description: "vendors.vendor_code — handyman_provider_contexts models no provider_code column."
             providerStatus: { type: string }
             vendorId: { type: string, format: uuid }
             vendorStatus: { type: string }

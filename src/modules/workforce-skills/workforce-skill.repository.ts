@@ -201,10 +201,15 @@ type EffectiveWorkforceSkillRow = {
  *
  * `asOf` is passed in rather than using NOW() so the caller controls the
  * reference instant and the behaviour is deterministic under test.
+ *
+ * `clientId` (optional) adds the Skill-master client scope: `skills` carries
+ * `client_id` (0025) while the assignment table does not, so a caller that
+ * projects a client-scoped profile can pin the catalog side explicitly.
  */
 async function listEffectiveSkills(
   workforceProfileId: string,
   asOf: Date,
+  clientId?: string,
 ): Promise<EffectiveWorkforceSkill[]> {
   const result = await getPool().query<EffectiveWorkforceSkillRow>(
     `SELECT
@@ -222,8 +227,9 @@ async function listEffectiveSkills(
        AND s.status = 'ACTIVE'
        AND (wsa.valid_from IS NULL OR wsa.valid_from <= $2)
        AND (wsa.valid_until IS NULL OR wsa.valid_until >= $2)
+       AND ($3::uuid IS NULL OR s.client_id = $3)
      ORDER BY s.code ASC`,
-    [workforceProfileId, asOf],
+    [workforceProfileId, asOf, clientId ?? null],
   );
 
   return result.rows.map((row) => ({
