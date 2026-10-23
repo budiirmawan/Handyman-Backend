@@ -80087,6 +80087,41 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Handyman Material Execution]
+      operationId: getOperationsHandymanMaterialPurchase
+      x-required-permission: tenant_company.read
+      summary: Read one material purchase record and event history (Operations)
+      description: >-
+        Requires an authenticated actor with tenant_company.read and
+        exact-Building access to the execution scope's Building (403
+        BUILDING_ACCESS_DENIED or PERMISSION_DENIED otherwise). Returns the
+        authoritative material purchase record and its append-only event
+        trail.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND]
+      responses:
+        "200":
+          description: Material purchase record and append-only event history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanOperationsMaterialPurchaseDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reconcile:
     parameters:
       - $ref: "#/components/parameters/ExecutionScopeIdPath"
@@ -80098,16 +80133,19 @@ paths:
       tags: [Handyman Material Execution]
       operationId: reconcileHandymanMaterialPurchase
       x-required-permission: tenant_company.manage
-      summary: Reconcile a material purchase (Operations/Manager)
+      summary: Verify and reconcile a material purchase (Operations/Manager)
       description: >-
         Operations/Manager only (tenant_company.manage, exact-Building);
         the field requester may never self-reconcile (403
-        HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN). Transitions RETURN to
-        RECONCILIATION and recomputes the separation summary and the
-        reimbursement payable. Shared material-purchase command semantics
-        apply (see approve).
+        HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN). Verifies used + returned =
+        acquired quantity, verified MATERIAL_RECEIPT private evidence for
+        personal out-of-pocket REIMBURSEMENT claims, recomputes the 4-way
+        separation summary, and marks eligible personal expenses
+        RECONCILED_PAYABLE (or REJECTED when reimbursementEligible is false)
+        while keeping CASH_ADVANCE, PETTY_CASH, COMPANY_DIRECT and
+        WAREHOUSE_STOCK at NOT_APPLICABLE.
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_ILLEGAL_TRANSITION, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, INVALID_STORAGE_KEY]
+      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_ILLEGAL_TRANSITION, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID, INVALID_STORAGE_KEY]
       requestBody:
         required: true
         content:
@@ -80124,6 +80162,216 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/HandymanMaterialPurchaseReconcileResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/material-reimbursements:
+    get:
+      tags: [Handyman Material Execution]
+      operationId: listFinanceHandymanMaterialReimbursements
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      summary: List personal out-of-pocket worker reimbursements (Finance queue)
+      description: >-
+        Requires handyman.finance.read and scopes results inside SQL to
+        Buildings where the authenticated Finance actor holds an ACTIVE
+        user_building_assignments grant. Returns only personal out-of-pocket
+        REIMBURSEMENT records and their append-only event history.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN]
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: executionScopeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: workOrderId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: reimbursementStatus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [NOT_APPLICABLE, PENDING_RECONCILIATION, RECONCILED_PAYABLE, FINANCE_APPROVED, DISBURSED, REJECTED]
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: Building-scoped Finance reimbursement queue.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanFinanceMaterialReimbursementQueue" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /handyman/execution-scopes/{executionScopeId}/material-reimbursements:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Material Execution]
+      operationId: listScopeFinanceHandymanMaterialReimbursements
+      x-required-permission: handyman.finance.read
+      summary: List worker reimbursements of an execution scope (Finance)
+      description: >-
+        Requires handyman.finance.read and exact-Building access to the
+        execution scope's Building. Returns eligible personal out-of-pocket
+        reimbursement records with events and the 4-way ledger separation
+        summary.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN]
+      responses:
+        "200":
+          description: Execution-scope worker reimbursements and separation summary.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseOperationsList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reimbursement/approve:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Material Execution]
+      operationId: approveHandymanMaterialPurchaseReimbursement
+      x-required-permission: handyman.finance.manage
+      summary: Approve an Operations-verified worker reimbursement (Finance)
+      description: >-
+        Requires handyman.finance.manage and exact-Building access; forbids
+        self-approval of the requester/payee's own reimbursement (403
+        HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN). Requires fundingSource
+        REIMBURSEMENT, status RECONCILIATION, reimbursementStatus
+        RECONCILED_PAYABLE, and a verified MATERIAL_RECEIPT in private
+        storage. Transitions reimbursementStatus to FINANCE_APPROVED and
+        appends an immutable REIMBURSEMENT_APPROVED event.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID, HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN, HANDYMAN_REIMBURSEMENT_ILLEGAL_TRANSITION, HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApproveMaterialPurchaseReimbursementRequest" }
+      responses:
+        "200":
+          description: Reimbursement approved by Finance (FINANCE_APPROVED), or replayed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseCommandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reimbursement/reject:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Material Execution]
+      operationId: rejectHandymanMaterialPurchaseReimbursement
+      x-required-permission: handyman.finance.manage
+      summary: Reject an un-disbursed worker reimbursement (Finance)
+      description: >-
+        Requires handyman.finance.manage and exact-Building access; forbids
+        self-rejection by the requester/payee. Transitions
+        RECONCILED_PAYABLE or FINANCE_APPROVED to REJECTED, zeroes payable
+        amount, and appends an immutable REIMBURSEMENT_REJECTED event.
+        Refuses already-disbursed claims with 409
+        HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN, HANDYMAN_REIMBURSEMENT_ILLEGAL_TRANSITION, HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RejectMaterialPurchaseReimbursementRequest" }
+      responses:
+        "200":
+          description: Reimbursement rejected by Finance (REJECTED), or replayed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseCommandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reimbursement/disburse:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Material Execution]
+      operationId: disburseHandymanMaterialPurchaseReimbursement
+      x-required-permission: handyman.finance.manage
+      summary: Disburse a Finance-approved worker reimbursement (Finance)
+      description: >-
+        Requires handyman.finance.manage and exact-Building access; forbids
+        self-disbursement by the requester/payee. Enforces prior Finance
+        approval (409 HANDYMAN_REIMBURSEMENT_APPROVAL_REQUIRED otherwise),
+        prevents double payment and duplicate disbursement references (409
+        HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED), enforces exact amount
+        match (409 HANDYMAN_REIMBURSEMENT_AMOUNT_MISMATCH), transitions
+        reimbursementStatus to DISBURSED, and appends an immutable
+        REIMBURSEMENT_DISBURSED event.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID, HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED, HANDYMAN_REIMBURSEMENT_AMOUNT_MISMATCH, HANDYMAN_REIMBURSEMENT_APPROVAL_REQUIRED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN, HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DisburseMaterialPurchaseReimbursementRequest" }
+      responses:
+        "200":
+          description: Reimbursement disbursed by Finance (DISBURSED), or replayed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseCommandResult" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -80155,6 +80403,40 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/HandymanFieldMaterialPurchaseList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Handyman Material Execution]
+      operationId: getFieldHandymanMaterialPurchase
+      summary: Read one material purchase record for the field actor
+      description: >-
+        Authentication only; the service requires the CURRENT Crew Lead
+        (PIC Pekerjaan) or the assigned Inspector for the scope (403
+        HANDYMAN_FIELD_READ_FORBIDDEN otherwise). PIC Pekerjaan receives
+        expense and reimbursement lifecycle status; Inspector receives
+        operational movement quantities only.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_FIELD_READ_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND]
+      responses:
+        "200":
+          description: Role-scoped material purchase detail.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanFieldMaterialPurchaseDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -128895,11 +129177,12 @@ components:
     HandymanMaterialPurchaseRecord:
       type: object
       description: "Source: HandymanMaterialPurchaseRecord (handyman-material-purchasing.types.ts). Quantities and amounts are decimal strings as stored."
-      required: [id, clientId, executionScopeId, handymanRequestId, tenantCompanyId, buildingId, materialExecutionLineId, sourceItemId, itemName, uomId, uomCode, fundingSource, status, requestedQuantity, approvedQuantity, issuedQuantity, purchasedQuantity, usedQuantity, returnedQuantity, returnDestination, supplierName, supplierReference, purchaseReference, purchaseDate, currency, approvedMaxUnitPrice, actualUnitPrice, actualTotalExpenseAmount, netUsedExpenseAmount, approvalReference, expenditureReference, cashAdvanceReference, receiptEvidenceReference, latestEvidenceReference, reimbursementPayableAmount, reimbursementPayeeUserId, reimbursementStatus, tenantChargeEligible, tenantChargeEligibleQty, tenantInvoiced, requestedByUserId, approvedByUserId, reconciledByUserId, reconciledAt, createIdempotencyKey, version, createdAt, updatedAt]
+      required: [id, clientId, executionScopeId, workOrderId, handymanRequestId, tenantCompanyId, buildingId, materialExecutionLineId, sourceItemId, itemName, uomId, uomCode, fundingSource, status, requestedQuantity, approvedQuantity, issuedQuantity, purchasedQuantity, usedQuantity, returnedQuantity, returnDestination, supplierName, supplierReference, purchaseReference, purchaseDate, currency, approvedMaxUnitPrice, actualUnitPrice, actualTotalExpenseAmount, netUsedExpenseAmount, approvalReference, expenditureReference, cashAdvanceReference, receiptEvidenceReference, receiptSha256Checksum, latestEvidenceReference, reimbursementPayableAmount, reimbursementPayeeUserId, reimbursementStatus, reimbursementFinanceApprovalReference, reimbursementFinanceApprovedByUserId, reimbursementFinanceApprovedAt, reimbursementDisbursementReference, reimbursementDisbursementMethod, reimbursementDisbursedAmount, reimbursementDisbursedByUserId, reimbursementDisbursedAt, reimbursementRejectedByUserId, reimbursementRejectedAt, reimbursementRejectionReason, tenantChargeEligible, tenantChargeEligibleQty, tenantInvoiced, requestedByUserId, approvedByUserId, reconciledByUserId, reconciledAt, createIdempotencyKey, version, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
         handymanRequestId: { type: string, format: uuid }
         tenantCompanyId: { type: string, format: uuid }
         buildingId: { type: string, format: uuid }
@@ -128930,10 +129213,22 @@ components:
         expenditureReference: { type: string, nullable: true }
         cashAdvanceReference: { type: string, nullable: true }
         receiptEvidenceReference: { type: string, nullable: true }
+        receiptSha256Checksum: { type: string, nullable: true }
         latestEvidenceReference: { type: string }
         reimbursementPayableAmount: { type: string }
         reimbursementPayeeUserId: { type: string, format: uuid, nullable: true }
-        reimbursementStatus: { type: string, enum: [NOT_APPLICABLE, PENDING_RECONCILIATION, RECONCILED_PAYABLE] }
+        reimbursementStatus: { type: string, enum: [NOT_APPLICABLE, PENDING_RECONCILIATION, RECONCILED_PAYABLE, FINANCE_APPROVED, DISBURSED, REJECTED] }
+        reimbursementFinanceApprovalReference: { type: string, nullable: true }
+        reimbursementFinanceApprovedByUserId: { type: string, format: uuid, nullable: true }
+        reimbursementFinanceApprovedAt: { type: string, format: date-time, nullable: true }
+        reimbursementDisbursementReference: { type: string, nullable: true }
+        reimbursementDisbursementMethod: { type: string, enum: [BANK_TRANSFER, PAYROLL_SETTLEMENT, PETTY_CASH_PAYOUT], nullable: true }
+        reimbursementDisbursedAmount: { type: string }
+        reimbursementDisbursedByUserId: { type: string, format: uuid, nullable: true }
+        reimbursementDisbursedAt: { type: string, format: date-time, nullable: true }
+        reimbursementRejectedByUserId: { type: string, format: uuid, nullable: true }
+        reimbursementRejectedAt: { type: string, format: date-time, nullable: true }
+        reimbursementRejectionReason: { type: string, nullable: true }
         tenantChargeEligible: { type: boolean }
         tenantChargeEligibleQty: { type: string }
         tenantInvoiced: { type: boolean }
@@ -128954,11 +129249,11 @@ components:
         clientId: { type: string, format: uuid }
         purchaseRecordId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
-        eventType: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION] }
+        eventType: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION, REIMBURSEMENT_APPROVED, REIMBURSEMENT_REJECTED, REIMBURSEMENT_DISBURSED] }
         fromStatus: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION], nullable: true }
         toStatus: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION] }
         actorUserId: { type: string, format: uuid }
-        actorRole: { type: string, enum: [PIC_PEKERJAAN, OPERATIONS_MANAGER] }
+        actorRole: { type: string, enum: [PIC_PEKERJAAN, OPERATIONS_MANAGER, FINANCE_MANAGER] }
         quantityDelta: { type: string }
         evidenceReference: { type: string }
         notes: { type: string, nullable: true }
@@ -129003,12 +129298,16 @@ components:
             purchasedRecordsCount: { type: integer }
         workerAdvanceReimbursementPayable:
           type: object
-          required: [currency, totalReimbursementPayableAmount, pendingReconciliationCount, reconciledPayableCount]
+          required: [currency, totalReimbursementPayableAmount, totalDisbursedAmount, pendingReconciliationCount, reconciledPayableCount, financeApprovedCount, disbursedCount, rejectedCount]
           properties:
             currency: { type: string }
             totalReimbursementPayableAmount: { type: string }
+            totalDisbursedAmount: { type: string }
             pendingReconciliationCount: { type: integer }
             reconciledPayableCount: { type: integer }
+            financeApprovedCount: { type: integer }
+            disbursedCount: { type: integer }
+            rejectedCount: { type: integer }
         tenantInvoiceChargeEligibility:
           type: object
           required: [eligibleRecordsCount, totalEligibleUsedQuantity, anyTenantInvoiced]
@@ -129031,6 +129330,7 @@ components:
       description: "Source: submitMaterialPurchaseRequest input (handyman-material-purchasing.service.ts). Caller must be the current Crew Lead (PIC Pekerjaan)."
       required: [itemName, uomId, fundingSource, requestedQuantity, evidenceReference, idempotencyKey]
       properties:
+        workOrderId: { type: string, format: uuid }
         materialExecutionLineId: { type: string, format: uuid }
         sourceItemId: { type: string, format: uuid }
         itemName: { type: string, minLength: 1, maxLength: 250 }
@@ -129074,6 +129374,7 @@ components:
       type: object
       required: [purchasedQuantity, supplierName, purchaseReference, actualUnitPrice, purchaseDate, receiptEvidenceReference, idempotencyKey]
       properties:
+        workOrderId: { type: string, format: uuid }
         purchasedQuantity: { type: number, exclusiveMinimum: 0 }
         supplierName: { type: string }
         supplierReference: { type: string }
@@ -129111,10 +129412,42 @@ components:
       required: [idempotencyKey]
       properties:
         tenantChargeEligible: { type: boolean }
+        reimbursementEligible: { type: boolean }
+        reimbursementRejectionReason: { type: string }
         expenditureReference: { type: string }
         evidenceReference: { type: string }
         notes: { type: string }
         idempotencyKey: { type: string }
+        expectedVersion: { type: integer, minimum: 1 }
+    ApproveMaterialPurchaseReimbursementRequest:
+      type: object
+      additionalProperties: false
+      required: [approvalReference, idempotencyKey]
+      properties:
+        approvalReference: { type: string, minLength: 1, maxLength: 200 }
+        notes: { type: string }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
+        expectedVersion: { type: integer, minimum: 1 }
+    RejectMaterialPurchaseReimbursementRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, idempotencyKey]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        notes: { type: string }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
+        expectedVersion: { type: integer, minimum: 1 }
+    DisburseMaterialPurchaseReimbursementRequest:
+      type: object
+      additionalProperties: false
+      required: [disbursementReference, idempotencyKey]
+      properties:
+        disbursementReference: { type: string, minLength: 1, maxLength: 200 }
+        disbursementMethod: { type: string, enum: [BANK_TRANSFER, PAYROLL_SETTLEMENT, PETTY_CASH_PAYOUT] }
+        disbursedAmount: { type: number, minimum: 0 }
+        evidenceReference: { type: string }
+        notes: { type: string }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
         expectedVersion: { type: integer, minimum: 1 }
     HandymanMaterialPurchaseReconcileResult:
       allOf:
@@ -129138,6 +129471,30 @@ components:
         records:
           type: array
           items: { $ref: "#/components/schemas/HandymanMaterialPurchaseRecord" }
+    HandymanFieldMaterialPurchaseDetail:
+      type: object
+      additionalProperties: false
+      required: [actorRole, record]
+      properties:
+        actorRole: { type: string, enum: [PIC_PEKERJAAN, INSPECTOR] }
+        record: { $ref: "#/components/schemas/HandymanMaterialPurchaseRecord" }
+    HandymanOperationsMaterialPurchaseDetail:
+      type: object
+      additionalProperties: false
+      required: [record, events]
+      properties:
+        record: { $ref: "#/components/schemas/HandymanMaterialPurchaseRecord" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanMaterialPurchaseEvent" }
+    HandymanFinanceMaterialReimbursementQueue:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanMaterialPurchaseWithEvents" }
     HandymanMaterialPurchaseOperationsList:
       type: object
       required: [records, separationSummary]

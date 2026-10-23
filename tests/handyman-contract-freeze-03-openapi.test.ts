@@ -53,8 +53,8 @@ function collectKeys(value: unknown, key: string, out: unknown[] = []): unknown[
 }
 
 describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
-  it('keeps the 269-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 269);
+  it('keeps the 276-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 276);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -153,11 +153,11 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
         `${operationId} names unseeded permission ${permission}`,
       );
     }
-    // 167 route guards + 1 dual-guard op (first guard named) + 11
-    // unconditional service-enforced permissions; the remaining 90 ops
+    // 173 route guards + 1 dual-guard op (first guard named) + 11
+    // unconditional service-enforced permissions; the remaining 91 ops
     // are composite-authority (Crew Lead / workspace session / HMAC)
     // and must stay unannotated rather than name a misleading permission.
-    assert.equal(annotated, 179);
+    assert.equal(annotated, 185);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

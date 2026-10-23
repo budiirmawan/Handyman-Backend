@@ -11,12 +11,15 @@ import { assertVerifiedManagedEvidenceReference } from '../handyman-field-eviden
 import { handymanMaterialPurchasingRepository } from './handyman-material-purchasing.repository';
 import {
   HANDYMAN_MATERIAL_FUNDING_SOURCES,
+  HANDYMAN_MATERIAL_REIMBURSEMENT_STATUSES,
   HANDYMAN_MATERIAL_RETURN_DESTINATIONS,
+  HANDYMAN_REIMBURSEMENT_DISBURSEMENT_METHODS,
   type HandymanMaterialFundingSource,
   type HandymanMaterialPurchaseEventRecord,
   type HandymanMaterialPurchaseRecord,
   type HandymanMaterialReimbursementStatus,
   type HandymanMaterialReturnDestination,
+  type HandymanReimbursementDisbursementMethod,
   type MaterialLedgerSeparationSummary,
 } from './handyman-material-purchasing.types';
 
@@ -73,6 +76,81 @@ function assertFundingSource(value: unknown): HandymanMaterialFundingSource {
     );
   }
   return value as HandymanMaterialFundingSource;
+}
+
+function assertStrictBodyAllowlist(
+  body: unknown,
+  allowedKeys: readonly string[],
+): Record<string, unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw AppError.validation('Request body must be a JSON object.');
+  }
+  const obj = body as Record<string, unknown>;
+  const allowed = new Set(allowedKeys);
+  const unknown = Object.keys(obj).filter((k) => !allowed.has(k));
+  if (unknown.length > 0) {
+    throw AppError.validation(
+      `Unknown or unaccepted fields in request body: ${unknown.join(', ')}.`,
+    );
+  }
+  return obj;
+}
+
+function isPgUniqueViolation(
+  err: unknown,
+): err is { code: string; constraint?: string } {
+  return (
+    Boolean(err) &&
+    typeof err === 'object' &&
+    (err as { code?: unknown }).code === '23505'
+  );
+}
+
+async function resolveOptionalWorkOrderId(
+  tx: PoolClient,
+  ctx: ExecutionScopeContext,
+  rawWorkOrderId: unknown,
+  existingWorkOrderId: string | null = null,
+): Promise<string | null> {
+  if (rawWorkOrderId === undefined || rawWorkOrderId === null) {
+    return existingWorkOrderId;
+  }
+  const validWoId = assertUuid(rawWorkOrderId, 'workOrderId');
+  if (existingWorkOrderId && existingWorkOrderId !== validWoId) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_CROSS_WORK_ORDER_CLAIM,
+      message:
+        'Material purchase record is already bound to a different Work Order.',
+    });
+  }
+  const woRes = await tx.query<{
+    id: string;
+    client_id: string;
+    building_id: string;
+  }>(
+    `SELECT id, client_id, building_id
+       FROM work_orders
+      WHERE id = $1`,
+    [validWoId],
+  );
+  const wo = woRes.rows[0];
+  if (!wo) {
+    throw new AppError({
+      statusCode: 404,
+      code: ERROR_CODES.WORK_ORDER_NOT_FOUND,
+      message: 'Referenced Work Order not found.',
+    });
+  }
+  if (wo.client_id !== ctx.clientId || wo.building_id !== ctx.buildingId) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN,
+      message:
+        'Referenced workOrderId does not belong to the exact Client and Building of this Execution Scope.',
+    });
+  }
+  return wo.id;
 }
 
 interface ExecutionScopeContext {
@@ -226,6 +304,41 @@ async function assertOperationsManagerActor(
   }
 }
 
+async function assertFinanceReimbursementActor(
+  actorUserId: string,
+  ctx: ExecutionScopeContext,
+  mode: 'read' | 'manage',
+  forbiddenSelfUserIds: Array<string | null | undefined> = [],
+): Promise<void> {
+  await assertBuildingScopeAccess(actorUserId, ctx);
+  const perms = await permissionService.resolvePermissionsForUser(actorUserId);
+  const allowed =
+    mode === 'manage'
+      ? perms.includes('handyman.finance.manage')
+      : perms.includes('handyman.finance.read') ||
+        perms.includes('handyman.finance.manage');
+  if (!allowed) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN,
+      message:
+        mode === 'manage'
+          ? 'Missing required Finance authority: handyman.finance.manage.'
+          : 'Missing required Finance read authority: handyman.finance.read.',
+    });
+  }
+  for (const selfId of forbiddenSelfUserIds) {
+    if (selfId && selfId === actorUserId) {
+      throw new AppError({
+        statusCode: 403,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN,
+        message:
+          'Finance actor may never self-approve, self-reject, or self-disburse their own worker reimbursement.',
+      });
+    }
+  }
+}
+
 function assertExpectedVersion(
   record: HandymanMaterialPurchaseRecord,
   expectedVersion: unknown,
@@ -263,8 +376,12 @@ export function computeMaterialLedgerSeparationSummary(
   let purchasedRecordsCount = 0;
 
   let totalReimbursementPayable = 0;
+  let totalDisbursedAmount = 0;
   let pendingReconciliationCount = 0;
   let reconciledPayableCount = 0;
+  let financeApprovedCount = 0;
+  let disbursedCount = 0;
+  let rejectedCount = 0;
 
   let eligibleRecordsCount = 0;
   let totalEligibleUsedQty = 0;
@@ -287,10 +404,17 @@ export function computeMaterialLedgerSeparationSummary(
     }
 
     totalReimbursementPayable += Number(r.reimbursementPayableAmount);
+    totalDisbursedAmount += Number(r.reimbursementDisbursedAmount);
     if (r.reimbursementStatus === 'PENDING_RECONCILIATION') {
       pendingReconciliationCount += 1;
     } else if (r.reimbursementStatus === 'RECONCILED_PAYABLE') {
       reconciledPayableCount += 1;
+    } else if (r.reimbursementStatus === 'FINANCE_APPROVED') {
+      financeApprovedCount += 1;
+    } else if (r.reimbursementStatus === 'DISBURSED') {
+      disbursedCount += 1;
+    } else if (r.reimbursementStatus === 'REJECTED') {
+      rejectedCount += 1;
     }
 
     if (r.tenantChargeEligible) {
@@ -321,8 +445,12 @@ export function computeMaterialLedgerSeparationSummary(
     workerAdvanceReimbursementPayable: {
       currency,
       totalReimbursementPayableAmount: totalReimbursementPayable.toFixed(2),
+      totalDisbursedAmount: totalDisbursedAmount.toFixed(2),
       pendingReconciliationCount,
       reconciledPayableCount,
+      financeApprovedCount,
+      disbursedCount,
+      rejectedCount,
     },
     tenantInvoiceChargeEligibility: {
       eligibleRecordsCount,
@@ -339,6 +467,7 @@ export async function submitMaterialPurchaseRequest(
   actorUserId: string,
   executionScopeId: string,
   input: {
+    workOrderId?: unknown;
     materialExecutionLineId?: unknown;
     sourceItemId?: unknown;
     itemName: unknown;
@@ -458,12 +587,19 @@ export async function submitMaterialPurchaseRequest(
     }
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+    const workOrderId = await resolveOptionalWorkOrderId(
+      tx,
+      ctx,
+      input.workOrderId,
+      null,
+    );
 
     const record =
       await handymanMaterialPurchasingRepository.insertPurchaseRecord(tx, {
         id: randomUUID(),
         clientId: ctx.clientId,
         executionScopeId: ctx.executionScopeId,
+        workOrderId,
         handymanRequestId: ctx.handymanRequestId,
         tenantCompanyId: ctx.tenantCompanyId,
         buildingId: ctx.buildingId,
@@ -502,6 +638,7 @@ export async function submitMaterialPurchaseRequest(
         fundingSource,
         requestedQuantity,
         uomId,
+        workOrderId,
       },
     });
 
@@ -918,6 +1055,7 @@ export async function recordMaterialSupplierPurchase(
   executionScopeId: string,
   purchaseRecordId: string,
   input: {
+    workOrderId?: unknown;
     purchasedQuantity: unknown;
     supplierName: unknown;
     supplierReference?: unknown;
@@ -1096,46 +1234,117 @@ export async function recordMaterialSupplierPurchase(
       Number(purchasedQuantity) * Number(actualUnitPrice)
     ).toFixed(2);
 
+    // PART 01: ONLY worker personal out-of-pocket expenses ('REIMBURSEMENT')
+    // may generate a reimbursement claim; Handyman cash advances ('CASH_ADVANCE')
+    // and company funds ('PETTY_CASH', 'COMPANY_DIRECT') stay NOT_APPLICABLE.
     let reimbursementPayableAmount = '0.00';
     let reimbursementPayeeUserId: string | null = null;
+    let clearReimbursementPayee = true;
     let reimbursementStatus: HandymanMaterialReimbursementStatus =
       'NOT_APPLICABLE';
 
     if (record.fundingSource === 'REIMBURSEMENT') {
       reimbursementPayableAmount = actualTotalExpenseAmount;
       reimbursementPayeeUserId = record.requestedByUserId;
-      reimbursementStatus = 'PENDING_RECONCILIATION';
-    } else if (record.fundingSource === 'CASH_ADVANCE') {
-      reimbursementPayableAmount = '0.00';
-      reimbursementPayeeUserId = record.requestedByUserId;
+      clearReimbursementPayee = false;
       reimbursementStatus = 'PENDING_RECONCILIATION';
     }
 
-    await assertVerifiedManagedEvidenceReference(
+    const workOrderId = await resolveOptionalWorkOrderId(
+      tx,
+      ctx,
+      input.workOrderId,
+      record.workOrderId,
+    );
+
+    const verifiedReceipt = await assertVerifiedManagedEvidenceReference(
       tx,
       ctx,
       receiptEvidenceReference,
+      { requiredPurpose: 'MATERIAL_RECEIPT' },
     );
+    const receiptSha256Checksum = verifiedReceipt!.sha256Checksum;
 
-    const updated =
-      await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
-        purchaseRecordId: record.id,
-        status: 'PURCHASED',
-        latestEvidenceReference: receiptEvidenceReference,
-        purchasedQuantity,
-        supplierName,
-        supplierReference,
-        purchaseReference,
-        purchaseDate: parsedPurchaseDate,
-        currency,
-        actualUnitPrice,
-        actualTotalExpenseAmount,
-        expenditureReference,
-        receiptEvidenceReference,
-        reimbursementPayableAmount,
-        reimbursementPayeeUserId,
-        reimbursementStatus,
+    const dup =
+      await handymanMaterialPurchasingRepository.findDuplicateReceiptOrInvoice(
+        tx,
+        {
+          clientId: ctx.clientId,
+          excludeRecordId: record.id,
+          receiptEvidenceReference,
+          receiptSha256Checksum,
+          supplierName,
+          purchaseReference,
+        },
+      );
+    if (dup) {
+      if (
+        dup.executionScopeId !== ctx.executionScopeId ||
+        (workOrderId && dup.workOrderId && dup.workOrderId !== workOrderId)
+      ) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_CROSS_WORK_ORDER_CLAIM,
+          message:
+            'Receipt photo or supplier invoice reference has already been claimed on another Work Order.',
+          details: [
+            {
+              conflictingPurchaseRecordId: dup.id,
+              conflictingExecutionScopeId: dup.executionScopeId,
+              matchedBy: dup.matchedBy,
+            },
+          ],
+        });
+      }
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_MATERIAL_RECEIPT_DUPLICATE,
+        message:
+          'Duplicate receipt photo, receipt binary digest, or supplier invoice reference cannot be claimed more than once.',
+        details: [
+          {
+            conflictingPurchaseRecordId: dup.id,
+            matchedBy: dup.matchedBy,
+          },
+        ],
       });
+    }
+
+    let updated: HandymanMaterialPurchaseRecord;
+    try {
+      updated =
+        await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
+          purchaseRecordId: record.id,
+          status: 'PURCHASED',
+          latestEvidenceReference: receiptEvidenceReference,
+          workOrderId,
+          purchasedQuantity,
+          supplierName,
+          supplierReference,
+          purchaseReference,
+          purchaseDate: parsedPurchaseDate,
+          currency,
+          actualUnitPrice,
+          actualTotalExpenseAmount,
+          expenditureReference,
+          receiptEvidenceReference,
+          receiptSha256Checksum,
+          reimbursementPayableAmount,
+          reimbursementPayeeUserId,
+          clearReimbursementPayee,
+          reimbursementStatus,
+        });
+    } catch (err) {
+      if (isPgUniqueViolation(err)) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_MATERIAL_RECEIPT_DUPLICATE,
+          message:
+            'Duplicate receipt photo, receipt binary digest, or supplier invoice reference rejected.',
+        });
+      }
+      throw err;
+    }
 
     await handymanMaterialPurchasingRepository.insertEvent(tx, {
       id: randomUUID(),
@@ -1152,6 +1361,7 @@ export async function recordMaterialSupplierPurchase(
       notes,
       idempotencyKey,
       metadata: {
+        workOrderId,
         purchasedQuantity,
         supplierName,
         supplierReference,
@@ -1163,6 +1373,7 @@ export async function recordMaterialSupplierPurchase(
         fundingSource: record.fundingSource,
         expenditureReference,
         receiptEvidenceReference,
+        receiptSha256Checksum,
         reimbursementPayableAmount,
         reimbursementStatus,
       },
@@ -1578,6 +1789,8 @@ export async function reconcileMaterialPurchase(
   purchaseRecordId: string,
   input: {
     tenantChargeEligible?: unknown;
+    reimbursementEligible?: unknown;
+    reimbursementRejectionReason?: unknown;
     expenditureReference?: unknown;
     evidenceReference?: unknown;
     notes?: unknown;
@@ -1702,18 +1915,55 @@ export async function reconcileMaterialPurchase(
         : record.expenditureReference;
 
     let reimbursementStatus: HandymanMaterialReimbursementStatus =
-      record.reimbursementStatus;
-    let reimbursementPayableAmount = record.reimbursementPayableAmount;
+      'NOT_APPLICABLE';
+    let reimbursementPayableAmount = '0.00';
+    let clearReimbursementPayee = true;
+    let reimbursementRejectedByUserId: string | null = null;
+    let reimbursementRejectedAt: Date | null = null;
+    let reimbursementRejectionReason: string | null = null;
+
     if (record.fundingSource === 'REIMBURSEMENT') {
-      reimbursementStatus = 'RECONCILED_PAYABLE';
-      // If unused material was returned to supplier, reimburse net used; if returned to warehouse/company custody, reimburse full supplier receipt expense.
-      if (record.returnDestination === 'SUPPLIER_RETURN') {
-        reimbursementPayableAmount = record.netUsedExpenseAmount;
-      } else {
-        reimbursementPayableAmount = record.actualTotalExpenseAmount;
+      if (!record.receiptEvidenceReference) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED,
+          message:
+            'Personal out-of-pocket reimbursement requires a verified MATERIAL_RECEIPT photo.',
+        });
       }
-    } else if (record.fundingSource === 'CASH_ADVANCE') {
-      reimbursementStatus = 'RECONCILED_PAYABLE';
+      await assertVerifiedManagedEvidenceReference(
+        tx,
+        ctx,
+        record.receiptEvidenceReference,
+        { requiredPurpose: 'MATERIAL_RECEIPT' },
+      );
+
+      clearReimbursementPayee = false;
+      const eligible =
+        input.reimbursementEligible !== undefined
+          ? Boolean(input.reimbursementEligible)
+          : true;
+
+      if (!eligible) {
+        const rawReason = input.reimbursementRejectionReason ?? notes;
+        reimbursementRejectionReason = assertNonEmptyText(
+          rawReason,
+          'reimbursementRejectionReason',
+          500,
+        );
+        reimbursementStatus = 'REJECTED';
+        reimbursementPayableAmount = '0.00';
+        reimbursementRejectedByUserId = actorUserId;
+        reimbursementRejectedAt = new Date();
+      } else {
+        reimbursementStatus = 'RECONCILED_PAYABLE';
+        // If unused material was returned to supplier, reimburse net used; if returned to warehouse/company custody, reimburse full supplier receipt expense.
+        if (record.returnDestination === 'SUPPLIER_RETURN') {
+          reimbursementPayableAmount = record.netUsedExpenseAmount;
+        } else {
+          reimbursementPayableAmount = record.actualTotalExpenseAmount;
+        }
+      }
     }
 
     const evidenceReference =
@@ -1734,7 +1984,11 @@ export async function reconcileMaterialPurchase(
         latestEvidenceReference: evidenceReference,
         expenditureReference,
         reimbursementPayableAmount,
+        clearReimbursementPayee,
         reimbursementStatus,
+        reimbursementRejectedByUserId,
+        reimbursementRejectedAt,
+        reimbursementRejectionReason,
         tenantChargeEligible,
         tenantChargeEligibleQty,
         reconciledByUserId: actorUserId,
@@ -1854,66 +2108,189 @@ export async function listFieldMaterialPurchases(
   if (isPicPekerjaan) {
     return {
       actorRole: 'PIC_PEKERJAAN',
-      records: records.map((r) => ({
-        id: r.id,
-        executionScopeId: r.executionScopeId,
-        handymanRequestId: r.handymanRequestId,
-        materialExecutionLineId: r.materialExecutionLineId,
-        sourceItemId: r.sourceItemId,
-        itemName: r.itemName,
-        uomId: r.uomId,
-        uomCode: r.uomCode,
-        fundingSource: r.fundingSource,
-        status: r.status,
-        requestedQuantity: r.requestedQuantity,
-        approvedQuantity: r.approvedQuantity,
-        issuedQuantity: r.issuedQuantity,
-        purchasedQuantity: r.purchasedQuantity,
-        usedQuantity: r.usedQuantity,
-        returnedQuantity: r.returnedQuantity,
-        returnDestination: r.returnDestination,
-        supplierName: r.supplierName,
-        supplierReference: r.supplierReference,
-        purchaseReference: r.purchaseReference,
-        purchaseDate: r.purchaseDate,
-        currency: r.currency,
-        actualUnitPrice: r.actualUnitPrice,
-        actualTotalExpenseAmount: r.actualTotalExpenseAmount,
-        receiptEvidenceReference: r.receiptEvidenceReference,
-        latestEvidenceReference: r.latestEvidenceReference,
-        reimbursementPayableAmount: r.reimbursementPayableAmount,
-        reimbursementStatus: r.reimbursementStatus,
-        version: r.version,
-        createdAt: r.createdAt,
-        updatedAt: r.updatedAt,
-        events: eventsByRec.get(r.id) ?? [],
-      })),
+      records: records.map((r) => projectFieldRecordForPic(r, eventsByRec.get(r.id) ?? [])),
     };
   }
 
   // Inspector receives operational material movement view without supplier expense / commercial pricing details
   return {
     actorRole: 'INSPECTOR',
-    records: records.map((r) => ({
-      id: r.id,
-      executionScopeId: r.executionScopeId,
-      handymanRequestId: r.handymanRequestId,
-      itemName: r.itemName,
-      uomId: r.uomId,
-      uomCode: r.uomCode,
-      status: r.status,
-      requestedQuantity: r.requestedQuantity,
-      approvedQuantity: r.approvedQuantity,
-      issuedQuantity: r.issuedQuantity,
-      purchasedQuantity: r.purchasedQuantity,
-      usedQuantity: r.usedQuantity,
-      returnedQuantity: r.returnedQuantity,
-      latestEvidenceReference: r.latestEvidenceReference,
-      version: r.version,
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-    })),
+    records: records.map((r) => projectFieldRecordForInspector(r)),
   };
+}
+
+function projectFieldRecordForPic(
+  r: HandymanMaterialPurchaseRecord,
+  events: HandymanMaterialPurchaseEventRecord[],
+): Record<string, unknown> {
+  return {
+    id: r.id,
+    executionScopeId: r.executionScopeId,
+    workOrderId: r.workOrderId,
+    handymanRequestId: r.handymanRequestId,
+    materialExecutionLineId: r.materialExecutionLineId,
+    sourceItemId: r.sourceItemId,
+    itemName: r.itemName,
+    uomId: r.uomId,
+    uomCode: r.uomCode,
+    fundingSource: r.fundingSource,
+    status: r.status,
+    requestedQuantity: r.requestedQuantity,
+    approvedQuantity: r.approvedQuantity,
+    issuedQuantity: r.issuedQuantity,
+    purchasedQuantity: r.purchasedQuantity,
+    usedQuantity: r.usedQuantity,
+    returnedQuantity: r.returnedQuantity,
+    returnDestination: r.returnDestination,
+    supplierName: r.supplierName,
+    supplierReference: r.supplierReference,
+    purchaseReference: r.purchaseReference,
+    purchaseDate: r.purchaseDate,
+    currency: r.currency,
+    actualUnitPrice: r.actualUnitPrice,
+    actualTotalExpenseAmount: r.actualTotalExpenseAmount,
+    netUsedExpenseAmount: r.netUsedExpenseAmount,
+    cashAdvanceReference: r.cashAdvanceReference,
+    receiptEvidenceReference: r.receiptEvidenceReference,
+    receiptSha256Checksum: r.receiptSha256Checksum,
+    latestEvidenceReference: r.latestEvidenceReference,
+    reimbursementPayableAmount: r.reimbursementPayableAmount,
+    reimbursementStatus: r.reimbursementStatus,
+    reimbursementFinanceApprovalReference:
+      r.reimbursementFinanceApprovalReference,
+    reimbursementFinanceApprovedAt: r.reimbursementFinanceApprovedAt,
+    reimbursementDisbursementReference: r.reimbursementDisbursementReference,
+    reimbursementDisbursementMethod: r.reimbursementDisbursementMethod,
+    reimbursementDisbursedAmount: r.reimbursementDisbursedAmount,
+    reimbursementDisbursedAt: r.reimbursementDisbursedAt,
+    reimbursementRejectionReason: r.reimbursementRejectionReason,
+    version: r.version,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    events,
+  };
+}
+
+function projectFieldRecordForInspector(
+  r: HandymanMaterialPurchaseRecord,
+): Record<string, unknown> {
+  return {
+    id: r.id,
+    executionScopeId: r.executionScopeId,
+    workOrderId: r.workOrderId,
+    handymanRequestId: r.handymanRequestId,
+    itemName: r.itemName,
+    uomId: r.uomId,
+    uomCode: r.uomCode,
+    status: r.status,
+    requestedQuantity: r.requestedQuantity,
+    approvedQuantity: r.approvedQuantity,
+    issuedQuantity: r.issuedQuantity,
+    purchasedQuantity: r.purchasedQuantity,
+    usedQuantity: r.usedQuantity,
+    returnedQuantity: r.returnedQuantity,
+    latestEvidenceReference: r.latestEvidenceReference,
+    version: r.version,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  };
+}
+
+/**
+ * Field Single-Record Read: Assigned PIC Pekerjaan or Inspector reads one
+ * material purchase record within their role scope.
+ */
+export async function getFieldMaterialPurchase(
+  actorUserId: string,
+  executionScopeId: string,
+  purchaseRecordId: string,
+): Promise<{
+  actorRole: 'PIC_PEKERJAAN' | 'INSPECTOR';
+  record: Record<string, unknown>;
+}> {
+  const ctx = await loadExecutionScopeContext(executionScopeId);
+  const validRecordId = assertUuid(purchaseRecordId, 'purchaseRecordId');
+  const { isPicPekerjaan, isInspector } =
+    await resolveFieldRoleForExecutionScope(actorUserId, ctx);
+
+  if (!isPicPekerjaan && !isInspector) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_FIELD_READ_FORBIDDEN,
+      message:
+        'User is not an authorized assigned PIC Pekerjaan or Inspector for this Work Order.',
+    });
+  }
+
+  const record = await handymanMaterialPurchasingRepository.findById(
+    validRecordId,
+    ctx.executionScopeId,
+  );
+  if (!record) {
+    throw new AppError({
+      statusCode: 404,
+      code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND,
+      message: 'Handyman material purchase record not found.',
+    });
+  }
+
+  if (isPicPekerjaan) {
+    const events =
+      await handymanMaterialPurchasingRepository.listEventsByRecord(record.id);
+    return {
+      actorRole: 'PIC_PEKERJAAN',
+      record: projectFieldRecordForPic(record, events),
+    };
+  }
+
+  return {
+    actorRole: 'INSPECTOR',
+    record: projectFieldRecordForInspector(record),
+  };
+}
+
+/**
+ * Operations Single-Record Read: Full material purchase record + event history.
+ */
+export async function getOperationsMaterialPurchase(
+  actorUserId: string,
+  executionScopeId: string,
+  purchaseRecordId: string,
+): Promise<{
+  record: HandymanMaterialPurchaseRecord;
+  events: HandymanMaterialPurchaseEventRecord[];
+}> {
+  const ctx = await loadExecutionScopeContext(executionScopeId);
+  const validRecordId = assertUuid(purchaseRecordId, 'purchaseRecordId');
+  await assertBuildingScopeAccess(actorUserId, ctx);
+
+  const hasRead = await userHasPermissionCode(
+    actorUserId,
+    'tenant_company.read',
+  );
+  if (!hasRead) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN,
+      message: 'Missing required permission: tenant_company.read.',
+    });
+  }
+
+  const record = await handymanMaterialPurchasingRepository.findById(
+    validRecordId,
+    ctx.executionScopeId,
+  );
+  if (!record) {
+    throw new AppError({
+      statusCode: 404,
+      code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND,
+      message: 'Handyman material purchase record not found.',
+    });
+  }
+  const events = await handymanMaterialPurchasingRepository.listEventsByRecord(
+    record.id,
+  );
+  return { record, events };
 }
 
 /**
@@ -1971,4 +2348,808 @@ export async function listOperationsMaterialPurchases(
       records,
     ),
   };
+}
+
+/**
+ * Finance Read (Execution Scope): Lists reimbursement-relevant material
+ * purchases and 4-way ledger summary for a specific execution scope.
+ */
+export async function listScopeFinanceMaterialReimbursements(
+  actorUserId: string,
+  executionScopeId: string,
+): Promise<{
+  records: Array<
+    HandymanMaterialPurchaseRecord & {
+      events: HandymanMaterialPurchaseEventRecord[];
+    }
+  >;
+  separationSummary: MaterialLedgerSeparationSummary;
+}> {
+  const ctx = await loadExecutionScopeContext(executionScopeId);
+  await assertFinanceReimbursementActor(actorUserId, ctx, 'read');
+
+  const records =
+    await handymanMaterialPurchasingRepository.listByExecutionScope(
+      ctx.executionScopeId,
+    );
+  const allEvents =
+    await handymanMaterialPurchasingRepository.listEventsByExecutionScope(
+      ctx.executionScopeId,
+    );
+  const eventsByRec = new Map<string, HandymanMaterialPurchaseEventRecord[]>();
+  for (const ev of allEvents) {
+    const arr = eventsByRec.get(ev.purchaseRecordId) ?? [];
+    arr.push(ev);
+    eventsByRec.set(ev.purchaseRecordId, arr);
+  }
+
+  return {
+    records: records
+      .filter((r) => r.fundingSource === 'REIMBURSEMENT')
+      .map((r) => ({
+        ...r,
+        events: eventsByRec.get(r.id) ?? [],
+      })),
+    separationSummary: computeMaterialLedgerSeparationSummary(
+      ctx.executionScopeId,
+      records,
+    ),
+  };
+}
+
+/**
+ * Finance Read (Assigned Buildings Queue): Lists personal out-of-pocket worker
+ * reimbursements strictly within Buildings assigned to the Finance actor.
+ */
+export async function listFinanceMaterialReimbursements(
+  actorUserId: string,
+  rawQuery: unknown,
+): Promise<{
+  items: Array<
+    HandymanMaterialPurchaseRecord & {
+      events: HandymanMaterialPurchaseEventRecord[];
+    }
+  >;
+}> {
+  const query = assertStrictBodyAllowlist(rawQuery ?? {}, [
+    'buildingId',
+    'executionScopeId',
+    'workOrderId',
+    'reimbursementStatus',
+    'limit',
+  ]);
+  const perms = await permissionService.resolvePermissionsForUser(actorUserId);
+  if (
+    !perms.includes('handyman.finance.read') &&
+    !perms.includes('handyman.finance.manage')
+  ) {
+    throw new AppError({
+      statusCode: 403,
+      code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN,
+      message: 'Missing required Finance read authority: handyman.finance.read.',
+    });
+  }
+
+  const buildingId =
+    query.buildingId !== undefined &&
+    query.buildingId !== null &&
+    query.buildingId !== ''
+      ? assertUuid(query.buildingId, 'buildingId')
+      : undefined;
+  const executionScopeId =
+    query.executionScopeId !== undefined &&
+    query.executionScopeId !== null &&
+    query.executionScopeId !== ''
+      ? assertUuid(query.executionScopeId, 'executionScopeId')
+      : undefined;
+  const workOrderId =
+    query.workOrderId !== undefined &&
+    query.workOrderId !== null &&
+    query.workOrderId !== ''
+      ? assertUuid(query.workOrderId, 'workOrderId')
+      : undefined;
+
+  let reimbursementStatus: HandymanMaterialReimbursementStatus | undefined;
+  if (
+    query.reimbursementStatus !== undefined &&
+    query.reimbursementStatus !== null &&
+    query.reimbursementStatus !== ''
+  ) {
+    if (
+      typeof query.reimbursementStatus !== 'string' ||
+      !(HANDYMAN_MATERIAL_REIMBURSEMENT_STATUSES as readonly string[]).includes(
+        query.reimbursementStatus,
+      )
+    ) {
+      throw AppError.validation(
+        `reimbursementStatus must be one of: ${HANDYMAN_MATERIAL_REIMBURSEMENT_STATUSES.join(', ')}.`,
+      );
+    }
+    reimbursementStatus =
+      query.reimbursementStatus as HandymanMaterialReimbursementStatus;
+  }
+
+  let limit: number | undefined;
+  if (query.limit !== undefined && query.limit !== null && query.limit !== '') {
+    const parsed = Number(query.limit);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+      throw AppError.validation('limit must be an integer between 1 and 200.');
+    }
+    limit = parsed;
+  }
+
+  const records =
+    await handymanMaterialPurchasingRepository.listReimbursementsForFinanceActor(
+      actorUserId,
+      {
+        buildingId,
+        executionScopeId,
+        workOrderId,
+        reimbursementStatus,
+        limit,
+      },
+    );
+  const events =
+    await handymanMaterialPurchasingRepository.listEventsByRecordIds(
+      records.map((r) => r.id),
+    );
+  const eventsByRec = new Map<string, HandymanMaterialPurchaseEventRecord[]>();
+  for (const ev of events) {
+    const arr = eventsByRec.get(ev.purchaseRecordId) ?? [];
+    arr.push(ev);
+    eventsByRec.set(ev.purchaseRecordId, arr);
+  }
+
+  return {
+    items: records.map((r) => ({
+      ...r,
+      events: eventsByRec.get(r.id) ?? [],
+    })),
+  };
+}
+
+/**
+ * 7A. FINANCE REIMBURSEMENT APPROVAL — Authorized Finance actor (`handyman.finance.manage`)
+ *     approves an Operations-verified (`RECONCILED_PAYABLE`) personal out-of-pocket
+ *     worker reimbursement claim for disbursement.
+ */
+export async function approveMaterialPurchaseReimbursement(
+  actorUserId: string,
+  executionScopeId: string,
+  purchaseRecordId: string,
+  rawBody: unknown,
+): Promise<{
+  replayed: boolean;
+  record: HandymanMaterialPurchaseRecord;
+  events: HandymanMaterialPurchaseEventRecord[];
+}> {
+  const input = assertStrictBodyAllowlist(rawBody, [
+    'approvalReference',
+    'notes',
+    'idempotencyKey',
+    'expectedVersion',
+  ]);
+  const ctx = await loadExecutionScopeContext(executionScopeId);
+  const validRecordId = assertUuid(purchaseRecordId, 'purchaseRecordId');
+  const approvalReference = assertNonEmptyText(
+    input.approvalReference,
+    'approvalReference',
+    200,
+  );
+  const idempotencyKey = assertNonEmptyText(
+    input.idempotencyKey,
+    'idempotencyKey',
+    128,
+  );
+  const notes =
+    typeof input.notes === 'string' && input.notes.trim().length > 0
+      ? input.notes.trim()
+      : null;
+
+  return withTransaction(async (tx) => {
+    const record =
+      await handymanMaterialPurchasingRepository.findByIdForUpdate(
+        tx,
+        validRecordId,
+        ctx.executionScopeId,
+      );
+    if (!record) {
+      throw new AppError({
+        statusCode: 404,
+        code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND,
+        message: 'Handyman material purchase record not found.',
+      });
+    }
+
+    await assertFinanceReimbursementActor(actorUserId, ctx, 'manage', [
+      record.requestedByUserId,
+      record.reimbursementPayeeUserId,
+    ]);
+
+    const existingEv =
+      await handymanMaterialPurchasingRepository.findEventByIdempotencyKey(
+        tx,
+        record.id,
+        'REIMBURSEMENT_APPROVED',
+        idempotencyKey,
+      );
+    if (existingEv) {
+      if (
+        record.reimbursementFinanceApprovalReference !== approvalReference
+      ) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT,
+          message:
+            'idempotencyKey was already used with a different Finance reimbursement approvalReference.',
+        });
+      }
+      const events =
+        await handymanMaterialPurchasingRepository.listEventsByRecord(
+          record.id,
+          tx,
+        );
+      return { replayed: true, record, events };
+    }
+
+    assertExpectedVersion(record, input.expectedVersion);
+
+    if (record.fundingSource !== 'REIMBURSEMENT') {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE,
+        message: `Funding source ${record.fundingSource} is not eligible for worker personal reimbursement.`,
+      });
+    }
+    if (record.reimbursementStatus === 'DISBURSED') {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED,
+        message:
+          'Worker reimbursement has already been disbursed and cannot be modified.',
+      });
+    }
+    if (
+      record.status !== 'RECONCILIATION' ||
+      record.reimbursementStatus !== 'RECONCILED_PAYABLE' ||
+      Number(record.reimbursementPayableAmount) <= 0
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_ILLEGAL_TRANSITION,
+        message: `Cannot approve worker reimbursement when purchase status is ${record.status} and reimbursementStatus is ${record.reimbursementStatus}. Operations verification (RECONCILIATION / RECONCILED_PAYABLE) is required first.`,
+      });
+    }
+
+    if (!record.receiptEvidenceReference) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED,
+        message:
+          'Cannot approve worker reimbursement without a verified MATERIAL_RECEIPT photo.',
+      });
+    }
+    await assertVerifiedManagedEvidenceReference(
+      tx,
+      ctx,
+      record.receiptEvidenceReference,
+      { requiredPurpose: 'MATERIAL_RECEIPT' },
+    );
+
+    const approvedAt = new Date();
+    const updated =
+      await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
+        purchaseRecordId: record.id,
+        status: record.status,
+        latestEvidenceReference: record.latestEvidenceReference,
+        reimbursementStatus: 'FINANCE_APPROVED',
+        reimbursementFinanceApprovalReference: approvalReference,
+        reimbursementFinanceApprovedByUserId: actorUserId,
+        reimbursementFinanceApprovedAt: approvedAt,
+      });
+
+    await handymanMaterialPurchasingRepository.insertEvent(tx, {
+      id: randomUUID(),
+      clientId: ctx.clientId,
+      purchaseRecordId: record.id,
+      executionScopeId: ctx.executionScopeId,
+      eventType: 'REIMBURSEMENT_APPROVED',
+      fromStatus: record.status,
+      toStatus: record.status,
+      actorUserId,
+      actorRole: 'FINANCE_MANAGER',
+      quantityDelta: '0.000',
+      evidenceReference: record.receiptEvidenceReference,
+      notes,
+      idempotencyKey,
+      metadata: {
+        workOrderId: record.workOrderId,
+        approvalReference,
+        reimbursementPayableAmount: record.reimbursementPayableAmount,
+        reimbursementPayeeUserId: record.reimbursementPayeeUserId,
+        fromReimbursementStatus: record.reimbursementStatus,
+        toReimbursementStatus: 'FINANCE_APPROVED',
+      },
+    });
+
+    await recordOperationalEvent(
+      {
+        clientId: ctx.clientId,
+        buildingId: ctx.buildingId,
+        actorUserId,
+        eventType: 'handyman_material_reimbursement.approved',
+        entityType: 'handyman_material_purchase_record',
+        entityId: record.id,
+        summary: `Finance approved worker reimbursement (${record.reimbursementPayableAmount} ${record.currency}, ref ${approvalReference})`,
+        metadata: {
+          executionScopeId: ctx.executionScopeId,
+          workOrderId: record.workOrderId,
+          approvalReference,
+          reimbursementPayableAmount: record.reimbursementPayableAmount,
+          reimbursementPayeeUserId: record.reimbursementPayeeUserId,
+        },
+      },
+      tx,
+    );
+
+    const events =
+      await handymanMaterialPurchasingRepository.listEventsByRecord(
+        record.id,
+        tx,
+      );
+    return { replayed: false, record: updated, events };
+  });
+}
+
+/**
+ * 7B. FINANCE REIMBURSEMENT REJECTION — Authorized Finance actor (`handyman.finance.manage`)
+ *     rejects an un-disbursed worker reimbursement claim with an explicit reason.
+ */
+export async function rejectMaterialPurchaseReimbursement(
+  actorUserId: string,
+  executionScopeId: string,
+  purchaseRecordId: string,
+  rawBody: unknown,
+): Promise<{
+  replayed: boolean;
+  record: HandymanMaterialPurchaseRecord;
+  events: HandymanMaterialPurchaseEventRecord[];
+}> {
+  const input = assertStrictBodyAllowlist(rawBody, [
+    'reason',
+    'notes',
+    'idempotencyKey',
+    'expectedVersion',
+  ]);
+  const ctx = await loadExecutionScopeContext(executionScopeId);
+  const validRecordId = assertUuid(purchaseRecordId, 'purchaseRecordId');
+  const reason = assertNonEmptyText(input.reason, 'reason', 500);
+  const idempotencyKey = assertNonEmptyText(
+    input.idempotencyKey,
+    'idempotencyKey',
+    128,
+  );
+  const notes =
+    typeof input.notes === 'string' && input.notes.trim().length > 0
+      ? input.notes.trim()
+      : reason;
+
+  return withTransaction(async (tx) => {
+    const record =
+      await handymanMaterialPurchasingRepository.findByIdForUpdate(
+        tx,
+        validRecordId,
+        ctx.executionScopeId,
+      );
+    if (!record) {
+      throw new AppError({
+        statusCode: 404,
+        code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND,
+        message: 'Handyman material purchase record not found.',
+      });
+    }
+
+    await assertFinanceReimbursementActor(actorUserId, ctx, 'manage', [
+      record.requestedByUserId,
+      record.reimbursementPayeeUserId,
+    ]);
+
+    const existingEv =
+      await handymanMaterialPurchasingRepository.findEventByIdempotencyKey(
+        tx,
+        record.id,
+        'REIMBURSEMENT_REJECTED',
+        idempotencyKey,
+      );
+    if (existingEv) {
+      if (record.reimbursementRejectionReason !== reason) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT,
+          message:
+            'idempotencyKey was already used with a different Finance reimbursement rejection reason.',
+        });
+      }
+      const events =
+        await handymanMaterialPurchasingRepository.listEventsByRecord(
+          record.id,
+          tx,
+        );
+      return { replayed: true, record, events };
+    }
+
+    assertExpectedVersion(record, input.expectedVersion);
+
+    if (record.fundingSource !== 'REIMBURSEMENT') {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE,
+        message: `Funding source ${record.fundingSource} is not eligible for worker personal reimbursement.`,
+      });
+    }
+    if (record.reimbursementStatus === 'DISBURSED') {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED,
+        message:
+          'Worker reimbursement has already been disbursed and cannot be rejected.',
+      });
+    }
+    if (
+      record.status !== 'RECONCILIATION' ||
+      (record.reimbursementStatus !== 'RECONCILED_PAYABLE' &&
+        record.reimbursementStatus !== 'FINANCE_APPROVED')
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_ILLEGAL_TRANSITION,
+        message: `Cannot reject worker reimbursement when purchase status is ${record.status} and reimbursementStatus is ${record.reimbursementStatus}.`,
+      });
+    }
+
+    const updated =
+      await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
+        purchaseRecordId: record.id,
+        status: record.status,
+        latestEvidenceReference: record.latestEvidenceReference,
+        reimbursementStatus: 'REJECTED',
+        reimbursementPayableAmount: '0.00',
+        reimbursementRejectedByUserId: actorUserId,
+        reimbursementRejectedAt: new Date(),
+        reimbursementRejectionReason: reason,
+      });
+
+    await handymanMaterialPurchasingRepository.insertEvent(tx, {
+      id: randomUUID(),
+      clientId: ctx.clientId,
+      purchaseRecordId: record.id,
+      executionScopeId: ctx.executionScopeId,
+      eventType: 'REIMBURSEMENT_REJECTED',
+      fromStatus: record.status,
+      toStatus: record.status,
+      actorUserId,
+      actorRole: 'FINANCE_MANAGER',
+      quantityDelta: '0.000',
+      evidenceReference:
+        record.receiptEvidenceReference ?? record.latestEvidenceReference,
+      notes,
+      idempotencyKey,
+      metadata: {
+        workOrderId: record.workOrderId,
+        reason,
+        previousReimbursementPayableAmount: record.reimbursementPayableAmount,
+        fromReimbursementStatus: record.reimbursementStatus,
+        toReimbursementStatus: 'REJECTED',
+      },
+    });
+
+    await recordOperationalEvent(
+      {
+        clientId: ctx.clientId,
+        buildingId: ctx.buildingId,
+        actorUserId,
+        eventType: 'handyman_material_reimbursement.rejected',
+        entityType: 'handyman_material_purchase_record',
+        entityId: record.id,
+        summary: `Finance rejected worker reimbursement (${reason})`,
+        metadata: {
+          executionScopeId: ctx.executionScopeId,
+          workOrderId: record.workOrderId,
+          reason,
+        },
+      },
+      tx,
+    );
+
+    const events =
+      await handymanMaterialPurchasingRepository.listEventsByRecord(
+        record.id,
+        tx,
+      );
+    return { replayed: false, record: updated, events };
+  });
+}
+
+/**
+ * 7C. FINANCE REIMBURSEMENT DISBURSEMENT — Authorized Finance actor (`handyman.finance.manage`)
+ *     records payout/disbursement of a Finance-approved worker reimbursement,
+ *     preventing disbursement without prior approval and preventing double payment.
+ */
+export async function disburseMaterialPurchaseReimbursement(
+  actorUserId: string,
+  executionScopeId: string,
+  purchaseRecordId: string,
+  rawBody: unknown,
+): Promise<{
+  replayed: boolean;
+  record: HandymanMaterialPurchaseRecord;
+  events: HandymanMaterialPurchaseEventRecord[];
+}> {
+  const input = assertStrictBodyAllowlist(rawBody, [
+    'disbursementReference',
+    'disbursementMethod',
+    'disbursedAmount',
+    'evidenceReference',
+    'notes',
+    'idempotencyKey',
+    'expectedVersion',
+  ]);
+  const ctx = await loadExecutionScopeContext(executionScopeId);
+  const validRecordId = assertUuid(purchaseRecordId, 'purchaseRecordId');
+  const disbursementReference = assertNonEmptyText(
+    input.disbursementReference,
+    'disbursementReference',
+    200,
+  );
+  const rawMethod =
+    typeof input.disbursementMethod === 'string' &&
+    input.disbursementMethod.trim().length > 0
+      ? input.disbursementMethod.trim().toUpperCase()
+      : 'BANK_TRANSFER';
+  if (
+    !(HANDYMAN_REIMBURSEMENT_DISBURSEMENT_METHODS as readonly string[]).includes(
+      rawMethod,
+    )
+  ) {
+    throw AppError.validation(
+      `disbursementMethod must be one of: ${HANDYMAN_REIMBURSEMENT_DISBURSEMENT_METHODS.join(', ')}.`,
+    );
+  }
+  const disbursementMethod =
+    rawMethod as HandymanReimbursementDisbursementMethod;
+  const requestedDisbursedAmount =
+    input.disbursedAmount !== undefined && input.disbursedAmount !== null
+      ? assertNonNegativeAmount(input.disbursedAmount, 'disbursedAmount')
+      : null;
+  const idempotencyKey = assertNonEmptyText(
+    input.idempotencyKey,
+    'idempotencyKey',
+    128,
+  );
+  const notes =
+    typeof input.notes === 'string' && input.notes.trim().length > 0
+      ? input.notes.trim()
+      : null;
+
+  return withTransaction(async (tx) => {
+    const record =
+      await handymanMaterialPurchasingRepository.findByIdForUpdate(
+        tx,
+        validRecordId,
+        ctx.executionScopeId,
+      );
+    if (!record) {
+      throw new AppError({
+        statusCode: 404,
+        code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND,
+        message: 'Handyman material purchase record not found.',
+      });
+    }
+
+    await assertFinanceReimbursementActor(actorUserId, ctx, 'manage', [
+      record.requestedByUserId,
+      record.reimbursementPayeeUserId,
+    ]);
+
+    const existingEv =
+      await handymanMaterialPurchasingRepository.findEventByIdempotencyKey(
+        tx,
+        record.id,
+        'REIMBURSEMENT_DISBURSED',
+        idempotencyKey,
+      );
+    if (existingEv) {
+      if (
+        record.reimbursementDisbursementReference !== disbursementReference ||
+        record.reimbursementDisbursementMethod !== disbursementMethod ||
+        (requestedDisbursedAmount !== null &&
+          record.reimbursementDisbursedAmount !== requestedDisbursedAmount)
+      ) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT,
+          message:
+            'idempotencyKey was already used with a different Finance disbursement payload.',
+        });
+      }
+      const events =
+        await handymanMaterialPurchasingRepository.listEventsByRecord(
+          record.id,
+          tx,
+        );
+      return { replayed: true, record, events };
+    }
+
+    if (record.fundingSource !== 'REIMBURSEMENT') {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE,
+        message: `Funding source ${record.fundingSource} is not eligible for worker personal reimbursement.`,
+      });
+    }
+
+    if (record.reimbursementStatus === 'DISBURSED') {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED,
+        message:
+          'Worker reimbursement has already been disbursed; double payment is prohibited.',
+      });
+    }
+
+    if (
+      record.status !== 'RECONCILIATION' ||
+      record.reimbursementStatus !== 'FINANCE_APPROVED' ||
+      !record.reimbursementFinanceApprovedByUserId ||
+      !record.reimbursementFinanceApprovedAt
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_APPROVAL_REQUIRED,
+        message: `Cannot disburse worker reimbursement when reimbursementStatus is ${record.reimbursementStatus}: Finance approval is required before disbursement.`,
+      });
+    }
+
+    assertExpectedVersion(record, input.expectedVersion);
+
+    if (
+      requestedDisbursedAmount !== null &&
+      requestedDisbursedAmount !== record.reimbursementPayableAmount
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_AMOUNT_MISMATCH,
+        message: `disbursedAmount (${requestedDisbursedAmount}) must equal approved reimbursementPayableAmount (${record.reimbursementPayableAmount}).`,
+      });
+    }
+
+    const dupDisb =
+      await handymanMaterialPurchasingRepository.findDuplicateDisbursementReference(
+        tx,
+        {
+          clientId: ctx.clientId,
+          excludeRecordId: record.id,
+          disbursementReference,
+        },
+      );
+    if (dupDisb) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED,
+        message:
+          'disbursementReference has already been recorded on another worker reimbursement payout.',
+      });
+    }
+
+    if (!record.receiptEvidenceReference) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED,
+        message:
+          'Cannot disburse worker reimbursement without a verified MATERIAL_RECEIPT photo.',
+      });
+    }
+    await assertVerifiedManagedEvidenceReference(
+      tx,
+      ctx,
+      record.receiptEvidenceReference,
+      { requiredPurpose: 'MATERIAL_RECEIPT' },
+    );
+
+    const payoutEvidenceReference =
+      input.evidenceReference !== undefined && input.evidenceReference !== null
+        ? assertNonEmptyText(
+            input.evidenceReference,
+            'evidenceReference',
+            500,
+          )
+        : record.receiptEvidenceReference;
+    if (payoutEvidenceReference !== record.receiptEvidenceReference) {
+      await assertVerifiedManagedEvidenceReference(
+        tx,
+        ctx,
+        payoutEvidenceReference,
+      );
+    }
+
+    let updated: HandymanMaterialPurchaseRecord;
+    try {
+      updated =
+        await handymanMaterialPurchasingRepository.updatePurchaseRecord(tx, {
+          purchaseRecordId: record.id,
+          status: record.status,
+          latestEvidenceReference: payoutEvidenceReference,
+          reimbursementStatus: 'DISBURSED',
+          reimbursementDisbursementReference: disbursementReference,
+          reimbursementDisbursementMethod: disbursementMethod,
+          reimbursementDisbursedAmount: record.reimbursementPayableAmount,
+          reimbursementDisbursedByUserId: actorUserId,
+          reimbursementDisbursedAt: new Date(),
+        });
+    } catch (err) {
+      if (isPgUniqueViolation(err)) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED,
+          message:
+            'disbursementReference has already been recorded on another worker reimbursement payout.',
+        });
+      }
+      throw err;
+    }
+
+    await handymanMaterialPurchasingRepository.insertEvent(tx, {
+      id: randomUUID(),
+      clientId: ctx.clientId,
+      purchaseRecordId: record.id,
+      executionScopeId: ctx.executionScopeId,
+      eventType: 'REIMBURSEMENT_DISBURSED',
+      fromStatus: record.status,
+      toStatus: record.status,
+      actorUserId,
+      actorRole: 'FINANCE_MANAGER',
+      quantityDelta: '0.000',
+      evidenceReference: payoutEvidenceReference,
+      notes,
+      idempotencyKey,
+      metadata: {
+        workOrderId: record.workOrderId,
+        disbursementReference,
+        disbursementMethod,
+        reimbursementDisbursedAmount: record.reimbursementPayableAmount,
+        reimbursementPayeeUserId: record.reimbursementPayeeUserId,
+        financeApprovalReference: record.reimbursementFinanceApprovalReference,
+        fromReimbursementStatus: record.reimbursementStatus,
+        toReimbursementStatus: 'DISBURSED',
+      },
+    });
+
+    await recordOperationalEvent(
+      {
+        clientId: ctx.clientId,
+        buildingId: ctx.buildingId,
+        actorUserId,
+        eventType: 'handyman_material_reimbursement.disbursed',
+        entityType: 'handyman_material_purchase_record',
+        entityId: record.id,
+        summary: `Finance disbursed worker reimbursement (${record.reimbursementPayableAmount} ${record.currency}, ref ${disbursementReference})`,
+        metadata: {
+          executionScopeId: ctx.executionScopeId,
+          workOrderId: record.workOrderId,
+          disbursementReference,
+          disbursementMethod,
+          reimbursementDisbursedAmount: record.reimbursementPayableAmount,
+          reimbursementPayeeUserId: record.reimbursementPayeeUserId,
+        },
+      },
+      tx,
+    );
+
+    const events =
+      await handymanMaterialPurchasingRepository.listEventsByRecord(
+        record.id,
+        tx,
+      );
+    return { replayed: false, record: updated, events };
+  });
 }

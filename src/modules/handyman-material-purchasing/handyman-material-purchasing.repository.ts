@@ -2,11 +2,14 @@ import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   HandymanMaterialFundingSource,
+  HandymanMaterialPurchaseActorRole,
   HandymanMaterialPurchaseEventRecord,
+  HandymanMaterialPurchaseEventType,
   HandymanMaterialPurchaseRecord,
   HandymanMaterialPurchaseStatus,
   HandymanMaterialReimbursementStatus,
   HandymanMaterialReturnDestination,
+  HandymanReimbursementDisbursementMethod,
 } from './handyman-material-purchasing.types';
 
 type DbExecutor = Pick<PoolClient, 'query'>;
@@ -15,6 +18,7 @@ interface PurchaseRow {
   id: string;
   client_id: string;
   execution_scope_id: string;
+  work_order_id: string | null;
   handyman_request_id: string;
   tenant_company_id: string;
   building_id: string;
@@ -45,10 +49,22 @@ interface PurchaseRow {
   expenditure_reference: string | null;
   cash_advance_reference: string | null;
   receipt_evidence_reference: string | null;
+  receipt_sha256_checksum: string | null;
   latest_evidence_reference: string;
   reimbursement_payable_amount: string;
   reimbursement_payee_user_id: string | null;
   reimbursement_status: HandymanMaterialReimbursementStatus;
+  reimbursement_finance_approval_reference: string | null;
+  reimbursement_finance_approved_by_user_id: string | null;
+  reimbursement_finance_approved_at: Date | string | null;
+  reimbursement_disbursement_reference: string | null;
+  reimbursement_disbursement_method: HandymanReimbursementDisbursementMethod | null;
+  reimbursement_disbursed_amount: string;
+  reimbursement_disbursed_by_user_id: string | null;
+  reimbursement_disbursed_at: Date | string | null;
+  reimbursement_rejected_by_user_id: string | null;
+  reimbursement_rejected_at: Date | string | null;
+  reimbursement_rejection_reason: string | null;
   tenant_charge_eligible: boolean;
   tenant_charge_eligible_qty: string;
   tenant_invoiced: boolean;
@@ -67,11 +83,11 @@ interface PurchaseEventRow {
   client_id: string;
   purchase_record_id: string;
   execution_scope_id: string;
-  event_type: HandymanMaterialPurchaseStatus;
+  event_type: HandymanMaterialPurchaseEventType;
   from_status: HandymanMaterialPurchaseStatus | null;
   to_status: HandymanMaterialPurchaseStatus;
   actor_user_id: string;
-  actor_role: 'PIC_PEKERJAAN' | 'OPERATIONS_MANAGER';
+  actor_role: HandymanMaterialPurchaseActorRole;
   quantity_delta: string;
   evidence_reference: string;
   notes: string | null;
@@ -90,6 +106,7 @@ function mapPurchaseRow(row: PurchaseRow): HandymanMaterialPurchaseRecord {
     id: row.id,
     clientId: row.client_id,
     executionScopeId: row.execution_scope_id,
+    workOrderId: row.work_order_id ?? null,
     handymanRequestId: row.handyman_request_id,
     tenantCompanyId: row.tenant_company_id,
     buildingId: row.building_id,
@@ -128,12 +145,34 @@ function mapPurchaseRow(row: PurchaseRow): HandymanMaterialPurchaseRecord {
     expenditureReference: row.expenditure_reference,
     cashAdvanceReference: row.cash_advance_reference,
     receiptEvidenceReference: row.receipt_evidence_reference,
+    receiptSha256Checksum: row.receipt_sha256_checksum ?? null,
     latestEvidenceReference: row.latest_evidence_reference,
     reimbursementPayableAmount: Number(
       row.reimbursement_payable_amount,
     ).toFixed(2),
     reimbursementPayeeUserId: row.reimbursement_payee_user_id,
     reimbursementStatus: row.reimbursement_status,
+    reimbursementFinanceApprovalReference:
+      row.reimbursement_finance_approval_reference ?? null,
+    reimbursementFinanceApprovedByUserId:
+      row.reimbursement_finance_approved_by_user_id ?? null,
+    reimbursementFinanceApprovedAt: toIso(
+      row.reimbursement_finance_approved_at ?? null,
+    ),
+    reimbursementDisbursementReference:
+      row.reimbursement_disbursement_reference ?? null,
+    reimbursementDisbursementMethod:
+      row.reimbursement_disbursement_method ?? null,
+    reimbursementDisbursedAmount: Number(
+      row.reimbursement_disbursed_amount ?? 0,
+    ).toFixed(2),
+    reimbursementDisbursedByUserId:
+      row.reimbursement_disbursed_by_user_id ?? null,
+    reimbursementDisbursedAt: toIso(row.reimbursement_disbursed_at ?? null),
+    reimbursementRejectedByUserId:
+      row.reimbursement_rejected_by_user_id ?? null,
+    reimbursementRejectedAt: toIso(row.reimbursement_rejected_at ?? null),
+    reimbursementRejectionReason: row.reimbursement_rejection_reason ?? null,
     tenantChargeEligible: Boolean(row.tenant_charge_eligible),
     tenantChargeEligibleQty: Number(row.tenant_charge_eligible_qty).toFixed(3),
     tenantInvoiced: Boolean(row.tenant_invoiced),
@@ -169,9 +208,9 @@ function mapEventRow(row: PurchaseEventRow): HandymanMaterialPurchaseEventRecord
 }
 
 const PURCHASE_COLUMNS = `
-  id, client_id, execution_scope_id, handyman_request_id, tenant_company_id,
-  building_id, material_execution_line_id, source_item_id, item_name,
-  uom_id, uom_code, funding_source, status,
+  id, client_id, execution_scope_id, work_order_id, handyman_request_id,
+  tenant_company_id, building_id, material_execution_line_id, source_item_id,
+  item_name, uom_id, uom_code, funding_source, status,
   requested_quantity::text AS requested_quantity,
   approved_quantity::text AS approved_quantity,
   issued_quantity::text AS issued_quantity,
@@ -185,9 +224,20 @@ const PURCHASE_COLUMNS = `
   actual_total_expense_amount::text AS actual_total_expense_amount,
   net_used_expense_amount::text AS net_used_expense_amount,
   approval_reference, expenditure_reference, cash_advance_reference,
-  receipt_evidence_reference, latest_evidence_reference,
+  receipt_evidence_reference, receipt_sha256_checksum, latest_evidence_reference,
   reimbursement_payable_amount::text AS reimbursement_payable_amount,
   reimbursement_payee_user_id, reimbursement_status,
+  reimbursement_finance_approval_reference,
+  reimbursement_finance_approved_by_user_id,
+  reimbursement_finance_approved_at,
+  reimbursement_disbursement_reference,
+  reimbursement_disbursement_method,
+  reimbursement_disbursed_amount::text AS reimbursement_disbursed_amount,
+  reimbursement_disbursed_by_user_id,
+  reimbursement_disbursed_at,
+  reimbursement_rejected_by_user_id,
+  reimbursement_rejected_at,
+  reimbursement_rejection_reason,
   tenant_charge_eligible,
   tenant_charge_eligible_qty::text AS tenant_charge_eligible_qty,
   tenant_invoiced, requested_by_user_id, approved_by_user_id,
@@ -196,6 +246,21 @@ const PURCHASE_COLUMNS = `
 `;
 
 export const handymanMaterialPurchasingRepository = {
+  async findById(
+    purchaseRecordId: string,
+    executionScopeId: string,
+    tx?: DbExecutor,
+  ): Promise<HandymanMaterialPurchaseRecord | null> {
+    const db = tx ?? getPool();
+    const res = await db.query<PurchaseRow>(
+      `SELECT ${PURCHASE_COLUMNS}
+         FROM handyman_material_purchase_records
+        WHERE id = $1 AND execution_scope_id = $2`,
+      [purchaseRecordId, executionScopeId],
+    );
+    return res.rows[0] ? mapPurchaseRow(res.rows[0]) : null;
+  },
+
   async findByIdForUpdate(
     tx: DbExecutor,
     purchaseRecordId: string,
@@ -225,6 +290,100 @@ export const handymanMaterialPurchasingRepository = {
     return res.rows[0] ? mapPurchaseRow(res.rows[0]) : null;
   },
 
+  async findDuplicateReceiptOrInvoice(
+    tx: DbExecutor,
+    input: {
+      clientId: string;
+      excludeRecordId: string;
+      receiptEvidenceReference: string;
+      receiptSha256Checksum: string;
+      supplierName: string;
+      purchaseReference: string;
+    },
+  ): Promise<{
+    id: string;
+    executionScopeId: string;
+    workOrderId: string | null;
+    matchedBy: 'RECEIPT_REFERENCE' | 'RECEIPT_SHA256' | 'SUPPLIER_INVOICE';
+  } | null> {
+    const res = await tx.query<{
+      id: string;
+      execution_scope_id: string;
+      work_order_id: string | null;
+      receipt_evidence_reference: string | null;
+      receipt_sha256_checksum: string | null;
+    }>(
+      `SELECT id,
+              execution_scope_id,
+              work_order_id,
+              receipt_evidence_reference,
+              receipt_sha256_checksum
+         FROM handyman_material_purchase_records
+        WHERE client_id = $1
+          AND id <> $2
+          AND (
+            receipt_evidence_reference = $3
+            OR receipt_sha256_checksum = $4
+            OR (
+              status NOT IN ('REQUEST', 'ISSUED')
+              AND supplier_name IS NOT NULL
+              AND purchase_reference IS NOT NULL
+              AND lower(btrim(supplier_name)) = lower(btrim($5))
+              AND lower(btrim(purchase_reference)) = lower(btrim($6))
+            )
+          )
+        LIMIT 1`,
+      [
+        input.clientId,
+        input.excludeRecordId,
+        input.receiptEvidenceReference,
+        input.receiptSha256Checksum,
+        input.supplierName,
+        input.purchaseReference,
+      ],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    const matchedBy =
+      row.receipt_evidence_reference === input.receiptEvidenceReference
+        ? 'RECEIPT_REFERENCE'
+        : row.receipt_sha256_checksum === input.receiptSha256Checksum
+          ? 'RECEIPT_SHA256'
+          : 'SUPPLIER_INVOICE';
+    return {
+      id: row.id,
+      executionScopeId: row.execution_scope_id,
+      workOrderId: row.work_order_id ?? null,
+      matchedBy,
+    };
+  },
+
+  async findDuplicateDisbursementReference(
+    tx: DbExecutor,
+    input: {
+      clientId: string;
+      excludeRecordId: string;
+      disbursementReference: string;
+    },
+  ): Promise<{ id: string; executionScopeId: string } | null> {
+    const res = await tx.query<{ id: string; execution_scope_id: string }>(
+      `SELECT id, execution_scope_id
+         FROM handyman_material_purchase_records
+        WHERE client_id = $1
+          AND id <> $2
+          AND reimbursement_disbursement_reference IS NOT NULL
+          AND lower(btrim(reimbursement_disbursement_reference)) = lower(btrim($3))
+        LIMIT 1`,
+      [input.clientId, input.excludeRecordId, input.disbursementReference],
+    );
+    return res.rows[0]
+      ? {
+          id: res.rows[0].id,
+          executionScopeId: res.rows[0].execution_scope_id,
+        }
+      : null;
+  },
+
   async listByExecutionScope(
     executionScopeId: string,
     tx?: DbExecutor,
@@ -240,12 +399,82 @@ export const handymanMaterialPurchasingRepository = {
     return res.rows.map(mapPurchaseRow);
   },
 
+  async listReimbursementsForFinanceActor(
+    actorUserId: string,
+    filters: {
+      buildingId?: string;
+      executionScopeId?: string;
+      workOrderId?: string;
+      reimbursementStatus?: HandymanMaterialReimbursementStatus;
+      limit?: number;
+    },
+  ): Promise<HandymanMaterialPurchaseRecord[]> {
+    const db = getPool();
+    const conditions: string[] = [
+      `m.funding_source = 'REIMBURSEMENT'`,
+      `EXISTS (
+        SELECT 1
+          FROM user_building_assignments uba
+          JOIN buildings b ON b.id = uba.building_id AND b.status = 'ACTIVE'
+          JOIN properties p ON p.id = b.property_id AND p.status = 'ACTIVE'
+          JOIN clients c ON c.id = p.client_id AND c.status = 'ACTIVE'
+          JOIN users u ON u.id = uba.user_id AND u.status = 'ACTIVE'
+         WHERE uba.user_id = $1
+           AND uba.status = 'ACTIVE'
+           AND b.id = m.building_id
+           AND c.id = m.client_id
+      )`,
+    ];
+    const params: unknown[] = [actorUserId];
+    let idx = 2;
+
+    if (filters.buildingId) {
+      conditions.push(`m.building_id = $${idx++}`);
+      params.push(filters.buildingId);
+    }
+    if (filters.executionScopeId) {
+      conditions.push(`m.execution_scope_id = $${idx++}`);
+      params.push(filters.executionScopeId);
+    }
+    if (filters.workOrderId) {
+      conditions.push(`m.work_order_id = $${idx++}`);
+      params.push(filters.workOrderId);
+    }
+    if (filters.reimbursementStatus) {
+      conditions.push(`m.reimbursement_status = $${idx++}`);
+      params.push(filters.reimbursementStatus);
+    }
+
+    const limit = Math.min(Math.max(filters.limit ?? 50, 1), 200);
+    params.push(limit);
+
+    const scopedCols = PURCHASE_COLUMNS.trim()
+      .split(',')
+      .map((col) => {
+        const trimmed = col.trim();
+        return `m.${trimmed}`;
+      })
+      .join(',\n        ');
+
+    const res = await db.query<PurchaseRow>(
+      `SELECT
+        ${scopedCols}
+         FROM handyman_material_purchase_records m
+        WHERE ${conditions.join('\n          AND ')}
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT $${idx}`,
+      params,
+    );
+    return res.rows.map(mapPurchaseRow);
+  },
+
   async insertPurchaseRecord(
     tx: DbExecutor,
     input: {
       id: string;
       clientId: string;
       executionScopeId: string;
+      workOrderId: string | null;
       handymanRequestId: string;
       tenantCompanyId: string;
       buildingId: string;
@@ -267,21 +496,22 @@ export const handymanMaterialPurchasingRepository = {
   ): Promise<HandymanMaterialPurchaseRecord> {
     const res = await tx.query<PurchaseRow>(
       `INSERT INTO handyman_material_purchase_records (
-         id, client_id, execution_scope_id, handyman_request_id,
+         id, client_id, execution_scope_id, work_order_id, handyman_request_id,
          tenant_company_id, building_id, material_execution_line_id,
          source_item_id, item_name, uom_id, uom_code, funding_source,
          status, requested_quantity, supplier_name, supplier_reference,
          currency, cash_advance_reference, latest_evidence_reference,
          requested_by_user_id, create_idempotency_key, version
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-         'REQUEST', $13::numeric(14,3), $14, $15, $16, $17, $18, $19, $20, 1
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+         'REQUEST', $14::numeric(14,3), $15, $16, $17, $18, $19, $20, $21, 1
        )
        RETURNING ${PURCHASE_COLUMNS}`,
       [
         input.id,
         input.clientId,
         input.executionScopeId,
+        input.workOrderId,
         input.handymanRequestId,
         input.tenantCompanyId,
         input.buildingId,
@@ -310,6 +540,7 @@ export const handymanMaterialPurchasingRepository = {
       purchaseRecordId: string;
       status: HandymanMaterialPurchaseStatus;
       latestEvidenceReference: string;
+      workOrderId?: string | null;
       approvedQuantity?: string;
       issuedQuantity?: string;
       purchasedQuantity?: string;
@@ -329,9 +560,22 @@ export const handymanMaterialPurchasingRepository = {
       expenditureReference?: string | null;
       cashAdvanceReference?: string | null;
       receiptEvidenceReference?: string | null;
+      receiptSha256Checksum?: string | null;
       reimbursementPayableAmount?: string;
       reimbursementPayeeUserId?: string | null;
+      clearReimbursementPayee?: boolean;
       reimbursementStatus?: HandymanMaterialReimbursementStatus;
+      reimbursementFinanceApprovalReference?: string | null;
+      reimbursementFinanceApprovedByUserId?: string | null;
+      reimbursementFinanceApprovedAt?: Date | null;
+      reimbursementDisbursementReference?: string | null;
+      reimbursementDisbursementMethod?: HandymanReimbursementDisbursementMethod | null;
+      reimbursementDisbursedAmount?: string;
+      reimbursementDisbursedByUserId?: string | null;
+      reimbursementDisbursedAt?: Date | null;
+      reimbursementRejectedByUserId?: string | null;
+      reimbursementRejectedAt?: Date | null;
+      reimbursementRejectionReason?: string | null;
       tenantChargeEligible?: boolean;
       tenantChargeEligibleQty?: string;
       approvedByUserId?: string | null;
@@ -343,33 +587,49 @@ export const handymanMaterialPurchasingRepository = {
       `UPDATE handyman_material_purchase_records
           SET status = $2,
               latest_evidence_reference = $3,
-              approved_quantity = COALESCE($4::numeric(14,3), approved_quantity),
-              issued_quantity = COALESCE($5::numeric(14,3), issued_quantity),
-              purchased_quantity = COALESCE($6::numeric(14,3), purchased_quantity),
-              used_quantity = COALESCE($7::numeric(14,3), used_quantity),
-              returned_quantity = COALESCE($8::numeric(14,3), returned_quantity),
-              return_destination = COALESCE($9, return_destination),
-              supplier_name = COALESCE($10, supplier_name),
-              supplier_reference = COALESCE($11, supplier_reference),
-              purchase_reference = COALESCE($12, purchase_reference),
-              purchase_date = COALESCE($13, purchase_date),
-              currency = COALESCE($14, currency),
-              approved_max_unit_price = COALESCE($15::numeric(18,2), approved_max_unit_price),
-              actual_unit_price = COALESCE($16::numeric(18,2), actual_unit_price),
-              actual_total_expense_amount = COALESCE($17::numeric(18,2), actual_total_expense_amount),
-              net_used_expense_amount = COALESCE($18::numeric(18,2), net_used_expense_amount),
-              approval_reference = COALESCE($19, approval_reference),
-              expenditure_reference = COALESCE($20, expenditure_reference),
-              cash_advance_reference = COALESCE($21, cash_advance_reference),
-              receipt_evidence_reference = COALESCE($22, receipt_evidence_reference),
-              reimbursement_payable_amount = COALESCE($23::numeric(18,2), reimbursement_payable_amount),
-              reimbursement_payee_user_id = COALESCE($24, reimbursement_payee_user_id),
-              reimbursement_status = COALESCE($25, reimbursement_status),
-              tenant_charge_eligible = COALESCE($26, tenant_charge_eligible),
-              tenant_charge_eligible_qty = COALESCE($27::numeric(14,3), tenant_charge_eligible_qty),
-              approved_by_user_id = COALESCE($28, approved_by_user_id),
-              reconciled_by_user_id = COALESCE($29, reconciled_by_user_id),
-              reconciled_at = COALESCE($30, reconciled_at),
+              work_order_id = COALESCE($4, work_order_id),
+              approved_quantity = COALESCE($5::numeric(14,3), approved_quantity),
+              issued_quantity = COALESCE($6::numeric(14,3), issued_quantity),
+              purchased_quantity = COALESCE($7::numeric(14,3), purchased_quantity),
+              used_quantity = COALESCE($8::numeric(14,3), used_quantity),
+              returned_quantity = COALESCE($9::numeric(14,3), returned_quantity),
+              return_destination = COALESCE($10, return_destination),
+              supplier_name = COALESCE($11, supplier_name),
+              supplier_reference = COALESCE($12, supplier_reference),
+              purchase_reference = COALESCE($13, purchase_reference),
+              purchase_date = COALESCE($14, purchase_date),
+              currency = COALESCE($15, currency),
+              approved_max_unit_price = COALESCE($16::numeric(18,2), approved_max_unit_price),
+              actual_unit_price = COALESCE($17::numeric(18,2), actual_unit_price),
+              actual_total_expense_amount = COALESCE($18::numeric(18,2), actual_total_expense_amount),
+              net_used_expense_amount = COALESCE($19::numeric(18,2), net_used_expense_amount),
+              approval_reference = COALESCE($20, approval_reference),
+              expenditure_reference = COALESCE($21, expenditure_reference),
+              cash_advance_reference = COALESCE($22, cash_advance_reference),
+              receipt_evidence_reference = COALESCE($23, receipt_evidence_reference),
+              receipt_sha256_checksum = COALESCE($24, receipt_sha256_checksum),
+              reimbursement_payable_amount = COALESCE($25::numeric(18,2), reimbursement_payable_amount),
+              reimbursement_payee_user_id = CASE
+                WHEN $26::boolean THEN NULL
+                ELSE COALESCE($27::uuid, reimbursement_payee_user_id)
+              END,
+              reimbursement_status = COALESCE($28, reimbursement_status),
+              reimbursement_finance_approval_reference = COALESCE($29, reimbursement_finance_approval_reference),
+              reimbursement_finance_approved_by_user_id = COALESCE($30, reimbursement_finance_approved_by_user_id),
+              reimbursement_finance_approved_at = COALESCE($31, reimbursement_finance_approved_at),
+              reimbursement_disbursement_reference = COALESCE($32, reimbursement_disbursement_reference),
+              reimbursement_disbursement_method = COALESCE($33, reimbursement_disbursement_method),
+              reimbursement_disbursed_amount = COALESCE($34::numeric(18,2), reimbursement_disbursed_amount),
+              reimbursement_disbursed_by_user_id = COALESCE($35, reimbursement_disbursed_by_user_id),
+              reimbursement_disbursed_at = COALESCE($36, reimbursement_disbursed_at),
+              reimbursement_rejected_by_user_id = COALESCE($37, reimbursement_rejected_by_user_id),
+              reimbursement_rejected_at = COALESCE($38, reimbursement_rejected_at),
+              reimbursement_rejection_reason = COALESCE($39, reimbursement_rejection_reason),
+              tenant_charge_eligible = COALESCE($40, tenant_charge_eligible),
+              tenant_charge_eligible_qty = COALESCE($41::numeric(14,3), tenant_charge_eligible_qty),
+              approved_by_user_id = COALESCE($42, approved_by_user_id),
+              reconciled_by_user_id = COALESCE($43, reconciled_by_user_id),
+              reconciled_at = COALESCE($44, reconciled_at),
               version = version + 1,
               updated_at = NOW()
         WHERE id = $1
@@ -378,6 +638,7 @@ export const handymanMaterialPurchasingRepository = {
         input.purchaseRecordId,
         input.status,
         input.latestEvidenceReference,
+        input.workOrderId ?? null,
         input.approvedQuantity ?? null,
         input.issuedQuantity ?? null,
         input.purchasedQuantity ?? null,
@@ -397,9 +658,22 @@ export const handymanMaterialPurchasingRepository = {
         input.expenditureReference ?? null,
         input.cashAdvanceReference ?? null,
         input.receiptEvidenceReference ?? null,
+        input.receiptSha256Checksum ?? null,
         input.reimbursementPayableAmount ?? null,
+        Boolean(input.clearReimbursementPayee),
         input.reimbursementPayeeUserId ?? null,
         input.reimbursementStatus ?? null,
+        input.reimbursementFinanceApprovalReference ?? null,
+        input.reimbursementFinanceApprovedByUserId ?? null,
+        input.reimbursementFinanceApprovedAt ?? null,
+        input.reimbursementDisbursementReference ?? null,
+        input.reimbursementDisbursementMethod ?? null,
+        input.reimbursementDisbursedAmount ?? null,
+        input.reimbursementDisbursedByUserId ?? null,
+        input.reimbursementDisbursedAt ?? null,
+        input.reimbursementRejectedByUserId ?? null,
+        input.reimbursementRejectedAt ?? null,
+        input.reimbursementRejectionReason ?? null,
         input.tenantChargeEligible ?? null,
         input.tenantChargeEligibleQty ?? null,
         input.approvedByUserId ?? null,
@@ -413,7 +687,7 @@ export const handymanMaterialPurchasingRepository = {
   async findEventByIdempotencyKey(
     tx: DbExecutor,
     purchaseRecordId: string,
-    eventType: HandymanMaterialPurchaseStatus,
+    eventType: HandymanMaterialPurchaseEventType,
     idempotencyKey: string,
   ): Promise<HandymanMaterialPurchaseEventRecord | null> {
     const res = await tx.query<PurchaseEventRow>(
@@ -435,11 +709,11 @@ export const handymanMaterialPurchasingRepository = {
       clientId: string;
       purchaseRecordId: string;
       executionScopeId: string;
-      eventType: HandymanMaterialPurchaseStatus;
+      eventType: HandymanMaterialPurchaseEventType;
       fromStatus: HandymanMaterialPurchaseStatus | null;
       toStatus: HandymanMaterialPurchaseStatus;
       actorUserId: string;
-      actorRole: 'PIC_PEKERJAAN' | 'OPERATIONS_MANAGER';
+      actorRole: HandymanMaterialPurchaseActorRole;
       quantityDelta: string;
       evidenceReference: string;
       notes: string | null;
@@ -451,7 +725,7 @@ export const handymanMaterialPurchasingRepository = {
       `INSERT INTO handyman_material_purchase_events (
          id, client_id, purchase_record_id, execution_scope_id, event_type,
          from_status, to_status, actor_user_id, actor_role,
-         quantity_delta, evidence_reference, notes, idempotency_key, metadata
+         quantity_delta, evidence_reference, notes, idempotencyKey, metadata
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9,
          $10::numeric(14,3), $11, $12, $13, $14::jsonb
@@ -459,7 +733,10 @@ export const handymanMaterialPurchasingRepository = {
        RETURNING id, client_id, purchase_record_id, execution_scope_id, event_type,
                  from_status, to_status, actor_user_id, actor_role,
                  quantity_delta::text AS quantity_delta, evidence_reference,
-                 notes, idempotency_key, metadata, occurred_at`,
+                 notes, idempotency_key, metadata, occurred_at`.replace(
+        'idempotencyKey',
+        'idempotency_key',
+      ),
       [
         input.id,
         input.clientId,
@@ -494,6 +771,25 @@ export const handymanMaterialPurchasingRepository = {
         WHERE purchase_record_id = $1
         ORDER BY occurred_at ASC, id ASC`,
       [purchaseRecordId],
+    );
+    return res.rows.map(mapEventRow);
+  },
+
+  async listEventsByRecordIds(
+    purchaseRecordIds: string[],
+    tx?: DbExecutor,
+  ): Promise<HandymanMaterialPurchaseEventRecord[]> {
+    if (purchaseRecordIds.length === 0) return [];
+    const db = tx ?? getPool();
+    const res = await db.query<PurchaseEventRow>(
+      `SELECT id, client_id, purchase_record_id, execution_scope_id, event_type,
+              from_status, to_status, actor_user_id, actor_role,
+              quantity_delta::text AS quantity_delta, evidence_reference,
+              notes, idempotency_key, metadata, occurred_at
+         FROM handyman_material_purchase_events
+        WHERE purchase_record_id = ANY($1::uuid[])
+        ORDER BY occurred_at ASC, id ASC`,
+      [purchaseRecordIds],
     );
     return res.rows.map(mapEventRow);
   },
