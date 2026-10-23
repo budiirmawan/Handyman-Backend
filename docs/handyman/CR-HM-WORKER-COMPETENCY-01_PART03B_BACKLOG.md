@@ -1,23 +1,26 @@
 # CR-HM-WORKER-COMPETENCY-01 — PART 03B Backlog / Handoff
 
-Basis: PART 03A selesai (commit di branch `arena/3df97f5e-handyman-backend`). Item di bawah adalah
-**usulan**, belum dikerjakan. Urut berdasarkan risiko, bukan ukuran.
+Basis: PART 03A selesai (`8c7e8ef`) dan **PART 03B1 selesai (`76eb66b`)** di branch
+`arena/3df97f5e-handyman-backend`.
+
+**Status per dokumen ini:** item **1** dan **2** sudah **DELIVERED pada PART 03B1** dan tidak lagi menjadi
+backlog (detail: `CR-HM-WORKER-COMPETENCY-01_PART03B1_DELIVERY_REPORT.md`). Item sisanya adalah usulan untuk
+**PART 03B2**, belum dikerjakan. Urut berdasarkan risiko, bukan ukuran.
 
 ## P0 — kelengkapan siklus keputusan
 
-1. **Assignment competency history read model**
-   Saat ini bukti gate hanya tersimpan sebagai `operational_events.metadata.competency`
-   (`{requirementCount, mandatoryRequirementCount}`) pada event assignment. Belum ada model baca bertipe
-   "siapa dievaluasi, requirement mana, bukti apa" per assignment.
-   Usulan: tabel append-only `handyman_assignment_competency_evaluations` (assignmentId, executionScopeId,
-   workerContextId, requirementId, satisfied, reason, snapshot certificateId/skillLevel, evaluatedAt,
-   requirementSnapshot jsonb) yang ditulis di transaksi assignment yang sama, plus endpoint
-   `GET /handyman/execution-scopes/:id/competency/history`. Butuh keputusan retensi & redaksi.
+1. ~~**Assignment competency history read model**~~ — **DONE (PART 03B1, `76eb66b`)**
+   Tabel append-only `handyman_assignment_competency_evaluations` (migrasi `0464`) ditulis di transaksi
+   assignment yang sama + endpoint `GET /handyman/execution-scopes/:id/competency/history` (read-only,
+   paginasi, `tenant_company.read` + exact-Building). Snapshot sengaja **tanpa** nomor sertifikat, document id,
+   storage key, atau isi dokumen. Retensi/arsip masih terbuka → lihat item 11.
 
-2. **Kebijakan re-verifikasi sertifikat** (warisan backlog PART 02 item 3)
-   Sertifikat VERIFIED tetap VERIFIED setelah edit metadata. Untuk requirement MANDATORY, ini berarti
-   perubahan `certificate_name`/`issue_date` bisa menggeser kelayakan tanpa re-attestation.
-   Usulan: revert ke `PENDING_VERIFICATION` bila field pembuktian berubah, dengan event audit.
+2. ~~**Kebijakan re-verifikasi sertifikat**~~ (warisan backlog PART 02 item 3) — **DONE (PART 03B1, `76eb66b`)**
+   Edit metadata **material** (nomor, nama, penerbit, tanggal terbit/kedaluwarsa, skill, dokumen,
+   `fileReference`, status) mengembalikan sertifikat ke `PENDING_VERIFICATION` dan mengosongkan triple verifier
+   dalam UPDATE yang sama. Edit `notes` dan pengiriman nilai identik **tidak** mereset. Keputusan lama tidak
+   hilang: tersimpan di `workforce_certification_decisions` (append-only) + endpoint
+   `GET /workforce/:workforceId/certifications/:certificationId/decisions`. Maker-checker tidak berubah.
 
 3. **Sweeper kedaluwarsa** (backlog PART 02 item 1)
    `status='EXPIRED'` hanya dihitung saat dibaca. Sweeper akan membuat laporan kedaluwarsa konsisten dan
@@ -59,6 +62,11 @@ Basis: PART 03A selesai (commit di branch `arena/3df97f5e-handyman-backend`). It
     Ekspor riwayat perubahan requirement (create/update/deactivate) untuk audit eksternal, mengikuti pola
     export yang sudah ada di domain lain.
 
+11. **Kebijakan retensi ledger PART 03B1**
+    `workforce_certification_decisions` dan `handyman_assignment_competency_evaluations` tumbuh monoton dan
+    menolak UPDATE/DELETE (trigger). Bila volume menuntut, arsipkan lewat ekspor + partisi — **bukan** DELETE.
+    Perlu keputusan retensi (mis. berapa lama disimpan panas) sebelum implementasi.
+
 ## Catatan konsistensi yang harus dipertahankan PART 03B
 
 - Satu evaluator (`worker-competency-eligibility`) untuk penegakan **dan** baca; jangan menduplikasi aturan.
@@ -66,3 +74,4 @@ Basis: PART 03A selesai (commit di branch `arena/3df97f5e-handyman-backend`). It
 - Jangan menambah jalur assignment kedua; penegakan tetap di `handyman-scope-assignment.service.ts`.
 - Pertahankan invarian frozen CR-HM-04 PART C: tepat dua bentuk URL assignment.
 - Client/Building scope wajib ditegakkan pada setiap operasi baru.
+- Kedua ledger PART 03B1 tetap **append-only**; jangan menambahkan UPDATE/DELETE atau "koreksi" baris historis.
