@@ -20,7 +20,10 @@ import { buildingService } from '../src/modules/buildings';
 import { clientService } from '../src/modules/clients';
 import { departmentService } from '../src/modules/departments';
 import { organizationService } from '../src/modules/organizations';
-import { permissionRepository } from '../src/modules/permissions';
+import {
+  permissionRepository,
+  permissionService,
+} from '../src/modules/permissions';
 import { positionService } from '../src/modules/positions';
 import { propertyService } from '../src/modules/properties';
 import { roleService } from '../src/modules/roles';
@@ -86,11 +89,9 @@ async function createUserWithPermissions(
           name: code,
         });
       }
-      await roleService.assignPermissionToRole(role.id, {
-        permissionId: perm.id,
-      });
+      await permissionService.assignPermissionToRole(role.id, perm.id);
     }
-    await roleService.assignRoleToUser(user.id, { roleId: role.id });
+    await roleService.assignRoleToUser(user.id, role.id);
   }
 
   const login = await api().post(`${V1}/auth/login`).send({
@@ -807,6 +808,64 @@ describe('CR-HM-ASSIGNMENT-RESPONSE-01 PART 02A — Standard Work Order Assignme
     assert.equal(
       wrongWorkerRespond.body.error.code,
       'WORK_ORDER_EXECUTION_UNAUTHORIZED',
+    );
+
+    // Real MOBILE_STAFF_ROLE worker (work_order.read ONLY, NO work_order.manage)
+    // can respond to their own assignment, while being denied Operations management routes.
+    const mobileWorker = await createUserWithPermissions(
+      ['work_order.read'],
+      'Mobile Staff Worker',
+    );
+    await buildingAssignmentService.createAssignment(mobileWorker.userId, {
+      buildingId: f.building.id,
+    });
+    const mobileProfile = await workforceService.createWorkforceProfile({
+      organizationId: f.organization.id,
+      departmentId: f.department.id,
+      positionId: f.position.id,
+      userId: mobileWorker.userId,
+      employeeCode: `WFM_${suffix()}`,
+      fullName: 'Mobile Staff Worker',
+    });
+    await workforceBuildingAssignmentService.assignBuildingToWorkforce({
+      workforceProfileId: mobileProfile.id,
+      buildingId: f.building.id,
+    });
+
+    // Mobile worker cannot reassign (requires work_order.manage -> 403 PERMISSION_DENIED)
+    const illegalManageByWorker = await api()
+      .patch(`${V1}/work-orders/${f.wo.id}/assignments/${assignmentId}`)
+      .set(auth(mobileWorker.token))
+      .send({
+        assigneeType: 'WORKFORCE',
+        workforceProfileId: mobileProfile.id,
+      });
+    assert.equal(illegalManageByWorker.status, 403);
+    assert.equal(illegalManageByWorker.body.error.code, 'PERMISSION_DENIED');
+
+    // Operations reassigns to mobileWorker
+    const reassignedToMobile = await api()
+      .patch(`${V1}/work-orders/${f.wo.id}/assignments/${assignmentId}`)
+      .set(auth(f.ops.token))
+      .send({
+        assigneeType: 'WORKFORCE',
+        workforceProfileId: mobileProfile.id,
+      });
+    assert.equal(reassignedToMobile.status, 200);
+    const mobileAssignmentId = reassignedToMobile.body.data.id as string;
+
+    // Mobile worker with work_order.read (and NO work_order.manage) responds TERIMA -> 200 OK
+    const mobileRespond = await api()
+      .post(
+        `${V1}/work-orders/${f.wo.id}/assignments/${mobileAssignmentId}/respond`,
+      )
+      .set(auth(mobileWorker.token))
+      .send({ decision: 'TERIMA' });
+    assert.equal(mobileRespond.status, 200);
+    assert.equal(mobileRespond.body.data.responseStatus, 'TERIMA');
+    assert.equal(
+      mobileRespond.body.data.respondedByUserId,
+      mobileWorker.userId,
     );
   });
 

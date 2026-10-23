@@ -19,6 +19,7 @@ import {
  * Management (`work_order.manage`):
  *   POST  /work-orders/:id/assignments
  *   PATCH /work-orders/:id/assignments/:assignmentId   (deactivate or reassign)
+ * Field Assignee Response (`work_order.read` + Building scope + assignment ownership):
  *   POST  /work-orders/:id/assignments/:assignmentId/respond
  * Reads (`work_order.read`):
  *   GET   /work-orders/:id/assignments
@@ -55,7 +56,7 @@ export function createWorkOrderAssignmentRouter(): Router {
   router.post(
     '/work-orders/:id/assignments/:assignmentId/respond',
     authenticationMiddleware,
-    requirePermission('work_order.manage'),
+    requirePermission('work_order.read'),
     respondToAssignmentHandler,
   );
   router.get(

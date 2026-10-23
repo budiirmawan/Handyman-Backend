@@ -33,6 +33,55 @@ export function parseAssignmentScopeParam(
   return uuid(p(value), 'executionScopeId');
 }
 
+export function parseAssignmentIdParam(
+  value: string | string[] | undefined,
+): string {
+  return uuid(p(value), 'assignmentId');
+}
+
+export function parseAssignmentResponseBody(body: unknown): {
+  responseStatus: 'TERIMA' | 'TIDAK_BISA';
+  declineReason?: string | null;
+  notes?: string | null;
+} {
+  const src = (body ?? {}) as Record<string, unknown>;
+  const rawDecision =
+    typeof src.responseStatus === 'string'
+      ? src.responseStatus.trim()
+      : typeof src.decision === 'string'
+        ? src.decision.trim()
+        : '';
+  if (rawDecision !== 'TERIMA' && rawDecision !== 'TIDAK_BISA') {
+    fail("responseStatus/decision must be either 'TERIMA' or 'TIDAK_BISA'.", [
+      {
+        field: 'responseStatus',
+        message: "responseStatus must be either 'TERIMA' or 'TIDAK_BISA'.",
+      },
+    ]);
+  }
+  const rawDeclineReason =
+    src.declineReason !== undefined && src.declineReason !== null
+      ? src.declineReason
+      : src.reason;
+  const declineReason =
+    rawDeclineReason === undefined || rawDeclineReason === null
+      ? null
+      : typeof rawDeclineReason === 'string'
+        ? rawDeclineReason
+        : '';
+  const notes =
+    src.notes === undefined || src.notes === null
+      ? null
+      : typeof src.notes === 'string'
+        ? src.notes
+        : '';
+  return {
+    responseStatus: rawDecision as 'TERIMA' | 'TIDAK_BISA',
+    declineReason,
+    notes,
+  };
+}
+
 /** Caller-established references ONLY; scope id comes from the URL. */
 export function parseAssignmentBody(body: unknown): {
   providerContextId: string;

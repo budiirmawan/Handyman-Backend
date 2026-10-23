@@ -3,6 +3,11 @@ import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
+import {
+  handymanAssignmentDeclinedError,
+  handymanAssignmentResponseForbiddenError,
+  handymanAssignmentResponseSupersededError,
+} from '../assignment-responses';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
 import { handymanRequestInspectionRepository } from './handyman-request-inspection.repository';
 import {
@@ -123,6 +128,69 @@ export async function recordHandymanInspection(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+
+      // 3b) CR-HM-ASSIGNMENT-RESPONSE-01 PART 02B:
+      //     When inspector visit assignments exist for this request, enforce:
+      //     - An inspector whose active assignment was declined (`TIDAK_BISA`)
+      //       cannot record an inspection (`409 HANDYMAN_ASSIGNMENT_DECLINED`).
+      //     - An inspector whose assignment was superseded or revoked cannot
+      //       record an inspection (`409 HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED`).
+      //     - Another actor who is not the active assigned inspector cannot
+      //       record the inspection (`403 HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN`).
+      const inspectorAssignmentsRes = await tx.query<{
+        id: string;
+        inspectorUserId: string;
+        status: string;
+        responseStatus: string | null;
+      }>(
+        `SELECT a.id,
+                a.inspector_user_id AS "inspectorUserId",
+                a.status,
+                ar.response_status AS "responseStatus"
+           FROM handyman_inspector_assignments a
+           LEFT JOIN handyman_assignment_responses ar
+             ON ar.assignment_id = a.id
+            AND ar.assignment_target_type = 'INSPECTOR_VISIT_ASSIGNMENT'
+          WHERE a.client_id = $1
+            AND a.handyman_request_id = $2
+          ORDER BY (a.status = 'ACTIVE') DESC, a.assigned_at DESC, a.id DESC`,
+        [request.clientId, request.id],
+      );
+      if ((inspectorAssignmentsRes.rowCount ?? 0) > 0) {
+        const activeAssign = inspectorAssignmentsRes.rows.find(
+          (r) => r.status === 'ACTIVE',
+        );
+        if (activeAssign) {
+          if (activeAssign.inspectorUserId !== actorUserId) {
+            const actorFormerAssign = inspectorAssignmentsRes.rows.find(
+              (r) =>
+                r.inspectorUserId === actorUserId &&
+                (r.status === 'SUPERSEDED' || r.status === 'REVOKED'),
+            );
+            if (actorFormerAssign) {
+              throw handymanAssignmentResponseSupersededError();
+            }
+            throw handymanAssignmentResponseForbiddenError(
+              'Only the currently assigned active Inspector can perform this inspection visit.',
+            );
+          }
+          if (activeAssign.responseStatus === 'TIDAK_BISA') {
+            throw handymanAssignmentDeclinedError();
+          }
+        } else {
+          const actorFormerAssign = inspectorAssignmentsRes.rows.find(
+            (r) =>
+              r.inspectorUserId === actorUserId &&
+              (r.status === 'SUPERSEDED' || r.status === 'REVOKED'),
+          );
+          if (actorFormerAssign) {
+            throw handymanAssignmentResponseSupersededError();
+          }
+          throw handymanAssignmentResponseForbiddenError(
+            'Inspection visit assignment has been revoked and no active Inspector is currently assigned.',
+          );
+        }
+      }
 
       // 4) F2 pre-check inside the transaction; UNIQUE constrains races to
       //    the SAME 409 contract.

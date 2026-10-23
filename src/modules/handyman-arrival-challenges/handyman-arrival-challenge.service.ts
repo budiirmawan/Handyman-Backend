@@ -11,6 +11,10 @@ import {
   resolveHandymanAssignmentLead,
 } from '../handyman-scope-assignments';
 import {
+  assignmentResponseRepository,
+  handymanAssignmentDeclinedError,
+} from '../assignment-responses';
+import {
   arrivalChallengeInvalidError,
   arrivalChallengeLiveConflictError,
   arrivalChallengeNotAuthorizedError,
@@ -164,6 +168,13 @@ export async function createHandymanArrivalChallenge(
   );
   if (!resolution || resolution.leadUserId !== actorUserId) {
     throw arrivalChallengeNotAuthorizedError();
+  }
+  const assignmentResponse =
+    await assignmentResponseRepository.findByAssignmentId(
+      resolution.assignmentId,
+    );
+  if (assignmentResponse?.responseStatus === 'TIDAK_BISA') {
+    throw handymanAssignmentDeclinedError();
   }
 
   // Raw token: existing server-side secure-random convention; hash at

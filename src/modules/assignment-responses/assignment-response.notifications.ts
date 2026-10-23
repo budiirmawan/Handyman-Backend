@@ -365,3 +365,407 @@ export async function notifyWorkOrderAssignmentDeclined(
     );
   }
 }
+
+async function filterActiveUserIds(
+  candidateIds: Array<string | null | undefined>,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<string[]> {
+  const unique = Array.from(
+    new Set(
+      candidateIds.filter(
+        (id): id is string => typeof id === 'string' && id.length > 0,
+      ),
+    ),
+  );
+  if (unique.length === 0) return [];
+  const result = await executor.query<{ id: string }>(
+    `SELECT id
+       FROM users
+      WHERE id = ANY($1::uuid[])
+        AND status = 'ACTIVE'
+      ORDER BY id ASC`,
+    [unique],
+  );
+  return result.rows.map((r) => r.id);
+}
+
+/**
+ * Sends an `IN_APP` notification ONLY to the active authorized Crew Lead
+ * (`leadUserId`) of an Execution Scope Crew assignment. Helpers (including
+ * login-less Helpers without smartphones) are deliberately never notified here;
+ * their attendance is governed by `handyman-helper-attendance` (0471).
+ */
+export async function notifyExecutionScopeCrewLeadAssignedPending(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    executionScopeId: string;
+    assignmentId: string;
+    crewId: string;
+    leadUserId: string;
+    leadWorkerContextId: string;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  const recipients = await filterActiveUserIds([input.leadUserId], executor);
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'EXECUTION_SCOPE_ASSIGNMENT_PENDING',
+        title: 'Penugasan Crew Lead Handyman Baru',
+        body: 'Anda ditugaskan sebagai Crew Lead (PIC Pekerjaan) pada Execution Scope Handyman. Silakan konfirmasi TERIMA atau TIDAK_BISA.',
+        sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
+        sourceEntityId: input.assignmentId,
+        sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_PENDING',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          executionScopeId: input.executionScopeId,
+          buildingId: input.buildingId,
+          assignmentId: input.assignmentId,
+          crewId: input.crewId,
+          leadUserId: input.leadUserId,
+          leadWorkerContextId: input.leadWorkerContextId,
+          responseStatus: 'PENDING',
+        },
+      },
+      executor,
+    );
+  }
+}
+
+export async function notifyExecutionScopeCrewLeadSuperseded(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    executionScopeId: string;
+    oldAssignmentId: string;
+    newAssignmentId: string;
+    oldLeadUserId: string | null;
+    newLeadUserId: string | null;
+    reason: string;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  if (!input.oldLeadUserId || input.oldLeadUserId === input.newLeadUserId) {
+    return;
+  }
+  const recipients = await filterActiveUserIds([input.oldLeadUserId], executor);
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'EXECUTION_SCOPE_ASSIGNMENT_SUPERSEDED',
+        title: 'Penugasan Crew Lead Handyman Digantikan',
+        body: `Penugasan Crew Lead Anda pada Execution Scope telah digantikan (${input.reason}).`,
+        sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
+        sourceEntityId: input.oldAssignmentId,
+        sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_SUPERSEDED',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          executionScopeId: input.executionScopeId,
+          buildingId: input.buildingId,
+          supersededAssignmentId: input.oldAssignmentId,
+          replacementAssignmentId: input.newAssignmentId,
+          reason: input.reason,
+        },
+      },
+      executor,
+    );
+  }
+}
+
+export async function notifyExecutionScopeAssignmentAccepted(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    executionScopeId: string;
+    assignmentId: string;
+    crewId: string;
+    assignedByUserId: string;
+    respondedByUserId: string;
+    respondedByWorkerId: string | null;
+    respondedAt: Date;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  const recipients = await filterActiveUserIds(
+    [input.assignedByUserId],
+    executor,
+  );
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'EXECUTION_SCOPE_ASSIGNMENT_ACCEPTED',
+        title: 'Penugasan Crew Lead Handyman Diterima (TERIMA)',
+        body: 'Crew Lead telah mengonfirmasi TERIMA atas penugasan Execution Scope Handyman.',
+        sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
+        sourceEntityId: input.assignmentId,
+        sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_ACCEPTED',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          executionScopeId: input.executionScopeId,
+          buildingId: input.buildingId,
+          assignmentId: input.assignmentId,
+          crewId: input.crewId,
+          responseStatus: 'TERIMA',
+          respondedByUserId: input.respondedByUserId,
+          respondedByWorkerId: input.respondedByWorkerId,
+          respondedAt: input.respondedAt.toISOString(),
+          reassignmentRequired: false,
+        },
+      },
+      executor,
+    );
+  }
+}
+
+export async function notifyExecutionScopeAssignmentDeclined(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    executionScopeId: string;
+    assignmentId: string;
+    crewId: string;
+    assignedByUserId: string;
+    respondedByUserId: string;
+    respondedByWorkerId: string | null;
+    respondedAt: Date;
+    declineReason: string;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  const recipients = await filterActiveUserIds(
+    [input.assignedByUserId],
+    executor,
+  );
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'EXECUTION_SCOPE_ASSIGNMENT_DECLINED',
+        title: 'Penugasan Crew Lead Handyman Ditolak (TIDAK_BISA)',
+        body: `Crew Lead menolak penugasan Execution Scope dengan alasan: ${input.declineReason}. Penugasan ulang diperlukan.`,
+        sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
+        sourceEntityId: input.assignmentId,
+        sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_DECLINED',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          executionScopeId: input.executionScopeId,
+          buildingId: input.buildingId,
+          assignmentId: input.assignmentId,
+          crewId: input.crewId,
+          responseStatus: 'TIDAK_BISA',
+          respondedByUserId: input.respondedByUserId,
+          respondedByWorkerId: input.respondedByWorkerId,
+          respondedAt: input.respondedAt.toISOString(),
+          declineReason: input.declineReason,
+          reassignmentRequired: true,
+        },
+      },
+      executor,
+    );
+  }
+}
+
+export async function notifyInspectorAssignedPending(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    visitAppointmentId: string;
+    assignmentId: string;
+    inspectorUserId: string;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  const recipients = await filterActiveUserIds(
+    [input.inspectorUserId],
+    executor,
+  );
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'INSPECTOR_VISIT_ASSIGNMENT_PENDING',
+        title: 'Penugasan Kunjungan Inspeksi Handyman Baru',
+        body: 'Anda ditugaskan sebagai Inspector untuk kunjungan inspeksi Handyman. Silakan konfirmasi TERIMA atau TIDAK_BISA.',
+        sourceEntityType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        sourceEntityId: input.assignmentId,
+        sourceEventType: 'INSPECTOR_VISIT_ASSIGNMENT_PENDING',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          visitAppointmentId: input.visitAppointmentId,
+          buildingId: input.buildingId,
+          assignmentId: input.assignmentId,
+          inspectorUserId: input.inspectorUserId,
+          responseStatus: 'PENDING',
+        },
+      },
+      executor,
+    );
+  }
+}
+
+export async function notifyInspectorAssignmentSuperseded(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    visitAppointmentId: string;
+    oldAssignmentId: string;
+    newAssignmentId: string | null;
+    oldInspectorUserId: string;
+    newInspectorUserId: string | null;
+    reason: string;
+    action: 'SUPERSEDED' | 'REVOKED';
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  if (input.oldInspectorUserId === input.newInspectorUserId) {
+    return;
+  }
+  const recipients = await filterActiveUserIds(
+    [input.oldInspectorUserId],
+    executor,
+  );
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'INSPECTOR_VISIT_ASSIGNMENT_SUPERSEDED',
+        title:
+          input.action === 'REVOKED'
+            ? 'Penugasan Inspeksi Handyman Dicabut'
+            : 'Penugasan Inspeksi Handyman Digantikan',
+        body: `Penugasan kunjungan inspeksi Anda telah ${input.action === 'REVOKED' ? 'dicabut' : 'digantikan'} (${input.reason}).`,
+        sourceEntityType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        sourceEntityId: input.oldAssignmentId,
+        sourceEventType: 'INSPECTOR_VISIT_ASSIGNMENT_SUPERSEDED',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          visitAppointmentId: input.visitAppointmentId,
+          buildingId: input.buildingId,
+          supersededAssignmentId: input.oldAssignmentId,
+          replacementAssignmentId: input.newAssignmentId,
+          action: input.action,
+          reason: input.reason,
+        },
+      },
+      executor,
+    );
+  }
+}
+
+export async function notifyInspectorAssignmentAccepted(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    visitAppointmentId: string;
+    assignmentId: string;
+    assignedByUserId: string;
+    respondedByUserId: string;
+    respondedByWorkerId: string | null;
+    respondedAt: Date;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  const recipients = await filterActiveUserIds(
+    [input.assignedByUserId],
+    executor,
+  );
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'INSPECTOR_VISIT_ASSIGNMENT_ACCEPTED',
+        title: 'Penugasan Inspector Handyman Diterima (TERIMA)',
+        body: 'Inspector telah mengonfirmasi TERIMA atas penugasan kunjungan inspeksi Handyman.',
+        sourceEntityType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        sourceEntityId: input.assignmentId,
+        sourceEventType: 'INSPECTOR_VISIT_ASSIGNMENT_ACCEPTED',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          visitAppointmentId: input.visitAppointmentId,
+          buildingId: input.buildingId,
+          assignmentId: input.assignmentId,
+          responseStatus: 'TERIMA',
+          respondedByUserId: input.respondedByUserId,
+          respondedByWorkerId: input.respondedByWorkerId,
+          respondedAt: input.respondedAt.toISOString(),
+          reassignmentRequired: false,
+        },
+      },
+      executor,
+    );
+  }
+}
+
+export async function notifyInspectorAssignmentDeclined(
+  input: {
+    clientId: string;
+    buildingId: string;
+    handymanRequestId: string;
+    visitAppointmentId: string;
+    assignmentId: string;
+    assignedByUserId: string;
+    respondedByUserId: string;
+    respondedByWorkerId: string | null;
+    respondedAt: Date;
+    declineReason: string;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<void> {
+  const recipients = await filterActiveUserIds(
+    [input.assignedByUserId],
+    executor,
+  );
+  for (const recipientUserId of recipients) {
+    await recordDeduplicatedAssignmentNotification(
+      {
+        clientId: input.clientId,
+        recipientUserId,
+        type: 'INSPECTOR_VISIT_ASSIGNMENT_DECLINED',
+        title: 'Penugasan Inspector Handyman Ditolak (TIDAK_BISA)',
+        body: `Inspector menolak penugasan kunjungan inspeksi dengan alasan: ${input.declineReason}. Penugasan ulang diperlukan.`,
+        sourceEntityType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        sourceEntityId: input.assignmentId,
+        sourceEventType: 'INSPECTOR_VISIT_ASSIGNMENT_DECLINED',
+        navigationTarget: null,
+        metadata: {
+          handymanRequestId: input.handymanRequestId,
+          visitAppointmentId: input.visitAppointmentId,
+          buildingId: input.buildingId,
+          assignmentId: input.assignmentId,
+          responseStatus: 'TIDAK_BISA',
+          respondedByUserId: input.respondedByUserId,
+          respondedByWorkerId: input.respondedByWorkerId,
+          respondedAt: input.respondedAt.toISOString(),
+          declineReason: input.declineReason,
+          reassignmentRequired: true,
+        },
+      },
+      executor,
+    );
+  }
+}

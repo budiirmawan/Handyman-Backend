@@ -6,6 +6,23 @@ import { canAccessBuildingScopedResource } from '../context-access';
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { recordOperationalEvent } from '../operational-events';
 import {
+  assignmentDeclineReasonForbiddenOnAcceptError,
+  assignmentDeclineReasonRequiredError,
+  assignmentResponseRepository,
+  handymanAssignmentResponseConflictError,
+  handymanAssignmentResponseForbiddenError,
+  handymanAssignmentResponseLateError,
+  handymanAssignmentResponseSupersededError,
+  isAssignableResponseDecision,
+  notifyInspectorAssignedPending,
+  notifyInspectorAssignmentAccepted,
+  notifyInspectorAssignmentDeclined,
+  notifyInspectorAssignmentSuperseded,
+  toPublicAssignmentResponseEvent,
+  type HandymanAssignmentResponseRecord,
+} from '../assignment-responses';
+import { AppError } from '../../shared/errors';
+import {
   handymanInspectorAssignmentConflictError,
   handymanInspectorAssignmentIneligibleError,
   handymanInspectorAssignmentNotFoundError,
@@ -18,8 +35,11 @@ import type {
   AssignHandymanInspectorInput,
   EligibleInspectorProjection,
   HandymanInspectorAssignmentRecord,
+  HandymanInspectorAssignmentResponseHistoryView,
+  HandymanInspectorAssignmentResponseView,
   PublicHandymanInspectorAssignment,
   ReassignHandymanInspectorInput,
+  RespondToHandymanInspectorAssignmentInput,
 } from './handyman-inspector-assignment.types';
 
 function ensureUuid(value: string, field: string): string {
@@ -40,12 +60,24 @@ function ensureReason(value: string | undefined): string {
 
 function toPublic(
   record: HandymanInspectorAssignmentRecord,
+  response?: HandymanAssignmentResponseRecord | null,
 ): PublicHandymanInspectorAssignment {
+  const responseStatus = response?.responseStatus ?? 'PENDING';
   return {
     ...record,
     assignedAt: record.assignedAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+    responseStatus,
+    respondedByUserId: response?.respondedByUserId ?? null,
+    respondedByWorkerId: response?.respondedByWorkerId ?? null,
+    respondedAt: response?.respondedAt
+      ? response.respondedAt.toISOString()
+      : null,
+    declineReason: response?.declineReason ?? null,
+    responseNotes: response?.responseNotes ?? null,
+    reassignmentRequired:
+      record.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
   };
 }
 
@@ -313,7 +345,32 @@ export async function assignInspectorToVisit(
       'HANDYMAN_INSPECTOR_ASSIGNMENT_CREATED',
       `Inspector assigned to inspection visit ${visit.id}.`,
     );
-    return toPublic(record);
+    const pendingResponse =
+      await assignmentResponseRepository.ensurePendingForAssignment(
+        {
+          assignmentTargetType: 'INSPECTOR_VISIT_ASSIGNMENT',
+          assignmentId: record.id,
+          clientId: visit.clientId,
+          buildingId: visit.buildingId,
+          handymanRequestId: visit.handymanRequestId,
+          visitAppointmentId: visit.id,
+          assignedByUserId: actorUserId,
+          assignedAt: record.assignedAt,
+        },
+        tx,
+      );
+    await notifyInspectorAssignedPending(
+      {
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        assignmentId: record.id,
+        inspectorUserId: record.inspectorUserId,
+      },
+      tx,
+    );
+    return toPublic(record, pendingResponse);
   });
 }
 
@@ -362,7 +419,12 @@ export async function reassignInspectorForVisit(
 
     // Idempotency guard: same inspector => already current assignment (treat as no-op replay).
     if (current.inspectorUserId === inspectorId) {
-      return toPublic(current);
+      const currentResponse =
+        await assignmentResponseRepository.findByAssignmentId(
+          current.id,
+          tx,
+        );
+      return toPublic(current, currentResponse);
     }
 
     await assertInspectorEligible(tx, {
@@ -411,7 +473,63 @@ export async function reassignInspectorForVisit(
       'HANDYMAN_INSPECTOR_ASSIGNMENT_CREATED',
       `Inspector reassigned to visit ${visit.id} (new assignment).`,
     );
-    return toPublic(record);
+
+    await assignmentResponseRepository.recordSupersededEvent(
+      {
+        assignmentTargetType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        assignmentId: current.id,
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        assignedByUserId: current.assignedByUserId,
+        assignedAt: current.assignedAt,
+      },
+      actorUserId,
+      reason,
+      tx,
+    );
+    const pendingResponse =
+      await assignmentResponseRepository.ensurePendingForAssignment(
+        {
+          assignmentTargetType: 'INSPECTOR_VISIT_ASSIGNMENT',
+          assignmentId: record.id,
+          clientId: visit.clientId,
+          buildingId: visit.buildingId,
+          handymanRequestId: visit.handymanRequestId,
+          visitAppointmentId: visit.id,
+          assignedByUserId: actorUserId,
+          assignedAt: record.assignedAt,
+        },
+        tx,
+      );
+    await notifyInspectorAssignmentSuperseded(
+      {
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        oldAssignmentId: current.id,
+        newAssignmentId: record.id,
+        oldInspectorUserId: current.inspectorUserId,
+        newInspectorUserId: record.inspectorUserId,
+        reason,
+        action: 'SUPERSEDED',
+      },
+      tx,
+    );
+    await notifyInspectorAssignedPending(
+      {
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        assignmentId: record.id,
+        inspectorUserId: record.inspectorUserId,
+      },
+      tx,
+    );
+    return toPublic(record, pendingResponse);
   });
 }
 
@@ -465,7 +583,41 @@ export async function revokeInspectorAssignment(
       'HANDYMAN_INSPECTOR_ASSIGNMENT_REVOKED',
       `Inspector assignment revoked: ${reasonText}`,
     );
-    return toPublic(revoked);
+    await assignmentResponseRepository.recordSupersededEvent(
+      {
+        assignmentTargetType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        assignmentId: current.id,
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        assignedByUserId: current.assignedByUserId,
+        assignedAt: current.assignedAt,
+      },
+      actorUserId,
+      reasonText,
+      tx,
+    );
+    await notifyInspectorAssignmentSuperseded(
+      {
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        oldAssignmentId: current.id,
+        newAssignmentId: null,
+        oldInspectorUserId: current.inspectorUserId,
+        newInspectorUserId: null,
+        reason: reasonText,
+        action: 'REVOKED',
+      },
+      tx,
+    );
+    const response = await assignmentResponseRepository.findByAssignmentId(
+      revoked.id,
+      tx,
+    );
+    return toPublic(revoked, response);
   });
 }
 
@@ -488,7 +640,11 @@ export async function getInspectorAssignmentForVisit(
     undefined,
     visitId,
   );
-  return current ? toPublic(current) : null;
+  if (!current) return null;
+  const response = await assignmentResponseRepository.findByAssignmentId(
+    current.id,
+  );
+  return toPublic(current, response);
 }
 
 export async function listInspectorAssignmentHistory(
@@ -513,12 +669,20 @@ export async function listInspectorAssignmentHistory(
       scope.rows[0].client_id,
       requestId,
     );
-  return rows.map(toPublic);
+  const results: PublicHandymanInspectorAssignment[] = [];
+  for (const row of rows) {
+    const response = await assignmentResponseRepository.findByAssignmentId(
+      row.id,
+    );
+    results.push(toPublic(row, response));
+  }
+  return results;
 }
 
 /**
  * Helper for field read authority: determine if a user is currently the ACTIVE
- * assigned inspector for a request's latest INSPECTION visit.
+ * assigned inspector for a request's latest INSPECTION visit (and has NOT
+ * declined via `TIDAK_BISA`).
  */
 export async function isActiveInspectorForRequest(
   clientId: string,
@@ -540,8 +704,266 @@ export async function isActiveInspectorForRequest(
       db,
       visit.rows[0].id,
     );
-  if (!assignment) return false;
-  return assignment.inspectorUserId === userId;
+  if (!assignment || assignment.inspectorUserId !== userId) return false;
+  const response = await assignmentResponseRepository.findByAssignmentId(
+    assignment.id,
+    db,
+  );
+  if (response?.responseStatus === 'TIDAK_BISA') return false;
+  return true;
+}
+
+/**
+ * CR-HM-ASSIGNMENT-RESPONSE-01 PART 02B:
+ * Allows the assigned Inspector to respond `TERIMA` or `TIDAK_BISA` to an
+ * Inspection Visit assignment.
+ *
+ * - `TIDAK_BISA` requires a non-empty `declineReason` (1..1000 chars), sets
+ *   `reassignmentRequired = true`, and notifies Operations (`IN_APP`) without
+ *   deleting or cancelling the Visit Appointment or Handyman Service Request.
+ * - Duplicate identical responses are idempotent (`idempotentReplay: true`).
+ * - Conflicting responses are rejected with `409 HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT`.
+ * - Superseded or revoked assignments are rejected with `409 HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED`.
+ * - Late responses after visit completion/cancellation or recorded inspection
+ *   are rejected with `409 HANDYMAN_ASSIGNMENT_RESPONSE_LATE`.
+ */
+export async function respondToInspectorVisitAssignment(
+  input: RespondToHandymanInspectorAssignmentInput,
+  actorUserId: string,
+): Promise<HandymanInspectorAssignmentResponseView> {
+  const visitId = ensureUuid(input.visitAppointmentId, 'visitAppointmentId');
+  const assignmentId = ensureUuid(input.assignmentId, 'assignmentId');
+  ensureUuid(actorUserId, 'actorUserId');
+
+  if (!isAssignableResponseDecision(input.responseStatus)) {
+    throw AppError.validation(
+      "responseStatus must be either 'TERIMA' or 'TIDAK_BISA'.",
+    );
+  }
+
+  const rawDeclineReason =
+    typeof input.declineReason === 'string' ? input.declineReason.trim() : '';
+  if (input.responseStatus === 'TIDAK_BISA') {
+    if (rawDeclineReason.length === 0 || rawDeclineReason.length > 1000) {
+      throw assignmentDeclineReasonRequiredError();
+    }
+  } else if (rawDeclineReason.length > 0) {
+    throw assignmentDeclineReasonForbiddenOnAcceptError();
+  }
+  const normalizedDeclineReason =
+    input.responseStatus === 'TIDAK_BISA' ? rawDeclineReason : null;
+
+  const rawNotes =
+    typeof input.notes === 'string' ? input.notes.trim() : '';
+  if (rawNotes.length > 2000) {
+    throw AppError.validation('notes must not exceed 2000 characters.');
+  }
+  const normalizedNotes = rawNotes.length > 0 ? rawNotes : null;
+
+  return withTransaction(async (tx) => {
+    const visit = await handymanInspectorAssignmentRepository.lockVisit(
+      tx,
+      visitId,
+    );
+    if (!visit) throw handymanInspectorAssignmentNotFoundError();
+
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: visit.clientId,
+      buildingId: visit.buildingId,
+    });
+
+    const assignment =
+      await handymanInspectorAssignmentRepository.lockByIdAndVisit(
+        tx,
+        assignmentId,
+        visitId,
+      );
+    if (!assignment) throw handymanInspectorAssignmentNotFoundError();
+
+    if (assignment.inspectorUserId !== actorUserId) {
+      throw handymanAssignmentResponseForbiddenError(
+        'Only the assigned Inspector can respond to this visit assignment.',
+      );
+    }
+
+    if (assignment.status !== 'ACTIVE') {
+      throw handymanAssignmentResponseSupersededError();
+    }
+
+    await assignmentResponseRepository.ensurePendingForAssignment(
+      {
+        assignmentTargetType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        assignmentId: assignment.id,
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        assignedByUserId: assignment.assignedByUserId,
+        assignedAt: assignment.assignedAt,
+      },
+      tx,
+    );
+    const existing =
+      await assignmentResponseRepository.findByAssignmentIdForUpdate(
+        assignment.id,
+        tx,
+      );
+    if (!existing) throw handymanInspectorAssignmentNotFoundError();
+
+    if (existing.responseStatus === input.responseStatus) {
+      const sameDecline =
+        (existing.declineReason ?? null) === normalizedDeclineReason;
+      const sameNotes = (existing.responseNotes ?? null) === normalizedNotes;
+      if (sameDecline && sameNotes) {
+        return {
+          ...toPublic(assignment, existing),
+          idempotentReplay: true,
+        };
+      }
+      throw handymanAssignmentResponseConflictError();
+    }
+
+    if (existing.responseStatus !== 'PENDING') {
+      throw handymanAssignmentResponseConflictError();
+    }
+
+    // Late response guard: visit already terminal or inspection already recorded
+    if (
+      visit.state === 'COMPLETED' ||
+      visit.state === 'CANCELLED' ||
+      visit.state === 'NO_SHOW'
+    ) {
+      throw handymanAssignmentResponseLateError();
+    }
+    const inspectionRes = await tx.query(
+      `SELECT 1
+         FROM handyman_request_inspections
+        WHERE handyman_request_id = $1
+        LIMIT 1`,
+      [visit.handymanRequestId],
+    );
+    if ((inspectionRes.rowCount ?? 0) > 0) {
+      throw handymanAssignmentResponseLateError();
+    }
+
+    const workerRes = await tx.query<{ workerContextId: string | null }>(
+      `SELECT wc.id AS "workerContextId"
+         FROM workforce_profiles fp
+         LEFT JOIN handyman_worker_contexts wc
+           ON wc.workforce_profile_id = fp.id
+          AND wc.client_id = $1
+          AND wc.status = 'ACTIVE'
+        WHERE fp.user_id = $2
+          AND fp.status = 'ACTIVE'
+        LIMIT 1`,
+      [visit.clientId, actorUserId],
+    );
+    const respondedByWorkerId = workerRes.rows[0]?.workerContextId ?? null;
+
+    const updated = await assignmentResponseRepository.recordDecision(
+      {
+        assignmentId: assignment.id,
+        decision: input.responseStatus,
+        actorUserId,
+        actorWorkerId: respondedByWorkerId,
+        declineReason: normalizedDeclineReason,
+        notes: normalizedNotes,
+      },
+      tx,
+    );
+
+    if (input.responseStatus === 'TERIMA') {
+      await notifyInspectorAssignmentAccepted(
+        {
+          clientId: visit.clientId,
+          buildingId: visit.buildingId,
+          handymanRequestId: visit.handymanRequestId,
+          visitAppointmentId: visit.id,
+          assignmentId: assignment.id,
+          assignedByUserId: assignment.assignedByUserId,
+          respondedByUserId: actorUserId,
+          respondedByWorkerId,
+          respondedAt: updated.respondedAt!,
+        },
+        tx,
+      );
+    } else {
+      await notifyInspectorAssignmentDeclined(
+        {
+          clientId: visit.clientId,
+          buildingId: visit.buildingId,
+          handymanRequestId: visit.handymanRequestId,
+          visitAppointmentId: visit.id,
+          assignmentId: assignment.id,
+          assignedByUserId: assignment.assignedByUserId,
+          respondedByUserId: actorUserId,
+          respondedByWorkerId,
+          respondedAt: updated.respondedAt!,
+          declineReason: normalizedDeclineReason!,
+        },
+        tx,
+      );
+    }
+
+    return {
+      ...toPublic(assignment, updated),
+      idempotentReplay: false,
+    };
+  });
+}
+
+export async function listInspectorVisitAssignmentResponseHistory(
+  visitAppointmentId: string,
+  assignmentId: string,
+  actorUserId: string,
+): Promise<HandymanInspectorAssignmentResponseHistoryView> {
+  const visitId = ensureUuid(visitAppointmentId, 'visitAppointmentId');
+  const assignId = ensureUuid(assignmentId, 'assignmentId');
+  ensureUuid(actorUserId, 'actorUserId');
+
+  const visit = await handymanInspectorAssignmentRepository.findVisit(
+    undefined,
+    visitId,
+  );
+  if (!visit) throw handymanInspectorAssignmentNotFoundError();
+
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: visit.clientId,
+    buildingId: visit.buildingId,
+  });
+
+  const assignment =
+    await handymanInspectorAssignmentRepository.findByIdAndVisit(
+      undefined,
+      assignId,
+      visitId,
+    );
+  if (!assignment) throw handymanInspectorAssignmentNotFoundError();
+
+  const [response, events] = await Promise.all([
+    assignmentResponseRepository.findByAssignmentId(assignment.id),
+    assignmentResponseRepository.listEventsByAssignmentId(assignment.id),
+  ]);
+
+  const responseStatus = response?.responseStatus ?? 'PENDING';
+  return {
+    assignmentId: assignment.id,
+    visitAppointmentId: visit.id,
+    handymanRequestId: visit.handymanRequestId,
+    inspectorUserId: assignment.inspectorUserId,
+    status: assignment.status,
+    responseStatus,
+    respondedByUserId: response?.respondedByUserId ?? null,
+    respondedByWorkerId: response?.respondedByWorkerId ?? null,
+    respondedAt: response?.respondedAt
+      ? response.respondedAt.toISOString()
+      : null,
+    declineReason: response?.declineReason ?? null,
+    responseNotes: response?.responseNotes ?? null,
+    reassignmentRequired:
+      assignment.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
+    events: events.map(toPublicAssignmentResponseEvent),
+  };
 }
 
 export const handymanInspectorAssignmentService = {
@@ -552,4 +974,6 @@ export const handymanInspectorAssignmentService = {
   listInspectorAssignmentHistory,
   listEligibleInspectorsForVisit,
   isActiveInspectorForRequest,
+  respondToInspectorVisitAssignment,
+  listInspectorVisitAssignmentResponseHistory,
 };

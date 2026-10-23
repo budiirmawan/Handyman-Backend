@@ -5,11 +5,15 @@ import {
   assignHandymanExecutionScopeCrew,
   getHandymanExecutionScopeAssignment,
   handymanAssignmentNotFoundError,
+  listHandymanExecutionScopeAssignmentResponseHistory,
   reassignHandymanExecutionScopeCrew,
   resolveHandymanAssignmentLead,
+  respondToHandymanExecutionScopeAssignment,
 } from '../handyman-scope-assignments';
 import {
   parseAssignmentBody,
+  parseAssignmentIdParam,
+  parseAssignmentResponseBody,
   parseAssignmentScopeParam,
   parseReassignmentBody,
 } from './handyman-scope-assignments-api.validation';
@@ -110,6 +114,58 @@ export async function postHandymanExecutionScopeReassignHandler(
         actor(req),
       ),
       201,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function respondHandymanExecutionScopeAssignmentHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseAssignmentScopeParam(
+      p(req.params.executionScopeId),
+    );
+    const assignmentId = parseAssignmentIdParam(p(req.params.assignmentId));
+    const body = parseAssignmentResponseBody(req.body);
+    sendSuccess(
+      res,
+      await respondToHandymanExecutionScopeAssignment(
+        {
+          executionScopeId,
+          assignmentId,
+          ...body,
+        },
+        actor(req),
+      ),
+      200,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listHandymanExecutionScopeAssignmentResponseHistoryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const executionScopeId = parseAssignmentScopeParam(
+      p(req.params.executionScopeId),
+    );
+    const assignmentId = parseAssignmentIdParam(p(req.params.assignmentId));
+    sendSuccess(
+      res,
+      await listHandymanExecutionScopeAssignmentResponseHistory(
+        executionScopeId,
+        assignmentId,
+        actor(req),
+      ),
+      200,
     );
   } catch (error) {
     next(error);

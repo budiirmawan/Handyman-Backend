@@ -4,6 +4,10 @@ import { withTransaction } from '../../database';
 import { buildingAccessDeniedError, contextAccessService } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { workforceRepository } from '../workforce';
+import {
+  notifyExecutionScopeCrewLeadAssignedPending,
+  notifyExecutionScopeCrewLeadSuperseded,
+} from '../assignment-responses';
 import { handymanProviderContextRepository } from './handyman-provider-context.repository';
 import { handymanProviderContextNotFoundError } from './handyman-provider-context.errors';
 import { handymanWorkerContextRepository } from './handyman-worker-context.repository';
@@ -429,7 +433,12 @@ export async function designateHandymanCrewLead(
       workerContext.id,
     );
     if (!membership) throw handymanCrewMemberNotFoundError();
-    await assertProfileHasUser(workerContext.workforceProfileId);
+    const newLeadProfile = await workforceRepository.findById(
+      workerContext.workforceProfileId,
+    );
+    if (!newLeadProfile || newLeadProfile.userId === null) {
+      throw handymanCrewLeadInvalidError();
+    }
 
     const currentLead = await handymanWorkCrewRepository.findCurrentLead(
       tx,
@@ -437,6 +446,22 @@ export async function designateHandymanCrewLead(
     );
     if (currentLead?.handymanCrewMembershipId === membership.id) {
       throw handymanCrewLeadInvalidError();
+    }
+
+    let oldLeadUserId: string | null = null;
+    if (currentLead) {
+      const oldLeadRes = await tx.query<{ userId: string | null }>(
+        `SELECT wp.user_id AS "userId"
+           FROM handyman_crew_memberships cm
+           JOIN handyman_worker_contexts wc
+             ON wc.id = cm.handyman_worker_context_id
+           JOIN workforce_profiles wp
+             ON wp.id = wc.workforce_profile_id
+          WHERE cm.id = $1
+          LIMIT 1`,
+        [currentLead.handymanCrewMembershipId],
+      );
+      oldLeadUserId = oldLeadRes.rows[0]?.userId ?? null;
     }
 
     const lead = await handymanWorkCrewRepository.appendLead(
@@ -467,6 +492,66 @@ export async function designateHandymanCrewLead(
       },
       tx,
     );
+
+    // Notify old and new Crew Lead for any active Execution Scope assignments on this crew
+    const activeAssignmentsRes = await tx.query<{
+      assignmentId: string;
+      executionScopeId: string;
+      buildingId: string;
+      handymanRequestId: string;
+      responseStatus: string | null;
+    }>(
+      `SELECT a.id AS "assignmentId",
+              a.execution_scope_id AS "executionScopeId",
+              s.building_id AS "buildingId",
+              s.handyman_request_id AS "handymanRequestId",
+              ar.response_status AS "responseStatus"
+         FROM handyman_execution_scope_assignments a
+         JOIN handyman_execution_scopes s
+           ON s.id = a.execution_scope_id
+         LEFT JOIN handyman_assignment_responses ar
+           ON ar.assignment_id = a.id
+          AND ar.assignment_target_type = 'EXECUTION_SCOPE_ASSIGNMENT'
+        WHERE a.client_id = $1
+          AND a.handyman_crew_id = $2
+          AND a.status = 'ACTIVE'`,
+      [crew.clientId, crew.id],
+    );
+
+    for (const activeAssign of activeAssignmentsRes.rows) {
+      await notifyExecutionScopeCrewLeadSuperseded(
+        {
+          clientId: crew.clientId,
+          buildingId: activeAssign.buildingId,
+          handymanRequestId: activeAssign.handymanRequestId,
+          executionScopeId: activeAssign.executionScopeId,
+          oldAssignmentId: activeAssign.assignmentId,
+          newAssignmentId: activeAssign.assignmentId,
+          oldLeadUserId,
+          newLeadUserId: newLeadProfile.userId,
+          reason: 'Crew Lead changed',
+        },
+        tx,
+      );
+      if (
+        activeAssign.responseStatus === null ||
+        activeAssign.responseStatus === 'PENDING'
+      ) {
+        await notifyExecutionScopeCrewLeadAssignedPending(
+          {
+            clientId: crew.clientId,
+            buildingId: activeAssign.buildingId,
+            handymanRequestId: activeAssign.handymanRequestId,
+            executionScopeId: activeAssign.executionScopeId,
+            assignmentId: activeAssign.assignmentId,
+            crewId: crew.id,
+            leadUserId: newLeadProfile.userId,
+            leadWorkerContextId: workerContext.id,
+          },
+          tx,
+        );
+      }
+    }
 
     return { ...lead, designatedAt: lead.designatedAt.toISOString() };
   });

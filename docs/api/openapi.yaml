@@ -9338,6 +9338,95 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /handyman/execution-scopes/{executionScopeId}/assignments/{assignmentId}/respond:
+    post:
+      tags: [Handyman Scope Assignments]
+      operationId: respondHandymanExecutionScopeAssignment
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_EXECUTION_SCOPE_NOT_FOUND
+        - HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_FOUND
+        - HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN
+        - HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED
+        - HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT
+        - HANDYMAN_ASSIGNMENT_RESPONSE_LATE
+      summary: Record Crew Lead response (TERIMA or TIDAK_BISA) for an Execution Scope assignment
+      description: >
+        Allows the authoritative active Crew Lead (and only the current Crew Lead)
+        to respond `TERIMA` or `TIDAK_BISA` to an Execution Scope crew assignment.
+        `TIDAK_BISA` requires a non-empty declineReason, sets
+        `reassignmentRequired = true`, notifies Operations (`IN_APP`), and blocks
+        arrival verification and work session check-in/start without cancelling
+        the Tenant request or Execution Scope.
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RespondHandymanAssignmentRequest'
+      responses:
+        '200':
+          description: Updated Execution Scope assignment response state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanExecutionScopeAssignmentResponseView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /handyman/execution-scopes/{executionScopeId}/assignments/{assignmentId}/response-history:
+    get:
+      tags: [Handyman Scope Assignments]
+      operationId: listHandymanExecutionScopeAssignmentResponseHistory
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_EXECUTION_SCOPE_NOT_FOUND
+        - HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_FOUND
+      summary: List append-only response history for an Execution Scope assignment
+      description: >
+        Returns the current response state and append-only decision history events
+        for the specified Execution Scope crew assignment.
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Execution Scope assignment response history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanExecutionScopeAssignmentResponseHistoryView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /handyman/execution-scopes/{executionScopeId}/arrival-verification:
     get:
       tags: [Handyman Arrival Verification]
@@ -19595,9 +19684,9 @@ paths:
         or SLA response clock fulfillment. `TIDAK_BISA` requires a non-empty
         decline reason, preserves the Tenant Work Order, blocks execution under
         that assignment, and notifies Operations for reassignment. Requires
-        `work_order.manage` and Building access.
+        `work_order.read`, exact-Building access, and active assignment ownership.
       tags: [Work Orders]
-      x-required-permission: work_order.manage
+      x-required-permission: work_order.read
       x-building-scoped: true
       x-error-codes:
         - VALIDATION_ERROR
@@ -79954,6 +80043,94 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/visit-appointments/{visitAppointmentId}/inspector-assignments/{assignmentId}/respond:
+    parameters:
+      - name: visitAppointmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: assignmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman]
+      operationId: respondHandymanInspectorAssignment
+      summary: Record Inspector response (TERIMA or TIDAK_BISA) for a Visit Appointment assignment
+      description: >-
+        Allows the assigned Inspector to respond `TERIMA` or `TIDAK_BISA` to an
+        Inspection Visit assignment. `TIDAK_BISA` requires a mandatory declineReason,
+        sets `reassignmentRequired = true`, notifies Operations (`IN_APP`), and
+        blocks the declined Inspector from recording the inspection without
+        deleting or cancelling the Visit Appointment or Handyman Service Request.
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_INSPECTOR_ASSIGNMENT_NOT_FOUND
+        - HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN
+        - HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED
+        - HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT
+        - HANDYMAN_ASSIGNMENT_RESPONSE_LATE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RespondHandymanAssignmentRequest" }
+      responses:
+        "200":
+          description: Updated Inspector assignment response state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspectorAssignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/visit-appointments/{visitAppointmentId}/inspector-assignments/{assignmentId}/response-history:
+    parameters:
+      - name: visitAppointmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: assignmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Handyman]
+      operationId: listHandymanInspectorAssignmentResponseHistory
+      summary: List append-only response history for an Inspector Visit assignment
+      description: >-
+        Returns the current response state and append-only decision history events
+        for the specified Inspector Visit assignment (preserved across reassign
+        and revoke).
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_INSPECTOR_ASSIGNMENT_NOT_FOUND
+      responses:
+        "200":
+          description: Inspector Visit assignment response history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspectorAssignmentResponseHistoryView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /handyman/requests/{handymanRequestId}/inspector-assignments/history:
     parameters:
       - $ref: "#/components/parameters/HandymanRequestIdPath"
@@ -98281,10 +98458,123 @@ components:
       required: [decision]
       properties:
         decision: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
         declineReason: { type: string, minLength: 1, maxLength: 1000 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         notes: { type: string, maxLength: 1000 }
         idempotencyKey: { type: string, minLength: 1, maxLength: 255 }
+
+    RespondHandymanAssignmentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        decision: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        declineReason: { type: string, minLength: 1, maxLength: 1000, nullable: true }
+        reason: { type: string, minLength: 1, maxLength: 1000, nullable: true }
+        notes: { type: string, maxLength: 2000, nullable: true }
+
+    HandymanExecutionScopeAssignmentResponseView:
+      type: object
+      additionalProperties: false
+      required:
+        - assignmentId
+        - executionScopeId
+        - handymanRequestId
+        - crewId
+        - providerContextId
+        - status
+        - leadWorkerContextId
+        - leadUserId
+        - responseStatus
+        - respondedByUserId
+        - respondedByWorkerId
+        - respondedAt
+        - declineReason
+        - responseNotes
+        - reassignmentRequired
+        - idempotentReplay
+      properties:
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        executionScopeId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        crewId: { $ref: "#/components/schemas/Uuid" }
+        providerContextId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        leadWorkerContextId: { type: string, format: uuid, nullable: true }
+        leadUserId: { type: string, format: uuid, nullable: true }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        idempotentReplay: { type: boolean }
+
+    HandymanExecutionScopeAssignmentResponseHistoryView:
+      type: object
+      additionalProperties: false
+      required:
+        - assignmentId
+        - executionScopeId
+        - status
+        - responseStatus
+        - respondedByUserId
+        - respondedByWorkerId
+        - respondedAt
+        - declineReason
+        - responseNotes
+        - reassignmentRequired
+        - events
+      properties:
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        executionScopeId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
+
+    HandymanInspectorAssignmentResponseHistoryView:
+      type: object
+      additionalProperties: false
+      required:
+        - assignmentId
+        - visitAppointmentId
+        - handymanRequestId
+        - inspectorUserId
+        - status
+        - responseStatus
+        - respondedByUserId
+        - respondedByWorkerId
+        - respondedAt
+        - declineReason
+        - responseNotes
+        - reassignmentRequired
+        - events
+      properties:
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        visitAppointmentId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        inspectorUserId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED, REVOKED] }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
 
     HandymanAssignmentResponseEvent:
       type: object

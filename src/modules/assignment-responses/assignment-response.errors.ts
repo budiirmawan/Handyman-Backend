@@ -39,3 +39,75 @@ export function assignmentResponseLateError(
     message,
   });
 }
+
+export function handymanAssignmentResponseForbiddenError(
+  message = 'User is not the authorized active assignee (Crew Lead or Inspector) for this assignment.',
+): AppError {
+  return new AppError({
+    statusCode: 403,
+    code: 'HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN',
+    message,
+  });
+}
+
+export function handymanAssignmentResponseSupersededError(
+  message = 'Cannot respond to or execute a superseded or revoked assignment.',
+): AppError {
+  return new AppError({
+    statusCode: 409,
+    code: 'HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED',
+    message,
+  });
+}
+
+export function handymanAssignmentResponseConflictError(
+  message = 'Assignment response has already been finalized and cannot be changed to a conflicting decision.',
+): AppError {
+  return new AppError({
+    statusCode: 409,
+    code: 'HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT',
+    message,
+  });
+}
+
+export function handymanAssignmentDeclinedError(
+  message = 'Cannot execute work or visit under an assignment that has been declined (TIDAK_BISA).',
+): AppError {
+  return new AppError({
+    statusCode: 409,
+    code: 'HANDYMAN_ASSIGNMENT_DECLINED',
+    message,
+  });
+}
+
+export function handymanAssignmentResponseLateError(
+  message = 'Assignment response is no longer allowed because execution or inspection has already started or completed.',
+): AppError {
+  return new AppError({
+    statusCode: 409,
+    code: 'HANDYMAN_ASSIGNMENT_RESPONSE_LATE',
+    message,
+  });
+}
+
+export function assignmentDeclineReasonRequiredError(
+  message = 'declineReason is required (1-1000 characters) when responseStatus is TIDAK_BISA.',
+): AppError {
+  return AppError.validation(message, [
+    {
+      field: 'declineReason',
+      message: 'declineReason is required (1-1000 characters) when responseStatus is TIDAK_BISA.',
+    },
+  ]);
+}
+
+export function assignmentDeclineReasonForbiddenOnAcceptError(
+  message = 'declineReason must not be provided when responseStatus is TERIMA.',
+): AppError {
+  return AppError.validation(message, [
+    {
+      field: 'declineReason',
+      message: 'declineReason must not be provided when responseStatus is TERIMA.',
+    },
+  ]);
+}

@@ -5,6 +5,7 @@ import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError } from '../context-access';
 import { handymanInspectorAssignmentService } from '../handyman-inspector-assignments';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments';
+import { assignmentResponseRepository } from '../assignment-responses';
 
 /**
  * Read-only field feed. The logged-in user is the identity; never accept
@@ -15,7 +16,8 @@ import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments';
  */
 export const MY_JOBS_SQL = `
   SELECT DISTINCT es.id AS "executionScopeId", es.handyman_request_id AS "requestId",
-    es.building_id AS "buildingId", a.handyman_crew_id AS "crewId",
+    es.building_id AS "buildingId", a.id AS "assignmentId", a.handyman_crew_id AS "crewId",
+    COALESCE(ar.response_status, 'PENDING') AS "responseStatus",
     r.status AS "requestStatus", es.status AS "scopeStatus",
     dr.id AS "dispatchReleaseId", dr.status AS "dispatchStatus",
     dr.released_at AS "releasedAt",
@@ -25,6 +27,8 @@ export const MY_JOBS_SQL = `
   JOIN handyman_service_requests r ON r.id=es.handyman_request_id AND r.client_id=es.client_id
   JOIN handyman_execution_scope_assignments a ON a.execution_scope_id=es.id
     AND a.client_id=es.client_id AND a.status='ACTIVE'
+  LEFT JOIN handyman_assignment_responses ar
+    ON ar.assignment_id=a.id AND ar.assignment_target_type='EXECUTION_SCOPE_ASSIGNMENT'
   LEFT JOIN handyman_dispatch_releases dr
     ON dr.execution_scope_id=es.id AND dr.client_id=es.client_id
    AND dr.assignment_id=a.id AND dr.status IN ('RELEASED','IN_PROGRESS')
@@ -59,6 +63,7 @@ export const MY_JOBS_SQL = `
       AND booked.resource_id=a.handyman_crew_id
       AND booked.state IN ('CONFIRMED','IN_PROGRESS')
   WHERE es.status='AUTHORIZED'
+    AND COALESCE(ar.response_status, 'PENDING') <> 'TIDAK_BISA'
   ORDER BY booked.start_at NULLS LAST, es.id DESC
   LIMIT 100`;
 
@@ -66,10 +71,13 @@ export const MY_INSPECTIONS_SQL = `
   SELECT v.id AS "appointmentId", v.handyman_request_id AS "requestId",
     v.building_id AS "buildingId", v.start_at AS "startAt", v.end_at AS "endAt",
     v.timezone, v.state, v.version,
-    ia.id AS "assignmentId", ia.version AS "assignmentVersion"
+    ia.id AS "assignmentId", ia.version AS "assignmentVersion",
+    COALESCE(ar.response_status, 'PENDING') AS "responseStatus"
   FROM handyman_visit_appointments v
   JOIN handyman_inspector_assignments ia
     ON ia.visit_appointment_id = v.id AND ia.status = 'ACTIVE'
+  LEFT JOIN handyman_assignment_responses ar
+    ON ar.assignment_id = ia.id AND ar.assignment_target_type = 'INSPECTOR_VISIT_ASSIGNMENT'
   JOIN users u ON u.id=$1 AND u.status='ACTIVE'
   JOIN jsonb_to_recordset($2::jsonb) AS access("buildingId" uuid, "clientId" uuid)
     ON access."buildingId"=v.building_id AND access."clientId"=v.client_id
@@ -80,6 +88,7 @@ export const MY_INSPECTIONS_SQL = `
   WHERE v.kind='INSPECTION' AND v.resource_type='INSPECTOR_USER'
     AND ia.inspector_user_id = u.id
     AND v.state IN ('PROPOSED','TENANT_SELECTED','CONFIRMED','IN_PROGRESS')
+    AND COALESCE(ar.response_status, 'PENDING') <> 'TIDAK_BISA'
   ORDER BY v.start_at, v.id
   LIMIT 100`;
 
@@ -159,7 +168,12 @@ async function resolveFieldRoleForExecutionScope(params: {
   }
 
   if (leadResolution && leadResolution.leadUserId === params.actorUserId) {
-    return { actorRole: 'PIC_PEKERJAAN', leadResolution };
+    const response = await assignmentResponseRepository.findByAssignmentId(
+      leadResolution.assignmentId,
+    );
+    if (response?.responseStatus !== 'TIDAK_BISA') {
+      return { actorRole: 'PIC_PEKERJAAN', leadResolution };
+    }
   }
 
   const isInspector = await isAssignedInspectorForRequest(
@@ -264,6 +278,10 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
     assigned_at: Date;
     lead_worker_context_id: string | null;
     lead_user_id: string | null;
+    response_status: string | null;
+    responded_by_user_id: string | null;
+    responded_at: Date | null;
+    decline_reason: string | null;
   }>(
     `SELECT a.id AS assignment_id,
             a.handyman_provider_context_id AS provider_context_id,
@@ -273,11 +291,18 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
             a.status,
             a.assigned_at,
             wc.id AS lead_worker_context_id,
-            fp.user_id AS lead_user_id
+            fp.user_id AS lead_user_id,
+            COALESCE(ar.response_status, 'PENDING') AS response_status,
+            ar.responded_by_user_id,
+            ar.responded_at,
+            ar.decline_reason
        FROM handyman_execution_scope_assignments a
        JOIN handyman_work_crews crew
          ON crew.id = a.handyman_crew_id
         AND crew.client_id = a.client_id
+       LEFT JOIN handyman_assignment_responses ar
+         ON ar.assignment_id = a.id
+        AND ar.assignment_target_type = 'EXECUTION_SCOPE_ASSIGNMENT'
        LEFT JOIN LATERAL (
          SELECT cl.handyman_crew_membership_id
            FROM handyman_crew_leads cl
@@ -302,6 +327,7 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
   );
   const row = res.rows[0];
   if (!row) return null;
+  const responseStatus = row.response_status ?? 'PENDING';
   return {
     assignmentId: row.assignment_id,
     providerContextId: row.provider_context_id,
@@ -312,6 +338,12 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
     assignedAt: row.assigned_at.toISOString(),
     leadWorkerContextId: row.lead_worker_context_id,
     leadUserId: row.lead_user_id,
+    responseStatus,
+    respondedByUserId: row.responded_by_user_id,
+    respondedAt: row.responded_at ? row.responded_at.toISOString() : null,
+    declineReason: row.decline_reason,
+    reassignmentRequired:
+      row.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
   };
 }
 
@@ -802,7 +834,12 @@ export async function readAssignedFieldRequestDetail(
         actorUserId,
       );
       if (leadRes && leadRes.leadUserId === actorUserId) {
-        actorRole = 'PIC_PEKERJAAN';
+        const response = await assignmentResponseRepository.findByAssignmentId(
+          leadRes.assignmentId,
+        );
+        if (response?.responseStatus !== 'TIDAK_BISA') {
+          actorRole = 'PIC_PEKERJAAN';
+        }
       }
     } catch {
       actorRole = null;

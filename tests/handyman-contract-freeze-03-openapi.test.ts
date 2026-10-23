@@ -53,8 +53,8 @@ function collectKeys(value: unknown, key: string, out: unknown[] = []): unknown[
 }
 
 describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
-  it('keeps the 280-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 280);
+  it('keeps the 284-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 284);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);

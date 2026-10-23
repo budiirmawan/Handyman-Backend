@@ -179,7 +179,7 @@ Karena tabel `handyman_execution_scope_assignments` (`0396`) dan `handyman_inspe
    - `id UUID PRIMARY KEY`
    - `client_id UUID NOT NULL REFERENCES clients(id)`
    - `building_id UUID NOT NULL REFERENCES buildings(id)`
-   - `assignment_target_type TEXT NOT NULL CHECK (assignment_target_type IN ('WORK_ORDER_ASSIGNMENT', 'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT', 'HANDYMAN_INSPECTOR_ASSIGNMENT'))`
+   - `assignment_target_type TEXT NOT NULL CHECK (assignment_target_type IN ('WORK_ORDER_ASSIGNMENT', 'EXECUTION_SCOPE_ASSIGNMENT', 'INSPECTOR_VISIT_ASSIGNMENT'))`
    - `assignment_id UUID NOT NULL`
    - `work_order_id UUID REFERENCES work_orders(id)`
    - `execution_scope_id UUID REFERENCES handyman_execution_scopes(id)`
