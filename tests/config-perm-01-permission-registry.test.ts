@@ -150,6 +150,11 @@ const EXPECTED_UNASSIGNED_BY_DEFAULT = [
   // still authorizes nothing without an ACTIVE assignment to the EXACT
   // Building under the server-derived Client.
   'handyman.care.building',
+  // CR-HM-WORKER-COMPETENCY-01 PART 02 — attesting a worker's competence is
+  // separation of duties: the verification decision is never inherited, and the
+  // certificate owner can never decide on their own record even when granted.
+  // `workforce_certification.read`/`.manage` stay on the default policy.
+  'workforce_certification.verify',
   'operational_budget.override',
   'rfq.award',
   'price_catalog.override',
@@ -248,9 +253,13 @@ describe('CR-BE-CONFIG-PERM-01 — permission registry closure', () => {
     // (migration 0448 — never reconciled into this pin by PR #34)
     // + 1 CR-HM-BM-CARE-AUTH-01 handyman.care.building code (migration 0450)
     // + 2 CR-HM-MASTER-IND-01 unit_party.{read,manage} codes (migration 0456 —
-    // reconciled into this pin by CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01).
-    assert.equal(CATALOGUE.length, 362);
-    assert.equal(CATALOGUE_SET.size, 362, 'catalogue must contain no duplicates');
+    // reconciled into this pin by CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01)
+    // + 3 CR-HM-WORKER-COMPETENCY-01 PART 02 workforce_certification.
+    //   {read,manage,verify} codes (migration 0462 — reconciled into this pin
+    //   by PART 02; individual worker certification is its own authority
+    //   domain, so no existing namespace was widened).
+    assert.equal(CATALOGUE.length, 365);
+    assert.equal(CATALOGUE_SET.size, 365, 'catalogue must contain no duplicates');
   });
 
   for (const domain of Object.keys(DOMAIN_ROUTE_FILES)) {

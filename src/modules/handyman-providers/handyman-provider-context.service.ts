@@ -13,6 +13,7 @@ import {
 } from './handyman-provider-context.errors';
 import {
   isHandymanProviderContextStatus,
+  type CreateDirectHandymanProviderContextInput,
   type CreateHandymanProviderContextInput,
   type HandymanProviderContextRecord,
   type PublicHandymanProviderContext,
@@ -32,12 +33,15 @@ import {
  */
 
 const CONTEXT_UNIQUE_CONSTRAINT = 'handyman_provider_contexts_vendor_unique';
+const DIRECT_CONTEXT_UNIQUE_CONSTRAINT =
+  'handyman_provider_contexts_direct_client_unique';
 
 function isContextUniqueViolation(error: unknown): boolean {
   const candidate = error as { code?: string; constraint?: string };
   return (
     candidate?.code === '23505' &&
-    candidate?.constraint === CONTEXT_UNIQUE_CONSTRAINT
+    (candidate?.constraint === CONTEXT_UNIQUE_CONSTRAINT ||
+      candidate?.constraint === DIRECT_CONTEXT_UNIQUE_CONSTRAINT)
   );
 }
 
@@ -88,6 +92,7 @@ export async function createHandymanProviderContext(
         tx,
         {
           clientId: vendor.clientId,
+          providerType: 'VENDOR',
           vendorId: vendor.id,
           createdByUserId: actorUserId,
         },
@@ -105,6 +110,7 @@ export async function createHandymanProviderContext(
           summary: 'Handyman provider context created (ACTIVE).',
           metadata: {
             providerContextId: record.id,
+            providerType: 'VENDOR',
             vendorId: vendor.id,
           },
         },
@@ -119,6 +125,100 @@ export async function createHandymanProviderContext(
     }
     throw error;
   }
+}
+
+/**
+ * PART 03B2D — create the Client's DIRECT workforce pool.
+ *
+ * Handyman is a direct service provider: Operations manages permanent,
+ * contract and freelance field workers itself. This pool therefore has NO
+ * vendor and none is fabricated. There is at most ONE per Client (enforced by
+ * the partial unique index), so the whole workforce of a Client lives in a
+ * single, unambiguous authority — the same provider/crew/worker chain the
+ * assignment service already validates and journals.
+ *
+ * The Client is caller-supplied only because no vendor exists to derive it
+ * from; the actor must have real access to that exact Client.
+ */
+export async function createDirectHandymanProviderContext(
+  input: CreateDirectHandymanProviderContextInput,
+  actorUserId: string,
+): Promise<PublicHandymanProviderContext> {
+  ensureUuid(input.clientId, 'clientId');
+  ensureUuid(actorUserId, 'actorUserId');
+
+  if (
+    !(await contextAccessService.canAccessClient(actorUserId, input.clientId))
+  ) {
+    throw buildingAccessDeniedError();
+  }
+
+  try {
+    return await withTransaction(async (tx) => {
+      const existing = await handymanProviderContextRepository.findDirectByClient(
+        tx,
+        input.clientId,
+      );
+      if (existing) throw handymanProviderContextAlreadyExistsError();
+
+      const record = await handymanProviderContextRepository.insertContext(
+        tx,
+        {
+          clientId: input.clientId,
+          providerType: 'DIRECT',
+          vendorId: null,
+          createdByUserId: actorUserId,
+        },
+        actorUserId,
+      );
+
+      await recordOperationalEvent(
+        {
+          clientId: record.clientId,
+          eventType: 'HANDYMAN_PROVIDER_CONTEXT_CREATED',
+          entityType: 'HANDYMAN_PROVIDER_CONTEXT',
+          entityId: record.id,
+          actorUserId,
+          summary: 'Handyman direct workforce pool created (ACTIVE).',
+          metadata: {
+            providerContextId: record.id,
+            providerType: 'DIRECT',
+            vendorId: null,
+          },
+        },
+        tx,
+      );
+
+      return toPublic(record);
+    });
+  } catch (error) {
+    if (isContextUniqueViolation(error)) {
+      throw handymanProviderContextAlreadyExistsError();
+    }
+    throw error;
+  }
+}
+
+/** PART 03B2D — bounded read of the Client's direct pool. */
+export async function getDirectHandymanProviderContext(
+  clientId: string,
+  actorUserId?: string,
+): Promise<PublicHandymanProviderContext> {
+  ensureUuid(clientId, 'clientId');
+  const record = await handymanProviderContextRepository.findDirectByClient(
+    undefined,
+    clientId,
+  );
+  if (!record) throw handymanProviderContextNotFoundError();
+  if (actorUserId !== undefined) {
+    ensureUuid(actorUserId, 'actorUserId');
+    if (
+      !(await contextAccessService.canAccessClient(actorUserId, record.clientId))
+    ) {
+      throw buildingAccessDeniedError();
+    }
+  }
+  return toPublic(record);
 }
 
 /** Lifecycle transition: ACTIVE ⇄ INACTIVE, with history preserved. */
@@ -168,6 +268,7 @@ export async function setHandymanProviderContextStatus(
         summary: `Handyman provider context status: ${existing.status} → ${status}.`,
         metadata: {
           providerContextId: existing.id,
+          providerType: existing.providerType,
           vendorId: existing.vendorId,
           fromStatus: existing.status,
           toStatus: status,
@@ -207,6 +308,8 @@ export async function getHandymanProviderContextByVendor(
 
 export const handymanProviderContextService = {
   createHandymanProviderContext,
+  createDirectHandymanProviderContext,
+  getDirectHandymanProviderContext,
   setHandymanProviderContextStatus,
   getHandymanProviderContextByVendor,
 };

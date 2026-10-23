@@ -17,14 +17,14 @@ import { createApp } from '../src/app';
  *
  * Verifies the structural hygiene and census reconciliation for the
  * operational API contract:
- *  1. Operational census arithmetic & route disposition:
- *     - TOTAL_RUNTIME = 1,687
+ *  1. Operational census arithmetic & route disposition (PART 04A pins):
+ *     - TOTAL_RUNTIME = 2,016
  *     - NON_OPENAPI_INFRASTRUCTURE_ROUTE = 1 (app root `GET /`)
- *     - IN_SCOPE_OPERATIONAL_RUNTIME = 1,617
- *     - OPENAPI_OPERATIONAL = 1,250
- *     - RUNTIME_NOT_DOCUMENTED (Class A) = 367 (1,617 - 1,250 = 367)
+ *     - IN_SCOPE_OPERATIONAL_RUNTIME = 1,946
+ *     - OPENAPI_OPERATIONAL = 1,945
+ *     - RUNTIME_NOT_DOCUMENTED (Class A) = 1 (1,946 - 1,945 = 1)
  *     - Duplicate runtime mount = 1 (`GET /tasks/:id` vs `GET /tasks/:taskId`)
- *  2. Exact Class A count after route disposition = 367
+ *  2. Exact Class A count after route disposition = 1
  *  3. All OpenAPI operations have unique operationId (0 missing)
  *  4. Exactly 14 SLA operations carry canonical operationId
  *  5. Duplicate operationId count = 0
@@ -57,10 +57,19 @@ function walkRouter(
   }>;
   for (const layer of s ?? []) {
     if (layer.route?.path) {
-      const full = (prefix + layer.route.path) || '/';
-      for (const m of Object.keys(layer.route.methods ?? {})) {
-        if (m === '_all') continue;
-        out.push({ method: m.toUpperCase(), path: full });
+      // CR-HM-WORKER-COMPETENCY-01 PART 04A — one handler may be registered for
+      // an ARRAY of paths (`router.get(['/a', '/a/:id'], handler)`). Concatenating
+      // the array produced a single bogus route string and hid those operations
+      // from the census; each path is its own route.
+      const paths = Array.isArray(layer.route.path)
+        ? layer.route.path
+        : [layer.route.path];
+      for (const routePath of paths) {
+        const full = (prefix + routePath) || '/';
+        for (const m of Object.keys(layer.route.methods ?? {})) {
+          if (m === '_all') continue;
+          out.push({ method: m.toUpperCase(), path: full });
+        }
       }
     } else if (layer.handle?.stack) {
       let layerPrefix = prefix;
@@ -127,10 +136,10 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
   const operationalOpenApi = openapi.filter((o) => !o.path.startsWith('/platform'));
 
   // 1. Reconciled operational census arithmetic & route disposition
-  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 1,687, IN_SCOPE = 1,617', () => {
-    assert.equal(runtime.length, 1687, 'Total runtime routes must be exactly 1,687');
+  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 2,016, IN_SCOPE = 1,946', () => {
+    assert.equal(runtime.length, 2016, 'Total runtime routes must be exactly 2,016');
     assert.equal(platformRuntime.length, 69, 'SaaS platform runtime routes must be exactly 69');
-    assert.equal(operationalRuntime.length, 1618, 'Operational runtime routes must be 1,618');
+    assert.equal(operationalRuntime.length, 1947, 'Operational runtime routes must be 1,947');
 
     // Root GET / is the single NON_OPENAPI_INFRASTRUCTURE_ROUTE
     const rootRoute = operationalRuntime.filter((r) => r.path === '/');
@@ -138,10 +147,10 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
     assert.equal(rootRoute[0].method, 'GET');
 
     const inScopeOperational = operationalRuntime.filter((r) => r.path !== '/');
-    assert.equal(inScopeOperational.length, 1617, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,617');
-    assert.equal(operationalOpenApi.length, 1616, 'OPENAPI_OPERATIONAL must be 1,616 after PART 14');
+    assert.equal(inScopeOperational.length, 1946, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,946');
+    assert.equal(operationalOpenApi.length, 1945, 'OPENAPI_OPERATIONAL must be 1,945 after PART 04A');
 
-    // Reconciled arithmetic: 1617 - 1616 = 1 (duplicate task mount only)
+    // Reconciled arithmetic: 1946 - 1945 = 1 (duplicate task mount only)
     const runtimeNotDocumented = inScopeOperational.length - operationalOpenApi.length;
     assert.equal(runtimeNotDocumented, 1, 'RUNTIME_NOT_DOCUMENTED must be exactly 1');
   });
@@ -219,6 +228,19 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
       buckets[k] = new Set(Object.keys(v ?? {}));
     }
 
+    // PART 04A — resolve the whole JSON pointer: a `$ref` may target a NESTED
+    // schema node (`.../HandymanStatusVisibilityReadView/properties/stages/...`),
+    // which this check previously reported as broken while it is valid.
+    const resolvePointer = (ref: string): unknown => {
+      let current: unknown = SPEC;
+      for (const rawPart of ref.slice(2).split('/')) {
+        const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (current === null || typeof current !== 'object') return undefined;
+        current = (current as Record<string, unknown>)[part];
+        if (current === undefined) return undefined;
+      }
+      return current;
+    };
     const broken: string[] = [];
     function walk(node: unknown): void {
       if (!node || typeof node !== 'object') return;
@@ -229,11 +251,8 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
       const o = node as Record<string, unknown>;
       if (typeof o['$ref'] === 'string') {
         const ref = o['$ref'];
-        if (ref.startsWith('#/components/')) {
-          const parts = ref.slice(2).split('/');
-          const bucket = parts[1];
-          const tail = parts.slice(2).join('/');
-          if (!buckets[bucket]?.has(tail)) broken.push(ref);
+        if (ref.startsWith('#/components/') && buckets[ref.slice(2).split('/')[1] ?? '']) {
+          if (resolvePointer(ref) === undefined) broken.push(ref);
         }
       }
       for (const v of Object.values(o)) walk(v);
@@ -250,6 +269,10 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
       'POST /auth/login',
       // Public token acceptance. No bearer middleware.
       'POST /invitations/accept',
+      // Public token validation (`security: []` in the spec).
+      'POST /invitations/validate',
+      // Public tenant care intake (`security: []` in the spec).
+      'POST /handyman/requests/care',
     ]);
 
     const missing401: string[] = [];

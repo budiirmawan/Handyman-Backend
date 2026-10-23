@@ -21,7 +21,11 @@ import {createVisitProposal} from '../src/modules/handyman-appointment-contract/
 // to read the minimal fixtures. No application migration or persistent table.
 const id = Object.fromEntries(['client','otherClient','building','sibling','property',
   'request','scope','provider','crew','oldCrew','oldUser','user','oldMember','member',
-  'oldWorker','worker','oldProfile','profile','booking','inspection','vendor','organization','oldCrewMember'].map(key => [key,randomUUID()]));
+  'oldWorker','worker','oldProfile','profile','booking','inspection','vendor','organization','oldCrewMember',
+  // CR-HM-WORKER-COMPETENCY-01 PART 03A: the assignment authority now evaluates
+  // the job type's competency requirements, so the fixtures need the catalog
+  // chain and the (empty) competency surface.
+  'catalog'].map(key => [key,randomUUID()]));
 let postgres: EmbeddedPostgres;
 let directory: string;
 let db: Client;
@@ -30,7 +34,10 @@ const tables = ['clients','properties','buildings','users','user_building_assign
   'handyman_service_requests','handyman_execution_scopes','handyman_execution_scope_assignments',
   'handyman_work_crews','handyman_crew_leads','handyman_crew_memberships',
   'handyman_worker_contexts','workforce_profiles','handyman_visit_appointments',
-  'vendors','organizations','handyman_provider_contexts','vendor_workforce_bindings','workforce_building_assignments','operational_events','handyman_execution_scope_assignment_history','handyman_work_sessions','handyman_dispatch_releases'];
+  'vendors','organizations','handyman_provider_contexts','vendor_workforce_bindings','workforce_building_assignments','operational_events','handyman_execution_scope_assignment_history','handyman_work_sessions','handyman_dispatch_releases',
+  // CR-HM-WORKER-COMPETENCY-01 PART 03A — competency evaluation surface.
+  'service_catalog','service_catalog_competency_requirements','skills',
+  'workforce_skill_assignments','workforce_certifications','handyman_assignment_competency_evaluations'];
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(),'hm-crew-registration-'));
@@ -52,7 +59,7 @@ before(async () => {
     CREATE TEMP TABLE handyman_visit_tenant_slot_consents(id uuid, handyman_request_id uuid, kind text,
       selected_start_at timestamptz, selected_end_at timestamptz, tenant_company_id uuid, building_id uuid, accepted_at timestamptz);
     CREATE TEMP TABLE handyman_visit_tenant_slot_bindings(consent_id uuid, appointment_id uuid);
-    CREATE TEMP TABLE handyman_service_requests(id uuid, client_id uuid, status text, building_id uuid, tenant_company_id uuid);
+    CREATE TEMP TABLE handyman_service_requests(id uuid, client_id uuid, status text, building_id uuid, tenant_company_id uuid, service_catalog_id uuid);
     CREATE TEMP TABLE handyman_execution_scopes(id uuid, handyman_request_id uuid, client_id uuid, building_id uuid, status text);
     CREATE TEMP TABLE handyman_execution_scope_assignments(execution_scope_id uuid, client_id uuid, handyman_crew_id uuid, handyman_provider_context_id uuid, status text,
       id uuid, assigned_by_user_id uuid, supersedes_assignment_id uuid, assigned_at timestamptz DEFAULT NOW(), created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW(),
@@ -81,12 +88,36 @@ before(async () => {
       created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE organizations(id uuid, client_id uuid);
     CREATE TEMP TABLE vendors(id uuid, client_id uuid, status text);
-    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text, created_by_user_id uuid,
+    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, provider_type text DEFAULT 'VENDOR', vendor_id uuid, status text, created_by_user_id uuid,
       created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE vendor_workforce_bindings(vendor_id uuid, workforce_profile_id uuid, status text, effective_from timestamptz, effective_until timestamptz);
     CREATE TEMP TABLE workforce_building_assignments(workforce_profile_id uuid, building_id uuid, status text, effective_from timestamptz, effective_until timestamptz);
     CREATE TEMP TABLE operational_events(id uuid, client_id uuid, event_type text, entity_type text, entity_id uuid, actor_user_id uuid,
       building_id uuid, vendor_work_id uuid, request_id uuid, source text, summary text, metadata jsonb);
+    -- CR-HM-WORKER-COMPETENCY-01 PART 03A fixtures. The competency gate is a
+    -- READ-ONLY consumer of these tables: the default fixture configures NO
+    -- requirement, so the verdict is "unrestricted" and every pre-existing
+    -- admission/assignment rule under test keeps its original meaning. The gate
+    -- itself is covered end-to-end by tests/worker-competency-03b1.test.ts and
+    -- tests/handyman-competency-assignment.test.ts against the real schema.
+    CREATE TEMP TABLE service_catalog(id uuid, client_id uuid, code text, status text);
+    CREATE TEMP TABLE service_catalog_competency_requirements(id uuid, client_id uuid, service_catalog_id uuid,
+      trade_category_id uuid, requirement_type text, enforcement_level text, skill_id uuid,
+      minimum_proficiency_level text, certificate_name text, notes text, status text,
+      created_by_user_id uuid, created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
+    CREATE TEMP TABLE skills(id uuid, code text, name text, category text, status text);
+    CREATE TEMP TABLE workforce_skill_assignments(workforce_profile_id uuid, skill_id uuid, proficiency_level text,
+      status text, valid_from timestamptz, valid_until timestamptz);
+    CREATE TEMP TABLE workforce_certifications(id uuid, client_id uuid, workforce_profile_id uuid, skill_id uuid,
+      certificate_number text, certificate_name text, issuing_authority text, issue_date timestamptz,
+      expiry_date timestamptz, status text, verification_status text);
+    CREATE TEMP TABLE handyman_assignment_competency_evaluations(id uuid, decision_group_id uuid, client_id uuid,
+      execution_scope_id uuid, assignment_id uuid, handyman_crew_id uuid, action text, service_catalog_id uuid,
+      worker_context_id uuid, workforce_profile_id uuid, requirement_id uuid, requirement_type text,
+      enforcement_level text, skill_id uuid, skill_code text, minimum_proficiency_level text,
+      certificate_name text, satisfied boolean, reason text, evidence_proficiency_level text,
+      evidence_certification_id uuid, evidence_verification_status text, evidence_expiry_date timestamptz,
+      evaluated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE handyman_visit_appointments(id uuid, execution_scope_id uuid, handyman_request_id uuid, client_id uuid, building_id uuid,
       kind text, resource_type text, resource_id uuid, state text, start_at timestamptz, end_at timestamptz, timezone text, version integer DEFAULT 1, tenant_company_id uuid, created_by_user_id uuid, created_at timestamptz DEFAULT NOW());
   `);
@@ -121,7 +152,8 @@ beforeEach(async () => {
   await db.query("INSERT INTO buildings(id,property_id,status) VALUES ($1,$3,'ACTIVE'),($2,$3,'ACTIVE')",[id.building,id.sibling,id.property]);
   await db.query("INSERT INTO users VALUES ($1,'ACTIVE'),($2,'ACTIVE')",[id.oldUser,id.user]);
   await db.query("INSERT INTO user_building_assignments VALUES ($1,$3,'ACTIVE'),($2,$3,'ACTIVE')",[id.oldUser,id.user,id.building]);
-  await db.query("INSERT INTO handyman_service_requests VALUES ($1,$2,'READY_FOR_NEXT_STEP',$3,$4)",[id.request,id.client,id.building,id.client]);
+  await db.query("INSERT INTO service_catalog(id,client_id,code,status) VALUES ($1,$2,'TEST_JOB_TYPE','ACTIVE')",[id.catalog,id.client]);
+  await db.query("INSERT INTO handyman_service_requests(id,client_id,status,building_id,tenant_company_id,service_catalog_id) VALUES ($1,$2,'READY_FOR_NEXT_STEP',$3,$4,$5)",[id.request,id.client,id.building,id.client,id.catalog]);
   await db.query("INSERT INTO handyman_execution_scopes VALUES ($1,$2,$3,$4,'AUTHORIZED')",[id.scope,id.request,id.client,id.building]);
   await db.query("INSERT INTO handyman_work_crews(id,client_id,handyman_provider_context_id,status) VALUES ($1,$3,$4,'ACTIVE'),($2,$3,$4,'ACTIVE')",[id.crew,id.oldCrew,id.client,id.provider]);
   await db.query('INSERT INTO handyman_crew_leads(handyman_crew_id,handyman_crew_membership_id,client_id,lead_seq) VALUES ($1,$2,$4,1),($1,$3,$4,2)',[id.crew,id.oldMember,id.member,id.client]);
@@ -172,7 +204,12 @@ test('registered no-login helper remains eligible through workforce identity and
 });
 for (const [name,sql] of [
   ['inactive workforce',"UPDATE workforce_profiles SET status='INACTIVE' WHERE id=$1"],
-  ['non-external workforce',"UPDATE workforce_profiles SET workforce_type='INTERNAL' WHERE id=$1"],
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2D removed the `workforce_type='EXTERNAL'`
+  // predicate: Handyman's own permanent/contract/freelance staff are eligible,
+  // and ownership is decided by the provider kind (VENDOR needs its binding,
+  // DIRECT needs none). The equivalent refusal is a missing/expired binding,
+  // covered by the cases below, and the full rule lives in
+  // tests/handyman-direct-workforce-03b2d.test.ts.
   ['missing vendor registration','DELETE FROM vendor_workforce_bindings WHERE workforce_profile_id=$1'],
   ['inactive vendor registration',"UPDATE vendor_workforce_bindings SET status='INACTIVE' WHERE workforce_profile_id=$1"],
   ['expired vendor registration',"UPDATE vendor_workforce_bindings SET effective_until=NOW()-INTERVAL '1 day' WHERE workforce_profile_id=$1"],

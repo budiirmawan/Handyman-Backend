@@ -719,6 +719,34 @@ export const FOUNDATION_PERMISSIONS: readonly {
   // BE-03D1 — Skill Catalog (Client-scoped master/reference only)
   { code: 'skill.read', name: 'Read Skills' },
   { code: 'skill.manage', name: 'Manage Skills' },
+  // CR-HM-WORKER-COMPETENCY-01 PART 02 — Individual Worker Certification.
+  //
+  // A worker's own certificate (issuer, serial number, validity window,
+  // verification decision, evidence document) is a distinct authority domain:
+  // it is NOT a Skill assignment (`skill.*` administers the catalogue), NOT
+  // workforce master data (`workforce.*` administers the person) and NOT a
+  // vendor licence (company-level `vendor_licenses_certifications`). A tenant
+  // administration code (`tenant_company.*`) is broader still and is never
+  // consulted.
+  //
+  // `read`/`manage` are ordinary operational administration and follow the
+  // default catalogue rule (granted to PLATFORM_ADMIN by the seed loop below).
+  // `verify` is an attestation about a person's competence and is withheld
+  // from every role by default — see
+  // UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.
+  //
+  // Registration only: the Client boundary is enforced independently of the
+  // permission (context access on the workforce profile's own Client), so none
+  // of these codes can widen a read across Clients.
+  { code: 'workforce_certification.read', name: 'Read Workforce Certifications' },
+  {
+    code: 'workforce_certification.manage',
+    name: 'Manage Workforce Certifications',
+  },
+  {
+    code: 'workforce_certification.verify',
+    name: 'Verify or Reject Workforce Certifications',
+  },
   // BE-03E — Shift (Building-scoped definition; also gated by BE-02G
   // requireBuildingAccess on the Building-nested routes)
   { code: 'shift.read', name: 'Read Shifts' },
@@ -821,6 +849,15 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   'handyman.finance.read',
   'handyman.finance.manage',
   'handyman.settlement.manage',
+  // CR-HM-WORKER-COMPETENCY-01 PART 02 — verifying (or rejecting) a worker's
+  // individual certificate is an attestation about a person's competence and
+  // therefore separation of duties: the permission must be a deliberate,
+  // audited administrative grant, never inherited by being a platform
+  // administrator, an Operations user or the worker themselves. Even when
+  // granted, the runtime additionally forbids the certificate owner from
+  // deciding on their own record. `read`/`manage` stay on the default
+  // catalogue policy.
+  'workforce_certification.verify',
   // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A).
   // Being the mediation bridge between Tenant/PIC and Handyman for a Building
   // is an explicit operational authority: it must be assigned as a deliberate

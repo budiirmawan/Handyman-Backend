@@ -597,7 +597,27 @@ Read-only projection of authoritative worker profile facts without fabricating u
         ]
       },
       "certificationsAndExpiry": {
-        "individualCertificateNumberModeled": false,
+        "individualCertificateNumberModeled": true,
+        "individualCertifications": [
+          {
+            "id": "uuid",
+            "certificateNumber": "CERT-K3-LISTRIK-2026-0091",
+            "certificateName": "Sertifikat K3 Listrik Teknisi",
+            "issuingAuthority": "Kementerian Ketenagakerjaan RI",
+            "skillId": "uuid",
+            "skillCode": "SKL-PLUMB-01",
+            "skillName": "Commercial Plumbing & Piping",
+            "status": "ACTIVE",
+            "verificationStatus": "VERIFIED",
+            "issueDate": "2024-02-01T00:00:00.000Z",
+            "expiryDate": "2030-06-30T00:00:00.000Z",
+            "expiryStatus": "VALID",
+            "isExpired": false,
+            "isValid": true,
+            "documentAvailable": true,
+            "documentId": "uuid"
+          }
+        ],
         "skillValidityWindows": [
           {
             "skillId": "uuid",
@@ -649,7 +669,16 @@ Read-only projection of authoritative worker profile facts without fabricating u
 - **Note on Modeled vs Unmodeled Profile Attributes**:
   - Individual skill validity windows (`validFrom`, `validUntil` / `expiresAt`, `proficiencyLevel`) are projected from `workforce_skill_assignments` + `skills` (client-scoped through `skills.client_id`).
   - Employer/provider licenses & certifications (`recordType`, `name`, `number`, `issuingAuthority`, `issueDate`, `expiryDate`, `status`) are projected from `vendor_licenses_certifications`. They are OPTIONAL: a worker (or provider) without certificates still returns `200` with an empty array.
-  - Individual per-worker certificate serial numbers and star ratings are not separately modeled in the database schema (`individualCertificateNumberModeled: false`) and are never fabricated.
+  - **CR-HM-WORKER-COMPETENCY-01 PART 02** — `individualCertifications` projects the worker's OWN certificates from `workforce_certifications` (migration `0461`). `individualCertificateNumberModeled` is now `true`, because a per-worker certificate number IS modeled. It is an ADDITIVE change: `skillValidityWindows` and `providerLicensesAndCertifications` keep their exact previous meaning, and the three facts are never merged — a Skill assignment, a worker certificate and a **company-level** vendor licence are different authorities.
+  - `individualCertifications` semantics:
+    - **Source**: `GET /api/v1/workforce/:workforceId/certifications` and this projection share one read model; this projection is narrower (no storage keys).
+    - **Membership**: `ACTIVE` and `EXPIRED` certificates only. An administratively `INACTIVE` (withdrawn) certificate is excluded — it is not part of the worker's current competence record.
+    - **Order**: ACTIVE first, then by `expiryDate` ascending (soonest expiry first), then by issue date.
+    - **`isValid`** is the only field meant for "does this satisfy a certification requirement": `true` only when `status = ACTIVE` **and** the expiry instant has not passed **and** `verificationStatus = VERIFIED`. An expired certificate is never valid; an unverified or rejected one never is either.
+    - **`isExpired`** is the raw time fact (expiry instant already passed); `expiryStatus` is `VALID | EXPIRED | NOT_APPLICABLE`.
+    - **`documentAvailable`** is `true` when a resolvable document/storage reference exists; `documentId` identifies the shared-document registry row. **The raw storage key (`fileReference`) is deliberately never exposed to Mobile** — downloading evidence (if needed) must go through a scoped backend endpoint, not a client-side path.
+    - **Optional by contract**: a worker with zero certificates receives `200` with `individualCertifications: []`. Nothing is ever fabricated, and a missing/not-yet-migrated certification table degrades the list to empty rather than failing the profile.
+    - **Star ratings** remain unmodeled and are never fabricated.
 - **CR-HM-WORKER-PROFILE-FIX-01 — schema-fidelity notes (response shape UNCHANGED)**:
   - `workerCode` = `vendor_workforce_bindings.vendor_personnel_code` of the current vendor binding, falling back to `workforce_profiles.employee_code`. No `worker_code` column exists on `handyman_worker_contexts`.
   - `providerCode` = `vendors.vendor_code`. No `provider_code` column exists on `handyman_provider_contexts`.
@@ -687,3 +716,112 @@ Read-only projection of authoritative worker profile facts without fabricating u
 - Evidence-record compatibility with the generic `/evidence` module records (field-evidence uploads are a separate managed namespace, `hm-ev://`).
 - Material UOM catalog endpoint for mobile (commands accept an existing `uomId`/`uomCode`; no handyman-scoped UOM list is exposed here).
 - Cross-persona frontend handoffs beyond this document (Handyman-Mobile PR #9 consumption, operations web) remain with the respective frontend teams.
+
+---
+
+## 7. CR-HM-WORKER-COMPETENCY-01 PART 02 — Individual Worker Certifications
+
+An **individual worker certificate** is its own authority domain. It is deliberately NOT a Skill
+assignment (`workforce_skill_assignments` carries proficiency + a validity window only), NOT
+workforce master data, and NOT a company-level vendor licence
+(`vendor_licenses_certifications`). The API below never merges the three.
+
+### 7.1 Permission matrix (Operations surface)
+
+| Operation | Method + path | Required permission |
+| --- | --- | --- |
+| Expiry watch | `GET /api/v1/workforce/certifications/expiring` | `workforce_certification.read` |
+| List a worker's certificates | `GET /api/v1/workforce/:workforceId/certifications` | `workforce_certification.read` |
+| Certificate detail | `GET /api/v1/workforce/:workforceId/certifications/:certificationId` | `workforce_certification.read` |
+| Create | `POST /api/v1/workforce/:workforceId/certifications` | `workforce_certification.manage` |
+| Update metadata | `PATCH /api/v1/workforce/:workforceId/certifications/:certificationId` | `workforce_certification.manage` |
+| Verify / reject | `POST /api/v1/workforce/:workforceId/certifications/:certificationId/verify` | `workforce_certification.verify` |
+| Deactivate | `POST /api/v1/workforce/:workforceId/certifications/:certificationId/deactivate` | `workforce_certification.manage` |
+
+- The read routes above are the **Operations** surface and require the read code. The worker's own view
+  is served by `GET /handyman/field/me/profile` (no certification permission); the domain service also
+  permits a worker to read their own records and an ACTIVE Crew Lead to read their crew member's — those
+  field-authority rules are service-level, not a transport bypass.
+- `skill.*`, `workforce.*` and `tenant_company.*` are **not** substitutes for any row above. The three
+  codes are registered by migration `0462`; `verify` is withheld from every role by default
+  (`UNASSIGNED_BY_DEFAULT_PERMISSION_CODES`) and must be granted deliberately.
+- Every operation additionally requires access to the certificate's **own Client** (derived from the
+  caller's ACTIVE Building assignments). A wide permission never widens a read across Clients, and the
+  raw storage key of a document is never exposed to Mobile.
+- **Separation of duties**: the certificate owner can never verify/reject their own record
+  (`403 WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN`), even when they hold the verify code.
+
+### 7.2 Create (201)
+
+```json
+POST /api/v1/workforce/{workforceId}/certifications
+{
+  "certificateNumber": "CERT-K3-LISTRIK-2026-0091",
+  "certificateName": "Sertifikat K3 Listrik Teknisi",
+  "issuingAuthority": "Kementerian Ketenagakerjaan RI",
+  "issueDate": "2024-02-01T00:00:00.000Z",
+  "expiryDate": "2030-06-30T00:00:00.000Z",
+  "skillId": "uuid",
+  "documentId": "uuid",
+  "fileReference": "certifications/workers/k3-teknisi.pdf"
+}
+```
+- `certificateNumber` is **mandatory** for every certification record (1..128 chars, unique per
+  profile among ACTIVE rows). `certificateName`, `issuingAuthority` and `issueDate` are mandatory too.
+- `expiryDate` is optional (`null` = lifelong) and must not precede `issueDate`.
+- `skillId` must be an ACTIVE Skill of the same Client; `documentId` must be an active document of the
+  same Client; `fileReference` must be a safe relative storage key or `hm-ev://<uuid>`.
+- A new certificate is **always** `PENDING_VERIFICATION`. `verificationStatus` is rejected here
+  (`400 VALIDATION_ERROR`) — verification has its own authority and endpoint.
+
+### 7.3 Verify / reject
+
+```json
+POST /api/v1/workforce/{workforceId}/certifications/{certificationId}/verify
+{ "verificationStatus": "VERIFIED", "notes": "Sesuai dokumen asli." }
+```
+- `verificationStatus` ∈ `VERIFIED | REJECTED | PENDING_VERIFICATION` (the last resets the decision and
+  clears the verifier audit fields).
+- An `INACTIVE` or already-expired certificate can never become `VERIFIED`
+  (`409 WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED`).
+- Each decision writes a `WORKFORCE_CERTIFICATION_VERIFIED` operational event carrying the previous and
+  new status plus the deciding actor.
+
+### 7.4 Deactivate
+
+`POST .../deactivate` with an optional `{ "reason": "..." }` (audit metadata only; it never overwrites
+`notes`). The row is retained (`status = INACTIVE`), the certificate disappears from the Mobile
+profile, can no longer be verified, and its number may be re-registered as a new ACTIVE certificate.
+
+### 7.5 Expiry watch
+
+`GET /api/v1/workforce/certifications/expiring?days=30` (default 30, bounded 1..365; optional
+`workforceProfileId`, `verificationStatus`). Returns ACTIVE certificates whose `expiryDate` falls inside
+`[now, now + days]` **inside the caller's own Client scope**, ordered by `expiryDate` ascending:
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "certification": { "id": "uuid", "certificateNumber": "CERT-K3-001", "expiryStatus": "VALID", "isExpired": false, "isValid": true },
+      "workforceProfile": { "id": "uuid", "fullName": "Budi Santoso", "employeeCode": "EMP-001", "organizationId": "uuid" },
+      "daysUntilExpiry": 5
+    }
+  ],
+  "meta": { "days": 30 }
+}
+```
+Already-expired and INACTIVE certificates are excluded. A caller with no reachable Client receives
+`200` with `[]`.
+
+### 7.6 Validity semantics (single source of truth)
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `ACTIVE` / `EXPIRED` (derived from `expiryDate`) / `INACTIVE` (withdrawn) |
+| `expiryStatus` | `VALID` / `EXPIRED` / `NOT_APPLICABLE` (INACTIVE) |
+| `isExpired` | the expiry instant has already passed |
+| `isValid` | `ACTIVE` **and** not expired **and** `VERIFIED` — the only field that answers "may this satisfy a certification requirement?" |
+
+An expired certificate is never valid and can never be verified into validity.

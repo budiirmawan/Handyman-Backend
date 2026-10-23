@@ -116,7 +116,7 @@ before(async () => {
       status text, tenant_slot_choice_scope boolean DEFAULT FALSE);
     CREATE TEMP TABLE organizations(id uuid, client_id uuid);
     CREATE TEMP TABLE vendors(id uuid, client_id uuid, status text);
-    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text);
+    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text, provider_type text DEFAULT 'VENDOR');
     CREATE TEMP TABLE handyman_worker_contexts(id uuid, client_id uuid, handyman_provider_context_id uuid, workforce_profile_id uuid, status text);
     CREATE TEMP TABLE workforce_profiles(id uuid, organization_id uuid, user_id uuid, workforce_type text, status text);
     CREATE TEMP TABLE vendor_workforce_bindings(vendor_id uuid, workforce_profile_id uuid, status text, effective_from timestamptz, effective_until timestamptz);
@@ -328,7 +328,12 @@ for (const [name,sql] of [
   ['workforce profile',"UPDATE workforce_profiles SET status='INACTIVE'"],
   ['vendor registration',"UPDATE vendor_workforce_bindings SET status='INACTIVE'"],
   ['operational placement',"UPDATE workforce_building_assignments SET status='INACTIVE'"],
-  ['non-external workforce',"UPDATE workforce_profiles SET workforce_type='INTERNAL'"],
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2D replaced the old "must be EXTERNAL"
+  // rule with the provider-kind rule: Handyman's own permanent (INTERNAL),
+  // contract (CONTRACT) and freelance (FREELANCE) staff are legitimately
+  // eligible, so a non-EXTERNAL workforce type is NO LONGER a refusal reason.
+  // The equivalent fail-closed case is the worker's own login status.
+  ['login-less workforce profile',"UPDATE workforce_profiles SET user_id=NULL"],
   ['expired vendor registration',"UPDATE vendor_workforce_bindings SET effective_until=NOW()-INTERVAL '1 day'"],
   ['future vendor registration',"UPDATE vendor_workforce_bindings SET effective_from=NOW()+INTERVAL '1 day'"],
   ['expired placement',"UPDATE workforce_building_assignments SET effective_until=NOW()-INTERVAL '1 day'"],

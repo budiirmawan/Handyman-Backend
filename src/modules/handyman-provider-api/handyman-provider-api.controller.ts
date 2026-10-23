@@ -12,7 +12,7 @@ import {
   parseCrewMembershipStatusBody,
   parseProviderApiUuidParam,
   parseProviderAvailabilityQuery,
-  parseProviderContextCreateBody,
+  parseProviderContextCreateRequest,
   parseProviderContextStatusBody,
   parseWorkerContextCreateBody,
   parseWorkerContextStatusBody,
@@ -46,9 +46,19 @@ export async function postHandymanProviderContextHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const input = parseProviderContextCreateBody(req.body);
-    const record = await handymanProviderContextService
-      .createHandymanProviderContext(input, req.auth.userId);
+    // PART 03B2D — one route, two owners: vendor workforce (legacy) or the
+    // Client's own direct workforce. Never a fake vendor.
+    const input = parseProviderContextCreateRequest(req.body);
+    const record =
+      input.kind === 'VENDOR'
+        ? await handymanProviderContextService.createHandymanProviderContext(
+            { vendorId: input.vendorId },
+            req.auth.userId,
+          )
+        : await handymanProviderContextService.createDirectHandymanProviderContext(
+            { clientId: input.clientId },
+            req.auth.userId,
+          );
     sendSuccess(res, record, 201);
   } catch (error) {
     next(error);

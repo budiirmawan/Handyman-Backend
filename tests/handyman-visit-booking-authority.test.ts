@@ -82,7 +82,7 @@ before(async () => {
       WHERE state IN ('PROPOSED','TENANT_SELECTED','CONFIRMED','IN_PROGRESS');
     CREATE TEMP TABLE organizations(id uuid, client_id uuid);
     CREATE TEMP TABLE vendors(id uuid, client_id uuid, status text);
-    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text);
+    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text, provider_type text DEFAULT 'VENDOR');
     CREATE TEMP TABLE handyman_worker_contexts(id uuid, client_id uuid, handyman_provider_context_id uuid, workforce_profile_id uuid, status text);
     CREATE TEMP TABLE workforce_profiles(id uuid, organization_id uuid, user_id uuid, workforce_type text, status text);
     CREATE TEMP TABLE vendor_workforce_bindings(vendor_id uuid, workforce_profile_id uuid, status text, effective_from timestamptz, effective_until timestamptz);

@@ -531,14 +531,28 @@ describe('OpenAPI SaaS route parity (PART 13A)', () => {
       for (const v of Object.values(o)) walk(v);
     }
     walk(SPEC);
+    // CR-HM-WORKER-COMPETENCY-01 PART 04A — a `$ref` may legally point into a
+    // NESTED schema node (for example
+    // `.../HandymanStatusVisibilityReadView/properties/stages/properties/...`).
+    // Resolving only `#/components/<bucket>/<name>` reported those valid
+    // pointers as broken; the full JSON pointer is resolved instead, and a
+    // genuinely missing target is still reported.
+    const resolvePointer = (ref: string): unknown => {
+      let current: unknown = SPEC;
+      for (const rawPart of ref.slice(2).split('/')) {
+        const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (current === null || typeof current !== 'object') return undefined;
+        current = (current as Record<string, unknown>)[part];
+        if (current === undefined) return undefined;
+      }
+      return current;
+    };
     const broken: string[] = [];
     for (const ref of refs) {
       if (!ref.startsWith('#/components/')) continue;
-      const parts = ref.slice(2).split('/');
-      const bucket = buckets[parts[1]];
+      const bucket = buckets[ref.slice(2).split('/')[1] ?? ''];
       if (!bucket) continue; // external ref or unknown bucket
-      const tail = parts.slice(2).join('/');
-      if (!bucket.has(tail)) broken.push(ref);
+      if (resolvePointer(ref) === undefined) broken.push(ref);
     }
     assert.deepEqual(broken, [], `Broken $refs: ${broken.join(', ')}`);
   });

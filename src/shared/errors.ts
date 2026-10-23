@@ -1953,6 +1953,45 @@ export const ERROR_CODES = {
   SERVICE_CATALOG_INACTIVE: 'SERVICE_CATALOG_INACTIVE',
   SERVICE_CATALOG_CODE_IMMUTABLE: 'SERVICE_CATALOG_CODE_IMMUTABLE',
   SERVICE_CATALOG_NOT_ACTIVE: 'SERVICE_CATALOG_NOT_ACTIVE',
+  // CR-HM-WORKER-COMPETENCY-01 PART 03A — competency requirements per job type
+  // (Service Catalog entry) and their enforcement at the EXISTING assignment
+  // authority. Requirements are optional; these codes only fire when a Client
+  // has explicitly configured one.
+  SERVICE_COMPETENCY_REQUIREMENT_NOT_FOUND:
+    'SERVICE_COMPETENCY_REQUIREMENT_NOT_FOUND',
+  SERVICE_COMPETENCY_REQUIREMENT_ALREADY_EXISTS:
+    'SERVICE_COMPETENCY_REQUIREMENT_ALREADY_EXISTS',
+  SERVICE_COMPETENCY_REQUIREMENT_INVALID_STATE:
+    'SERVICE_COMPETENCY_REQUIREMENT_INVALID_STATE',
+  SERVICE_COMPETENCY_REQUIREMENT_SKILL_MISMATCH:
+    'SERVICE_COMPETENCY_REQUIREMENT_SKILL_MISMATCH',
+  SERVICE_COMPETENCY_REQUIREMENT_SERVICE_INACTIVE:
+    'SERVICE_COMPETENCY_REQUIREMENT_SERVICE_INACTIVE',
+  HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_COMPETENCY_REQUIRED:
+    'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_COMPETENCY_REQUIRED',
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2A — multi-trade Work Order. The trade
+  // registry is configuration (deactivate, never delete); the requirement
+  // codes above are reused because requirements are the same model keyed by a
+  // second target. Only the enforcement refusal is a new code, so a Work Order
+  // rejection is distinguishable from the Handyman crew one.
+  WORK_ORDER_TRADE_CATEGORY_NOT_FOUND: 'WORK_ORDER_TRADE_CATEGORY_NOT_FOUND',
+  WORK_ORDER_TRADE_CATEGORY_ALREADY_EXISTS:
+    'WORK_ORDER_TRADE_CATEGORY_ALREADY_EXISTS',
+  WORK_ORDER_TRADE_CATEGORY_INVALID_STATE:
+    'WORK_ORDER_TRADE_CATEGORY_INVALID_STATE',
+  WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED:
+    'WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED',
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2E — a Handyman-lifecycle Work Order
+  // (Customer Care origin) must be classified before a NEW assignment. An
+  // unclassified Work Order may never slide through the competency gate as if
+  // it had no requirements; the caller is told exactly which decision is
+  // missing instead of receiving a silent success.
+  WORK_ORDER_CLASSIFICATION_REQUIRED: 'WORK_ORDER_CLASSIFICATION_REQUIRED',
+  // PART 03B2E — a classification change would leave the CURRENTLY ACTIVE
+  // assignment non-compliant with the new trade's MANDATORY requirements. The
+  // change is refused atomically instead of silently invalidating a running
+  // job (reassign first, then reclassify).
+  WORK_ORDER_CLASSIFICATION_CONFLICT: 'WORK_ORDER_CLASSIFICATION_CONFLICT',
   // CR-BE-SVC-01 PART 02 — Service Request catalog adoption. Governed anchor
   // validation on service_requests.service_catalog_id (same-Client, ACTIVE,
   // code equals service_type). Free service_type is retained unchanged.
@@ -3050,6 +3089,33 @@ export const ERROR_CODES = {
   HANDYMAN_FINAL_CLOSE_NOT_AUTHORIZED: 'HANDYMAN_FINAL_CLOSE_NOT_AUTHORIZED',
   HANDYMAN_FINAL_CLOSE_GATE_FAILED: 'HANDYMAN_FINAL_CLOSE_GATE_FAILED',
   HANDYMAN_FINAL_CLOSE_ALREADY_CLOSED: 'HANDYMAN_FINAL_CLOSE_ALREADY_CLOSED',
+  // CR-HM-WORKER-COMPETENCY-01 — Individual Worker Certification Foundation
+  WORKFORCE_CERTIFICATION_NOT_FOUND: 'WORKFORCE_CERTIFICATION_NOT_FOUND',
+  WORKFORCE_CERTIFICATION_ALREADY_ACTIVE:
+    'WORKFORCE_CERTIFICATION_ALREADY_ACTIVE',
+  WORKFORCE_CERTIFICATION_CLIENT_MISMATCH:
+    'WORKFORCE_CERTIFICATION_CLIENT_MISMATCH',
+  WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH:
+    'WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH',
+  WORKFORCE_CERTIFICATION_DOCUMENT_MISMATCH:
+    'WORKFORCE_CERTIFICATION_DOCUMENT_MISMATCH',
+  WORKFORCE_CERTIFICATION_DOCUMENT_INVALID:
+    'WORKFORCE_CERTIFICATION_DOCUMENT_INVALID',
+  WORKFORCE_CERTIFICATION_INVALID_FILE_REFERENCE:
+    'WORKFORCE_CERTIFICATION_INVALID_FILE_REFERENCE',
+  WORKFORCE_CERTIFICATION_VERIFICATION_ACTOR_REQUIRED:
+    'WORKFORCE_CERTIFICATION_VERIFICATION_ACTOR_REQUIRED',
+  // CR-HM-WORKER-COMPETENCY-01 PART 02 — verification is an attestation made by
+  // a DIFFERENT authorized actor. The certificate owner may read their own
+  // record but can never decide its verification status.
+  WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN:
+    'WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN',
+  // A certificate that is INACTIVE or already past its expiry date can never be
+  // marked VERIFIED: an expired certificate must not satisfy a certification
+  // requirement.
+  WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED:
+    'WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED',
+  WORKFORCE_CERTIFICATION_FORBIDDEN: 'WORKFORCE_CERTIFICATION_FORBIDDEN',
   /** Generic 409 conflict code (used by PART 11A for "unique effective
    * session" collisions where no domain-specific error is frozen). */
   CONFLICT: 'CONFLICT',

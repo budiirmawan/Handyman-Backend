@@ -65,6 +65,7 @@ import { createHandymanServiceWarrantyApiRouter }
 import { createHandymanSlaStatusApiRouter }
   from '../modules/handyman-sla-status-api';
 import { createHandymanScopeAssignmentsApiRouter } from '../modules/handyman-scope-assignments-api';
+import { createWorkerCompetencyEligibilityRouter } from '../modules/worker-competency-eligibility';
 import { createHandymanInspectorAssignmentsApiRouter } from '../modules/handyman-inspector-assignments-api';
 import { createHandymanDispatchApiRouter } from '../modules/handyman-dispatch-api';
 import { createAcceptanceSignOffRouter } from '../modules/acceptance-sign-offs/acceptance-sign-off.routes';
@@ -112,6 +113,8 @@ import { createRfqRecommendationRouter } from '../modules/rfq-recommendations/rf
 import { createRfqPoConversionRouter } from '../modules/rfq-po-conversions/rfq-po-conversion.routes';
 import { createPriceCatalogEntryRouter } from '../modules/price-catalog-entries/price-catalog-entry.routes';
 import { createServiceCatalogRouter } from '../modules/service-catalog/service-catalog.routes';
+import { createServiceCompetencyRequirementRouter } from '../modules/service-competency-requirements';
+import { createWorkOrderTradeCategoryRouter } from '../modules/work-order-trade-categories';
 import { createApartmentMasterRouter } from '../modules/apartment-master/apartment-master.routes';
 import { createTenantImportRouter } from '../modules/tenant-import';
 import { createHandymanCatalogueAdminRouter } from '../modules/handyman-catalog';
@@ -342,6 +345,7 @@ import { createWorkforceReportingLineRouter } from '../modules/workforce-reporti
 import { createWorkforceReportingRouter } from '../modules/workforce-reporting/workforce-reporting.routes';
 import { createWorkforceShiftRouter } from '../modules/workforce-shifts/workforce-shift.routes';
 import { createWorkforceSkillRouter } from '../modules/workforce-skills/workforce-skill.routes';
+import { createWorkforceCertificationRouter } from '../modules/workforce-certifications/workforce-certification.routes';
 import { createTeamRouter } from '../modules/teams/team.routes';
 import { createSubscriptionRouter } from '../modules/subscriptions/subscription.routes';
 import { createUserRouter } from '../modules/users/user.routes';
@@ -417,6 +421,7 @@ export function createApiRouter(): Router {
   router.use(createWorkforceReportingRouter());
   router.use(createSkillRouter());
   router.use(createWorkforceSkillRouter());
+  router.use(createWorkforceCertificationRouter());
   router.use(createShiftRouter());
   router.use(createWorkforceShiftRouter());
   router.use(createWorkforceReportingLineRouter());
@@ -739,6 +744,16 @@ export function createApiRouter(): Router {
   // CR-BE-SVC-01 PART 01 — Service Catalog Foundation (governed Service master
   // identity; Client-scoped, identity only — no demand/price/lineage behavior).
   router.use(createServiceCatalogRouter());
+  // CR-HM-WORKER-COMPETENCY-01 PART 03A — per-job-type competency requirements
+  // (SKILL / CERTIFICATION, MANDATORY / RECOMMENDED). Configuration only; the
+  // requirements are consumed by the EXISTING assignment authority.
+  router.use(createServiceCompetencyRequirementRouter());
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2A — configurable MULTI-TRADE Work
+  // Order classification (AC, plumbing, electrical-minor, sanitary,
+  // door/lock, furniture, painting, ceiling, tiling, installation, generic
+  // repair) plus the Operations classification step. The competency gate it
+  // feeds lives in the EXISTING Work Order assignment authority.
+  router.use(createWorkOrderTradeCategoryRouter());
   // CR-HM-MASTER-IND-01 — apartment Unit master administration and
   // effective-dated Owner/Occupant/PIC roles (Unit = existing Space master).
   router.use(createApartmentMasterRouter());
@@ -853,6 +868,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanReadinessApiRouter());
   router.use(createHandymanQuotationsApiRouter()); // CR-HM-06 PART 07A — quotation surface
   router.use(createHandymanScopeAssignmentsApiRouter()); // CR-HM-04 activation PART C — assignment surface
+  router.use(createWorkerCompetencyEligibilityRouter()); // CR-HM-WORKER-COMPETENCY-01 PART 03A — competency eligibility/candidates reads (assignment sub-resources; read-only)
   router.use(createHandymanInspectorAssignmentsApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-A — inspector visit assignment surface
   router.use(createHandymanDispatchApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-C/P0-D — dispatch readiness/release + identity projection
   router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification

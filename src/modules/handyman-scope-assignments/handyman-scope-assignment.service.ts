@@ -12,6 +12,11 @@ import { handymanExecutionScopeNotFoundError } from '../handyman-quotations';
 import { assertHandymanCrewWorkerEligibility } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { workforceRepository } from '../workforce';
 import {
+  evaluateExecutionScopeCompetency,
+  recordAssignmentCompetencyDecision,
+  type ExecutionScopeCompetencyDecision,
+} from '../worker-competency-eligibility';
+import {
   handymanAssignmentAlreadyActiveError,
   handymanAssignmentActiveSessionBlockError,
   handymanAssignmentContextInactiveError,
@@ -81,6 +86,75 @@ function toPublic(
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
+}
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03A — competency gate.
+ *
+ * Runs INSIDE the assignment transaction, after the existing eligibility chain
+ * has validated provider/crew/Lead/placement, and before any row is written.
+ * The decision itself lives in `worker-competency-eligibility` (one evaluator
+ * shared with the read API) so the preflight answer and the enforcement verdict
+ * can never disagree.
+ *
+ * Backward compatibility: a job type with no ACTIVE competency requirement
+ * returns immediately (`requirementsConfigured: false`) and the assignment
+ * proceeds exactly as before this CR. Certifications are never required for all
+ * workers — only where a Client configured one.
+ *
+ * There is no bypass: `assignHandymanExecutionScopeCrew` and
+ * `reassignHandymanExecutionScopeCrew` are the only writers of
+ * `handyman_execution_scope_assignments`, and dispatch release requires an
+ * ACTIVE assignment row, so it cannot be used as an alternative entry point.
+ */
+async function assertCompetencyEligible(
+  tx: PoolClient,
+  input: { executionScopeId: string; clientId: string; crewId: string },
+): Promise<{
+  summary: { requirementCount: number; mandatoryRequirementCount: number };
+  decision: ExecutionScopeCompetencyDecision;
+}> {
+  const decision = await evaluateExecutionScopeCompetency(tx, input);
+  return {
+    summary: {
+      requirementCount: decision.summary.requirementCount,
+      mandatoryRequirementCount: decision.summary.mandatoryRequirementCount,
+    },
+    decision,
+  };
+}
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B1 — persists the decision history.
+ *
+ * Called with the SAME `tx` as the assignment insert, after the assignment row
+ * exists (the ledger references it) and before commit. A rolled-back assignment
+ * therefore rolls back its decision rows too, and a committed assignment always
+ * carries the exact evaluation that authorised it.
+ *
+ * The evaluated set is the one the gate just produced — never a re-evaluation,
+ * so the ledger cannot drift from the enforced verdict.
+ */
+async function persistCompetencyDecision(
+  tx: PoolClient,
+  input: {
+    decision: ExecutionScopeCompetencyDecision;
+    clientId: string;
+    executionScopeId: string;
+    assignmentId: string;
+    crewId: string;
+    action: 'ASSIGNED' | 'REASSIGNED';
+  },
+): Promise<void> {
+  await recordAssignmentCompetencyDecision(tx, {
+    clientId: input.clientId,
+    executionScopeId: input.executionScopeId,
+    assignmentId: input.assignmentId,
+    crewId: input.crewId,
+    action: input.action,
+    serviceCatalogId: input.decision.serviceCatalogId,
+    evaluations: input.decision.evaluations,
+  });
 }
 
 /** Locked scope-row precondition (target boundary). */
@@ -192,6 +266,7 @@ async function journal(
   assignment: HandymanExecutionScopeAssignmentRecord,
   eventType: string,
   summary: string,
+  competency?: { requirementCount: number; mandatoryRequirementCount: number },
 ): Promise<void> {
   await recordOperationalEvent(
     {
@@ -208,6 +283,10 @@ async function journal(
         handymanCrewId: assignment.handymanCrewId,
         status: assignment.status,
         supersedesAssignmentId: assignment.supersedesAssignmentId,
+        // PART 03A — proof that the competency gate ran, including the
+        // "no requirement configured" case (0/0). A historical assignment can
+        // therefore always be explained without re-deriving old catalog state.
+        competency: competency ?? null,
       },
     },
     tx,
@@ -257,6 +336,15 @@ export async function assignHandymanExecutionScopeCrew(
       scope.clientId,
       scope.buildingId,
     );
+    // PART 03A — competency gate (blocking gaps → 409, nothing written).
+    const { summary: competency, decision } = await assertCompetencyEligible(
+      tx,
+      {
+        executionScopeId,
+        clientId: scope.clientId,
+        crewId: target.crewId,
+      },
+    );
     const record = await handymanScopeAssignmentRepository
       .insertAssignment(tx, {
         clientId: scope.clientId,
@@ -282,11 +370,21 @@ export async function assignHandymanExecutionScopeCrew(
       actorUserId,
       idempotencyKey,
     });
+    // PART 03B1 — decision history, same transaction as the assignment.
+    await persistCompetencyDecision(tx, {
+      decision,
+      clientId: scope.clientId,
+      executionScopeId,
+      assignmentId: record.id,
+      crewId: target.crewId,
+      action: 'ASSIGNED',
+    });
     await journal(
       tx,
       record,
       'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CREATED',
       `Handyman execution scope crew assignment created (crew ${record.handymanCrewId}).`,
+      competency,
     );
     return toPublic(record);
   });
@@ -364,6 +462,18 @@ export async function reassignHandymanExecutionScopeCrew(
       scope.clientId,
       scope.buildingId,
     );
+    // PART 03A — the SAME gate applies to reassignment. A crew that cannot take
+    // the job type initially cannot take it by transfer either, and the check
+    // runs before the current ACTIVE row is superseded, so a rejected
+    // reassignment leaves the existing assignment untouched.
+    const { summary: competency, decision } = await assertCompetencyEligible(
+      tx,
+      {
+        executionScopeId,
+        clientId: scope.clientId,
+        crewId: target.crewId,
+      },
+    );
     // Supersede any RELEASED dispatch release tied to the current ACTIVE
     // assignment BEFORE we flip the assignment to SUPERSEDED — the
     // dispatch-release guard requires the referenced assignment to be
@@ -416,11 +526,21 @@ export async function reassignHandymanExecutionScopeCrew(
         assignedByUserId: actorUserId,
         supersedesAssignmentId: current.id,
       });
+    // PART 03B1 — decision history for the reassignment, same transaction.
+    await persistCompetencyDecision(tx, {
+      decision,
+      clientId: scope.clientId,
+      executionScopeId,
+      assignmentId: record.id,
+      crewId: target.crewId,
+      action: 'REASSIGNED',
+    });
     await journal(
       tx,
       record,
       'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CREATED',
       `Handyman execution scope crew reassignment created (crew ${record.handymanCrewId}).`,
+      competency,
     );
     return toPublic(record);
   });

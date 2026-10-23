@@ -194,8 +194,13 @@ export async function listEligibleInspectorsForVisit(
          ON uba.user_id = u.id
         AND uba.building_id = $2
         AND uba.status = 'ACTIVE'
+       -- CR-HM-WORKER-COMPETENCY-01 PART 03B2D: no workforce_type filter. The
+       -- inspector pool is Handyman's own personnel (permanent, contract or
+       -- freelance) and must not be limited to vendor-typed (EXTERNAL)
+       -- profiles. Real admission is decided below by the single
+       -- findEligibleHandymanWorker authority (ACTIVE context, provider kind,
+       -- vendor binding only for VENDOR providers, Building placement).
        JOIN workforce_profiles fp ON fp.user_id = u.id AND fp.status = 'ACTIVE'
-        AND fp.workforce_type = 'EXTERNAL'
        LEFT JOIN handyman_worker_contexts wc
          ON wc.workforce_profile_id = fp.id
         AND wc.client_id = $1 AND wc.status = 'ACTIVE'
