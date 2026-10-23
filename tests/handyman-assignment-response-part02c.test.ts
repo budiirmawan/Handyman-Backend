@@ -1711,4 +1711,131 @@ describe('CR-HM-ASSIGNMENT-RESPONSE-01 PART 02C — Cross-App Projection & E2E',
       .set(auth(leadToken));
     assert.equal(revokedFeedRes.status, 401);
   });
+
+  it('6. Migration 0472 in-place ledger upgrade safety & cross-PR (PR #55 DIRECT/FREELANCE + 0468 + 0470-0472) compatibility', async () => {
+    const countBefore = await q(
+      `SELECT COUNT(*)::int AS cnt FROM handyman_assignment_responses`,
+    );
+    const eventsBefore = await q(
+      `SELECT COUNT(*)::int AS cnt FROM handyman_assignment_response_events`,
+    );
+    assert.ok((countBefore.rows[0].cnt as number) > 0);
+    assert.ok((eventsBefore.rows[0].cnt as number) > 0);
+
+    // Simulate a database that had previously executed PART 02A's 0472 (where notifications_navigation_target_check only had WORK_ORDER_FIELD_WORK)
+    await q(`
+      UPDATE notifications
+         SET navigation_target_type = NULL,
+             navigation_target_id = NULL
+       WHERE navigation_target_type IN ('EXECUTION_SCOPE_FIELD_WORK', 'INSPECTOR_VISIT_FIELD_WORK');
+      ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_navigation_target_check;
+      ALTER TABLE notifications ADD CONSTRAINT notifications_navigation_target_check CHECK (
+        (navigation_target_type IS NULL AND navigation_target_id IS NULL)
+        OR (navigation_target_type IN ('WORK_ORDER_FIELD_WORK') AND navigation_target_id IS NOT NULL)
+      );
+    `);
+
+    // Running migrateUp on a ledger where 0472_handyman_assignment_responses is already applied upgrades the constraint in-place without losing any response rows
+    const applied = await migrateUp(pool!);
+    assert.deepEqual(applied, []);
+
+    const defRes = await q(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'notifications_navigation_target_check'`,
+    );
+    assert.match(defRes.rows[0].def as string, /EXECUTION_SCOPE_FIELD_WORK/);
+    assert.match(defRes.rows[0].def as string, /INSPECTOR_VISIT_FIELD_WORK/);
+
+    const countAfter = await q(
+      `SELECT COUNT(*)::int AS cnt FROM handyman_assignment_responses`,
+    );
+    const eventsAfter = await q(
+      `SELECT COUNT(*)::int AS cnt FROM handyman_assignment_response_events`,
+    );
+    assert.equal(countAfter.rows[0].cnt, countBefore.rows[0].cnt);
+    assert.equal(eventsAfter.rows[0].cnt, eventsBefore.rows[0].cnt);
+
+    // Subsequent migrateUp is a true no-op
+    assert.deepEqual(await migrateUp(pool!), []);
+
+    // Simulate PR #55 (0466 DIRECT provider context & FREELANCE workforce_type) + IAM Revocation (0468) DDL coexistence on PostgreSQL 18
+    await q(`
+      ALTER TABLE handyman_provider_contexts
+        ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT 'VENDOR';
+      ALTER TABLE handyman_provider_contexts
+        DROP CONSTRAINT IF EXISTS handyman_provider_contexts_type_check;
+      ALTER TABLE handyman_provider_contexts
+        ADD CONSTRAINT handyman_provider_contexts_type_check
+          CHECK (provider_type IN ('VENDOR', 'DIRECT'));
+      ALTER TABLE handyman_provider_contexts
+        ALTER COLUMN vendor_id DROP NOT NULL;
+      ALTER TABLE handyman_provider_contexts
+        DROP CONSTRAINT IF EXISTS handyman_provider_contexts_identity_check;
+      ALTER TABLE handyman_provider_contexts
+        ADD CONSTRAINT handyman_provider_contexts_identity_check
+          CHECK (
+            (provider_type = 'VENDOR' AND vendor_id IS NOT NULL)
+            OR (provider_type = 'DIRECT' AND vendor_id IS NULL)
+          );
+      CREATE UNIQUE INDEX IF NOT EXISTS handyman_provider_contexts_direct_client_unique
+        ON handyman_provider_contexts (client_id)
+        WHERE provider_type = 'DIRECT';
+      ALTER TABLE workforce_profiles
+        DROP CONSTRAINT IF EXISTS workforce_profiles_workforce_type_check;
+      ALTER TABLE workforce_profiles
+        ADD CONSTRAINT workforce_profiles_workforce_type_check
+          CHECK (
+            workforce_type IN (
+              'INTERNAL', 'OUTSOURCED', 'CONTRACT', 'EXTERNAL', 'FREELANCE'
+            )
+          );
+    `);
+
+    const realm = await realmFixture('P02C_DIRECT');
+    const directContextId = randomUUID();
+    await q(
+      `INSERT INTO handyman_provider_contexts (id, client_id, vendor_id, provider_type, status, created_by_user_id)
+       VALUES ($1, $2, NULL, 'DIRECT', 'ACTIVE', $3)`,
+      [directContextId, realm.client.id, adminId],
+    );
+    const freelanceHelperProfileId = randomUUID();
+    await q(
+      `INSERT INTO workforce_profiles (
+         id, organization_id, department_id, position_id, user_id,
+         employee_code, full_name, workforce_type, status
+       )
+       VALUES ($1, $2, $3, $4, NULL, $5, 'Freelance Direct Helper', 'FREELANCE', 'ACTIVE')`,
+      [
+        freelanceHelperProfileId,
+        realm.organization.id,
+        realm.department.id,
+        realm.position.id,
+        `FRL_${suffix()}`,
+      ],
+    );
+    const directWorkerCtxId = randomUUID();
+    await q(
+      `INSERT INTO handyman_worker_contexts (
+         id, client_id, workforce_profile_id, handyman_provider_context_id, status, created_by_user_id
+       )
+       VALUES ($1, $2, $3, $4, 'ACTIVE', $5)`,
+      [
+        directWorkerCtxId,
+        realm.client.id,
+        freelanceHelperProfileId,
+        directContextId,
+        adminId,
+      ],
+    );
+    const verifyDirect = await q(
+      `SELECT pc.provider_type, pc.vendor_id, wp.workforce_type
+         FROM handyman_worker_contexts wc
+         JOIN handyman_provider_contexts pc ON pc.id = wc.handyman_provider_context_id
+         JOIN workforce_profiles wp ON wp.id = wc.workforce_profile_id
+        WHERE wc.id = $1`,
+      [directWorkerCtxId],
+    );
+    assert.equal(verifyDirect.rows[0].provider_type, 'DIRECT');
+    assert.equal(verifyDirect.rows[0].vendor_id, null);
+    assert.equal(verifyDirect.rows[0].workforce_type, 'FREELANCE');
+  });
 });

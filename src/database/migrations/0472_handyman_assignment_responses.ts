@@ -26,7 +26,7 @@ export const migration0472HandymanAssignmentResponses: Migration = {
   id: '0472_handyman_assignment_responses',
   async up(client: PoolClient): Promise<void> {
     await client.query(`
-      CREATE TABLE handyman_assignment_responses (
+      CREATE TABLE IF NOT EXISTS handyman_assignment_responses (
         id                          UUID PRIMARY KEY,
         client_id                   UUID NOT NULL REFERENCES clients (id),
         building_id                 UUID NOT NULL REFERENCES buildings (id),
@@ -95,25 +95,25 @@ export const migration0472HandymanAssignmentResponses: Migration = {
     `);
 
     await client.query(`
-      CREATE INDEX hm_assign_resp_wo_idx
+      CREATE INDEX IF NOT EXISTS hm_assign_resp_wo_idx
         ON handyman_assignment_responses (work_order_id, response_status, updated_at)
         WHERE work_order_id IS NOT NULL
     `);
 
     await client.query(`
-      CREATE INDEX hm_assign_resp_scope_idx
+      CREATE INDEX IF NOT EXISTS hm_assign_resp_scope_idx
         ON handyman_assignment_responses (execution_scope_id, response_status, updated_at)
         WHERE execution_scope_id IS NOT NULL
     `);
 
     await client.query(`
-      CREATE INDEX hm_assign_resp_visit_idx
+      CREATE INDEX IF NOT EXISTS hm_assign_resp_visit_idx
         ON handyman_assignment_responses (visit_appointment_id, response_status, updated_at)
         WHERE visit_appointment_id IS NOT NULL
     `);
 
     await client.query(`
-      CREATE TABLE handyman_assignment_response_events (
+      CREATE TABLE IF NOT EXISTS handyman_assignment_response_events (
         id                     UUID PRIMARY KEY,
         response_id            UUID NOT NULL REFERENCES handyman_assignment_responses (id),
         client_id              UUID NOT NULL REFERENCES clients (id),
@@ -165,18 +165,18 @@ export const migration0472HandymanAssignmentResponses: Migration = {
     `);
 
     await client.query(`
-      CREATE INDEX hm_assign_resp_events_assignment_idx
+      CREATE INDEX IF NOT EXISTS hm_assign_resp_events_assignment_idx
         ON handyman_assignment_response_events (assignment_id, occurred_at, id)
     `);
 
     await client.query(`
-      CREATE INDEX hm_assign_resp_events_wo_idx
+      CREATE INDEX IF NOT EXISTS hm_assign_resp_events_wo_idx
         ON handyman_assignment_response_events (work_order_id, occurred_at, id)
         WHERE work_order_id IS NOT NULL
     `);
 
     await client.query(`
-      CREATE UNIQUE INDEX notifications_assignment_response_dedup_idx
+      CREATE UNIQUE INDEX IF NOT EXISTS notifications_assignment_response_dedup_idx
         ON notifications (recipient_user_id, source_entity_type, source_entity_id, source_event_type)
         WHERE source_entity_type IN (
           'WORK_ORDER_ASSIGNMENT',
@@ -216,6 +216,8 @@ export const migration0472HandymanAssignmentResponses: Migration = {
     `);
 
     await client.query(`
+      DROP TRIGGER IF EXISTS hm_assign_resp_events_immutable
+        ON handyman_assignment_response_events;
       CREATE TRIGGER hm_assign_resp_events_immutable
         BEFORE UPDATE OR DELETE ON handyman_assignment_response_events
         FOR EACH ROW
@@ -232,6 +234,8 @@ export const migration0472HandymanAssignmentResponses: Migration = {
     `);
 
     await client.query(`
+      DROP TRIGGER IF EXISTS hm_assign_resp_no_delete
+        ON handyman_assignment_responses;
       CREATE TRIGGER hm_assign_resp_no_delete
         BEFORE DELETE ON handyman_assignment_responses
         FOR EACH ROW
@@ -253,6 +257,8 @@ export const migration0472HandymanAssignmentResponses: Migration = {
     `);
 
     await client.query(`
+      DROP TRIGGER IF EXISTS hm_assign_resp_terminal_immutable
+        ON handyman_assignment_responses;
       CREATE TRIGGER hm_assign_resp_terminal_immutable
         BEFORE UPDATE ON handyman_assignment_responses
         FOR EACH ROW
@@ -272,6 +278,13 @@ export const migration0472HandymanAssignmentResponses: Migration = {
       DROP FUNCTION IF EXISTS handyman_assignment_responses_no_delete;
       DROP FUNCTION IF EXISTS handyman_assignment_response_events_append_only;
       DROP INDEX IF EXISTS notifications_assignment_response_dedup_idx;
+      UPDATE notifications
+         SET navigation_target_type = NULL,
+             navigation_target_id = NULL
+       WHERE navigation_target_type IN (
+         'EXECUTION_SCOPE_FIELD_WORK',
+         'INSPECTOR_VISIT_FIELD_WORK'
+       );
       ALTER TABLE notifications
         DROP CONSTRAINT IF EXISTS notifications_navigation_target_check;
       ALTER TABLE notifications

@@ -1,5 +1,4 @@
 import type { PoolClient } from 'pg';
-import { getPool } from '../../database';
 import { recordOperationalEvent } from '../operational-events';
 import { workOrderNotFoundError } from '../work-orders/work-order.errors';
 import { workOrderRepository } from '../work-orders/work-order.repository';
@@ -32,7 +31,13 @@ export async function recordWorkOrderEvent(
     summary: string;
     metadata?: Record<string, unknown>;
   },
-  executor: Pick<PoolClient, 'query'> = getPool(),
+  /**
+   * CR-HM-WORKER-COMPETENCY-01 PART 03B2A — optional transaction executor, so a
+   * Work Order assignment, its event and its competency decision commit (or
+   * roll back) together. Without it the event is written on its own connection,
+   * exactly as before.
+   */
+  executor?: Pick<PoolClient, 'query'>,
 ): Promise<PublicWorkOrderHistoryEvent> {
   const record = await recordOperationalEvent(
     {
