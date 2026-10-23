@@ -100,6 +100,7 @@ type WorkOrderAssignmentRow = {
   fl_id: string | null;
   fl_code: string | null;
   fl_name: string | null;
+  response_status?: 'PENDING' | 'TERIMA' | 'TIDAK_BISA';
 };
 
 const iso = (value: Date | null | undefined): string | null =>
@@ -159,7 +160,7 @@ const TASK_ASSIGNMENT_SELECT = `
   LEFT JOIN LATERAL (
     SELECT
       COUNT(*)::INTEGER AS active_safety_inspection_binding_count,
-      CASE WHEN COUNT(*) = 1 THEN MIN(sib_row.id) ELSE NULL END
+      CASE WHEN COUNT(*) = 1 THEN MIN(sib_row.id::text)::uuid ELSE NULL END
         AS active_safety_inspection_binding_id
       FROM safety_inspection_bindings sib_row
      WHERE sib_row.schedule_definition_id = t.schedule_definition_id
@@ -210,12 +211,14 @@ const WORK_ORDER_ASSIGNMENT_SELECT = `
     ast.asset_name,
     fl.id           AS fl_id,
     fl.code         AS fl_code,
-    fl.name         AS fl_name
+    fl.name         AS fl_name,
+    COALESCE(har.response_status, 'PENDING') AS response_status
   FROM work_order_assignments a
   JOIN work_orders w ON w.id = a.work_order_id
   JOIN buildings b ON b.id = w.building_id
   LEFT JOIN assets ast ON ast.id = w.asset_id
   LEFT JOIN functional_locations fl ON fl.id = w.functional_location_id
+  LEFT JOIN handyman_assignment_responses har ON har.assignment_id = a.id
 `;
 
 const WORK_ORDER_ASSIGNMENT_SCOPE = `
@@ -386,6 +389,7 @@ function toWorkOrderItem(
           true,
           true,
           canClose,
+          row.response_status,
         )
       : [],
     shift: null, // MOB-C04 PART 01 — annotated below from the current-shift authority.

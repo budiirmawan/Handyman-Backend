@@ -19584,6 +19584,107 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /work-orders/{workOrderId}/assignments/{assignmentId}/respond:
+    post:
+      operationId: respondToWorkOrderAssignment
+      summary: Record assignee response (TERIMA or TIDAK_BISA) for a Work Order assignment
+      description: >
+        Records a worker/PIC response (`TERIMA` | `TIDAK_BISA`) against the
+        specified Work Order assignment ID. `TERIMA` integrates with
+        `ACKNOWLEDGE` without duplicating execution actions, operational events,
+        or SLA response clock fulfillment. `TIDAK_BISA` requires a non-empty
+        decline reason, preserves the Tenant Work Order, blocks execution under
+        that assignment, and notifies Operations for reassignment. Requires
+        `work_order.manage` and Building access.
+      tags: [Work Orders]
+      x-required-permission: work_order.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - WORK_ORDER_NOT_FOUND
+        - WORK_ORDER_ASSIGNMENT_NOT_FOUND
+        - WORK_ORDER_EXECUTION_UNAUTHORIZED
+        - WORK_ORDER_ASSIGNMENT_SUPERSEDED
+        - WORK_ORDER_ASSIGNMENT_RESPONSE_CONFLICT
+        - WORK_ORDER_ASSIGNMENT_RESPONSE_LATE
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RespondWorkOrderAssignmentRequest" }
+      responses:
+        "200":
+          description: The updated Work Order assignment with response state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderAssignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-orders/{workOrderId}/assignments/{assignmentId}/response-history:
+    get:
+      operationId: listWorkOrderAssignmentResponseHistory
+      summary: List decision history events for a Work Order assignment
+      description: >
+        Returns the append-only decision history (`ASSIGNMENT_PENDING_CREATED`,
+        `ASSIGNMENT_ACCEPTED`, `ASSIGNMENT_DECLINED`, `ASSIGNMENT_SUPERSEDED`)
+        for the specified Work Order assignment ID. Requires `work_order.read`
+        and Building access.
+      tags: [Work Orders]
+      x-required-permission: work_order.read
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - WORK_ORDER_NOT_FOUND
+        - WORK_ORDER_ASSIGNMENT_NOT_FOUND
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Decision history events for the assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /work-orders/{workOrderId}/acknowledge:
     post:
       operationId: acknowledgeWorkOrder
@@ -98157,6 +98258,75 @@ components:
         assignedByUserId: { $ref: "#/components/schemas/Uuid" }
         assignedAt: { type: string, format: date-time }
         status: { $ref: "#/components/schemas/WorkOrderAssignmentStatus" }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+
+    HandymanAssignmentResponseStatus:
+      type: string
+      enum: [PENDING, TERIMA, TIDAK_BISA]
+
+    HandymanAssignmentResponseDecision:
+      type: string
+      enum: [TERIMA, TIDAK_BISA]
+
+    RespondWorkOrderAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        declineReason: { type: string, minLength: 1, maxLength: 1000 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        notes: { type: string, maxLength: 1000 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 255 }
+
+    HandymanAssignmentResponseEvent:
+      type: object
+      additionalProperties: false
+      required:
+        [id, responseId, assignmentTargetType, assignmentId, workOrderId,
+         handymanRequestId, executionScopeId, visitAppointmentId, eventType,
+         previousStatus, newStatus, declineReason, notes, actorUserId,
+         actorWorkerId, occurredAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        responseId: { $ref: "#/components/schemas/Uuid" }
+        assignmentTargetType:
+          type: string
+          enum: [WORK_ORDER_ASSIGNMENT, EXECUTION_SCOPE_ASSIGNMENT, INSPECTOR_VISIT_ASSIGNMENT]
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        workOrderId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        handymanRequestId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        executionScopeId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        visitAppointmentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        eventType:
+          type: string
+          enum: [ASSIGNMENT_PENDING_CREATED, ASSIGNMENT_ACCEPTED, ASSIGNMENT_DECLINED, ASSIGNMENT_SUPERSEDED]
+        previousStatus:
+          allOf: [{ $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }]
+          nullable: true
+        newStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        declineReason: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        actorUserId: { $ref: "#/components/schemas/Uuid" }
+        actorWorkerId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        occurredAt: { type: string, format: date-time }
 
     WorkOrderActionType:
       type: string

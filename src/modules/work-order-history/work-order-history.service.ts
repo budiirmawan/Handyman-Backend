@@ -1,3 +1,5 @@
+import type { PoolClient } from 'pg';
+import { getPool } from '../../database';
 import { recordOperationalEvent } from '../operational-events';
 import { workOrderNotFoundError } from '../work-orders/work-order.errors';
 import { workOrderRepository } from '../work-orders/work-order.repository';
@@ -20,25 +22,31 @@ import type {
  * resolved the Work Order), which keeps this helper free of a dependency on the
  * work-order module and avoids circular imports.
  */
-export async function recordWorkOrderEvent(input: {
-  workOrderId: string;
-  clientId: string;
-  buildingId: string;
-  eventType: string;
-  actorUserId?: string | null;
-  summary: string;
-  metadata?: Record<string, unknown>;
-}): Promise<PublicWorkOrderHistoryEvent> {
-  const record = await recordOperationalEvent({
-    clientId: input.clientId,
-    eventType: input.eventType,
-    entityType: 'WORK_ORDER',
-    entityId: input.workOrderId,
-    actorUserId: input.actorUserId ?? null,
-    buildingId: input.buildingId,
-    summary: input.summary,
-    metadata: input.metadata,
-  });
+export async function recordWorkOrderEvent(
+  input: {
+    workOrderId: string;
+    clientId: string;
+    buildingId: string;
+    eventType: string;
+    actorUserId?: string | null;
+    summary: string;
+    metadata?: Record<string, unknown>;
+  },
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<PublicWorkOrderHistoryEvent> {
+  const record = await recordOperationalEvent(
+    {
+      clientId: input.clientId,
+      eventType: input.eventType,
+      entityType: 'WORK_ORDER',
+      entityId: input.workOrderId,
+      actorUserId: input.actorUserId ?? null,
+      buildingId: input.buildingId,
+      summary: input.summary,
+      metadata: input.metadata,
+    },
+    executor,
+  );
 
   return {
     id: record.id,

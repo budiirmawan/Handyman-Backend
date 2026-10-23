@@ -1,16 +1,11 @@
+import type {
+  HandymanAssignmentResponseDecision,
+  HandymanAssignmentResponseStatus,
+} from '../assignment-responses';
+
 /**
- * BE-08E — Work Order Assignment domain types.
- *
- * Assigns a Work Order to an internal Workforce Profile / Team, or to a
- * Vendor / Vendor Workforce member. The assignee masters are the existing
- * BE-03 (workforce_profiles, teams) and BE-06 (vendors,
- * vendor_workforce_bindings) tables — this module references them, never
- * duplicates them.
- *
- * Only ONE active assignment per Work Order is allowed (a partial unique
- * index over ACTIVE rows, mirroring the BE-07 task-assignment idiom). All
- * assignments are persisted; deactivation is `status: 'INACTIVE'`, never a
- * delete.
+ * BE-08E + CR-HM-ASSIGNMENT-RESPONSE-01 PART 02A — Work Order Assignment domain
+ * types.
  */
 export const WORK_ORDER_ASSIGNEE_TYPES = [
   'WORKFORCE',
@@ -56,12 +51,8 @@ export const WORK_ORDER_ASSIGNABLE_STATUSES = [
   'ON_HOLD',
 ] as const;
 
-export function isWorkOrderAssignableStatus(
-  status: string,
-): boolean {
-  return (WORK_ORDER_ASSIGNABLE_STATUSES as readonly string[]).includes(
-    status,
-  );
+export function isWorkOrderAssignableStatus(status: string): boolean {
+  return (WORK_ORDER_ASSIGNABLE_STATUSES as readonly string[]).includes(status);
 }
 
 /** Full database record. */
@@ -90,6 +81,12 @@ export type PublicWorkOrderAssignment = {
   assignedByUserId: string;
   assignedAt: string;
   status: WorkOrderAssignmentStatus;
+  responseStatus: HandymanAssignmentResponseStatus;
+  respondedByUserId: string | null;
+  respondedAt: string | null;
+  declineReason: string | null;
+  responseNotes: string | null;
+  reassignmentRequired: boolean;
 };
 
 /** Input supplied by the API consumer when assigning a Work Order. */
@@ -115,4 +112,14 @@ export type NewWorkOrderAssignment = {
 /** Update input (deactivate). */
 export type UpdateWorkOrderAssignmentInput = {
   status: WorkOrderAssignmentStatus;
+};
+
+export type RespondToWorkOrderAssignmentInput = {
+  workOrderId: string;
+  assignmentId: string;
+  decision: HandymanAssignmentResponseDecision;
+  actorUserId: string;
+  declineReason?: string;
+  notes?: string;
+  idempotencyKey?: string;
 };

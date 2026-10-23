@@ -4,23 +4,26 @@ import { requirePermission } from '../auth/rbac.middleware';
 import {
   assignWorkOrderHandler,
   getCurrentAssignmentHandler,
+  listAssignmentResponseHistoryHandler,
   listAssignmentsHandler,
+  respondToAssignmentHandler,
   updateAssignmentHandler,
 } from './work-order-assignment.controller';
 
 /**
- * BE-08E — Work Order Assignment endpoints, protected by BE-01 RBAC and BE-02
- * Building isolation (enforced in the controller after resolving the Work
- * Order's Building).
+ * BE-08E + CR-HM-ASSIGNMENT-RESPONSE-01 PART 02A — Work Order Assignment and
+ * Assignment Response endpoints, protected by BE-01 RBAC and BE-02 Building
+ * isolation (enforced in the controller after resolving the Work Order's
+ * Building).
  *
  * Management (`work_order.manage`):
  *   POST  /work-orders/:id/assignments
  *   PATCH /work-orders/:id/assignments/:assignmentId   (deactivate or reassign)
+ *   POST  /work-orders/:id/assignments/:assignmentId/respond
  * Reads (`work_order.read`):
  *   GET   /work-orders/:id/assignments
  *   GET   /work-orders/:id/assignments/current
- *
- * No execution/evidence endpoints are exposed here (later BE-08 PARTs).
+ *   GET   /work-orders/:id/assignments/:assignmentId/response-history
  */
 export function createWorkOrderAssignmentRouter(): Router {
   const router = Router();
@@ -48,6 +51,18 @@ export function createWorkOrderAssignmentRouter(): Router {
     authenticationMiddleware,
     requirePermission('work_order.manage'),
     updateAssignmentHandler,
+  );
+  router.post(
+    '/work-orders/:id/assignments/:assignmentId/respond',
+    authenticationMiddleware,
+    requirePermission('work_order.manage'),
+    respondToAssignmentHandler,
+  );
+  router.get(
+    '/work-orders/:id/assignments/:assignmentId/response-history',
+    authenticationMiddleware,
+    requirePermission('work_order.read'),
+    listAssignmentResponseHistoryHandler,
   );
 
   return router;

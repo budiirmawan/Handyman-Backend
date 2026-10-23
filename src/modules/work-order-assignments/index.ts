@@ -13,8 +13,11 @@ export {
   assignWorkOrder,
   deactivateWorkOrderAssignment,
   getCurrentWorkOrderAssignment,
+  isActorAuthorizedForAssignment,
+  listWorkOrderAssignmentResponseHistory,
   listWorkOrderAssignments,
   reassignWorkOrder,
+  respondToWorkOrderAssignment,
   toPublicWorkOrderAssignment,
   workOrderAssignmentService,
 } from './work-order-assignment.service';
@@ -31,6 +34,7 @@ export {
 export {
   parseAssignWorkOrderBody,
   parseAssignmentIdParam,
+  parseRespondWorkOrderAssignmentBody,
   parseUpdateAssignmentBody,
   parseWorkOrderIdParam,
 } from './work-order-assignment.validation';
@@ -41,6 +45,7 @@ export type {
   AssignWorkOrderInput,
   NewWorkOrderAssignment,
   PublicWorkOrderAssignment,
+  RespondToWorkOrderAssignmentInput,
   UpdateWorkOrderAssignmentInput,
   WorkOrderAssignmentRecord,
   WorkOrderAssignmentStatus,
