@@ -19340,6 +19340,7 @@ paths:
           $ref: "#/components/responses/NotFound"
     post:
       operationId: assignWorkOrder
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_NOT_FOUND, WORK_ORDER_ASSIGNMENT_ALREADY_ASSIGNED, WORK_ORDER_CLASSIFICATION_REQUIRED, WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED, WORK_ORDER_ASSIGNMENT_CLIENT_MISMATCH, WORK_ORDER_ASSIGNMENT_BUILDING_MISMATCH]
       summary: Assign a Work Order
       description: >
         MUTATION — assigns the Work Order to a WORKFORCE / TEAM / VENDOR /
@@ -19887,6 +19888,7 @@ paths:
   /work-orders/{workOrderId}/assignments/{assignmentId}:
     patch:
       operationId: updateWorkOrderAssignment
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_NOT_FOUND, WORK_ORDER_ASSIGNMENT_NOT_FOUND, WORK_ORDER_ASSIGNMENT_INVALID_STATE, WORK_ORDER_CLASSIFICATION_REQUIRED, WORK_ORDER_CLASSIFICATION_CONFLICT, WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED]
       summary: Deactivate or reassign a Work Order assignment
       description: >
         Requires `work_order.manage` and Building access.

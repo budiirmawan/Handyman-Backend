@@ -35,7 +35,10 @@ Work Order (OPEN, unclassified)
    │        ├─ 409 WORK_ORDER_TRADE_CATEGORY_INVALID_STATE  → WO sudah COMPLETED/CLOSED/CANCELLED
    │        └─ 409 WORK_ORDER_CLASSIFICATION_CONFLICT       → WO sedang dipegang pekerja yang tidak memenuhi MANDATORY trade baru
    ├─▶ Layar Pemilihan Pekerja
-   │     GET  /workforce?...                          → pekerja + employmentType (INTERNAL/CONTRACT/FREELANCE)
+   │     GET  /organizations/{organizationId}/workforce-profiles
+   │                                                 → pekerja + employmentType (INTERNAL/CONTRACT/FREELANCE)
+   │       (varian: GET /departments/{departmentId}/workforce-profiles,
+   │                 GET /teams/{teamId}/workforce-profiles; permission workforce.read)
    │     POST /work-orders/{id}/assignments           { assigneeType: 'WORKFORCE', workforceProfileId }
    │        ├─ 201 + data.competency.advisory[]       → sukses, warning bila ada RECOMMENDED yang tidak terpenuhi
    │        └─ 409 WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED + details[]
@@ -294,6 +297,9 @@ Catatan penting untuk UI:
 | POST | `/handyman/provider-contexts` | `tenant_company.manage` | pool DIRECT/VENDOR |
 | POST | `/handyman/worker-contexts` | `tenant_company.manage` | daftarkan pekerja ke pool |
 | GET | `/handyman/field/workers/{workerContextId}/profile` | `tenant_company.read` | worker card |
+| GET | `/organizations/{organizationId}/workforce-profiles` | `workforce.read` | daftar pekerja |
+| GET | `/departments/{departmentId}/workforce-profiles` | `workforce.read` | daftar pekerja per departemen |
+| GET | `/teams/{teamId}/workforce-profiles` | `workforce.read` | daftar pekerja per tim |
 | GET | `/workforce/{id}/skills/effective` | `skill.read` | skill efektif |
 | GET | `/workforce/{id}/certifications` | `workforce_certification.read` | sertifikat |
 

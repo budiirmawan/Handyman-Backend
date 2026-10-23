@@ -34,7 +34,12 @@ Attendance berdiri sendiri dan tidak menggerakkan status Work Order:
 
 ### `GET /handyman/field/me/profile`
 
-Profil pekerja yang login (resolusi dari sesi, bukan dari parameter). Bentuk respons:
+Profil pekerja yang login (resolusi dari sesi, bukan dari parameter).
+**Otorisasi: authentication saja** (tanpa permission khusus) — profil diturunkan dari worker context
+milik pemanggil; `404 HANDYMAN_WORKER_PROFILE_NOT_FOUND` bila pemanggil bukan pekerja lapangan.
+
+Bentuk respons: `{ "data": { "profile": { … } } }` — **semua grup di bawah berada di dalam
+`data.profile`**, bukan langsung di `data`.
 
 | Grup | Field |
 | --- | --- |
@@ -55,8 +60,10 @@ Catatan UI:
   (tetap/kontrak/freelance). Jangan menampilkan "vendor belum terdaftar".
 * 404 `HANDYMAN_WORKER_PROFILE_NOT_FOUND` = user ini bukan pekerja lapangan.
 
-Endpoint pelengkap: `GET /handyman/field/workers/{workerContextId}/profile` (profil rekan kerja dalam
-scope yang sama), `GET /workforce/{id}/skills/effective`, `GET /workforce/{id}/certifications`.
+Endpoint pelengkap: `GET /handyman/field/workers/{workerContextId}/profile` (profil rekan kerja;
+authentication saja, visibilitas ditegakkan server-side dari worker context + assignment pemanggil),
+`GET /workforce/{workforceId}/skills/effective` (`skill.read`),
+`GET /workforce/{workforceId}/certifications` (`workforce_certification.read`).
 
 ---
 
@@ -216,7 +223,7 @@ sah: `FORM_INSTANCE`, `CHECKLIST_EXECUTION`, `FINDING`, `FINDING_REWORK`, `FINDI
 | Bytes bukti | `evidence.manage`, `evidence.read` |
 | Field evidence presign/bytes/confirm | (diotorisasi konteks assignment, bukan permission terpisah) |
 | Attendance | `attendance.manage`, `attendance.read` |
-| Profil pekerja | `tenant_company.read` |
+| Profil pekerja (milik sendiri / rekan dalam scope) | *authentication saja* — tanpa permission khusus |
 
 ---
 
