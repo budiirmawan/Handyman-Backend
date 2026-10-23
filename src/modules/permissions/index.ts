@@ -1,4 +1,5 @@
 export {
+  lastAdminPermissionRequiredError,
   permissionAlreadyAssignedError,
   permissionCodeAlreadyExistsError,
   permissionInactiveError,
@@ -16,6 +17,7 @@ export {
   listPermissionsForRole,
   permissionService,
   resolvePermissionsForUser,
+  revokePermissionFromRole,
   toPublicPermission,
 } from './permission.service';
 

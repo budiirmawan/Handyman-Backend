@@ -7,6 +7,7 @@ import {
   getPermissionHandler,
   listPermissionsHandler,
   listRolePermissionsHandler,
+  revokePermissionHandler,
 } from './permission.controller';
 
 /**
@@ -15,7 +16,7 @@ import {
  * Reads (`permission.read`): GET /permissions, GET /permissions/:id,
  * GET /roles/:roleId/permissions.
  * Management (`permission.manage`): POST /permissions,
- * POST /roles/:roleId/permissions.
+ * POST /roles/:roleId/permissions, DELETE /roles/:roleId/permissions/:permissionId.
  */
 export function createPermissionRouter(): Router {
   const router = Router();
@@ -50,6 +51,16 @@ export function createPermissionRouter(): Router {
     authenticationMiddleware,
     requirePermission('permission.read'),
     listRolePermissionsHandler,
+  );
+  // CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — grant revocation. Privileged
+  // grants (system roles / authority-defining permissions) are owner-only;
+  // the last ACTIVE grant of an authority-defining permission cannot be
+  // revoked (409 LAST_ADMIN_PERMISSION_REQUIRED).
+  router.delete(
+    '/roles/:roleId/permissions/:permissionId',
+    authenticationMiddleware,
+    requirePermission('permission.manage'),
+    revokePermissionHandler,
   );
 
   return router;

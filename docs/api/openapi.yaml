@@ -12856,6 +12856,59 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /roles/{roleId}/permissions/{permissionId}:
+    delete:
+      operationId: revokePermissionFromRole
+      summary: Revoke an ACTIVE role-permission grant
+      description: >
+        Requires `permission.manage` (CR-HM-BE-IAM-PERMISSION-REVOCATION-01).
+        Revokes one CURRENTLY ACTIVE role-permission grant; a missing or
+        already-revoked grant returns 404 `ROLE_PERMISSION_ASSIGNMENT_NOT_FOUND`
+        (a repeated request is handled consistently and safely). Only the grant
+        is removed — the permission catalogue entry and the role are never
+        deleted. Grant mutations are transactionally serialized.
+
+        Privileged grants may only be revoked by an owner (an ACTIVE
+        `PLATFORM_ADMIN` holder): revoking from the owner role or any role that
+        defines authority, or revoking an authority-defining permission
+        (`role.manage`, `permission.manage`, `user.manage`, `building.manage`),
+        returns 403 `PRIVILEGED_ROLE_ASSIGNMENT_DENIED` for any other caller —
+        a delegated `permission.manage` holder cannot strip system roles or the
+        primary administrator's access.
+
+        The LAST ACTIVE grant of an authority-defining permission cannot be
+        revoked (409 `LAST_ADMIN_PERMISSION_REQUIRED`) so the installation
+        always retains that administrative capability. Grant it to another role
+        first.
+
+        The revocation is audited as `PERMISSION_REVOKED`. Effective
+        permissions are re-resolved per request, so existing sessions observe
+        the revocation immediately. Authentication, tenant isolation and user
+        credentials are untouched.
+      tags: [Roles & Permissions]
+      x-required-permission: permission.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, ROLE_NOT_FOUND, PERMISSION_NOT_FOUND, ROLE_PERMISSION_ASSIGNMENT_NOT_FOUND, PRIVILEGED_ROLE_ASSIGNMENT_DENIED, LAST_ADMIN_PERMISSION_REQUIRED]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RoleIdPath"
+        - $ref: "#/components/parameters/PermissionIdPath"
+      responses:
+        "200":
+          description: Permission grant revoked.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/PublicPermission" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /clients:
     post:
       operationId: createClient
