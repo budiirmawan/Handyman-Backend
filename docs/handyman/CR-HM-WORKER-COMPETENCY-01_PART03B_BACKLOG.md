@@ -136,3 +136,21 @@ gagal. Marker kini diambil dengan `ORDER BY created_at, id LIMIT 1` di dalam LAT
 punya fungsi untuk uuid). Gunakan `ORDER BY ... LIMIT 1` di dalam LATERAL/subquery, atau agregasikan `::text`
 bila memang hanya butuh nilai apa pun — dan pilih salah satunya secara sadar. Detail:
 `CR-HM-WO-PG18-UUID-01_PART03B2C_DELIVERY_REPORT.md`.
+
+## Catatan lintas-CR — CR-HM-WORKER-COMPETENCY-01 PART 03B2D (selesai)
+
+Koreksi model bisnis: Handyman adalah penyedia jasa **langsung**. Pekerja tetap/kontrak/freelance adalah
+personel Handyman sendiri yang dikelola Operations, **bukan** vendor eksternal. Jalur assignment tidak lagi
+berakar pada `handyman_provider_contexts.vendor_id`:
+
+- `provider_type` (`VENDOR` | `DIRECT`) + `vendor_id` nullable + satu pool `DIRECT` per Client (migrasi `0466`);
+- binding vendor hanya wajib untuk pool `VENDOR`;
+- admission crew memakai **provider kind**, bukan `workforce_profiles.workforce_type` (predikat `EXTERNAL`
+  dihapus di `findEligibleHandymanWorker` dan di daftar kandidat inspector);
+- `workforce_type` mendapat nilai `FREELANCE` (tetap/ kontrak / lepas sebagai hubungan kerja, bukan perusahaan).
+
+**Aturan ke depan:** jangan pernah membuat vendor (atau baris vendor per-freelancer) sebagai workaround, dan
+jangan menandai pegawai sendiri `EXTERNAL` agar bisa ditugaskan. Jangan menambah jalur assignment kedua —
+otoritasnya tetap `handyman-scope-assignment.service.ts` dengan evaluator kompetensi yang sama. Detail:
+`CR-HM-WORKER-COMPETENCY-01_PART03B2D_DELIVERY_REPORT.md`.
+

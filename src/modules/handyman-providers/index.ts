@@ -4,6 +4,8 @@
 export { handymanProviderContextRepository } from './handyman-provider-context.repository';
 export {
   createHandymanProviderContext,
+  createDirectHandymanProviderContext,
+  getDirectHandymanProviderContext,
   setHandymanProviderContextStatus,
   getHandymanProviderContextByVendor,
   handymanProviderContextService,
@@ -16,10 +18,14 @@ export {
 } from './handyman-provider-context.errors';
 export {
   HANDYMAN_PROVIDER_CONTEXT_STATUSES,
+  HANDYMAN_PROVIDER_CONTEXT_TYPES,
   isHandymanProviderContextStatus,
+  isHandymanProviderContextType,
 } from './handyman-provider-context.types';
 export type {
+  CreateDirectHandymanProviderContextInput,
   CreateHandymanProviderContextInput,
+  HandymanProviderContextType,
   HandymanProviderContextRecord,
   HandymanProviderContextStatus,
   NewHandymanProviderContextRecord,

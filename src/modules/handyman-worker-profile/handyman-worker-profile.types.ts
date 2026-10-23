@@ -24,10 +24,14 @@ export interface HandymanWorkerProfileProjection {
   providerAssociation: {
     clientId: string;
     providerContextId: string;
-    providerCode: string;
+    /** PART 03B2D — VENDOR (subcontractor pool) or DIRECT (own workforce). */
+    providerType: string;
+    /** vendors.vendor_code; NULL for a DIRECT provider context. */
+    providerCode: string | null;
     providerStatus: string;
-    vendorId: string;
-    vendorStatus: string;
+    /** NULL for a DIRECT provider context (no vendor exists). */
+    vendorId: string | null;
+    vendorStatus: string | null;
     organizationId: string;
     organizationCode: string;
     organizationName: string;

@@ -151,7 +151,9 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
       );
       -- 0384 — no provider_code column exists
       CREATE TABLE handyman_provider_contexts(
-        id uuid PRIMARY KEY, client_id uuid NOT NULL, vendor_id uuid NOT NULL,
+        id uuid PRIMARY KEY, client_id uuid NOT NULL,
+        -- 0466 — provider kind; a DIRECT pool carries no vendor.
+        provider_type text NOT NULL DEFAULT 'VENDOR', vendor_id uuid,
         status text NOT NULL, created_by_user_id uuid NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
       );

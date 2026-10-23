@@ -7989,15 +7989,21 @@ paths:
       operationId: createHandymanProviderContext
       x-required-permission: tenant_company.manage
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_PROVIDER_CONTEXT_ALREADY_EXISTS, VENDOR_NOT_FOUND]
-      summary: Create the Handyman provider operational context for one vendor
+      summary: Create a Handyman provider operational context (vendor or direct)
       description: >
         CR-HM-04 PART 05A (frozen F1/F8/F9) — caller-owned input is ONLY
-        the vendor reference; `clientId` is derived server-side from the
-        authoritative `vendors` row and the actor comes from the
-        authenticated session — smuggled actor/client/provider-scope keys
-        are structurally ignored. One context per vendor (409 on
-        duplicate). No vendor master data, compliance, capability or
-        commercial state is created or modified here.
+        the owner reference; for `vendorId` the `clientId` is derived
+        server-side from the authoritative `vendors` row and the actor comes
+        from the authenticated session — smuggled actor/provider-scope keys
+        are structurally ignored. One context per vendor (409 on duplicate).
+        No vendor master data, compliance, capability or commercial state is
+        created or modified here.
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2D — Handyman is a direct service
+        provider, so Operations may instead create the Client's DIRECT
+        workforce pool with `clientId`. That pool has NO vendor row and none is
+        fabricated: permanent (INTERNAL), contract (CONTRACT) and freelance
+        (FREELANCE) field workers are Handyman's own personnel. At most one
+        DIRECT pool exists per Client (409).
       tags: [Handyman Provider Crew]
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -89981,12 +89987,21 @@ components:
     # contract-only, deferred to the authoritative CR-HM-06 target).
     CreateHandymanProviderContextRequest:
       type: object
-      required: [vendorId]
       description: >-
-        Vendor reference only. `clientId`/actor are server-derived; any
-        smuggled actor, client or scope keys are structurally ignored.
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2D - exactly ONE owner reference:
+        `vendorId` creates the VENDOR pool (external subcontractor, legacy
+        behaviour unchanged), `clientId` creates the DIRECT pool (Handyman's
+        own permanent/contract/freelance workforce). Supplying both or neither
+        is VALIDATION_ERROR. The actor always comes from the session; for
+        `vendorId` the client is still server-derived from the vendor row.
       properties:
         vendorId: { $ref: "#/components/schemas/Uuid" }
+        clientId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          description: >-
+            DIRECT pool only. Requires real accessible-Client scope for the
+            actor; at most one DIRECT pool per Client (409 otherwise).
     SetHandymanLifecycleStatusRequest:
       type: object
       required: [status]
@@ -89999,9 +90014,14 @@ components:
       required: [handymanProviderContextId, workforceProfileId]
       description: >-
         Provider context + workforce profile references only. Workforce
-        identity fields are never accepted; provider context ACTIVE,
-        same-Client scope and the standing vendor-workforce binding are
-        validated server-side.
+        identity fields are never accepted; provider context ACTIVE and
+        same-Client scope are validated server-side.
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2D - the vendor-workforce binding
+        is required only when the provider context is VENDOR (real
+        subcontractor personnel). A DIRECT provider context is Handyman's own
+        workforce pool, so permanent (INTERNAL), contract (CONTRACT) and
+        freelance (FREELANCE) workers are registered without any vendor
+        binding.
       properties:
         handymanProviderContextId: { $ref: "#/components/schemas/Uuid" }
         workforceProfileId: { $ref: "#/components/schemas/Uuid" }
@@ -93181,12 +93201,27 @@ components:
       description: >-
         CR-HM-04 PART 01 — identity is the authoritative `vendors` row;
         `clientId` is the server-derived verbatim snapshot.
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2D - `providerType` distinguishes
+        the VENDOR pool (one per `vendors` row, `vendorId` required) from the
+        DIRECT pool (Handyman's own workforce for one Client, `vendorId` NULL).
       required:
-        [id, clientId, vendorId, status, createdByUserId, createdAt, updatedAt]
+        [id, clientId, providerType, vendorId, status, createdByUserId,
+         createdAt, updatedAt]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
         clientId: { $ref: "#/components/schemas/Uuid" }
-        vendorId: { $ref: "#/components/schemas/Uuid" }
+        providerType:
+          type: string
+          enum: [VENDOR, DIRECT]
+          description: >-
+            VENDOR - external subcontractor pool, unchanged legacy semantics.
+            DIRECT - Handyman-managed workforce; no vendor exists and none is
+            created.
+        vendorId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+          description: "NULL for providerType=DIRECT."
         status: { type: string, enum: [ACTIVE, INACTIVE] }
         createdByUserId: { $ref: "#/components/schemas/Uuid" }
         createdAt: { type: string, format: date-time }
@@ -131829,20 +131864,37 @@ components:
             workforceType: { type: string }
             employmentType:
               type: string
-              description: "Derived from workforce_profiles.workforce_type: EXTERNAL→VENDOR, OUTSOURCED→OUTSOURCED, CONTRACT→CONTRACT, else INTERNAL. No employment_type column exists."
+              description: "Derived from workforce_profiles.workforce_type: EXTERNAL→VENDOR, OUTSOURCED→OUTSOURCED, CONTRACT→CONTRACT, FREELANCE→FREELANCE, else INTERNAL. No employment_type column exists."
             workerStatus: { type: string }
         providerAssociation:
           type: object
-          required: [clientId, providerContextId, providerCode, providerStatus, vendorId, vendorStatus, organizationId, organizationCode, organizationName, bindingStatus, bindingEffectiveFrom, bindingEffectiveUntil]
+          required: [clientId, providerContextId, providerType, providerCode, providerStatus, vendorId, vendorStatus, organizationId, organizationCode, organizationName, bindingStatus, bindingEffectiveFrom, bindingEffectiveUntil]
+          description: >-
+            CR-HM-WORKER-COMPETENCY-01 PART 03B2D - the vendor join is optional:
+            a DIRECT provider context projects with providerType=DIRECT and
+            null providerCode/vendorId/vendorStatus instead of being excluded
+            from the projection.
           properties:
             clientId: { type: string, format: uuid }
             providerContextId: { type: string, format: uuid }
+            providerType:
+              type: string
+              enum: [VENDOR, DIRECT]
+              description: "handyman_provider_contexts.provider_type."
             providerCode:
               type: string
-              description: "vendors.vendor_code — handyman_provider_contexts models no provider_code column."
+              nullable: true
+              description: "vendors.vendor_code — handyman_provider_contexts models no provider_code column. NULL for providerType=DIRECT."
             providerStatus: { type: string }
-            vendorId: { type: string, format: uuid }
-            vendorStatus: { type: string }
+            vendorId:
+              type: string
+              format: uuid
+              nullable: true
+              description: "NULL for providerType=DIRECT (no vendor exists)."
+            vendorStatus:
+              type: string
+              nullable: true
+              description: "NULL for providerType=DIRECT (no vendor exists)."
             organizationId: { type: string, format: uuid }
             organizationCode: { type: string }
             organizationName: { type: string }

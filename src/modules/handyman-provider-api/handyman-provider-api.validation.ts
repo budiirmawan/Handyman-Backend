@@ -101,6 +101,48 @@ export function parseProviderApiUuidParam(
 }
 
 /** POST /handyman/provider-contexts — vendor reference only. */
+/**
+ * PART 03B2D — a provider context is created for exactly ONE of two owners:
+ *
+ *   { vendorId }  VENDOR pool (external subcontractor) — legacy, unchanged.
+ *   { clientId }  DIRECT pool: Handyman's own workforce for that Client
+ *                 (permanent / contract / freelance). No vendor exists and
+ *                 none is fabricated.
+ *
+ * Supplying both or neither is a validation error, so a caller can never
+ * smuggle a vendor identity into the direct pool or vice versa.
+ */
+export type ProviderContextCreateRequest =
+  | { kind: 'VENDOR'; vendorId: string }
+  | { kind: 'DIRECT'; clientId: string };
+
+export function parseProviderContextCreateRequest(
+  body: unknown,
+): ProviderContextCreateRequest {
+  const source = isRecord(body) ? body : {};
+  const details: Detail[] = [];
+  const hasVendor = source.vendorId !== undefined && source.vendorId !== null;
+  const hasClient = source.clientId !== undefined && source.clientId !== null;
+  if (hasVendor === hasClient) {
+    fail([
+      {
+        field: 'vendorId',
+        message:
+          'Exactly one of vendorId (vendor workforce) or clientId (direct workforce) is required.',
+      },
+    ]);
+  }
+  if (hasVendor) {
+    const vendorId = readId(source.vendorId, 'vendorId', details);
+    if (!vendorId || details.length) fail(details);
+    return { kind: 'VENDOR', vendorId };
+  }
+  const clientId = readId(source.clientId, 'clientId', details);
+  if (!clientId || details.length) fail(details);
+  return { kind: 'DIRECT', clientId };
+}
+
+/** Backward-compatible vendor-only parser (PART 05A surface). */
 export function parseProviderContextCreateBody(
   body: unknown,
 ): CreateHandymanProviderContextInput {

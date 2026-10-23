@@ -4,6 +4,7 @@ import { getPool } from '../../database';
 import type {
   HandymanProviderContextRecord,
   HandymanProviderContextStatus,
+  HandymanProviderContextType,
   NewHandymanProviderContextRecord,
 } from './handyman-provider-context.types';
 
@@ -17,22 +18,26 @@ import type {
 type Row = {
   id: string;
   client_id: string;
-  vendor_id: string;
+  provider_type: HandymanProviderContextType;
+  vendor_id: string | null;
   status: HandymanProviderContextStatus;
   created_by_user_id: string;
   created_at: Date;
   updated_at: Date;
 };
 
+const CONTEXT_COLUMNS = `id, client_id, provider_type, vendor_id, status,
+         created_by_user_id, created_at, updated_at`;
+
 const CONTEXT_SELECT = `
-  SELECT id, client_id, vendor_id, status, created_by_user_id,
-         created_at, updated_at
+  SELECT ${CONTEXT_COLUMNS}
     FROM handyman_provider_contexts`;
 
 function map(row: Row): HandymanProviderContextRecord {
   return {
     id: row.id,
     clientId: row.client_id,
+    providerType: row.provider_type,
     vendorId: row.vendor_id,
     status: row.status,
     createdByUserId: row.created_by_user_id,
@@ -48,11 +53,16 @@ async function insertContext(
 ): Promise<HandymanProviderContextRecord> {
   const result = await executor.query<Row>(
     `INSERT INTO handyman_provider_contexts (
-       id, client_id, vendor_id, created_by_user_id
-     ) VALUES ($1, $2, $3, $4)
-     RETURNING id, client_id, vendor_id, status, created_by_user_id,
-               created_at, updated_at`,
-    [randomUUID(), record.clientId, record.vendorId, createdByUserId],
+       id, client_id, provider_type, vendor_id, created_by_user_id
+     ) VALUES ($1, $2, $3, $4, $5)
+     RETURNING ${CONTEXT_COLUMNS}`,
+    [
+      randomUUID(),
+      record.clientId,
+      record.providerType,
+      record.vendorId,
+      createdByUserId,
+    ],
   );
   return map(result.rows[0]);
 }
@@ -73,8 +83,25 @@ async function findByVendor(
   vendorId: string,
 ): Promise<HandymanProviderContextRecord | null> {
   const result = await executor.query<Row>(
-    `${CONTEXT_SELECT} WHERE vendor_id = $1`,
+    `${CONTEXT_SELECT}
+      WHERE vendor_id = $1 AND provider_type = 'VENDOR'`,
     [vendorId],
+  );
+  return result.rows[0] ? map(result.rows[0]) : null;
+}
+
+/**
+ * PART 03B2D — the Client's own (DIRECT) workforce pool, if Operations has
+ * created it. Read-only; never creates anything implicitly.
+ */
+async function findDirectByClient(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  clientId: string,
+): Promise<HandymanProviderContextRecord | null> {
+  const result = await executor.query<Row>(
+    `${CONTEXT_SELECT}
+      WHERE client_id = $1 AND provider_type = 'DIRECT'`,
+    [clientId],
   );
   return result.rows[0] ? map(result.rows[0]) : null;
 }
@@ -100,8 +127,7 @@ async function updateStatus(
     `UPDATE handyman_provider_contexts
         SET status = $2, updated_at = NOW()
       WHERE id = $1
-      RETURNING id, client_id, vendor_id, status, created_by_user_id,
-                created_at, updated_at`,
+      RETURNING ${CONTEXT_COLUMNS}`,
     [id, status],
   );
   return result.rows[0] ? map(result.rows[0]) : null;
@@ -131,6 +157,7 @@ export const handymanProviderContextRepository = {
   insertContext,
   findById,
   findByVendor,
+  findDirectByClient,
   lockById,
   updateStatus,
   listActiveByClient,

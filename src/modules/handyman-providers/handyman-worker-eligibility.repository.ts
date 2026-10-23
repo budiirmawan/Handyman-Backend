@@ -3,11 +3,78 @@ import {getPool} from '../../database';
 import {handymanCrewLeadInvalidError} from './handyman-work-crew.errors';
 import {handymanWorkforceBindingRequiredError} from './handyman-worker-context.errors';
 
-/** Read-only admission over existing registration and operational placement.
+/**
+ * Read-only admission over existing registration and operational placement.
  * User Building access and workforce Building placement are independent.
  * Helpers may lack a login, but never a registered ACTIVE person/context.
  * No skills, delegation, booking, onboarding or new status authority.
+ *
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2D — the admission rule is now expressed
+ * in terms of WHO OWNS THE WORKER (the provider context), never in terms of
+ * the person's `workforce_type`:
+ *
+ *   provider_type = 'VENDOR'  the previous behaviour verbatim — an ACTIVE
+ *       `vendors` row plus an ACTIVE, currently-effective
+ *       `vendor_workforce_bindings` row for the SAME vendor is mandatory.
+ *       Legacy subcontractor data keeps working unchanged.
+ *   provider_type = 'DIRECT'  Handyman's own workforce pool: there is no
+ *       vendor and therefore no vendor binding to demand. Permanent
+ *       (INTERNAL), CONTRACT and FREELANCE workers are admitted on exactly
+ *       the same operational evidence as before: ACTIVE person, ACTIVE
+ *       organization in the same Client, ACTIVE worker context, ACTIVE
+ *       Building placement (and, for the Lead, a login with ACTIVE Building
+ *       access).
+ *
+ * The previous hard `fp.workforce_type='EXTERNAL'` predicate is deliberately
+ * gone: it structurally excluded permanent and contract staff from crew
+ * assignment, forcing Operations to mislabel its own employees as external
+ * vendors. Trading that for a provider-kind predicate keeps ONE admission
+ * rule instead of adding a second, parallel path.
  */
+
+const ELIGIBLE_WORKER_SQL = `
+    SELECT wc.id AS "workerContextId", fp.user_id AS "userId"
+    FROM handyman_worker_contexts wc
+    JOIN handyman_provider_contexts pc ON pc.id=wc.handyman_provider_context_id
+      AND pc.client_id=wc.client_id AND pc.status='ACTIVE'
+    JOIN workforce_profiles fp ON fp.id=wc.workforce_profile_id
+      AND fp.status='ACTIVE'
+    JOIN organizations o ON o.id=fp.organization_id AND o.client_id=wc.client_id
+    LEFT JOIN vendors v ON v.id=pc.vendor_id AND v.client_id=pc.client_id
+    LEFT JOIN users u ON u.id=fp.user_id
+    WHERE wc.client_id=$1 AND wc.status='ACTIVE'
+      AND (
+        pc.provider_type='DIRECT'
+        OR (pc.provider_type='VENDOR' AND v.id IS NOT NULL AND v.status='ACTIVE')
+      )
+      AND ($3::uuid IS NULL OR wc.id=$3)
+      AND ($4::uuid IS NULL OR fp.user_id=$4)
+      AND ($6::uuid IS NULL OR pc.id=$6)
+      AND (fp.user_id IS NULL OR u.status='ACTIVE')
+      AND (NOT $5::boolean OR (fp.user_id IS NOT NULL AND u.status='ACTIVE'
+        AND EXISTS (SELECT 1 FROM user_building_assignments access
+          WHERE access.user_id=fp.user_id AND access.building_id=$2 AND access.status='ACTIVE')))
+      AND (
+        pc.provider_type='DIRECT'
+        OR EXISTS (
+          SELECT 1 FROM vendor_workforce_bindings binding
+          WHERE binding.vendor_id=pc.vendor_id AND binding.workforce_profile_id=fp.id
+            AND binding.status='ACTIVE'
+            AND (binding.effective_from IS NULL OR binding.effective_from<=CURRENT_TIMESTAMP)
+            AND (binding.effective_until IS NULL OR binding.effective_until>CURRENT_TIMESTAMP)
+        )
+      )
+      AND EXISTS (
+        SELECT 1 FROM workforce_building_assignments placement
+        JOIN buildings b ON b.id=placement.building_id AND b.status='ACTIVE'
+        JOIN properties p ON p.id=b.property_id AND p.client_id=wc.client_id
+        WHERE placement.workforce_profile_id=fp.id AND placement.building_id=$2
+          AND placement.status='ACTIVE'
+          AND (placement.effective_from IS NULL OR placement.effective_from<=CURRENT_TIMESTAMP)
+          AND (placement.effective_until IS NULL OR placement.effective_until>=CURRENT_TIMESTAMP)
+      )
+    LIMIT 1`;
+
 export async function findEligibleHandymanWorker(
   executor: Pick<PoolClient, 'query'> | undefined,
   input: {
@@ -24,41 +91,7 @@ export async function findEligibleHandymanWorker(
   }
   const result = await (executor ?? getPool()).query<{
     workerContextId: string; userId: string | null;
-  }>(`
-    SELECT wc.id AS "workerContextId", fp.user_id AS "userId"
-    FROM handyman_worker_contexts wc
-    JOIN handyman_provider_contexts pc ON pc.id=wc.handyman_provider_context_id
-      AND pc.client_id=wc.client_id AND pc.status='ACTIVE'
-    JOIN vendors v ON v.id=pc.vendor_id AND v.client_id=pc.client_id AND v.status='ACTIVE'
-    JOIN workforce_profiles fp ON fp.id=wc.workforce_profile_id
-      AND fp.status='ACTIVE' AND fp.workforce_type='EXTERNAL'
-    JOIN organizations o ON o.id=fp.organization_id AND o.client_id=wc.client_id
-    LEFT JOIN users u ON u.id=fp.user_id
-    WHERE wc.client_id=$1 AND wc.status='ACTIVE'
-      AND ($3::uuid IS NULL OR wc.id=$3)
-      AND ($4::uuid IS NULL OR fp.user_id=$4)
-      AND ($6::uuid IS NULL OR pc.id=$6)
-      AND (fp.user_id IS NULL OR u.status='ACTIVE')
-      AND (NOT $5::boolean OR (fp.user_id IS NOT NULL AND u.status='ACTIVE'
-        AND EXISTS (SELECT 1 FROM user_building_assignments access
-          WHERE access.user_id=fp.user_id AND access.building_id=$2 AND access.status='ACTIVE')))
-      AND EXISTS (
-        SELECT 1 FROM vendor_workforce_bindings binding
-        WHERE binding.vendor_id=pc.vendor_id AND binding.workforce_profile_id=fp.id
-          AND binding.status='ACTIVE'
-          AND (binding.effective_from IS NULL OR binding.effective_from<=CURRENT_TIMESTAMP)
-          AND (binding.effective_until IS NULL OR binding.effective_until>CURRENT_TIMESTAMP)
-      )
-      AND EXISTS (
-        SELECT 1 FROM workforce_building_assignments placement
-        JOIN buildings b ON b.id=placement.building_id AND b.status='ACTIVE'
-        JOIN properties p ON p.id=b.property_id AND p.client_id=wc.client_id
-        WHERE placement.workforce_profile_id=fp.id AND placement.building_id=$2
-          AND placement.status='ACTIVE'
-          AND (placement.effective_from IS NULL OR placement.effective_from<=CURRENT_TIMESTAMP)
-          AND (placement.effective_until IS NULL OR placement.effective_until>=CURRENT_TIMESTAMP)
-      )
-    LIMIT 1`, [input.clientId, input.buildingId, input.workerContextId ?? null,
+  }>(ELIGIBLE_WORKER_SQL, [input.clientId, input.buildingId, input.workerContextId ?? null,
     input.userId ?? null, input.requireLogin, input.providerContextId ?? null]);
   return result.rows[0] ?? null;
 }

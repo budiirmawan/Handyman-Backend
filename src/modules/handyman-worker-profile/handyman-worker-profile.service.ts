@@ -34,10 +34,11 @@ interface CoreWorkerRow {
   worker_status: string;
   client_id: string;
   provider_context_id: string;
-  provider_code: string;
+  provider_type: string;
+  provider_code: string | null;
   provider_status: string;
-  vendor_id: string;
-  vendor_status: string;
+  vendor_id: string | null;
+  vendor_status: string | null;
   organization_id: string;
   organization_code: string;
   organization_name: string;
@@ -65,19 +66,29 @@ interface CoreWorkerRow {
  *                     (0060) with workforce_profiles.employee_code (0024)
  *                     as the fallback when the provider binding is absent.
  *   providerCode      vendors.vendor_code (0054) — provider contexts (0384)
- *                     carry no code of their own.
+ *                     carry no code of their own. PART 03B2D: NULL for a
+ *                     DIRECT provider context (Handyman's own workforce pool,
+ *                     which has no vendor at all) — never a fabricated code.
  *   clientId          handyman_worker_contexts.client_id (0385); the profile
  *                     is client-scoped through organization (0020/0024),
  *                     never through a nonexistent profile column.
  *   email / phone     users.email / users.whatsapp_phone (0002/0301). The
  *                     profile master models no contact columns.
  *   employmentType    derived from workforce_profiles.workforce_type
- *                     (0024/0031): EXTERNAL → VENDOR, OUTSOURCED →
- *                     OUTSOURCED, CONTRACT → CONTRACT, else INTERNAL.
+ *                     (0024/0031/0466): EXTERNAL → VENDOR, OUTSOURCED →
+ *                     OUTSOURCED, CONTRACT → CONTRACT, FREELANCE → FREELANCE,
+ *                     else INTERNAL.
  *
  * Client isolation is structural: provider context, vendor and organization
  * are all pinned to wc.client_id, and the profile is pinned through its
  * organization, so a cross-client row can never be projected.
+ *
+ * PART 03B2D — the vendor join is a LEFT JOIN and the provider context exposes
+ * `providerType` (VENDOR | DIRECT). Before this the INNER JOIN on `vendors`
+ * made every Handyman-managed worker (permanent, contract, freelance) invisible
+ * to the worker-profile surface, which is why Operations had to register its own
+ * staff as vendors. A DIRECT worker now projects normally with NULL
+ * vendorId/vendorStatus/providerCode.
  */
 const CORE_WORKER_SELECT = `
   SELECT
@@ -89,6 +100,7 @@ const CORE_WORKER_SELECT = `
     wc.status AS worker_status,
     wc.client_id,
     pc.id AS provider_context_id,
+    pc.provider_type,
     v.vendor_code AS provider_code,
     pc.status AS provider_status,
     v.id AS vendor_id,
@@ -107,6 +119,7 @@ const CORE_WORKER_SELECT = `
       WHEN 'EXTERNAL' THEN 'VENDOR'
       WHEN 'OUTSOURCED' THEN 'OUTSOURCED'
       WHEN 'CONTRACT' THEN 'CONTRACT'
+      WHEN 'FREELANCE' THEN 'FREELANCE'
       ELSE 'INTERNAL'
     END AS employment_type,
     vwb.status AS binding_status,
@@ -121,7 +134,7 @@ const CORE_WORKER_SELECT = `
   JOIN handyman_provider_contexts pc
     ON pc.id = wc.handyman_provider_context_id
    AND pc.client_id = wc.client_id
-  JOIN vendors v
+  LEFT JOIN vendors v
     ON v.id = pc.vendor_id
    AND v.client_id = wc.client_id
   LEFT JOIN users u
@@ -133,6 +146,7 @@ const CORE_WORKER_SELECT = `
            b.vendor_personnel_code
       FROM vendor_workforce_bindings b
      WHERE b.vendor_id = v.id
+       AND v.id IS NOT NULL
        AND b.workforce_profile_id = wp.id
      ORDER BY (b.status = 'ACTIVE') DESC, b.created_at DESC
      LIMIT 1
@@ -547,6 +561,7 @@ async function buildWorkerProfileProjection(
     providerAssociation: {
       clientId: core.client_id,
       providerContextId: core.provider_context_id,
+      providerType: core.provider_type,
       providerCode: core.provider_code,
       providerStatus: core.provider_status,
       vendorId: core.vendor_id,

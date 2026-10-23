@@ -81,7 +81,7 @@ before(async () => {
       created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE organizations(id uuid, client_id uuid);
     CREATE TEMP TABLE vendors(id uuid, client_id uuid, status text);
-    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, vendor_id uuid, status text, created_by_user_id uuid,
+    CREATE TEMP TABLE handyman_provider_contexts(id uuid, client_id uuid, provider_type text DEFAULT 'VENDOR', vendor_id uuid, status text, created_by_user_id uuid,
       created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE vendor_workforce_bindings(vendor_id uuid, workforce_profile_id uuid, status text, effective_from timestamptz, effective_until timestamptz);
     CREATE TEMP TABLE workforce_building_assignments(workforce_profile_id uuid, building_id uuid, status text, effective_from timestamptz, effective_until timestamptz);
@@ -172,7 +172,12 @@ test('registered no-login helper remains eligible through workforce identity and
 });
 for (const [name,sql] of [
   ['inactive workforce',"UPDATE workforce_profiles SET status='INACTIVE' WHERE id=$1"],
-  ['non-external workforce',"UPDATE workforce_profiles SET workforce_type='INTERNAL' WHERE id=$1"],
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2D removed the `workforce_type='EXTERNAL'`
+  // predicate: Handyman's own permanent/contract/freelance staff are eligible,
+  // and ownership is decided by the provider kind (VENDOR needs its binding,
+  // DIRECT needs none). The equivalent refusal is a missing/expired binding,
+  // covered by the cases below, and the full rule lives in
+  // tests/handyman-direct-workforce-03b2d.test.ts.
   ['missing vendor registration','DELETE FROM vendor_workforce_bindings WHERE workforce_profile_id=$1'],
   ['inactive vendor registration',"UPDATE vendor_workforce_bindings SET status='INACTIVE' WHERE workforce_profile_id=$1"],
   ['expired vendor registration',"UPDATE vendor_workforce_bindings SET effective_until=NOW()-INTERVAL '1 day' WHERE workforce_profile_id=$1"],
