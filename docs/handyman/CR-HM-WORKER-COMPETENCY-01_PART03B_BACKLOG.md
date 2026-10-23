@@ -123,3 +123,16 @@ warning RECOMMENDED menjadi penolakan.
 - Pertahankan invarian frozen CR-HM-04 PART C: tepat dua bentuk URL assignment.
 - Client/Building scope wajib ditegakkan pada setiap operasi baru.
 - Kedua ledger PART 03B1 tetap **append-only**; jangan menambahkan UPDATE/DELETE atau "koreksi" baris historis.
+
+## Catatan lintas-CR — CR-HM-WO-PG18-UUID-01 PART 03B2C (selesai)
+
+PostgreSQL 18 tidak punya agregat `min(uuid)` / `max(uuid)`. Query feed Mobile
+(`mobile-assignment.service.ts`) memakainya untuk marker Safety Inspection sehingga seluruh
+`GET /mobile/assignments` menjawab 500 dan suite lifecycle Work Order (action, completion, BAST closure)
+gagal. Marker kini diambil dengan `ORDER BY created_at, id LIMIT 1` di dalam LATERAL yang tetap dijaga
+`COUNT(*) = 1`, jadi deterministik dan tanpa winner acak.
+
+**Aturan ke depan:** jangan pernah mengagregasi kolom `uuid` dengan `MIN`/`MAX` (atau agregat lain yang tidak
+punya fungsi untuk uuid). Gunakan `ORDER BY ... LIMIT 1` di dalam LATERAL/subquery, atau agregasikan `::text`
+bila memang hanya butuh nilai apa pun — dan pilih salah satunya secara sadar. Detail:
+`CR-HM-WO-PG18-UUID-01_PART03B2C_DELIVERY_REPORT.md`.

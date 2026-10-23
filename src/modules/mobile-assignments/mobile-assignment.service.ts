@@ -132,7 +132,7 @@ const TASK_ASSIGNMENT_SELECT = `
     urd.id          AS utility_reading_due_id,
     csb.cleaning_area_id AS cleaning_area_id,
     psb.id          AS active_patrol_binding_id,
-    sib.active_safety_inspection_binding_id,
+    sib_id.active_safety_inspection_binding_id,
     sib.active_safety_inspection_binding_count
   FROM task_assignments a
   JOIN generated_tasks t ON t.id = a.task_id
@@ -155,16 +155,29 @@ const TASK_ASSIGNMENT_SELECT = `
    AND csb.status = 'ACTIVE'
   -- CR-BE-RN19-SAFETY-INSPECTION-01 — aggregate before projecting the marker.
   -- The count is the cardinality guard; the id is exposed only when exactly
-  -- one ACTIVE binding exists. No LIMIT, rows[0], or winner ordering is used.
+  -- one ACTIVE binding exists. No rows[0], no arbitrary winner.
   LEFT JOIN LATERAL (
     SELECT
-      COUNT(*)::INTEGER AS active_safety_inspection_binding_count,
-      CASE WHEN COUNT(*) = 1 THEN MIN(sib_row.id) ELSE NULL END
-        AS active_safety_inspection_binding_id
+      COUNT(*)::INTEGER AS active_safety_inspection_binding_count
       FROM safety_inspection_bindings sib_row
      WHERE sib_row.schedule_definition_id = t.schedule_definition_id
        AND sib_row.status = 'ACTIVE'
   ) sib ON TRUE
+  -- CR-HM-WO-PG18-UUID-01 PART 03B2C — PostgreSQL 18 refuses MIN(uuid):
+  -- the uuid type has no min/max aggregate, so the old
+  -- 'CASE WHEN COUNT(*) = 1 THEN MIN(sib_row.id) ...' aborted the whole feed
+  -- with 'function min(uuid) does not exist'. The marker is now resolved with a
+  -- deterministic ORDER BY + LIMIT 1 (creation time, then id) and the count
+  -- above remains the cardinality gate: the join matches only when exactly one
+  -- ACTIVE binding exists, so no arbitrary binding is ever selected.
+  LEFT JOIN LATERAL (
+    SELECT sib_one.id AS active_safety_inspection_binding_id
+      FROM safety_inspection_bindings sib_one
+     WHERE sib_one.schedule_definition_id = t.schedule_definition_id
+       AND sib_one.status = 'ACTIVE'
+     ORDER BY sib_one.created_at ASC, sib_one.id ASC
+     LIMIT 1
+  ) sib_id ON sib.active_safety_inspection_binding_count = 1
 `;
 
 const TASK_ASSIGNMENT_SCOPE = `
