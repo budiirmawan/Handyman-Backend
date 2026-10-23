@@ -187,6 +187,26 @@ export const migration0472HandymanAssignmentResponses: Migration = {
     `);
 
     await client.query(`
+      ALTER TABLE notifications
+        DROP CONSTRAINT IF EXISTS notifications_navigation_target_check;
+      ALTER TABLE notifications
+        ADD CONSTRAINT notifications_navigation_target_check CHECK (
+          (
+            navigation_target_type IS NULL
+            AND navigation_target_id IS NULL
+          )
+          OR (
+            navigation_target_type IN (
+              'WORK_ORDER_FIELD_WORK',
+              'EXECUTION_SCOPE_FIELD_WORK',
+              'INSPECTOR_VISIT_FIELD_WORK'
+            )
+            AND navigation_target_id IS NOT NULL
+          )
+        );
+    `);
+
+    await client.query(`
       CREATE OR REPLACE FUNCTION handyman_assignment_response_events_append_only()
       RETURNS trigger AS $$
       BEGIN
@@ -252,6 +272,19 @@ export const migration0472HandymanAssignmentResponses: Migration = {
       DROP FUNCTION IF EXISTS handyman_assignment_responses_no_delete;
       DROP FUNCTION IF EXISTS handyman_assignment_response_events_append_only;
       DROP INDEX IF EXISTS notifications_assignment_response_dedup_idx;
+      ALTER TABLE notifications
+        DROP CONSTRAINT IF EXISTS notifications_navigation_target_check;
+      ALTER TABLE notifications
+        ADD CONSTRAINT notifications_navigation_target_check CHECK (
+          (
+            navigation_target_type IS NULL
+            AND navigation_target_id IS NULL
+          )
+          OR (
+            navigation_target_type IN ('WORK_ORDER_FIELD_WORK')
+            AND navigation_target_id IS NOT NULL
+          )
+        );
       DROP TABLE IF EXISTS handyman_assignment_response_events;
       DROP TABLE IF EXISTS handyman_assignment_responses;
     `);

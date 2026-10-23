@@ -415,16 +415,17 @@ export async function reassignHandymanExecutionScopeCrew(
       throw handymanAssignmentVersionConflictError();
     }
 
-    // Same crew — no-op replay with same version returns current record.
+    // Same crew — no-op replay with same version returns current record when still PENDING.
+    const currentResponse =
+      await assignmentResponseRepository.findByAssignmentId(
+        current.id,
+        tx,
+      );
     if (
       current.handymanProviderContextId === providerContextId &&
-      current.handymanCrewId === crewId
+      current.handymanCrewId === crewId &&
+      (!currentResponse || currentResponse.responseStatus === 'PENDING')
     ) {
-      const currentResponse =
-        await assignmentResponseRepository.findByAssignmentId(
-          current.id,
-          tx,
-        );
       return toPublic(current, currentResponse);
     }
 

@@ -6988,6 +6988,8 @@ paths:
                                     executionScopeStatus: { type: string, nullable: true }
                                 assignment:
                                   $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/assignment"
+                                inspectorAssignment:
+                                  $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/inspectorAssignment"
                                 readiness:
                                   $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/readiness"
                                 slaMilestones:
@@ -91795,12 +91797,35 @@ components:
                 status: { type: string, nullable: true }
             assignment:
               type: object
-              required: [assignmentId, status, providerContextId, crewId]
+              required: [assignmentId, status, providerContextId, crewId, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, responseNotes, reassignmentRequired]
               properties:
                 assignmentId: { type: string, format: uuid, nullable: true }
                 status: { type: string, nullable: true }
                 providerContextId: { type: string, format: uuid, nullable: true }
                 crewId: { type: string, format: uuid, nullable: true }
+                responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA], nullable: true }
+                respondedByUserId: { type: string, format: uuid, nullable: true }
+                respondedByWorkerId: { type: string, format: uuid, nullable: true }
+                respondedAt: { type: string, format: date-time, nullable: true }
+                declineReason: { type: string, nullable: true }
+                responseNotes: { type: string, nullable: true }
+                reassignmentRequired: { type: boolean }
+            inspectorAssignment:
+              type: object
+              required: [assignmentId, visitAppointmentId, visitState, inspectorUserId, status, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, responseNotes, reassignmentRequired]
+              properties:
+                assignmentId: { type: string, format: uuid, nullable: true }
+                visitAppointmentId: { type: string, format: uuid, nullable: true }
+                visitState: { type: string, nullable: true }
+                inspectorUserId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA], nullable: true }
+                respondedByUserId: { type: string, format: uuid, nullable: true }
+                respondedByWorkerId: { type: string, format: uuid, nullable: true }
+                respondedAt: { type: string, format: date-time, nullable: true }
+                declineReason: { type: string, nullable: true }
+                responseNotes: { type: string, nullable: true }
+                reassignmentRequired: { type: boolean }
             arrival:
               type: object
               required: [arrivalVerificationResultId, status, primaryReason]
@@ -101327,6 +101352,34 @@ components:
         assignmentStatus:
           type: string
           const: ACTIVE
+        assignmentId:
+          $ref: "#/components/schemas/Uuid"
+        responseStatus:
+          type: string
+          enum: [PENDING, TERIMA, TIDAK_BISA]
+          nullable: true
+        respondedByUserId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        respondedByWorkerId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        respondedAt:
+          type: string
+          format: date-time
+          nullable: true
+        declineReason:
+          type: string
+          nullable: true
+        reassignmentRequired:
+          type: boolean
+        availableResponseActions:
+          type: array
+          items:
+            type: string
+            enum: [TERIMA, TIDAK_BISA]
     MobileAssignmentContext:
       type: object
       description: Building / Location context of the assigned work.
@@ -103984,29 +104037,32 @@ components:
       properties:
         type:
           type: string
-          enum: [WORK_ORDER_FIELD_WORK]
+          enum: [WORK_ORDER_FIELD_WORK, EXECUTION_SCOPE_FIELD_WORK, INSPECTOR_VISIT_FIELD_WORK]
           description: >-
-            Target type. `WORK_ORDER_FIELD_WORK` means "open this Work Order
-            on the mobile FieldWork surface"; the destination is resolved by
-            the backend from the recipient's own assignment, never from a
-            stored route string.
+            Target type. `WORK_ORDER_FIELD_WORK`, `EXECUTION_SCOPE_FIELD_WORK`,
+            and `INSPECTOR_VISIT_FIELD_WORK` identify the canonical work target;
+            the destination is resolved by the backend from the recipient's own
+            assignment or Operations building scope, never from a stored route
+            string.
         id:
           $ref: "#/components/schemas/Uuid"
           description: >-
             The canonical backend entity id the target points at. For
-            `WORK_ORDER_FIELD_WORK` this is exactly `work_orders.id`.
+            `WORK_ORDER_FIELD_WORK` this is `work_orders.id`; for
+            `EXECUTION_SCOPE_FIELD_WORK` this is `handyman_execution_scopes.id`;
+            for `INSPECTOR_VISIT_FIELD_WORK` this is `handyman_visit_appointments.id`.
 
     NotificationNavigationTargetResolution:
       type: object
       description: >-
         The resolved navigation target for the AUTHENTICATED recipient.
         `target` is `null` when the notification declares no navigation target
-        OR when the recipient has no visible matching assignment — never a
+        OR when the recipient has no visible matching assignment (e.g. superseded,
+        reassigned, declined, or outside Building scope) — never a
         fallback, never a guessed destination. Ownership of the notification
         grants no work authority: the assignment is resolved independently
-        through `GET /mobile/assignments` visibility and authority rules, so
-        the object returned here is the same `MobileAssignment` shape the
-        feed publishes (not a second assignment DTO). Resolving is a READ: it
+        through `GET /mobile/assignments` or Handyman field/Operations
+        visibility and authority rules. Resolving is a READ: it
         never marks the notification read.
       required: [target]
       properties:
@@ -104014,13 +104070,40 @@ components:
           nullable: true
           allOf:
             - type: object
-              required: [destination, assignment]
+              required: [destination]
               properties:
                 destination:
                   type: string
-                  enum: [FIELD_WORK]
+                  enum:
+                    - FIELD_WORK
+                    - OPERATIONS_WORK_ORDER
+                    - OPERATIONS_EXECUTION_SCOPE
+                    - OPERATIONS_INSPECTOR_VISIT
                 assignment:
                   $ref: "#/components/schemas/MobileAssignment"
+                  nullable: true
+                assignmentType:
+                  type: string
+                  enum: [EXECUTION_SCOPE_ASSIGNMENT, INSPECTOR_VISIT_ASSIGNMENT]
+                assignmentId:
+                  $ref: "#/components/schemas/Uuid"
+                workOrderId:
+                  $ref: "#/components/schemas/Uuid"
+                executionScopeId:
+                  $ref: "#/components/schemas/Uuid"
+                handymanRequestId:
+                  $ref: "#/components/schemas/Uuid"
+                visitAppointmentId:
+                  $ref: "#/components/schemas/Uuid"
+                responseStatus:
+                  type: string
+                  enum: [PENDING, TERIMA, TIDAK_BISA]
+                  nullable: true
+                reassignmentRequired:
+                  type: boolean
+                availableActions:
+                  type: array
+                  items: { type: string }
 
     # ------------------------------------------------------------------
     # BE-26B — Notification template foundation. Platform configuration;
@@ -130472,14 +130555,24 @@ components:
     HandymanFieldJob:
       type: object
       description: "Source: MY_JOBS_SQL row plus ISO date conversion in readMyHandymanFieldFeed (handyman-field-feed.service.ts)."
-      required: [executionScopeId, requestId, buildingId, crewId, requestStatus, scopeStatus, dispatchReleaseId, dispatchStatus, releasedAt, confirmedAppointmentId, confirmedStartAt, confirmedEndAt, timezone, appointmentConfirmed, dispatchReleased]
+      required: [assignmentId, executionScopeId, requestId, buildingId, crewId, requestStatus, scopeStatus, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions, dispatchReleaseId, dispatchStatus, releasedAt, confirmedAppointmentId, confirmedStartAt, confirmedEndAt, timezone, appointmentConfirmed, dispatchReleased]
       properties:
+        assignmentId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
         requestId: { type: string, format: uuid }
         buildingId: { type: string, format: uuid }
         crewId: { type: string, format: uuid }
         requestStatus: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
         scopeStatus: { type: string }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
         dispatchReleaseId: { type: string, format: uuid, nullable: true }
         dispatchStatus: { type: string, nullable: true }
         releasedAt: { type: string, format: date-time, nullable: true }
@@ -130492,9 +130585,10 @@ components:
     HandymanFieldInspectionJob:
       type: object
       description: "Source: MY_INSPECTIONS_SQL row in readMyHandymanFieldFeed."
-      required: [appointmentId, requestId, buildingId, startAt, endAt, timezone, state, version, assignmentId, assignmentVersion]
+      required: [appointmentId, visitAppointmentId, requestId, buildingId, startAt, endAt, timezone, state, version, assignmentId, assignmentVersion, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions]
       properties:
         appointmentId: { type: string, format: uuid }
+        visitAppointmentId: { type: string, format: uuid }
         requestId: { type: string, format: uuid }
         buildingId: { type: string, format: uuid }
         startAt: { type: string, format: date-time }
@@ -130504,6 +130598,15 @@ components:
         version: { type: integer }
         assignmentId: { type: string, format: uuid }
         assignmentVersion: { type: integer }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
     HandymanFieldFeed:
       type: object
       required: [jobs, inspections, feedSource]
@@ -130539,7 +130642,7 @@ components:
     HandymanFieldAssignmentContext:
       type: object
       nullable: true
-      required: [assignmentId, providerContextId, crewId, crewCode, crewName, status, assignedAt, leadWorkerContextId, leadUserId]
+      required: [assignmentId, providerContextId, crewId, crewCode, crewName, status, assignedAt, leadWorkerContextId, leadUserId, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions]
       properties:
         assignmentId: { type: string, format: uuid }
         providerContextId: { type: string, format: uuid }
@@ -130550,6 +130653,34 @@ components:
         assignedAt: { type: string, format: date-time }
         leadWorkerContextId: { type: string, format: uuid, nullable: true }
         leadUserId: { type: string, format: uuid, nullable: true }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
+    HandymanFieldInspectorAssignmentContext:
+      type: object
+      nullable: true
+      required: [assignmentId, visitAppointmentId, inspectorUserId, status, assignedAt, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions]
+      properties:
+        assignmentId: { type: string, format: uuid }
+        visitAppointmentId: { type: string, format: uuid }
+        inspectorUserId: { type: string, format: uuid }
+        status: { type: string }
+        assignedAt: { type: string, format: date-time }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
     HandymanFieldInspectionContext:
       type: object
       required: [triage, inspection, diagnosis]
@@ -130730,6 +130861,7 @@ components:
           nullable: true
         approvedQuotation: { $ref: "#/components/schemas/HandymanFieldQuotationSnapshot" }
         assignmentContext: { $ref: "#/components/schemas/HandymanFieldAssignmentContext" }
+        inspectorAssignmentContext: { $ref: "#/components/schemas/HandymanFieldInspectorAssignmentContext" }
         materials: { $ref: "#/components/schemas/HandymanFieldMaterials" }
     HandymanFieldQuotationSnapshotResponse:
       type: object

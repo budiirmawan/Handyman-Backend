@@ -417,11 +417,14 @@ export async function notifyExecutionScopeCrewLeadAssignedPending(
         type: 'EXECUTION_SCOPE_ASSIGNMENT_PENDING',
         title: 'Penugasan Crew Lead Handyman Baru',
         body: 'Anda ditugaskan sebagai Crew Lead (PIC Pekerjaan) pada Execution Scope Handyman. Silakan konfirmasi TERIMA atau TIDAK_BISA.',
-        sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
-        sourceEntityId: input.assignmentId,
-        sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_PENDING',
-        navigationTarget: null,
-        metadata: {
+    sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
+    sourceEntityId: input.assignmentId,
+    sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_PENDING',
+    navigationTarget: {
+      type: 'EXECUTION_SCOPE_FIELD_WORK',
+      id: input.executionScopeId,
+    },
+    metadata: {
           handymanRequestId: input.handymanRequestId,
           executionScopeId: input.executionScopeId,
           buildingId: input.buildingId,
@@ -511,7 +514,10 @@ export async function notifyExecutionScopeAssignmentAccepted(
         sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
         sourceEntityId: input.assignmentId,
         sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_ACCEPTED',
-        navigationTarget: null,
+        navigationTarget: {
+          type: 'EXECUTION_SCOPE_FIELD_WORK',
+          id: input.executionScopeId,
+        },
         metadata: {
           handymanRequestId: input.handymanRequestId,
           executionScopeId: input.executionScopeId,
@@ -561,7 +567,10 @@ export async function notifyExecutionScopeAssignmentDeclined(
         sourceEntityType: 'EXECUTION_SCOPE_ASSIGNMENT',
         sourceEntityId: input.assignmentId,
         sourceEventType: 'EXECUTION_SCOPE_ASSIGNMENT_DECLINED',
-        navigationTarget: null,
+        navigationTarget: {
+          type: 'EXECUTION_SCOPE_FIELD_WORK',
+          id: input.executionScopeId,
+        },
         metadata: {
           handymanRequestId: input.handymanRequestId,
           executionScopeId: input.executionScopeId,
@@ -607,7 +616,10 @@ export async function notifyInspectorAssignedPending(
         sourceEntityType: 'INSPECTOR_VISIT_ASSIGNMENT',
         sourceEntityId: input.assignmentId,
         sourceEventType: 'INSPECTOR_VISIT_ASSIGNMENT_PENDING',
-        navigationTarget: null,
+        navigationTarget: {
+          type: 'INSPECTOR_VISIT_FIELD_WORK',
+          id: input.visitAppointmentId,
+        },
         metadata: {
           handymanRequestId: input.handymanRequestId,
           visitAppointmentId: input.visitAppointmentId,
@@ -703,7 +715,10 @@ export async function notifyInspectorAssignmentAccepted(
         sourceEntityType: 'INSPECTOR_VISIT_ASSIGNMENT',
         sourceEntityId: input.assignmentId,
         sourceEventType: 'INSPECTOR_VISIT_ASSIGNMENT_ACCEPTED',
-        navigationTarget: null,
+        navigationTarget: {
+          type: 'INSPECTOR_VISIT_FIELD_WORK',
+          id: input.visitAppointmentId,
+        },
         metadata: {
           handymanRequestId: input.handymanRequestId,
           visitAppointmentId: input.visitAppointmentId,
@@ -751,7 +766,10 @@ export async function notifyInspectorAssignmentDeclined(
         sourceEntityType: 'INSPECTOR_VISIT_ASSIGNMENT',
         sourceEntityId: input.assignmentId,
         sourceEventType: 'INSPECTOR_VISIT_ASSIGNMENT_DECLINED',
-        navigationTarget: null,
+        navigationTarget: {
+          type: 'INSPECTOR_VISIT_FIELD_WORK',
+          id: input.visitAppointmentId,
+        },
         metadata: {
           handymanRequestId: input.handymanRequestId,
           visitAppointmentId: input.visitAppointmentId,

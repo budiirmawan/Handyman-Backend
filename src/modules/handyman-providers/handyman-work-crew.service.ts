@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
@@ -5,6 +6,7 @@ import { buildingAccessDeniedError, contextAccessService } from '../context-acce
 import { recordOperationalEvent } from '../operational-events';
 import { workforceRepository } from '../workforce';
 import {
+  assignmentResponseRepository,
   notifyExecutionScopeCrewLeadAssignedPending,
   notifyExecutionScopeCrewLeadSuperseded,
 } from '../assignment-responses';
@@ -493,19 +495,34 @@ export async function designateHandymanCrewLead(
       tx,
     );
 
-    // Notify old and new Crew Lead for any active Execution Scope assignments on this crew
+    // Notify old and new Crew Lead for any active Execution Scope assignments on this crew.
+    // If the old Lead had already recorded a terminal decision (TERIMA or TIDAK_BISA)
+    // and no active work session is running, rotate the assignment row to a new
+    // ACTIVE version (superseding the old row) so the old Lead's immutable decision
+    // is preserved in history while the new Lead starts at PENDING.
     const activeAssignmentsRes = await tx.query<{
       assignmentId: string;
       executionScopeId: string;
+      providerContextId: string;
+      version: number;
       buildingId: string;
       handymanRequestId: string;
       responseStatus: string | null;
+      hasActiveSession: boolean;
     }>(
       `SELECT a.id AS "assignmentId",
               a.execution_scope_id AS "executionScopeId",
+              a.handyman_provider_context_id AS "providerContextId",
+              a.version AS "version",
               s.building_id AS "buildingId",
               s.handyman_request_id AS "handymanRequestId",
-              ar.response_status AS "responseStatus"
+              ar.response_status AS "responseStatus",
+              EXISTS (
+                SELECT 1
+                  FROM handyman_work_sessions ws
+                 WHERE ws.execution_scope_id = a.execution_scope_id
+                   AND ws.status IN ('CHECKED_IN', 'IN_PROGRESS', 'PAUSED', 'MATERIAL_RUN')
+              ) AS "hasActiveSession"
          FROM handyman_execution_scope_assignments a
          JOIN handyman_execution_scopes s
            ON s.id = a.execution_scope_id
@@ -519,6 +536,83 @@ export async function designateHandymanCrewLead(
     );
 
     for (const activeAssign of activeAssignmentsRes.rows) {
+      let effectiveAssignmentId = activeAssign.assignmentId;
+
+      if (
+        (activeAssign.responseStatus === 'TERIMA' ||
+          activeAssign.responseStatus === 'TIDAK_BISA') &&
+        !activeAssign.hasActiveSession
+      ) {
+        const newAssignmentId = randomUUID();
+        const { handymanDispatchRepository } = await import(
+          '../handyman-dispatch/handyman-dispatch.repository'
+        );
+        await handymanDispatchRepository.supersedeForAssignment(
+          tx,
+          activeAssign.assignmentId,
+          actorUserId,
+          'Crew Lead changed after finalized response',
+        );
+        await tx.query(
+          `UPDATE handyman_execution_scope_assignments
+              SET status = 'SUPERSEDED',
+                  version = version + 1
+            WHERE id = $1
+              AND status = 'ACTIVE'
+              AND version = $2`,
+          [activeAssign.assignmentId, activeAssign.version],
+        );
+        await assignmentResponseRepository.recordSupersededEvent(
+          {
+            clientId: crew.clientId,
+            buildingId: activeAssign.buildingId,
+            assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+            assignmentId: activeAssign.assignmentId,
+            handymanRequestId: activeAssign.handymanRequestId,
+            executionScopeId: activeAssign.executionScopeId,
+            assignedByUserId: actorUserId,
+          },
+          actorUserId,
+          `Superseded by Crew Lead change to ${newLeadProfile.userId}: new assignment ${newAssignmentId}`,
+          tx,
+        );
+        await tx.query(
+          `INSERT INTO handyman_execution_scope_assignments (
+             id,
+             client_id,
+             execution_scope_id,
+             handyman_provider_context_id,
+             handyman_crew_id,
+             status,
+             assigned_by_user_id,
+             supersedes_assignment_id
+           )
+           VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, $7)`,
+          [
+            newAssignmentId,
+            crew.clientId,
+            activeAssign.executionScopeId,
+            activeAssign.providerContextId,
+            crew.id,
+            actorUserId,
+            activeAssign.assignmentId,
+          ],
+        );
+        await assignmentResponseRepository.ensurePendingForAssignment(
+          {
+            clientId: crew.clientId,
+            buildingId: activeAssign.buildingId,
+            assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+            assignmentId: newAssignmentId,
+            handymanRequestId: activeAssign.handymanRequestId,
+            executionScopeId: activeAssign.executionScopeId,
+            assignedByUserId: actorUserId,
+          },
+          tx,
+        );
+        effectiveAssignmentId = newAssignmentId;
+      }
+
       await notifyExecutionScopeCrewLeadSuperseded(
         {
           clientId: crew.clientId,
@@ -526,24 +620,22 @@ export async function designateHandymanCrewLead(
           handymanRequestId: activeAssign.handymanRequestId,
           executionScopeId: activeAssign.executionScopeId,
           oldAssignmentId: activeAssign.assignmentId,
-          newAssignmentId: activeAssign.assignmentId,
+          newAssignmentId: effectiveAssignmentId,
           oldLeadUserId,
           newLeadUserId: newLeadProfile.userId,
           reason: 'Crew Lead changed',
         },
         tx,
       );
-      if (
-        activeAssign.responseStatus === null ||
-        activeAssign.responseStatus === 'PENDING'
-      ) {
+
+      if (!activeAssign.hasActiveSession) {
         await notifyExecutionScopeCrewLeadAssignedPending(
           {
             clientId: crew.clientId,
             buildingId: activeAssign.buildingId,
             handymanRequestId: activeAssign.handymanRequestId,
             executionScopeId: activeAssign.executionScopeId,
-            assignmentId: activeAssign.assignmentId,
+            assignmentId: effectiveAssignmentId,
             crewId: crew.id,
             leadUserId: newLeadProfile.userId,
             leadWorkerContextId: workerContext.id,

@@ -18,6 +18,12 @@ export const MY_JOBS_SQL = `
   SELECT DISTINCT es.id AS "executionScopeId", es.handyman_request_id AS "requestId",
     es.building_id AS "buildingId", a.id AS "assignmentId", a.handyman_crew_id AS "crewId",
     COALESCE(ar.response_status, 'PENDING') AS "responseStatus",
+    ar.responded_by_user_id AS "respondedByUserId",
+    ar.responded_by_worker_id AS "respondedByWorkerId",
+    ar.responded_at AS "respondedAt",
+    ar.decline_reason AS "declineReason",
+    (COALESCE(ar.response_status, 'PENDING') = 'TIDAK_BISA') AS "reassignmentRequired",
+    ws.status AS "activeWorkSessionStatus",
     r.status AS "requestStatus", es.status AS "scopeStatus",
     dr.id AS "dispatchReleaseId", dr.status AS "dispatchStatus",
     dr.released_at AS "releasedAt",
@@ -29,6 +35,14 @@ export const MY_JOBS_SQL = `
     AND a.client_id=es.client_id AND a.status='ACTIVE'
   LEFT JOIN handyman_assignment_responses ar
     ON ar.assignment_id=a.id AND ar.assignment_target_type='EXECUTION_SCOPE_ASSIGNMENT'
+  LEFT JOIN LATERAL (
+    SELECT ws_row.status
+      FROM handyman_work_sessions ws_row
+     WHERE ws_row.assignment_id = a.id
+       AND ws_row.status IN ('CHECKED_IN', 'IN_PROGRESS', 'PAUSED', 'MATERIAL_RUN')
+     ORDER BY ws_row.checked_in_at DESC
+     LIMIT 1
+  ) ws ON TRUE
   LEFT JOIN handyman_dispatch_releases dr
     ON dr.execution_scope_id=es.id AND dr.client_id=es.client_id
    AND dr.assignment_id=a.id AND dr.status IN ('RELEASED','IN_PROGRESS')
@@ -68,11 +82,17 @@ export const MY_JOBS_SQL = `
   LIMIT 100`;
 
 export const MY_INSPECTIONS_SQL = `
-  SELECT v.id AS "appointmentId", v.handyman_request_id AS "requestId",
+  SELECT v.id AS "appointmentId", v.id AS "visitAppointmentId",
+    v.handyman_request_id AS "requestId",
     v.building_id AS "buildingId", v.start_at AS "startAt", v.end_at AS "endAt",
     v.timezone, v.state, v.version,
     ia.id AS "assignmentId", ia.version AS "assignmentVersion",
-    COALESCE(ar.response_status, 'PENDING') AS "responseStatus"
+    COALESCE(ar.response_status, 'PENDING') AS "responseStatus",
+    ar.responded_by_user_id AS "respondedByUserId",
+    ar.responded_by_worker_id AS "respondedByWorkerId",
+    ar.responded_at AS "respondedAt",
+    ar.decline_reason AS "declineReason",
+    (COALESCE(ar.response_status, 'PENDING') = 'TIDAK_BISA') AS "reassignmentRequired"
   FROM handyman_visit_appointments v
   JOIN handyman_inspector_assignments ia
     ON ia.visit_appointment_id = v.id AND ia.status = 'ACTIVE'
@@ -91,6 +111,63 @@ export const MY_INSPECTIONS_SQL = `
     AND COALESCE(ar.response_status, 'PENDING') <> 'TIDAK_BISA'
   ORDER BY v.start_at, v.id
   LIMIT 100`;
+
+export type HandymanFieldJobAction =
+  | 'TERIMA'
+  | 'TIDAK_BISA'
+  | 'CREATE_ARRIVAL_CHALLENGE'
+  | 'CHECK_IN'
+  | 'START_WORK'
+  | 'PAUSE_WORK'
+  | 'RESUME_WORK'
+  | 'MATERIAL_RUN'
+  | 'COMPLETE_WORK'
+  | 'CHECK_OUT';
+
+export type HandymanFieldInspectionAction =
+  | 'TERIMA'
+  | 'TIDAK_BISA'
+  | 'RECORD_OUTCOME';
+
+export function computeHandymanFieldJobAvailableActions(
+  responseStatus: string | null | undefined,
+  activeWorkSessionStatus?: string | null,
+): HandymanFieldJobAction[] {
+  const status = responseStatus ?? 'PENDING';
+  if (status === 'TIDAK_BISA') {
+    return [];
+  }
+  if (status === 'PENDING') {
+    return ['TERIMA', 'TIDAK_BISA'];
+  }
+  if (!activeWorkSessionStatus) {
+    return ['CREATE_ARRIVAL_CHALLENGE', 'CHECK_IN'];
+  }
+  switch (activeWorkSessionStatus) {
+    case 'CHECKED_IN':
+      return ['START_WORK', 'CHECK_OUT'];
+    case 'IN_PROGRESS':
+      return ['PAUSE_WORK', 'MATERIAL_RUN', 'COMPLETE_WORK', 'CHECK_OUT'];
+    case 'PAUSED':
+    case 'MATERIAL_RUN':
+      return ['RESUME_WORK', 'COMPLETE_WORK', 'CHECK_OUT'];
+    default:
+      return [];
+  }
+}
+
+export function computeHandymanFieldInspectionAvailableActions(
+  responseStatus: string | null | undefined,
+): HandymanFieldInspectionAction[] {
+  const status = responseStatus ?? 'PENDING';
+  if (status === 'TIDAK_BISA') {
+    return [];
+  }
+  if (status === 'PENDING') {
+    return ['TERIMA', 'TIDAK_BISA'];
+  }
+  return ['RECORD_OUTCOME'];
+}
 
 export type FieldActorRole = 'PIC_PEKERJAAN' | 'INSPECTOR';
 
@@ -280,8 +357,10 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
     lead_user_id: string | null;
     response_status: string | null;
     responded_by_user_id: string | null;
+    responded_by_worker_id: string | null;
     responded_at: Date | null;
     decline_reason: string | null;
+    active_work_session_status: string | null;
   }>(
     `SELECT a.id AS assignment_id,
             a.handyman_provider_context_id AS provider_context_id,
@@ -294,8 +373,10 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
             fp.user_id AS lead_user_id,
             COALESCE(ar.response_status, 'PENDING') AS response_status,
             ar.responded_by_user_id,
+            ar.responded_by_worker_id,
             ar.responded_at,
-            ar.decline_reason
+            ar.decline_reason,
+            ws.status AS active_work_session_status
        FROM handyman_execution_scope_assignments a
        JOIN handyman_work_crews crew
          ON crew.id = a.handyman_crew_id
@@ -303,6 +384,14 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
        LEFT JOIN handyman_assignment_responses ar
          ON ar.assignment_id = a.id
         AND ar.assignment_target_type = 'EXECUTION_SCOPE_ASSIGNMENT'
+       LEFT JOIN LATERAL (
+         SELECT ws_row.status
+           FROM handyman_work_sessions ws_row
+          WHERE ws_row.assignment_id = a.id
+            AND ws_row.status IN ('CHECKED_IN', 'IN_PROGRESS', 'PAUSED', 'MATERIAL_RUN')
+          ORDER BY ws_row.checked_in_at DESC
+          LIMIT 1
+       ) ws ON TRUE
        LEFT JOIN LATERAL (
          SELECT cl.handyman_crew_membership_id
            FROM handyman_crew_leads cl
@@ -329,6 +418,7 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
   if (!row) return null;
   const responseStatus = row.response_status ?? 'PENDING';
   return {
+    executionScopeId,
     assignmentId: row.assignment_id,
     providerContextId: row.provider_context_id,
     crewId: row.crew_id,
@@ -340,10 +430,75 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
     leadUserId: row.lead_user_id,
     responseStatus,
     respondedByUserId: row.responded_by_user_id,
+    respondedByWorkerId: row.responded_by_worker_id,
     respondedAt: row.responded_at ? row.responded_at.toISOString() : null,
     declineReason: row.decline_reason,
     reassignmentRequired:
       row.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
+    activeWorkSessionStatus: row.active_work_session_status,
+    availableActions: computeHandymanFieldJobAvailableActions(
+      responseStatus,
+      row.active_work_session_status,
+    ),
+  };
+}
+
+async function loadInspectorAssignmentContext(
+  handymanRequestId: string,
+  clientId: string,
+) {
+  const db = getPool();
+  const res = await db.query<{
+    assignment_id: string;
+    visit_appointment_id: string;
+    inspector_user_id: string;
+    status: string;
+    assigned_at: Date;
+    response_status: string | null;
+    responded_by_user_id: string | null;
+    responded_by_worker_id: string | null;
+    responded_at: Date | null;
+    decline_reason: string | null;
+  }>(
+    `SELECT ia.id AS assignment_id,
+            ia.visit_appointment_id,
+            ia.inspector_user_id,
+            ia.status,
+            ia.assigned_at,
+            COALESCE(ar.response_status, 'PENDING') AS response_status,
+            ar.responded_by_user_id,
+            ar.responded_by_worker_id,
+            ar.responded_at,
+            ar.decline_reason
+       FROM handyman_inspector_assignments ia
+       LEFT JOIN handyman_assignment_responses ar
+         ON ar.assignment_id = ia.id
+        AND ar.assignment_target_type = 'INSPECTOR_VISIT_ASSIGNMENT'
+      WHERE ia.handyman_request_id = $1
+        AND ia.client_id = $2
+        AND ia.status = 'ACTIVE'
+      ORDER BY ia.assigned_at DESC, ia.id DESC
+      LIMIT 1`,
+    [handymanRequestId, clientId],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  const responseStatus = row.response_status ?? 'PENDING';
+  return {
+    assignmentId: row.assignment_id,
+    visitAppointmentId: row.visit_appointment_id,
+    inspectorUserId: row.inspector_user_id,
+    status: row.status,
+    assignedAt: row.assigned_at.toISOString(),
+    responseStatus,
+    respondedByUserId: row.responded_by_user_id,
+    respondedByWorkerId: row.responded_by_worker_id,
+    respondedAt: row.responded_at ? row.responded_at.toISOString() : null,
+    declineReason: row.decline_reason,
+    reassignmentRequired:
+      row.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
+    availableActions:
+      computeHandymanFieldInspectionAvailableActions(responseStatus),
   };
 }
 
@@ -618,6 +773,14 @@ export async function readMyHandymanFieldFeed(actorUserId: string) {
   return {
     jobs: jobs.rows.map((row) => ({
       ...row,
+      respondedAt:
+        row.respondedAt instanceof Date ? row.respondedAt.toISOString() : null,
+      declineReason: row.declineReason ?? null,
+      reassignmentRequired: Boolean(row.reassignmentRequired),
+      availableActions: computeHandymanFieldJobAvailableActions(
+        row.responseStatus,
+        row.activeWorkSessionStatus ?? null,
+      ),
       confirmedStartAt: row.confirmedStartAt?.toISOString() ?? null,
       confirmedEndAt: row.confirmedEndAt?.toISOString() ?? null,
       releasedAt: (row as Record<string, unknown>).releasedAt
@@ -628,6 +791,14 @@ export async function readMyHandymanFieldFeed(actorUserId: string) {
     })),
     inspections: inspections.rows.map((row) => ({
       ...row,
+      visitAppointmentId: row.visitAppointmentId ?? row.appointmentId,
+      respondedAt:
+        row.respondedAt instanceof Date ? row.respondedAt.toISOString() : null,
+      declineReason: row.declineReason ?? null,
+      reassignmentRequired: Boolean(row.reassignmentRequired),
+      availableActions: computeHandymanFieldInspectionAvailableActions(
+        row.responseStatus,
+      ),
       startAt: row.startAt.toISOString(),
       endAt: row.endAt.toISOString(),
     })),
@@ -863,24 +1034,30 @@ export async function readAssignedFieldRequestDetail(
     throw fieldReadForbiddenError();
   }
 
-  const [inspectionContext, visit, approvedQuotation, assignmentContext] =
-    await Promise.all([
-      loadInspectionContext(request.id, request.client_id),
-      loadVisitContext({
-        handymanRequestId: request.id,
-        clientId: request.client_id,
-        executionScopeId: scope?.id ?? null,
-      }),
-      scope
-        ? loadSanitizedQuotationSnapshot(
-            scope.quotation_id,
-            scope.approved_quotation_version_id,
-          )
-        : Promise.resolve(null),
-      scope
-        ? loadAssignmentContext(scope.id, request.client_id)
-        : Promise.resolve(null),
-    ]);
+  const [
+    inspectionContext,
+    visit,
+    approvedQuotation,
+    assignmentContext,
+    inspectorAssignmentContext,
+  ] = await Promise.all([
+    loadInspectionContext(request.id, request.client_id),
+    loadVisitContext({
+      handymanRequestId: request.id,
+      clientId: request.client_id,
+      executionScopeId: scope?.id ?? null,
+    }),
+    scope
+      ? loadSanitizedQuotationSnapshot(
+          scope.quotation_id,
+          scope.approved_quotation_version_id,
+        )
+      : Promise.resolve(null),
+    scope
+      ? loadAssignmentContext(scope.id, request.client_id)
+      : Promise.resolve(null),
+    loadInspectorAssignmentContext(request.id, request.client_id),
+  ]);
 
   const materials = scope
     ? await loadRoleScopedMaterials({
@@ -925,6 +1102,7 @@ export async function readAssignedFieldRequestDetail(
       : null,
     approvedQuotation,
     assignmentContext,
+    inspectorAssignmentContext,
     materials,
   };
 }
