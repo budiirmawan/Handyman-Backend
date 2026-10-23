@@ -1,4 +1,8 @@
 import { withTransaction } from '../../database';
+import {
+  acknowledgeWorkOrderAssignmentTx,
+  precheckWorkOrderAssignmentResponseGuard,
+} from '../handyman-assignment-responses/handyman-assignment-response.service';
 import { pauseResolutionClock, resumeResolutionClock, satisfyClock, terminateClocks } from '../applied-slas/sla-clock-lifecycle.service';
 import { workforceRepository } from '../workforce';
 import { vendorWorkforceRepository } from '../vendor-workforce';
@@ -174,13 +178,35 @@ export async function recordWorkOrderAction(
   const workOrder = await loadWorkOrder(input.workOrderId);
   const rule = ACTION_RULES[input.actionType];
 
+  let activeAssignment: WorkOrderAssignmentRecord | null = null;
   if (rule.requiresAssignment) {
-    const assignment = await loadActiveAssignment(input.workOrderId);
-    if (!assignment) {
-      throw workOrderExecutionNoAssignmentError();
-    }
-    if (!(await isActorAuthorizedForWorkOrderAssignment(input.actorUserId, assignment))) {
-      throw workOrderExecutionUnauthorizedError();
+    activeAssignment = await loadActiveAssignment(input.workOrderId);
+    if (input.actionType === 'ACKNOWLEDGED') {
+      const authorized = activeAssignment
+        ? await isActorAuthorizedForWorkOrderAssignment(
+            input.actorUserId,
+            activeAssignment,
+          )
+        : false;
+      await precheckWorkOrderAssignmentResponseGuard(
+        workOrder,
+        activeAssignment,
+        input.actorUserId,
+        input.assignmentId,
+        authorized,
+      );
+    } else {
+      if (!activeAssignment) {
+        throw workOrderExecutionNoAssignmentError();
+      }
+      if (
+        !(await isActorAuthorizedForWorkOrderAssignment(
+          input.actorUserId,
+          activeAssignment,
+        ))
+      ) {
+        throw workOrderExecutionUnauthorizedError();
+      }
     }
   }
 
@@ -188,9 +214,19 @@ export async function recordWorkOrderAction(
     throw workOrderExecutionInvalidStateError();
   }
 
+  const normalizedNotes = input.notes?.trim() || null;
+
   // The existing action is the authoritative hold/resume signal. Persist its
   // lifecycle transition, action timestamp, and SLA side effect atomically.
   const record = await withTransaction(async (tx) => {
+    if (input.actionType === 'ACKNOWLEDGED') {
+      await acknowledgeWorkOrderAssignmentTx(tx, {
+        workOrder,
+        assignment: activeAssignment!,
+        actorUserId: input.actorUserId,
+        notes: normalizedNotes,
+      });
+    }
     if (rule.nextStatus !== null && rule.nextStatus !== workOrder.status) {
       await workOrderRepository.updateStatus(workOrder.id, rule.nextStatus, tx);
     }
@@ -198,7 +234,7 @@ export async function recordWorkOrderAction(
       workOrderId: workOrder.id,
       actionType: input.actionType,
       actorUserId: input.actorUserId,
-      notes: input.notes?.trim() || null,
+      notes: normalizedNotes,
     }, tx);
     if (input.actionType === 'ON_HOLD') {
       await pauseResolutionClock(workOrder, action.occurredAt, input.actorUserId, tx);

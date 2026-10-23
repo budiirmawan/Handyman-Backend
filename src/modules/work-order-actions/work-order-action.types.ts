@@ -87,4 +87,5 @@ export type RecordWorkOrderActionInput = {
   actionType: WorkOrderActionType;
   actorUserId: string;
   notes?: string;
+  assignmentId?: string;
 };

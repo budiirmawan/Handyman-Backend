@@ -770,3 +770,77 @@ Read-only projection of authoritative worker profile facts without fabricating u
 }
 ```
 
+---
+
+## 8. Assignment Notification & Worker `TERIMA` / `TIDAK_BISA` Response (`CR-HM-FIELD-ASSIGNMENT-RESPONSE-01`)
+
+### 8.1 Covered Worker Categories & Exact-Recipient Notification Rules
+Every Handyman assignment or reassignment atomically materializes a `PENDING` response envelope (`handyman_assignment_responses` + append-only `handyman_assignment_response_events`) and publishes an `IN_APP` notification (`notifications` table, idempotent on `(recipient_user_id, source_entity_type, source_entity_id, source_event_type)`) **exclusively** to the assigned worker(s):
+- **Direct / FM Work Orders (`work_order_assignments`)** — covers permanent (`INTERNAL`), contract (`CONTRACT`), outsourced (`OUTSOURCED`), direct/freelance (`EXTERNAL`), `VENDOR_WORKFORCE`, and `TEAM` workers:
+  - Notification `type`: `WORK_ORDER_ASSIGNMENT_ISSUED`, `navigationTarget`: `{ "type": "WORK_ORDER_FIELD_WORK", "id": "<workOrderId>" }`.
+- **Handyman Execution Scope Crew Lead (`handyman_execution_scope_assignments`)** — covers `PIC_PEKERJAAN` (Crew Lead):
+  - Notification `type`: `HANDYMAN_ASSIGNMENT_ISSUED` (sent ONLY to current Crew Lead `leadUserId`; Helpers without Mobile accounts or unassigned crews are never spammed).
+- **Handyman Inspection Visit (`handyman_inspector_assignments`)** — covers assigned Inspector:
+  - Notification `type`: `HANDYMAN_INSPECTOR_ASSIGNMENT_ISSUED` (sent ONLY to `inspectorUserId`).
+
+### 8.2 Mobile Worker `TERIMA` (`ACKNOWLEDGE` Reuse) & `TIDAK_BISA` (`DECLINE`) Endpoints
+`ACKNOWLEDGE` is reused directly as the single `TERIMA` acceptance lifecycle (no second acceptance state machine):
+
+1. **Direct / FM Work Order Worker** (`work_order.manage` + exact-Building access + active assignee):
+   - **`TERIMA` (Acknowledge)**: `POST /api/v1/work-orders/:workOrderId/acknowledge`
+     - Body (optional): `{ "notes": "Siap meluncur", "assignmentId": "uuid (optional)" }`
+     - Transitions `work_orders.status` `OPEN -> ASSIGNED`, satisfies `RESPONSE` SLA clock, and transitions `handyman_assignment_responses` `PENDING -> ACCEPTED` (`responseCode: "TERIMA"`, server `respondedAt`).
+   - **`TIDAK_BISA` (Decline)**: `POST /api/v1/work-orders/:workOrderId/decline`
+     - Body (required `reason`): `{ "reason": "Sedang menangani darurat pipa di lantai lain", "notes": "Mohon alihkan", "assignmentId": "uuid (optional)" }`
+     - Transitions response `PENDING -> DECLINED` (`responseCode: "TIDAK_BISA"`), marks the declining worker's `work_order_assignments` row `INACTIVE`, returns `work_orders.status` to `OPEN` (**NEVER** `CANCELLED`), and sends `IN_APP` notification `WORK_ORDER_ASSIGNMENT_DECLINED_OPERATIONS_ACTION_REQUIRED` to Operations (`assignedByUserId` + Building Operations managers).
+
+2. **Handyman Execution Scope Crew Lead (`PIC_PEKERJAAN`)** (authenticated current Crew Lead + exact-Building access):
+   - **`TERIMA` (Acknowledge)**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/acknowledge`
+   - **`TIDAK_BISA` (Decline)**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/decline`
+     - Body: `{ "reason": "Peralatan las sedang rusak", "notes": "optional", "assignmentId": "uuid (optional)" }`
+     - Supersedes any `RELEASED` dispatch release and revokes the declining crew's assignment (`ACTIVE -> SUPERSEDED`) while keeping `handyman_execution_scopes.status = "AUTHORIZED"` and the Tenant's `handyman_service_requests` **uncancelled**, and notifies Operations (`HANDYMAN_ASSIGNMENT_DECLINED_OPERATIONS_ACTION_REQUIRED`) for reassignment (`POST /api/v1/handyman/execution-scopes/:executionScopeId/assignment/reassign` or `/assignment`).
+
+3. **Handyman Inspection Visit Inspector** (authenticated current Inspector + exact-Building access):
+   - **`TERIMA` (Acknowledge)**: `POST /api/v1/handyman/field/visit-appointments/:visitAppointmentId/acknowledge`
+   - **`TIDAK_BISA` (Decline)**: `POST /api/v1/handyman/field/visit-appointments/:visitAppointmentId/decline`
+     - Revokes the inspector assignment without cancelling the Tenant's inspection visit or request, and notifies Operations (`HANDYMAN_INSPECTOR_ASSIGNMENT_DECLINED_OPERATIONS_ACTION_REQUIRED`).
+
+4. **Field Feed Projections**:
+   - `GET /api/v1/handyman/field/my-jobs` includes `workerResponse` on each item in `jobs` and `inspections`, plus `pendingAssignments` for newly issued `PENDING` assignments awaiting `TERIMA` / `TIDAK_BISA`.
+   - `GET /api/v1/handyman/field/execution-scopes/:executionScopeId` includes `assignmentContext.workerResponse`.
+
+### 8.3 Operations Visibility & Configurable Response Deadline Policy (No Auto-Reassignment)
+- **Operations Visibility Endpoints** (returns `PENDING`, `ACCEPTED`, `DECLINED`, `SUPERSEDED`, `declineReason`, `requiresReassignment`, `reassignmentReasonCode`, `tenantWorkOrderCancelled: false`, and immutable `history`):
+  - `GET /api/v1/work-orders/:workOrderId/worker-response` (`work_order.read` + exact-Building access)
+  - `GET /api/v1/handyman/execution-scopes/:executionScopeId/worker-response` (`tenant_company.read` + exact-Building access)
+  - `GET /api/v1/handyman/visit-appointments/:visitAppointmentId/worker-response` (`tenant_company.read` + exact-Building access)
+  - `GET /api/v1/handyman/requests/:id/status-visibility` & `/api/v1/handyman/execution-scopes/:id/status-visibility` also expose `stages.assignment.{responseStatus, responseCode, declineReason, respondedAt, responseDeadlineAt, requiresReassignment}`.
+- **Configurable Response Deadline Policy**:
+  - `GET /api/v1/handyman/operations/response-deadline-policy?clientId=<uuid>&buildingId=<uuid>`
+  - `PUT /api/v1/handyman/operations/response-deadline-policy` (`{ "clientId": "uuid", "buildingId": "uuid | null", "deadlineMinutes": 60 }`)
+  - Precedence: `BUILDING_POLICY` -> `CLIENT_POLICY` -> `ENV_DEFAULT` (`ASSIGNMENT_RESPONSE_DEADLINE_MINUTES`) -> `SYSTEM_DEFAULT` (`120` minutes).
+  - **No Auto-Reassignment**: `autoReassignEnabled` is strictly `false` (attempting `autoReassignEnabled: true` is rejected with `400 HANDYMAN_ASSIGNMENT_RESPONSE_DEADLINE_INVALID`). Late worker responses past `responseDeadlineAt` are rejected (`409 HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED`) and flagged `isResponseOverdue: true` / `reassignmentReasonCode: "RESPONSE_DEADLINE_EXCEEDED"` for explicit Operations reassignment.
+
+### 8.4 Authoritative Error Codes (Fail-Closed Guards)
+- `400 HANDYMAN_ASSIGNMENT_DECLINE_REASON_REQUIRED` — missing or blank `reason` on `TIDAK_BISA`.
+- `400 HANDYMAN_ASSIGNMENT_RESPONSE_DEADLINE_INVALID` — invalid `deadlineMinutes` (`1..10080`) or forbidden `autoReassignEnabled: true`.
+- `403 BUILDING_ACCESS_DENIED` — cross-Client or sibling-Building actor.
+- `403 HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN` / `403 WORK_ORDER_EXECUTION_UNAUTHORIZED` — actor is not the assigned Crew Lead / Inspector / Workforce assignee.
+- `409 HANDYMAN_ASSIGNMENT_RESPONSE_DUPLICATE` — duplicate `TERIMA` / `TIDAK_BISA` on an assignment already responded to.
+- `409 HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED` — late response after `responseDeadlineAt`.
+- `409 HANDYMAN_ASSIGNMENT_SUPERSEDED` — response attempted on an assignment already replaced/reassigned or revoked.
+
+### 8.5 Notification Channel Audit: `IN_APP` vs Closed-App Background Push & WhatsApp
+1. **`IN_APP` Notifications (Active & Authoritative in Backend)**:
+   - Stored transactionally in `notifications` and served via `GET /api/v1/notifications` + `GET /api/v1/notifications/unread-count`.
+   - Works immediately whenever the Mobile or Operations Web app is open, resumed, or polling, with zero external provider dependency.
+   - **Limitation**: `IN_APP` rows alone do **not** wake a completely closed/killed Mobile app at the OS level.
+2. **Closed-App Background Push (`PUSH` Outbound Delivery — Conditional Queueing + External FCM/APNs Dependency)**:
+   - When the recipient already holds an `ACTIVE` device token in `mobile_push_tokens` (`POST /api/v1/mobile/push-tokens`), assignment/decline emission also enqueues an idempotent `PUSH` delivery intent in `notification_outbound_deliveries` (`channel = 'PUSH'`).
+   - **External Deployment & Mobile Dependencies Required for Closed-App OS Wakeup**:
+     - Mobile app must integrate native FCM/APNs SDKs and register device tokens via `POST /api/v1/mobile/push-tokens`.
+     - Deployment environment must configure `PUSH_PROVIDER=fcm`, Firebase credentials (`FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`), and run the outbound delivery worker (`SCHEDULER_ENABLED=true`). Default local/test config uses `PUSH_PROVIDER=noop`.
+3. **WhatsApp Outbound Channel (Separate External Provider Dependency — Not Available Yet)**:
+   - `WHATSAPP_PROVIDER` currently supports `noop` only in `src/config/env.ts` and has no live WhatsApp Business API adapter or approved assignment template configured. WhatsApp alerts must be treated as a separate future integration dependency, not assumed active.
+
+

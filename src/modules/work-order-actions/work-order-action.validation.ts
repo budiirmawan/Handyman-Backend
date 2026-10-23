@@ -25,16 +25,32 @@ export function parseWorkOrderIdParam(raw: string): string {
   return value.toLowerCase();
 }
 
-/** Optional execution-note body: `{ "notes": "..." }`. */
-export function parseNotesBody(body: unknown): { notes?: string } {
+/** Optional execution-note body: `{ "notes": "...", "assignmentId"?: "..." }`. */
+export function parseNotesBody(body: unknown): {
+  notes?: string;
+  assignmentId?: string;
+} {
   if (!isRecord(body)) {
     throw AppError.validation('Request validation failed.', [
       { field: 'body', message: 'Request body must be a JSON object.' },
     ]);
   }
 
+  let assignmentId: string | undefined;
+  if (body.assignmentId !== undefined && body.assignmentId !== null) {
+    if (
+      typeof body.assignmentId !== 'string' ||
+      !isValidUuid(body.assignmentId.trim())
+    ) {
+      throw AppError.validation('Request validation failed.', [
+        { field: 'assignmentId', message: 'assignmentId must be a valid UUID.' },
+      ]);
+    }
+    assignmentId = body.assignmentId.trim().toLowerCase();
+  }
+
   if (body.notes === undefined) {
-    return {};
+    return { assignmentId };
   }
 
   if (typeof body.notes !== 'string') {
@@ -53,5 +69,5 @@ export function parseNotesBody(body: unknown): { notes?: string } {
     ]);
   }
 
-  return { notes: trimmed };
+  return { notes: trimmed, assignmentId };
 }

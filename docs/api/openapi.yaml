@@ -19587,10 +19587,14 @@ paths:
   /work-orders/{workOrderId}/acknowledge:
     post:
       operationId: acknowledgeWorkOrder
-      summary: Acknowledge the Work Order
+      summary: Acknowledge (TERIMA) the Work Order assignment
       description: >
-        MUTATION — records an ACKNOWLEDGED execution action (BE-08F).
-        Requires `work_order.manage` and Building access.
+        MUTATION — records an ACKNOWLEDGED execution action (BE-08F) and
+        reuses ACKNOWLEDGE as the authoritative worker TERIMA acceptance
+        response on the active Work Order assignment (PENDING -> ACCEPTED),
+        enforcing response deadline, duplicate-response, and
+        superseded-assignment guards. Requires `work_order.manage` and
+        exact Building access.
       tags: [Work Orders]
       security:
         - bearerAuth: []
@@ -19612,6 +19616,78 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/WorkOrderAction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-orders/{workOrderId}/decline:
+    post:
+      operationId: declineWorkOrderAssignment
+      x-required-permission: work_order.manage
+      summary: Decline (TIDAK_BISA) the active Work Order assignment with mandatory reason
+      description: >-
+        Records an authoritative TIDAK_BISA decline response with mandatory
+        reason and server timestamp, deactivates the declining worker's
+        assignment without cancelling the Tenant Work Order (returning status
+        to OPEN for Operations reassignment), and emits targeted IN_APP
+        notifications to Operations. Requires work_order.manage and exact
+        Building access.
+      tags: [Work Orders]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanDeclineAssignmentRequest" }
+      responses:
+        "200":
+          description: Recorded TIDAK_BISA assignment response.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanAssignmentResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-orders/{workOrderId}/worker-response:
+    get:
+      operationId: getWorkOrderWorkerResponse
+      x-required-permission: work_order.read
+      summary: Read worker assignment response state, decline reason, and history (Operations)
+      description: >-
+        Requires work_order.read and exact Building access. Returns current
+        and historical PENDING, ACCEPTED (TERIMA), DECLINED (TIDAK_BISA), and
+        SUPERSEDED worker responses, mandatory decline reasons, server
+        timestamps, reassignment requirement flags, and immutable response
+        event history.
+      tags: [Work Orders]
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+      responses:
+        "200":
+          description: Operations worker response visibility and history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanOperationsWorkerResponseVisibility" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -80603,6 +80679,286 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/field/execution-scopes/{executionScopeId}/acknowledge:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    post:
+      tags: [Handyman Field Execution]
+      operationId: acknowledgeFieldHandymanExecutionScope
+      summary: Acknowledge (TERIMA) an Execution Scope crew assignment (Crew Lead)
+      description: >-
+        Authentication only; requires exact-Building access and the current
+        authoritative Crew Lead (PIC Pekerjaan) for the active Execution
+        Scope assignment. Reuses ACKNOWLEDGE semantics as TERIMA
+        (PENDING -> ACCEPTED), satisfies any active RESPONSE SLA clock, and
+        rejects duplicate, expired, or superseded-assignment responses.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN, HANDYMAN_ASSIGNMENT_RESPONSE_DUPLICATE, HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED, HANDYMAN_ASSIGNMENT_SUPERSEDED]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanAcknowledgeAssignmentRequest" }
+      responses:
+        "200":
+          description: Accepted (TERIMA) worker assignment response.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanAssignmentResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/field/execution-scopes/{executionScopeId}/decline:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    post:
+      tags: [Handyman Field Execution]
+      operationId: declineFieldHandymanExecutionScope
+      summary: Decline (TIDAK_BISA) an Execution Scope crew assignment with mandatory reason (Crew Lead)
+      description: >-
+        Authentication only; requires exact-Building access and the current
+        authoritative Crew Lead (PIC Pekerjaan). Records TIDAK_BISA with
+        mandatory reason and server timestamp, revokes the declining crew's
+        assignment and any released dispatch without cancelling the Tenant
+        request or Execution Scope, and notifies Operations via IN_APP for
+        reassignment.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_ASSIGNMENT_DECLINE_REASON_REQUIRED, HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN, HANDYMAN_ASSIGNMENT_RESPONSE_DUPLICATE, HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED, HANDYMAN_ASSIGNMENT_SUPERSEDED, HANDYMAN_ASSIGNMENT_ACTIVE_SESSION_BLOCK]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanDeclineAssignmentRequest" }
+      responses:
+        "200":
+          description: Declined (TIDAK_BISA) worker assignment response.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanAssignmentResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/field/visit-appointments/{visitAppointmentId}/acknowledge:
+    parameters:
+      - name: visitAppointmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Field Execution]
+      operationId: acknowledgeFieldHandymanVisitAppointment
+      summary: Acknowledge (TERIMA) an Inspection Visit assignment (Inspector)
+      description: >-
+        Authentication only; requires exact-Building access and the current
+        authoritative assigned Inspector for the visit appointment. Reuses
+        ACKNOWLEDGE semantics as TERIMA (PENDING -> ACCEPTED) and rejects
+        duplicate, expired, or superseded-assignment responses.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_INSPECTOR_ASSIGNMENT_NOT_FOUND, HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN, HANDYMAN_ASSIGNMENT_RESPONSE_DUPLICATE, HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED, HANDYMAN_ASSIGNMENT_SUPERSEDED]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanAcknowledgeAssignmentRequest" }
+      responses:
+        "200":
+          description: Accepted (TERIMA) inspector assignment response.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanAssignmentResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/field/visit-appointments/{visitAppointmentId}/decline:
+    parameters:
+      - name: visitAppointmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Field Execution]
+      operationId: declineFieldHandymanVisitAppointment
+      summary: Decline (TIDAK_BISA) an Inspection Visit assignment with mandatory reason (Inspector)
+      description: >-
+        Authentication only; requires exact-Building access and the current
+        authoritative assigned Inspector. Records TIDAK_BISA with mandatory
+        reason and server timestamp, revokes the inspector assignment
+        without cancelling the Tenant request or visit appointment, and
+        notifies Operations via IN_APP for reassignment.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_INSPECTOR_ASSIGNMENT_NOT_FOUND, HANDYMAN_ASSIGNMENT_DECLINE_REASON_REQUIRED, HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN, HANDYMAN_ASSIGNMENT_RESPONSE_DUPLICATE, HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED, HANDYMAN_ASSIGNMENT_SUPERSEDED, HANDYMAN_ASSIGNMENT_ACTIVE_SESSION_BLOCK]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandymanDeclineAssignmentRequest" }
+      responses:
+        "200":
+          description: Declined (TIDAK_BISA) inspector assignment response.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanAssignmentResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/worker-response:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Field Execution]
+      operationId: getHandymanExecutionScopeWorkerResponse
+      x-required-permission: tenant_company.read
+      summary: Read Execution Scope Crew Lead response state, decline reason, and history (Operations)
+      description: >-
+        Requires tenant_company.read and exact-Building access. Returns
+        PENDING, ACCEPTED (TERIMA), DECLINED (TIDAK_BISA), and SUPERSEDED
+        Crew Lead responses, mandatory decline reason, reassignment flags,
+        and immutable response event history.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
+      responses:
+        "200":
+          description: Execution Scope worker response visibility and history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanOperationsWorkerResponseVisibility" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/visit-appointments/{visitAppointmentId}/worker-response:
+    parameters:
+      - name: visitAppointmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Handyman Field Execution]
+      operationId: getHandymanVisitAppointmentWorkerResponse
+      x-required-permission: tenant_company.read
+      summary: Read Inspection Visit worker response state, decline reason, and history (Operations)
+      description: >-
+        Requires tenant_company.read and exact-Building access. Returns
+        PENDING, ACCEPTED (TERIMA), DECLINED (TIDAK_BISA), and SUPERSEDED
+        Inspector responses, mandatory decline reason, reassignment flags,
+        and immutable response event history.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_INSPECTOR_ASSIGNMENT_NOT_FOUND]
+      responses:
+        "200":
+          description: Inspection Visit worker response visibility and history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanOperationsWorkerResponseVisibility" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/operations/response-deadline-policy:
+    get:
+      tags: [Handyman]
+      operationId: getHandymanResponseDeadlinePolicy
+      x-required-permission: tenant_company.read
+      summary: Read effective worker assignment response deadline policy
+      description: >-
+        Requires tenant_company.read and Building/Client scope access.
+        Resolves the effective assignment response deadline in minutes
+        (BUILDING_POLICY -> CLIENT_POLICY -> ENV_DEFAULT -> SYSTEM_DEFAULT)
+        with autoReassignEnabled fixed to false.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
+      responses:
+        "200":
+          description: Effective worker assignment response deadline policy.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanAssignmentDeadlinePolicy" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      tags: [Handyman]
+      operationId: upsertHandymanResponseDeadlinePolicy
+      x-required-permission: tenant_company.manage
+      summary: Configure Client or Building worker assignment response deadline policy
+      description: >-
+        Requires tenant_company.manage and exact-Building/Client scope
+        access. Configures the response deadline window (1..10080 minutes)
+        and refuses autoReassignEnabled true because overdue assignments
+        always require explicit Operations action.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_ASSIGNMENT_RESPONSE_DEADLINE_INVALID]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpsertHandymanAssignmentDeadlinePolicyRequest" }
+      responses:
+        "200":
+          description: Persisted worker assignment response deadline policy.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanAssignmentDeadlinePolicy" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /handyman/field/execution-scopes/{executionScopeId}/material-purchases/requests:
     parameters:
       - $ref: "#/components/parameters/ExecutionScopeIdPath"
@@ -91517,12 +91873,34 @@ components:
                 status: { type: string, nullable: true }
             assignment:
               type: object
-              required: [assignmentId, status, providerContextId, crewId]
+              required:
+                - assignmentId
+                - status
+                - providerContextId
+                - crewId
+                - responseStatus
+                - responseCode
+                - declineReason
+                - respondedAt
+                - responseDeadlineAt
+                - requiresReassignment
               properties:
                 assignmentId: { type: string, format: uuid, nullable: true }
                 status: { type: string, nullable: true }
                 providerContextId: { type: string, format: uuid, nullable: true }
                 crewId: { type: string, format: uuid, nullable: true }
+                responseStatus:
+                  type: string
+                  nullable: true
+                  enum: [PENDING, ACCEPTED, DECLINED, SUPERSEDED, null]
+                responseCode:
+                  type: string
+                  nullable: true
+                  enum: [TERIMA, TIDAK_BISA, null]
+                declineReason: { type: string, nullable: true }
+                respondedAt: { type: string, format: date-time, nullable: true }
+                responseDeadlineAt: { type: string, format: date-time, nullable: true }
+                requiresReassignment: { type: boolean }
             arrival:
               type: object
               required: [arrivalVerificationResultId, status, primaryReason]
@@ -98302,6 +98680,7 @@ components:
       type: object
       properties:
         notes: { type: string, nullable: true }
+        assignmentId: { type: string, format: uuid, nullable: true }
 
     CompleteWorkOrderRequest:
       type: object
@@ -132598,3 +132977,222 @@ components:
         personnelChange: { $ref: "#/components/schemas/HandymanScopeHelperPersonnelChangeRecord" }
         projection: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
         replayed: { type: boolean }
+    HandymanAcknowledgeAssignmentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        assignmentId: { type: string, format: uuid }
+        responseCode:
+          type: string
+          enum: [TERIMA]
+        notes: { type: string, maxLength: 1000 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    HandymanDeclineAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        assignmentId: { type: string, format: uuid }
+        responseCode:
+          type: string
+          enum: [TIDAK_BISA]
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        notes: { type: string, maxLength: 1000 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    UpsertHandymanAssignmentDeadlinePolicyRequest:
+      type: object
+      additionalProperties: false
+      required: [clientId, deadlineMinutes]
+      properties:
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid, nullable: true }
+        deadlineMinutes: { type: integer, minimum: 1, maximum: 10080 }
+        autoReassignEnabled: { type: boolean }
+    HandymanAssignmentDeadlinePolicy:
+      type: object
+      additionalProperties: false
+      required: [clientId, buildingId, deadlineMinutes, source, autoReassignEnabled]
+      properties:
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid, nullable: true }
+        deadlineMinutes: { type: integer, minimum: 1, maximum: 10080 }
+        source:
+          type: string
+          enum: [BUILDING_POLICY, CLIENT_POLICY, ENV_DEFAULT, SYSTEM_DEFAULT]
+        autoReassignEnabled:
+          type: boolean
+          enum: [false]
+    HandymanAssignmentResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - clientId
+        - buildingId
+        - assignmentKind
+        - assignmentId
+        - executionScopeId
+        - handymanRequestId
+        - visitAppointmentId
+        - workOrderId
+        - expectedResponderUserId
+        - assignedByUserId
+        - assignedAt
+        - deadlineMinutes
+        - responseDeadlineAt
+        - isResponseOverdue
+        - responseStatus
+        - responseCode
+        - declineReason
+        - responseNotes
+        - respondedByUserId
+        - respondedAt
+        - supersededAt
+        - supersededByAssignmentId
+        - availableResponseActions
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        assignmentKind:
+          type: string
+          enum: [EXECUTION_SCOPE_CREW, INSPECTION_VISIT, WORK_ORDER]
+        assignmentId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid, nullable: true }
+        handymanRequestId: { type: string, format: uuid, nullable: true }
+        visitAppointmentId: { type: string, format: uuid, nullable: true }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        expectedResponderUserId: { type: string, format: uuid, nullable: true }
+        assignedByUserId: { type: string, format: uuid }
+        assignedAt: { type: string, format: date-time }
+        deadlineMinutes: { type: integer }
+        responseDeadlineAt: { type: string, format: date-time }
+        isResponseOverdue: { type: boolean }
+        responseStatus:
+          type: string
+          enum: [PENDING, ACCEPTED, DECLINED, SUPERSEDED]
+        responseCode:
+          type: string
+          nullable: true
+          enum: [TERIMA, TIDAK_BISA, null]
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        supersededAt: { type: string, format: date-time, nullable: true }
+        supersededByAssignmentId: { type: string, format: uuid, nullable: true }
+        availableResponseActions:
+          type: array
+          items:
+            type: string
+            enum: [ACKNOWLEDGE, DECLINE]
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanAssignmentResponseEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - clientId
+        - buildingId
+        - assignmentResponseId
+        - assignmentKind
+        - assignmentId
+        - executionScopeId
+        - handymanRequestId
+        - visitAppointmentId
+        - workOrderId
+        - eventType
+        - responseStatus
+        - responseCode
+        - reason
+        - notes
+        - actorUserId
+        - idempotencyKey
+        - occurredAt
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        assignmentResponseId: { type: string, format: uuid }
+        assignmentKind:
+          type: string
+          enum: [EXECUTION_SCOPE_CREW, INSPECTION_VISIT, WORK_ORDER]
+        assignmentId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid, nullable: true }
+        handymanRequestId: { type: string, format: uuid, nullable: true }
+        visitAppointmentId: { type: string, format: uuid, nullable: true }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        eventType:
+          type: string
+          enum: [ASSIGNMENT_ISSUED, ACKNOWLEDGED_TERIMA, DECLINED_TIDAK_BISA, ASSIGNMENT_SUPERSEDED]
+        responseStatus:
+          type: string
+          enum: [PENDING, ACCEPTED, DECLINED, SUPERSEDED]
+        responseCode:
+          type: string
+          nullable: true
+          enum: [TERIMA, TIDAK_BISA, null]
+        reason: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        actorUserId: { type: string, format: uuid }
+        idempotencyKey: { type: string, nullable: true }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    HandymanOperationsWorkerResponseVisibility:
+      type: object
+      additionalProperties: false
+      required:
+        - targetKind
+        - clientId
+        - buildingId
+        - executionScopeId
+        - handymanRequestId
+        - visitAppointmentId
+        - workOrderId
+        - targetLifecycleStatus
+        - tenantWorkOrderCancelled
+        - requiresReassignment
+        - reassignmentReasonCode
+        - currentResponse
+        - latestResponse
+        - responses
+        - history
+      properties:
+        targetKind:
+          type: string
+          enum: [EXECUTION_SCOPE_CREW, INSPECTION_VISIT, WORK_ORDER]
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid, nullable: true }
+        handymanRequestId: { type: string, format: uuid, nullable: true }
+        visitAppointmentId: { type: string, format: uuid, nullable: true }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        targetLifecycleStatus: { type: string }
+        tenantWorkOrderCancelled:
+          type: boolean
+          enum: [false]
+        requiresReassignment: { type: boolean }
+        reassignmentReasonCode:
+          type: string
+          nullable: true
+          enum: [WORKER_DECLINED_TIDAK_BISA, RESPONSE_DEADLINE_EXCEEDED, UNASSIGNED, null]
+        currentResponse:
+          allOf:
+            - $ref: "#/components/schemas/HandymanAssignmentResponse"
+          nullable: true
+        latestResponse:
+          allOf:
+            - $ref: "#/components/schemas/HandymanAssignmentResponse"
+          nullable: true
+        responses:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanAssignmentResponse" }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }

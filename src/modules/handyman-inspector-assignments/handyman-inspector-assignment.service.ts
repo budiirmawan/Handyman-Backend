@@ -4,6 +4,10 @@ import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { canAccessBuildingScopedResource } from '../context-access';
 import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
+import {
+  issueInspectorAssignmentResponseTx,
+  supersedeAssignmentResponseOnlyTx,
+} from '../handyman-assignment-responses/handyman-assignment-response.service';
 import { recordOperationalEvent } from '../operational-events';
 import {
   handymanInspectorAssignmentConflictError,
@@ -298,6 +302,20 @@ export async function assignInspectorToVisit(
       });
     }
 
+    const priorDeclinedRes = await tx.query<{ id: string }>(
+      `SELECT a.id
+         FROM handyman_inspector_assignments a
+         JOIN handyman_assignment_responses r ON r.assignment_id = a.id
+        WHERE a.visit_appointment_id = $1
+          AND a.status = 'REVOKED'
+          AND r.response_status = 'DECLINED'
+          AND r.superseded_by_assignment_id IS NULL
+        ORDER BY a.assigned_at DESC, a.id DESC
+        LIMIT 1`,
+      [visit.id],
+    );
+    const priorDeclinedId = priorDeclinedRes.rows[0]?.id ?? null;
+
     const record = await handymanInspectorAssignmentRepository.insert(tx, {
       clientId: visit.clientId,
       handymanRequestId: visit.handymanRequestId,
@@ -305,7 +323,7 @@ export async function assignInspectorToVisit(
       inspectorUserId: inspectorId,
       status: 'ACTIVE',
       assignedByUserId: actorUserId,
-      supersedesAssignmentId: null,
+      supersedesAssignmentId: priorDeclinedId,
     });
     await journal(
       tx,
@@ -313,6 +331,18 @@ export async function assignInspectorToVisit(
       'HANDYMAN_INSPECTOR_ASSIGNMENT_CREATED',
       `Inspector assigned to inspection visit ${visit.id}.`,
     );
+    await issueInspectorAssignmentResponseTx(tx, {
+      clientId: visit.clientId,
+      buildingId: visit.buildingId,
+      handymanRequestId: visit.handymanRequestId,
+      visitAppointmentId: visit.id,
+      assignmentId: record.id,
+      inspectorUserId: inspectorId,
+      assignedByUserId: actorUserId,
+      assignedAt: record.assignedAt,
+      isReassignment: priorDeclinedId !== null,
+      supersededAssignmentId: priorDeclinedId,
+    });
     return toPublic(record);
   });
 }
@@ -355,7 +385,75 @@ export async function reassignInspectorForVisit(
         tx,
         visitId,
       );
-    if (!current) throw handymanInspectorAssignmentNotFoundError();
+    if (!current) {
+      const declinedRes = await tx.query<{
+        id: string;
+        version: number;
+      }>(
+        `SELECT a.id, a.version
+           FROM handyman_inspector_assignments a
+           JOIN handyman_assignment_responses r ON r.assignment_id = a.id
+          WHERE a.visit_appointment_id = $1
+            AND a.status = 'REVOKED'
+            AND r.response_status = 'DECLINED'
+            AND r.superseded_by_assignment_id IS NULL
+          ORDER BY a.assigned_at DESC, a.id DESC
+          LIMIT 1
+          FOR UPDATE OF a`,
+        [visitId],
+      );
+      const declined = declinedRes.rows[0];
+      if (!declined) throw handymanInspectorAssignmentNotFoundError();
+      if (
+        input.expectedVersion !== declined.version &&
+        input.expectedVersion !== declined.version - 1
+      ) {
+        throw handymanInspectorVersionConflictError();
+      }
+      await assertInspectorEligible(tx, {
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        userId: inspectorId,
+      });
+      if (visit.state === 'CONFIRMED' || visit.state === 'IN_PROGRESS') {
+        await assertNoOverlappingCapacity(tx, {
+          clientId: visit.clientId,
+          inspectorUserId: inspectorId,
+          startAt: visit.startAt,
+          endAt: visit.endAt,
+          excludeVisitId: visit.id,
+        });
+      }
+      const record = await handymanInspectorAssignmentRepository.insert(tx, {
+        clientId: visit.clientId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        inspectorUserId: inspectorId,
+        status: 'ACTIVE',
+        assignedByUserId: actorUserId,
+        supersedesAssignmentId: declined.id,
+        reassignmentReason: reason,
+      });
+      await journal(
+        tx,
+        record,
+        'HANDYMAN_INSPECTOR_ASSIGNMENT_CREATED',
+        `Inspector reassigned to visit ${visit.id} (new assignment).`,
+      );
+      await issueInspectorAssignmentResponseTx(tx, {
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        handymanRequestId: visit.handymanRequestId,
+        visitAppointmentId: visit.id,
+        assignmentId: record.id,
+        inspectorUserId: inspectorId,
+        assignedByUserId: actorUserId,
+        assignedAt: record.assignedAt,
+        isReassignment: true,
+        supersededAssignmentId: declined.id,
+      });
+      return toPublic(record);
+    }
     if (current.version !== input.expectedVersion) {
       throw handymanInspectorVersionConflictError();
     }
@@ -411,6 +509,18 @@ export async function reassignInspectorForVisit(
       'HANDYMAN_INSPECTOR_ASSIGNMENT_CREATED',
       `Inspector reassigned to visit ${visit.id} (new assignment).`,
     );
+    await issueInspectorAssignmentResponseTx(tx, {
+      clientId: visit.clientId,
+      buildingId: visit.buildingId,
+      handymanRequestId: visit.handymanRequestId,
+      visitAppointmentId: visit.id,
+      assignmentId: record.id,
+      inspectorUserId: inspectorId,
+      assignedByUserId: actorUserId,
+      assignedAt: record.assignedAt,
+      isReassignment: true,
+      supersededAssignmentId: current.id,
+    });
     return toPublic(record);
   });
 }
@@ -465,6 +575,13 @@ export async function revokeInspectorAssignment(
       'HANDYMAN_INSPECTOR_ASSIGNMENT_REVOKED',
       `Inspector assignment revoked: ${reasonText}`,
     );
+    await supersedeAssignmentResponseOnlyTx(tx, {
+      clientId: visit.clientId,
+      buildingId: visit.buildingId,
+      assignmentId: current.id,
+      actorUserId,
+      notes: `Inspector assignment revoked: ${reasonText}`,
+    });
     return toPublic(revoked);
   });
 }

@@ -9,6 +9,7 @@ import {
   handymanWorkCrewRepository,
 } from '../handyman-providers';
 import { handymanExecutionScopeNotFoundError } from '../handyman-quotations';
+import { issueExecutionScopeAssignmentResponseTx } from '../handyman-assignment-responses/handyman-assignment-response.service';
 import { assertHandymanCrewWorkerEligibility } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { workforceRepository } from '../workforce';
 import {
@@ -251,6 +252,19 @@ export async function assignHandymanExecutionScopeCrew(
         executionScopeId,
       );
     if (existing) throw handymanAssignmentAlreadyActiveError();
+    const priorDeclinedRes = await tx.query<{ id: string }>(
+      `SELECT a.id
+         FROM handyman_execution_scope_assignments a
+         JOIN handyman_assignment_responses r ON r.assignment_id = a.id
+        WHERE a.execution_scope_id = $1
+          AND a.status = 'SUPERSEDED'
+          AND r.response_status = 'DECLINED'
+          AND r.superseded_by_assignment_id IS NULL
+        ORDER BY a.assigned_at DESC, a.id DESC
+        LIMIT 1`,
+      [executionScopeId],
+    );
+    const priorDeclinedId = priorDeclinedRes.rows[0]?.id ?? null;
     const target = await validateTarget(
       tx,
       { providerContextId, crewId },
@@ -265,7 +279,7 @@ export async function assignHandymanExecutionScopeCrew(
         handymanCrewId: target.crewId,
         status: 'ACTIVE',
         assignedByUserId: actorUserId,
-        supersedesAssignmentId: null,
+        supersedesAssignmentId: priorDeclinedId,
       });
     await handymanScopeAssignmentRepository.insertAssignmentHistory(tx, {
       clientId: scope.clientId,
@@ -288,6 +302,19 @@ export async function assignHandymanExecutionScopeCrew(
       'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CREATED',
       `Handyman execution scope crew assignment created (crew ${record.handymanCrewId}).`,
     );
+    await issueExecutionScopeAssignmentResponseTx(tx, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+      executionScopeId,
+      assignmentId: record.id,
+      crewId: target.crewId,
+      leadUserId: target.leadUserId,
+      assignedByUserId: actorUserId,
+      assignedAt: record.assignedAt,
+      isReassignment: priorDeclinedId !== null,
+      supersededAssignmentId: priorDeclinedId,
+      idempotencyKey,
+    });
     return toPublic(record);
   });
 }
@@ -345,7 +372,89 @@ export async function reassignHandymanExecutionScopeCrew(
         tx,
         executionScopeId,
       );
-    if (!current) throw handymanAssignmentNotFoundError();
+    if (!current) {
+      // Support reassigning after a Crew Lead declined (`TIDAK_BISA`), where
+      // the declined assignment was revoked (`SUPERSEDED`) awaiting reassignment.
+      const declinedRes = await tx.query<{
+        id: string;
+        handyman_provider_context_id: string;
+        handyman_crew_id: string;
+        version: number;
+      }>(
+        `SELECT a.id, a.handyman_provider_context_id, a.handyman_crew_id, a.version
+           FROM handyman_execution_scope_assignments a
+           JOIN handyman_assignment_responses r ON r.assignment_id = a.id
+          WHERE a.execution_scope_id = $1
+            AND a.status = 'SUPERSEDED'
+            AND r.response_status = 'DECLINED'
+            AND r.superseded_by_assignment_id IS NULL
+          ORDER BY a.assigned_at DESC, a.id DESC
+          LIMIT 1
+          FOR UPDATE OF a`,
+        [executionScopeId],
+      );
+      const declined = declinedRes.rows[0];
+      if (!declined) throw handymanAssignmentNotFoundError();
+      if (
+        expectedVersion !== declined.version &&
+        expectedVersion !== declined.version - 1
+      ) {
+        throw handymanAssignmentVersionConflictError();
+      }
+      const target = await validateTarget(
+        tx,
+        { providerContextId, crewId },
+        scope.clientId,
+        scope.buildingId,
+      );
+      await handymanScopeAssignmentRepository.insertAssignmentHistory(tx, {
+        clientId: scope.clientId,
+        assignmentId: declined.id,
+        executionScopeId,
+        fromProviderContextId: declined.handyman_provider_context_id,
+        fromCrewId: declined.handyman_crew_id,
+        toProviderContextId: target.providerContextId,
+        toCrewId: target.crewId,
+        action: 'REASSIGNED',
+        reason,
+        expectedVersion,
+        priorVersion: declined.version,
+        actorUserId,
+        idempotencyKey,
+      });
+      const record = await handymanScopeAssignmentRepository.insertAssignment(
+        tx,
+        {
+          clientId: scope.clientId,
+          executionScopeId,
+          handymanProviderContextId: target.providerContextId,
+          handymanCrewId: target.crewId,
+          status: 'ACTIVE',
+          assignedByUserId: actorUserId,
+          supersedesAssignmentId: declined.id,
+        },
+      );
+      await journal(
+        tx,
+        record,
+        'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CREATED',
+        `Handyman execution scope crew reassignment created (crew ${record.handymanCrewId}).`,
+      );
+      await issueExecutionScopeAssignmentResponseTx(tx, {
+        clientId: scope.clientId,
+        buildingId: scope.buildingId,
+        executionScopeId,
+        assignmentId: record.id,
+        crewId: target.crewId,
+        leadUserId: target.leadUserId,
+        assignedByUserId: actorUserId,
+        assignedAt: record.assignedAt,
+        isReassignment: true,
+        supersededAssignmentId: declined.id,
+        idempotencyKey,
+      });
+      return toPublic(record);
+    }
     if (current.version !== expectedVersion) {
       throw handymanAssignmentVersionConflictError();
     }
@@ -422,6 +531,19 @@ export async function reassignHandymanExecutionScopeCrew(
       'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CREATED',
       `Handyman execution scope crew reassignment created (crew ${record.handymanCrewId}).`,
     );
+    await issueExecutionScopeAssignmentResponseTx(tx, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+      executionScopeId,
+      assignmentId: record.id,
+      crewId: target.crewId,
+      leadUserId: target.leadUserId,
+      assignedByUserId: actorUserId,
+      assignedAt: record.assignedAt,
+      isReassignment: true,
+      supersededAssignmentId: current.id,
+      idempotencyKey,
+    });
     return toPublic(record);
   });
 }

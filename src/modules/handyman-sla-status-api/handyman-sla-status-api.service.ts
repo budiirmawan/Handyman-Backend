@@ -146,6 +146,12 @@ export type HandymanStatusVisibilityReadView = {
       status: string | null;
       providerContextId: string | null;
       crewId: string | null;
+      responseStatus: string | null;
+      responseCode: string | null;
+      declineReason: string | null;
+      respondedAt: string | null;
+      responseDeadlineAt: string | null;
+      requiresReassignment: boolean;
     };
     arrival: {
       arrivalVerificationResultId: string | null;
@@ -669,6 +675,12 @@ async function composeStatusVisibility(
     status: null as string | null,
     providerContextId: null as string | null,
     crewId: null as string | null,
+    responseStatus: null as string | null,
+    responseCode: null as string | null,
+    declineReason: null as string | null,
+    respondedAt: null as string | null,
+    responseDeadlineAt: null as string | null,
+    requiresReassignment: false,
   };
   let assignmentCandidateIds: string[] = [];
 
@@ -752,14 +764,25 @@ async function composeStatusVisibility(
         status: string;
         providerContextId: string;
         crewId: string;
+        responseStatus: string | null;
+        responseCode: string | null;
+        declineReason: string | null;
+        respondedAt: Date | null;
+        responseDeadlineAt: Date | null;
       }>(
-        `SELECT id,
-                status,
-                handyman_provider_context_id AS "providerContextId",
-                handyman_crew_id AS "crewId"
-           FROM handyman_execution_scope_assignments
-          WHERE execution_scope_id = $1
-          ORDER BY (status = 'ACTIVE') DESC, assigned_at DESC, id DESC`,
+        `SELECT a.id,
+                a.status,
+                a.handyman_provider_context_id AS "providerContextId",
+                a.handyman_crew_id AS "crewId",
+                r.response_status AS "responseStatus",
+                r.response_code AS "responseCode",
+                r.decline_reason AS "declineReason",
+                r.responded_at AS "respondedAt",
+                r.response_deadline_at AS "responseDeadlineAt"
+           FROM handyman_execution_scope_assignments a
+           LEFT JOIN handyman_assignment_responses r ON r.assignment_id = a.id
+          WHERE a.execution_scope_id = $1
+          ORDER BY (a.status = 'ACTIVE') DESC, a.assigned_at DESC, a.id DESC`,
         [executionScopeId],
       ),
       pool.query<{ id: string; status: string; primaryReason: string }>(
@@ -864,11 +887,23 @@ async function composeStatusVisibility(
 
     assignmentCandidateIds = assignmentsRes.rows.map((r) => r.id);
     if (assignmentsRes.rows[0]) {
+      const top = assignmentsRes.rows[0];
+      const hasActive = top.status === 'ACTIVE';
+      const isDeclinedUnreplaced =
+        !hasActive && top.responseStatus === 'DECLINED';
       assignmentStage = {
-        assignmentId: assignmentsRes.rows[0].id,
-        status: assignmentsRes.rows[0].status,
-        providerContextId: assignmentsRes.rows[0].providerContextId,
-        crewId: assignmentsRes.rows[0].crewId,
+        assignmentId: top.id,
+        status: top.status,
+        providerContextId: top.providerContextId,
+        crewId: top.crewId,
+        responseStatus: top.responseStatus,
+        responseCode: top.responseCode,
+        declineReason: top.declineReason,
+        respondedAt: top.respondedAt ? top.respondedAt.toISOString() : null,
+        responseDeadlineAt: top.responseDeadlineAt
+          ? top.responseDeadlineAt.toISOString()
+          : null,
+        requiresReassignment: isDeclinedUnreplaced,
       };
     }
 

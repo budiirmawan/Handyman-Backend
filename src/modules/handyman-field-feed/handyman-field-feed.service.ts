@@ -302,6 +302,48 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
   );
   const row = res.rows[0];
   if (!row) return null;
+  let workerResponse: {
+    responseStatus: string;
+    responseCode: string | null;
+    responseDeadlineAt: string;
+    isResponseOverdue: boolean;
+    respondedAt: string | null;
+    availableResponseActions: Array<'ACKNOWLEDGE' | 'DECLINE'>;
+  } | null = null;
+  try {
+    const respRes = await db.query<{
+      response_status: string;
+      response_code: string | null;
+      response_deadline_at: Date;
+      responded_at: Date | null;
+      server_now: Date;
+    }>(
+      `SELECT response_status, response_code, response_deadline_at, responded_at, NOW() AS server_now
+         FROM handyman_assignment_responses
+        WHERE assignment_id = $1
+        LIMIT 1`,
+      [row.assignment_id],
+    );
+    const resp = respRes.rows[0];
+    if (resp) {
+      const overdue =
+        resp.response_status === 'PENDING' &&
+        resp.server_now.getTime() > resp.response_deadline_at.getTime();
+      workerResponse = {
+        responseStatus: resp.response_status,
+        responseCode: resp.response_code,
+        responseDeadlineAt: resp.response_deadline_at.toISOString(),
+        isResponseOverdue: overdue,
+        respondedAt: resp.responded_at ? resp.responded_at.toISOString() : null,
+        availableResponseActions:
+          resp.response_status === 'PENDING' && !overdue
+            ? ['ACKNOWLEDGE', 'DECLINE']
+            : [],
+      };
+    }
+  } catch (err) {
+    if ((err as { code?: string })?.code !== '42P01') throw err;
+  }
   return {
     assignmentId: row.assignment_id,
     providerContextId: row.provider_context_id,
@@ -312,6 +354,7 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
     assignedAt: row.assigned_at.toISOString(),
     leadWorkerContextId: row.lead_worker_context_id,
     leadUserId: row.lead_user_id,
+    workerResponse,
   };
 }
 
@@ -583,6 +626,167 @@ export async function readMyHandymanFieldFeed(actorUserId: string) {
     db.query(MY_JOBS_SQL, [actorUserId, access]),
     db.query(MY_INSPECTIONS_SQL, [actorUserId, access]),
   ]);
+
+  type FeedWorkerResponseSummary = {
+    assignmentId: string;
+    responseStatus: string;
+    responseCode: string | null;
+    responseDeadlineAt: string;
+    isResponseOverdue: boolean;
+    respondedAt: string | null;
+    availableResponseActions: Array<'ACKNOWLEDGE' | 'DECLINE'>;
+  };
+
+  const scopeResponseMap = new Map<string, FeedWorkerResponseSummary>();
+  const visitResponseMap = new Map<string, FeedWorkerResponseSummary>();
+  let pendingAssignments: Array<{
+    assignmentId: string;
+    assignmentKind: string;
+    executionScopeId: string | null;
+    handymanRequestId: string | null;
+    visitAppointmentId: string | null;
+    buildingId: string;
+    assignedAt: string;
+    responseDeadlineAt: string;
+    isResponseOverdue: boolean;
+    responseStatus: string;
+    availableResponseActions: Array<'ACKNOWLEDGE' | 'DECLINE'>;
+  }> = [];
+
+  try {
+    const scopeIds = jobs.rows
+      .map((r) => (r as { executionScopeId?: string }).executionScopeId)
+      .filter((v): v is string => typeof v === 'string');
+    if (scopeIds.length > 0) {
+      const sr = await db.query<{
+        execution_scope_id: string;
+        assignment_id: string;
+        response_status: string;
+        response_code: string | null;
+        response_deadline_at: Date;
+        responded_at: Date | null;
+        server_now: Date;
+      }>(
+        `SELECT r.execution_scope_id, r.assignment_id, r.response_status,
+                r.response_code, r.response_deadline_at, r.responded_at,
+                NOW() AS server_now
+           FROM handyman_execution_scope_assignments a
+           JOIN handyman_assignment_responses r ON r.assignment_id = a.id
+          WHERE a.execution_scope_id = ANY($1::uuid[])
+            AND a.status = 'ACTIVE'`,
+        [scopeIds],
+      );
+      for (const row of sr.rows) {
+        const overdue =
+          row.response_status === 'PENDING' &&
+          row.server_now.getTime() > row.response_deadline_at.getTime();
+        scopeResponseMap.set(row.execution_scope_id, {
+          assignmentId: row.assignment_id,
+          responseStatus: row.response_status,
+          responseCode: row.response_code,
+          responseDeadlineAt: row.response_deadline_at.toISOString(),
+          isResponseOverdue: overdue,
+          respondedAt: row.responded_at ? row.responded_at.toISOString() : null,
+          availableResponseActions:
+            row.response_status === 'PENDING' && !overdue
+              ? ['ACKNOWLEDGE', 'DECLINE']
+              : [],
+        });
+      }
+    }
+
+    const visitIds = inspections.rows
+      .map((r) => (r as { appointmentId?: string }).appointmentId)
+      .filter((v): v is string => typeof v === 'string');
+    if (visitIds.length > 0) {
+      const vr = await db.query<{
+        visit_appointment_id: string;
+        assignment_id: string;
+        response_status: string;
+        response_code: string | null;
+        response_deadline_at: Date;
+        responded_at: Date | null;
+        server_now: Date;
+      }>(
+        `SELECT r.visit_appointment_id, r.assignment_id, r.response_status,
+                r.response_code, r.response_deadline_at, r.responded_at,
+                NOW() AS server_now
+           FROM handyman_inspector_assignments a
+           JOIN handyman_assignment_responses r ON r.assignment_id = a.id
+          WHERE a.visit_appointment_id = ANY($1::uuid[])
+            AND a.status = 'ACTIVE'`,
+        [visitIds],
+      );
+      for (const row of vr.rows) {
+        const overdue =
+          row.response_status === 'PENDING' &&
+          row.server_now.getTime() > row.response_deadline_at.getTime();
+        visitResponseMap.set(row.visit_appointment_id, {
+          assignmentId: row.assignment_id,
+          responseStatus: row.response_status,
+          responseCode: row.response_code,
+          responseDeadlineAt: row.response_deadline_at.toISOString(),
+          isResponseOverdue: overdue,
+          respondedAt: row.responded_at ? row.responded_at.toISOString() : null,
+          availableResponseActions:
+            row.response_status === 'PENDING' && !overdue
+              ? ['ACKNOWLEDGE', 'DECLINE']
+              : [],
+        });
+      }
+    }
+
+    const pendingRes = await db.query<{
+      assignment_id: string;
+      assignment_kind: string;
+      execution_scope_id: string | null;
+      handyman_request_id: string | null;
+      visit_appointment_id: string | null;
+      building_id: string;
+      assigned_at: Date;
+      response_deadline_at: Date;
+      response_status: string;
+      server_now: Date;
+    }>(
+      `WITH access AS (
+         SELECT * FROM jsonb_to_recordset($2::jsonb) AS x("buildingId" uuid, "clientId" uuid)
+       )
+       SELECT r.assignment_id, r.assignment_kind, r.execution_scope_id,
+              r.handyman_request_id, r.visit_appointment_id, r.building_id,
+              r.assigned_at, r.response_deadline_at, r.response_status,
+              NOW() AS server_now
+         FROM handyman_assignment_responses r
+         JOIN access
+           ON access."buildingId" = r.building_id
+          AND access."clientId" = r.client_id
+        WHERE r.expected_responder_user_id = $1
+          AND r.response_status = 'PENDING'
+          AND r.assignment_kind IN ('EXECUTION_SCOPE_CREW', 'INSPECTION_VISIT')
+        ORDER BY r.response_deadline_at ASC, r.assigned_at DESC`,
+      [actorUserId, access],
+    );
+    pendingAssignments = pendingRes.rows.map((row) => {
+      const overdue =
+        row.server_now.getTime() > row.response_deadline_at.getTime();
+      return {
+        assignmentId: row.assignment_id,
+        assignmentKind: row.assignment_kind,
+        executionScopeId: row.execution_scope_id,
+        handymanRequestId: row.handyman_request_id,
+        visitAppointmentId: row.visit_appointment_id,
+        buildingId: row.building_id,
+        assignedAt: row.assigned_at.toISOString(),
+        responseDeadlineAt: row.response_deadline_at.toISOString(),
+        isResponseOverdue: overdue,
+        responseStatus: row.response_status,
+        availableResponseActions: overdue ? [] : ['ACKNOWLEDGE', 'DECLINE'],
+      };
+    });
+  } catch (err) {
+    // Preserve temp-table unit suites that only materialize feed tables.
+    if ((err as { code?: string })?.code !== '42P01') throw err;
+  }
+
   return {
     jobs: jobs.rows.map((row) => ({
       ...row,
@@ -593,12 +797,21 @@ export async function readMyHandymanFieldFeed(actorUserId: string) {
         : null,
       appointmentConfirmed: Boolean(row.confirmedAppointmentId),
       dispatchReleased: Boolean((row as Record<string, unknown>).dispatchReleaseId),
+      workerResponse:
+        scopeResponseMap.get(
+          (row as { executionScopeId: string }).executionScopeId,
+        ) ?? null,
     })),
     inspections: inspections.rows.map((row) => ({
       ...row,
       startAt: row.startAt.toISOString(),
       endAt: row.endAt.toISOString(),
+      workerResponse:
+        visitResponseMap.get(
+          (row as { appointmentId: string }).appointmentId,
+        ) ?? null,
     })),
+    pendingAssignments,
     feedSource: 'AUTHORITATIVE_BACKEND',
   };
 }

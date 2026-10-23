@@ -11,6 +11,11 @@ import {
 import {
   vendorWorkforceRepository,
 } from '../vendor-workforce';
+import { withTransaction } from '../../database';
+import {
+  issueWorkOrderAssignmentResponse,
+  supersedeAssignmentResponseOnlyTx,
+} from '../handyman-assignment-responses';
 import {
   workOrderNotFoundError,
   workOrderRepository,
@@ -283,7 +288,13 @@ function requireId(value: string | undefined): string {
 
 async function loadAssignableWorkOrder(
   workOrderId: string,
-): Promise<{ clientId: string; buildingId: string; status: string }> {
+): Promise<{
+  clientId: string;
+  buildingId: string;
+  status: string;
+  workOrderNumber: string;
+  title: string;
+}> {
   const workOrder = await workOrderRepository.findById(workOrderId);
   if (!workOrder) {
     throw workOrderNotFoundError();
@@ -295,6 +306,8 @@ async function loadAssignableWorkOrder(
     clientId: workOrder.clientId,
     buildingId: workOrder.buildingId,
     status: workOrder.status,
+    workOrderNumber: workOrder.workOrderNumber,
+    title: workOrder.title,
   };
 }
 
@@ -318,8 +331,21 @@ export async function assignWorkOrder(
   }
 
   const newAssignment = await resolveAssignee(workOrder, input);
+  const priorAssignments =
+    await workOrderAssignmentRepository.listByWorkOrderId(input.workOrderId);
+  const priorInactiveId = priorAssignments[0]?.id ?? null;
   try {
     const record = await workOrderAssignmentRepository.create(newAssignment);
+    await issueWorkOrderAssignmentResponse({
+      clientId: workOrder.clientId,
+      buildingId: workOrder.buildingId,
+      workOrderId: input.workOrderId,
+      workOrderNumber: workOrder.workOrderNumber,
+      workOrderTitle: workOrder.title,
+      assignment: record,
+      isReassignment: priorInactiveId !== null,
+      supersededAssignmentId: priorInactiveId,
+    });
     await recordWorkOrderEvent({
       workOrderId: input.workOrderId,
       clientId: workOrder.clientId,
@@ -379,6 +405,17 @@ export async function deactivateWorkOrderAssignment(
     'INACTIVE',
   );
   const workOrder = await workOrderRepository.findById(workOrderId);
+  if (workOrder && record.status === 'ACTIVE') {
+    await withTransaction((tx) =>
+      supersedeAssignmentResponseOnlyTx(tx, {
+        clientId: workOrder.clientId,
+        buildingId: workOrder.buildingId,
+        assignmentId: record.id,
+        actorUserId: record.assignedByUserId,
+        notes: 'Work order assignment deactivated',
+      }),
+    );
+  }
   if (workOrder) {
     await recordWorkOrderEvent({
       workOrderId,
@@ -411,12 +448,27 @@ export async function reassignWorkOrder(
   const current = await workOrderAssignmentRepository.findActiveByWorkOrderId(
     workOrderId,
   );
+  let supersededAssignmentId: string | null = current?.id ?? null;
   if (current) {
     await workOrderAssignmentRepository.updateStatus(current.id, 'INACTIVE');
+  } else {
+    const priorAssignments =
+      await workOrderAssignmentRepository.listByWorkOrderId(workOrderId);
+    supersededAssignmentId = priorAssignments[0]?.id ?? null;
   }
 
   try {
     const record = await workOrderAssignmentRepository.create(newAssignment);
+    await issueWorkOrderAssignmentResponse({
+      clientId: workOrder.clientId,
+      buildingId: workOrder.buildingId,
+      workOrderId,
+      workOrderNumber: workOrder.workOrderNumber,
+      workOrderTitle: workOrder.title,
+      assignment: record,
+      isReassignment: true,
+      supersededAssignmentId,
+    });
     await recordWorkOrderEvent({
       workOrderId,
       clientId: workOrder.clientId,

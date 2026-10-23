@@ -36,12 +36,13 @@ async function runAction(
     }
     await assertWorkOrderBuildingAccess(req.auth.userId, workOrderId);
 
-    const { notes } = parseNotesBody(req.body);
+    const { notes, assignmentId } = parseNotesBody(req.body);
     const action = await workOrderActionService.recordWorkOrderAction({
       workOrderId,
       actionType,
       actorUserId: req.auth.userId,
       notes,
+      assignmentId,
     });
     sendSuccess(res, action, 201);
   } catch (error) {
