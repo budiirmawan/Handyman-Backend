@@ -924,9 +924,42 @@ describe('CR-HM-04 activation PART C — scope assignment API', () => {
     // No handyman assignment route may live outside the
     // execution-scopes namespace (no hidden resolver/lead/collection
     // variants anywhere else in the document).
+    //
+    // CR-HM-BACKEND-RELEASE-INTEGRATION-01 reconciliation: this guard was
+    // already stale on `main`. CR-HM-05..17 added the inspector-assignment
+    // read (`/handyman/requests/{id}/inspector-assignments/history`) and
+    // CR-HM-ASSIGNMENT-RESPONSE-01 added the operational response sub-resources
+    // (`…/assignments/{assignmentId}/respond|response-history` for Execution
+    // Scope and Inspector Visit). Those are SEPARATELY GOVERNED authorities —
+    // PART C still owns exactly the two crew-assignment URL shapes. The guard
+    // therefore whitelists the two known, documented response surfaces and
+    // keeps rejecting anything else (a hidden resolver, a collection route, a
+    // variant under another namespace).
+    const KNOWN_NON_PART_C_ASSIGNMENT_PATHS = [
+      '/handyman/execution-scopes/{executionScopeId}/assignments/{assignmentId}/respond',
+      '/handyman/execution-scopes/{executionScopeId}/assignments/{assignmentId}/response-history',
+      '/handyman/requests/{handymanRequestId}/inspector-assignments/history',
+      '/handyman/visit-appointments/{visitAppointmentId}/inspector-assignments/{assignmentId}/respond',
+      '/handyman/visit-appointments/{visitAppointmentId}/inspector-assignments/{assignmentId}/response-history',
+    ];
     const handymanAssignments = Object.keys(doc.paths).filter((p) =>
       p.startsWith('/handyman') && /assignment/i.test(p));
-    assert.deepEqual(handymanAssignments.sort(), partCSurface.sort());
+    const unexpectedAssignmentPaths = handymanAssignments.filter(
+      (p) =>
+        !partCSurface.includes(p) &&
+        !KNOWN_NON_PART_C_ASSIGNMENT_PATHS.includes(p),
+    );
+    assert.deepEqual(
+      unexpectedAssignmentPaths.sort(),
+      [],
+      'unexpected handyman assignment path outside PART C',
+    );
+    for (const known of KNOWN_NON_PART_C_ASSIGNMENT_PATHS) {
+      assert.ok(
+        handymanAssignments.includes(known),
+        `documented assignment surface disappeared: ${known}`,
+      );
+    }
     // Assignment schemas exist and stay bounded.
     for (const name of [
       'AssignHandymanScopeCrewRequest',

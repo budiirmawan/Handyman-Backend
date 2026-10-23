@@ -16,19 +16,25 @@ import { createApp } from '../src/app';
  * INT-LC-19-BE PART 14 — final operational parity.
  *
  * CR-HM-WORKER-COMPETENCY-01 PART 04A — pins reconciled with the ACTUAL route
- * inventory (2026-10-23, PostgreSQL 18.4 disposable cluster) after ~330
- * operations landed in later PARTs. The invariants are unchanged and still
- * asserted structurally (unmapped = 0, speculative = 0, platform parity,
- * duplicate operationIds = 0); only the snapshots below were refreshed:
+ * inventory after ~330 operations landed in later PARTs.
  *
- *   runtime routes ............ 2,016  (1,946 operational in-scope + 1 root + 69 platform)
- *   operational OpenAPI ....... 1,945
+ * CR-HM-BACKEND-RELEASE-INTEGRATION-01 PART 01 — pins re-reconciled once for the
+ * MERGED release (worker competency + IAM permission revocation + assignment
+ * response / field expense / helper attendance), measured on the integration
+ * branch with this suite's own inventory (WHATSAPP_WEBHOOK_ENABLED=true):
+ *
+ *   runtime routes ............ 2,034  (1,964 operational in-scope + 1 root + 69 platform)
+ *   operational OpenAPI ....... 1,963
  *   platform OpenAPI ..........    69
- *   total OpenAPI ............. 2,014
+ *   total OpenAPI ............. 2,032
+ *
+ * The invariants are unchanged and still asserted structurally (unmapped = 0,
+ * speculative = 0, platform parity, duplicate operationIds = 0, local $refs
+ * resolve); only the snapshots below were refreshed.
  *
  * The application root `GET /` stays infrastructure (never documented). The
  * duplicate task mount still collapses to one OpenAPI operation and remains the
- * only arithmetic gap (1,946 runtime rows vs 1,945 documented operations).
+ * only arithmetic gap (1,964 runtime rows vs 1,963 documented operations).
  */
 
 const SPEC_PATH = resolve(__dirname, '../docs/api/openapi.yaml');
@@ -173,8 +179,8 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
     (o) => !runtimeCanon.has(`${o.method} ${o.canon}`),
   );
 
-  it('1. total runtime is 2016 and root GET / is the only infrastructure exclusion', () => {
-    assert.equal(runtime.length, 2016);
+  it('1. total runtime is 2034 and root GET / is the only infrastructure exclusion', () => {
+    assert.equal(runtime.length, 2034);
     const root = operationalRuntime.filter((r) => r.path === '/');
     assert.equal(root.length, 1);
     assert.equal(root[0]?.method, 'GET');
@@ -185,8 +191,8 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
     );
   });
 
-  it('2. in-scope operational runtime is 1946 and the task duplicate collapses to one operation', () => {
-    assert.equal(inScopeOperational.length, 1946);
+  it('2. in-scope operational runtime is 1964 and the task duplicate collapses to one operation', () => {
+    assert.equal(inScopeOperational.length, 1964);
     const taskGets = inScopeOperational.filter(
       (r) => r.method === 'GET' && r.canon === '/tasks/{p}',
     );
@@ -195,25 +201,25 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
       (o) => o.method === 'GET' && o.canon === '/tasks/{p}',
     );
     assert.equal(documentedTaskGets.length, 1);
-    assert.equal(new Set(inScopeOperational.map((r) => `${r.method} ${r.canon}`)).size, 1945);
+    assert.equal(new Set(inScopeOperational.map((r) => `${r.method} ${r.canon}`)).size, 1963);
   });
 
-  it('3. operational OpenAPI is 1945 and distinct operational gap is 0', () => {
-    assert.equal(operationalOpenApi.length, 1945);
+  it('3. operational OpenAPI is 1963 and distinct operational gap is 0', () => {
+    assert.equal(operationalOpenApi.length, 1963);
     assert.equal(inScopeOperational.length - operationalOpenApi.length, 1);
     assert.equal(unmapped.length, 0);
     assert.deepEqual(unmapped, []);
   });
 
-  it('4. platform SaaS remains 69 and normalized parity is 2014/2014', () => {
+  it('4. platform SaaS remains 69 and normalized parity is 2032/2032', () => {
     assert.equal(platformRuntime.length, 69);
     assert.equal(platformOpenApi.length, 69);
     const runtimeKeys = new Set(platformRuntime.map((r) => `${r.method} ${r.canon}`));
     const openapiKeys = new Set(platformOpenApi.map((o) => `${o.method} ${o.canon}`));
     assert.deepEqual([...runtimeKeys].filter((k) => !openapiKeys.has(k)), []);
     assert.deepEqual([...openapiKeys].filter((k) => !runtimeKeys.has(k)), []);
-    assert.equal(openapi.length, 2014);
-    assert.equal(1945 + 69, 2014);
+    assert.equal(openapi.length, 2032);
+    assert.equal(1963 + 69, 2032);
     assert.equal(operationalOpenApi.length + platformOpenApi.length, openapi.length);
   });
 
