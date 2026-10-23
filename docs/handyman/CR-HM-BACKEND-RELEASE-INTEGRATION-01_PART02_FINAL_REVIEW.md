@@ -8,7 +8,7 @@
 | Base | `main` @ `e8b94af426d5d730900d98716135a7114e62e097` |
 | Audit tip | `6f90266` (product code identical to PART 01 tip `3e5c40a`; only test tooling was added after it) |
 | Reviewed at | 2026-10-23 |
-| Product diff vs `main` | 178 files, +51,119 / −706 (the delta over PART 01's +50,814 is test-only) |
+| Diff vs `main` | 180 files, +51,591 / −706 (product code unchanged since PART 01's `3e5c40a`; the delta is release test tooling and this report) |
 | Integrated sources | PR #55 `30be708e` · IAM revocation `63f3a851` · PR #56 `8f549dc9` — **all three are already integrated here** |
 | Excluded by instruction | PR #47 (finance bank receipt attestation) — verified absent |
 
