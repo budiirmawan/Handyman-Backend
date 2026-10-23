@@ -309,7 +309,10 @@ kegagalannya tidak menyentuh jalur competency.
 
 ## 14. Commit
 
-Lihat bagian akhir pesan balasan (SHA dicantumkan setelah `git push`).
+- Implementasi: **`8c7e8ef`** — `feat(worker-competency): CR-HM-WORKER-COMPETENCY-01 PART 03A competency-based work assignment`
+- Branch: `arena/3df97f5e-handyman-backend` (di-push ke origin)
+- Baseline PART 02: `558ba4d06729e015198000220fcbafcf39501572`
+- **Tidak** ada PR, merge, atau deploy.
 
 ---
 
