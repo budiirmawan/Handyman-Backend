@@ -5,6 +5,7 @@ import {
   assignWorkOrderHandler,
   getCurrentAssignmentHandler,
   listAssignmentsHandler,
+  listCompetencyDecisionsHandler,
   updateAssignmentHandler,
 } from './work-order-assignment.controller';
 
@@ -42,6 +43,15 @@ export function createWorkOrderAssignmentRouter(): Router {
     authenticationMiddleware,
     requirePermission('work_order.read'),
     getCurrentAssignmentHandler,
+  );
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2A — read-only competency decision
+  // history (append-only ledger). Registered BEFORE the `:assignmentId` PATCH
+  // route and on a static segment, so it can never be captured as an id.
+  router.get(
+    '/work-orders/:id/assignments/competency-decisions',
+    authenticationMiddleware,
+    requirePermission('work_order.read'),
+    listCompetencyDecisionsHandler,
   );
   router.patch(
     '/work-orders/:id/assignments/:assignmentId',

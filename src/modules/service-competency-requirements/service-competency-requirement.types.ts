@@ -111,11 +111,23 @@ export type CompetencyRequirementSkillSummary = {
   status: string;
 };
 
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2A — a requirement is configured against
+ * exactly ONE target. The model is shared (one table, one service, one
+ * evaluator): the target only decides where the requirement applies.
+ */
+export type CompetencyRequirementTarget =
+  | { kind: 'SERVICE_CATALOG'; serviceCatalogId: string }
+  | { kind: 'TRADE_CATEGORY'; tradeCategoryId: string };
+
 /** Full database row as read by the repository. */
 export type CompetencyRequirementRecord = {
   id: string;
   clientId: string;
-  serviceCatalogId: string;
+  /** Set for a Service Catalog (job type) requirement, else null. */
+  serviceCatalogId: string | null;
+  /** Set for a Work Order trade category requirement, else null. */
+  tradeCategoryId: string | null;
   requirementType: CompetencyRequirementType;
   enforcementLevel: CompetencyEnforcementLevel;
   skillId: string | null;
@@ -150,7 +162,8 @@ export type CreateCompetencyRequirementInput = {
 /** Fully-resolved create payload ready for persistence. */
 export type NewCompetencyRequirement = {
   clientId: string;
-  serviceCatalogId: string;
+  serviceCatalogId: string | null;
+  tradeCategoryId: string | null;
   requirementType: CompetencyRequirementType;
   enforcementLevel: CompetencyEnforcementLevel;
   skillId: string | null;
@@ -191,4 +204,15 @@ export type ListCompetencyRequirementsFilter = {
 export const COMPETENCY_REQUIREMENT_PERMISSIONS = {
   read: 'service_catalog.read',
   manage: 'service_catalog.manage',
+} as const;
+
+/**
+ * PART 03B2A — the same configuration surface for the multi-trade Work Order
+ * path reuses the Work Order vocabulary (`work_order.read` / `work_order.manage`),
+ * so no new permission code is introduced and a broad permission never widens
+ * reach.
+ */
+export const WORK_ORDER_TRADE_REQUIREMENT_PERMISSIONS = {
+  read: 'work_order.read',
+  manage: 'work_order.manage',
 } as const;

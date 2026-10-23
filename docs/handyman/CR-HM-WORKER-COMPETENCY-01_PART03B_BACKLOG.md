@@ -1,11 +1,12 @@
 # CR-HM-WORKER-COMPETENCY-01 — PART 03B Backlog / Handoff
 
-Basis: PART 03A selesai (`8c7e8ef`) dan **PART 03B1 selesai (`76eb66b`)** di branch
-`arena/3df97f5e-handyman-backend`.
+Basis: PART 03A selesai (`8c7e8ef`), **PART 03B1 selesai (`76eb66b`)**, dan
+**PART 03B2A selesai** di branch `arena/3df97f5e-handyman-backend`.
 
-**Status per dokumen ini:** item **1** dan **2** sudah **DELIVERED pada PART 03B1** dan tidak lagi menjadi
-backlog (detail: `CR-HM-WORKER-COMPETENCY-01_PART03B1_DELIVERY_REPORT.md`). Item sisanya adalah usulan untuk
-**PART 03B2**, belum dikerjakan. Urut berdasarkan risiko, bukan ukuran.
+**Status per dokumen ini:** item **1** dan **2** sudah **DELIVERED pada PART 03B1** (detail:
+`CR-HM-WORKER-COMPETENCY-01_PART03B1_DELIVERY_REPORT.md`). Item **4** sudah **DELIVERED pada PART 03B2A**
+(detail: `CR-HM-WORKER-COMPETENCY-01_PART03B2A_DELIVERY_REPORT.md`). Item sisanya masih backlog, urut
+berdasarkan risiko, bukan ukuran.
 
 ## P0 — kelengkapan siklus keputusan
 
@@ -28,11 +29,13 @@ backlog (detail: `CR-HM-WORKER-COMPETENCY-01_PART03B1_DELIVERY_REPORT.md`). Item
 
 ## P1 — cakupan & operasional
 
-4. **Requirement untuk Work Order**
-   `work-orders.work_type` adalah teks bebas tanpa relasi ke `service_catalog`, sehingga assignment
-   `workforce/team/vendor` tidak bisa dienforce sekarang. Usulan: peta `work_type` → entri katalog (atau kolom
-   `service_catalog_id` di `work_orders`), lalu pakai evaluator yang sama pada `work-order-assignment.service.ts`.
-   Jangan membuat evaluator kedua.
+4. ~~**Requirement untuk Work Order**~~ — **DONE (PART 03B2A)**
+   Registry trade multi-trade (`work_order_trade_categories`, migrasi `0465`), klasifikasi Work Order
+   (`trade_category_id` + `risk_level` + jejak classifier), requirement kompetensi dua target
+   (katalog **atau** trade, XOR, per Client), dan satu gerbang kompetensi di dalam transaksi
+   `work-order-assignment.service.ts` (WORKFORCE/TEAM/VENDOR_WORKFORCE = ALL, VENDOR = ANY). Ledger
+   `work_order_assignment_competency_decisions` append-only + endpoint
+   `GET /work-orders/:id/assignments/competency-decisions`. Tidak ada evaluator kedua.
 
 5. **Bulk konfigurasi requirement**
    Impor CSV/JSON per Client (preview → validate → commit), mengikuti konvensi tenant-batch-import.
@@ -67,11 +70,34 @@ backlog (detail: `CR-HM-WORKER-COMPETENCY-01_PART03B1_DELIVERY_REPORT.md`). Item
     menolak UPDATE/DELETE (trigger). Bila volume menuntut, arsipkan lewat ekspor + partisi — **bukan** DELETE.
     Perlu keputusan retensi (mis. berapa lama disimpan panas) sebelum implementasi.
 
+## Tambahan backlog setelah PART 03B2A
+
+12. **Penugasan tingkat VENDOR dinilai per orang (G1)**
+    Assignment `VENDOR` menunjuk perusahaan, sehingga gate memakai aturan ANY atas worker terikat. Perlu
+    keputusan governance: deklarasi worker sebelum mulai, atau verifikasi di lapangan.
+
+13. **Klasifikasi wajib untuk `work_type` berisiko (G4)**
+    Work Order boleh tetap tanpa klasifikasi (disengaja agar tidak ada regresi). Usulkan laporan aging
+    "unclassified Work Order" atau kewajiban klasifikasi untuk kategori tertentu.
+
+14. **Override/exception ber-approval (G5)**
+    Penolakan kompetensi saat ini final. Bila lapangan butuh pengecualian, sediakan alur override dengan
+    alasan + approver terpisah + jejak audit, tanpa melemahkan default.
+
+15. **Read model kandidat per Work Order (G9)**
+    Endpoint kandidat (seperti `.../competency/candidates` pada execution scope) yang menampilkan siapa
+    memenuhi requirement trade sebuah Work Order, agar UI assign tidak bergantung pada 409.
+
+16. **Risk level sebagai kebijakan (G3)**
+    `risk_level` kini deskriptif. Bila nanti dipakai menurunkan requirement minimum, buat pemetaan eksplisit
+    dan tetap lewat model requirement yang sama.
+
 ## Catatan konsistensi yang harus dipertahankan PART 03B
 
 - Satu evaluator (`worker-competency-eligibility`) untuk penegakan **dan** baca; jangan menduplikasi aturan.
 - Sertifikasi **tidak boleh** menjadi wajib untuk semua worker; requirement hanya bila dikonfigurasi.
-- Jangan menambah jalur assignment kedua; penegakan tetap di `handyman-scope-assignment.service.ts`.
+- Jangan menambah jalur assignment kedua; penegakan tetap di `handyman-scope-assignment.service.ts`
+  (execution scope) dan `work-order-assignment.service.ts` (Work Order) — keduanya memakai evaluator yang sama.
 - Pertahankan invarian frozen CR-HM-04 PART C: tepat dua bentuk URL assignment.
 - Client/Building scope wajib ditegakkan pada setiap operasi baru.
 - Kedua ledger PART 03B1 tetap **append-only**; jangan menambahkan UPDATE/DELETE atau "koreksi" baris historis.

@@ -19400,6 +19400,158 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /work-orders/{workOrderId}/assignments/competency-decisions:
+    get:
+      operationId: listWorkOrderAssignmentCompetencyDecisions
+      x-required-permission: work_order.read
+      x-building-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_NOT_FOUND]
+      summary: Read the append-only assignment competency decision ledger of a Work Order
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires `work_order.read` plus
+        an ACTIVE assignment to the Work Order Building (403
+        `BUILDING_ACCESS_DENIED` otherwise). The Client comes from the Work
+        Order row, never from the caller, so a broad permission can never widen
+        access. Returns one row per subject x requirement evaluated by the
+        EXISTING assignment authority on every successful ASSIGNED /
+        REASSIGNED decision, including the machine-readable `reason` and the
+        minimum evidence (opaque certificate id, verification status, expiry
+        date, proficiency level). The ledger is append-only at the database
+        level. Optional filters `action`, `assignmentId`, `workforceProfileId`,
+        `satisfied` and `enforcementLevel`; `page` / `pageSize` are optional
+        and, when absent, `meta` is `{}` exactly like the other standalone
+        lists.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, enum: [ASSIGNED, REASSIGNED] }
+        - name: assignmentId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: workforceProfileId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: satisfied
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: enforcementLevel
+          in: query
+          required: false
+          schema: { type: string, enum: [MANDATORY, RECOMMENDED] }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        "200":
+          description: The decision rows of this Work Order, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkOrderAssignmentCompetencyDecision"
+                      meta:
+                        allOf:
+                          - $ref: "#/components/schemas/PaginationMeta"
+                        description: Present only when `page` or `pageSize` is supplied, otherwise `{}`.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /work-orders/{workOrderId}/classification:
+    get:
+      operationId: getWorkOrderClassification
+      x-required-permission: work_order.read
+      x-building-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_NOT_FOUND]
+      summary: Read the authoritative trade classification of a Work Order
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires `work_order.read` plus
+        Building access to the Work Order. Returns the Operations triage
+        decision that maps the Work Order to skill and certificate needs. An
+        unclassified Work Order returns `tradeCategoryId` = `null` and stays
+        assignable exactly as before this PART. This is a dedicated resource,
+        so the published `WorkOrder` payload did not change shape.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+      responses:
+        "200":
+          description: The current classification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderClassification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: classifyWorkOrder
+      x-required-permission: work_order.manage
+      x-building-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_INVALID_STATE]
+      summary: Record the Operations classification decision for a Work Order
+      description: >
+        MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
+        `work_order.manage` plus Building access to the Work Order. Sets the
+        single ACTIVE trade category and, optionally, a risk level that
+        overrides the category default. An unconfigured category default is
+        never a silent requirement. `tradeCategoryId` = `null` clears the
+        classification and returns the Work Order to the unrestricted path.
+        Refused with 409 `WORK_ORDER_TRADE_CATEGORY_INVALID_STATE` for an
+        INACTIVE category or a terminal Work Order, and 409
+        `WORK_ORDER_TRADE_CATEGORY_NOT_FOUND` for an unknown category. Writes a
+        `WORK_ORDER_CLASSIFIED` history event in the same transaction.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClassifyWorkOrderRequest" }
+      responses:
+        "200":
+          description: The stored classification.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderClassification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /work-orders/{workOrderId}/actions:
     get:
       operationId: listWorkOrderActions
@@ -33100,6 +33252,405 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-order-trade-categories:
+    get:
+      operationId: listWorkOrderTradeCategories
+      x-required-permission: work_order.read
+      x-error-codes: [VALIDATION_ERROR]
+      summary: List the configurable Handyman trade registry
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires `work_order.read`. The
+        registry is reference DATA, not an application enum, so a new trade
+        (pool equipment, pest control, anything Operations supports) is
+        configuration rather than a deploy. The baseline is multi-trade by
+        construction — AC, plumbing, minor electrical, sanitary, door and lock,
+        furniture, painting, ceiling, tiling, installation and generic repair.
+        Optional filters `status`, `riskLevel`, `handymanDisciplineId`.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+        - name: riskLevel
+          in: query
+          required: false
+          schema: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        - name: handymanDisciplineId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Trade categories, ACTIVE first by code.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WorkOrderTradeCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createWorkOrderTradeCategory
+      x-required-permission: work_order.manage
+      x-error-codes: [VALIDATION_ERROR, WORK_ORDER_TRADE_CATEGORY_ALREADY_EXISTS, WORK_ORDER_TRADE_CATEGORY_INVALID_STATE]
+      summary: Create a trade category
+      description: >
+        MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
+        `work_order.manage`. `code` is upper-snake, unique and immutable once
+        created, because historical assignment decisions quote it. A duplicate
+        code is refused with 409 `WORK_ORDER_TRADE_CATEGORY_ALREADY_EXISTS` and
+        an unknown `handymanDisciplineId` with 409
+        `WORK_ORDER_TRADE_CATEGORY_INVALID_STATE`. New categories start
+        `ACTIVE` and carry no competency requirement until one is configured.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateWorkOrderTradeCategoryRequest" }
+      responses:
+        "201":
+          description: The created trade category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderTradeCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-order-trade-categories/{tradeCategoryId}:
+    get:
+      operationId: getWorkOrderTradeCategory
+      x-required-permission: work_order.read
+      x-error-codes: [VALIDATION_ERROR, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND]
+      summary: Read one trade category
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires `work_order.read`.
+        404 `WORK_ORDER_TRADE_CATEGORY_NOT_FOUND` for an unknown id.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+      responses:
+        "200":
+          description: The trade category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderTradeCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateWorkOrderTradeCategory
+      x-required-permission: work_order.manage
+      x-error-codes: [VALIDATION_ERROR, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_INVALID_STATE]
+      summary: Update a trade category
+      description: >
+        MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
+        `work_order.manage`. `name`, `description`, `riskLevel` and
+        `handymanDisciplineId` are editable. `code` is immutable — supplying it
+        is a 400 validation error, because historical decisions quote it.
+        An INACTIVE category is read-only (409
+        `WORK_ORDER_TRADE_CATEGORY_INVALID_STATE`).
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateWorkOrderTradeCategoryRequest" }
+      responses:
+        "200":
+          description: The updated trade category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderTradeCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-order-trade-categories/{tradeCategoryId}/deactivate:
+    post:
+      operationId: deactivateWorkOrderTradeCategory
+      x-required-permission: work_order.manage
+      x-error-codes: [VALIDATION_ERROR, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_INVALID_STATE]
+      summary: Deactivate a trade category
+      description: >
+        MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
+        `work_order.manage`. Sets `status` = `INACTIVE`; the row survives so
+        historical classification and competency decisions stay auditable. An
+        INACTIVE category can no longer classify a Work Order (409
+        `WORK_ORDER_TRADE_CATEGORY_INVALID_STATE`). Nothing is deleted.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+      responses:
+        "200":
+          description: The deactivated trade category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderTradeCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-order-trade-categories/{tradeCategoryId}/competency-requirements:
+    get:
+      operationId: listTradeCategoryCompetencyRequirements
+      x-required-permission: work_order.read
+      x-client-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND]
+      summary: List the competency requirements configured for a trade category
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires `work_order.read` and
+        an explicit `clientId` query parameter the caller can actually reach
+        (403 `BUILDING_ACCESS_DENIED` otherwise) — the trade registry is
+        platform-wide while requirements are per Client, so one tenant's
+        configuration can never gate another tenant's assignment. SKILL rows
+        carry `skillId` + `minimumProficiencyLevel`, CERTIFICATION rows carry
+        `certificateName`; MANDATORY blocks assignment and RECOMMENDED is
+        advisory. A trade with no ACTIVE row stays assignable.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+        - name: clientId
+          in: query
+          required: true
+          description: Client that owns this configuration; the actor must have access to it.
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+        - name: enforcementLevel
+          in: query
+          required: false
+          schema: { type: string, enum: [MANDATORY, RECOMMENDED] }
+        - name: requirementType
+          in: query
+          required: false
+          schema: { type: string, enum: [SKILL, CERTIFICATION] }
+      responses:
+        "200":
+          description: Requirements of the trade category for that Client.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createTradeCategoryCompetencyRequirement
+      x-required-permission: work_order.manage
+      x-client-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, SERVICE_COMPETENCY_REQUIREMENT_SKILL_MISMATCH]
+      summary: Configure a competency requirement for a trade category
+      description: >
+        MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
+        `work_order.manage` and an explicit `clientId` the caller can reach
+        (parameter or body; 403 `BUILDING_ACCESS_DENIED` otherwise). SKILL
+        requires `skillId` + `minimumProficiencyLevel`; CERTIFICATION requires
+        `certificateName` and rejects `minimumProficiencyLevel`. Certification
+        is demanded ONLY here or by an applicable safety/regulation rule —
+        never globally for every worker. A skill belonging to another Client is
+        refused with 400 `SERVICE_COMPETENCY_REQUIREMENT_SKILL_MISMATCH`.
+        `clientId`, `status`, `serviceCatalogId` and `createdByUserId` are
+        server-derived and rejected if smuggled.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateServiceCompetencyRequirementRequest" }
+      responses:
+        "201":
+          description: The created requirement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-order-trade-categories/{tradeCategoryId}/competency-requirements/{requirementId}:
+    get:
+      operationId: getTradeCategoryCompetencyRequirement
+      x-required-permission: work_order.read
+      x-client-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, SERVICE_COMPETENCY_REQUIREMENT_NOT_FOUND]
+      summary: Read one trade-category competency requirement
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires `work_order.read` and
+        an explicit `clientId` the caller can reach. A requirement of another
+        Client is invisible — the read is Client-scoped, never merely
+        id-addressed.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+        - $ref: "#/components/parameters/CompetencyRequirementIdPath"
+        - name: clientId
+          in: query
+          required: true
+          description: Client that owns this configuration; the actor must have access to it.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The requirement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateTradeCategoryCompetencyRequirement
+      x-required-permission: work_order.manage
+      x-client-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, SERVICE_COMPETENCY_REQUIREMENT_NOT_FOUND]
+      summary: Update a trade-category competency requirement
+      description: >
+        MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
+        `work_order.manage` and an explicit reachable `clientId`.
+        `requirementType` and `skillId` are immutable; `enforcementLevel`,
+        the SKILL-only `minimumProficiencyLevel`, the CERTIFICATION-only
+        `certificateName` and `notes` are editable. Lowering a requirement to
+        RECOMMENDED stops it blocking without deleting the audit trail.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+        - $ref: "#/components/parameters/CompetencyRequirementIdPath"
+        - name: clientId
+          in: query
+          required: true
+          description: Client that owns this configuration; the actor must have access to it.
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateServiceCompetencyRequirementRequest" }
+      responses:
+        "200":
+          description: The updated requirement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-order-trade-categories/{tradeCategoryId}/competency-requirements/{requirementId}/deactivate:
+    post:
+      operationId: deactivateTradeCategoryCompetencyRequirement
+      x-required-permission: work_order.manage
+      x-client-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, SERVICE_COMPETENCY_REQUIREMENT_NOT_FOUND]
+      summary: Deactivate a trade-category competency requirement
+      description: >
+        MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
+        `work_order.manage` and an explicit reachable `clientId`. Sets
+        `status` = `INACTIVE`, which stops the requirement applying
+        immediately while keeping the configuration auditable. No row is
+        deleted.
+      tags: [Work Orders]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TradeCategoryIdPath"
+        - $ref: "#/components/parameters/CompetencyRequirementIdPath"
+        - name: clientId
+          in: query
+          required: true
+          description: Client that owns this configuration; the actor must have access to it.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The deactivated requirement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -83616,6 +84167,13 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/Uuid"
+    TradeCategoryIdPath:
+      name: tradeCategoryId
+      in: path
+      description: Trade category id (CR-HM-WORKER-COMPETENCY-01 PART 03B2A).
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
     WorkOrderIdPath:
       name: workOrderId
       in: path
@@ -92072,13 +92630,101 @@ components:
         supersedesAssignmentId: { type: string, format: uuid, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    WorkOrderTradeCategory:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A - one trade in the configurable multi-trade registry. The registry is DATA, so supporting a new trade is configuration, not a deploy. `code` is immutable because historical competency decisions quote it.
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,39}$' }
+        name: { type: string, maxLength: 120 }
+        description: { type: string, nullable: true, maxLength: 500 }
+        riskLevel: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        handymanDisciplineId: { type: string, format: uuid, nullable: true }
+        handymanDisciplineCode: { type: string, nullable: true }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdByUserId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateWorkOrderTradeCategoryRequest:
+      type: object
+      required: [code, name]
+      additionalProperties: false
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A create payload. `code` is upper-snake and immutable. `riskLevel` defaults to LOW. `createdByUserId` and `status` are server-derived and rejected if supplied.
+      properties:
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,39}$' }
+        name: { type: string, maxLength: 120 }
+        description: { type: string, nullable: true, maxLength: 500 }
+        riskLevel: { type: string, enum: [LOW, MEDIUM, HIGH], default: LOW }
+        handymanDisciplineId: { type: string, format: uuid, nullable: true }
+    UpdateWorkOrderTradeCategoryRequest:
+      type: object
+      additionalProperties: false
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A patch payload. `code` is immutable and is a 400 if supplied. At least one editable field is expected.
+      properties:
+        name: { type: string, maxLength: 120 }
+        description: { type: string, nullable: true, maxLength: 500 }
+        riskLevel: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        handymanDisciplineId: { type: string, format: uuid, nullable: true }
+    ClassifyWorkOrderRequest:
+      type: object
+      required: [tradeCategoryId]
+      additionalProperties: false
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A classification payload. `tradeCategoryId` = null clears the classification and returns the Work Order to the unrestricted path. `riskLevel` optionally overrides the category default.
+      properties:
+        tradeCategoryId: { type: string, format: uuid, nullable: true }
+        riskLevel: { type: string, enum: [LOW, MEDIUM, HIGH], nullable: true }
+        notes: { type: string, nullable: true, maxLength: 1000 }
+    WorkOrderClassification:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A - the authoritative trade classification of a Work Order, as decided by Operations during triage. An unclassified Work Order carries nulls and stays assignable.
+      properties:
+        workOrderId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        tradeCategoryId: { type: string, format: uuid, nullable: true }
+        tradeCategoryCode: { type: string, nullable: true }
+        tradeCategoryName: { type: string, nullable: true }
+        riskLevel: { type: string, nullable: true, enum: [LOW, MEDIUM, HIGH] }
+        classifiedAt: { type: string, format: date-time, nullable: true }
+        classifiedByUserId: { type: string, format: uuid, nullable: true }
+    WorkOrderAssignmentCompetencyDecision:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A - one append-only ledger row of the competency gate for a Work Order assignment or reassignment. Carries the minimum evidence only (opaque certificate id, verification status, expiry date, proficiency level) and never certificate numbers or document storage keys. `reason` is null exactly when `satisfied` is true.
+      properties:
+        id: { type: string, format: uuid }
+        decisionGroupId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        action: { type: string, enum: [ASSIGNED, REASSIGNED] }
+        assigneeType: { type: string, enum: [WORKFORCE, TEAM, VENDOR, VENDOR_WORKFORCE] }
+        tradeCategoryId: { type: string, format: uuid, nullable: true }
+        tradeCategoryCode: { type: string, nullable: true }
+        riskLevel: { type: string, nullable: true, enum: [LOW, MEDIUM, HIGH] }
+        workforceProfileId: { type: string, format: uuid }
+        requirementId: { type: string, format: uuid }
+        requirementType: { type: string, enum: [SKILL, CERTIFICATION] }
+        enforcementLevel: { type: string, enum: [MANDATORY, RECOMMENDED] }
+        skillId: { type: string, format: uuid, nullable: true }
+        skillCode: { type: string, nullable: true }
+        minimumProficiencyLevel: { type: string, nullable: true, enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT] }
+        certificateName: { type: string, nullable: true }
+        satisfied: { type: boolean }
+        reason: { type: string, nullable: true, enum: [SKILL_MISSING, PROFICIENCY_INSUFFICIENT, CERTIFICATION_MISSING, CERTIFICATION_UNVERIFIED, CERTIFICATION_EXPIRED] }
+        evidenceProficiencyLevel: { type: string, nullable: true, enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT] }
+        evidenceCertificationId: { type: string, format: uuid, nullable: true }
+        evidenceVerificationStatus: { type: string, nullable: true }
+        evidenceExpiryDate: { type: string, nullable: true, format: date }
+        evaluatedAt: { type: string, format: date-time }
+
     ServiceCompetencyRequirement:
       type: object
-      description: CR-HM-WORKER-COMPETENCY-01 PART 03A - one competency requirement of a job type (Service Catalog entry). SKILL requirements carry `skillId` + `minimumProficiencyLevel`; CERTIFICATION requirements carry `certificateName` and may narrow it with `skillId`. MANDATORY blocks assignment/reassignment, RECOMMENDED is advisory only.
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A (and PART 03B2A for the multi-trade target) - one competency requirement. Exactly one target is set, `serviceCatalogId` for a Service Catalog job type or `tradeCategoryId` for a multi-trade Work Order category, and a database CHECK enforces the XOR. SKILL requirements carry `skillId` + `minimumProficiencyLevel`; CERTIFICATION requirements carry `certificateName` and may narrow it with `skillId`. MANDATORY blocks assignment/reassignment, RECOMMENDED is advisory only.
       properties:
         id: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
-        serviceCatalogId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid, nullable: true }
+        tradeCategoryId: { type: string, format: uuid, nullable: true }
         requirementType:
           type: string
           enum: [SKILL, CERTIFICATION]

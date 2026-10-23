@@ -13,7 +13,9 @@ import {
   resolveWorkforceCertificationExpiryStatus,
   type WorkforceCertificationStatus,
 } from '../workforce-certifications';
+import { workOrderService } from '../work-orders';
 import { workerCompetencyDecisionRepository } from './worker-competency-decision.repository';
+import { workOrderCompetencyDecisionRepository } from './work-order-competency-decision.repository';
 import { workerCompetencyEligibilityRepository as repository } from './worker-competency-eligibility.repository';
 import type {
   AssignmentCompetencyEvaluationRow,
@@ -30,6 +32,11 @@ import type {
   WorkerCertificationRow,
   WorkerCompetencyEligibility,
   WorkerSkillRow,
+  WorkOrderCompetencyBlockingGap,
+  WorkOrderCompetencyDecision,
+  WorkOrderCompetencyDecisionRow,
+  WorkOrderCompetencyHistoryItem,
+  WorkOrderCompetencySubject,
 } from './worker-competency-eligibility.types';
 
 /**
@@ -736,3 +743,230 @@ export async function recordAssignmentCompetencyDecision(
   );
   return { decisionGroupId, rowCount };
 }
+
+// ---------------------------------------------------------------------------
+// CR-HM-WORKER-COMPETENCY-01 PART 03B2A — multi-trade Work Order evaluation
+// ---------------------------------------------------------------------------
+
+/**
+ * Evaluates Work Order assignment subjects against the requirements of the
+ * Work Order's TRADE CATEGORY.
+ *
+ * This is the SAME evaluator as PART 03A/03B1 — `evaluateRequirement` is not
+ * re-implemented here. What differs is only the address of the requirement set
+ * (a trade category instead of a Service Catalog job type) and the subject
+ * shape (workforce profiles instead of Handyman crew members), because a Work
+ * Order is assigned to people/teams/vendors rather than to a work crew.
+ *
+ * The rule is expressed by the caller:
+ *   ALL — a single assignee, a vendor-workforce member, or every ACTIVE member
+ *         of an assigned team (a team works as one unit, exactly like a crew);
+ *   ANY — a company-level VENDOR assignment: a company holds no skill, at least
+ *         one bound worker has to.
+ *
+ * A Work Order with no trade category, or whose category has no ACTIVE
+ * requirement, is unrestricted: `satisfied` is true, `rows` is empty, and no
+ * worker is ever asked for a certificate that nobody configured.
+ */
+export async function evaluateWorkOrderCompetency(
+  executor: Pick<PoolClient, 'query'>,
+  input: {
+    clientId: string;
+    tradeCategoryId: string | null;
+    tradeCategoryCode?: string | null;
+    subjects: WorkOrderCompetencySubject[];
+    rule?: 'ALL' | 'ANY';
+  },
+): Promise<WorkOrderCompetencyDecision> {
+  const rule = input.rule ?? 'ALL';
+  const requirements = input.tradeCategoryId
+    ? await serviceCompetencyRequirementRepository.listActiveByTradeCategory(
+        executor,
+        input.tradeCategoryId,
+        input.clientId,
+      )
+    : [];
+
+  const empty: WorkOrderCompetencyDecision = {
+    tradeCategoryId: input.tradeCategoryId,
+    tradeCategoryCode: input.tradeCategoryCode ?? null,
+    summary: summarize(requirements),
+    rule,
+    satisfied: true,
+    blocking: [],
+    advisory: [],
+    rows: [],
+  };
+
+  if (requirements.length === 0) return empty;
+
+  const profileIds = [...new Set(input.subjects.map((s) => s.workforceProfileId))];
+  if (profileIds.length === 0) {
+    // Requirements exist but nobody can demonstrate them (e.g. a vendor with no
+    // bound worker). That is a refusal, never a silent pass.
+    return { ...empty, satisfied: false };
+  }
+
+  const [skills, certifications] = await Promise.all([
+    repository.listEffectiveSkills(executor, profileIds),
+    repository.listCertificationsForProfiles(executor, input.clientId, profileIds),
+  ]);
+  const now = new Date();
+
+  const rows: WorkOrderCompetencyDecisionRow[] = [];
+  const blocking: WorkOrderCompetencyBlockingGap[] = [];
+  const advisory: CompetencyRequirementEvaluation[] = [];
+  let anySatisfied = false;
+
+  for (const subject of input.subjects) {
+    const subjectSkills = skills.filter(
+      (skill) => skill.workforceProfileId === subject.workforceProfileId,
+    );
+    const subjectCertifications = certifications.filter(
+      (certification) =>
+        certification.workforceProfileId === subject.workforceProfileId,
+    );
+    const evaluations = requirements.map((requirement) =>
+      evaluateRequirement(requirement, subjectSkills, subjectCertifications, now),
+    );
+
+    let subjectBlocked = false;
+    for (const evaluation of evaluations) {
+      const evidence = evaluation.evidence;
+      const gap = evaluation.gapEvidence;
+      rows.push({
+        workforceProfileId: subject.workforceProfileId,
+        requirementId: evaluation.requirementId,
+        requirementType: evaluation.requirementType,
+        enforcementLevel: evaluation.enforcementLevel,
+        skillId: evaluation.skillId,
+        skillCode: evaluation.skillCode,
+        minimumProficiencyLevel: evaluation.minimumProficiencyLevel,
+        certificateName: evaluation.certificateName,
+        satisfied: evaluation.satisfied,
+        reason: evaluation.reason,
+        evidenceProficiencyLevel:
+          evidence?.proficiencyLevel ?? gap?.proficiencyLevel ?? null,
+        evidenceCertificationId:
+          evidence?.certificationId ?? gap?.certificationId ?? null,
+        evidenceVerificationStatus:
+          evidence?.verificationStatus ?? gap?.verificationStatus ?? null,
+        evidenceExpiryDate: evidence?.expiryDate ?? gap?.expiryDate ?? null,
+      });
+
+      if (evaluation.satisfied) continue;
+      if (evaluation.enforcementLevel === 'MANDATORY') {
+        subjectBlocked = true;
+        blocking.push({
+          workforceProfileId: subject.workforceProfileId,
+          workforceProfileName: subject.workforceProfileName,
+          requirementId: evaluation.requirementId,
+          requirementType: evaluation.requirementType,
+          enforcementLevel: evaluation.enforcementLevel,
+          skillCode: evaluation.skillCode,
+          certificateName: evaluation.certificateName,
+          minimumProficiencyLevel: evaluation.minimumProficiencyLevel,
+          reason: evaluation.reason ?? 'SKILL_MISSING',
+        });
+      } else if (
+        !advisory.some(
+          (item) =>
+            item.requirementId === evaluation.requirementId &&
+            item.reason === evaluation.reason,
+        )
+      ) {
+        advisory.push(evaluation);
+      }
+    }
+    if (!subjectBlocked) anySatisfied = true;
+  }
+
+  return {
+    tradeCategoryId: input.tradeCategoryId,
+    tradeCategoryCode: input.tradeCategoryCode ?? null,
+    summary: summarize(requirements),
+    rule,
+    satisfied: rule === 'ANY' ? anySatisfied : blocking.length === 0,
+    blocking,
+    advisory,
+    rows,
+  };
+}
+
+/**
+ * PART 03B2A — writes the decision group for a Work Order assignment.
+ *
+ * MUST be called inside the assignment transaction: the ledger row and the
+ * assignment commit (or roll back) together.
+ */
+export async function recordWorkOrderCompetencyDecision(
+  executor: Pick<PoolClient, 'query'>,
+  input: {
+    clientId: string;
+    workOrderId: string;
+    assignmentId: string;
+    action: 'ASSIGNED' | 'REASSIGNED';
+    assigneeType: 'WORKFORCE' | 'TEAM' | 'VENDOR' | 'VENDOR_WORKFORCE';
+    tradeCategoryId: string | null;
+    tradeCategoryCode: string | null;
+    riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+    rows: WorkOrderCompetencyDecisionRow[];
+  },
+): Promise<{ decisionGroupId: string | null; rowCount: number }> {
+  if (input.rows.length === 0) {
+    // An unclassified Work Order (or one whose category has no requirement)
+    // produces no evaluation rows: there is nothing to explain.
+    return { decisionGroupId: null, rowCount: 0 };
+  }
+  const decisionGroupId = randomUUID();
+  const { rows, ...group } = input;
+  const rowCount = await workOrderCompetencyDecisionRepository.appendDecisionGroup(
+    executor,
+    { ...group, decisionGroupId, rows },
+  );
+  return { decisionGroupId, rowCount };
+}
+
+/**
+ * PART 03B2A — read the Work Order assignment competency decisions.
+ *
+ * Authorization is the SAME exact-Building rule every Work Order surface uses
+ * (BE-02G): the Building comes from the Work Order row, never from the caller.
+ */
+export async function listWorkOrderAssignmentCompetencyHistory(
+  workOrderId: string,
+  filter: {
+    action?: 'ASSIGNED' | 'REASSIGNED';
+    assignmentId?: string;
+    workforceProfileId?: string;
+    satisfied?: boolean;
+    enforcementLevel?: 'MANDATORY' | 'RECOMMENDED';
+  },
+  pagination: { limit: number; offset: number },
+  actorUserId: string,
+): Promise<{ items: WorkOrderCompetencyHistoryItem[]; total: number }> {
+  const workOrder = await workOrderService.getWorkOrderById(workOrderId);
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: workOrder.clientId,
+    buildingId: workOrder.buildingId,
+  });
+
+  const input = {
+    clientId: workOrder.clientId,
+    workOrderId,
+    limit: pagination.limit,
+    offset: pagination.offset,
+    ...filter,
+  };
+  const [items, total] = await Promise.all([
+    workOrderCompetencyDecisionRepository.listDecisionHistory(undefined, input),
+    workOrderCompetencyDecisionRepository.countDecisionHistory(undefined, input),
+  ]);
+  return { items, total };
+}
+
+export const workOrderCompetencyService = {
+  evaluateWorkOrderCompetency,
+  listWorkOrderAssignmentCompetencyHistory,
+  recordWorkOrderCompetencyDecision,
+};

@@ -254,3 +254,108 @@ export type AssignmentCompetencyHistoryItem = {
   evidenceExpiryDate: string | null;
   evaluatedAt: string;
 };
+
+// ---------------------------------------------------------------------------
+// CR-HM-WORKER-COMPETENCY-01 PART 03B2A — multi-trade Work Order subjects
+// ---------------------------------------------------------------------------
+
+/**
+ * A subject of a Work Order competency evaluation.
+ *
+ * Work Orders assign PEOPLE or a group of people, not Handyman crews, so the
+ * evaluator is addressed with workforce profiles. `workerContextId` is null for
+ * this path (a Handyman worker context is an execution-scope concept) and the
+ * role records HOW the subject participates in the assignment:
+ *
+ *   ASSIGNEE        — the single person named by the assignment;
+ *   TEAM_MEMBER     — a member of the assigned team (every member must qualify);
+ *   VENDOR_CANDIDATE— one of the vendor's bound workers (at least one must).
+ */
+export type WorkOrderCompetencySubjectRole =
+  | 'ASSIGNEE'
+  | 'TEAM_MEMBER'
+  | 'VENDOR_CANDIDATE';
+
+export type WorkOrderCompetencySubject = {
+  workforceProfileId: string;
+  workforceProfileName: string | null;
+  role: WorkOrderCompetencySubjectRole;
+};
+
+/** One blocking gap attributed to a specific subject. */
+export type WorkOrderCompetencyBlockingGap = {
+  workforceProfileId: string;
+  workforceProfileName: string | null;
+  requirementId: string;
+  requirementType: 'SKILL' | 'CERTIFICATION';
+  enforcementLevel: CompetencyEnforcementLevel;
+  skillCode: string | null;
+  certificateName: string | null;
+  minimumProficiencyLevel: ProficiencyLevel | null;
+  reason: CompetencyGapReason;
+};
+
+/** Ledger row for a Work Order assignment decision (one per subject × requirement). */
+export type WorkOrderCompetencyDecisionRow = {
+  workforceProfileId: string;
+  requirementId: string;
+  requirementType: 'SKILL' | 'CERTIFICATION';
+  enforcementLevel: CompetencyEnforcementLevel;
+  skillId: string | null;
+  skillCode: string | null;
+  minimumProficiencyLevel: ProficiencyLevel | null;
+  certificateName: string | null;
+  satisfied: boolean;
+  reason: CompetencyGapReason | null;
+  evidenceProficiencyLevel: ProficiencyLevel | null;
+  evidenceCertificationId: string | null;
+  evidenceVerificationStatus: string | null;
+  evidenceExpiryDate: string | null;
+};
+
+/**
+ * Verdict for a Work Order assignment. `satisfied` is the ONLY thing the
+ * assignment authority may read as a decision: for a single assignee it means
+ * "this person qualifies", for a team "every member qualifies", for a vendor
+ * "at least one bound worker qualifies" (`rule`).
+ */
+export type WorkOrderCompetencyDecision = {
+  tradeCategoryId: string | null;
+  tradeCategoryCode: string | null;
+  summary: CompetencyEvaluationSummary;
+  /** ALL = every subject must qualify; ANY = at least one subject must. */
+  rule: 'ALL' | 'ANY';
+  satisfied: boolean;
+  blocking: WorkOrderCompetencyBlockingGap[];
+  advisory: CompetencyRequirementEvaluation[];
+  rows: WorkOrderCompetencyDecisionRow[];
+};
+
+/** Read model row for the Work Order decision ledger. */
+export type WorkOrderCompetencyHistoryItem = {
+  id: string;
+  decisionGroupId: string;
+  clientId: string;
+  workOrderId: string;
+  assignmentId: string;
+  action: 'ASSIGNED' | 'REASSIGNED';
+  assigneeType: 'WORKFORCE' | 'TEAM' | 'VENDOR' | 'VENDOR_WORKFORCE';
+  tradeCategoryId: string | null;
+  tradeCategoryCode: string | null;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  workforceProfileId: string;
+  requirementId: string;
+  requirementType: 'SKILL' | 'CERTIFICATION';
+  enforcementLevel: CompetencyEnforcementLevel;
+  skillId: string | null;
+  skillCode: string | null;
+  minimumProficiencyLevel: ProficiencyLevel | null;
+  certificateName: string | null;
+  satisfied: boolean;
+  reason: CompetencyGapReason | null;
+  evidenceProficiencyLevel: ProficiencyLevel | null;
+  evidenceCertificationId: string | null;
+  evidenceVerificationStatus: string | null;
+  evidenceExpiryDate: string | null;
+  evaluatedAt: string;
+};

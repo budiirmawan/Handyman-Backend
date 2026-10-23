@@ -6,17 +6,28 @@ import type {
   CompetencyRequirementChanges,
   CompetencyRequirementRecord,
   CompetencyRequirementStatus,
+  CompetencyRequirementTarget,
   CompetencyRequirementType,
   NewCompetencyRequirement,
 } from './service-competency-requirement.types';
 
 /**
- * CR-HM-WORKER-COMPETENCY-01 PART 03A — requirement repository. Sole writer of
- * `service_catalog_competency_requirements` (0463).
+ * CR-HM-WORKER-COMPETENCY-01 PART 03A/03B2A — requirement repository. Sole
+ * writer of `service_catalog_competency_requirements`.
+ *
+ * The table serves TWO targets since 0465, with one requirement MODEL:
+ *   - a Service Catalog entry (the Handyman "job type", PART 03A), and
+ *   - a Work Order TRADE CATEGORY (the multi-trade Work Order path, PART
+ *     03B2A).
+ *
+ * Exactly one target is set per row (database CHECK). Queries take a
+ * `CompetencyRequirementTarget` and bind the target column explicitly, so a
+ * caller can never read across targets: a requirement configured for a trade
+ * category is invisible to the job-type evaluator and vice versa.
  *
  * Reads are Client-scoped by the caller-supplied `clientId`; the write path
  * never trusts a caller-supplied Client (the service derives it from the
- * catalog entry it just authorised).
+ * target row it just authorised).
  */
 
 type Row = QueryResultRow;
@@ -25,6 +36,7 @@ const SELECT = `
   SELECT r.id,
          r.client_id,
          r.service_catalog_id,
+         r.trade_category_id,
          r.requirement_type,
          r.enforcement_level,
          r.skill_id,
@@ -42,11 +54,22 @@ const SELECT = `
     FROM service_catalog_competency_requirements r
     LEFT JOIN skills s ON s.id = r.skill_id`;
 
+/** Binds the target predicate without ever interpolating a column name. */
+function targetParams(target: CompetencyRequirementTarget): {
+  serviceCatalogId: string | null;
+  tradeCategoryId: string | null;
+} {
+  return target.kind === 'SERVICE_CATALOG'
+    ? { serviceCatalogId: target.serviceCatalogId, tradeCategoryId: null }
+    : { serviceCatalogId: null, tradeCategoryId: target.tradeCategoryId };
+}
+
 function mapRow(row: Row): CompetencyRequirementRecord {
   return {
     id: row.id,
     clientId: row.client_id,
-    serviceCatalogId: row.service_catalog_id,
+    serviceCatalogId: row.service_catalog_id ?? null,
+    tradeCategoryId: row.trade_category_id ?? null,
     requirementType: row.requirement_type as CompetencyRequirementType,
     enforcementLevel: row.enforcement_level as CompetencyEnforcementLevel,
     skillId: row.skill_id ?? null,
@@ -76,15 +99,16 @@ async function insertRequirement(
 ): Promise<CompetencyRequirementRecord> {
   const result = await executor.query(
     `INSERT INTO service_catalog_competency_requirements (
-       id, client_id, service_catalog_id, requirement_type,
+       id, client_id, service_catalog_id, trade_category_id, requirement_type,
        enforcement_level, skill_id, minimum_proficiency_level,
        certificate_name, notes, status, created_by_user_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'ACTIVE', $10)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'ACTIVE', $11)
      RETURNING id`,
     [
       randomUUID(),
       record.clientId,
       record.serviceCatalogId,
+      record.tradeCategoryId,
       record.requirementType,
       record.enforcementLevel,
       record.skillId,
@@ -113,14 +137,16 @@ async function findById(
 
 async function findScopedById(
   executor: Pick<PoolClient, 'query'> = getPool(),
-  input: { id: string; serviceCatalogId: string; clientId: string },
+  input: { id: string; clientId: string; target: CompetencyRequirementTarget },
 ): Promise<CompetencyRequirementRecord | null> {
+  const { serviceCatalogId, tradeCategoryId } = targetParams(input.target);
   const result = await executor.query(
     `${SELECT}
       WHERE r.id = $1
-        AND r.service_catalog_id = $2
-        AND r.client_id = $3`,
-    [input.id, input.serviceCatalogId, input.clientId],
+        AND r.client_id = $2
+        AND (($3::uuid IS NOT NULL AND r.service_catalog_id = $3)
+             OR ($4::uuid IS NOT NULL AND r.trade_category_id = $4))`,
+    [input.id, input.clientId, serviceCatalogId, tradeCategoryId],
   );
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }
@@ -131,24 +157,27 @@ type ListFilter = {
   requirementType?: CompetencyRequirementType;
 };
 
-async function listByServiceCatalog(
+async function listByTarget(
   executor: Pick<PoolClient, 'query'> = getPool(),
-  input: { clientId: string; serviceCatalogId: string },
+  input: { clientId: string; target: CompetencyRequirementTarget },
   filter: ListFilter = {},
 ): Promise<CompetencyRequirementRecord[]> {
+  const { serviceCatalogId, tradeCategoryId } = targetParams(input.target);
   const result = await executor.query(
     `${SELECT}
-      WHERE r.service_catalog_id = $1
-        AND r.client_id = $2
-        AND ($3::text IS NULL OR r.status = $3)
-        AND ($4::text IS NULL OR r.enforcement_level = $4)
-        AND ($5::text IS NULL OR r.requirement_type = $5)
+      WHERE r.client_id = $1
+        AND (($2::uuid IS NOT NULL AND r.service_catalog_id = $2)
+             OR ($3::uuid IS NOT NULL AND r.trade_category_id = $3))
+        AND ($4::text IS NULL OR r.status = $4)
+        AND ($5::text IS NULL OR r.enforcement_level = $5)
+        AND ($6::text IS NULL OR r.requirement_type = $6)
       ORDER BY r.enforcement_level ASC,
                r.requirement_type ASC,
                r.created_at ASC`,
     [
-      input.serviceCatalogId,
       input.clientId,
+      serviceCatalogId,
+      tradeCategoryId,
       filter.status ?? null,
       filter.enforcementLevel ?? null,
       filter.requirementType ?? null,
@@ -158,52 +187,94 @@ async function listByServiceCatalog(
 }
 
 /**
- * Evaluation read: ACTIVE requirements only, split by enforcement level. The
- * evaluator never needs INACTIVE rows, so this is a separate, index-friendly
- * query rather than a filter on top of the list read.
+ * Evaluation read: ACTIVE requirements only for one target. The evaluator
+ * never needs INACTIVE rows, so this is a separate, index-friendly query
+ * rather than a filter on top of the list read.
  */
-async function listActiveByServiceCatalog(
+async function listActiveByTarget(
   executor: Pick<PoolClient, 'query'> = getPool(),
-  serviceCatalogId: string,
+  target: CompetencyRequirementTarget,
 ): Promise<CompetencyRequirementRecord[]> {
+  const { serviceCatalogId, tradeCategoryId } = targetParams(target);
   const result = await executor.query(
     `${SELECT}
-      WHERE r.service_catalog_id = $1
+      WHERE (($1::uuid IS NOT NULL AND r.service_catalog_id = $1)
+             OR ($2::uuid IS NOT NULL AND r.trade_category_id = $2))
         AND r.status = 'ACTIVE'
       ORDER BY r.enforcement_level ASC,
                r.requirement_type ASC,
                r.created_at ASC`,
-    [serviceCatalogId],
+    [serviceCatalogId, tradeCategoryId],
+  );
+  return result.rows.map(mapRow);
+}
+
+/** PART 03A entry point, preserved for the existing job-type evaluator. */
+async function listActiveByServiceCatalog(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  serviceCatalogId: string,
+): Promise<CompetencyRequirementRecord[]> {
+  return listActiveByTarget(executor, {
+    kind: 'SERVICE_CATALOG',
+    serviceCatalogId,
+  });
+}
+
+/**
+ * PART 03B2A entry point for the multi-trade Work Order evaluator.
+ *
+ * The trade registry is PLATFORM-wide, while requirements are per Client, so
+ * the Client is part of the read: a requirement another tenant configured for
+ * the same trade can never gate this tenant's assignment.
+ */
+async function listActiveByTradeCategory(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  tradeCategoryId: string,
+  clientId: string,
+): Promise<CompetencyRequirementRecord[]> {
+  const result = await executor.query(
+    `${SELECT}
+      WHERE r.trade_category_id = $1
+        AND r.client_id = $2
+        AND r.status = 'ACTIVE'
+      ORDER BY r.enforcement_level ASC,
+               r.requirement_type ASC,
+               r.created_at ASC`,
+    [tradeCategoryId, clientId],
   );
   return result.rows.map(mapRow);
 }
 
 async function findActiveSkillRequirement(
   executor: Pick<PoolClient, 'query'> = getPool(),
-  input: { serviceCatalogId: string; skillId: string },
+  input: { target: CompetencyRequirementTarget; skillId: string },
 ): Promise<CompetencyRequirementRecord | null> {
+  const { serviceCatalogId, tradeCategoryId } = targetParams(input.target);
   const result = await executor.query(
     `${SELECT}
-      WHERE r.service_catalog_id = $1
+      WHERE (($1::uuid IS NOT NULL AND r.service_catalog_id = $1)
+             OR ($2::uuid IS NOT NULL AND r.trade_category_id = $2))
         AND r.requirement_type = 'SKILL'
-        AND r.skill_id = $2
+        AND r.skill_id = $3
         AND r.status = 'ACTIVE'`,
-    [input.serviceCatalogId, input.skillId],
+    [serviceCatalogId, tradeCategoryId, input.skillId],
   );
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }
 
 async function findActiveCertificationRequirement(
   executor: Pick<PoolClient, 'query'> = getPool(),
-  input: { serviceCatalogId: string; certificateName: string },
+  input: { target: CompetencyRequirementTarget; certificateName: string },
 ): Promise<CompetencyRequirementRecord | null> {
+  const { serviceCatalogId, tradeCategoryId } = targetParams(input.target);
   const result = await executor.query(
     `${SELECT}
-      WHERE r.service_catalog_id = $1
+      WHERE (($1::uuid IS NOT NULL AND r.service_catalog_id = $1)
+             OR ($2::uuid IS NOT NULL AND r.trade_category_id = $2))
         AND r.requirement_type = 'CERTIFICATION'
-        AND lower(btrim(r.certificate_name)) = lower(btrim($2))
+        AND lower(btrim(r.certificate_name)) = lower(btrim($3))
         AND r.status = 'ACTIVE'`,
-    [input.serviceCatalogId, input.certificateName],
+    [serviceCatalogId, tradeCategoryId, input.certificateName],
   );
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }
@@ -269,6 +340,8 @@ export const serviceCompetencyRequirementRepository = {
   findScopedById,
   insertRequirement,
   listActiveByServiceCatalog,
-  listByServiceCatalog,
+  listActiveByTarget,
+  listActiveByTradeCategory,
+  listByTarget,
   updateRequirement,
 };

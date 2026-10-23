@@ -187,3 +187,77 @@ function readOptionalUuid(
   }
   return value.trim().toLowerCase();
 }
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2A — filters for the Work Order competency
+ * decision history. Unknown keys are ignored (read-only surface), while a value
+ * of the wrong type is a 400 rather than a silently empty page.
+ */
+export function parseCompetencyDecisionFilter(
+  query: Record<string, unknown>,
+): {
+  action?: 'ASSIGNED' | 'REASSIGNED';
+  assignmentId?: string;
+  workforceProfileId?: string;
+  satisfied?: boolean;
+  enforcementLevel?: 'MANDATORY' | 'RECOMMENDED';
+} {
+  const details: ValidationDetail[] = [];
+  const filter: {
+    action?: 'ASSIGNED' | 'REASSIGNED';
+    assignmentId?: string;
+    workforceProfileId?: string;
+    satisfied?: boolean;
+    enforcementLevel?: 'MANDATORY' | 'RECOMMENDED';
+  } = {};
+
+  if (query.action !== undefined) {
+    if (query.action !== 'ASSIGNED' && query.action !== 'REASSIGNED') {
+      details.push({
+        field: 'action',
+        message: 'action must be one of ASSIGNED, REASSIGNED.',
+      });
+    } else {
+      filter.action = query.action;
+    }
+  }
+  for (const field of ['assignmentId', 'workforceProfileId'] as const) {
+    const raw = query[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string' || !isValidUuid(raw.trim())) {
+      details.push({ field, message: `${field} must be a valid UUID.` });
+    } else {
+      filter[field] = raw.trim().toLowerCase();
+    }
+  }
+  if (query.satisfied !== undefined) {
+    if (query.satisfied === 'true' || query.satisfied === true) {
+      filter.satisfied = true;
+    } else if (query.satisfied === 'false' || query.satisfied === false) {
+      filter.satisfied = false;
+    } else {
+      details.push({
+        field: 'satisfied',
+        message: 'satisfied must be true or false.',
+      });
+    }
+  }
+  if (query.enforcementLevel !== undefined) {
+    if (
+      query.enforcementLevel !== 'MANDATORY' &&
+      query.enforcementLevel !== 'RECOMMENDED'
+    ) {
+      details.push({
+        field: 'enforcementLevel',
+        message: 'enforcementLevel must be one of MANDATORY, RECOMMENDED.',
+      });
+    } else {
+      filter.enforcementLevel = query.enforcementLevel;
+    }
+  }
+
+  if (details.length > 0) {
+    throw AppError.validation('Request validation failed.', details);
+  }
+  return filter;
+}

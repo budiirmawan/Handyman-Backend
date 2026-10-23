@@ -1969,6 +1969,18 @@ export const ERROR_CODES = {
     'SERVICE_COMPETENCY_REQUIREMENT_SERVICE_INACTIVE',
   HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_COMPETENCY_REQUIRED:
     'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_COMPETENCY_REQUIRED',
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2A — multi-trade Work Order. The trade
+  // registry is configuration (deactivate, never delete); the requirement
+  // codes above are reused because requirements are the same model keyed by a
+  // second target. Only the enforcement refusal is a new code, so a Work Order
+  // rejection is distinguishable from the Handyman crew one.
+  WORK_ORDER_TRADE_CATEGORY_NOT_FOUND: 'WORK_ORDER_TRADE_CATEGORY_NOT_FOUND',
+  WORK_ORDER_TRADE_CATEGORY_ALREADY_EXISTS:
+    'WORK_ORDER_TRADE_CATEGORY_ALREADY_EXISTS',
+  WORK_ORDER_TRADE_CATEGORY_INVALID_STATE:
+    'WORK_ORDER_TRADE_CATEGORY_INVALID_STATE',
+  WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED:
+    'WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED',
   // CR-BE-SVC-01 PART 02 — Service Request catalog adoption. Governed anchor
   // validation on service_requests.service_catalog_id (same-Client, ACTIVE,
   // code equals service_type). Free service_type is retained unchanged.

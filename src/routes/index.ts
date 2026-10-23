@@ -114,6 +114,7 @@ import { createRfqPoConversionRouter } from '../modules/rfq-po-conversions/rfq-p
 import { createPriceCatalogEntryRouter } from '../modules/price-catalog-entries/price-catalog-entry.routes';
 import { createServiceCatalogRouter } from '../modules/service-catalog/service-catalog.routes';
 import { createServiceCompetencyRequirementRouter } from '../modules/service-competency-requirements';
+import { createWorkOrderTradeCategoryRouter } from '../modules/work-order-trade-categories';
 import { createApartmentMasterRouter } from '../modules/apartment-master/apartment-master.routes';
 import { createTenantImportRouter } from '../modules/tenant-import';
 import { createHandymanCatalogueAdminRouter } from '../modules/handyman-catalog';
@@ -747,6 +748,12 @@ export function createApiRouter(): Router {
   // (SKILL / CERTIFICATION, MANDATORY / RECOMMENDED). Configuration only; the
   // requirements are consumed by the EXISTING assignment authority.
   router.use(createServiceCompetencyRequirementRouter());
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2A — configurable MULTI-TRADE Work
+  // Order classification (AC, plumbing, electrical-minor, sanitary,
+  // door/lock, furniture, painting, ceiling, tiling, installation, generic
+  // repair) plus the Operations classification step. The competency gate it
+  // feeds lives in the EXISTING Work Order assignment authority.
+  router.use(createWorkOrderTradeCategoryRouter());
   // CR-HM-MASTER-IND-01 — apartment Unit master administration and
   // effective-dated Owner/Occupant/PIC roles (Unit = existing Space master).
   router.use(createApartmentMasterRouter());

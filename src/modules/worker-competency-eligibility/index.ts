@@ -4,13 +4,18 @@ export { workerCompetencyDecisionRepository } from './worker-competency-decision
 export {
   assertExecutionScopeCompetencyEligible,
   evaluateExecutionScopeCompetency,
+  evaluateWorkOrderCompetency,
   getCrewCompetencyEligibility,
   listAssignmentCompetencyHistory,
   listCompetencyCandidates,
+  listWorkOrderAssignmentCompetencyHistory,
   recordAssignmentCompetencyDecision,
+  recordWorkOrderCompetencyDecision,
   toDecisionLedgerRows,
+  workOrderCompetencyService,
   workerCompetencyEligibilityService,
 } from './worker-competency-eligibility.service';
+export { workOrderCompetencyDecisionRepository } from './work-order-competency-decision.repository';
 export type {
   ExecutionScopeCompetencyDecision,
   ListAssignmentCompetencyHistoryFilter,
@@ -28,4 +33,10 @@ export type {
   CompetencyRequirementEvaluation,
   CrewCompetencyEligibilityReport,
   WorkerCompetencyEligibility,
+  WorkOrderCompetencyBlockingGap,
+  WorkOrderCompetencyDecision,
+  WorkOrderCompetencyDecisionRow,
+  WorkOrderCompetencyHistoryItem,
+  WorkOrderCompetencySubject,
+  WorkOrderCompetencySubjectRole,
 } from './worker-competency-eligibility.types';

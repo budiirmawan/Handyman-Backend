@@ -109,7 +109,12 @@ export function parseRequirementIdParam(value: string): string {
  *                   absent; skillId is optional narrowing.
  */
 export function validateCreateCompetencyRequirementInput(
-  serviceCatalogId: string,
+  /**
+   * PART 03B2A — exactly one target is supplied by the transport: the Service
+   * Catalog entry the route is scoped to, or the trade category of the same
+   * route. Never both, never neither.
+   */
+  target: { serviceCatalogId: string | null; tradeCategoryId: string | null },
   clientId: string,
   body: CreateCompetencyRequirementInput,
   actorUserId: string,
@@ -210,7 +215,8 @@ export function validateCreateCompetencyRequirementInput(
 
   return {
     clientId,
-    serviceCatalogId,
+    serviceCatalogId: target.serviceCatalogId,
+    tradeCategoryId: target.tradeCategoryId,
     requirementType: requirementType as NewCompetencyRequirement['requirementType'],
     enforcementLevel,
     skillId,

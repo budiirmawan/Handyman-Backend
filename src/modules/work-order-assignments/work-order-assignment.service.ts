@@ -21,14 +21,26 @@ import {
   workforceProfileNotFoundError,
   workforceRepository,
 } from '../workforce';
+import { withTransaction } from '../../database';
+import type { PoolClient } from 'pg';
 import { departmentRepository } from '../departments';
 import { organizationRepository } from '../organizations';
 import { workforceBuildingAssignmentRepository } from '../workforce-building-assignments';
 import { vendorBuildingRepository } from '../vendor-buildings';
 import {
+  workOrderCompetencyService,
+  type WorkOrderCompetencyDecision,
+  type WorkOrderCompetencySubject,
+} from '../worker-competency-eligibility';
+// Direct file imports (not the module index) so the trade registry and the
+// assignment authority can reference each other without a load-order cycle.
+import { workOrderTradeCategoryRepository } from '../work-order-trade-categories/work-order-trade-category.repository';
+import type { WorkOrderTradeRiskLevel } from '../work-order-trade-categories/work-order-trade-category.types';
+import {
   workOrderAssignmentAlreadyAssignedError,
   workOrderAssignmentBuildingMismatchError,
   workOrderAssignmentClientMismatchError,
+  workOrderAssignmentCompetencyRequiredError,
   workOrderAssignmentInvalidStateError,
   workOrderAssignmentNotFoundError,
   workOrderAssignmentVendorWorkforceMismatchError,
@@ -281,9 +293,20 @@ function requireId(value: string | undefined): string {
   return value;
 }
 
+type AssignableWorkOrder = {
+  id: string;
+  clientId: string;
+  buildingId: string;
+  status: string;
+  /** PART 03B2A — the authoritative trade classification, if any. */
+  tradeCategoryId: string | null;
+  tradeCategoryCode: string | null;
+  riskLevel: WorkOrderTradeRiskLevel | null;
+};
+
 async function loadAssignableWorkOrder(
   workOrderId: string,
-): Promise<{ clientId: string; buildingId: string; status: string }> {
+): Promise<AssignableWorkOrder> {
   const workOrder = await workOrderRepository.findById(workOrderId);
   if (!workOrder) {
     throw workOrderNotFoundError();
@@ -291,10 +314,157 @@ async function loadAssignableWorkOrder(
   if (!isWorkOrderAssignableStatus(workOrder.status)) {
     throw workOrderAssignmentInvalidStateError(workOrder.status);
   }
+  const classification =
+    await workOrderTradeCategoryRepository.findClassification(
+      undefined,
+      workOrderId,
+    );
   return {
+    id: workOrder.id,
     clientId: workOrder.clientId,
     buildingId: workOrder.buildingId,
     status: workOrder.status,
+    tradeCategoryId: classification?.tradeCategoryId ?? null,
+    tradeCategoryCode: classification?.tradeCategoryCode ?? null,
+    riskLevel: classification?.riskLevel ?? null,
+  };
+}
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2A — the people an assignment actually
+ * commits to. A company (VENDOR) names no person, so the rule is ANY (at least
+ * one bound worker must qualify); a team works as one unit, so EVERY active
+ * member must qualify — exactly the crew rule of PART 03A.
+ */
+type AssignmentSubjects = {
+  subjects: WorkOrderCompetencySubject[];
+  rule: 'ALL' | 'ANY';
+};
+
+async function resolveAssignmentSubjects(
+  workOrder: AssignableWorkOrder,
+  input: AssignWorkOrderInput,
+): Promise<AssignmentSubjects> {
+  switch (input.assigneeType) {
+    case 'WORKFORCE':
+    case 'VENDOR_WORKFORCE': {
+      const workforceProfileId = requireId(input.workforceProfileId);
+      const profile = await workforceRepository.findById(workforceProfileId);
+      return {
+        subjects: [
+          {
+            workforceProfileId,
+            workforceProfileName: profile?.fullName ?? null,
+            role: 'ASSIGNEE',
+          },
+        ],
+        rule: 'ALL',
+      };
+    }
+    case 'TEAM': {
+      const teamId = requireId(input.teamId);
+      const members = await workforceRepository.listByTeamId(teamId);
+      return {
+        subjects: members
+          .filter((member) => member.status === 'ACTIVE')
+          .map((member) => ({
+            workforceProfileId: member.id,
+            workforceProfileName: member.fullName,
+            role: 'TEAM_MEMBER' as const,
+          })),
+        rule: 'ALL',
+      };
+    }
+    case 'VENDOR': {
+      const vendorId = requireId(input.vendorId);
+      const bindings = await vendorWorkforceRepository.listByVendorId(vendorId);
+      const candidates: WorkOrderCompetencySubject[] = [];
+      for (const binding of bindings) {
+        if (binding.status !== 'ACTIVE') continue;
+        const profile = await workforceRepository.findById(
+          binding.workforceProfileId,
+        );
+        if (!profile || profile.status !== 'ACTIVE') continue;
+        // The vendor is already proven to be inside the Work Order's Client;
+        // the worker binding is re-checked so a mis-bound profile can never be
+        // used to satisfy another Client's requirement.
+        const workerClient = await resolveWorkforceClient(profile.id);
+        if (workerClient !== workOrder.clientId) continue;
+        candidates.push({
+          workforceProfileId: profile.id,
+          workforceProfileName: profile.fullName,
+          role: 'VENDOR_CANDIDATE',
+        });
+      }
+      return { subjects: candidates, rule: 'ANY' };
+    }
+  }
+}
+
+/**
+ * The single competency gate for Work Order assignment/reassignment.
+ *
+ * Runs INSIDE the assignment transaction: the decision ledger row and the
+ * assignment commit together, so a refused assignment leaves neither a
+ * half-written assignment nor a decision that never happened. When the Work
+ * Order is unclassified (or its trade has no ACTIVE requirement) the decision
+ * is unrestricted and nothing is written.
+ */
+async function applyCompetencyGate(
+  executor: Pick<PoolClient, 'query'>,
+  workOrder: AssignableWorkOrder,
+  input: AssignWorkOrderInput,
+  assignmentId: string,
+  action: 'ASSIGNED' | 'REASSIGNED',
+): Promise<{
+  summary: WorkOrderCompetencyDecision['summary'];
+  blockingCount: number;
+}> {
+  const { subjects, rule } = await resolveAssignmentSubjects(workOrder, input);
+
+  const decision = await workOrderCompetencyService.evaluateWorkOrderCompetency(
+    executor,
+    {
+      clientId: workOrder.clientId,
+      tradeCategoryId: workOrder.tradeCategoryId,
+      tradeCategoryCode: workOrder.tradeCategoryCode,
+      subjects,
+      rule,
+    },
+  );
+
+  if (!decision.satisfied) {
+    throw workOrderAssignmentCompetencyRequiredError(
+      decision.blocking.map((gap) => ({
+        workforceProfileId: gap.workforceProfileId,
+        workforceProfileName: gap.workforceProfileName,
+        requirementId: gap.requirementId,
+        requirementType: gap.requirementType,
+        enforcementLevel: gap.enforcementLevel,
+        skillCode: gap.skillCode,
+        certificateName: gap.certificateName,
+        minimumProficiencyLevel: gap.minimumProficiencyLevel,
+        reason: gap.reason,
+        rule: decision.rule,
+      })),
+    );
+  }
+
+  await workOrderCompetencyService.recordWorkOrderCompetencyDecision(executor, {
+    clientId: workOrder.clientId,
+    workOrderId: workOrder.id,
+    assignmentId,
+    action,
+    assigneeType: input.assigneeType,
+    tradeCategoryId: decision.tradeCategoryId,
+    tradeCategoryCode: decision.tradeCategoryCode,
+    riskLevel: workOrder.riskLevel,
+    rows: decision.rows,
+  });
+
+  return {
+    summary: decision.summary,
+    blockingCount: decision.blocking.length,
   };
 }
 
@@ -319,17 +489,41 @@ export async function assignWorkOrder(
 
   const newAssignment = await resolveAssignee(workOrder, input);
   try {
-    const record = await workOrderAssignmentRepository.create(newAssignment);
-    await recordWorkOrderEvent({
-      workOrderId: input.workOrderId,
-      clientId: workOrder.clientId,
-      buildingId: workOrder.buildingId,
-      eventType: 'WORK_ORDER_ASSIGNED',
-      actorUserId: input.assignedByUserId,
-      summary: `Work order assigned to ${input.assigneeType}`,
-      metadata: { assigneeType: input.assigneeType },
+    // PART 03B2A — assignment + audit event + competency decision are ONE
+    // transaction. A competency refusal (409) rolls the assignment back, so a
+    // Work Order can never end up assigned to someone the gate rejected.
+    return await withTransaction(async (tx) => {
+      const record = await workOrderAssignmentRepository.create(
+        newAssignment,
+        tx,
+      );
+      const competency = await applyCompetencyGate(
+        tx,
+        workOrder,
+        input,
+        record.id,
+        'ASSIGNED',
+      );
+      await recordWorkOrderEvent(
+        {
+          workOrderId: input.workOrderId,
+          clientId: workOrder.clientId,
+          buildingId: workOrder.buildingId,
+          eventType: 'WORK_ORDER_ASSIGNED',
+          actorUserId: input.assignedByUserId,
+          summary: `Work order assigned to ${input.assigneeType}`,
+          metadata: {
+            assigneeType: input.assigneeType,
+            tradeCategoryId: workOrder.tradeCategoryId,
+            tradeCategoryCode: workOrder.tradeCategoryCode,
+            riskLevel: workOrder.riskLevel,
+            competency: competency.summary,
+          },
+        },
+        tx,
+      );
+      return toPublicWorkOrderAssignment(record);
     });
-    return toPublicWorkOrderAssignment(record);
   } catch (error) {
     // The partial ACTIVE unique index is the final authority for races.
     if (isActiveAssignmentUniqueViolation(error)) {
@@ -408,25 +602,52 @@ export async function reassignWorkOrder(
     workOrderId,
   });
 
-  const current = await workOrderAssignmentRepository.findActiveByWorkOrderId(
-    workOrderId,
-  );
-  if (current) {
-    await workOrderAssignmentRepository.updateStatus(current.id, 'INACTIVE');
-  }
-
   try {
-    const record = await workOrderAssignmentRepository.create(newAssignment);
-    await recordWorkOrderEvent({
-      workOrderId,
-      clientId: workOrder.clientId,
-      buildingId: workOrder.buildingId,
-      eventType: 'WORK_ORDER_REASSIGNED',
-      actorUserId: input.assignedByUserId,
-      summary: `Work order reassigned to ${input.assigneeType}`,
-      metadata: { assigneeType: input.assigneeType },
+    return await withTransaction(async (tx) => {
+      const current =
+        await workOrderAssignmentRepository.findActiveByWorkOrderId(
+          workOrderId,
+          tx,
+        );
+      if (current) {
+        await workOrderAssignmentRepository.updateStatus(
+          current.id,
+          'INACTIVE',
+          tx,
+        );
+      }
+
+      const record = await workOrderAssignmentRepository.create(
+        newAssignment,
+        tx,
+      );
+      const competency = await applyCompetencyGate(
+        tx,
+        workOrder,
+        input,
+        record.id,
+        'REASSIGNED',
+      );
+      await recordWorkOrderEvent(
+        {
+          workOrderId,
+          clientId: workOrder.clientId,
+          buildingId: workOrder.buildingId,
+          eventType: 'WORK_ORDER_REASSIGNED',
+          actorUserId: input.assignedByUserId,
+          summary: `Work order reassigned to ${input.assigneeType}`,
+          metadata: {
+            assigneeType: input.assigneeType,
+            tradeCategoryId: workOrder.tradeCategoryId,
+            tradeCategoryCode: workOrder.tradeCategoryCode,
+            riskLevel: workOrder.riskLevel,
+            competency: competency.summary,
+          },
+        },
+        tx,
+      );
+      return toPublicWorkOrderAssignment(record);
     });
-    return toPublicWorkOrderAssignment(record);
   } catch (error) {
     if (isActiveAssignmentUniqueViolation(error)) {
       // Extremely unlikely (we just deactivated); surface as already assigned.

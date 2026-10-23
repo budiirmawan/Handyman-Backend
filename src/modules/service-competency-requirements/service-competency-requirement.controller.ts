@@ -1,8 +1,13 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
+import { AppError } from '../../shared/errors';
 import { authenticationRequiredError } from '../auth';
+import { isValidUuid } from '../clients';
 import { serviceCatalogRepository, serviceCatalogNotFoundError } from '../service-catalog';
-import { serviceCompetencyRequirementService } from './service-competency-requirement.service';
+import {
+  serviceCompetencyRequirementService,
+  tradeCategoryCompetencyRequirementService,
+} from './service-competency-requirement.service';
 import {
   parseRequirementIdParam,
   parseServiceCatalogIdParam,
@@ -44,7 +49,7 @@ export async function createCompetencyRequirementHandler(
     const serviceCatalogId = parseServiceCatalogIdParam(param(req.params.id));
     const clientId = await entryClientId(serviceCatalogId);
     const input = validateCreateCompetencyRequirementInput(
-      serviceCatalogId,
+      { serviceCatalogId, tradeCategoryId: null },
       clientId,
       req.body as Record<string, unknown>,
       actor(req),
@@ -147,6 +152,174 @@ export async function deactivateCompetencyRequirementHandler(
         parseRequirementIdParam(param(req.params.requirementId)),
         actor(req),
       ),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ------------------------------------------------------------- PART 03B2A API
+
+/**
+ * Multi-trade Work Order requirement configuration.
+ *
+ * The registry row is platform-wide, so the Client that owns the requirement
+ * is explicit (`clientId` query/body) — and the service verifies the caller can
+ * actually reach that Client before any read or write. That is the same rule
+ * the Service Catalog path applies to its own Client, expressed explicitly
+ * because a registry row carries no tenant.
+ */
+function requireClientId(req: Request): string {
+  const raw = req.query.clientId ?? (req.body as Record<string, unknown> | undefined)?.clientId;
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'clientId', message: 'clientId is required.' },
+    ]);
+  }
+  const value = raw.trim().toLowerCase();
+  if (!isValidUuid(value)) {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'clientId', message: 'clientId must be a valid UUID.' },
+    ]);
+  }
+  return value;
+}
+
+function tradeCategoryId(req: Request): string {
+  const raw = param(req.params.tradeCategoryId);
+  const value = raw.trim().toLowerCase();
+  if (!isValidUuid(value)) {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'tradeCategoryId', message: 'tradeCategoryId must be a valid UUID.' },
+    ]);
+  }
+  return value;
+}
+
+export async function listTradeCategoryRequirementsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(
+      res,
+      await tradeCategoryCompetencyRequirementService
+        .listTradeCategoryCompetencyRequirements(
+          tradeCategoryId(req),
+          requireClientId(req),
+          validateListCompetencyRequirementsFilter(
+            req.query as Record<string, unknown>,
+          ),
+          actor(req),
+        ),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function createTradeCategoryRequirementHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const clientId = requireClientId(req);
+    const id = tradeCategoryId(req);
+    const input = validateCreateCompetencyRequirementInput(
+      { serviceCatalogId: null, tradeCategoryId: id },
+      clientId,
+      req.body as Record<string, unknown>,
+      actor(req),
+    );
+    sendSuccess(
+      res,
+      await tradeCategoryCompetencyRequirementService
+        .createTradeCategoryCompetencyRequirement(
+          id,
+          clientId,
+          input,
+          actor(req),
+        ),
+      201,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getTradeCategoryRequirementHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(
+      res,
+      await tradeCategoryCompetencyRequirementService
+        .getTradeCategoryCompetencyRequirement(
+          tradeCategoryId(req),
+          requireClientId(req),
+          parseRequirementIdParam(param(req.params.requirementId)),
+          actor(req),
+        ),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateTradeCategoryRequirementHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const clientId = requireClientId(req);
+    const id = tradeCategoryId(req);
+    const requirementId = parseRequirementIdParam(param(req.params.requirementId));
+    const existing = await tradeCategoryCompetencyRequirementService
+      .getTradeCategoryCompetencyRequirement(
+        id,
+        clientId,
+        requirementId,
+        actor(req),
+      );
+    sendSuccess(
+      res,
+      await tradeCategoryCompetencyRequirementService
+        .updateTradeCategoryCompetencyRequirement(
+          id,
+          clientId,
+          requirementId,
+          validateUpdateCompetencyRequirementInput(
+            existing.requirementType,
+            req.body as Record<string, unknown>,
+          ),
+          actor(req),
+        ),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function deactivateTradeCategoryRequirementHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(
+      res,
+      await tradeCategoryCompetencyRequirementService
+        .deactivateTradeCategoryCompetencyRequirement(
+          tradeCategoryId(req),
+          requireClientId(req),
+          parseRequirementIdParam(param(req.params.requirementId)),
+          actor(req),
+        ),
     );
   } catch (error) {
     next(error);

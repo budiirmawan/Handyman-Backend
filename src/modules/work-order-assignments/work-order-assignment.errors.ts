@@ -67,3 +67,26 @@ export function workOrderAssignmentAlreadyAssignedError(): AppError {
     statusCode: 409,
   });
 }
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2A — the assignee cannot demonstrate the
+ * mandatory competency requirements of the Work Order's TRADE CATEGORY.
+ *
+ * A dedicated code (rather than a generic conflict) so a client can tell
+ * "the people are not qualified for this trade" apart from every existing
+ * assignment conflict, while the HTTP status keeps the flow's 409 convention.
+ * `details` names each gap (subject × requirement × reason) using the same
+ * vocabulary the PART 03A/03B1 surfaces use.
+ */
+export function workOrderAssignmentCompetencyRequiredError(
+  details: ReadonlyArray<Record<string, unknown>>,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED,
+    message:
+      'The assignee does not satisfy the mandatory competency requirements of ' +
+      "this Work Order's trade category.",
+    statusCode: 409,
+    details: [...details],
+  });
+}

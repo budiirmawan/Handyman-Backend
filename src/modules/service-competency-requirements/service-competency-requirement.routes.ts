@@ -3,10 +3,15 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   createCompetencyRequirementHandler,
+  createTradeCategoryRequirementHandler,
   deactivateCompetencyRequirementHandler,
+  deactivateTradeCategoryRequirementHandler,
   getCompetencyRequirementHandler,
+  getTradeCategoryRequirementHandler,
   listCompetencyRequirementsHandler,
+  listTradeCategoryRequirementsHandler,
   updateCompetencyRequirementHandler,
+  updateTradeCategoryRequirementHandler,
 } from './service-competency-requirement.controller';
 
 /**
@@ -51,6 +56,36 @@ export function createServiceCompetencyRequirementRouter(): Router {
     auth,
     manage,
     deactivateCompetencyRequirementHandler,
+  );
+
+  // PART 03B2A — the same requirement model keyed by a multi-trade Work Order
+  // category. Permission vocabulary is the Work Order one (`work_order.read` /
+  // `work_order.manage`); the Client that owns the configuration is explicit
+  // and verified against the caller's own Building reach.
+  const tradeBase =
+    '/work-order-trade-categories/:tradeCategoryId/competency-requirements';
+  const tradeRead = requirePermission('work_order.read');
+  const tradeManage = requirePermission('work_order.manage');
+
+  router.get(tradeBase, auth, tradeRead, listTradeCategoryRequirementsHandler);
+  router.post(tradeBase, auth, tradeManage, createTradeCategoryRequirementHandler);
+  router.get(
+    `${tradeBase}/:requirementId`,
+    auth,
+    tradeRead,
+    getTradeCategoryRequirementHandler,
+  );
+  router.patch(
+    `${tradeBase}/:requirementId`,
+    auth,
+    tradeManage,
+    updateTradeCategoryRequirementHandler,
+  );
+  router.post(
+    `${tradeBase}/:requirementId/deactivate`,
+    auth,
+    tradeManage,
+    deactivateTradeCategoryRequirementHandler,
   );
 
   return router;
