@@ -194,6 +194,55 @@ export type ListWorkforceCertificationsFilter = {
   currentOnly?: boolean;
 };
 
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B1 — one immutable row of the certification
+ * decision ledger.
+ *
+ * `decision` is the resulting verification status. `previous*` describes the
+ * decision this row replaced, which is exactly the information the single-row
+ * PART 02 model used to overwrite. `changedFields` is populated only when a
+ * MATERIAL metadata edit forced the reset, so a reader can tell an
+ * administrative reset apart from an explicit verify/reject.
+ */
+export type CertificationDecisionRecord = {
+  id: string;
+  clientId: string;
+  certificationId: string;
+  workforceProfileId: string;
+  decision: WorkforceCertificationVerificationStatus;
+  previousVerificationStatus: WorkforceCertificationVerificationStatus | null;
+  previousVerifiedByUserId: string | null;
+  previousVerifiedAt: string | null;
+  changedFields: string[] | null;
+  /** The note supplied with a verify/reject decision (never the metadata edit). */
+  reason: string | null;
+  decidedByUserId: string | null;
+  decidedAt: string;
+};
+
+/**
+ * Fields whose change invalidates a previous attestation. Deliberately
+ * MATERIAL only: a note or a bookkeeping edit must not silently withdraw an
+ * attestation, but anything that changes WHAT was attested must.
+ *
+ * `expiryDate` and `status` are on the list because extending validity changes
+ * the claim being made. `notes` is intentionally absent.
+ */
+export const CERTIFICATION_MATERIAL_FIELDS = [
+  'certificateNumber',
+  'certificateName',
+  'issuingAuthority',
+  'issueDate',
+  'expiryDate',
+  'skillId',
+  'documentId',
+  'fileReference',
+  'status',
+] as const;
+
+export type CertificationMaterialField =
+  (typeof CERTIFICATION_MATERIAL_FIELDS)[number];
+
 export type ListExpiringWorkforceCertificationsFilter = {
   /** Look-ahead window in days. Defaults to 30, bounded to 1..365. */
   days: number;

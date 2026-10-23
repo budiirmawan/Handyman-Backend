@@ -14,6 +14,7 @@ import { migration0460HandymanSettlementDisputeAdjudication } from './0460_handy
 import { migration0461CreateWorkforceCertifications } from './0461_create_workforce_certifications';
 import { migration0462WorkforceCertificationPermissions } from './0462_workforce_certification_permissions';
 import { migration0463ServiceCatalogCompetencyRequirements } from './0463_service_catalog_competency_requirements';
+import { migration0464WorkforceCompetencyDecisionHistory } from './0464_workforce_competency_decision_history';
 import { migration0456ApartmentMasterData } from './0456_apartment_master_data';
 import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
 import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
@@ -965,4 +966,5 @@ export const migrations: readonly Migration[] = [
   migration0461CreateWorkforceCertifications,
   migration0462WorkforceCertificationPermissions,
   migration0463ServiceCatalogCompetencyRequirements,
+  migration0464WorkforceCompetencyDecisionHistory,
 ];

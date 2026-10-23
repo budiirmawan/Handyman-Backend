@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { QueryResultRow } from 'pg';
+import type { PoolClient, QueryResultRow } from 'pg';
 import { getPool } from '../../database';
 import type {
   ListExpiringWorkforceCertificationsFilter,
@@ -328,11 +328,14 @@ export const workforceCertificationRepository = {
     };
   },
 
-  async findById(id: string): Promise<WorkforceCertificationRecord | null> {
-    const result = await query<WorkforceCertificationRow>(
-      `${SELECT_WITH_RELATIONS} WHERE wc.id = $1`,
-      [id],
-    );
+  async findById(
+    id: string,
+    executor?: Pick<PoolClient, 'query'>,
+  ): Promise<WorkforceCertificationRecord | null> {
+    const sql = `${SELECT_WITH_RELATIONS} WHERE wc.id = $1`;
+    const result = executor
+      ? await executor.query<WorkforceCertificationRow>(sql, [id])
+      : await query<WorkforceCertificationRow>(sql, [id]);
     const row = result.rows[0];
     return row ? mapRow(row) : null;
   },
@@ -340,12 +343,16 @@ export const workforceCertificationRepository = {
   async findByIdInWorkforceProfile(
     workforceProfileId: string,
     id: string,
+    executor?: Pick<PoolClient, 'query'>,
   ): Promise<WorkforceCertificationRecord | null> {
-    const result = await query<WorkforceCertificationRow>(
-      `${SELECT_WITH_RELATIONS}
-        WHERE wc.workforce_profile_id = $1 AND wc.id = $2`,
-      [workforceProfileId, id],
-    );
+    const sql = `${SELECT_WITH_RELATIONS}
+        WHERE wc.workforce_profile_id = $1 AND wc.id = $2`;
+    const result = executor
+      ? await executor.query<WorkforceCertificationRow>(sql, [
+        workforceProfileId,
+        id,
+      ])
+      : await query<WorkforceCertificationRow>(sql, [workforceProfileId, id]);
     const row = result.rows[0];
     return row ? mapRow(row) : null;
   },
@@ -605,6 +612,7 @@ export const workforceCertificationRepository = {
       fileReference?: string | null;
       notes?: string | null;
     },
+    executor?: Pick<PoolClient, 'query'>,
   ): Promise<WorkforceCertificationRecord | null> {
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -666,15 +674,15 @@ export const workforceCertificationRepository = {
     fields.push(`updated_at = NOW()`);
     values.push(id);
 
-    const updateResult = await query(
-      `UPDATE workforce_certifications
+    const sql = `UPDATE workforce_certifications
           SET ${fields.join(', ')}
-        WHERE id = $${index}`,
-      values,
-    );
+        WHERE id = $${index}`;
+    const updateResult = executor
+      ? await executor.query(sql, values)
+      : await query(sql, values);
     if ((updateResult.rowCount ?? 0) === 0) {
       return null;
     }
-    return this.findById(id);
+    return this.findById(id, executor);
   },
 };

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import type { PoolClient } from 'pg';
 import { assertBuildingScopedResourceAccess } from '../context-access';
@@ -12,8 +13,11 @@ import {
   resolveWorkforceCertificationExpiryStatus,
   type WorkforceCertificationStatus,
 } from '../workforce-certifications';
+import { workerCompetencyDecisionRepository } from './worker-competency-decision.repository';
 import { workerCompetencyEligibilityRepository as repository } from './worker-competency-eligibility.repository';
 import type {
+  AssignmentCompetencyEvaluationRow,
+  AssignmentCompetencyHistoryItem,
   CompetencyCandidateReport,
   CompetencyEvidence,
   CompetencyEvaluationSummary,
@@ -21,6 +25,7 @@ import type {
   CompetencyGapReason,
   CompetencyRequirementEvaluation,
   CrewCompetencyEligibilityReport,
+  CrewEvaluationResult,
   CrewWorkerRow,
   WorkerCertificationRow,
   WorkerCompetencyEligibility,
@@ -281,7 +286,10 @@ function evaluateWorker(
   skills: WorkerSkillRow[],
   certifications: WorkerCertificationRow[],
   now: Date,
-): WorkerCompetencyEligibility {
+): {
+  eligibility: WorkerCompetencyEligibility;
+  evaluations: CompetencyRequirementEvaluation[];
+} {
   const evaluations = requirements.map((requirement) =>
     evaluateRequirement(requirement, skills, certifications, now),
   );
@@ -293,15 +301,18 @@ function evaluateWorker(
     (evaluation) => evaluation.enforcementLevel === 'RECOMMENDED',
   );
   return {
-    workerContextId: worker.workerContextId,
-    workforceProfileId: worker.workforceProfileId,
-    workforceProfileName: worker.workforceProfileName,
-    isLead: worker.isLead,
-    eligible: blockingGaps.length === 0,
-    blockingGaps,
-    advisoryGaps,
-    satisfiedCount: evaluations.length - fails.length,
-    requirementsEvaluated: evaluations.length,
+    eligibility: {
+      workerContextId: worker.workerContextId,
+      workforceProfileId: worker.workforceProfileId,
+      workforceProfileName: worker.workforceProfileName,
+      isLead: worker.isLead,
+      eligible: blockingGaps.length === 0,
+      blockingGaps,
+      advisoryGaps,
+      satisfiedCount: evaluations.length - fails.length,
+      requirementsEvaluated: evaluations.length,
+    },
+    evaluations,
   };
 }
 
@@ -336,10 +347,7 @@ type EvaluateInput = {
 async function evaluateCrews(
   executor: Pick<PoolClient, 'query'> | undefined,
   input: EvaluateInput,
-): Promise<{
-  requirements: CompetencyRequirementRecord[];
-  workersByCrew: Map<string, WorkerCompetencyEligibility[]>;
-}> {
+): Promise<CrewEvaluationResult> {
   const requirements =
     await serviceCompetencyRequirementRepository.listActiveByServiceCatalog(
       executor,
@@ -370,7 +378,7 @@ async function evaluateCrews(
           })),
       );
     }
-    return { requirements, workersByCrew };
+    return { requirements, workersByCrew, evaluationsByCrew: new Map() };
   }
 
   const profileIds = [...new Set(workers.map((worker) => worker.workforceProfileId))];
@@ -384,29 +392,79 @@ async function evaluateCrews(
   ]);
   const now = new Date();
 
+  const evaluationsByCrew = new Map<
+    string,
+    Map<string, CompetencyRequirementEvaluation[]>
+  >();
+
   for (const crewId of input.crewIds) {
-    workersByCrew.set(
-      crewId,
-      workers
-        .filter((worker) => worker.crewId === crewId)
-        .map((worker) =>
-          evaluateWorker(
-            worker,
-            requirements,
-            skills.filter(
-              (skill) => skill.workforceProfileId === worker.workforceProfileId,
-            ),
-            certifications.filter(
-              (certification) =>
-                certification.workforceProfileId === worker.workforceProfileId,
-            ),
-            now,
-          ),
+    const crewWorkers = workers.filter((worker) => worker.crewId === crewId);
+    const perWorker = new Map<string, CompetencyRequirementEvaluation[]>();
+    const eligibilities: WorkerCompetencyEligibility[] = [];
+    for (const worker of crewWorkers) {
+      const result = evaluateWorker(
+        worker,
+        requirements,
+        skills.filter(
+          (skill) => skill.workforceProfileId === worker.workforceProfileId,
         ),
-    );
+        certifications.filter(
+          (certification) =>
+            certification.workforceProfileId === worker.workforceProfileId,
+        ),
+        now,
+      );
+      eligibilities.push(result.eligibility);
+      perWorker.set(worker.workerContextId, result.evaluations);
+    }
+    workersByCrew.set(crewId, eligibilities);
+    evaluationsByCrew.set(crewId, perWorker);
   }
 
-  return { requirements, workersByCrew };
+  return { requirements, workersByCrew, evaluationsByCrew };
+}
+
+/**
+ * PART 03B1 — flattens the crew verdict into ledger rows (worker × requirement).
+ *
+ * Evidence is deliberately reduced to what explains a verdict: the opaque
+ * certificate id, the verification status and the expiry date. Certificate
+ * numbers, document ids, storage keys and document contents never enter the
+ * decision ledger.
+ */
+export function toDecisionLedgerRows(
+  workers: WorkerCompetencyEligibility[],
+  evaluationsByWorker: Map<string, CompetencyRequirementEvaluation[]>,
+): AssignmentCompetencyEvaluationRow[] {
+  const rows: AssignmentCompetencyEvaluationRow[] = [];
+  for (const worker of workers) {
+    const evaluations = evaluationsByWorker.get(worker.workerContextId) ?? [];
+    for (const evaluation of evaluations) {
+      const evidence = evaluation.evidence;
+      const gap = evaluation.gapEvidence;
+      rows.push({
+        workerContextId: worker.workerContextId,
+        workforceProfileId: worker.workforceProfileId,
+        requirementId: evaluation.requirementId,
+        requirementType: evaluation.requirementType,
+        enforcementLevel: evaluation.enforcementLevel,
+        skillId: evaluation.skillId,
+        skillCode: evaluation.skillCode,
+        minimumProficiencyLevel: evaluation.minimumProficiencyLevel,
+        certificateName: evaluation.certificateName,
+        satisfied: evaluation.satisfied,
+        reason: evaluation.reason,
+        evidenceProficiencyLevel:
+          evidence?.proficiencyLevel ?? gap?.proficiencyLevel ?? null,
+        evidenceCertificationId:
+          evidence?.certificationId ?? gap?.certificationId ?? null,
+        evidenceVerificationStatus:
+          evidence?.verificationStatus ?? gap?.verificationStatus ?? null,
+        evidenceExpiryDate: evidence?.expiryDate ?? gap?.expiryDate ?? null,
+      });
+    }
+  }
+  return rows;
 }
 
 /**
@@ -419,10 +477,26 @@ async function evaluateCrews(
  * competent for this job type" from every existing assignment conflict, while
  * the status code keeps the flow's 409 conflict convention.
  */
-export async function assertExecutionScopeCompetencyEligible(
+export type ExecutionScopeCompetencyDecision = {
+  summary: CompetencyEvaluationSummary;
+  serviceCatalogId: string;
+  /** Flat ledger rows (worker x requirement) for the decision history. */
+  evaluations: AssignmentCompetencyEvaluationRow[];
+};
+
+/**
+ * PART 03B1 — evaluates AND hands back the decision detail.
+ *
+ * The verdict is unchanged from PART 03A (same evaluator, same blocking rule).
+ * What is new is the returned `evaluations`, so the assignment authority can
+ * persist the decision history in its own transaction without re-evaluating
+ * anything (and therefore without any chance of the ledger disagreeing with the
+ * decision that was actually enforced).
+ */
+export async function evaluateExecutionScopeCompetency(
   executor: Pick<PoolClient, 'query'>,
   input: { executionScopeId: string; clientId: string; crewId: string },
-): Promise<CompetencyEvaluationSummary> {
+): Promise<ExecutionScopeCompetencyDecision> {
   const jobType = await repository.resolveScopeJobType(
     executor,
     input.executionScopeId,
@@ -431,12 +505,15 @@ export async function assertExecutionScopeCompetencyEligible(
     throw handymanExecutionScopeNotFoundError();
   }
 
-  const { requirements, workersByCrew } = await evaluateCrews(executor, {
-    executionScopeId: input.executionScopeId,
-    clientId: input.clientId,
-    serviceCatalogId: jobType.serviceCatalogId,
-    crewIds: [input.crewId],
-  });
+  const { requirements, workersByCrew, evaluationsByCrew } = await evaluateCrews(
+    executor,
+    {
+      executionScopeId: input.executionScopeId,
+      clientId: input.clientId,
+      serviceCatalogId: jobType.serviceCatalogId,
+      crewIds: [input.crewId],
+    },
+  );
 
   const workers = workersByCrew.get(input.crewId) ?? [];
   const blocking = workers.flatMap((worker) =>
@@ -464,7 +541,26 @@ export async function assertExecutionScopeCompetencyEligible(
     });
   }
 
-  return summarize(requirements);
+  return {
+    summary: summarize(requirements),
+    serviceCatalogId: jobType.serviceCatalogId,
+    evaluations: toDecisionLedgerRows(
+      workers,
+      evaluationsByCrew.get(input.crewId) ?? new Map(),
+    ),
+  };
+}
+
+/**
+ * PART 03A enforcement entry point, kept for its original callers: the verdict
+ * is the same, only the summary is surfaced.
+ */
+export async function assertExecutionScopeCompetencyEligible(
+  executor: Pick<PoolClient, 'query'>,
+  input: { executionScopeId: string; clientId: string; crewId: string },
+): Promise<CompetencyEvaluationSummary> {
+  const decision = await evaluateExecutionScopeCompetency(executor, input);
+  return decision.summary;
 }
 
 /** Read-only preflight for one crew: "would this assignment be accepted?" */
@@ -560,3 +656,83 @@ export const workerCompetencyEligibilityService = {
   getCrewCompetencyEligibility,
   listCompetencyCandidates,
 };
+
+export type ListAssignmentCompetencyHistoryFilter = {
+  action?: 'ASSIGNED' | 'REASSIGNED';
+  assignmentId?: string;
+  crewId?: string;
+  workerContextId?: string;
+  satisfied?: boolean;
+  enforcementLevel?: 'MANDATORY' | 'RECOMMENDED';
+};
+
+/**
+ * PART 03B1 — read the assignment competency decision history for one
+ * Execution Scope.
+ *
+ * Authorization is the SAME exact-Building rule the assignment and eligibility
+ * surfaces already use (BE-02G, no same-Client shortcut), and the Client comes
+ * from the scope row — never from the caller. Pagination is opt-in through the
+ * shared BE-25A contract.
+ */
+export async function listAssignmentCompetencyHistory(
+  executionScopeId: string,
+  filter: ListAssignmentCompetencyHistoryFilter,
+  pagination: { limit: number; offset: number },
+  actorUserId: string,
+): Promise<{
+  items: AssignmentCompetencyHistoryItem[];
+  total: number;
+}> {
+  const jobType = await repository.resolveScopeJobType(undefined, executionScopeId);
+  if (!jobType) throw handymanExecutionScopeNotFoundError();
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: jobType.clientId,
+    buildingId: jobType.buildingId,
+  });
+
+  const input = {
+    clientId: jobType.clientId,
+    executionScopeId,
+    limit: pagination.limit,
+    offset: pagination.offset,
+    ...filter,
+  };
+  const [items, total] = await Promise.all([
+    workerCompetencyDecisionRepository.listDecisionHistory(undefined, input),
+    workerCompetencyDecisionRepository.countDecisionHistory(undefined, input),
+  ]);
+  return { items, total };
+}
+
+/**
+ * PART 03B1 — writes the decision group for a just-created assignment.
+ *
+ * MUST be called inside the assignment transaction: the caller passes `tx`, so
+ * the ledger row and the assignment commit (or roll back) together.
+ */
+export async function recordAssignmentCompetencyDecision(
+  executor: Pick<PoolClient, 'query'>,
+  input: {
+    clientId: string;
+    executionScopeId: string;
+    assignmentId: string;
+    crewId: string;
+    action: 'ASSIGNED' | 'REASSIGNED';
+    serviceCatalogId: string;
+    evaluations: AssignmentCompetencyEvaluationRow[];
+  },
+): Promise<{ decisionGroupId: string | null; rowCount: number }> {
+  if (input.evaluations.length === 0) {
+    // A job type with no ACTIVE requirement produces no evaluation rows: there
+    // is nothing to explain, and an empty group would only add noise.
+    return { decisionGroupId: null, rowCount: 0 };
+  }
+  const decisionGroupId = randomUUID();
+  const { evaluations, ...group } = input;
+  const rowCount = await workerCompetencyDecisionRepository.appendDecisionGroup(
+    executor,
+    { ...group, decisionGroupId, rows: evaluations },
+  );
+  return { decisionGroupId, rowCount };
+}

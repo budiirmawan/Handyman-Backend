@@ -58,8 +58,13 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   // to the previously pinned 269-operation surface: 269 + 2 = 271. The
   // runtime-parity assertion below is what actually guards the contract; the
   // constant only pins the size of the surface a reviewer should expect.
-  it('keeps the 271-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 271);
+  //
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B1 then adds ONE more read-only Handyman
+  // operation (`.../competency/history`): 271 + 1 = 272. It is a read, so it
+  // widens no mutation surface; the additive cert-decision route lives outside
+  // `/handyman` and is covered by the generic parity assertion.
+  it('keeps the 272-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 272);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -164,7 +169,9 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
     // and must stay unannotated rather than name a misleading permission.
     // CR-HM-WORKER-COMPETENCY-01 PART 03A adds two route-guarded operations
     // (`tenant_company.read`): 179 + 2 = 181.
-    assert.equal(annotated, 181);
+    // CR-HM-WORKER-COMPETENCY-01 PART 03B1 adds one more route-guarded read
+    // (`tenant_company.read` on `.../competency/history`): 181 + 1 = 182.
+    assert.equal(annotated, 182);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

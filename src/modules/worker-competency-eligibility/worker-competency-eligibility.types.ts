@@ -182,3 +182,75 @@ export type CandidateCrewRow = {
   providerContextId: string;
   providerContextStatus: string;
 };
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B1 — one row of the assignment competency
+ * decision ledger (worker × requirement × assignment action).
+ *
+ * The snapshot is intentionally MINIMAL and de-identified beyond what a verdict
+ * needs: no certificate number, no document id, no storage key, no document
+ * contents, no token. `evidenceCertificationId` is an opaque reference used to
+ * follow the case up through the certification authority.
+ */
+export type AssignmentCompetencyEvaluationRow = {
+  workerContextId: string;
+  workforceProfileId: string;
+  requirementId: string;
+  requirementType: 'SKILL' | 'CERTIFICATION';
+  enforcementLevel: CompetencyEnforcementLevel;
+  skillId: string | null;
+  skillCode: string | null;
+  minimumProficiencyLevel: ProficiencyLevel | null;
+  certificateName: string | null;
+  satisfied: boolean;
+  reason: CompetencyGapReason | null;
+  evidenceProficiencyLevel: ProficiencyLevel | null;
+  evidenceCertificationId: string | null;
+  evidenceVerificationStatus: string | null;
+  evidenceExpiryDate: string | null;
+};
+
+/** Internal shape returned by the shared evaluator (PART 03B1 widening). */
+export type CrewEvaluationResult = {
+  requirements: import('../service-competency-requirements').CompetencyRequirementRecord[];
+  workersByCrew: Map<string, WorkerCompetencyEligibility[]>;
+  evaluationsByCrew: Map<
+    string,
+    Map<string, CompetencyRequirementEvaluation[]>
+  >;
+};
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B1 — one row of the decision ledger as read
+ * back through the API. `requirementType`/`enforcementLevel`/level are the
+ * values that applied at decision time, even if the requirement was edited
+ * afterwards.
+ */
+export type AssignmentCompetencyHistoryItem = {
+  id: string;
+  /** All rows written by one assign/reassign action share this id. */
+  decisionGroupId: string;
+  clientId: string;
+  executionScopeId: string;
+  assignmentId: string;
+  crewId: string;
+  action: 'ASSIGNED' | 'REASSIGNED';
+  serviceCatalogId: string;
+  workerContextId: string;
+  workforceProfileId: string;
+  requirementId: string;
+  requirementType: 'SKILL' | 'CERTIFICATION';
+  enforcementLevel: CompetencyEnforcementLevel;
+  skillId: string | null;
+  skillCode: string | null;
+  minimumProficiencyLevel: ProficiencyLevel | null;
+  certificateName: string | null;
+  satisfied: boolean;
+  reason: CompetencyGapReason | null;
+  evidenceProficiencyLevel: ProficiencyLevel | null;
+  /** Opaque certificate reference — NEVER a number, document id or storage key. */
+  evidenceCertificationId: string | null;
+  evidenceVerificationStatus: string | null;
+  evidenceExpiryDate: string | null;
+  evaluatedAt: string;
+};

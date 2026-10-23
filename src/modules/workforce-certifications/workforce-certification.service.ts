@@ -1,4 +1,4 @@
-import { getPool } from '../../database';
+import { getPool, withTransaction } from '../../database';
 import {
   buildingAccessDeniedError,
   contextAccessService,
@@ -21,12 +21,15 @@ import {
   workforceCertificationVerificationActorRequiredError,
   workforceCertificationVerificationNotAllowedError,
 } from './workforce-certification.errors';
+import { workforceCertificationDecisionRepository } from './workforce-certification-decision.repository';
 import {
   workforceCertificationRepository,
   type WorkforceProfileClientContext,
 } from './workforce-certification.repository';
 import {
+  CERTIFICATION_MATERIAL_FIELDS,
   WORKFORCE_CERTIFICATION_PERMISSIONS,
+  type CertificationDecisionRecord,
   type CreateWorkforceCertificationInput,
   type DeactivateWorkforceCertificationInput,
   type ListExpiringWorkforceCertificationsFilter,
@@ -350,6 +353,87 @@ function resolveVerificationAuditFields(
   };
 }
 
+/** ISO-normalises a date-ish value so equality is not spoiled by formatting. */
+function normalizeComparableDate(value: string | Date | null): string | null {
+  if (value === null) return null;
+  return new Date(value).toISOString();
+}
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B1 — which MATERIAL fields the patch
+ * actually changes.
+ *
+ * The comparison is against the STORED record, not against "was the key
+ * supplied": re-sending an unchanged value (a common client behaviour) must not
+ * withdraw an attestation. Dates are compared as instants and text as trimmed
+ * values, matching how the columns are written.
+ */
+function resolveMaterialChanges(
+  existing: WorkforceCertificationRecord,
+  input: UpdateWorkforceCertificationInput,
+  next: {
+    status: WorkforceCertificationStatus;
+    expiryDate: string | null;
+    fileReference: string | null;
+  },
+): string[] {
+  const changed: string[] = [];
+  const push = (field: string, differs: boolean): void => {
+    if (differs) changed.push(field);
+  };
+
+  if (input.certificateNumber !== undefined) {
+    push(
+      'certificateNumber',
+      input.certificateNumber.trim() !== existing.certificateNumber,
+    );
+  }
+  if (input.certificateName !== undefined) {
+    push(
+      'certificateName',
+      input.certificateName.trim() !== existing.certificateName,
+    );
+  }
+  if (input.issuingAuthority !== undefined) {
+    push(
+      'issuingAuthority',
+      input.issuingAuthority.trim() !== existing.issuingAuthority,
+    );
+  }
+  if (input.issueDate !== undefined) {
+    push(
+      'issueDate',
+      normalizeComparableDate(input.issueDate) !==
+        normalizeComparableDate(existing.issueDate),
+    );
+  }
+  if (input.expiryDate !== undefined) {
+    push(
+      'expiryDate',
+      normalizeComparableDate(next.expiryDate) !==
+        normalizeComparableDate(existing.expiryDate),
+    );
+  }
+  if (input.skillId !== undefined) {
+    push('skillId', (input.skillId ?? null) !== existing.skillId);
+  }
+  if (input.documentId !== undefined) {
+    push('documentId', (input.documentId ?? null) !== existing.documentId);
+  }
+  if (input.fileReference !== undefined) {
+    push(
+      'fileReference',
+      (next.fileReference ?? null) !== (existing.fileReference ?? null),
+    );
+  }
+  push('status', next.status !== existing.status);
+
+  // Guard-rail: the list above is the policy. Anything outside it (notably
+  // `notes`) can never force a reset, and the returned order is the declared
+  // policy order so the audit reads consistently.
+  return CERTIFICATION_MATERIAL_FIELDS.filter((field) => changed.includes(field));
+}
+
 export const workforceCertificationService = {
   async listWorkforceCertifications(
     workforceProfileId: string,
@@ -602,31 +686,110 @@ export const workforceCertificationService = {
       }
     }
 
+    // PART 03B1 — a MATERIAL edit withdraws the previous attestation.
+    // Computed against the STORED record (re-sending an unchanged value is not
+    // a change), and before the write so the reset is part of the same row
+    // update instead of a follow-up statement that could be lost.
+    const materialChanges = resolveMaterialChanges(existing, input, {
+      status: nextStatus,
+      expiryDate: nextExpiryDate,
+      fileReference:
+        nextFileReference !== undefined
+          ? nextFileReference
+          : existing.fileReference,
+    });
+    const requiresReverification =
+      materialChanges.length > 0 &&
+      existing.verificationStatus !== 'PENDING_VERIFICATION';
+
     let updated: WorkforceCertificationRecord | null;
     try {
-      updated = await workforceCertificationRepository.update(certificationId, {
-        ...(input.skillId !== undefined ? { skillId: input.skillId } : {}),
-        ...(input.certificateNumber !== undefined
-          ? { certificateNumber: input.certificateNumber }
-          : {}),
-        ...(input.certificateName !== undefined
-          ? { certificateName: input.certificateName }
-          : {}),
-        ...(input.issuingAuthority !== undefined
-          ? { issuingAuthority: input.issuingAuthority }
-          : {}),
-        ...(input.issueDate !== undefined ? { issueDate: input.issueDate } : {}),
-        ...(input.expiryDate !== undefined
-          ? { expiryDate: input.expiryDate }
-          : {}),
-        status: nextStatus,
-        ...(input.documentId !== undefined
-          ? { documentId: input.documentId }
-          : {}),
-        ...(nextFileReference !== undefined
-          ? { fileReference: nextFileReference }
-          : {}),
-        ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      updated = await withTransaction(async (tx) => {
+        const written = await workforceCertificationRepository.update(
+          certificationId,
+          {
+            ...(input.skillId !== undefined ? { skillId: input.skillId } : {}),
+            ...(input.certificateNumber !== undefined
+              ? { certificateNumber: input.certificateNumber }
+              : {}),
+            ...(input.certificateName !== undefined
+              ? { certificateName: input.certificateName }
+              : {}),
+            ...(input.issuingAuthority !== undefined
+              ? { issuingAuthority: input.issuingAuthority }
+              : {}),
+            ...(input.issueDate !== undefined
+              ? { issueDate: input.issueDate }
+              : {}),
+            ...(input.expiryDate !== undefined
+              ? { expiryDate: input.expiryDate }
+              : {}),
+            status: nextStatus,
+            // The reset is written in the SAME statement as the metadata edit:
+            // a certificate can never exist in the state "new facts, old
+            // attestation", not even for one transaction.
+            ...(requiresReverification
+              ? {
+                verificationStatus: 'PENDING_VERIFICATION' as const,
+                verifiedByUserId: null,
+                verifiedAt: null,
+              }
+              : {}),
+            ...(input.documentId !== undefined
+              ? { documentId: input.documentId }
+              : {}),
+            ...(nextFileReference !== undefined
+              ? { fileReference: nextFileReference }
+              : {}),
+            ...(input.notes !== undefined ? { notes: input.notes } : {}),
+          },
+          tx,
+        );
+
+        if (!written) {
+          return null;
+        }
+
+        if (requiresReverification) {
+          // Previous decision is preserved in the append-only ledger, not lost.
+          await workforceCertificationDecisionRepository.appendDecision(tx, {
+            clientId: profile.clientId,
+            certificationId,
+            workforceProfileId,
+            decision: 'PENDING_VERIFICATION',
+            previousVerificationStatus: existing.verificationStatus,
+            previousVerifiedByUserId: existing.verifiedByUserId,
+            previousVerifiedAt: existing.verifiedAt,
+            changedFields: materialChanges,
+            reason: null,
+            decidedByUserId: actor?.id ?? null,
+          });
+        }
+
+        if (actor) {
+          await recordOperationalEvent(
+            {
+              clientId: profile.clientId,
+              eventType: 'WORKFORCE_CERTIFICATION_UPDATED',
+              entityType: 'WORKFORCE_CERTIFICATION',
+              entityId: written.id,
+              actorUserId: actor.id,
+              summary:
+                `Workforce certification ${written.certificateNumber} updated`,
+              metadata: {
+                workforceProfileId,
+                status: written.status,
+                verificationStatus: written.verificationStatus,
+                ...(requiresReverification
+                  ? { materialChanges, reverified: true }
+                  : {}),
+              },
+            },
+            tx,
+          );
+        }
+
+        return written;
       });
     } catch (err) {
       if (isPgUniqueViolation(err)) {
@@ -637,22 +800,6 @@ export const workforceCertificationService = {
 
     if (!updated) {
       throw workforceCertificationNotFoundError();
-    }
-
-    if (actor) {
-      await recordOperationalEvent({
-        clientId: profile.clientId,
-        eventType: 'WORKFORCE_CERTIFICATION_UPDATED',
-        entityType: 'WORKFORCE_CERTIFICATION',
-        entityId: updated.id,
-        actorUserId: actor.id,
-        summary: `Workforce certification ${updated.certificateNumber} updated`,
-        metadata: {
-          workforceProfileId,
-          status: updated.status,
-          verificationStatus: updated.verificationStatus,
-        },
-      });
     }
 
     return updated;
@@ -703,38 +850,106 @@ export const workforceCertificationService = {
       actor,
     );
 
-    const updated = await workforceCertificationRepository.update(
-      certificationId,
-      {
-        verificationStatus: input.verificationStatus,
-        verifiedByUserId: audit.verifiedByUserId,
-        verifiedAt: audit.verifiedAt,
-        ...(input.notes !== undefined ? { notes: input.notes } : {}),
-      },
-    );
+    // PART 03B1 — the decision and its ledger row are one transaction: a
+    // decision that is not recorded never happened, and a recorded decision
+    // always matches the row it describes.
+    const updated = await withTransaction(async (tx) => {
+      const written = await workforceCertificationRepository.update(
+        certificationId,
+        {
+          verificationStatus: input.verificationStatus,
+          verifiedByUserId: audit.verifiedByUserId,
+          verifiedAt: audit.verifiedAt,
+          ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        },
+        tx,
+      );
+
+      if (!written) {
+        return null;
+      }
+
+      await workforceCertificationDecisionRepository.appendDecision(tx, {
+        clientId: profile.clientId,
+        certificationId,
+        workforceProfileId,
+        decision: input.verificationStatus,
+        previousVerificationStatus: existing.verificationStatus,
+        previousVerifiedByUserId: existing.verifiedByUserId,
+        previousVerifiedAt: existing.verifiedAt,
+        // An explicit decision is never a metadata-driven reset.
+        changedFields: null,
+        reason: input.notes ?? null,
+        decidedByUserId: actor?.id ?? null,
+      });
+
+      if (actor) {
+        await recordOperationalEvent(
+          {
+            clientId: profile.clientId,
+            eventType: 'WORKFORCE_CERTIFICATION_VERIFIED',
+            entityType: 'WORKFORCE_CERTIFICATION',
+            entityId: written.id,
+            actorUserId: actor.id,
+            summary: `Workforce certification ${written.certificateNumber} verification status set to ${written.verificationStatus}`,
+            metadata: {
+              workforceProfileId,
+              previousVerificationStatus: existing.verificationStatus,
+              verificationStatus: written.verificationStatus,
+              certificateExpiryStatus: written.expiryStatus,
+            },
+          },
+          tx,
+        );
+      }
+
+      return written;
+    });
 
     if (!updated) {
       throw workforceCertificationNotFoundError();
     }
 
-    if (actor) {
-      await recordOperationalEvent({
-        clientId: profile.clientId,
-        eventType: 'WORKFORCE_CERTIFICATION_VERIFIED',
-        entityType: 'WORKFORCE_CERTIFICATION',
-        entityId: updated.id,
-        actorUserId: actor.id,
-        summary: `Workforce certification ${updated.certificateNumber} verification status set to ${updated.verificationStatus}`,
-        metadata: {
-          workforceProfileId,
-          previousVerificationStatus: existing.verificationStatus,
-          verificationStatus: updated.verificationStatus,
-          certificateExpiryStatus: updated.expiryStatus,
-        },
-      });
-    }
-
     return updated;
+  },
+
+  /**
+   * PART 03B1 — the certification decision ledger, newest first.
+   *
+   * Read authority is the SAME rule as the certificate itself (self, Crew Lead
+   * or `workforce_certification.read`), and the Client boundary is resolved
+   * from the workforce profile — never from the caller. A certificate from
+   * another Client is therefore a 403, not an empty page.
+   */
+  async listWorkforceCertificationDecisions(
+    workforceProfileId: string,
+    certificationId: string,
+    options: { limit?: number; offset?: number } = {},
+    actor?: WorkforceCertificationActor,
+  ): Promise<{ decisions: CertificationDecisionRecord[]; total: number }> {
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureReadAccess(profile, actor);
+    const certification =
+      await workforceCertificationRepository.findByIdInWorkforceProfile(
+        workforceProfileId,
+        certificationId,
+      );
+    if (!certification) {
+      throw workforceCertificationNotFoundError();
+    }
+    const [decisions, total] = await Promise.all([
+      workforceCertificationDecisionRepository.listByCertification(undefined, {
+        certificationId,
+        clientId: profile.clientId,
+        limit: options.limit,
+        offset: options.offset,
+      }),
+      workforceCertificationDecisionRepository.countByCertification(undefined, {
+        certificationId,
+        clientId: profile.clientId,
+      }),
+    ]);
+    return { decisions, total };
   },
 
   async deactivateWorkforceCertification(

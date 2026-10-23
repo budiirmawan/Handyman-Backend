@@ -6,6 +6,7 @@ import {
   deactivateWorkforceCertificationHandler,
   getWorkforceCertificationHandler,
   listExpiringWorkforceCertificationsHandler,
+  listWorkforceCertificationDecisionsHandler,
   listWorkforceCertificationsHandler,
   updateWorkforceCertificationHandler,
   verifyWorkforceCertificationHandler,
@@ -24,6 +25,8 @@ import { WORKFORCE_CERTIFICATION_PERMISSIONS } from './workforce-certification.t
  *     GET  /workforce/certifications/expiring
  *     GET  /workforce/:workforceId/certifications
  *     GET  /workforce/:workforceId/certifications/:certificationId
+ *     GET  /workforce/:workforceId/certifications/:certificationId/decisions
+ *          (PART 03B1 — append-only verification decision ledger)
  *
  *   manage  (`workforce_certification.manage`)
  *     POST   /workforce/:workforceId/certifications
@@ -73,6 +76,16 @@ export function createWorkforceCertificationRouter(): Router {
     authenticationMiddleware,
     read,
     getWorkforceCertificationHandler,
+  );
+
+  // PART 03B1 — append-only decision ledger (read-only). Place before the
+  // PATCH on the same node; the `/decisions` suffix cannot be captured by a
+  // `:certificationId` route.
+  router.get(
+    '/workforce/:workforceId/certifications/:certificationId/decisions',
+    authenticationMiddleware,
+    read,
+    listWorkforceCertificationDecisionsHandler,
   );
 
   router.patch(

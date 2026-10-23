@@ -3,6 +3,7 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   getCrewCompetencyEligibilityHandler,
+  listAssignmentCompetencyHistoryHandler,
   listCompetencyCandidatesHandler,
 } from './worker-competency-eligibility.controller';
 
@@ -11,6 +12,8 @@ import {
  *
  *   GET /handyman/execution-scopes/:executionScopeId/competency/eligibility?crewId=
  *   GET /handyman/execution-scopes/:executionScopeId/competency/candidates
+ *   GET /handyman/execution-scopes/:executionScopeId/competency/history
+ *        (PART 03B1 — append-only assignment competency decision history)
  *
  * Both are READ-ONLY sub-resources of the EXISTING execution scope: the answer
  * is "would the assignment authority accept this crew right now", not a second
@@ -35,6 +38,14 @@ export function createWorkerCompetencyEligibilityRouter(): Router {
 
   router.get(`${base}/eligibility`, auth, read, getCrewCompetencyEligibilityHandler);
   router.get(`${base}/candidates`, auth, read, listCompetencyCandidatesHandler);
+  // PART 03B1 — decision history. Same read authority and the same
+  // exact-Building scope check as the assignment surface it describes.
+  router.get(
+    `${base}/history`,
+    auth,
+    read,
+    listAssignmentCompetencyHistoryHandler,
+  );
 
   return router;
 }

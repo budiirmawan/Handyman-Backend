@@ -9414,6 +9414,81 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/competency/history:
+    get:
+      operationId: listHandymanScopeAssignmentCompetencyHistory
+      x-required-permission: tenant_company.read
+      x-building-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
+      summary: Read the append-only assignment competency decision history
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B1. Requires `tenant_company.read`
+        plus the actor's ACTIVE assignment to the Execution Scope's exact
+        Building (BE-02G). Returns the decisions recorded for every successful
+        assignment and reassignment: one row per (action x worker x requirement),
+        with the verdict, the machine-readable reason, the requirement facts that
+        applied at decision time and the minimum evidence (opaque certificate id,
+        verification status, expiry date). The rows are written inside the
+        assignment transaction, so a rolled-back assignment contributes nothing
+        and the history can never disagree with the assignment it explains. No
+        certificate number, document id, storage key, document content or token
+        is ever stored. Immutable: UPDATE/DELETE are rejected at the database
+        layer. Paginated through the shared `page`/`pageSize` contract.
+      tags: [Handyman Worker Competency]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, enum: [ASSIGNED, REASSIGNED] }
+        - name: assignmentId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: crewId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: workerContextId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: satisfied
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: enforcementLevel
+          in: query
+          required: false
+          schema: { type: string, enum: [MANDATORY, RECOMMENDED] }
+      responses:
+        '200':
+          description: Decision history rows, newest first, with pagination meta
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/AssignmentCompetencyHistoryItem' }
+                      meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /handyman/execution-scopes/{executionScopeId}/arrival-verification:
     get:
       tags: [Handyman Arrival Verification]
@@ -63427,6 +63502,58 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /workforce/{workforceId}/certifications/{certificationId}/decisions:
+    parameters:
+      - $ref: "#/components/parameters/WorkforceIdPathParam"
+      - $ref: "#/components/parameters/WorkforceCertificationIdPath"
+    get:
+      operationId: listWorkforceCertificationDecisions
+      summary: Read the append-only verification decision ledger of a certificate
+      description: >-
+        PART 03B1. Requires `workforce_certification.read`. Same read authority
+        as the certificate itself: the worker (self-read), an ACTIVE Crew Lead of
+        an ACTIVE crew the worker belongs to, or a holder of
+        `workforce_certification.read`. The Client boundary is resolved from the
+        workforce profile, so a certificate of another Client is `403
+        BUILDING_ACCESS_DENIED` rather than an empty page. Newest first.
+        Pagination is opt-in through the shared `page`/`pageSize` contract
+        (`meta.page/pageSize/total/totalPages`); without it the list is bounded by
+        the repository ceiling. Decisions are immutable: the ledger is
+        append-only at the database layer (UPDATE/DELETE are rejected by
+        trigger), and the note supplied with a verify/reject decision is returned
+        as `reason`. A material metadata edit adds a `PENDING_VERIFICATION` row
+        that names the changed fields and preserves the decision it replaced.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.read
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORKFORCE_CERTIFICATION_FORBIDDEN, WORKFORCE_CERTIFICATION_NOT_FOUND, WORKFORCE_PROFILE_NOT_FOUND]
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: Decision ledger rows, newest first.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WorkforceCertificationDecision" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /workforce/{workforceId}/certifications/{certificationId}/verify:
     parameters:
@@ -122683,6 +122810,86 @@ components:
             Server-side storage key of the document. Exposed on the Operations
             surface only; the Mobile projection never carries it.
         status: { type: string }
+    WorkforceCertificationDecision:
+      type: object
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 03B1. One immutable row of the
+        certification decision ledger. `decision` is the resulting verification
+        status; `previous*` describes the decision it replaced; `changedFields` is
+        populated only when a MATERIAL metadata edit forced the reset, which is
+        how an administrative reset is distinguished from an explicit
+        verify/reject.
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        certificationId: { type: string, format: uuid }
+        workforceProfileId: { type: string, format: uuid }
+        decision:
+          type: string
+          enum: [VERIFIED, REJECTED, PENDING_VERIFICATION]
+        previousVerificationStatus:
+          type: string
+          nullable: true
+          enum: [PENDING_VERIFICATION, VERIFIED, REJECTED]
+        previousVerifiedByUserId: { type: string, format: uuid, nullable: true }
+        previousVerifiedAt: { type: string, format: date-time, nullable: true }
+        changedFields:
+          type: array
+          nullable: true
+          description: Material fields that forced a reset; null for an explicit decision.
+          items:
+            type: string
+            enum: [certificateNumber, certificateName, issuingAuthority, issueDate, expiryDate, skillId, documentId, fileReference, status]
+        reason: { type: string, nullable: true, maxLength: 1000 }
+        decidedByUserId: { type: string, format: uuid, nullable: true }
+        decidedAt: { type: string, format: date-time }
+    AssignmentCompetencyHistoryItem:
+      type: object
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 03B1. One immutable decision row written
+        by a successful assign/reassign: the requirement facts that applied at
+        decision time plus the minimum evidence. Deliberately free of certificate
+        numbers, document ids, storage keys, document contents and tokens.
+      properties:
+        id: { type: string, format: uuid }
+        decisionGroupId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        crewId: { type: string, format: uuid }
+        action:
+          type: string
+          enum: [ASSIGNED, REASSIGNED]
+        serviceCatalogId: { type: string, format: uuid }
+        workerContextId: { type: string, format: uuid }
+        workforceProfileId: { type: string, format: uuid }
+        requirementId: { type: string, format: uuid }
+        requirementType:
+          type: string
+          enum: [SKILL, CERTIFICATION]
+        enforcementLevel:
+          type: string
+          enum: [MANDATORY, RECOMMENDED]
+        skillId: { type: string, format: uuid, nullable: true }
+        skillCode: { type: string, nullable: true }
+        minimumProficiencyLevel:
+          type: string
+          nullable: true
+          enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+        certificateName: { type: string, nullable: true }
+        satisfied: { type: boolean }
+        reason:
+          type: string
+          nullable: true
+          enum: [SKILL_MISSING, PROFICIENCY_INSUFFICIENT, CERTIFICATION_MISSING, CERTIFICATION_UNVERIFIED, CERTIFICATION_EXPIRED, CERTIFICATION_INACTIVE]
+        evidenceProficiencyLevel:
+          type: string
+          nullable: true
+          enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+        evidenceCertificationId: { type: string, format: uuid, nullable: true }
+        evidenceVerificationStatus: { type: string, nullable: true }
+        evidenceExpiryDate: { type: string, format: date-time, nullable: true }
+        evaluatedAt: { type: string, format: date-time }
     WorkforceCertification:
       type: object
       description: >-
