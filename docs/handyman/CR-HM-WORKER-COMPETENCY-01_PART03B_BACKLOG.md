@@ -1,7 +1,8 @@
 # CR-HM-WORKER-COMPETENCY-01 — PART 03B Backlog / Handoff
 
-Basis: PART 03A selesai (`8c7e8ef`), **PART 03B1 selesai (`76eb66b`)**, dan
-**PART 03B2A selesai** di branch `arena/3df97f5e-handyman-backend`.
+Basis: PART 03A selesai (`8c7e8ef`), **PART 03B1 selesai (`76eb66b`)**, **PART 03B2A selesai**, dan
+**PART 03B2B selesai** (koreksi business rule MULTI-SKILL WORKER) di branch
+`arena/3df97f5e-handyman-backend`.
 
 **Status per dokumen ini:** item **1** dan **2** sudah **DELIVERED pada PART 03B1** (detail:
 `CR-HM-WORKER-COMPETENCY-01_PART03B1_DELIVERY_REPORT.md`). Item **4** sudah **DELIVERED pada PART 03B2A**
@@ -70,6 +71,23 @@ berdasarkan risiko, bukan ukuran.
     menolak UPDATE/DELETE (trigger). Bila volume menuntut, arsipkan lewat ekspor + partisi — **bukan** DELETE.
     Perlu keputusan retensi (mis. berapa lama disimpan panas) sebelum implementasi.
 
+## Koreksi PART 03B2B (multi-skill worker) — sudah selesai
+
+Model yang berlaku: **satu pekerja boleh memegang banyak skill/sertifikat lintas trade**, dan trade sertifikat
+tidak pernah membatasi penugasan. Yang dikerjakan:
+
+- warning RECOMMENDED kini tampil pada respons assign/reassign (`data.competency.advisory`) — bukan hanya di
+  ledger; tidak pernah memblokir.
+- dua cacat isolasi Client diperbaiki: unique index requirement per trade + probe duplikat kini menyertakan
+  `client_id`, sehingga Client tidak saling menolak/menimpa konfigurasi trade yang sama.
+- 11 regression test baru (B1–B10) mencakup seluruh skenario yang diminta (AC → electrical/plumbing,
+  RECOMMENDED warning, MANDATORY denial, multi-skilled worker, sertifikat kategori lain, bypass keselamatan,
+  team, dan lifecycle).
+
+**Catatan aturan yang tidak boleh dilanggar ke depan:** jangan pernah menambahkan perbandingan trade pekerja vs
+trade Work Order, jangan menurunkan requirement dari sertifikat yang dimiliki pekerja, dan jangan mengubah
+warning RECOMMENDED menjadi penolakan.
+
 ## Tambahan backlog setelah PART 03B2A
 
 12. **Penugasan tingkat VENDOR dinilai per orang (G1)**
@@ -88,7 +106,11 @@ berdasarkan risiko, bukan ukuran.
     Endpoint kandidat (seperti `.../competency/candidates` pada execution scope) yang menampilkan siapa
     memenuhi requirement trade sebuah Work Order, agar UI assign tidak bergantung pada 409.
 
-16. **Risk level sebagai kebijakan (G3)**
+16. **Warning RECOMMENDED di UI assign (G6, lanjutan 03B2B)**
+    `data.competency.advisory` sudah tersedia pada respons assign/reassign; UI perlu menampilkannya sebagai
+    peringatan (bukan dialog blokir), mis. "worker belum memiliki skill X (disarankan)".
+
+17. **Risk level sebagai kebijakan (G3)**
     `risk_level` kini deskriptif. Bila nanti dipakai menurunkan requirement minimum, buat pemetaan eksplisit
     dan tetap lewat model requirement yang sama.
 

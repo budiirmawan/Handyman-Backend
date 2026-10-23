@@ -52,13 +52,16 @@ import {
   type NewWorkOrderAssignment,
   type PublicWorkOrderAssignment,
   type UpdateWorkOrderAssignmentInput,
+  type WorkOrderAssignmentCompetencyOutcome,
+  type WorkOrderAssignmentCompetencyWarning,
   type WorkOrderAssignmentRecord,
 } from './work-order-assignment.types';
 
 export function toPublicWorkOrderAssignment(
   record: WorkOrderAssignmentRecord,
+  competency?: WorkOrderAssignmentCompetencyOutcome | null,
 ): PublicWorkOrderAssignment {
-  return {
+  const assignment: PublicWorkOrderAssignment = {
     id: record.id,
     workOrderId: record.workOrderId,
     assigneeType: record.assigneeType,
@@ -69,6 +72,12 @@ export function toPublicWorkOrderAssignment(
     assignedAt: record.assignedAt.toISOString(),
     status: record.status,
   };
+  // PART 03B2B — the RECOMMENDED warnings of the decision just taken. Omitted
+  // on plain reads so the pre-existing payload stays untouched there.
+  if (competency !== undefined) {
+    assignment.competency = competency;
+  }
+  return assignment;
 }
 
 /** Resolves the Client that owns a Workforce Profile (Profile → Org → Client). */
@@ -416,10 +425,7 @@ async function applyCompetencyGate(
   input: AssignWorkOrderInput,
   assignmentId: string,
   action: 'ASSIGNED' | 'REASSIGNED',
-): Promise<{
-  summary: WorkOrderCompetencyDecision['summary'];
-  blockingCount: number;
-}> {
+): Promise<WorkOrderAssignmentCompetencyOutcome> {
   const { subjects, rule } = await resolveAssignmentSubjects(workOrder, input);
 
   const decision = await workOrderCompetencyService.evaluateWorkOrderCompetency(
@@ -462,9 +468,31 @@ async function applyCompetencyGate(
     rows: decision.rows,
   });
 
+  // PART 03B2B — every unsatisfied RECOMMENDED requirement becomes a warning on
+  // the response. It never blocks: the assignment already succeeded above.
+  const subjectNames = new Map(
+    subjects.map((subject) => [subject.workforceProfileId, subject.workforceProfileName]),
+  );
+  const advisory: WorkOrderAssignmentCompetencyWarning[] = decision.rows
+    .filter((row) => !row.satisfied && row.enforcementLevel === 'RECOMMENDED')
+    .map((row) => ({
+      workforceProfileId: row.workforceProfileId,
+      workforceProfileName: subjectNames.get(row.workforceProfileId) ?? null,
+      requirementId: row.requirementId,
+      requirementType: row.requirementType,
+      skillCode: row.skillCode,
+      certificateName: row.certificateName,
+      minimumProficiencyLevel: row.minimumProficiencyLevel,
+      reason: row.reason ?? 'REQUIREMENT_NOT_MET',
+    }));
+
   return {
-    summary: decision.summary,
-    blockingCount: decision.blocking.length,
+    tradeCategoryId: decision.tradeCategoryId,
+    tradeCategoryCode: decision.tradeCategoryCode,
+    rule: decision.rule,
+    satisfied: decision.satisfied,
+    mandatoryRequirementCount: decision.summary.mandatoryRequirementCount,
+    advisory,
   };
 }
 
@@ -517,12 +545,17 @@ export async function assignWorkOrder(
             tradeCategoryId: workOrder.tradeCategoryId,
             tradeCategoryCode: workOrder.tradeCategoryCode,
             riskLevel: workOrder.riskLevel,
-            competency: competency.summary,
+            competency: {
+              rule: competency.rule,
+              satisfied: competency.satisfied,
+              mandatoryRequirementCount: competency.mandatoryRequirementCount,
+              advisoryCount: competency.advisory.length,
+            },
           },
         },
         tx,
       );
-      return toPublicWorkOrderAssignment(record);
+      return toPublicWorkOrderAssignment(record, competency);
     });
   } catch (error) {
     // The partial ACTIVE unique index is the final authority for races.
@@ -550,7 +583,7 @@ export async function listWorkOrderAssignments(
   const records = await workOrderAssignmentRepository.listByWorkOrderId(
     workOrderId,
   );
-  return records.map(toPublicWorkOrderAssignment);
+  return records.map((record) => toPublicWorkOrderAssignment(record));
 }
 
 /**
@@ -641,12 +674,17 @@ export async function reassignWorkOrder(
             tradeCategoryId: workOrder.tradeCategoryId,
             tradeCategoryCode: workOrder.tradeCategoryCode,
             riskLevel: workOrder.riskLevel,
-            competency: competency.summary,
+            competency: {
+              rule: competency.rule,
+              satisfied: competency.satisfied,
+              mandatoryRequirementCount: competency.mandatoryRequirementCount,
+              advisoryCount: competency.advisory.length,
+            },
           },
         },
         tx,
       );
-      return toPublicWorkOrderAssignment(record);
+      return toPublicWorkOrderAssignment(record, competency);
     });
   } catch (error) {
     if (isActiveAssignmentUniqueViolation(error)) {

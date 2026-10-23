@@ -184,11 +184,16 @@ async function createForTarget(
     input.requirementType === 'SKILL'
       ? await serviceCompetencyRequirementRepository.findActiveSkillRequirement(
           undefined,
-          { target: context.target, skillId: input.skillId as string },
+          {
+            target: context.target,
+            clientId: context.clientId,
+            skillId: input.skillId as string,
+          },
         )
       : await serviceCompetencyRequirementRepository
           .findActiveCertificationRequirement(undefined, {
             target: context.target,
+            clientId: context.clientId,
             certificateName: input.certificateName as string,
           });
   if (duplicate) throw competencyRequirementAlreadyExistsError();

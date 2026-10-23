@@ -161,7 +161,11 @@ export const migration0465WorkOrderMultiTradeClassification: Migration = {
     `);
     await client.query(`
       CREATE UNIQUE INDEX service_catalog_competency_requirements_trade_skill_unique
-        ON service_catalog_competency_requirements (trade_category_id, skill_id)
+        ON service_catalog_competency_requirements (
+          client_id,
+          trade_category_id,
+          skill_id
+        )
         WHERE requirement_type = 'SKILL'
           AND status = 'ACTIVE'
           AND trade_category_id IS NOT NULL
@@ -169,6 +173,7 @@ export const migration0465WorkOrderMultiTradeClassification: Migration = {
     await client.query(`
       CREATE UNIQUE INDEX service_catalog_competency_requirements_trade_cert_unique
         ON service_catalog_competency_requirements (
+          client_id,
           trade_category_id,
           lower(btrim(certificate_name))
         )

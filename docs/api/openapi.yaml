@@ -19339,6 +19339,16 @@ paths:
         MUTATION — assigns the Work Order to a WORKFORCE / TEAM / VENDOR /
         VENDOR_WORKFORCE assignee. Requires `work_order.manage` and Building
         access.
+
+
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2B — Handyman uses a MULTI-SKILL
+        worker model, never one worker = one trade. The assignee's trade,
+        certificate category or first skill never restricts which Work Order
+        they may take; only the MANDATORY requirements configured for the Work
+        Order's trade can refuse the assignment (409
+        `WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED`). An unmet RECOMMENDED
+        requirement is returned as a warning in `data.competency.advisory` and
+        never blocks. A trade with no configured requirement is unrestricted.
       tags: [Work Orders]
       security:
         - bearerAuth: []
@@ -99331,6 +99341,56 @@ components:
         assignedByUserId: { $ref: "#/components/schemas/Uuid" }
         assignedAt: { type: string, format: date-time }
         status: { $ref: "#/components/schemas/WorkOrderAssignmentStatus" }
+        competency:
+          nullable: true
+          description: >
+            CR-HM-WORKER-COMPETENCY-01 PART 03B2B. Present only on the response
+            to an assign or reassign, and only when the Work Order carries a
+            trade classification. `satisfied` is always true on a 2xx (a
+            MANDATORY gap is a 409), so `advisory` lists the RECOMMENDED gaps as
+            WARNINGS for Operations. An unclassified Work Order, or a trade
+            with no configured requirement, carries an empty `advisory`.
+          allOf:
+            - $ref: "#/components/schemas/WorkOrderAssignmentCompetencyOutcome"
+
+    WorkOrderAssignmentCompetencyOutcome:
+      type: object
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2B - the competency outcome of the
+        assignment decision just taken. Handyman uses a MULTI-SKILL worker
+        model, so no trade equality is ever inferred from this payload: it
+        reports requirement coverage only.
+      properties:
+        tradeCategoryId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        tradeCategoryCode: { type: string, nullable: true }
+        rule: { type: string, enum: [ALL, ANY] }
+        satisfied: { type: boolean }
+        mandatoryRequirementCount: { type: integer, minimum: 0 }
+        advisory:
+          type: array
+          description: Unmet RECOMMENDED requirements - warnings, never blockers.
+          items:
+            $ref: "#/components/schemas/WorkOrderAssignmentCompetencyWarning"
+
+    WorkOrderAssignmentCompetencyWarning:
+      type: object
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2B - one advisory (RECOMMENDED) gap
+        for one worker. It never blocks an assignment; it tells Operations what
+        the worker does not yet hold.
+      properties:
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileName: { type: string, nullable: true }
+        requirementId: { $ref: "#/components/schemas/Uuid" }
+        requirementType: { type: string, enum: [SKILL, CERTIFICATION] }
+        skillCode: { type: string, nullable: true }
+        certificateName: { type: string, nullable: true }
+        minimumProficiencyLevel: { type: string, nullable: true }
+        reason:
+          type: string
+          description: Machine-readable gap reason (for example SKILL_MISSING).
 
     WorkOrderActionType:
       type: string

@@ -245,36 +245,47 @@ async function listActiveByTradeCategory(
   return result.rows.map(mapRow);
 }
 
+/**
+ * Duplicate probe, per Client. A trade category is platform-wide, so the
+ * Client is part of the predicate: another tenant's requirement for the same
+ * trade must never be mistaken for this tenant's (PART 03B2B isolation fix).
+ */
 async function findActiveSkillRequirement(
   executor: Pick<PoolClient, 'query'> = getPool(),
-  input: { target: CompetencyRequirementTarget; skillId: string },
+  input: { target: CompetencyRequirementTarget; clientId: string; skillId: string },
 ): Promise<CompetencyRequirementRecord | null> {
   const { serviceCatalogId, tradeCategoryId } = targetParams(input.target);
   const result = await executor.query(
     `${SELECT}
       WHERE (($1::uuid IS NOT NULL AND r.service_catalog_id = $1)
              OR ($2::uuid IS NOT NULL AND r.trade_category_id = $2))
+        AND r.client_id = $4
         AND r.requirement_type = 'SKILL'
         AND r.skill_id = $3
         AND r.status = 'ACTIVE'`,
-    [serviceCatalogId, tradeCategoryId, input.skillId],
+    [serviceCatalogId, tradeCategoryId, input.skillId, input.clientId],
   );
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }
 
 async function findActiveCertificationRequirement(
   executor: Pick<PoolClient, 'query'> = getPool(),
-  input: { target: CompetencyRequirementTarget; certificateName: string },
+  input: {
+    target: CompetencyRequirementTarget;
+    clientId: string;
+    certificateName: string;
+  },
 ): Promise<CompetencyRequirementRecord | null> {
   const { serviceCatalogId, tradeCategoryId } = targetParams(input.target);
   const result = await executor.query(
     `${SELECT}
       WHERE (($1::uuid IS NOT NULL AND r.service_catalog_id = $1)
              OR ($2::uuid IS NOT NULL AND r.trade_category_id = $2))
+        AND r.client_id = $4
         AND r.requirement_type = 'CERTIFICATION'
         AND lower(btrim(r.certificate_name)) = lower(btrim($3))
         AND r.status = 'ACTIVE'`,
-    [serviceCatalogId, tradeCategoryId, input.certificateName],
+    [serviceCatalogId, tradeCategoryId, input.certificateName, input.clientId],
   );
   return result.rows[0] ? mapRow(result.rows[0]) : null;
 }

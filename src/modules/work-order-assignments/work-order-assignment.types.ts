@@ -80,6 +80,42 @@ export type WorkOrderAssignmentRecord = {
 };
 
 /** Safe public representation exposed through the API. */
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2B — one RECOMMENDED gap. Handyman is a
+ * MULTI-SKILL platform: a worker carries skills and certificates across
+ * several trades, so a gap on a RECOMMENDED requirement is a WARNING the
+ * Operations user should see, never a refusal.
+ */
+export type WorkOrderAssignmentCompetencyWarning = {
+  workforceProfileId: string;
+  workforceProfileName: string | null;
+  requirementId: string;
+  requirementType: 'SKILL' | 'CERTIFICATION';
+  skillCode: string | null;
+  certificateName: string | null;
+  minimumProficiencyLevel: string | null;
+  reason: string;
+};
+
+/**
+ * The competency outcome of the assignment just made. `satisfied` is always
+ * true on a 2xx response (a MANDATORY gap refuses the assignment), so
+ * `advisory` is the only part that can be non-empty: it answers "what should
+ * Operations know before sending this worker", never "may I assign".
+ *
+ * `competency` is present only on the assign/reassign response (where a
+ * decision was just taken); plain reads of an assignment omit it.
+ */
+export type WorkOrderAssignmentCompetencyOutcome = {
+  tradeCategoryId: string | null;
+  tradeCategoryCode: string | null;
+  /** ALL = every subject must qualify; ANY = at least one subject must. */
+  rule: 'ALL' | 'ANY';
+  satisfied: boolean;
+  mandatoryRequirementCount: number;
+  advisory: WorkOrderAssignmentCompetencyWarning[];
+};
+
 export type PublicWorkOrderAssignment = {
   id: string;
   workOrderId: string;
@@ -90,6 +126,7 @@ export type PublicWorkOrderAssignment = {
   assignedByUserId: string;
   assignedAt: string;
   status: WorkOrderAssignmentStatus;
+  competency?: WorkOrderAssignmentCompetencyOutcome | null;
 };
 
 /** Input supplied by the API consumer when assigning a Work Order. */
