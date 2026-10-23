@@ -16,11 +16,17 @@ import { propertyService } from '../src/modules/properties';
 import { roomService } from '../src/modules/rooms';
 import { skillService } from '../src/modules/skills';
 import { spaceService } from '../src/modules/spaces';
+import { credentialService } from '../src/modules/auth';
+import { userService } from '../src/modules/users';
 import { workforceService } from '../src/modules/workforce';
 import { workforceBuildingAssignmentService } from '../src/modules/workforce-building-assignments';
 import { assignSkillToWorkforce } from '../src/modules/workforce-skills';
 import { workOrderService } from '../src/modules/work-orders';
-import { createAdminUser, createSessionWithPermissions } from './helpers/access';
+import {
+  createAdminUser,
+  createSessionWithPermissions,
+  createSessionWithPermissionsForUser,
+} from './helpers/access';
 import {
   startEmbeddedTestDatabase,
   type EmbeddedTestDatabase,
@@ -173,6 +179,52 @@ async function worker(
     buildingId: r.building.id,
   });
   return profile;
+}
+
+/**
+ * The same Direct Workforce worker, but with a real login bound to the profile:
+ * field execution (acknowledge / start / evidence / complete) authorizes the
+ * CALLER against the ACTIVE assignment's `workforce_profiles.user_id`, so a
+ * worker-path test needs a session for that user, not an administrator.
+ */
+async function workerWithSession(r: Realm) {
+  const user = await userService.createUser({
+    email: `field-${suffix().toLowerCase()}@example.com`,
+    displayName: `Field Worker ${suffix()}`,
+  });
+  const password = 'WorkerPass123';
+  await credentialService.createInitialCredential({
+    userId: user.id,
+    password,
+  });
+  const profile = await workforceService.createWorkforceProfile({
+    organizationId: r.organization.id,
+    departmentId: r.department.id,
+    positionId: r.position.id,
+    employeeCode: `WF_${suffix()}`,
+    fullName: 'Field Worker',
+    workforceType: 'FREELANCE',
+    userId: user.id,
+  });
+  await workforceBuildingAssignmentService.assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: r.building.id,
+  });
+  // BE-02G: the SESSION's Building access comes from the user-level assignment,
+  // not from the workforce placement (which is what the assignment authority
+  // validates separately).
+  await buildingAssignmentService.createAssignment(user.id, {
+    buildingId: r.building.id,
+  });
+  const token = await createSessionWithPermissionsForUser(
+    { id: user.id, email: user.email },
+    password,
+    [
+      { code: 'work_order.read', name: 'Read Work Orders' },
+      { code: 'work_order.manage', name: 'Manage Work Orders' },
+    ],
+  );
+  return { user, profile, token };
 }
 
 /**
@@ -893,6 +945,80 @@ describe('PART 03B2E-E4 — compatibility', () => {
       .get(`/api/v1/work-orders/${wo.id}/assignments/competency-decisions?action=BOGUS`)
       .set(auth());
     assert.equal(response.status, 400, JSON.stringify(response.body));
+  });
+
+  it('keeps executing a legacy assigned Work Order that predates the rule', async (t) => {
+    if (!ready(t)) return;
+    const r = await realm();
+    const plumbing = await tradeCategoryId('PLUMBING');
+    const { profile, token } = await workerWithSession(r);
+    const woId = await customerCareWorkOrder(r);
+    assert.equal((await classify(woId, { tradeCategoryId: plumbing })).status, 200);
+    const assigned = await assign(woId, {
+      assigneeType: 'WORKFORCE',
+      workforceProfileId: profile.id,
+    });
+    assert.equal(assigned.status, 201, JSON.stringify(assigned.body));
+
+    // A Work Order assigned BEFORE this PART: the assignment exists but the
+    // classification does not. The new rule must not retroactively break work
+    // that is already running — it only governs NEW assignment decisions.
+    await q(
+      `UPDATE work_orders
+          SET trade_category_id = NULL, trade_category_code = NULL,
+              risk_level = NULL, classified_at = NULL,
+              classified_by_user_id = NULL
+        WHERE id = $1`,
+      [woId],
+    );
+
+    const workerAuth = { Authorization: `Bearer ${token}` };
+
+    // A new decision on the same Work Order is still refused...
+    const next = await worker(r);
+    const refusedReassign = await reassign(woId, assigned.body.data.id, {
+      assigneeType: 'WORKFORCE',
+      workforceProfileId: next.id,
+    });
+    assert.equal(refusedReassign.status, 409, JSON.stringify(refusedReassign.body));
+    assert.equal(
+      refusedReassign.body.error.code,
+      'WORK_ORDER_CLASSIFICATION_REQUIRED',
+    );
+
+    // ...while the running job stays fully executable end to end.
+    const acknowledged = await api()
+      .post(`/api/v1/work-orders/${woId}/acknowledge`)
+      .set(workerAuth)
+      .send({});
+    assert.equal(acknowledged.status, 201, JSON.stringify(acknowledged.body));
+
+    const started = await api()
+      .post(`/api/v1/work-orders/${woId}/start`)
+      .set(workerAuth)
+      .send({});
+    assert.equal(started.status, 201, JSON.stringify(started.body));
+
+    const evidence = await api()
+      .post(`/api/v1/work-orders/${woId}/evidence`)
+      .set(workerAuth)
+      .send({
+        evidenceType: 'PHOTO',
+        fileReference: `field/legacy-${suffix()}.jpg`,
+        originalFileName: 'before.jpg',
+        mimeType: 'image/jpeg',
+        fileSize: 1024,
+      });
+    assert.equal(evidence.status, 201, JSON.stringify(evidence.body));
+
+    const completed = await api()
+      .post(`/api/v1/work-orders/${woId}/complete`)
+      .set(workerAuth)
+      .send({ completionSummary: 'Legacy job finished.', completionNotes: 'No defect.' });
+    assert.equal(completed.status, 200, JSON.stringify(completed.body));
+
+    const stored = await q('SELECT status FROM work_orders WHERE id = $1', [woId]);
+    assert.equal(stored.rows[0].status, 'COMPLETED');
   });
 
   it('accepts the RECLASSIFIED action filter', async (t) => {

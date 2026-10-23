@@ -252,3 +252,60 @@ tidak ada regresi pada lingkup tersebut, dan tidak ada kode di sana yang bergant
 5. Ledger tetap append-only; jangan pernah menambah UPDATE/DELETE atau "koreksi" baris historis.
 6. Tetap satu otoritas assignment (`work-order-assignment.service.ts` + `handyman-scope-assignment.service.ts`)
    dan satu evaluator (`worker-competency-eligibility`).
+
+---
+
+## 9. Audit ulang independen (verifikasi PART 03B2E yang sudah ada)
+
+Bagian ini ditambahkan saat PART 03B2E diaudit ulang terhadap daftar acceptance criteria, dengan
+`d4a7aa3` sebagai titik masuk. Hasilnya: seluruh kriteria sudah terpenuhi oleh implementasi yang ada —
+**tidak ada perubahan aturan bisnis baru** yang diperlukan. Satu kekurangan *bukti* ditemukan dan ditutup
+(lihat butir 10).
+
+| # | Acceptance criterion | Bukti di kode | Bukti di test |
+|---|---|---|---|
+| 1 | Audit klasifikasi + gate kompetensi | `work-order-trade-category.service.ts`, `work-order-assignment.service.ts` | E1–E5 |
+| 2 | Service Request tanpa trade teknis tetap diterima | `requestType` bebas → `work_type` (`tenant-service-request.service.ts` L248) | E1-1 |
+| 3 | Klasifikasi wajib sebelum assignment **baru** | `assertClassificationPresent()` dipanggil sebelum `withTransaction()` di `assignWorkOrder` (L559) dan `reassignWorkOrder` (L685) | E1-2, E1-3 |
+| 4 | Tidak boleh lolos gate secara diam-diam | 409 `WORK_ORDER_CLASSIFICATION_REQUIRED`, tanpa tulisan apa pun | E1-2 (assignment + ledger tetap kosong) |
+| 5 | `GENERAL_REPAIR` hanya bila dipilih Operations | registry trade di-seed; tidak ada pemetaan otomatis dari `work_type` | E1-4 |
+| 6 | Tanpa pembatasan trade pekerja vs trade WO | tidak ada perbandingan trade; 03B2B dipertahankan | E2-1 |
+| 7 | Hanya `MANDATORY` memblokir, `RECOMMENDED` peringatan | `applyCompetencyGate` + `advisory[]` | E2-2 |
+| 8 | Perubahan klasifikasi saat assignment `ACTIVE` aman | `lockWorkOrder` + `revalidateActiveAssignmentForClassification()` | E3-1 (rollback), E3-2 (`RECLASSIFIED`), E3-3 (advisory) |
+| 9 | Reuse direct workforce (03B2D) + evaluator 03A | `resolveAssignmentSubjects` + `evaluateWorkOrderCompetency` | E2-3 |
+| 10 | Isolasi Client/Building, transaksi, ledger, kompatibilitas historis | klausa `EXISTS` pada `classificationRequired`; lock + satu transaksi | E4-*, E5-*, **E4-5 (baru)** |
+| 11 | Regression test fokus | — | 19 test di `work-order-classification-03b2e.test.ts` |
+| 12 | typecheck / build / test fokus | `tsc --noEmit`, `tsc` | 0 error / 0 error |
+
+### 9.1 Bukti tambahan: kompatibilitas Work Order historis (E4-5)
+
+Sebelumnya kompatibilitas historis hanya dibuktikan secara tidak langsung (assignment lama tetap terbaca).
+Ditambahkan satu test yang membuktikan batas aturan secara eksplisit:
+
+1. Work Order Customer Care diklasifikasi, lalu di-assign (assignment `ACTIVE`).
+2. Klasifikasi dihapus langsung di database — merepresentasikan data lama yang dibuat **sebelum** PART ini.
+3. **Keputusan assignment baru tetap ditolak** (409 `WORK_ORDER_CLASSIFICATION_REQUIRED`).
+4. **Pekerjaan yang sudah berjalan tetap dapat dieksekusi penuh**: `acknowledge` → `start` → unggah evidence
+   `PHOTO` → `complete`, dan status akhir `COMPLETED`.
+
+Aturan ini dengan demikian bersifat **maju (forward-only)**: ia menggerbangi keputusan penugasan baru, tidak
+pernah membalikkan pekerjaan yang sedang berjalan.
+
+### 9.2 Hasil verifikasi ulang (2026-10-23, PostgreSQL 18.4 disposable)
+
+| Gate | Hasil |
+|---|---|
+| `tests/work-order-classification-03b2e.test.ts` | **19/19** (sebelumnya 18; +1 test kompatibilitas) |
+| `tests/work-order-multitrade-03b2a.test.ts` | 17/17 |
+| `tests/work-order-multiskill-03b2b.test.ts` | 11/11 |
+| `tests/handyman-direct-workforce-03b2d.test.ts` | 20/20 |
+| `tests/openapi-contract.test.ts` + `handyman-contract-freeze-03-openapi.test.ts` | 20/20 |
+| `npm run typecheck` / `npm run build` | 0 error / 0 error |
+
+### 9.3 Batas yang disengaja (bukan gap)
+
+- Kewajiban klasifikasi hanya berlaku untuk Work Order yang berasal dari Customer Care
+  (`tenant_service_requests`). Work Order Engineering/breakdown tidak memakai registry trade Handyman,
+  sehingga klasifikasinya tetap opsional. Ini keputusan kompatibilitas yang eksplisit, bukan kelalaian.
+- Endpoint eksekusi (`acknowledge`/`start`/`evidence`/`complete`) sengaja **tidak** memeriksa klasifikasi:
+  satu-satunya gerbang adalah keputusan penugasan. Lihat E4-5.

@@ -79466,6 +79466,7 @@ paths:
                       meta: { $ref: '#/components/schemas/PaginationMeta' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /buildings/{buildingId}/units/{unitId}:
     parameters:
       - $ref: '#/components/parameters/BuildingId'
@@ -79487,6 +79488,7 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/ApartmentUnit' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/UnitNotFound' }
     patch:
       tags: [Apartment Units]
@@ -79521,6 +79523,7 @@ paths:
                       data: { $ref: '#/components/schemas/ApartmentUnit' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/UnitNotFound' }
   /buildings/{buildingId}/units/{unitId}/occupancies:
     parameters:
@@ -79560,6 +79563,7 @@ paths:
                       meta: { $ref: '#/components/schemas/PaginationMeta' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/UnitNotFound' }
   /buildings/{buildingId}/units/{unitId}/parties:
     parameters:
@@ -79599,6 +79603,7 @@ paths:
                       meta: { $ref: '#/components/schemas/PaginationMeta' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/UnitNotFound' }
     post:
       tags: [Unit Party Roles]
@@ -79638,6 +79643,7 @@ paths:
                       data: { $ref: '#/components/schemas/UnitPartyRole' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/UnitNotFound' }
         '409':
           description: The party already holds this role on the Unit.
@@ -79680,6 +79686,7 @@ paths:
                       data: { $ref: '#/components/schemas/UnitPartyRole' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404':
           description: Unknown assignment (or outside the caller's reach).
           content:
@@ -79715,6 +79722,7 @@ paths:
                         type: array
                         items: { type: string }
         '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /service-catalog/entries/{serviceCatalogId}/variants:
     parameters:
       - $ref: '#/components/parameters/ServiceCatalogId'
@@ -79741,6 +79749,7 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/ServiceVariant' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/CatalogueNotFound' }
     post:
       tags: [Catalogue Administration]
@@ -79778,6 +79787,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '409':
           description: Variant code already exists for the service.
           content:
@@ -79816,6 +79826,7 @@ paths:
                         items:
                           $ref: '#/components/schemas/CommonMaterialProfile'
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/CatalogueNotFound' }
     post:
       tags: [Catalogue Administration]
@@ -79862,6 +79873,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '409':
           description: The material is already associated at this level.
           content:
@@ -79901,6 +79913,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404':
           description: Request not found in this Building/Client.
           content:
@@ -79957,6 +79970,7 @@ paths:
                       data: { $ref: '#/components/schemas/TenantImportUploadResult' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '409':
           description: Idempotency conflict
           content:
@@ -79986,6 +80000,7 @@ paths:
                         items: { $ref: '#/components/schemas/TenantImportBatch' }
                       meta: { $ref: '#/components/schemas/PaginationMeta' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /clients/{clientId}/tenant-imports/{batchId}:
     parameters:
       - $ref: '#/components/parameters/ClientId'
@@ -80017,6 +80032,7 @@ paths:
                       data: { $ref: '#/components/schemas/TenantImportDetail' }
                       meta: { $ref: '#/components/schemas/PaginationMeta' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/TenantImportNotFound' }
   /clients/{clientId}/tenant-imports/{batchId}/validate:
     parameters:
@@ -80055,6 +80071,7 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/TenantImportDetail' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/TenantImportNotFound' }
         '409':
           description: Batch is CONFIRMED/COMMITTED/ABORTED
@@ -80088,6 +80105,7 @@ paths:
                         properties:
                           batch: { $ref: '#/components/schemas/TenantImportBatch' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/TenantImportNotFound' }
         '409':
           description: TENANT_IMPORT_STATE_CONFLICT or TENANT_IMPORT_EMPTY
@@ -80130,6 +80148,7 @@ paths:
                     properties:
                       data: { $ref: '#/components/schemas/TenantImportUploadResult' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/TenantImportNotFound' }
         '409':
           description: Batch not CONFIRMED (TENANT_IMPORT_STATE_CONFLICT)
@@ -80165,6 +80184,7 @@ paths:
                         properties:
                           batch: { $ref: '#/components/schemas/TenantImportBatch' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/TenantImportNotFound' }
         '409':
           description: COMMITTED batch cannot be aborted
@@ -80206,6 +80226,7 @@ paths:
                       data: { $ref: '#/components/schemas/PublicTenantCompany' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404':
           description: TENANT_COMPANY_NOT_FOUND
           content:
@@ -80240,6 +80261,7 @@ paths:
                       data: { $ref: '#/components/schemas/PublicTenantPic' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '404':
           description: TENANT_PIC_NOT_FOUND
           content:

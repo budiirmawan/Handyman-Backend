@@ -683,6 +683,41 @@ export async function createSessionWithPermissions(
 }
 
 /**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2E — a logged-in session for an EXISTING
+ * user, carrying exactly the given permission codes.
+ *
+ * Field-execution endpoints (`acknowledge` / `start` / `complete` / evidence)
+ * authorize the caller against the ACTIVE assignment's workforce profile, so a
+ * test that exercises the worker path needs a session bound to that profile's
+ * `user_id` — not an administrator whose user is not a workforce profile.
+ */
+export async function createSessionWithPermissionsForUser(
+  user: { id: string; email: string },
+  password: string,
+  codes: readonly { code: string; name: string }[],
+): Promise<string> {
+  const suffix = randomUUID().slice(0, 8).toUpperCase();
+  const role = await roleService.createRole({
+    code: `SCOPED_${suffix}`,
+    name: 'Scoped Role',
+  });
+
+  for (const permission of codes) {
+    const permissionId = await ensurePermissionId(permission.code, permission.name);
+    await permissionService.assignPermissionToRole(role.id, permissionId);
+  }
+
+  await roleService.assignRoleToUser(user.id, role.id);
+
+  const login = await api().post('/api/v1/auth/login').send({
+    email: user.email,
+    password,
+  });
+
+  return login.body.data.sessionToken as string;
+}
+
+/**
  * CR-HM-BE-CLIENT-MASTER-01 — creates a production-shaped Owner session.
  *
  * The first-owner bootstrap creates the canonical access catalogue and assigns
