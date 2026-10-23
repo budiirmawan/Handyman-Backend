@@ -1,6 +1,8 @@
 # CR-HM-WORKER-COMPETENCY-01 — PART 03 Backlog (proposed)
 
-Derived from PART 02 delivery. Ordered by risk, not by size. Nothing below is implemented yet.
+Derived from PART 02 delivery. Ordered by risk, not by size. Items 1–4, 6–10 remain unimplemented;
+item 5 (requirement enforcement) was delivered by PART 03A — see
+`CR-HM-WORKER-COMPETENCY-01_PART03A_DELIVERY_REPORT.md`.
 
 ## P0 — required for a complete certification lifecycle
 
@@ -25,9 +27,11 @@ Derived from PART 02 delivery. Ordered by risk, not by size. Nothing below is im
 
 4. **Bulk operations** — bulk register (CSV/JSON import per Client) and bulk expiry review, following the
    existing tenant-batch-import conventions (validation report, per-row status, no partial writes).
-5. **Workforce-requirement enforcement** — a "certification requirement" model (e.g. a Skill or job
-   category requires certificate type X to be valid) and a readiness check that refuses assignment/BAST
-   when the requirement is unmet. This is where `isValid` becomes operational rather than descriptive.
+5. ~~**Workforce-requirement enforcement**~~ — **DELIVERED by PART 03A**
+   (`CR-HM-WORKER-COMPETENCY-01_PART03A_DELIVERY_REPORT.md`): per-job-type requirements
+   (`service_catalog_competency_requirements`, migration `0463`), enforced at the single existing
+   assignment authority for assign **and** reassign, plus eligibility/candidates reads. Remaining
+   PART 03B follow-ups are listed in `CR-HM-WORKER-COMPETENCY-01_PART03B_BACKLOG.md`.
 6. **Certification history read model** — verified decisions are currently reconstructable only from
    `operational_events`; expose a typed, paginated decision history per certificate.
 7. **Worker self-service submission** — let a worker submit their own certificate (always

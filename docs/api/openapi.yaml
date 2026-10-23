@@ -9265,7 +9265,7 @@ paths:
       operationId: assignHandymanExecutionScopeCrew
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CREW_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONFLICT, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_WORKFORCE_BINDING_REQUIRED]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CREW_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_COMPETENCY_REQUIRED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONFLICT, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_WORKFORCE_BINDING_REQUIRED]
       summary: Assign an ACTIVE Handyman crew to an Execution Scope
       description: "Provider-authored crew assignment whose only target is HANDYMAN_EXECUTION_SCOPE (scope must exist with status AUTHORIZED). clientId, status, Lead identity and timestamps are server-derived; smuggled keys are structurally ignored. An existing ACTIVE assignment is a conflict (409) - reassignment is the only replacement path. Assignment does not mean verified arrival, does not start work, and does not create any schedule."
       parameters:
@@ -9314,7 +9314,7 @@ paths:
       operationId: reassignHandymanExecutionScopeCrew
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CREW_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_ACTIVE_SESSION_BLOCK, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_IDEMPOTENCY_CONFLICT, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_VERSION_CONFLICT, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_WORKFORCE_BINDING_REQUIRED]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CREW_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_ACTIVE_SESSION_BLOCK, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_COMPETENCY_REQUIRED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_IDEMPOTENCY_CONFLICT, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_VERSION_CONFLICT, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_WORKFORCE_BINDING_REQUIRED]
       summary: Atomically reassign the Execution Scope to a new crew
       description: "Atomic reassignment in one transaction: the current ACTIVE assignment is superseded and exactly one new ACTIVE assignment is created with supersession provenance. The new provider/crew/Lead is fully validated BEFORE any mutation; any failure rolls back everything (the old ACTIVE assignment remains untouched). Never a gap and never two ACTIVE assignments. Assignment does not start work and does not create a schedule."
       parameters:
@@ -9338,6 +9338,82 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /handyman/execution-scopes/{executionScopeId}/competency/eligibility:
+    get:
+      operationId: getHandymanScopeCrewCompetencyEligibility
+      x-required-permission: tenant_company.read
+      x-building-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
+      summary: Preview whether a crew satisfies the job type's competency requirements
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03A. Requires `tenant_company.read`
+        plus the actor's ACTIVE assignment to the Execution Scope's exact
+        Building (BE-02G). Read-only: evaluates the ACTIVE competency
+        requirements of the job type (the Service Catalog entry behind the
+        request) against every ACTIVE member of `crewId` and returns the
+        verdict, the machine-readable rejection reasons and the evidence. The
+        answer matches what `POST .../assignment` will decide because both use
+        the single evaluator in `worker-competency-eligibility`. A job type with
+        no ACTIVE requirement returns `requirementsConfigured: false` and
+        `eligible: true`.
+      tags: [Handyman Worker Competency]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - name: crewId
+          in: query
+          required: true
+          description: Crew whose ACTIVE members are evaluated.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Crew competency verdict with blocking and advisory gaps
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CrewCompetencyEligibilityReport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/execution-scopes/{executionScopeId}/competency/candidates:
+    get:
+      operationId: listHandymanScopeCompetencyCandidates
+      x-required-permission: tenant_company.read
+      x-building-scoped: true
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
+      summary: List crews of the Client with their competency verdict for this job type
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03A. Requires `tenant_company.read`
+        plus exact-Building access to the Execution Scope. Returns every ACTIVE
+        crew of the same Client whose provider context is ACTIVE, each with
+        `competencyEligible`, the blocking/advisory gaps and the per-worker
+        detail, plus `eligibleCandidateCount`. Competency is the only dimension
+        evaluated here: registration, Building placement and Lead validity stay
+        enforced by the assignment authority itself. Crews without an ACTIVE
+        member are excluded.
+      tags: [Handyman Worker Competency]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '200':
+          description: Candidate crews with verdicts and reasons
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CompetencyCandidateReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /handyman/execution-scopes/{executionScopeId}/arrival-verification:
     get:
       tags: [Handyman Arrival Verification]
@@ -32759,6 +32835,196 @@ paths:
                     properties:
                       data: { $ref: "#/components/schemas/ServiceCatalogEntry" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /service-catalog/entries/{id}/competency-requirements:
+    get:
+      operationId: listServiceCatalogCompetencyRequirements
+      x-required-permission: service_catalog.read
+      x-building-scoped: true
+      summary: List the competency requirements of a job type
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03A. Requires `service_catalog.read`
+        plus access to the entry's Client. Returns SKILL and CERTIFICATION
+        requirements with their enforcement level (MANDATORY blocks assignment,
+        RECOMMENDED is advisory). An entry with no rows is unrestricted.
+        Optional filters: `status`, `enforcementLevel`, `requirementType`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCatalogEntryIdPath"
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+        - name: enforcementLevel
+          in: query
+          required: false
+          schema: { type: string, enum: [MANDATORY, RECOMMENDED] }
+        - name: requirementType
+          in: query
+          required: false
+          schema: { type: string, enum: [SKILL, CERTIFICATION] }
+      responses:
+        "200":
+          description: Requirements of the entry.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createServiceCatalogCompetencyRequirement
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Configure a competency requirement for a job type (SKILL or CERTIFICATION)
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03A. Requires
+        `service_catalog.manage` plus access to the entry's Client. A SKILL
+        requirement needs `skillId` and `minimumProficiencyLevel`; a
+        CERTIFICATION requirement needs `certificateName` and may narrow it with
+        `skillId`. `enforcementLevel` defaults to MANDATORY. `clientId`,
+        `status`, `serviceCatalogId` and `createdByUserId` are server-derived
+        and rejected if supplied. The skill must belong to the same Client
+        (400 `SERVICE_COMPETENCY_REQUIREMENT_SKILL_MISMATCH`); a duplicate ACTIVE
+        requirement is 409. Audit: `SERVICE_COMPETENCY_REQUIREMENT_CREATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCatalogEntryIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceCompetencyRequirementRequest"
+      responses:
+        "201":
+          description: Created requirement (ACTIVE).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /service-catalog/entries/{id}/competency-requirements/{requirementId}:
+    get:
+      operationId: getServiceCatalogCompetencyRequirement
+      x-required-permission: service_catalog.read
+      x-building-scoped: true
+      summary: Read one competency requirement
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03A. Requires `service_catalog.read`
+        plus Client access. The requirement must belong to the addressed entry
+        (404 otherwise, no cross-entry or cross-Client read).
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCatalogEntryIdPath"
+        - $ref: "#/components/parameters/CompetencyRequirementIdPath"
+      responses:
+        "200":
+          description: Requirement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateServiceCatalogCompetencyRequirement
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Correct the level, enforcement or notes of a requirement
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03A. Requires
+        `service_catalog.manage` plus Client access. Editable: `enforcementLevel`,
+        `minimumProficiencyLevel` (SKILL only), `certificateName`
+        (CERTIFICATION only) and `notes`. `requirementType` and `skillId` are
+        immutable — deactivate and create a new requirement to repoint it, so an
+        existing assignment is never retro-actively reinterpreted. An INACTIVE
+        requirement is 409. Audit: `SERVICE_COMPETENCY_REQUIREMENT_UPDATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCatalogEntryIdPath"
+        - $ref: "#/components/parameters/CompetencyRequirementIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceCompetencyRequirementRequest"
+      responses:
+        "200":
+          description: Updated requirement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /service-catalog/entries/{id}/competency-requirements/{requirementId}/deactivate:
+    post:
+      operationId: deactivateServiceCatalogCompetencyRequirement
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Deactivate a competency requirement (stops applying immediately)
+      description: >
+        CR-HM-WORKER-COMPETENCY-01 PART 03A. Requires
+        `service_catalog.manage` plus Client access. ACTIVE to INACTIVE
+        (terminal for enforcement, the row is retained so historical
+        assignments stay explainable). A deactivated requirement stops applying
+        to new assignments immediately; already ACTIVE assignments are not
+        retro-invalidated. Deactivating twice is 409. Audit:
+        `SERVICE_COMPETENCY_REQUIREMENT_DEACTIVATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCatalogEntryIdPath"
+        - $ref: "#/components/parameters/CompetencyRequirementIdPath"
+      responses:
+        "200":
+          description: Deactivated requirement.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCompetencyRequirement" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -82180,6 +82446,13 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/Uuid"
+    CompetencyRequirementIdPath:
+      name: requirementId
+      in: path
+      description: Authoritative `service_catalog_competency_requirements.id`.
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
     HandymanRequestIdPath:
       name: handymanRequestId
       in: path
@@ -91672,6 +91945,204 @@ components:
         supersedesAssignmentId: { type: string, format: uuid, nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    ServiceCompetencyRequirement:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A - one competency requirement of a job type (Service Catalog entry). SKILL requirements carry `skillId` + `minimumProficiencyLevel`; CERTIFICATION requirements carry `certificateName` and may narrow it with `skillId`. MANDATORY blocks assignment/reassignment, RECOMMENDED is advisory only.
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        requirementType:
+          type: string
+          enum: [SKILL, CERTIFICATION]
+        enforcementLevel:
+          type: string
+          enum: [MANDATORY, RECOMMENDED]
+        skillId: { type: string, format: uuid, nullable: true }
+        skill:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/CompetencyRequirementSkillSummary'
+        minimumProficiencyLevel:
+          type: string
+          nullable: true
+          enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+        certificateName: { type: string, nullable: true, maxLength: 255 }
+        notes: { type: string, nullable: true, maxLength: 1000 }
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CompetencyRequirementSkillSummary:
+      type: object
+      description: Skill master summary referenced by a competency requirement (same Client as the entry, enforced by trigger).
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        category: { type: string }
+        status: { type: string }
+    CreateServiceCompetencyRequirementRequest:
+      type: object
+      required: [requirementType]
+      additionalProperties: false
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A create payload. `clientId`, `status`, `serviceCatalogId` and `createdByUserId` are server-derived and rejected if supplied. SKILL requires `skillId` + `minimumProficiencyLevel`; CERTIFICATION requires `certificateName` and rejects `minimumProficiencyLevel`.
+      properties:
+        requirementType:
+          type: string
+          enum: [SKILL, CERTIFICATION]
+        enforcementLevel:
+          type: string
+          enum: [MANDATORY, RECOMMENDED]
+          default: MANDATORY
+        skillId: { type: string, format: uuid }
+        minimumProficiencyLevel:
+          type: string
+          enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+        certificateName: { type: string, maxLength: 255 }
+        notes: { type: string, maxLength: 1000 }
+    UpdateServiceCompetencyRequirementRequest:
+      type: object
+      additionalProperties: false
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A patch payload. `requirementType` and `skillId` are immutable. `minimumProficiencyLevel` is SKILL-only, `certificateName` is CERTIFICATION-only.
+      properties:
+        enforcementLevel:
+          type: string
+          enum: [MANDATORY, RECOMMENDED]
+        minimumProficiencyLevel:
+          type: string
+          enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+        certificateName: { type: string, maxLength: 255 }
+        notes: { type: string, nullable: true, maxLength: 1000 }
+    CompetencyRequirementEvaluation:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A - the verdict for one requirement against one worker, including the machine-readable reason and the evidence that produced it. `reason` is null exactly when `satisfied` is true.
+      properties:
+        requirementId: { type: string, format: uuid }
+        requirementType:
+          type: string
+          enum: [SKILL, CERTIFICATION]
+        enforcementLevel:
+          type: string
+          enum: [MANDATORY, RECOMMENDED]
+        skillId: { type: string, format: uuid, nullable: true }
+        skillCode: { type: string, nullable: true }
+        skillName: { type: string, nullable: true }
+        minimumProficiencyLevel:
+          type: string
+          nullable: true
+          enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+        certificateName: { type: string, nullable: true }
+        satisfied: { type: boolean }
+        reason:
+          type: string
+          nullable: true
+          enum: [SKILL_MISSING, PROFICIENCY_INSUFFICIENT, CERTIFICATION_MISSING, CERTIFICATION_UNVERIFIED, CERTIFICATION_EXPIRED, CERTIFICATION_INACTIVE]
+        evidence:
+          type: object
+          nullable: true
+          description: Evidence for a satisfied requirement.
+          properties:
+            proficiencyLevel:
+              type: string
+              nullable: true
+              enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+            certificationId: { type: string, format: uuid, nullable: true }
+            certificateNumber: { type: string, nullable: true }
+            certificateName: { type: string, nullable: true }
+            issuingAuthority: { type: string, nullable: true }
+            verificationStatus: { type: string, nullable: true }
+            issueDate: { type: string, format: date-time, nullable: true }
+            expiryDate: { type: string, format: date-time, nullable: true }
+        gapEvidence:
+          type: object
+          nullable: true
+          description: Near-miss evidence for a failed requirement (e.g. the expired certificate the worker actually holds).
+          properties:
+            certificationId: { type: string, format: uuid, nullable: true }
+            certificateNumber: { type: string, nullable: true }
+            verificationStatus: { type: string, nullable: true }
+            status: { type: string, nullable: true }
+            expiryDate: { type: string, format: date-time, nullable: true }
+            proficiencyLevel:
+              type: string
+              nullable: true
+              enum: [BASIC, INTERMEDIATE, ADVANCED, EXPERT]
+    WorkerCompetencyEligibility:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A - per-worker verdict. `eligible` is false only when at least one MANDATORY requirement fails; RECOMMENDED failures appear in `advisoryGaps` and never block.
+      properties:
+        workerContextId: { type: string, format: uuid }
+        workforceProfileId: { type: string, format: uuid }
+        workforceProfileName: { type: string, nullable: true }
+        isLead: { type: boolean }
+        eligible: { type: boolean }
+        blockingGaps:
+          type: array
+          items: { $ref: '#/components/schemas/CompetencyRequirementEvaluation' }
+        advisoryGaps:
+          type: array
+          items: { $ref: '#/components/schemas/CompetencyRequirementEvaluation' }
+        satisfiedCount: { type: integer, minimum: 0 }
+        requirementsEvaluated: { type: integer, minimum: 0 }
+    CompetencyEvaluationSummary:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A - how much the job type actually requires. `requirementsConfigured=false` means the job type is unrestricted (pre-PART-03A behaviour).
+      properties:
+        requirementCount: { type: integer, minimum: 0 }
+        mandatoryRequirementCount: { type: integer, minimum: 0 }
+        recommendedRequirementCount: { type: integer, minimum: 0 }
+        requirementsConfigured: { type: boolean }
+    CrewCompetencyEligibilityReport:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A - read-only preflight for one crew on one Execution Scope. Matches the verdict the assignment authority will apply, because both share one evaluator.
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceCatalogCode: { type: string }
+        crewId: { type: string, format: uuid }
+        summary: { $ref: '#/components/schemas/CompetencyEvaluationSummary' }
+        eligible: { type: boolean }
+        blockingGaps:
+          type: array
+          items: { $ref: '#/components/schemas/CompetencyRequirementEvaluation' }
+        advisoryGaps:
+          type: array
+          items: { $ref: '#/components/schemas/CompetencyRequirementEvaluation' }
+        workers:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerCompetencyEligibility' }
+    CompetencyCandidateReport:
+      type: object
+      description: CR-HM-WORKER-COMPETENCY-01 PART 03A - qualified-candidate read model. Every ACTIVE crew of the Client is returned with its competency verdict; registration, Building placement and Lead validity remain enforced by the assignment authority.
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceCatalogCode: { type: string }
+        summary: { $ref: '#/components/schemas/CompetencyEvaluationSummary' }
+        eligibleCandidateCount: { type: integer, minimum: 0 }
+        candidates:
+          type: array
+          items:
+            type: object
+            properties:
+              crewId: { type: string, format: uuid }
+              crewCode: { type: string }
+              crewName: { type: string }
+              providerContextId: { type: string, format: uuid }
+              providerContextStatus: { type: string }
+              competencyEligible: { type: boolean }
+              blockingGaps:
+                type: array
+                items: { $ref: '#/components/schemas/CompetencyRequirementEvaluation' }
+              advisoryGaps:
+                type: array
+                items: { $ref: '#/components/schemas/CompetencyRequirementEvaluation' }
+              workers:
+                type: array
+                items: { $ref: '#/components/schemas/WorkerCompetencyEligibility' }
     HandymanScopeAssignmentView:
       type: object
       description: Bounded operational view of the current ACTIVE assignment with Lead identity dynamically derived from CR-HM-04 crew authority at read time. Assignment does not mean arrival and does not start work.
