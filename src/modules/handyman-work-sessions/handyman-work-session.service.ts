@@ -10,6 +10,10 @@ import {
   resolveHandymanAssignmentLead,
 } from '../handyman-scope-assignments';
 import {
+  assignmentResponseRepository,
+  handymanAssignmentDeclinedError,
+} from '../assignment-responses';
+import {
   handymanWorkSessionActiveConflictError,
   handymanWorkSessionArrivalRequiredError,
   handymanWorkSessionDispatchNotReleasedError,
@@ -171,6 +175,7 @@ async function listCurrentHelperRows(
 async function commandAuthorityPreamble(
   scopeUuid: string,
   actorUserId: string,
+  options?: { allowDeclinedRead?: boolean },
 ) {
   const scope = await handymanScopeAssignmentRepository.findScopeById(
     undefined,
@@ -190,6 +195,14 @@ async function commandAuthorityPreamble(
   );
   if (!resolution || resolution.leadUserId !== actorUserId) {
     throw handymanWorkSessionNotAuthorizedError();
+  }
+  if (!options?.allowDeclinedRead) {
+    const response = await assignmentResponseRepository.findByAssignmentId(
+      resolution.assignmentId,
+    );
+    if (response?.responseStatus === 'TIDAK_BISA') {
+      throw handymanAssignmentDeclinedError();
+    }
   }
   return { scope, resolution };
 }

@@ -503,6 +503,12 @@ import { migration0440CreateHandymanDispatchReleases }
   from './0440_create_handyman_dispatch_releases';
 import { migration0441HandymanDispatchReleaseReassignmentSupersede }
   from './0441_handyman_dispatch_release_reassignment_supersede';
+import { migration0470HandymanFieldExpenseReimbursement }
+  from './0470_handyman_field_expense_reimbursement';
+import { migration0471HandymanHelperAttendanceConfirmation }
+  from './0471_handyman_helper_attendance_confirmation';
+import { migration0472HandymanAssignmentResponses }
+  from './0472_handyman_assignment_responses';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -975,4 +981,7 @@ export const migrations: readonly Migration[] = [
   migration0466DirectHandymanWorkforce,
   migration0467WorkOrderReclassificationDecision,
   migration0468ExtendPermissionGrantAuditEvents,
+  migration0470HandymanFieldExpenseReimbursement,
+  migration0471HandymanHelperAttendanceConfirmation,
+  migration0472HandymanAssignmentResponses,
 ];

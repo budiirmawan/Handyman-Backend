@@ -29,6 +29,59 @@ export type PublicHandymanInspectorAssignment = Omit<
   assignedAt: string;
   createdAt: string;
   updatedAt: string;
+  responseStatus: 'PENDING' | 'TERIMA' | 'TIDAK_BISA';
+  respondedByUserId: string | null;
+  respondedByWorkerId: string | null;
+  respondedAt: string | null;
+  declineReason: string | null;
+  responseNotes: string | null;
+  reassignmentRequired: boolean;
+};
+
+export type RespondToHandymanInspectorAssignmentInput = {
+  visitAppointmentId: string;
+  assignmentId: string;
+  responseStatus: 'TERIMA' | 'TIDAK_BISA';
+  declineReason?: string | null;
+  notes?: string | null;
+};
+
+export type HandymanInspectorAssignmentResponseView =
+  PublicHandymanInspectorAssignment & {
+    idempotentReplay: boolean;
+  };
+
+export type HandymanInspectorAssignmentResponseHistoryView = {
+  assignmentId: string;
+  visitAppointmentId: string;
+  handymanRequestId: string;
+  inspectorUserId: string;
+  status: HandymanInspectorAssignmentStatus;
+  responseStatus: 'PENDING' | 'TERIMA' | 'TIDAK_BISA';
+  respondedByUserId: string | null;
+  respondedByWorkerId: string | null;
+  respondedAt: string | null;
+  declineReason: string | null;
+  responseNotes: string | null;
+  reassignmentRequired: boolean;
+  events: Array<{
+    id: string;
+    responseId: string;
+    assignmentTargetType: string;
+    assignmentId: string;
+    workOrderId: string | null;
+    handymanRequestId: string | null;
+    executionScopeId: string | null;
+    visitAppointmentId: string | null;
+    eventType: string;
+    previousStatus: string | null;
+    newStatus: string;
+    declineReason: string | null;
+    notes: string | null;
+    actorUserId: string;
+    actorWorkerId: string | null;
+    occurredAt: string;
+  }>;
 };
 
 export type AssignHandymanInspectorInput = {

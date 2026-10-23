@@ -109,6 +109,18 @@ export async function migrateUp(pool: Pool): Promise<string[]> {
       const applied = await withTransaction(client, async (client) => {
         const history = await listAppliedMigrationIds(client);
         if (history.has(migration.id)) {
+          if (migration.id === '0472_handyman_assignment_responses') {
+            const checkRes = await client.query<{ def: string }>(
+              `SELECT pg_get_constraintdef(oid) AS def
+                 FROM pg_constraint
+                WHERE conname = 'notifications_navigation_target_check'
+                LIMIT 1`,
+            );
+            const def = checkRes.rows[0]?.def ?? '';
+            if (!def.includes('EXECUTION_SCOPE_FIELD_WORK')) {
+              await migration.up(client);
+            }
+          }
           return false;
         }
 

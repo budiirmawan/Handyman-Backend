@@ -17,6 +17,23 @@ import {
   type ExecutionScopeCompetencyDecision,
 } from '../worker-competency-eligibility';
 import {
+  assignmentDeclineReasonForbiddenOnAcceptError,
+  assignmentDeclineReasonRequiredError,
+  assignmentResponseRepository,
+  handymanAssignmentResponseConflictError,
+  handymanAssignmentResponseForbiddenError,
+  handymanAssignmentResponseLateError,
+  handymanAssignmentResponseSupersededError,
+  isAssignableResponseDecision,
+  notifyExecutionScopeAssignmentAccepted,
+  notifyExecutionScopeAssignmentDeclined,
+  notifyExecutionScopeCrewLeadAssignedPending,
+  notifyExecutionScopeCrewLeadSuperseded,
+  toPublicAssignmentResponseEvent,
+  type HandymanAssignmentResponseRecord,
+} from '../assignment-responses';
+import { AppError } from '../../shared/errors';
+import {
   handymanAssignmentAlreadyActiveError,
   handymanAssignmentActiveSessionBlockError,
   handymanAssignmentContextInactiveError,
@@ -34,8 +51,11 @@ import type {
   AssignHandymanExecutionScopeCrewInput,
   HandymanAssignmentLeadResolution,
   HandymanExecutionScopeAssignmentRecord,
+  HandymanExecutionScopeAssignmentResponseHistoryView,
+  HandymanExecutionScopeAssignmentResponseView,
   PublicHandymanExecutionScopeAssignment,
   ReassignHandymanExecutionScopeCrewInput,
+  RespondToHandymanExecutionScopeAssignmentInput,
 } from './handyman-scope-assignment.types';
 
 /**
@@ -79,12 +99,24 @@ function ensureKey(value: string | undefined): string | undefined {
 
 function toPublic(
   record: HandymanExecutionScopeAssignmentRecord,
+  response?: HandymanAssignmentResponseRecord | null,
 ): PublicHandymanExecutionScopeAssignment {
+  const responseStatus = response?.responseStatus ?? 'PENDING';
   return {
     ...record,
     assignedAt: record.assignedAt.toISOString(),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+    responseStatus,
+    respondedByUserId: response?.respondedByUserId ?? null,
+    respondedByWorkerId: response?.respondedByWorkerId ?? null,
+    respondedAt: response?.respondedAt
+      ? response.respondedAt.toISOString()
+      : null,
+    declineReason: response?.declineReason ?? null,
+    responseNotes: response?.responseNotes ?? null,
+    reassignmentRequired:
+      record.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
   };
 }
 
@@ -161,7 +193,13 @@ async function persistCompetencyDecision(
 async function requireAssignableScope(
   tx: PoolClient,
   executionScopeId: string,
-): Promise<{ id: string; clientId: string; status: string; buildingId: string }> {
+): Promise<{
+  id: string;
+  clientId: string;
+  handymanRequestId: string;
+  status: string;
+  buildingId: string;
+}> {
   const scope = await handymanScopeAssignmentRepository.lockScopeById(
     tx,
     executionScopeId,
@@ -386,7 +424,34 @@ export async function assignHandymanExecutionScopeCrew(
       `Handyman execution scope crew assignment created (crew ${record.handymanCrewId}).`,
       competency,
     );
-    return toPublic(record);
+    const pendingResponse =
+      await assignmentResponseRepository.ensurePendingForAssignment(
+        {
+          assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+          assignmentId: record.id,
+          clientId: scope.clientId,
+          buildingId: scope.buildingId,
+          handymanRequestId: scope.handymanRequestId,
+          executionScopeId: scope.id,
+          assignedByUserId: actorUserId,
+          assignedAt: record.assignedAt,
+        },
+        tx,
+      );
+    await notifyExecutionScopeCrewLeadAssignedPending(
+      {
+        clientId: scope.clientId,
+        buildingId: scope.buildingId,
+        handymanRequestId: scope.handymanRequestId,
+        executionScopeId: scope.id,
+        assignmentId: record.id,
+        crewId: target.crewId,
+        leadUserId: target.leadUserId,
+        leadWorkerContextId: target.leadWorkerContextId,
+      },
+      tx,
+    );
+    return toPublic(record, pendingResponse);
   });
 }
 
@@ -448,12 +513,18 @@ export async function reassignHandymanExecutionScopeCrew(
       throw handymanAssignmentVersionConflictError();
     }
 
-    // Same crew — no-op replay with same version returns current record.
+    // Same crew — no-op replay with same version returns current record when still PENDING.
+    const currentResponse =
+      await assignmentResponseRepository.findByAssignmentId(
+        current.id,
+        tx,
+      );
     if (
       current.handymanProviderContextId === providerContextId &&
-      current.handymanCrewId === crewId
+      current.handymanCrewId === crewId &&
+      (!currentResponse || currentResponse.responseStatus === 'PENDING')
     ) {
-      return toPublic(current);
+      return toPublic(current, currentResponse);
     }
 
     const target = await validateTarget(
@@ -474,6 +545,25 @@ export async function reassignHandymanExecutionScopeCrew(
         crewId: target.crewId,
       },
     );
+    // CR-HM-ASSIGNMENT-RESPONSE-01 PART 02B — the crew lead who owned the
+    // superseded assignment, so the superseded IN_APP notification reaches the
+    // same person even after the lead changes.
+    const oldLeadRes = await tx.query<{ userId: string | null }>(
+      `SELECT wp.user_id AS "userId"
+         FROM handyman_crew_leads cl
+         JOIN handyman_crew_memberships cm
+           ON cm.id = cl.handyman_crew_membership_id
+         JOIN handyman_worker_contexts wc
+           ON wc.id = cm.handyman_worker_context_id
+         JOIN workforce_profiles wp
+           ON wp.id = wc.workforce_profile_id
+        WHERE cl.handyman_crew_id = $1
+        ORDER BY cl.lead_seq DESC
+        LIMIT 1`,
+      [current.handymanCrewId],
+    );
+    const oldLeadUserId = oldLeadRes.rows[0]?.userId ?? null;
+
     // Supersede any RELEASED dispatch release tied to the current ACTIVE
     // assignment BEFORE we flip the assignment to SUPERSEDED — the
     // dispatch-release guard requires the referenced assignment to be
@@ -542,7 +632,64 @@ export async function reassignHandymanExecutionScopeCrew(
       `Handyman execution scope crew reassignment created (crew ${record.handymanCrewId}).`,
       competency,
     );
-    return toPublic(record);
+
+    await assignmentResponseRepository.recordSupersededEvent(
+      {
+        assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+        assignmentId: current.id,
+        clientId: scope.clientId,
+        buildingId: scope.buildingId,
+        handymanRequestId: scope.handymanRequestId,
+        executionScopeId: scope.id,
+        assignedByUserId: current.assignedByUserId,
+        assignedAt: current.assignedAt,
+      },
+      actorUserId,
+      reason,
+      tx,
+    );
+    const pendingResponse =
+      await assignmentResponseRepository.ensurePendingForAssignment(
+        {
+          assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+          assignmentId: record.id,
+          clientId: scope.clientId,
+          buildingId: scope.buildingId,
+          handymanRequestId: scope.handymanRequestId,
+          executionScopeId: scope.id,
+          assignedByUserId: actorUserId,
+          assignedAt: record.assignedAt,
+        },
+        tx,
+      );
+    await notifyExecutionScopeCrewLeadSuperseded(
+      {
+        clientId: scope.clientId,
+        buildingId: scope.buildingId,
+        handymanRequestId: scope.handymanRequestId,
+        executionScopeId: scope.id,
+        oldAssignmentId: current.id,
+        newAssignmentId: record.id,
+        oldLeadUserId,
+        newLeadUserId: target.leadUserId,
+        reason,
+      },
+      tx,
+    );
+    await notifyExecutionScopeCrewLeadAssignedPending(
+      {
+        clientId: scope.clientId,
+        buildingId: scope.buildingId,
+        handymanRequestId: scope.handymanRequestId,
+        executionScopeId: scope.id,
+        assignmentId: record.id,
+        crewId: target.crewId,
+        leadUserId: target.leadUserId,
+        leadWorkerContextId: target.leadWorkerContextId,
+      },
+      tx,
+    );
+    return toPublic(record, pendingResponse);
   });
 }
 
@@ -568,7 +715,11 @@ export async function getHandymanExecutionScopeAssignment(
   });
   const current = await handymanScopeAssignmentRepository
     .findActiveAssignmentByScope(undefined, executionScopeId);
-  return current ? toPublic(current) : null;
+  if (!current) return null;
+  const response = await assignmentResponseRepository.findByAssignmentId(
+    current.id,
+  );
+  return toPublic(current, response);
 }
 
 /**
@@ -618,9 +769,314 @@ export async function resolveHandymanAssignmentLead(
   };
 }
 
+/**
+ * CR-HM-ASSIGNMENT-RESPONSE-01 PART 02B:
+ * Allows the authoritative active Crew Lead (and ONLY the current Crew Lead —
+ * never Helpers, former Leads, or Operations users) to respond `TERIMA` or
+ * `TIDAK_BISA` to an Execution Scope Crew assignment.
+ *
+ * - `TIDAK_BISA` requires a mandatory `declineReason` (1..1000 chars), sets
+ *   `reassignmentRequired = true`, and notifies Operations (`IN_APP`) without
+ *   cancelling the Tenant request or Execution Scope.
+ * - Duplicate identical responses are idempotent no-ops (`idempotentReplay: true`).
+ * - Conflicting responses (`TERIMA <-> TIDAK_BISA` or modified declineReason)
+ *   are rejected with `409 HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT`.
+ * - Superseded assignments are rejected with `409 HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED`.
+ * - Late responses after a work session has already started are rejected with
+ *   `409 HANDYMAN_ASSIGNMENT_RESPONSE_LATE`.
+ */
+export async function respondToHandymanExecutionScopeAssignment(
+  input: RespondToHandymanExecutionScopeAssignmentInput,
+  actorUserId: string,
+): Promise<HandymanExecutionScopeAssignmentResponseView> {
+  const executionScopeId = ensureUuid(
+    input.executionScopeId,
+    'executionScopeId',
+  );
+  const assignmentId = ensureUuid(input.assignmentId, 'assignmentId');
+  ensureUuid(actorUserId, 'actorUserId');
+
+  if (!isAssignableResponseDecision(input.responseStatus)) {
+    throw AppError.validation(
+      "responseStatus must be either 'TERIMA' or 'TIDAK_BISA'.",
+    );
+  }
+
+  const rawDeclineReason =
+    typeof input.declineReason === 'string' ? input.declineReason.trim() : '';
+  if (input.responseStatus === 'TIDAK_BISA') {
+    if (rawDeclineReason.length === 0 || rawDeclineReason.length > 1000) {
+      throw assignmentDeclineReasonRequiredError();
+    }
+  } else if (rawDeclineReason.length > 0) {
+    throw assignmentDeclineReasonForbiddenOnAcceptError();
+  }
+  const normalizedDeclineReason =
+    input.responseStatus === 'TIDAK_BISA' ? rawDeclineReason : null;
+
+  const rawNotes =
+    typeof input.notes === 'string' ? input.notes.trim() : '';
+  if (rawNotes.length > 2000) {
+    throw AppError.validation('notes must not exceed 2000 characters.');
+  }
+  const normalizedNotes = rawNotes.length > 0 ? rawNotes : null;
+
+  return withTransaction(async (tx) => {
+    const scope = await handymanScopeAssignmentRepository.lockScopeById(
+      tx,
+      executionScopeId,
+    );
+    if (!scope) throw handymanExecutionScopeNotFoundError();
+
+    await assertBuildingScopedResourceAccess(actorUserId, {
+      clientId: scope.clientId,
+      buildingId: scope.buildingId,
+    });
+
+    const assignment =
+      await handymanScopeAssignmentRepository.lockAssignmentByIdAndScope(
+        tx,
+        assignmentId,
+        executionScopeId,
+      );
+    if (!assignment) throw handymanAssignmentNotFoundError();
+
+    if (assignment.status !== 'ACTIVE') {
+      // Check if actor was ever a lead on this crew; if not, 403 forbidden;
+      // if they were, 409 superseded.
+      const wasLeadRes = await tx.query(
+        `SELECT 1
+           FROM handyman_crew_leads cl
+           JOIN handyman_crew_memberships cm
+             ON cm.id = cl.handyman_crew_membership_id
+           JOIN handyman_worker_contexts wc
+             ON wc.id = cm.handyman_worker_context_id
+           JOIN workforce_profiles wp
+             ON wp.id = wc.workforce_profile_id
+          WHERE cl.handyman_crew_id = $1
+            AND wp.user_id = $2
+          LIMIT 1`,
+        [assignment.handymanCrewId, actorUserId],
+      );
+      if ((wasLeadRes.rowCount ?? 0) === 0) {
+        throw handymanAssignmentResponseForbiddenError();
+      }
+      throw handymanAssignmentResponseSupersededError();
+    }
+
+    const target = await validateTarget(
+      tx,
+      {
+        providerContextId: assignment.handymanProviderContextId,
+        crewId: assignment.handymanCrewId,
+      },
+      scope.clientId,
+      scope.buildingId,
+    );
+    if (target.leadUserId !== actorUserId) {
+      throw handymanAssignmentResponseForbiddenError();
+    }
+
+    await assignmentResponseRepository.ensurePendingForAssignment(
+      {
+        assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+        assignmentId: assignment.id,
+        clientId: scope.clientId,
+        buildingId: scope.buildingId,
+        handymanRequestId: scope.handymanRequestId,
+        executionScopeId: scope.id,
+        assignedByUserId: assignment.assignedByUserId,
+        assignedAt: assignment.assignedAt,
+      },
+      tx,
+    );
+    const existing =
+      await assignmentResponseRepository.findByAssignmentIdForUpdate(
+        assignment.id,
+        tx,
+      );
+    if (!existing) {
+      throw handymanAssignmentNotFoundError();
+    }
+
+    // Idempotent replay check before late/conflict check when status matches
+    if (existing.responseStatus === input.responseStatus) {
+      const sameDecline =
+        (existing.declineReason ?? null) === normalizedDeclineReason;
+      const sameNotes = (existing.responseNotes ?? null) === normalizedNotes;
+      if (sameDecline && sameNotes) {
+        return {
+          assignmentId: assignment.id,
+          executionScopeId: scope.id,
+          handymanRequestId: scope.handymanRequestId,
+          crewId: target.crewId,
+          providerContextId: target.providerContextId,
+          status: assignment.status,
+          leadWorkerContextId: target.leadWorkerContextId,
+          leadUserId: target.leadUserId,
+          responseStatus: existing.responseStatus,
+          respondedByUserId: existing.respondedByUserId,
+          respondedByWorkerId: existing.respondedByWorkerId,
+          respondedAt: existing.respondedAt
+            ? existing.respondedAt.toISOString()
+            : null,
+          declineReason: existing.declineReason,
+          responseNotes: existing.responseNotes,
+          reassignmentRequired: existing.responseStatus === 'TIDAK_BISA',
+          idempotentReplay: true,
+        };
+      }
+      throw handymanAssignmentResponseConflictError();
+    }
+
+    if (existing.responseStatus !== 'PENDING') {
+      throw handymanAssignmentResponseConflictError();
+    }
+
+    // Late response guard: cannot respond after a work session has already
+    // been checked in / started for this assignment or scope is no longer AUTHORIZED.
+    if (scope.status !== 'AUTHORIZED') {
+      throw handymanAssignmentResponseLateError();
+    }
+    const sessionRes = await tx.query(
+      `SELECT 1
+         FROM handyman_work_sessions
+        WHERE execution_scope_id = $1
+          AND assignment_id = $2
+        LIMIT 1`,
+      [executionScopeId, assignment.id],
+    );
+    if ((sessionRes.rowCount ?? 0) > 0) {
+      throw handymanAssignmentResponseLateError();
+    }
+
+    const updated = await assignmentResponseRepository.recordDecision(
+      {
+        assignmentId: assignment.id,
+        decision: input.responseStatus,
+        actorUserId,
+        actorWorkerId: target.leadWorkerContextId,
+        declineReason: normalizedDeclineReason,
+        notes: normalizedNotes,
+      },
+      tx,
+    );
+
+    if (input.responseStatus === 'TERIMA') {
+      await notifyExecutionScopeAssignmentAccepted(
+        {
+          clientId: scope.clientId,
+          buildingId: scope.buildingId,
+          handymanRequestId: scope.handymanRequestId,
+          executionScopeId: scope.id,
+          assignmentId: assignment.id,
+          crewId: target.crewId,
+          assignedByUserId: assignment.assignedByUserId,
+          respondedByUserId: actorUserId,
+          respondedByWorkerId: target.leadWorkerContextId,
+          respondedAt: updated.respondedAt!,
+        },
+        tx,
+      );
+    } else {
+      await notifyExecutionScopeAssignmentDeclined(
+        {
+          clientId: scope.clientId,
+          buildingId: scope.buildingId,
+          handymanRequestId: scope.handymanRequestId,
+          executionScopeId: scope.id,
+          assignmentId: assignment.id,
+          crewId: target.crewId,
+          assignedByUserId: assignment.assignedByUserId,
+          respondedByUserId: actorUserId,
+          respondedByWorkerId: target.leadWorkerContextId,
+          respondedAt: updated.respondedAt!,
+          declineReason: normalizedDeclineReason!,
+        },
+        tx,
+      );
+    }
+
+    return {
+      assignmentId: assignment.id,
+      executionScopeId: scope.id,
+      handymanRequestId: scope.handymanRequestId,
+      crewId: target.crewId,
+      providerContextId: target.providerContextId,
+      status: assignment.status,
+      leadWorkerContextId: target.leadWorkerContextId,
+      leadUserId: target.leadUserId,
+      responseStatus: updated.responseStatus,
+      respondedByUserId: updated.respondedByUserId,
+      respondedByWorkerId: updated.respondedByWorkerId,
+      respondedAt: updated.respondedAt
+        ? updated.respondedAt.toISOString()
+        : null,
+      declineReason: updated.declineReason,
+      responseNotes: updated.responseNotes,
+      reassignmentRequired: updated.responseStatus === 'TIDAK_BISA',
+      idempotentReplay: false,
+    };
+  });
+}
+
+export async function listHandymanExecutionScopeAssignmentResponseHistory(
+  executionScopeId: string,
+  assignmentId: string,
+  actorUserId: string,
+): Promise<HandymanExecutionScopeAssignmentResponseHistoryView> {
+  ensureUuid(executionScopeId, 'executionScopeId');
+  ensureUuid(assignmentId, 'assignmentId');
+  ensureUuid(actorUserId, 'actorUserId');
+
+  const scope = await handymanScopeAssignmentRepository.findScopeById(
+    undefined,
+    executionScopeId,
+  );
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId,
+    buildingId: scope.buildingId,
+  });
+
+  const assignment =
+    await handymanScopeAssignmentRepository.findAssignmentByIdAndScope(
+      undefined,
+      assignmentId,
+      executionScopeId,
+    );
+  if (!assignment) throw handymanAssignmentNotFoundError();
+
+  const [response, events] = await Promise.all([
+    assignmentResponseRepository.findByAssignmentId(assignment.id),
+    assignmentResponseRepository.listEventsByAssignmentId(assignment.id),
+  ]);
+
+  const responseStatus = response?.responseStatus ?? 'PENDING';
+  return {
+    assignmentId: assignment.id,
+    executionScopeId: scope.id,
+    status: assignment.status,
+    responseStatus,
+    respondedByUserId: response?.respondedByUserId ?? null,
+    respondedByWorkerId: response?.respondedByWorkerId ?? null,
+    respondedAt: response?.respondedAt
+      ? response.respondedAt.toISOString()
+      : null,
+    declineReason: response?.declineReason ?? null,
+    responseNotes: response?.responseNotes ?? null,
+    reassignmentRequired:
+      assignment.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
+    events: events.map(toPublicAssignmentResponseEvent),
+  };
+}
+
 export const handymanScopeAssignmentService = {
   assignHandymanExecutionScopeCrew,
   reassignHandymanExecutionScopeCrew,
   getHandymanExecutionScopeAssignment,
   resolveHandymanAssignmentLead,
+  respondToHandymanExecutionScopeAssignment,
+  listHandymanExecutionScopeAssignmentResponseHistory,
 };

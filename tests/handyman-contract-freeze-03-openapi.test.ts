@@ -53,18 +53,22 @@ function collectKeys(value: unknown, key: string, out: unknown[] = []): unknown[
 }
 
 describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
-  // CR-HM-WORKER-COMPETENCY-01 PART 03A adds exactly TWO read-only Handyman
-  // operations (`.../competency/eligibility` and `.../competency/candidates`)
-  // to the previously pinned 269-operation surface: 269 + 2 = 271. The
-  // runtime-parity assertion below is what actually guards the contract; the
-  // constant only pins the size of the surface a reviewer should expect.
-  //
-  // CR-HM-WORKER-COMPETENCY-01 PART 03B1 then adds ONE more read-only Handyman
-  // operation (`.../competency/history`): 271 + 1 = 272. It is a read, so it
-  // widens no mutation surface; the additive cert-decision route lives outside
-  // `/handyman` and is covered by the generic parity assertion.
-  it('keeps the 272-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 272);
+  // The release-integration surface (269 at freeze-03) grows additively and
+  // the two release lines add DISJOINT operations, so the merged count is the
+  // sum of both deltas:
+  //   CR-HM-WORKER-COMPETENCY-01 PART 03A  +2  (.../competency/eligibility,
+  //                                            .../competency/candidates)
+  //   CR-HM-WORKER-COMPETENCY-01 PART 03B1 +1  (.../competency/history)
+  //   CR-HM-ASSIGNMENT-RESPONSE-01 /
+  //   CR-HM-FIELD-EXPENSE-HELPER-01        +15 (Execution Scope assignment
+  //                                            response + response-history,
+  //                                            field expense/reimbursement and
+  //                                            helper attendance surfaces)
+  //   269 + 3 + 15 = 287.
+  // The runtime-parity assertion below is what actually guards the contract;
+  // the constant only pins the size of the surface a reviewer should expect.
+  it('keeps the 287-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 287);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -163,15 +167,16 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
         `${operationId} names unseeded permission ${permission}`,
       );
     }
-    // 167 route guards + 1 dual-guard op (first guard named) + 11
-    // unconditional service-enforced permissions; the remaining 90 ops
+    // 173 route guards + 1 dual-guard op (first guard named) + 11
+    // unconditional service-enforced permissions; the remaining 91 ops
     // are composite-authority (Crew Lead / workspace session / HMAC)
     // and must stay unannotated rather than name a misleading permission.
-    // CR-HM-WORKER-COMPETENCY-01 PART 03A adds two route-guarded operations
-    // (`tenant_company.read`): 179 + 2 = 181.
-    // CR-HM-WORKER-COMPETENCY-01 PART 03B1 adds one more route-guarded read
-    // (`tenant_company.read` on `.../competency/history`): 181 + 1 = 182.
-    assert.equal(annotated, 182);
+    // Route-guarded operations, same additive arithmetic as the surface pin:
+    //   PART 03A  +2 (`tenant_company.read`)
+    //   PART 03B1 +1 (`tenant_company.read` on `.../competency/history`)
+    //   assignment-response / field-expense / helper-attendance +8
+    //   179 + 3 + 8 = 190.
+    assert.equal(annotated, 190);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

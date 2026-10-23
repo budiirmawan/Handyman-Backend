@@ -3,9 +3,9 @@ import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewWorkOrderAssignment,
+  WorkOrderAssigneeType,
   WorkOrderAssignmentRecord,
   WorkOrderAssignmentStatus,
-  WorkOrderAssigneeType,
 } from './work-order-assignment.types';
 
 type WorkOrderAssignmentRow = {
@@ -78,9 +78,26 @@ async function create(
 
 async function findById(
   id: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderAssignmentRecord | null> {
-  const result = await getPool().query<WorkOrderAssignmentRow>(
+  const result = await executor.query<WorkOrderAssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM work_order_assignments WHERE id = $1`,
+    [id],
+  );
+
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
+async function findByIdForUpdate(
+  id: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<WorkOrderAssignmentRecord | null> {
+  const result = await executor.query<WorkOrderAssignmentRow>(
+    `SELECT ${ASSIGNMENT_SELECT}
+       FROM work_order_assignments
+      WHERE id = $1
+      FOR UPDATE`,
     [id],
   );
 
@@ -103,10 +120,26 @@ async function findActiveByWorkOrderId(
   return row ? mapRow(row) : null;
 }
 
+async function findActiveByWorkOrderIdForUpdate(
+  workOrderId: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<WorkOrderAssignmentRecord | null> {
+  const result = await executor.query<WorkOrderAssignmentRow>(
+    `SELECT ${ASSIGNMENT_SELECT} FROM work_order_assignments
+     WHERE work_order_id = $1 AND status = 'ACTIVE'
+     FOR UPDATE`,
+    [workOrderId],
+  );
+
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
 async function listByWorkOrderId(
   workOrderId: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderAssignmentRecord[]> {
-  const result = await getPool().query<WorkOrderAssignmentRow>(
+  const result = await executor.query<WorkOrderAssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM work_order_assignments
      WHERE work_order_id = $1
      ORDER BY created_at ASC`,
@@ -135,7 +168,9 @@ async function updateStatus(
 export const workOrderAssignmentRepository = {
   create,
   findActiveByWorkOrderId,
+  findActiveByWorkOrderIdForUpdate,
   findById,
+  findByIdForUpdate,
   listByWorkOrderId,
   updateStatus,
 };

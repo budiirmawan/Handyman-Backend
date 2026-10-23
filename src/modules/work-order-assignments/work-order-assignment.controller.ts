@@ -14,6 +14,7 @@ import {
   parseAssignWorkOrderBody,
   parseAssignmentIdParam,
   parseCompetencyDecisionFilter,
+  parseRespondWorkOrderAssignmentBody,
   parseUpdateAssignmentBody,
   parseWorkOrderIdParam,
 } from './work-order-assignment.validation';
@@ -129,6 +130,7 @@ export async function updateAssignmentHandler(
         await workOrderAssignmentService.deactivateWorkOrderAssignment(
           workOrderId,
           assignmentId,
+          req.auth.userId,
         );
       sendSuccess(res, assignment);
       return;
@@ -141,8 +143,72 @@ export async function updateAssignmentHandler(
         workOrderId,
         assignedByUserId: req.auth.userId,
       },
+      assignmentId,
     );
     sendSuccess(res, assignment);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * CR-HM-ASSIGNMENT-RESPONSE-01 PART 02A —
+ * `POST /work-orders/:id/assignments/:assignmentId/respond`.
+ *
+ * Records the field assignee's explicit decision (`TERIMA` | `TIDAK_BISA`).
+ * The actor identity always comes from the authenticated session, never from
+ * the body.
+ */
+export async function respondToAssignmentHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const workOrderId = parseWorkOrderIdParam(paramString(req.params.id));
+    const assignmentId = parseAssignmentIdParam(
+      paramString(req.params.assignmentId),
+    );
+    if (!req.auth) {
+      throw authenticationRequiredError();
+    }
+    await assertWorkOrderBuildingAccess(req.auth.userId, workOrderId);
+
+    const body = parseRespondWorkOrderAssignmentBody(req.body);
+    const assignment =
+      await workOrderAssignmentService.respondToWorkOrderAssignment({
+        ...body,
+        workOrderId,
+        assignmentId,
+        actorUserId: req.auth.userId,
+      });
+    sendSuccess(res, assignment);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listAssignmentResponseHistoryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const workOrderId = parseWorkOrderIdParam(paramString(req.params.id));
+    const assignmentId = parseAssignmentIdParam(
+      paramString(req.params.assignmentId),
+    );
+    if (!req.auth) {
+      throw authenticationRequiredError();
+    }
+    await assertWorkOrderBuildingAccess(req.auth.userId, workOrderId);
+
+    const history =
+      await workOrderAssignmentService.listWorkOrderAssignmentResponseHistory(
+        workOrderId,
+        assignmentId,
+      );
+    sendSuccess(res, history);
   } catch (error) {
     next(error);
   }

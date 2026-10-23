@@ -6988,6 +6988,8 @@ paths:
                                     executionScopeStatus: { type: string, nullable: true }
                                 assignment:
                                   $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/assignment"
+                                inspectorAssignment:
+                                  $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/inspectorAssignment"
                                 readiness:
                                   $ref: "#/components/schemas/HandymanStatusVisibilityReadView/properties/stages/properties/readiness"
                                 slaMilestones:
@@ -9490,6 +9492,95 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/AssignmentCompetencyHistoryItem' }
                       meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /handyman/execution-scopes/{executionScopeId}/assignments/{assignmentId}/respond:
+    post:
+      tags: [Handyman Scope Assignments]
+      operationId: respondHandymanExecutionScopeAssignment
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_EXECUTION_SCOPE_NOT_FOUND
+        - HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_FOUND
+        - HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN
+        - HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED
+        - HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT
+        - HANDYMAN_ASSIGNMENT_RESPONSE_LATE
+      summary: Record Crew Lead response (TERIMA or TIDAK_BISA) for an Execution Scope assignment
+      description: >
+        Allows the authoritative active Crew Lead (and only the current Crew Lead)
+        to respond `TERIMA` or `TIDAK_BISA` to an Execution Scope crew assignment.
+        `TIDAK_BISA` requires a non-empty declineReason, sets
+        `reassignmentRequired = true`, notifies Operations (`IN_APP`), and blocks
+        arrival verification and work session check-in/start without cancelling
+        the Tenant request or Execution Scope.
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RespondHandymanAssignmentRequest'
+      responses:
+        '200':
+          description: Updated Execution Scope assignment response state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanExecutionScopeAssignmentResponseView'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /handyman/execution-scopes/{executionScopeId}/assignments/{assignmentId}/response-history:
+    get:
+      tags: [Handyman Scope Assignments]
+      operationId: listHandymanExecutionScopeAssignmentResponseHistory
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_EXECUTION_SCOPE_NOT_FOUND
+        - HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_FOUND
+      summary: List append-only response history for an Execution Scope assignment
+      description: >
+        Returns the current response state and append-only decision history events
+        for the specified Execution Scope crew assignment.
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Execution Scope assignment response history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanExecutionScopeAssignmentResponseHistoryView'
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -19985,6 +20076,107 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-orders/{workOrderId}/assignments/{assignmentId}/respond:
+    post:
+      operationId: respondToWorkOrderAssignment
+      summary: Record assignee response (TERIMA or TIDAK_BISA) for a Work Order assignment
+      description: >
+        Records a worker/PIC response (`TERIMA` | `TIDAK_BISA`) against the
+        specified Work Order assignment ID. `TERIMA` integrates with
+        `ACKNOWLEDGE` without duplicating execution actions, operational events,
+        or SLA response clock fulfillment. `TIDAK_BISA` requires a non-empty
+        decline reason, preserves the Tenant Work Order, blocks execution under
+        that assignment, and notifies Operations for reassignment. Requires
+        `work_order.read`, exact-Building access, and active assignment ownership.
+      tags: [Work Orders]
+      x-required-permission: work_order.read
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - WORK_ORDER_NOT_FOUND
+        - WORK_ORDER_ASSIGNMENT_NOT_FOUND
+        - WORK_ORDER_EXECUTION_UNAUTHORIZED
+        - WORK_ORDER_ASSIGNMENT_SUPERSEDED
+        - WORK_ORDER_ASSIGNMENT_RESPONSE_CONFLICT
+        - WORK_ORDER_ASSIGNMENT_RESPONSE_LATE
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RespondWorkOrderAssignmentRequest" }
+      responses:
+        "200":
+          description: The updated Work Order assignment with response state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkOrderAssignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /work-orders/{workOrderId}/assignments/{assignmentId}/response-history:
+    get:
+      operationId: listWorkOrderAssignmentResponseHistory
+      summary: List decision history events for a Work Order assignment
+      description: >
+        Returns the append-only decision history (`ASSIGNMENT_PENDING_CREATED`,
+        `ASSIGNMENT_ACCEPTED`, `ASSIGNMENT_DECLINED`, `ASSIGNMENT_SUPERSEDED`)
+        for the specified Work Order assignment ID. Requires `work_order.read`
+        and Building access.
+      tags: [Work Orders]
+      x-required-permission: work_order.read
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - WORK_ORDER_NOT_FOUND
+        - WORK_ORDER_ASSIGNMENT_NOT_FOUND
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/WorkOrderIdPath"
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/Uuid" }
+      responses:
+        "200":
+          description: Decision history events for the assignment.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /work-orders/{workOrderId}/acknowledge:
     post:
@@ -81284,6 +81476,94 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/visit-appointments/{visitAppointmentId}/inspector-assignments/{assignmentId}/respond:
+    parameters:
+      - name: visitAppointmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: assignmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman]
+      operationId: respondHandymanInspectorAssignment
+      summary: Record Inspector response (TERIMA or TIDAK_BISA) for a Visit Appointment assignment
+      description: >-
+        Allows the assigned Inspector to respond `TERIMA` or `TIDAK_BISA` to an
+        Inspection Visit assignment. `TIDAK_BISA` requires a mandatory declineReason,
+        sets `reassignmentRequired = true`, notifies Operations (`IN_APP`), and
+        blocks the declined Inspector from recording the inspection without
+        deleting or cancelling the Visit Appointment or Handyman Service Request.
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_INSPECTOR_ASSIGNMENT_NOT_FOUND
+        - HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN
+        - HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED
+        - HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT
+        - HANDYMAN_ASSIGNMENT_RESPONSE_LATE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RespondHandymanAssignmentRequest" }
+      responses:
+        "200":
+          description: Updated Inspector assignment response state.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspectorAssignment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/visit-appointments/{visitAppointmentId}/inspector-assignments/{assignmentId}/response-history:
+    parameters:
+      - name: visitAppointmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: assignmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Handyman]
+      operationId: listHandymanInspectorAssignmentResponseHistory
+      summary: List append-only response history for an Inspector Visit assignment
+      description: >-
+        Returns the current response state and append-only decision history events
+        for the specified Inspector Visit assignment (preserved across reassign
+        and revoke).
+      security: [{ bearerAuth: [] }]
+      x-error-codes:
+        - VALIDATION_ERROR
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_INSPECTOR_ASSIGNMENT_NOT_FOUND
+      responses:
+        "200":
+          description: Inspector Visit assignment response history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanInspectorAssignmentResponseHistoryView" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /handyman/requests/{handymanRequestId}/inspector-assignments/history:
     parameters:
       - $ref: "#/components/parameters/HandymanRequestIdPath"
@@ -81518,6 +81798,41 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Handyman Material Execution]
+      operationId: getOperationsHandymanMaterialPurchase
+      x-required-permission: tenant_company.read
+      summary: Read one material purchase record and event history (Operations)
+      description: >-
+        Requires an authenticated actor with tenant_company.read and
+        exact-Building access to the execution scope's Building (403
+        BUILDING_ACCESS_DENIED or PERMISSION_DENIED otherwise). Returns the
+        authoritative material purchase record and its append-only event
+        trail.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND]
+      responses:
+        "200":
+          description: Material purchase record and append-only event history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanOperationsMaterialPurchaseDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reconcile:
     parameters:
       - $ref: "#/components/parameters/ExecutionScopeIdPath"
@@ -81529,16 +81844,19 @@ paths:
       tags: [Handyman Material Execution]
       operationId: reconcileHandymanMaterialPurchase
       x-required-permission: tenant_company.manage
-      summary: Reconcile a material purchase (Operations/Manager)
+      summary: Verify and reconcile a material purchase (Operations/Manager)
       description: >-
         Operations/Manager only (tenant_company.manage, exact-Building);
         the field requester may never self-reconcile (403
-        HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN). Transitions RETURN to
-        RECONCILIATION and recomputes the separation summary and the
-        reimbursement payable. Shared material-purchase command semantics
-        apply (see approve).
+        HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN). Verifies used + returned =
+        acquired quantity, verified MATERIAL_RECEIPT private evidence for
+        personal out-of-pocket REIMBURSEMENT claims, recomputes the 4-way
+        separation summary, and marks eligible personal expenses
+        RECONCILED_PAYABLE (or REJECTED when reimbursementEligible is false)
+        while keeping CASH_ADVANCE, PETTY_CASH, COMPANY_DIRECT and
+        WAREHOUSE_STOCK at NOT_APPLICABLE.
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_ILLEGAL_TRANSITION, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, INVALID_STORAGE_KEY]
+      x-error-codes: [VALIDATION_ERROR, EVIDENCE_FILE_NOT_FOUND, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_ILLEGAL_TRANSITION, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID, INVALID_STORAGE_KEY]
       requestBody:
         required: true
         content:
@@ -81555,6 +81873,216 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/HandymanMaterialPurchaseReconcileResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/material-reimbursements:
+    get:
+      tags: [Handyman Material Execution]
+      operationId: listFinanceHandymanMaterialReimbursements
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      summary: List personal out-of-pocket worker reimbursements (Finance queue)
+      description: >-
+        Requires handyman.finance.read and scopes results inside SQL to
+        Buildings where the authenticated Finance actor holds an ACTIVE
+        user_building_assignments grant. Returns only personal out-of-pocket
+        REIMBURSEMENT records and their append-only event history.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN]
+      parameters:
+        - name: buildingId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: executionScopeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: workOrderId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: reimbursementStatus
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [NOT_APPLICABLE, PENDING_RECONCILIATION, RECONCILED_PAYABLE, FINANCE_APPROVED, DISBURSED, REJECTED]
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200 }
+      responses:
+        "200":
+          description: Building-scoped Finance reimbursement queue.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanFinanceMaterialReimbursementQueue" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /handyman/execution-scopes/{executionScopeId}/material-reimbursements:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Material Execution]
+      operationId: listScopeFinanceHandymanMaterialReimbursements
+      x-required-permission: handyman.finance.read
+      summary: List worker reimbursements of an execution scope (Finance)
+      description: >-
+        Requires handyman.finance.read and exact-Building access to the
+        execution scope's Building. Returns eligible personal out-of-pocket
+        reimbursement records with events and the 4-way ledger separation
+        summary.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN]
+      responses:
+        "200":
+          description: Execution-scope worker reimbursements and separation summary.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseOperationsList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reimbursement/approve:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Material Execution]
+      operationId: approveHandymanMaterialPurchaseReimbursement
+      x-required-permission: handyman.finance.manage
+      summary: Approve an Operations-verified worker reimbursement (Finance)
+      description: >-
+        Requires handyman.finance.manage and exact-Building access; forbids
+        self-approval of the requester/payee's own reimbursement (403
+        HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN). Requires fundingSource
+        REIMBURSEMENT, status RECONCILIATION, reimbursementStatus
+        RECONCILED_PAYABLE, and a verified MATERIAL_RECEIPT in private
+        storage. Transitions reimbursementStatus to FINANCE_APPROVED and
+        appends an immutable REIMBURSEMENT_APPROVED event.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID, HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN, HANDYMAN_REIMBURSEMENT_ILLEGAL_TRANSITION, HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApproveMaterialPurchaseReimbursementRequest" }
+      responses:
+        "200":
+          description: Reimbursement approved by Finance (FINANCE_APPROVED), or replayed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseCommandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reimbursement/reject:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Material Execution]
+      operationId: rejectHandymanMaterialPurchaseReimbursement
+      x-required-permission: handyman.finance.manage
+      summary: Reject an un-disbursed worker reimbursement (Finance)
+      description: >-
+        Requires handyman.finance.manage and exact-Building access; forbids
+        self-rejection by the requester/payee. Transitions
+        RECONCILED_PAYABLE or FINANCE_APPROVED to REJECTED, zeroes payable
+        amount, and appends an immutable REIMBURSEMENT_REJECTED event.
+        Refuses already-disbursed claims with 409
+        HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN, HANDYMAN_REIMBURSEMENT_ILLEGAL_TRANSITION, HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RejectMaterialPurchaseReimbursementRequest" }
+      responses:
+        "200":
+          description: Reimbursement rejected by Finance (REJECTED), or replayed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseCommandResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}/reimbursement/disburse:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Handyman Material Execution]
+      operationId: disburseHandymanMaterialPurchaseReimbursement
+      x-required-permission: handyman.finance.manage
+      summary: Disburse a Finance-approved worker reimbursement (Finance)
+      description: >-
+        Requires handyman.finance.manage and exact-Building access; forbids
+        self-disbursement by the requester/payee. Enforces prior Finance
+        approval (409 HANDYMAN_REIMBURSEMENT_APPROVAL_REQUIRED otherwise),
+        prevents double payment and duplicate disbursement references (409
+        HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED), enforces exact amount
+        match (409 HANDYMAN_REIMBURSEMENT_AMOUNT_MISMATCH), transitions
+        reimbursementStatus to DISBURSED, and appends an immutable
+        REIMBURSEMENT_DISBURSED event.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN, HANDYMAN_EVIDENCE_UPLOAD_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_IDEMPOTENCY_CONFLICT, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND, HANDYMAN_MATERIAL_PURCHASE_VERSION_CONFLICT, HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID, HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED, HANDYMAN_REIMBURSEMENT_AMOUNT_MISMATCH, HANDYMAN_REIMBURSEMENT_APPROVAL_REQUIRED, HANDYMAN_REIMBURSEMENT_FINANCE_FORBIDDEN, HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DisburseMaterialPurchaseReimbursementRequest" }
+      responses:
+        "200":
+          description: Reimbursement disbursed by Finance (DISBURSED), or replayed.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanMaterialPurchaseCommandResult" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -81590,6 +82118,202 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/field/execution-scopes/{executionScopeId}/material-purchases/{purchaseRecordId}:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      - name: purchaseRecordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Handyman Material Execution]
+      operationId: getFieldHandymanMaterialPurchase
+      summary: Read one material purchase record for the field actor
+      description: >-
+        Authentication only; the service requires the CURRENT Crew Lead
+        (PIC Pekerjaan) or the assigned Inspector for the scope (403
+        HANDYMAN_FIELD_READ_FORBIDDEN otherwise). PIC Pekerjaan receives
+        expense and reimbursement lifecycle status; Inspector receives
+        operational movement quantities only.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_FIELD_READ_FORBIDDEN, HANDYMAN_MATERIAL_PURCHASE_NOT_FOUND]
+      responses:
+        "200":
+          description: Role-scoped material purchase detail.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanFieldMaterialPurchaseDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/field/execution-scopes/{executionScopeId}/helper-attendance:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Field Execution]
+      operationId: getFieldHandymanHelperAttendance
+      summary: Read effective Helper roster and verified attendance state (Crew Lead)
+      description: >-
+        Authentication only; requires exact-Building access and the current
+        authoritative assigned Crew Lead for the Execution Scope (403
+        HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN otherwise). Distinguishes
+        effective Helper roster and unverified check-in snapshot from
+        explicit verified attendance (HADIR / TIDAK_HADIR), supports
+        Helpers without Mobile accounts (helperUserId null), and never
+        grants automatic fee approval.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: workSessionId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED]
+      responses:
+        "200":
+          description: Effective Helper roster, verified attendance, personnel changes, and audit history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/field/execution-scopes/{executionScopeId}/helper-attendance/confirm:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    post:
+      tags: [Handyman Field Execution]
+      operationId: confirmFieldHandymanHelperAttendance
+      summary: Confirm or correct actual Helper attendance on site (Crew Lead)
+      description: >-
+        Authentication only; requires exact-Building access, the current
+        authoritative assigned Crew Lead, and an active field session on
+        the Execution Scope. Confirms HADIR or TIDAK_HADIR per Helper from
+        the effective authorized roster (including Helpers without Mobile
+        accounts), requires correctionReason when modifying an already
+        confirmed Helper, records append-only confirmation and correction
+        history, and never grants automatic fee approval.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, CONFLICT, WORK_ORDER_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED, HANDYMAN_HELPER_ATTENDANCE_NOT_IN_ROSTER, HANDYMAN_HELPER_ATTENDANCE_CORRECTION_REASON_REQUIRED, HANDYMAN_HELPER_CROSS_WORK_ORDER_MISMATCH]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmHandymanHelperAttendanceRequest" }
+      responses:
+        "200":
+          description: Helper attendance confirmed or replayed idempotently.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperAttendanceConfirmResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /handyman/execution-scopes/{executionScopeId}/helper-attendance:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Field Execution]
+      operationId: getOperationsHandymanHelperAttendance
+      x-required-permission: tenant_company.read
+      summary: Read effective Helper roster, verified attendance, and correction history (Operations)
+      description: >-
+        Requires tenant_company.read and exact-Building access. Returns the
+        effective Helper roster, Operations personnel change log, verified
+        Helper attendance confirmations, and append-only correction history
+        for the Execution Scope.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: workSessionId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED]
+      responses:
+        "200":
+          description: Effective Helper roster, verified attendance, personnel changes, and audit history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/helper-attendance/personnel-changes:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    post:
+      tags: [Handyman Field Execution]
+      operationId: authorizeHandymanScopeHelperPersonnelChange
+      x-required-permission: tenant_company.manage
+      summary: Authorize an Execution Scope Helper addition, substitution, or removal (Operations)
+      description: >-
+        Requires tenant_company.manage and exact-Building access. Authorizes
+        ADD_HELPER, SUBSTITUTE_HELPER, or REMOVE_HELPER for this Execution
+        Scope while preserving Helpers without Mobile accounts, validates
+        worker Building placement, supersedes any prior HADIR confirmation
+        for a removed/substituted Helper with an immutable audit event, and
+        requires on-site Crew Lead confirmation for newly added or
+        substitute Helpers.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, CONFLICT, WORK_ORDER_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ROSTER_CHANGE_CONFLICT, HANDYMAN_HELPER_CROSS_WORK_ORDER_MISMATCH]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuthorizeHandymanHelperPersonnelChangeRequest" }
+      responses:
+        "200":
+          description: Idempotent replay of an existing Helper personnel change.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperPersonnelChangeResult" }
+        "201":
+          description: Helper personnel change authorized.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperPersonnelChangeResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /handyman/field/execution-scopes/{executionScopeId}/material-purchases/requests:
     parameters:
       - $ref: "#/components/parameters/ExecutionScopeIdPath"
@@ -92540,12 +93264,35 @@ components:
                 status: { type: string, nullable: true }
             assignment:
               type: object
-              required: [assignmentId, status, providerContextId, crewId]
+              required: [assignmentId, status, providerContextId, crewId, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, responseNotes, reassignmentRequired]
               properties:
                 assignmentId: { type: string, format: uuid, nullable: true }
                 status: { type: string, nullable: true }
                 providerContextId: { type: string, format: uuid, nullable: true }
                 crewId: { type: string, format: uuid, nullable: true }
+                responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA], nullable: true }
+                respondedByUserId: { type: string, format: uuid, nullable: true }
+                respondedByWorkerId: { type: string, format: uuid, nullable: true }
+                respondedAt: { type: string, format: date-time, nullable: true }
+                declineReason: { type: string, nullable: true }
+                responseNotes: { type: string, nullable: true }
+                reassignmentRequired: { type: boolean }
+            inspectorAssignment:
+              type: object
+              required: [assignmentId, visitAppointmentId, visitState, inspectorUserId, status, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, responseNotes, reassignmentRequired]
+              properties:
+                assignmentId: { type: string, format: uuid, nullable: true }
+                visitAppointmentId: { type: string, format: uuid, nullable: true }
+                visitState: { type: string, nullable: true }
+                inspectorUserId: { type: string, format: uuid, nullable: true }
+                status: { type: string, nullable: true }
+                responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA], nullable: true }
+                respondedByUserId: { type: string, format: uuid, nullable: true }
+                respondedByWorkerId: { type: string, format: uuid, nullable: true }
+                respondedAt: { type: string, format: date-time, nullable: true }
+                declineReason: { type: string, nullable: true }
+                responseNotes: { type: string, nullable: true }
+                reassignmentRequired: { type: boolean }
             arrival:
               type: object
               required: [arrivalVerificationResultId, status, primaryReason]
@@ -99519,6 +100266,14 @@ components:
             with no configured requirement, carries an empty `advisory`.
           allOf:
             - $ref: "#/components/schemas/WorkOrderAssignmentCompetencyOutcome"
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
 
     WorkOrderAssignmentCompetencyOutcome:
       type: object
@@ -99558,6 +100313,180 @@ components:
         reason:
           type: string
           description: Machine-readable gap reason (for example SKILL_MISSING).
+
+    HandymanAssignmentResponseStatus:
+      type: string
+      enum: [PENDING, TERIMA, TIDAK_BISA]
+
+    HandymanAssignmentResponseDecision:
+      type: string
+      enum: [TERIMA, TIDAK_BISA]
+
+    RespondWorkOrderAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        declineReason: { type: string, minLength: 1, maxLength: 1000 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        notes: { type: string, maxLength: 1000 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 255 }
+
+    RespondHandymanAssignmentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        decision: { $ref: "#/components/schemas/HandymanAssignmentResponseDecision" }
+        declineReason: { type: string, minLength: 1, maxLength: 1000, nullable: true }
+        reason: { type: string, minLength: 1, maxLength: 1000, nullable: true }
+        notes: { type: string, maxLength: 2000, nullable: true }
+
+    HandymanExecutionScopeAssignmentResponseView:
+      type: object
+      additionalProperties: false
+      required:
+        - assignmentId
+        - executionScopeId
+        - handymanRequestId
+        - crewId
+        - providerContextId
+        - status
+        - leadWorkerContextId
+        - leadUserId
+        - responseStatus
+        - respondedByUserId
+        - respondedByWorkerId
+        - respondedAt
+        - declineReason
+        - responseNotes
+        - reassignmentRequired
+        - idempotentReplay
+      properties:
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        executionScopeId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        crewId: { $ref: "#/components/schemas/Uuid" }
+        providerContextId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        leadWorkerContextId: { type: string, format: uuid, nullable: true }
+        leadUserId: { type: string, format: uuid, nullable: true }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        idempotentReplay: { type: boolean }
+
+    HandymanExecutionScopeAssignmentResponseHistoryView:
+      type: object
+      additionalProperties: false
+      required:
+        - assignmentId
+        - executionScopeId
+        - status
+        - responseStatus
+        - respondedByUserId
+        - respondedByWorkerId
+        - respondedAt
+        - declineReason
+        - responseNotes
+        - reassignmentRequired
+        - events
+      properties:
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        executionScopeId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED] }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
+
+    HandymanInspectorAssignmentResponseHistoryView:
+      type: object
+      additionalProperties: false
+      required:
+        - assignmentId
+        - visitAppointmentId
+        - handymanRequestId
+        - inspectorUserId
+        - status
+        - responseStatus
+        - respondedByUserId
+        - respondedByWorkerId
+        - respondedAt
+        - declineReason
+        - responseNotes
+        - reassignmentRequired
+        - events
+      properties:
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        visitAppointmentId: { $ref: "#/components/schemas/Uuid" }
+        handymanRequestId: { $ref: "#/components/schemas/Uuid" }
+        inspectorUserId: { $ref: "#/components/schemas/Uuid" }
+        status: { type: string, enum: [ACTIVE, SUPERSEDED, REVOKED] }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
+
+    HandymanAssignmentResponseEvent:
+      type: object
+      additionalProperties: false
+      required:
+        [id, responseId, assignmentTargetType, assignmentId, workOrderId,
+         handymanRequestId, executionScopeId, visitAppointmentId, eventType,
+         previousStatus, newStatus, declineReason, notes, actorUserId,
+         actorWorkerId, occurredAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        responseId: { $ref: "#/components/schemas/Uuid" }
+        assignmentTargetType:
+          type: string
+          enum: [WORK_ORDER_ASSIGNMENT, EXECUTION_SCOPE_ASSIGNMENT, INSPECTOR_VISIT_ASSIGNMENT]
+        assignmentId: { $ref: "#/components/schemas/Uuid" }
+        workOrderId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        handymanRequestId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        executionScopeId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        visitAppointmentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        eventType:
+          type: string
+          enum: [ASSIGNMENT_PENDING_CREATED, ASSIGNMENT_ACCEPTED, ASSIGNMENT_DECLINED, ASSIGNMENT_SUPERSEDED]
+        previousStatus:
+          allOf: [{ $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }]
+          nullable: true
+        newStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        declineReason: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        actorUserId: { $ref: "#/components/schemas/Uuid" }
+        actorWorkerId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        occurredAt: { type: string, format: date-time }
 
     WorkOrderActionType:
       type: string
@@ -102268,6 +103197,34 @@ components:
         assignmentStatus:
           type: string
           const: ACTIVE
+        assignmentId:
+          $ref: "#/components/schemas/Uuid"
+        responseStatus:
+          type: string
+          enum: [PENDING, TERIMA, TIDAK_BISA]
+          nullable: true
+        respondedByUserId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        respondedByWorkerId:
+          allOf:
+            - $ref: "#/components/schemas/Uuid"
+          nullable: true
+        respondedAt:
+          type: string
+          format: date-time
+          nullable: true
+        declineReason:
+          type: string
+          nullable: true
+        reassignmentRequired:
+          type: boolean
+        availableResponseActions:
+          type: array
+          items:
+            type: string
+            enum: [TERIMA, TIDAK_BISA]
     MobileAssignmentContext:
       type: object
       description: Building / Location context of the assigned work.
@@ -104925,29 +105882,32 @@ components:
       properties:
         type:
           type: string
-          enum: [WORK_ORDER_FIELD_WORK]
+          enum: [WORK_ORDER_FIELD_WORK, EXECUTION_SCOPE_FIELD_WORK, INSPECTOR_VISIT_FIELD_WORK]
           description: >-
-            Target type. `WORK_ORDER_FIELD_WORK` means "open this Work Order
-            on the mobile FieldWork surface"; the destination is resolved by
-            the backend from the recipient's own assignment, never from a
-            stored route string.
+            Target type. `WORK_ORDER_FIELD_WORK`, `EXECUTION_SCOPE_FIELD_WORK`,
+            and `INSPECTOR_VISIT_FIELD_WORK` identify the canonical work target;
+            the destination is resolved by the backend from the recipient's own
+            assignment or Operations building scope, never from a stored route
+            string.
         id:
           $ref: "#/components/schemas/Uuid"
           description: >-
             The canonical backend entity id the target points at. For
-            `WORK_ORDER_FIELD_WORK` this is exactly `work_orders.id`.
+            `WORK_ORDER_FIELD_WORK` this is `work_orders.id`; for
+            `EXECUTION_SCOPE_FIELD_WORK` this is `handyman_execution_scopes.id`;
+            for `INSPECTOR_VISIT_FIELD_WORK` this is `handyman_visit_appointments.id`.
 
     NotificationNavigationTargetResolution:
       type: object
       description: >-
         The resolved navigation target for the AUTHENTICATED recipient.
         `target` is `null` when the notification declares no navigation target
-        OR when the recipient has no visible matching assignment — never a
+        OR when the recipient has no visible matching assignment (e.g. superseded,
+        reassigned, declined, or outside Building scope) — never a
         fallback, never a guessed destination. Ownership of the notification
         grants no work authority: the assignment is resolved independently
-        through `GET /mobile/assignments` visibility and authority rules, so
-        the object returned here is the same `MobileAssignment` shape the
-        feed publishes (not a second assignment DTO). Resolving is a READ: it
+        through `GET /mobile/assignments` or Handyman field/Operations
+        visibility and authority rules. Resolving is a READ: it
         never marks the notification read.
       required: [target]
       properties:
@@ -104955,13 +105915,40 @@ components:
           nullable: true
           allOf:
             - type: object
-              required: [destination, assignment]
+              required: [destination]
               properties:
                 destination:
                   type: string
-                  enum: [FIELD_WORK]
+                  enum:
+                    - FIELD_WORK
+                    - OPERATIONS_WORK_ORDER
+                    - OPERATIONS_EXECUTION_SCOPE
+                    - OPERATIONS_INSPECTOR_VISIT
                 assignment:
                   $ref: "#/components/schemas/MobileAssignment"
+                  nullable: true
+                assignmentType:
+                  type: string
+                  enum: [EXECUTION_SCOPE_ASSIGNMENT, INSPECTOR_VISIT_ASSIGNMENT]
+                assignmentId:
+                  $ref: "#/components/schemas/Uuid"
+                workOrderId:
+                  $ref: "#/components/schemas/Uuid"
+                executionScopeId:
+                  $ref: "#/components/schemas/Uuid"
+                handymanRequestId:
+                  $ref: "#/components/schemas/Uuid"
+                visitAppointmentId:
+                  $ref: "#/components/schemas/Uuid"
+                responseStatus:
+                  type: string
+                  enum: [PENDING, TERIMA, TIDAK_BISA]
+                  nullable: true
+                reassignmentRequired:
+                  type: boolean
+                availableActions:
+                  type: array
+                  items: { type: string }
 
     # ------------------------------------------------------------------
     # BE-26B — Notification template foundation. Platform configuration;
@@ -131097,11 +132084,12 @@ components:
     HandymanMaterialPurchaseRecord:
       type: object
       description: "Source: HandymanMaterialPurchaseRecord (handyman-material-purchasing.types.ts). Quantities and amounts are decimal strings as stored."
-      required: [id, clientId, executionScopeId, handymanRequestId, tenantCompanyId, buildingId, materialExecutionLineId, sourceItemId, itemName, uomId, uomCode, fundingSource, status, requestedQuantity, approvedQuantity, issuedQuantity, purchasedQuantity, usedQuantity, returnedQuantity, returnDestination, supplierName, supplierReference, purchaseReference, purchaseDate, currency, approvedMaxUnitPrice, actualUnitPrice, actualTotalExpenseAmount, netUsedExpenseAmount, approvalReference, expenditureReference, cashAdvanceReference, receiptEvidenceReference, latestEvidenceReference, reimbursementPayableAmount, reimbursementPayeeUserId, reimbursementStatus, tenantChargeEligible, tenantChargeEligibleQty, tenantInvoiced, requestedByUserId, approvedByUserId, reconciledByUserId, reconciledAt, createIdempotencyKey, version, createdAt, updatedAt]
+      required: [id, clientId, executionScopeId, workOrderId, handymanRequestId, tenantCompanyId, buildingId, materialExecutionLineId, sourceItemId, itemName, uomId, uomCode, fundingSource, status, requestedQuantity, approvedQuantity, issuedQuantity, purchasedQuantity, usedQuantity, returnedQuantity, returnDestination, supplierName, supplierReference, purchaseReference, purchaseDate, currency, approvedMaxUnitPrice, actualUnitPrice, actualTotalExpenseAmount, netUsedExpenseAmount, approvalReference, expenditureReference, cashAdvanceReference, receiptEvidenceReference, receiptSha256Checksum, latestEvidenceReference, reimbursementPayableAmount, reimbursementPayeeUserId, reimbursementStatus, reimbursementFinanceApprovalReference, reimbursementFinanceApprovedByUserId, reimbursementFinanceApprovedAt, reimbursementDisbursementReference, reimbursementDisbursementMethod, reimbursementDisbursedAmount, reimbursementDisbursedByUserId, reimbursementDisbursedAt, reimbursementRejectedByUserId, reimbursementRejectedAt, reimbursementRejectionReason, tenantChargeEligible, tenantChargeEligibleQty, tenantInvoiced, requestedByUserId, approvedByUserId, reconciledByUserId, reconciledAt, createIdempotencyKey, version, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
         handymanRequestId: { type: string, format: uuid }
         tenantCompanyId: { type: string, format: uuid }
         buildingId: { type: string, format: uuid }
@@ -131132,10 +132120,22 @@ components:
         expenditureReference: { type: string, nullable: true }
         cashAdvanceReference: { type: string, nullable: true }
         receiptEvidenceReference: { type: string, nullable: true }
+        receiptSha256Checksum: { type: string, nullable: true }
         latestEvidenceReference: { type: string }
         reimbursementPayableAmount: { type: string }
         reimbursementPayeeUserId: { type: string, format: uuid, nullable: true }
-        reimbursementStatus: { type: string, enum: [NOT_APPLICABLE, PENDING_RECONCILIATION, RECONCILED_PAYABLE] }
+        reimbursementStatus: { type: string, enum: [NOT_APPLICABLE, PENDING_RECONCILIATION, RECONCILED_PAYABLE, FINANCE_APPROVED, DISBURSED, REJECTED] }
+        reimbursementFinanceApprovalReference: { type: string, nullable: true }
+        reimbursementFinanceApprovedByUserId: { type: string, format: uuid, nullable: true }
+        reimbursementFinanceApprovedAt: { type: string, format: date-time, nullable: true }
+        reimbursementDisbursementReference: { type: string, nullable: true }
+        reimbursementDisbursementMethod: { type: string, enum: [BANK_TRANSFER, PAYROLL_SETTLEMENT, PETTY_CASH_PAYOUT], nullable: true }
+        reimbursementDisbursedAmount: { type: string }
+        reimbursementDisbursedByUserId: { type: string, format: uuid, nullable: true }
+        reimbursementDisbursedAt: { type: string, format: date-time, nullable: true }
+        reimbursementRejectedByUserId: { type: string, format: uuid, nullable: true }
+        reimbursementRejectedAt: { type: string, format: date-time, nullable: true }
+        reimbursementRejectionReason: { type: string, nullable: true }
         tenantChargeEligible: { type: boolean }
         tenantChargeEligibleQty: { type: string }
         tenantInvoiced: { type: boolean }
@@ -131156,11 +132156,11 @@ components:
         clientId: { type: string, format: uuid }
         purchaseRecordId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
-        eventType: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION] }
+        eventType: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION, REIMBURSEMENT_APPROVED, REIMBURSEMENT_REJECTED, REIMBURSEMENT_DISBURSED] }
         fromStatus: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION], nullable: true }
         toStatus: { type: string, enum: [REQUEST, APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION] }
         actorUserId: { type: string, format: uuid }
-        actorRole: { type: string, enum: [PIC_PEKERJAAN, OPERATIONS_MANAGER] }
+        actorRole: { type: string, enum: [PIC_PEKERJAAN, OPERATIONS_MANAGER, FINANCE_MANAGER] }
         quantityDelta: { type: string }
         evidenceReference: { type: string }
         notes: { type: string, nullable: true }
@@ -131205,12 +132205,16 @@ components:
             purchasedRecordsCount: { type: integer }
         workerAdvanceReimbursementPayable:
           type: object
-          required: [currency, totalReimbursementPayableAmount, pendingReconciliationCount, reconciledPayableCount]
+          required: [currency, totalReimbursementPayableAmount, totalDisbursedAmount, pendingReconciliationCount, reconciledPayableCount, financeApprovedCount, disbursedCount, rejectedCount]
           properties:
             currency: { type: string }
             totalReimbursementPayableAmount: { type: string }
+            totalDisbursedAmount: { type: string }
             pendingReconciliationCount: { type: integer }
             reconciledPayableCount: { type: integer }
+            financeApprovedCount: { type: integer }
+            disbursedCount: { type: integer }
+            rejectedCount: { type: integer }
         tenantInvoiceChargeEligibility:
           type: object
           required: [eligibleRecordsCount, totalEligibleUsedQuantity, anyTenantInvoiced]
@@ -131233,6 +132237,7 @@ components:
       description: "Source: submitMaterialPurchaseRequest input (handyman-material-purchasing.service.ts). Caller must be the current Crew Lead (PIC Pekerjaan)."
       required: [itemName, uomId, fundingSource, requestedQuantity, evidenceReference, idempotencyKey]
       properties:
+        workOrderId: { type: string, format: uuid }
         materialExecutionLineId: { type: string, format: uuid }
         sourceItemId: { type: string, format: uuid }
         itemName: { type: string, minLength: 1, maxLength: 250 }
@@ -131276,6 +132281,7 @@ components:
       type: object
       required: [purchasedQuantity, supplierName, purchaseReference, actualUnitPrice, purchaseDate, receiptEvidenceReference, idempotencyKey]
       properties:
+        workOrderId: { type: string, format: uuid }
         purchasedQuantity: { type: number, exclusiveMinimum: 0 }
         supplierName: { type: string }
         supplierReference: { type: string }
@@ -131313,10 +132319,42 @@ components:
       required: [idempotencyKey]
       properties:
         tenantChargeEligible: { type: boolean }
+        reimbursementEligible: { type: boolean }
+        reimbursementRejectionReason: { type: string }
         expenditureReference: { type: string }
         evidenceReference: { type: string }
         notes: { type: string }
         idempotencyKey: { type: string }
+        expectedVersion: { type: integer, minimum: 1 }
+    ApproveMaterialPurchaseReimbursementRequest:
+      type: object
+      additionalProperties: false
+      required: [approvalReference, idempotencyKey]
+      properties:
+        approvalReference: { type: string, minLength: 1, maxLength: 200 }
+        notes: { type: string }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
+        expectedVersion: { type: integer, minimum: 1 }
+    RejectMaterialPurchaseReimbursementRequest:
+      type: object
+      additionalProperties: false
+      required: [reason, idempotencyKey]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
+        notes: { type: string }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
+        expectedVersion: { type: integer, minimum: 1 }
+    DisburseMaterialPurchaseReimbursementRequest:
+      type: object
+      additionalProperties: false
+      required: [disbursementReference, idempotencyKey]
+      properties:
+        disbursementReference: { type: string, minLength: 1, maxLength: 200 }
+        disbursementMethod: { type: string, enum: [BANK_TRANSFER, PAYROLL_SETTLEMENT, PETTY_CASH_PAYOUT] }
+        disbursedAmount: { type: number, minimum: 0 }
+        evidenceReference: { type: string }
+        notes: { type: string }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 128 }
         expectedVersion: { type: integer, minimum: 1 }
     HandymanMaterialPurchaseReconcileResult:
       allOf:
@@ -131340,6 +132378,30 @@ components:
         records:
           type: array
           items: { $ref: "#/components/schemas/HandymanMaterialPurchaseRecord" }
+    HandymanFieldMaterialPurchaseDetail:
+      type: object
+      additionalProperties: false
+      required: [actorRole, record]
+      properties:
+        actorRole: { type: string, enum: [PIC_PEKERJAAN, INSPECTOR] }
+        record: { $ref: "#/components/schemas/HandymanMaterialPurchaseRecord" }
+    HandymanOperationsMaterialPurchaseDetail:
+      type: object
+      additionalProperties: false
+      required: [record, events]
+      properties:
+        record: { $ref: "#/components/schemas/HandymanMaterialPurchaseRecord" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanMaterialPurchaseEvent" }
+    HandymanFinanceMaterialReimbursementQueue:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanMaterialPurchaseWithEvents" }
     HandymanMaterialPurchaseOperationsList:
       type: object
       required: [records, separationSummary]
@@ -131695,14 +132757,24 @@ components:
     HandymanFieldJob:
       type: object
       description: "Source: MY_JOBS_SQL row plus ISO date conversion in readMyHandymanFieldFeed (handyman-field-feed.service.ts)."
-      required: [executionScopeId, requestId, buildingId, crewId, requestStatus, scopeStatus, dispatchReleaseId, dispatchStatus, releasedAt, confirmedAppointmentId, confirmedStartAt, confirmedEndAt, timezone, appointmentConfirmed, dispatchReleased]
+      required: [assignmentId, executionScopeId, requestId, buildingId, crewId, requestStatus, scopeStatus, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions, dispatchReleaseId, dispatchStatus, releasedAt, confirmedAppointmentId, confirmedStartAt, confirmedEndAt, timezone, appointmentConfirmed, dispatchReleased]
       properties:
+        assignmentId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
         requestId: { type: string, format: uuid }
         buildingId: { type: string, format: uuid }
         crewId: { type: string, format: uuid }
         requestStatus: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
         scopeStatus: { type: string }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
         dispatchReleaseId: { type: string, format: uuid, nullable: true }
         dispatchStatus: { type: string, nullable: true }
         releasedAt: { type: string, format: date-time, nullable: true }
@@ -131715,9 +132787,10 @@ components:
     HandymanFieldInspectionJob:
       type: object
       description: "Source: MY_INSPECTIONS_SQL row in readMyHandymanFieldFeed."
-      required: [appointmentId, requestId, buildingId, startAt, endAt, timezone, state, version, assignmentId, assignmentVersion]
+      required: [appointmentId, visitAppointmentId, requestId, buildingId, startAt, endAt, timezone, state, version, assignmentId, assignmentVersion, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions]
       properties:
         appointmentId: { type: string, format: uuid }
+        visitAppointmentId: { type: string, format: uuid }
         requestId: { type: string, format: uuid }
         buildingId: { type: string, format: uuid }
         startAt: { type: string, format: date-time }
@@ -131727,6 +132800,15 @@ components:
         version: { type: integer }
         assignmentId: { type: string, format: uuid }
         assignmentVersion: { type: integer }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
     HandymanFieldFeed:
       type: object
       required: [jobs, inspections, feedSource]
@@ -131762,7 +132844,7 @@ components:
     HandymanFieldAssignmentContext:
       type: object
       nullable: true
-      required: [assignmentId, providerContextId, crewId, crewCode, crewName, status, assignedAt, leadWorkerContextId, leadUserId]
+      required: [assignmentId, providerContextId, crewId, crewCode, crewName, status, assignedAt, leadWorkerContextId, leadUserId, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions]
       properties:
         assignmentId: { type: string, format: uuid }
         providerContextId: { type: string, format: uuid }
@@ -131773,6 +132855,34 @@ components:
         assignedAt: { type: string, format: date-time }
         leadWorkerContextId: { type: string, format: uuid, nullable: true }
         leadUserId: { type: string, format: uuid, nullable: true }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
+    HandymanFieldInspectorAssignmentContext:
+      type: object
+      nullable: true
+      required: [assignmentId, visitAppointmentId, inspectorUserId, status, assignedAt, responseStatus, respondedByUserId, respondedByWorkerId, respondedAt, declineReason, reassignmentRequired, availableActions]
+      properties:
+        assignmentId: { type: string, format: uuid }
+        visitAppointmentId: { type: string, format: uuid }
+        inspectorUserId: { type: string, format: uuid }
+        status: { type: string }
+        assignedAt: { type: string, format: date-time }
+        responseStatus: { type: string, enum: [PENDING, TERIMA, TIDAK_BISA] }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        availableActions:
+          type: array
+          items: { type: string }
     HandymanFieldInspectionContext:
       type: object
       required: [triage, inspection, diagnosis]
@@ -131953,6 +133063,7 @@ components:
           nullable: true
         approvedQuotation: { $ref: "#/components/schemas/HandymanFieldQuotationSnapshot" }
         assignmentContext: { $ref: "#/components/schemas/HandymanFieldAssignmentContext" }
+        inspectorAssignmentContext: { $ref: "#/components/schemas/HandymanFieldInspectorAssignmentContext" }
         materials: { $ref: "#/components/schemas/HandymanFieldMaterials" }
     HandymanFieldQuotationSnapshotResponse:
       type: object
@@ -134025,3 +135136,298 @@ components:
             - SETTLED
         replayed:
           type: boolean
+    ConfirmHandymanHelperAttendanceItemInput:
+      type: object
+      additionalProperties: false
+      required:
+        - helperWorkerId
+        - attendanceStatus
+      properties:
+        helperWorkerId:
+          type: string
+          format: uuid
+        attendanceStatus:
+          type: string
+          enum: [HADIR, TIDAK_HADIR]
+        notes:
+          type: string
+          nullable: true
+          maxLength: 1000
+        correctionReason:
+          type: string
+          nullable: true
+          maxLength: 1000
+    ConfirmHandymanHelperAttendanceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - confirmations
+        - idempotencyKey
+      properties:
+        workOrderId:
+          type: string
+          format: uuid
+          nullable: true
+        workSessionId:
+          type: string
+          format: uuid
+          nullable: true
+        confirmations:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: "#/components/schemas/ConfirmHandymanHelperAttendanceItemInput" }
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+    AuthorizeHandymanHelperPersonnelChangeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - changeType
+        - reason
+        - idempotencyKey
+      properties:
+        workOrderId:
+          type: string
+          format: uuid
+          nullable: true
+        changeType:
+          type: string
+          enum: [ADD_HELPER, SUBSTITUTE_HELPER, REMOVE_HELPER]
+        targetHelperWorkerId:
+          type: string
+          format: uuid
+          nullable: true
+        replacedHelperWorkerId:
+          type: string
+          format: uuid
+          nullable: true
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+    HandymanScopeHelperPersonnelChangeRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - clientId
+        - buildingId
+        - handymanRequestId
+        - executionScopeId
+        - workOrderId
+        - assignmentId
+        - crewId
+        - workSessionId
+        - changeType
+        - targetHelperWorkerId
+        - targetHelperUserId
+        - replacedHelperWorkerId
+        - replacedHelperUserId
+        - reason
+        - authorizedByUserId
+        - authorizedAt
+        - idempotencyKey
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        assignmentId: { type: string, format: uuid }
+        crewId: { type: string, format: uuid }
+        workSessionId: { type: string, format: uuid, nullable: true }
+        changeType: { type: string, enum: [ADD_HELPER, SUBSTITUTE_HELPER, REMOVE_HELPER] }
+        targetHelperWorkerId: { type: string, format: uuid, nullable: true }
+        targetHelperUserId: { type: string, format: uuid, nullable: true }
+        replacedHelperWorkerId: { type: string, format: uuid, nullable: true }
+        replacedHelperUserId: { type: string, format: uuid, nullable: true }
+        reason: { type: string }
+        authorizedByUserId: { type: string, format: uuid }
+        authorizedAt: { type: string, format: date-time }
+        idempotencyKey: { type: string }
+        createdAt: { type: string, format: date-time }
+    HandymanHelperAttendanceEventRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - confirmationId
+        - clientId
+        - buildingId
+        - handymanRequestId
+        - executionScopeId
+        - workOrderId
+        - workSessionId
+        - helperWorkerId
+        - helperUserId
+        - eventType
+        - previousStatus
+        - newStatus
+        - notes
+        - correctionReason
+        - actorUserId
+        - actorWorkerId
+        - actorRole
+        - idempotencyKey
+        - occurredAt
+      properties:
+        id: { type: string, format: uuid }
+        confirmationId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        workSessionId: { type: string, format: uuid }
+        helperWorkerId: { type: string, format: uuid }
+        helperUserId: { type: string, format: uuid, nullable: true }
+        eventType: { type: string, enum: [INITIAL_CONFIRMATION, STATUS_CORRECTION, ROSTER_REMOVED_SUPERSEDED] }
+        previousStatus: { type: string, enum: [HADIR, TIDAK_HADIR], nullable: true }
+        newStatus: { type: string, enum: [HADIR, TIDAK_HADIR] }
+        notes: { type: string, nullable: true }
+        correctionReason: { type: string, nullable: true }
+        actorUserId: { type: string, format: uuid }
+        actorWorkerId: { type: string, format: uuid, nullable: true }
+        actorRole: { type: string, enum: [CREW_LEAD, OPERATIONS] }
+        idempotencyKey: { type: string }
+        occurredAt: { type: string, format: date-time }
+    HandymanHelperRosterMemberProjection:
+      type: object
+      additionalProperties: false
+      required:
+        - helperWorkerId
+        - helperUserId
+        - hasMobileAccount
+        - fullName
+        - employeeCode
+        - workforceType
+        - rosterSource
+        - personnelChangeId
+        - replacesHelperWorkerId
+        - replacedByHelperWorkerId
+        - activeInRoster
+        - unverifiedPresenceSnapshotRecorded
+        - attendanceStatus
+        - attendanceVerified
+        - confirmedByUserId
+        - confirmedByWorkerId
+        - firstConfirmedAt
+        - lastConfirmedAt
+        - confirmationCount
+        - latestNotes
+        - latestCorrectionReason
+      properties:
+        helperWorkerId: { type: string, format: uuid }
+        helperUserId: { type: string, format: uuid, nullable: true }
+        hasMobileAccount: { type: boolean }
+        fullName: { type: string }
+        employeeCode: { type: string }
+        workforceType: { type: string }
+        rosterSource: { type: string, enum: [CREW_ROSTER, OPERATIONS_ADDITION, OPERATIONS_SUBSTITUTION] }
+        personnelChangeId: { type: string, format: uuid, nullable: true }
+        replacesHelperWorkerId: { type: string, format: uuid, nullable: true }
+        replacedByHelperWorkerId: { type: string, format: uuid, nullable: true }
+        activeInRoster: { type: boolean }
+        unverifiedPresenceSnapshotRecorded: { type: boolean }
+        attendanceStatus: { type: string, enum: [UNCONFIRMED, HADIR, TIDAK_HADIR] }
+        attendanceVerified: { type: boolean }
+        confirmedByUserId: { type: string, format: uuid, nullable: true }
+        confirmedByWorkerId: { type: string, format: uuid, nullable: true }
+        firstConfirmedAt: { type: string, format: date-time, nullable: true }
+        lastConfirmedAt: { type: string, format: date-time, nullable: true }
+        confirmationCount: { type: integer }
+        latestNotes: { type: string, nullable: true }
+        latestCorrectionReason: { type: string, nullable: true }
+    HandymanHelperAttendanceSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - totalEffectiveHelpers
+        - loginlessHelperCount
+        - unverifiedPresenceSnapshotCount
+        - confirmedPresentCount
+        - confirmedAbsentCount
+        - unconfirmedCount
+        - allHelpersConfirmed
+        - presenceSnapshotIsVerifiedProof
+        - feeApprovalAutomatic
+      properties:
+        totalEffectiveHelpers: { type: integer }
+        loginlessHelperCount: { type: integer }
+        unverifiedPresenceSnapshotCount: { type: integer }
+        confirmedPresentCount: { type: integer }
+        confirmedAbsentCount: { type: integer }
+        unconfirmedCount: { type: integer }
+        allHelpersConfirmed: { type: boolean }
+        presenceSnapshotIsVerifiedProof: { type: boolean, enum: [false] }
+        feeApprovalAutomatic: { type: boolean, enum: [false] }
+    HandymanHelperAttendanceProjection:
+      type: object
+      additionalProperties: false
+      required:
+        - executionScopeId
+        - handymanRequestId
+        - workOrderId
+        - buildingId
+        - assignmentId
+        - crewId
+        - leadWorkerId
+        - leadUserId
+        - workSessionId
+        - workSessionStatus
+        - roster
+        - removedHelpers
+        - personnelChanges
+        - history
+        - summary
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        buildingId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid, nullable: true }
+        crewId: { type: string, format: uuid, nullable: true }
+        leadWorkerId: { type: string, format: uuid, nullable: true }
+        leadUserId: { type: string, format: uuid, nullable: true }
+        workSessionId: { type: string, format: uuid, nullable: true }
+        workSessionStatus: { type: string, nullable: true }
+        roster:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanHelperRosterMemberProjection" }
+        removedHelpers:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanHelperRosterMemberProjection" }
+        personnelChanges:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanScopeHelperPersonnelChangeRecord" }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanHelperAttendanceEventRecord" }
+        summary: { $ref: "#/components/schemas/HandymanHelperAttendanceSummary" }
+    HandymanHelperAttendanceConfirmResult:
+      allOf:
+        - $ref: "#/components/schemas/HandymanHelperAttendanceProjection"
+        - type: object
+          required: [replayed]
+          properties:
+            replayed: { type: boolean }
+    HandymanHelperPersonnelChangeResult:
+      type: object
+      additionalProperties: false
+      required:
+        - personnelChange
+        - projection
+        - replayed
+      properties:
+        personnelChange: { $ref: "#/components/schemas/HandymanScopeHelperPersonnelChangeRecord" }
+        projection: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
+        replayed: { type: boolean }

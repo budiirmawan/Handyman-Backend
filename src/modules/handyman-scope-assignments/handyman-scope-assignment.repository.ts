@@ -50,11 +50,13 @@ async function lockScopeById(
 ): Promise<{
   id: string;
   clientId: string;
+  handymanRequestId: string;
   status: string;
   buildingId: string;
 } | null> {
   const result = await executor.query(
-    `SELECT id, client_id, status, building_id FROM handyman_execution_scopes
+    `SELECT id, client_id, handyman_request_id, status, building_id
+       FROM handyman_execution_scopes
       WHERE id = $1 FOR UPDATE`,
     [id],
   );
@@ -63,6 +65,7 @@ async function lockScopeById(
     ? {
         id: row.id,
         clientId: row.client_id,
+        handymanRequestId: row.handyman_request_id,
         status: row.status,
         buildingId: row.building_id,
       }
@@ -76,11 +79,13 @@ async function findScopeById(
 ): Promise<{
   id: string;
   clientId: string;
+  handymanRequestId: string;
   status: string;
   buildingId: string;
 } | null> {
   const result = await executor.query(
-    `SELECT id, client_id, status, building_id FROM handyman_execution_scopes
+    `SELECT id, client_id, handyman_request_id, status, building_id
+       FROM handyman_execution_scopes
       WHERE id = $1`,
     [id],
   );
@@ -89,6 +94,7 @@ async function findScopeById(
     ? {
         id: row.id,
         clientId: row.client_id,
+        handymanRequestId: row.handyman_request_id,
         status: row.status,
         buildingId: row.building_id,
       }
@@ -261,12 +267,41 @@ async function listActiveAssignmentsByCrew(
   return result.rows.map(map);
 }
 
+async function findAssignmentByIdAndScope(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  assignmentId: string,
+  executionScopeId: string,
+): Promise<HandymanExecutionScopeAssignmentRecord | null> {
+  const result = await executor.query(
+    `${ASSIGNMENT_SELECT}
+      WHERE id = $1 AND execution_scope_id = $2`,
+    [assignmentId, executionScopeId],
+  );
+  return result.rows[0] ? map(result.rows[0]) : null;
+}
+
+async function lockAssignmentByIdAndScope(
+  executor: Pick<PoolClient, 'query'>,
+  assignmentId: string,
+  executionScopeId: string,
+): Promise<HandymanExecutionScopeAssignmentRecord | null> {
+  const result = await executor.query(
+    `${ASSIGNMENT_SELECT}
+      WHERE id = $1 AND execution_scope_id = $2
+      FOR UPDATE`,
+    [assignmentId, executionScopeId],
+  );
+  return result.rows[0] ? map(result.rows[0]) : null;
+}
+
 export const handymanScopeAssignmentRepository = {
   lockScopeById,
   findScopeById,
   insertAssignment,
   findActiveAssignmentByScope,
   lockActiveAssignmentByScope,
+  findAssignmentByIdAndScope,
+  lockAssignmentByIdAndScope,
   supersedeAssignment,
   listActiveAssignmentsByCrew,
   insertAssignmentHistory,

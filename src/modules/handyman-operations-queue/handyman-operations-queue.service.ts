@@ -28,6 +28,7 @@ export type HandymanOperationsQueueItem = {
     executionScopeStatus: string | null;
   };
   assignment: HandymanStatusVisibilityReadView['stages']['assignment'];
+  inspectorAssignment: HandymanStatusVisibilityReadView['stages']['inspectorAssignment'];
   readiness: HandymanStatusVisibilityReadView['stages']['readiness'];
   slaMilestones: HandymanStatusVisibilityReadView['slaMilestones'];
 };
@@ -85,6 +86,7 @@ export function toHandymanOperationsQueueItem(
       executionScopeStatus: visibility.stages.executionScope.status,
     },
     assignment: visibility.stages.assignment,
+    inspectorAssignment: visibility.stages.inspectorAssignment,
     readiness: visibility.stages.readiness,
     slaMilestones: visibility.slaMilestones,
   };

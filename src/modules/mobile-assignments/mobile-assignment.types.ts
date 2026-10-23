@@ -79,6 +79,12 @@ export type MobileAssignmentLocation = {
   name: string;
 };
 
+export type MobileAssignmentResponseStatus =
+  | 'PENDING'
+  | 'TERIMA'
+  | 'TIDAK_BISA';
+export type MobileAssignmentResponseAction = 'TERIMA' | 'TIDAK_BISA';
+
 /** Assignee / user / workforce context of the assignment. */
 export type MobileAssignmentAssignee = {
   assigneeType: 'WORKFORCE' | 'TEAM';
@@ -87,6 +93,14 @@ export type MobileAssignmentAssignee = {
   assignedByUserId: string;
   assignedAt: string;
   assignmentStatus: string;
+  assignmentId?: string;
+  responseStatus?: MobileAssignmentResponseStatus;
+  respondedByUserId?: string | null;
+  respondedByWorkerId?: string | null;
+  respondedAt?: string | null;
+  declineReason?: string | null;
+  reassignmentRequired?: boolean;
+  availableResponseActions?: MobileAssignmentResponseAction[];
 };
 
 /**

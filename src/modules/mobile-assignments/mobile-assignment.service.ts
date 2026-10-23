@@ -100,6 +100,12 @@ type WorkOrderAssignmentRow = {
   fl_id: string | null;
   fl_code: string | null;
   fl_name: string | null;
+  response_id: string | null;
+  response_status?: 'PENDING' | 'TERIMA' | 'TIDAK_BISA';
+  responded_by_user_id: string | null;
+  responded_by_worker_id: string | null;
+  responded_at: Date | null;
+  decline_reason: string | null;
 };
 
 const iso = (value: Date | null | undefined): string | null =>
@@ -223,12 +229,19 @@ const WORK_ORDER_ASSIGNMENT_SELECT = `
     ast.asset_name,
     fl.id           AS fl_id,
     fl.code         AS fl_code,
-    fl.name         AS fl_name
+    fl.name         AS fl_name,
+    har.id          AS response_id,
+    COALESCE(har.response_status, 'PENDING') AS response_status,
+    har.responded_by_user_id AS responded_by_user_id,
+    har.responded_by_worker_id AS responded_by_worker_id,
+    har.responded_at AS responded_at,
+    har.decline_reason AS decline_reason
   FROM work_order_assignments a
   JOIN work_orders w ON w.id = a.work_order_id
   JOIN buildings b ON b.id = w.building_id
   LEFT JOIN assets ast ON ast.id = w.asset_id
   LEFT JOIN functional_locations fl ON fl.id = w.functional_location_id
+  LEFT JOIN handyman_assignment_responses har ON har.assignment_id = a.id
 `;
 
 const WORK_ORDER_ASSIGNMENT_SCOPE = `
@@ -369,6 +382,56 @@ function toWorkOrderItem(
     completionNotes: row.completion_notes,
     createdAt: iso(row.created_at),
   };
+  const responseStatus: 'PENDING' | 'TERIMA' | 'TIDAK_BISA' =
+    row.response_status ??
+    (row.wo_status === 'OPEN' ? 'PENDING' : 'TERIMA');
+  const availableResponseActions: ('TERIMA' | 'TIDAK_BISA')[] =
+    responseStatus === 'PENDING' &&
+    (row.wo_status === 'OPEN' || row.wo_status === 'ASSIGNED')
+      ? ['TERIMA', 'TIDAK_BISA']
+      : [];
+
+  let availableActions: string[];
+  if (row.response_id !== null) {
+    if (responseStatus === 'TIDAK_BISA') {
+      availableActions = [];
+    } else if (
+      responseStatus === 'PENDING' &&
+      (row.wo_status === 'OPEN' || row.wo_status === 'ASSIGNED')
+    ) {
+      const lifecycleWhilePending = canManageWorkOrders
+        ? resolveWorkOrderAvailableActions(
+            row.wo_status as WorkOrderStatus,
+            true,
+            true,
+            canClose,
+            responseStatus,
+          ).filter((action) => action !== 'START')
+        : [];
+      availableActions = [...availableResponseActions, ...lifecycleWhilePending];
+    } else {
+      availableActions = canManageWorkOrders
+        ? resolveWorkOrderAvailableActions(
+            row.wo_status as WorkOrderStatus,
+            true,
+            true,
+            canClose,
+            responseStatus,
+          )
+        : [];
+    }
+  } else {
+    availableActions = canManageWorkOrders
+      ? resolveWorkOrderAvailableActions(
+          row.wo_status as WorkOrderStatus,
+          true,
+          true,
+          canClose,
+          row.response_status,
+        )
+      : [];
+  }
+
   return {
     id: row.assignment_id,
     type: 'WORK_ORDER',
@@ -380,6 +443,14 @@ function toWorkOrderItem(
       assignedByUserId: row.assigned_by_user_id,
       assignedAt: iso(row.assigned_at) ?? '',
       assignmentStatus: row.assignment_status,
+      assignmentId: row.assignment_id,
+      responseStatus,
+      respondedByUserId: row.responded_by_user_id ?? null,
+      respondedByWorkerId: row.responded_by_worker_id ?? null,
+      respondedAt: iso(row.responded_at),
+      declineReason: row.decline_reason ?? null,
+      reassignmentRequired: responseStatus === 'TIDAK_BISA',
+      availableResponseActions,
     },
     context: {
       clientId: row.client_id,
@@ -393,14 +464,7 @@ function toWorkOrderItem(
       dueAt: null,
     },
     reference,
-    availableActions: canManageWorkOrders
-      ? resolveWorkOrderAvailableActions(
-          row.wo_status as WorkOrderStatus,
-          true,
-          true,
-          canClose,
-        )
-      : [],
+    availableActions,
     shift: null, // MOB-C04 PART 01 — annotated below from the current-shift authority.
   };
 }

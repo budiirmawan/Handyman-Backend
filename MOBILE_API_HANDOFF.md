@@ -322,20 +322,22 @@ Preserves 4-way separation between:
 4. Tenant invoice charge eligibility (`tenantChargeEligible`, `tenantChargeEligibleQty`, `tenantInvoiced: false`)
 
 ### 3.1 List Material Purchasing Records & Ledger Summary
-- **Endpoint**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases`
-- **Alias (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases`
-- **Authorized Personas**: Assigned `PIC_PEKERJAAN` (sees operational + own purchasing/reimbursement details), Assigned `INSPECTOR` (sees operational movement quantities only; all price/expense/reimbursement fields are `null`), or Operations (`tenant_company.read` / `tenant_company.manage`).
+- **Endpoint (Operations)**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases` (`tenant_company.read` + Building scope)
+- **Endpoint (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases` (Bearer auth)
+- **Authorized Personas**: Assigned Crew Lead / `PIC_PEKERJAAN` (sees operational + own purchasing/reimbursement details), Assigned `INSPECTOR` (sees operational movement quantities only; all price/expense/reimbursement/receipt fields are `null`), or Operations (`tenant_company.read` + Building scope).
 
 ### 3.2 Read Single Material Purchase Record & Audit Event Trail
-- **Endpoint**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId`
-- **Alias (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases/:recordId`
+- **Endpoint (Operations)**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId` (`tenant_company.read` + Building scope)
+- **Endpoint (Mobile Field)**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId` (Bearer auth)
+- **Response**: `{ record, events }` where `record` carries canonical `workOrderId`, `receiptSha256Checksum`, and Finance reimbursement lifecycle metadata (`financeApprovedAmount`, `financeApprovedByUserId`, `financeApprovedAt`, `financeApprovalNotes`, `financeRejectedByUserId`, `financeRejectedAt`, `financeRejectionReason`, `reimbursementDisbursedAmount`, `reimbursementDisbursedByUserId`, `reimbursementDisbursedAt`, `reimbursementDisbursementReference`, `reimbursementDisbursementNotes`), and `events` returns the immutable append-only audit trail.
 
 ### 3.3 PIC Pekerjaan Requests Material (`REQUEST`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/requests` (or `/handyman/field/...`)
-- **Authorized Persona**: Assigned `PIC_PEKERJAAN`
+- **Endpoint**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases`
+- **Authorized Persona**: Assigned Crew Lead (`PIC_PEKERJAAN`)
 - **Payload**:
 ```json
 {
+  "workOrderId": "uuid (optional; when supplied must match scope's canonical workOrderId, otherwise 409 HANDYMAN_REIMBURSEMENT_CROSS_WORK_ORDER_CLAIM)",
   "materialExecutionLineId": "uuid",
   "sourceItemId": null,
   "itemName": "Brass Ball Valve 1/2 inch",
@@ -349,11 +351,14 @@ Preserves 4-way separation between:
   "idempotencyKey": "mat-req-001"
 }
 ```
-- **Allowed `fundingSource` values**: `'PETTY_CASH' | 'CASH_ADVANCE' | 'REIMBURSEMENT' | 'COMPANY_DIRECT' | 'WAREHOUSE_STOCK'`
+- **Allowed `fundingSource` values**:
+  - `'REIMBURSEMENT'` — **Uang pribadi petugas** (the ONLY funding source eligible for worker reimbursement payable).
+  - `'CASH_ADVANCE'` — **Uang muka Handyman** (`reimbursementStatus = 'NOT_APPLICABLE'`, `reimbursementPayableAmount = '0.00'`).
+  - `'COMPANY_DIRECT' | 'PETTY_CASH' | 'WAREHOUSE_STOCK'` — **Dana perusahaan / stok gudang** (`reimbursementStatus = 'NOT_APPLICABLE'`, `reimbursementPayableAmount = '0.00'`).
 
 ### 3.4 Operations Approves Material Request (`APPROVAL`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/approve`
-- **Authorized Persona**: Operations (`tenant_company.manage`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/approve`
+- **Authorized Persona**: Operations (`tenant_company.manage` + Building scope)
 - **Payload**:
 ```json
 {
@@ -369,16 +374,23 @@ Preserves 4-way separation between:
 ```
 
 ### 3.5 Operations Issues Warehouse Stock (`ISSUED`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/issue`
-- **Authorized Persona**: Assigned `PIC_PEKERJAAN` or Operations (`tenant_company.manage`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/issue`
+- **Authorized Persona**: Operations (`tenant_company.manage` + Building scope)
 - **Payload**: `{ "issuedQuantity": 4, "evidenceReference": "hm-ev://uuid", "notes": "Issued from central store", "expectedVersion": 2, "idempotencyKey": "mat-iss-001" }`
 
-### 3.6 PIC Pekerjaan / Operations Records Supplier Purchase (`PURCHASED`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/purchase` (or `/handyman/field/...`)
-- **Authorized Persona**: Assigned `PIC_PEKERJAAN` or Operations (`tenant_company.manage`)
+### 3.6 PIC Pekerjaan / Operations Records Supplier Purchase & Receipt Photo (`PURCHASED`)
+- **Endpoints**:
+  - Mobile Field: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/purchase`
+  - Operations: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/purchase` (`tenant_company.manage` + Building scope)
+- **Receipt Photo & Anti-Fraud Guards (`CR-HM-FIELD-EXPENSE-HELPER-01` PART 01)**:
+  1. Upload receipt photo/PDF first via private Field Evidence API (`POST /api/v1/handyman/field/evidence/upload`) with `purpose = "MATERIAL_RECEIPT"` and `executionScopeId` matching this scope.
+  2. `supplierName`, `purchaseDate`, `actualUnitPrice`, `purchasedQuantity`, and `receiptEvidenceReference` (`hm-ev://<uuid>`) are mandatory on supplier purchases (`REIMBURSEMENT`, `CASH_ADVANCE`, `COMPANY_DIRECT`, `PETTY_CASH`).
+  3. Wrong evidence purpose fails `422 HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID`; cross-Work Order evidence or `workOrderId` mismatch fails `409 HANDYMAN_REIMBURSEMENT_CROSS_WORK_ORDER_CLAIM`; duplicate receipt reference, duplicate binary SHA-256 digest, or duplicate `(supplierName, purchaseReference)` fails `409 HANDYMAN_MATERIAL_RECEIPT_DUPLICATE`.
+  4. When `fundingSource === "REIMBURSEMENT"`, recording the purchase sets `reimbursementPayeeUserId` to the purchasing worker (when recorded by Crew Lead) or `requestedByUserId` (when recorded by Operations on the worker's behalf), `reimbursementPayableAmount = actualTotalExpenseAmount`, and `reimbursementStatus = "PENDING_RECONCILIATION"`. All non-personal funding sources (`CASH_ADVANCE`, `COMPANY_DIRECT`, `PETTY_CASH`, `WAREHOUSE_STOCK`) remain `reimbursementStatus = "NOT_APPLICABLE"` and `reimbursementPayableAmount = "0.00"`.
 - **Payload**:
 ```json
 {
+  "workOrderId": "uuid (optional; verified against scope.workOrderId)",
   "purchasedQuantity": 4,
   "actualUnitPrice": 85000,
   "currency": "IDR",
@@ -396,13 +408,14 @@ Preserves 4-way separation between:
 ```
 
 ### 3.7 PIC Pekerjaan Records Actual Material Usage (`USAGE`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/usage` (or `/handyman/field/...`)
-- **Authorized Persona**: Assigned `PIC_PEKERJAAN`
+- **Endpoint**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/usage`
+- **Authorized Persona**: Assigned Crew Lead (`PIC_PEKERJAAN`)
 - **Payload**: `{ "usedQuantity": 3, "evidenceReference": "hm-ev://uuid", "notes": "Installed 3 valves on floor 12", "expectedVersion": 3, "idempotencyKey": "mat-use-001" }`
 
 ### 3.8 PIC Pekerjaan / Operations Records Unused Material Return (`RETURN`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/return` (or `/handyman/field/...`)
-- **Authorized Persona**: Assigned `PIC_PEKERJAAN` or Operations (`tenant_company.manage`)
+- **Endpoints**:
+  - Mobile Field: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/return`
+  - Operations: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/return` (`tenant_company.manage` + Building scope)
 - **Payload**:
 ```json
 {
@@ -416,14 +429,18 @@ Preserves 4-way separation between:
 ```
 - **Allowed `returnDestination` values**: `'WAREHOUSE' | 'SUPPLIER_RETURN' | 'COMPANY_CUSTODY'`
 
-### 3.9 Operations Reconciles Material & Purchasing Ledger (`RECONCILIATION`)
-- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:recordId/reconcile`
-- **Authorized Persona**: Operations (`tenant_company.manage`)
-- **Guard**: Requires `usedQuantity + returnedQuantity === issuedQuantity + purchasedQuantity`.
+### 3.9 Operations Verifies & Reconciles Material & Purchasing Ledger (`RECONCILIATION`)
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/reconcile`
+- **Authorized Persona**: Operations (`tenant_company.manage` + Building scope)
+- **Guards**:
+  - Requires `usedQuantity + returnedQuantity === issuedQuantity + purchasedQuantity`.
+  - When `fundingSource === 'REIMBURSEMENT'`: defaults `reimbursementEligible` to `true`, producing `reimbursementStatus = 'RECONCILED_PAYABLE'` (net payable adjusted for any `SUPPLIER_RETURN`) or `'REJECTED'` when Operations explicitly passes `"reimbursementEligible": false`.
+  - When `fundingSource !== 'REIMBURSEMENT'`: passing `"reimbursementEligible": true` is rejected with `422 HANDYMAN_REIMBURSEMENT_NOT_ELIGIBLE`.
 - **Payload**:
 ```json
 {
   "tenantChargeEligible": true,
+  "reimbursementEligible": true,
   "expenditureReference": "EXP-FIN-2026-004",
   "evidenceReference": "hm-ev://uuid",
   "notes": "Reconciled receipt and warehouse return",
@@ -431,6 +448,15 @@ Preserves 4-way separation between:
   "idempotencyKey": "mat-rec-001"
 }
 ```
+
+### 3.10 Finance Approval, Rejection & Disbursement of Worker Reimbursements (`FINANCE_APPROVED` / `REJECTED` / `DISBURSED`)
+- **Separation of Duties**: Finance reimbursement actions require explicit `handyman.finance.read` / `handyman.finance.manage` permissions paired with exact-Building scope assignment (`CR-HM-FIN-AUTH-01`), and enforce anti-self-approval (`actorUserId !== reimbursementPayeeUserId`). Mobile workers (`PIC_PEKERJAAN`) read the resulting `reimbursementStatus` and Finance metadata via §§3.1–3.2.
+- **Finance Endpoints**:
+  - `GET /api/v1/handyman/material-reimbursements?buildingId=<uuid>&reimbursementStatus=<status>&workOrderId=<uuid>&executionScopeId=<uuid>` (`handyman.finance.read` + Building scope; read-only private receipt metadata/bytes also accessible via `GET /api/v1/handyman/field/evidence/:evidenceId` and `.../bytes` for `MATERIAL_RECEIPT` records in assigned Buildings).
+  - `GET /api/v1/handyman/execution-scopes/:executionScopeId/material-reimbursements` (`handyman.finance.read` + Building scope).
+  - `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/reimbursement/approve` (`handyman.finance.manage` + Building scope) — transitions `RECONCILED_PAYABLE → FINANCE_APPROVED` with `{ approvedAmount?, approvalNotes?, expectedVersion, idempotencyKey }`.
+  - `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/reimbursement/reject` (`handyman.finance.manage` + Building scope) — transitions `RECONCILED_PAYABLE | FINANCE_APPROVED → REJECTED` with `{ rejectionReason, expectedVersion, idempotencyKey }`.
+  - `POST /api/v1/handyman/execution-scopes/:executionScopeId/material-purchases/:purchaseRecordId/reimbursement/disburse` (`handyman.finance.manage` + Building scope) — transitions `FINANCE_APPROVED → DISBURSED` with `{ disbursedAmount, disbursementReference, disbursementNotes?, expectedVersion, idempotencyKey }`; blocks disbursement before approval (`409 HANDYMAN_REIMBURSEMENT_APPROVAL_REQUIRED`), double disbursement (`409 HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED`), amount mismatch (`422 HANDYMAN_REIMBURSEMENT_AMOUNT_MISMATCH`), and reused `disbursementReference` across distinct records (`409 HANDYMAN_REIMBURSEMENT_ALREADY_DISBURSED`).
 
 ---
 
@@ -825,3 +851,57 @@ Already-expired and INACTIVE certificates are excluded. A caller with no reachab
 | `isValid` | `ACTIVE` **and** not expired **and** `VERIFIED` — the only field that answers "may this satisfy a certification requirement?" |
 
 An expired certificate is never valid and can never be verified into validity.
+## 8. CR-HM-FIELD-EXPENSE-HELPER-01 PART 02 — Konfirmasi Kehadiran Helper (Mobile Lead & Operations)
+
+### 8.1 Domain Invariants for Mobile UI
+1. **Helpers without smartphones or Mobile accounts are first-class**: Helpers may have `helperUserId = null` and `hasMobileAccount = false`. Mobile UI must render Helper rows keyed by `helperWorkerId` (displaying `fullName`, `employeeCode`, `rosterSource`), never requiring a `userId`.
+2. **Roster & `helperPresence` snapshot are NOT verified attendance**: After Lead `POST .../work-sessions/check-in`, `handyman_work_session_helper_presence` records an unverified roster snapshot (`unverifiedPresenceSnapshotRecorded = true`), while every Helper starts in `attendanceStatus = "UNCONFIRMED"` and `attendanceVerified = false` (`summary.presenceSnapshotIsVerifiedProof = false`). Mobile UI MUST display a checklist prompting the Crew Lead (`PIC_PEKERJAAN`) to explicitly confirm `HADIR` or `TIDAK_HADIR` for each Helper on site.
+3. **Corrections require `correctionReason`**: Once a Helper has been confirmed (`attendanceVerified = true`), changing their status (e.g. `TIDAK_HADIR → HADIR` when arriving late, or `HADIR → TIDAK_HADIR` on error) requires a non-empty `correctionReason` (`422 HANDYMAN_HELPER_ATTENDANCE_CORRECTION_REASON_REQUIRED` if omitted). Every confirmation and correction is recorded in immutable `history[]`.
+4. **Personnel changes require Operations authorization**: Mobile Lead cannot confirm an unlisted Helper (`422 HANDYMAN_HELPER_ATTENDANCE_NOT_IN_ROSTER`). If a Helper is added, substituted, or removed on site, Operations must first call `POST /api/v1/handyman/execution-scopes/:executionScopeId/helper-attendance/personnel-changes` (`ADD_HELPER` / `SUBSTITUTE_HELPER` / `REMOVE_HELPER`). Added/substitute Helpers enter `roster[]` as `UNCONFIRMED` until the Crew Lead confirms their actual arrival on site.
+5. **No automatic fee approval**: Confirming Helper attendance never auto-approves fees or creates financial entitlements (`summary.feeApprovalAutomatic = false`).
+
+### 8.2 Mobile Crew Lead Reads Effective Helper Roster & Confirmation Status
+- **Endpoint**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/helper-attendance` (optional `?workSessionId=<uuid>`)
+- **Authorized Persona**: Current authoritative assigned Crew Lead (`PIC_PEKERJAAN`) + exact-Building access.
+- **Operations Read Counterpart**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/helper-attendance` (`tenant_company.read` + exact-Building access).
+
+### 8.3 Mobile Crew Lead Confirms or Corrects Actual Helper Attendance
+- **Endpoint**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/helper-attendance/confirm`
+- **Authorized Persona**: Current authoritative assigned Crew Lead (`PIC_PEKERJAAN`) + active (non-`CHECKED_OUT`) Work Session (`409 HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED` if Lead has not checked in yet).
+- **Payload**:
+```json
+{
+  "workOrderId": "uuid (optional; verified against scope Building/Client & bound Work Order)",
+  "workSessionId": "uuid (optional; must match active session when supplied)",
+  "confirmations": [
+    {
+      "helperWorkerId": "uuid",
+      "attendanceStatus": "HADIR",
+      "notes": "Hadir tepat waktu membawa alat kerja"
+    },
+    {
+      "helperWorkerId": "uuid",
+      "attendanceStatus": "TIDAK_HADIR",
+      "notes": "Izin sakit",
+      "correctionReason": null
+    }
+  ],
+  "idempotencyKey": "hlp-att-001"
+}
+```
+
+### 8.4 Operations Authorizes Scope Helper Personnel Change
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/helper-attendance/personnel-changes`
+- **Authorized Persona**: Operations (`tenant_company.manage` + exact-Building access).
+- **Payload**:
+```json
+{
+  "workOrderId": "uuid (optional)",
+  "changeType": "SUBSTITUTE_HELPER",
+  "replacedHelperWorkerId": "uuid",
+  "targetHelperWorkerId": "uuid",
+  "reason": "Helper awal sakit mendadak, digantikan helper cadangan gedung",
+  "idempotencyKey": "ops-hlp-sub-001"
+}
+```
+

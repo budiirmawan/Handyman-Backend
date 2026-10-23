@@ -199,11 +199,37 @@ async function findActiveByInspector(
   return res.rows.map(map);
 }
 
+async function findByIdAndVisit(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  assignmentId: string,
+  visitId: string,
+): Promise<HandymanInspectorAssignmentRecord | null> {
+  const res = await executor.query(
+    `${SELECT} WHERE id = $1 AND visit_appointment_id = $2`,
+    [assignmentId, visitId],
+  );
+  return res.rows[0] ? map(res.rows[0]) : null;
+}
+
+async function lockByIdAndVisit(
+  executor: Pick<PoolClient, 'query'>,
+  assignmentId: string,
+  visitId: string,
+): Promise<HandymanInspectorAssignmentRecord | null> {
+  const res = await executor.query(
+    `${SELECT} WHERE id = $1 AND visit_appointment_id = $2 FOR UPDATE`,
+    [assignmentId, visitId],
+  );
+  return res.rows[0] ? map(res.rows[0]) : null;
+}
+
 export const handymanInspectorAssignmentRepository = {
   findVisit,
   lockVisit,
   findActiveByVisit,
   lockActiveByVisit,
+  findByIdAndVisit,
+  lockByIdAndVisit,
   insert,
   supersede,
   listHistoryByRequest,
