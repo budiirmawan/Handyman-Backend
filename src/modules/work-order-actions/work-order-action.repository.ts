@@ -64,10 +64,24 @@ async function create(
   return mapRow(result.rows[0]);
 }
 
+async function findById(
+  id: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<WorkOrderActionRecord | null> {
+  const result = await executor.query<WorkOrderActionRow>(
+    `SELECT ${ACTION_SELECT} FROM work_order_actions
+     WHERE id = $1`,
+    [id],
+  );
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
 async function listByWorkOrderId(
   workOrderId: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderActionRecord[]> {
-  const result = await getPool().query<WorkOrderActionRow>(
+  const result = await executor.query<WorkOrderActionRow>(
     `SELECT ${ACTION_SELECT} FROM work_order_actions
      WHERE work_order_id = $1
      ORDER BY occurred_at ASC, created_at ASC`,
@@ -79,5 +93,6 @@ async function listByWorkOrderId(
 
 export const workOrderActionRepository = {
   create,
+  findById,
   listByWorkOrderId,
 };

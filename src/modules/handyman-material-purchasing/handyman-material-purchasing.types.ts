@@ -20,6 +20,29 @@ export const HANDYMAN_MATERIAL_PURCHASE_STATUSES = [
 export type HandymanMaterialPurchaseStatus =
   (typeof HANDYMAN_MATERIAL_PURCHASE_STATUSES)[number];
 
+export const HANDYMAN_MATERIAL_PURCHASE_EVENT_TYPES = [
+  'REQUEST',
+  'APPROVAL',
+  'ISSUED',
+  'PURCHASED',
+  'USAGE',
+  'RETURN',
+  'RECONCILIATION',
+  'REIMBURSEMENT_APPROVED',
+  'REIMBURSEMENT_REJECTED',
+  'REIMBURSEMENT_DISBURSED',
+] as const;
+export type HandymanMaterialPurchaseEventType =
+  (typeof HANDYMAN_MATERIAL_PURCHASE_EVENT_TYPES)[number];
+
+export const HANDYMAN_MATERIAL_PURCHASE_ACTOR_ROLES = [
+  'PIC_PEKERJAAN',
+  'OPERATIONS_MANAGER',
+  'FINANCE_MANAGER',
+] as const;
+export type HandymanMaterialPurchaseActorRole =
+  (typeof HANDYMAN_MATERIAL_PURCHASE_ACTOR_ROLES)[number];
+
 export const HANDYMAN_MATERIAL_RETURN_DESTINATIONS = [
   'WAREHOUSE',
   'SUPPLIER_RETURN',
@@ -32,14 +55,26 @@ export const HANDYMAN_MATERIAL_REIMBURSEMENT_STATUSES = [
   'NOT_APPLICABLE',
   'PENDING_RECONCILIATION',
   'RECONCILED_PAYABLE',
+  'FINANCE_APPROVED',
+  'DISBURSED',
+  'REJECTED',
 ] as const;
 export type HandymanMaterialReimbursementStatus =
   (typeof HANDYMAN_MATERIAL_REIMBURSEMENT_STATUSES)[number];
+
+export const HANDYMAN_REIMBURSEMENT_DISBURSEMENT_METHODS = [
+  'BANK_TRANSFER',
+  'PAYROLL_SETTLEMENT',
+  'PETTY_CASH_PAYOUT',
+] as const;
+export type HandymanReimbursementDisbursementMethod =
+  (typeof HANDYMAN_REIMBURSEMENT_DISBURSEMENT_METHODS)[number];
 
 export interface HandymanMaterialPurchaseRecord {
   id: string;
   clientId: string;
   executionScopeId: string;
+  workOrderId: string | null;
   handymanRequestId: string;
   tenantCompanyId: string;
   buildingId: string;
@@ -70,10 +105,22 @@ export interface HandymanMaterialPurchaseRecord {
   expenditureReference: string | null;
   cashAdvanceReference: string | null;
   receiptEvidenceReference: string | null;
+  receiptSha256Checksum: string | null;
   latestEvidenceReference: string;
   reimbursementPayableAmount: string;
   reimbursementPayeeUserId: string | null;
   reimbursementStatus: HandymanMaterialReimbursementStatus;
+  reimbursementFinanceApprovalReference: string | null;
+  reimbursementFinanceApprovedByUserId: string | null;
+  reimbursementFinanceApprovedAt: string | null;
+  reimbursementDisbursementReference: string | null;
+  reimbursementDisbursementMethod: HandymanReimbursementDisbursementMethod | null;
+  reimbursementDisbursedAmount: string;
+  reimbursementDisbursedByUserId: string | null;
+  reimbursementDisbursedAt: string | null;
+  reimbursementRejectedByUserId: string | null;
+  reimbursementRejectedAt: string | null;
+  reimbursementRejectionReason: string | null;
   tenantChargeEligible: boolean;
   tenantChargeEligibleQty: string;
   tenantInvoiced: boolean;
@@ -92,11 +139,11 @@ export interface HandymanMaterialPurchaseEventRecord {
   clientId: string;
   purchaseRecordId: string;
   executionScopeId: string;
-  eventType: HandymanMaterialPurchaseStatus;
+  eventType: HandymanMaterialPurchaseEventType;
   fromStatus: HandymanMaterialPurchaseStatus | null;
   toStatus: HandymanMaterialPurchaseStatus;
   actorUserId: string;
-  actorRole: 'PIC_PEKERJAAN' | 'OPERATIONS_MANAGER';
+  actorRole: HandymanMaterialPurchaseActorRole;
   quantityDelta: string;
   evidenceReference: string;
   notes: string | null;
@@ -124,8 +171,12 @@ export interface MaterialLedgerSeparationSummary {
   workerAdvanceReimbursementPayable: {
     currency: string;
     totalReimbursementPayableAmount: string;
+    totalDisbursedAmount: string;
     pendingReconciliationCount: number;
     reconciledPayableCount: number;
+    financeApprovedCount: number;
+    disbursedCount: number;
+    rejectedCount: number;
   };
   tenantInvoiceChargeEligibility: {
     eligibleRecordsCount: number;

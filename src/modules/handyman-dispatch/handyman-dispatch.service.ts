@@ -100,6 +100,7 @@ export async function evaluateDispatchReadiness(
   let eligibleProvider = false;
   let eligibleCrew = false;
   let eligibleLead = false;
+  let leadDeclinedAssignment = false;
   if (assignment) {
     const rows = await db.query(
       `SELECT pc.status AS pc_status, c.status AS c_status,
@@ -112,7 +113,12 @@ export async function evaluateDispatchReadiness(
                    AND wp.status='ACTIVE' AND wp.user_id IS NOT NULL
                  JOIN users u ON u.id=wp.user_id AND u.status='ACTIVE'
                 WHERE cl.handyman_crew_id=c.id
-                ORDER BY cl.lead_seq DESC LIMIT 1) AS lead_user_id
+                ORDER BY cl.lead_seq DESC LIMIT 1) AS lead_user_id,
+              (SELECT ar.response_status
+                 FROM handyman_assignment_responses ar
+                WHERE ar.assignment_id = $4
+                  AND ar.assignment_target_type = 'EXECUTION_SCOPE_ASSIGNMENT'
+                LIMIT 1) AS response_status
          FROM handyman_provider_contexts pc
          JOIN handyman_work_crews c ON c.id=$3 AND c.handyman_provider_context_id=pc.id
            AND c.client_id=pc.client_id
@@ -121,13 +127,15 @@ export async function evaluateDispatchReadiness(
         scope.clientId,
         assignment.handymanProviderContextId,
         assignment.handymanCrewId,
+        assignment.id,
       ],
     );
     const row = rows.rows[0];
     if (row) {
       eligibleProvider = row.pc_status === 'ACTIVE';
       eligibleCrew = row.c_status === 'ACTIVE';
-      eligibleLead = row.lead_user_id !== null;
+      leadDeclinedAssignment = row.response_status === 'TIDAK_BISA';
+      eligibleLead = row.lead_user_id !== null && !leadDeclinedAssignment;
     }
   }
 
@@ -240,7 +248,11 @@ export async function evaluateDispatchReadiness(
   if (!confirmedAppointment) failures.push('No CONFIRMED execution appointment.');
   if (!eligibleProvider) failures.push('Provider context is not ACTIVE.');
   if (!eligibleCrew) failures.push('Crew is not ACTIVE.');
-  if (!eligibleLead) failures.push('Crew Lead is not a valid active user.');
+  if (leadDeclinedAssignment) {
+    failures.push('Crew Lead declined assignment (TIDAK_BISA); reassignment required.');
+  } else if (!eligibleLead) {
+    failures.push('Crew Lead is not a valid active user.');
+  }
   if (!noConflictingCommitment) failures.push('Crew has another active work session.');
   if (!permitClearance) failures.push('Permit is not cleared.');
   if (!unitAccessClearance) failures.push('Unit access is not cleared.');

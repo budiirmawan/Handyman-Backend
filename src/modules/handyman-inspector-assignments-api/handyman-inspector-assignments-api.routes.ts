@@ -6,7 +6,9 @@ import {
   getEligibleInspectorsHandler,
   getInspectorAssignmentHandler,
   getInspectorHistoryHandler,
+  listInspectorAssignmentResponseHistoryHandler,
   reassignInspectorHandler,
+  respondInspectorAssignmentHandler,
   revokeInspectorHandler,
 } from './handyman-inspector-assignments-api.controller';
 
@@ -19,6 +21,8 @@ import {
  *   POST /handyman/visit-appointments/:visitAppointmentId/inspector/reassign
  *   POST /handyman/visit-appointments/:visitAppointmentId/inspector/revoke
  *   GET  /handyman/requests/:handymanRequestId/inspector-assignments/history
+ *   POST /handyman/visit-appointments/:visitAppointmentId/inspector-assignments/:assignmentId/respond
+ *   GET  /handyman/visit-appointments/:visitAppointmentId/inspector-assignments/:assignmentId/response-history
  */
 export function createHandymanInspectorAssignmentsApiRouter(): Router {
   const router = Router();
@@ -39,6 +43,16 @@ export function createHandymanInspectorAssignmentsApiRouter(): Router {
     auth,
     read,
     getInspectorHistoryHandler,
+  );
+  router.post(
+    '/handyman/visit-appointments/:visitAppointmentId/inspector-assignments/:assignmentId/respond',
+    auth,
+    respondInspectorAssignmentHandler,
+  );
+  router.get(
+    '/handyman/visit-appointments/:visitAppointmentId/inspector-assignments/:assignmentId/response-history',
+    auth,
+    listInspectorAssignmentResponseHistoryHandler,
   );
   return router;
 }

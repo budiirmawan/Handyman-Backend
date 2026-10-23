@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewWorkOrderAssignment,
+  WorkOrderAssigneeType,
   WorkOrderAssignmentRecord,
   WorkOrderAssignmentStatus,
-  WorkOrderAssigneeType,
 } from './work-order-assignment.types';
 
 type WorkOrderAssignmentRow = {
@@ -53,8 +54,9 @@ function mapRow(row: WorkOrderAssignmentRow): WorkOrderAssignmentRecord {
 
 async function create(
   input: NewWorkOrderAssignment,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderAssignmentRecord> {
-  const result = await getPool().query<WorkOrderAssignmentRow>(
+  const result = await executor.query<WorkOrderAssignmentRow>(
     `INSERT INTO work_order_assignments
        (id, work_order_id, assignee_type, workforce_profile_id, team_id,
         vendor_id, assigned_by_user_id, assigned_at, status)
@@ -76,9 +78,26 @@ async function create(
 
 async function findById(
   id: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderAssignmentRecord | null> {
-  const result = await getPool().query<WorkOrderAssignmentRow>(
+  const result = await executor.query<WorkOrderAssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM work_order_assignments WHERE id = $1`,
+    [id],
+  );
+
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
+async function findByIdForUpdate(
+  id: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<WorkOrderAssignmentRecord | null> {
+  const result = await executor.query<WorkOrderAssignmentRow>(
+    `SELECT ${ASSIGNMENT_SELECT}
+       FROM work_order_assignments
+      WHERE id = $1
+      FOR UPDATE`,
     [id],
   );
 
@@ -88,8 +107,9 @@ async function findById(
 
 async function findActiveByWorkOrderId(
   workOrderId: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderAssignmentRecord | null> {
-  const result = await getPool().query<WorkOrderAssignmentRow>(
+  const result = await executor.query<WorkOrderAssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM work_order_assignments
      WHERE work_order_id = $1 AND status = 'ACTIVE'
      LIMIT 1`,
@@ -100,10 +120,26 @@ async function findActiveByWorkOrderId(
   return row ? mapRow(row) : null;
 }
 
+async function findActiveByWorkOrderIdForUpdate(
+  workOrderId: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<WorkOrderAssignmentRecord | null> {
+  const result = await executor.query<WorkOrderAssignmentRow>(
+    `SELECT ${ASSIGNMENT_SELECT} FROM work_order_assignments
+     WHERE work_order_id = $1 AND status = 'ACTIVE'
+     FOR UPDATE`,
+    [workOrderId],
+  );
+
+  const row = result.rows[0];
+  return row ? mapRow(row) : null;
+}
+
 async function listByWorkOrderId(
   workOrderId: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderAssignmentRecord[]> {
-  const result = await getPool().query<WorkOrderAssignmentRow>(
+  const result = await executor.query<WorkOrderAssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM work_order_assignments
      WHERE work_order_id = $1
      ORDER BY created_at ASC`,
@@ -116,8 +152,9 @@ async function listByWorkOrderId(
 async function updateStatus(
   id: string,
   status: WorkOrderAssignmentStatus,
+  executor: Pick<PoolClient, 'query'> = getPool(),
 ): Promise<WorkOrderAssignmentRecord | null> {
-  const result = await getPool().query<WorkOrderAssignmentRow>(
+  const result = await executor.query<WorkOrderAssignmentRow>(
     `UPDATE work_order_assignments SET status = $2, updated_at = NOW()
      WHERE id = $1
      RETURNING ${ASSIGNMENT_SELECT}`,
@@ -131,7 +168,9 @@ async function updateStatus(
 export const workOrderAssignmentRepository = {
   create,
   findActiveByWorkOrderId,
+  findActiveByWorkOrderIdForUpdate,
   findById,
+  findByIdForUpdate,
   listByWorkOrderId,
   updateStatus,
 };

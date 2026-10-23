@@ -33,10 +33,14 @@ import {
  *   3. Person Client chain: profile.organizationId → organizations →
  *      client_id MUST equal the provider context's client (snapshot of
  *      the vendor authority).
- *   4. An ACTIVE vendor↔workforce binding for the SAME vendor is required
- *      (mandatory business model: the worker belongs to the provider via
- *      the vendor-authoritative binding seam). If it is absent: reject —
+ *   4. VENDOR provider context only: an ACTIVE vendor↔workforce binding for
+ *      the SAME vendor is required (the worker belongs to the subcontractor
+ *      via the vendor-authoritative binding seam). If it is absent: reject —
  *      never synthesized, and vendor tables are NEVER modified here.
+ *      PART 03B2D — a DIRECT provider context (Handyman's own workforce pool)
+ *      deliberately SKIPS this step: permanent, contract and freelance field
+ *      workers are employed/managed by Handyman Operations and have no vendor
+ *      binding at all. Requiring one would force a fake vendor row.
  *
  * Actor and scope follow PART 01 (explicit authenticated local user +
  * accessible-Client convention; never derived from workforce profile or
@@ -123,14 +127,21 @@ export async function createHandymanWorkerContext(
     throw handymanWorkforceBindingRequiredError();
   }
 
-  // 4) Vendor-authoritative personnel link — required, read-only.
-  const binding = await vendorWorkforceRepository
-    .findActiveByVendorAndWorkforce(
-      providerContext.vendorId,
-      input.workforceProfileId,
-    );
-  if (!binding || !bindingStands(binding.effectiveFrom, binding.effectiveUntil)) {
-    throw handymanWorkforceBindingRequiredError();
+  // 4) VENDOR context: vendor-authoritative personnel link — required,
+  //    read-only. DIRECT context: Handyman-managed worker, no vendor exists.
+  if (providerContext.providerType === 'VENDOR') {
+    if (!providerContext.vendorId) throw handymanWorkforceBindingRequiredError();
+    const binding = await vendorWorkforceRepository
+      .findActiveByVendorAndWorkforce(
+        providerContext.vendorId,
+        input.workforceProfileId,
+      );
+    if (
+      !binding ||
+      !bindingStands(binding.effectiveFrom, binding.effectiveUntil)
+    ) {
+      throw handymanWorkforceBindingRequiredError();
+    }
   }
 
   try {

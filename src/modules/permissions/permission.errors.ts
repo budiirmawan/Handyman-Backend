@@ -39,3 +39,20 @@ export function rolePermissionAssignmentNotFoundError(): AppError {
     statusCode: 404,
   });
 }
+
+/**
+ * CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — a system invariant, not a
+ * privilege: an authority-defining permission (`role.manage`,
+ * `permission.manage`, `user.manage`, `building.manage`) must keep at least
+ * one ACTIVE grant, or the installation would permanently lose that
+ * administrative capability. Mirrors LAST_OWNER_ROLE_REQUIRED at the
+ * role-permission grant layer. Grant it to another role first.
+ */
+export function lastAdminPermissionRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.LAST_ADMIN_PERMISSION_REQUIRED,
+    message:
+      'The last active grant of an administrative permission cannot be revoked. Grant the permission to another role first.',
+    statusCode: 409,
+  });
+}

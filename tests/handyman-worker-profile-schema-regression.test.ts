@@ -386,9 +386,15 @@ describe('CR-HM-WORKER-PROFILE-FIX-01: worker profile over the canonical schema'
     assert.ok(windows.some((w: { isExpired: boolean }) => w.isExpired === true));
 
     // Certifications — optional, provider-scoped.
+    // PART 02 — individual certificate numbers are modeled (0461) and this
+    // worker has none, so the list is present and empty.
     assert.equal(
       profile.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
+    );
+    assert.deepEqual(
+      profile.certificationsAndExpiry.individualCertifications,
+      [],
     );
     assert.equal(
       profile.certificationsAndExpiry.providerLicensesAndCertifications.length,

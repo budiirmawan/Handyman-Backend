@@ -6,9 +6,13 @@ export type {
   AssignHandymanExecutionScopeCrewInput,
   HandymanAssignmentLeadResolution,
   HandymanExecutionScopeAssignmentRecord,
+  HandymanExecutionScopeAssignmentResponseHistoryView,
+  HandymanExecutionScopeAssignmentResponseView,
   HandymanExecutionScopeAssignmentStatus,
   NewHandymanExecutionScopeAssignment,
   PublicHandymanExecutionScopeAssignment,
+  ReassignHandymanExecutionScopeCrewInput,
+  RespondToHandymanExecutionScopeAssignmentInput,
 } from './handyman-scope-assignment.types';
 export {
   handymanAssignmentAlreadyActiveError,
@@ -24,6 +28,8 @@ export {
   assignHandymanExecutionScopeCrew,
   getHandymanExecutionScopeAssignment,
   handymanScopeAssignmentService,
+  listHandymanExecutionScopeAssignmentResponseHistory,
   reassignHandymanExecutionScopeCrew,
   resolveHandymanAssignmentLead,
+  respondToHandymanExecutionScopeAssignment,
 } from './handyman-scope-assignment.service';

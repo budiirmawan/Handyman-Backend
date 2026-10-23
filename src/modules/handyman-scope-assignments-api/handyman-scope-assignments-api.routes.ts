@@ -3,8 +3,10 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import {
   getHandymanExecutionScopeAssignmentHandler,
+  listHandymanExecutionScopeAssignmentResponseHistoryHandler,
   postHandymanExecutionScopeAssignmentHandler,
   postHandymanExecutionScopeReassignHandler,
+  respondHandymanExecutionScopeAssignmentHandler,
 } from './handyman-scope-assignments-api.controller';
 
 /**
@@ -14,9 +16,13 @@ import {
  *   POST /handyman/execution-scopes/:executionScopeId/assignment
  *   GET  /handyman/execution-scopes/:executionScopeId/assignment
  *   POST /handyman/execution-scopes/:executionScopeId/assignment/reassign
+ *   POST /handyman/execution-scopes/:executionScopeId/assignments/:assignmentId/respond
+ *   GET  /handyman/execution-scopes/:executionScopeId/assignments/:assignmentId/response-history
  *
  * Permissions: reads `tenant_company.read`; mutations
  * `tenant_company.manage` (existing vocabulary; no new permission).
+ * Field Crew Lead response endpoints use `authenticationMiddleware` +
+ * exact-Building scope + active Crew Lead ownership.
  * Assignment targets HANDYMAN_EXECUTION_SCOPE only; assignment never
  * implies arrival, CHECK-IN, work start, or a schedule. The internal
  * Lead resolver is deliberately NOT a standalone endpoint.
@@ -35,6 +41,16 @@ export function createHandymanScopeAssignmentsApiRouter(): Router {
     auth,
     manage,
     postHandymanExecutionScopeReassignHandler,
+  );
+  router.post(
+    '/handyman/execution-scopes/:executionScopeId/assignments/:assignmentId/respond',
+    auth,
+    respondHandymanExecutionScopeAssignmentHandler,
+  );
+  router.get(
+    '/handyman/execution-scopes/:executionScopeId/assignments/:assignmentId/response-history',
+    auth,
+    listHandymanExecutionScopeAssignmentResponseHistoryHandler,
   );
   return router;
 }

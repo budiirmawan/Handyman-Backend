@@ -39,6 +39,8 @@ export function isNotificationChannel(value: unknown): value is NotificationChan
  */
 export const NOTIFICATION_NAVIGATION_TARGET_TYPES = [
   'WORK_ORDER_FIELD_WORK',
+  'EXECUTION_SCOPE_FIELD_WORK',
+  'INSPECTOR_VISIT_FIELD_WORK',
 ] as const;
 
 export type NotificationNavigationTargetType =

@@ -4,8 +4,10 @@ import { authenticationRequiredError } from '../auth';
 import { handymanInspectorAssignmentService } from '../handyman-inspector-assignments';
 import {
   parseAssignInspectorBody,
+  parseAssignmentIdParam,
   parseReassignInspectorBody,
   parseRequestIdParam,
+  parseRespondInspectorBody,
   parseRevokeInspectorBody,
   parseVisitIdParam,
 } from './handyman-inspector-assignments-api.validation';
@@ -138,6 +140,54 @@ export async function getInspectorHistoryHandler(
         requestId,
         actor(req),
       ),
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function respondInspectorAssignmentHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const visitId = parseVisitIdParam(req.params.visitAppointmentId);
+    const assignmentId = parseAssignmentIdParam(req.params.assignmentId);
+    const body = parseRespondInspectorBody(req.body);
+    sendSuccess(
+      res,
+      await handymanInspectorAssignmentService.respondToInspectorVisitAssignment(
+        {
+          visitAppointmentId: visitId,
+          assignmentId,
+          ...body,
+        },
+        actor(req),
+      ),
+      200,
+    );
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listInspectorAssignmentResponseHistoryHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const visitId = parseVisitIdParam(req.params.visitAppointmentId);
+    const assignmentId = parseAssignmentIdParam(req.params.assignmentId);
+    sendSuccess(
+      res,
+      await handymanInspectorAssignmentService.listInspectorVisitAssignmentResponseHistory(
+        visitId,
+        assignmentId,
+        actor(req),
+      ),
+      200,
     );
   } catch (error) {
     next(error);

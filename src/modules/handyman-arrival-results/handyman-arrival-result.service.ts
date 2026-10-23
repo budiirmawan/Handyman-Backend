@@ -27,6 +27,10 @@ import { resolveHandymanAssignmentLead }
   from '../handyman-scope-assignments';
 import { handymanScopeAssignmentRepository }
   from '../handyman-scope-assignments';
+import {
+  assignmentResponseRepository,
+  handymanAssignmentDeclinedError,
+} from '../assignment-responses';
 import { recordOperationalEvent } from '../operational-events';
 import { isValidUuid } from '../clients';
 import { arrivalResultConflictError }
@@ -196,6 +200,15 @@ export async function evaluateHandymanArrivalVerification(
   );
   if (!actorIsAuthoritativeLead && !resolution) {
     throw arrivalChallengeNotAuthorizedError();
+  }
+  if (resolution) {
+    const assignmentResponse =
+      await assignmentResponseRepository.findByAssignmentId(
+        resolution.assignmentId,
+      );
+    if (assignmentResponse?.responseStatus === 'TIDAK_BISA') {
+      throw handymanAssignmentDeclinedError();
+    }
   }
   const expected = await resolveHandymanExpectedArrivalLocation(
     scopeUuid, actorUserId,

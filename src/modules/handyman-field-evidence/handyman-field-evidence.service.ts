@@ -258,6 +258,7 @@ async function resolveEvidenceActorRole(
   target: EvidenceTargetContext,
   allowReadOnlyOps = false,
   tx?: PoolClient,
+  purpose?: HandymanFieldEvidencePurpose,
 ): Promise<'PIC_PEKERJAAN' | 'INSPECTOR' | 'OPERATIONS_MANAGER'> {
   const allowedBuilding =
     await contextAccessService.canAccessBuildingScopedResource(actorUserId, {
@@ -315,7 +316,11 @@ async function resolveEvidenceActorRole(
   const perms = await permissionService.resolvePermissionsForUser(actorUserId);
   if (
     perms.includes('tenant_company.manage') ||
-    (allowReadOnlyOps && perms.includes('tenant_company.read'))
+    (allowReadOnlyOps && perms.includes('tenant_company.read')) ||
+    (allowReadOnlyOps &&
+      purpose === 'MATERIAL_RECEIPT' &&
+      (perms.includes('handyman.finance.read') ||
+        perms.includes('handyman.finance.manage')))
   ) {
     return 'OPERATIONS_MANAGER';
   }
@@ -430,6 +435,8 @@ async function bindVerifiedAttachmentToDomainObjects(
     materialPurchaseRecordId: string | null;
     attachmentReference: string;
     actorUserId: string;
+    purpose: HandymanFieldEvidencePurpose;
+    sha256Checksum: string;
   },
 ): Promise<void> {
   await assertDomainObjectOwnership(tx, target, {
@@ -480,25 +487,123 @@ async function bindVerifiedAttachmentToDomainObjects(
   }
 
   if (input.materialPurchaseRecordId) {
-    const res = await tx.query<{ version: number | string }>(
-      `UPDATE handyman_material_purchase_records
-          SET receipt_evidence_reference = $5,
-              latest_evidence_reference = $5,
-              version = version + 1,
-              updated_at = NOW()
+    const curRes = await tx.query<{
+      id: string;
+      status: string;
+      reimbursement_status: string;
+    }>(
+      `SELECT id, status, reimbursement_status
+         FROM handyman_material_purchase_records
         WHERE id = $1
           AND client_id = $2
           AND building_id = $3
           AND handyman_request_id = $4
-          AND latest_evidence_reference IS DISTINCT FROM $5
-        RETURNING version`,
+        FOR UPDATE`,
       [
         input.materialPurchaseRecordId,
         target.clientId,
         target.buildingId,
         target.handymanRequestId,
-        input.attachmentReference,
       ],
+    );
+    const cur = curRes.rows[0];
+    if (
+      cur &&
+      (cur.status === 'RECONCILIATION' ||
+        cur.reimbursement_status === 'FINANCE_APPROVED' ||
+        cur.reimbursement_status === 'DISBURSED')
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_MATERIAL_PURCHASE_ILLEGAL_TRANSITION,
+        message:
+          'Cannot rebind evidence onto a reconciled, finance-approved, or disbursed material purchase record.',
+      });
+    }
+
+    const isMaterialReceipt = input.purpose === 'MATERIAL_RECEIPT';
+    if (isMaterialReceipt) {
+      const dupRes = await tx.query<{
+        id: string;
+        execution_scope_id: string;
+      }>(
+        `SELECT id, execution_scope_id
+           FROM handyman_material_purchase_records
+          WHERE client_id = $1
+            AND id <> $2
+            AND (
+              receipt_evidence_reference = $3
+              OR receipt_sha256_checksum = $4
+            )
+          LIMIT 1`,
+        [
+          target.clientId,
+          input.materialPurchaseRecordId,
+          input.attachmentReference,
+          input.sha256Checksum,
+        ],
+      );
+      if (dupRes.rows[0]) {
+        if (
+          target.executionScopeId &&
+          dupRes.rows[0].execution_scope_id !== target.executionScopeId
+        ) {
+          throw new AppError({
+            statusCode: 409,
+            code: ERROR_CODES.HANDYMAN_REIMBURSEMENT_CROSS_WORK_ORDER_CLAIM,
+            message:
+              'Receipt photo has already been claimed on another Work Order.',
+          });
+        }
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_MATERIAL_RECEIPT_DUPLICATE,
+          message:
+            'Duplicate receipt photo binary digest cannot be bound to multiple material purchase records.',
+        });
+      }
+    }
+
+    const res = await tx.query<{ version: number | string }>(
+      isMaterialReceipt
+        ? `UPDATE handyman_material_purchase_records
+              SET receipt_evidence_reference = $5,
+                  receipt_sha256_checksum = $6,
+                  latest_evidence_reference = $5,
+                  version = version + 1,
+                  updated_at = NOW()
+            WHERE id = $1
+              AND client_id = $2
+              AND building_id = $3
+              AND handyman_request_id = $4
+              AND latest_evidence_reference IS DISTINCT FROM $5
+            RETURNING version`
+        : `UPDATE handyman_material_purchase_records
+              SET latest_evidence_reference = $5,
+                  version = version + 1,
+                  updated_at = NOW()
+            WHERE id = $1
+              AND client_id = $2
+              AND building_id = $3
+              AND handyman_request_id = $4
+              AND latest_evidence_reference IS DISTINCT FROM $5
+            RETURNING version`,
+      isMaterialReceipt
+        ? [
+            input.materialPurchaseRecordId,
+            target.clientId,
+            target.buildingId,
+            target.handymanRequestId,
+            input.attachmentReference,
+            input.sha256Checksum,
+          ]
+        : [
+            input.materialPurchaseRecordId,
+            target.clientId,
+            target.buildingId,
+            target.handymanRequestId,
+            input.attachmentReference,
+          ],
     );
     if (res.rows[0]) {
       await recordOperationalEvent(
@@ -523,6 +628,14 @@ async function bindVerifiedAttachmentToDomainObjects(
   }
 }
 
+export interface VerifiedManagedEvidenceAssertionResult {
+  id: string;
+  purpose: HandymanFieldEvidencePurpose;
+  sha256Checksum: string;
+  verifiedByteSize: number;
+  attachmentReference: string;
+}
+
 /**
  * Verifies that any managed `hm-ev://<uuid>` evidence reference exists, belongs
  * to the exact same tenant/building/Work Order, and has verified binary bytes
@@ -537,9 +650,12 @@ export async function assertVerifiedManagedEvidenceReference(
     executionScopeId: string;
   },
   reference: string | null | undefined,
-): Promise<void> {
+  options?: {
+    requiredPurpose?: HandymanFieldEvidencePurpose;
+  },
+): Promise<VerifiedManagedEvidenceAssertionResult | null> {
   if (!reference) {
-    return;
+    return null;
   }
   // P0-A: unmanaged/legacy references (any non-hm-ev:// string) are rejected;
   // there is no independently verifiable legacy authority for free-text refs.
@@ -623,6 +739,22 @@ export async function assertVerifiedManagedEvidenceReference(
         'Referenced field evidence upload failed storage byte verification.',
     });
   }
+
+  if (options?.requiredPurpose && record.purpose !== options.requiredPurpose) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_MATERIAL_RECEIPT_PURPOSE_INVALID,
+      message: `Referenced field evidence upload must have purpose ${options.requiredPurpose} (received ${record.purpose}).`,
+    });
+  }
+
+  return {
+    id: record.id,
+    purpose: record.purpose,
+    sha256Checksum: record.sha256Checksum,
+    verifiedByteSize: record.verifiedByteSize,
+    attachmentReference: record.attachmentReference,
+  };
 }
 
 /**
@@ -774,6 +906,8 @@ export async function uploadFieldEvidenceBinary(
       materialPurchaseRecordId,
       attachmentReference,
       actorUserId,
+      purpose,
+      sha256Checksum,
     });
 
     const record = await handymanFieldEvidenceRepository.insertUpload(tx, {
@@ -1138,6 +1272,8 @@ export async function confirmFieldEvidenceUpload(
       materialPurchaseRecordId: record.materialPurchaseRecordId,
       attachmentReference,
       actorUserId,
+      purpose: record.purpose,
+      sha256Checksum: record.sha256Checksum,
     });
 
     const verified = await handymanFieldEvidenceRepository.markVerified(tx, {
@@ -1197,6 +1333,8 @@ export async function getFieldEvidenceMetadata(
       executionScopeId: record.executionScopeId,
     },
     true,
+    undefined,
+    record.purpose,
   );
 
   return record;

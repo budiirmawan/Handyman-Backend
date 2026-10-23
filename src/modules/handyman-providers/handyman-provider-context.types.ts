@@ -6,7 +6,31 @@
  * of creation (the service derives it from the vendor authority, never
  * from caller input). No vendor name/contact/PIC, compliance, capability,
  * or commercial data exists here.
+ *
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2D — two KINDS of provider context:
+ *
+ *   VENDOR  the legacy/external-subcontractor pool: exactly one per `vendors`
+ *           row, `vendorId` is the authoritative identity. Behaviour is
+ *           byte-for-byte the pre-03B2D behaviour.
+ *   DIRECT  Handyman's OWN workforce pool for one Client: no vendor exists and
+ *           none is fabricated. Permanent (INTERNAL), CONTRACT and FREELANCE
+ *           workers are admitted here by Operations directly.
+ *
+ * `providerType` is additive; every pre-existing row is VENDOR.
  */
+
+export const HANDYMAN_PROVIDER_CONTEXT_TYPES = ['VENDOR', 'DIRECT'] as const;
+export type HandymanProviderContextType =
+  (typeof HANDYMAN_PROVIDER_CONTEXT_TYPES)[number];
+
+export function isHandymanProviderContextType(
+  value: unknown,
+): value is HandymanProviderContextType {
+  return (
+    typeof value === 'string' &&
+    (HANDYMAN_PROVIDER_CONTEXT_TYPES as readonly string[]).includes(value)
+  );
+}
 
 export const HANDYMAN_PROVIDER_CONTEXT_STATUSES = [
   'ACTIVE',
@@ -26,19 +50,31 @@ export function isHandymanProviderContextStatus(
 
 export type HandymanProviderContextRecord = {
   id: string;
-  /** Tenant isolation root, derived verbatim from the vendor authority. */
+  /** Tenant isolation root, derived from the vendor authority (VENDOR) or
+   * supplied explicitly and access-checked (DIRECT). */
   clientId: string;
-  /** Authoritative identity: the existing `vendors` master row. */
-  vendorId: string;
+  /** VENDOR | DIRECT (PART 03B2D). */
+  providerType: HandymanProviderContextType;
+  /** Authoritative identity for a VENDOR context; NULL for DIRECT. */
+  vendorId: string | null;
   status: HandymanProviderContextStatus;
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
 };
 
-/** Caller input — clientId/actor are NEVER input. */
+/** Caller input — clientId/actor are NEVER input (derived from the vendor). */
 export type CreateHandymanProviderContextInput = {
   vendorId: string;
+};
+
+/**
+ * PART 03B2D — caller input for the direct pool. The Client IS caller-supplied
+ * because there is no vendor to derive it from; the service verifies the actor
+ * can actually reach that Client (a broad permission never widens access).
+ */
+export type CreateDirectHandymanProviderContextInput = {
+  clientId: string;
 };
 
 export type NewHandymanProviderContextRecord = Omit<

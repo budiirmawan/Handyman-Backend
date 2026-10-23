@@ -22,11 +22,25 @@ export function isWorkforceStatus(value: unknown): value is WorkforceStatus {
   );
 }
 
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2D — FREELANCE added.
+ *
+ * INTERNAL  = permanent staff (tetap)
+ * CONTRACT  = contract staff (kontrak)
+ * FREELANCE = freelance field worker (lepas)
+ * EXTERNAL  = workforce supplied through a vendor/subcontractor
+ * OUTSOURCED = workforce supplied through an outsourcing partner
+ *
+ * For Handyman the first three are its OWN personnel managed by Operations;
+ * they must never be forced into a vendor company. FREELANCE is additive and
+ * backward compatible: every existing row keeps its current meaning.
+ */
 export const WORKFORCE_TYPES = [
   'INTERNAL',
   'OUTSOURCED',
   'CONTRACT',
   'EXTERNAL',
+  'FREELANCE',
 ] as const;
 
 export type WorkforceType = (typeof WORKFORCE_TYPES)[number];

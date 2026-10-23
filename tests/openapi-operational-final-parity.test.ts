@@ -15,9 +15,26 @@ import { createApp } from '../src/app';
 /**
  * INT-LC-19-BE PART 14 — final operational parity.
  *
- * Normalized contract surface is 1,685/1,685. The application root
- * `GET /` stays infrastructure. The duplicate task mount collapses to
- * one OpenAPI operation and is the only arithmetic gap.
+ * CR-HM-WORKER-COMPETENCY-01 PART 04A — pins reconciled with the ACTUAL route
+ * inventory after ~330 operations landed in later PARTs.
+ *
+ * CR-HM-BACKEND-RELEASE-INTEGRATION-01 PART 01 — pins re-reconciled once for the
+ * MERGED release (worker competency + IAM permission revocation + assignment
+ * response / field expense / helper attendance), measured on the integration
+ * branch with this suite's own inventory (WHATSAPP_WEBHOOK_ENABLED=true):
+ *
+ *   runtime routes ............ 2,034  (1,964 operational in-scope + 1 root + 69 platform)
+ *   operational OpenAPI ....... 1,963
+ *   platform OpenAPI ..........    69
+ *   total OpenAPI ............. 2,032
+ *
+ * The invariants are unchanged and still asserted structurally (unmapped = 0,
+ * speculative = 0, platform parity, duplicate operationIds = 0, local $refs
+ * resolve); only the snapshots below were refreshed.
+ *
+ * The application root `GET /` stays infrastructure (never documented). The
+ * duplicate task mount still collapses to one OpenAPI operation and remains the
+ * only arithmetic gap (1,964 runtime rows vs 1,963 documented operations).
  */
 
 const SPEC_PATH = resolve(__dirname, '../docs/api/openapi.yaml');
@@ -46,6 +63,10 @@ const PUBLIC_OR_PROVIDER = new Set([
   'GET /health/database',
   'POST /auth/login',
   'POST /invitations/accept',
+  // `security: []` in the spec: token-based public validation, no session, so
+  // a 401 is not part of its contract (same treatment as acceptInvitation).
+  'POST /invitations/validate',
+  'POST /handyman/requests/care',
 ]);
 
 function normalizePath(p: string): string {
@@ -68,10 +89,19 @@ function walkRouter(
   }>;
   for (const layer of s ?? []) {
     if (layer.route?.path) {
-      const full = (prefix + layer.route.path) || '/';
-      for (const m of Object.keys(layer.route.methods ?? {})) {
-        if (m === '_all') continue;
-        out.push({ method: m.toUpperCase(), path: full });
+      // Express accepts an ARRAY of paths for a single handler
+      // (`router.get(['/a', '/a/:id'], handler)`); each entry is its own route.
+      // Treating the array as one string used to hide those operations from the
+      // parity inventory and report them as speculative OpenAPI.
+      const paths = Array.isArray(layer.route.path)
+        ? layer.route.path
+        : [layer.route.path];
+      for (const routePath of paths) {
+        const full = (prefix + routePath) || '/';
+        for (const m of Object.keys(layer.route.methods ?? {})) {
+          if (m === '_all') continue;
+          out.push({ method: m.toUpperCase(), path: full });
+        }
       }
     } else if (layer.handle?.stack) {
       let layerPrefix = prefix;
@@ -149,8 +179,8 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
     (o) => !runtimeCanon.has(`${o.method} ${o.canon}`),
   );
 
-  it('1. total runtime is 1687 and root GET / is the only infrastructure exclusion', () => {
-    assert.equal(runtime.length, 1687);
+  it('1. total runtime is 2034 and root GET / is the only infrastructure exclusion', () => {
+    assert.equal(runtime.length, 2034);
     const root = operationalRuntime.filter((r) => r.path === '/');
     assert.equal(root.length, 1);
     assert.equal(root[0]?.method, 'GET');
@@ -161,8 +191,8 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
     );
   });
 
-  it('2. in-scope operational runtime is 1617 and the task duplicate collapses to one operation', () => {
-    assert.equal(inScopeOperational.length, 1617);
+  it('2. in-scope operational runtime is 1964 and the task duplicate collapses to one operation', () => {
+    assert.equal(inScopeOperational.length, 1964);
     const taskGets = inScopeOperational.filter(
       (r) => r.method === 'GET' && r.canon === '/tasks/{p}',
     );
@@ -171,25 +201,25 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
       (o) => o.method === 'GET' && o.canon === '/tasks/{p}',
     );
     assert.equal(documentedTaskGets.length, 1);
-    assert.equal(new Set(inScopeOperational.map((r) => `${r.method} ${r.canon}`)).size, 1616);
+    assert.equal(new Set(inScopeOperational.map((r) => `${r.method} ${r.canon}`)).size, 1963);
   });
 
-  it('3. operational OpenAPI is 1616 and distinct operational gap is 0', () => {
-    assert.equal(operationalOpenApi.length, 1616);
+  it('3. operational OpenAPI is 1963 and distinct operational gap is 0', () => {
+    assert.equal(operationalOpenApi.length, 1963);
     assert.equal(inScopeOperational.length - operationalOpenApi.length, 1);
     assert.equal(unmapped.length, 0);
     assert.deepEqual(unmapped, []);
   });
 
-  it('4. platform SaaS remains 69 and normalized parity is 1685/1685', () => {
+  it('4. platform SaaS remains 69 and normalized parity is 2032/2032', () => {
     assert.equal(platformRuntime.length, 69);
     assert.equal(platformOpenApi.length, 69);
     const runtimeKeys = new Set(platformRuntime.map((r) => `${r.method} ${r.canon}`));
     const openapiKeys = new Set(platformOpenApi.map((o) => `${o.method} ${o.canon}`));
     assert.deepEqual([...runtimeKeys].filter((k) => !openapiKeys.has(k)), []);
     assert.deepEqual([...openapiKeys].filter((k) => !runtimeKeys.has(k)), []);
-    assert.equal(openapi.length, 1685);
-    assert.equal(1616 + 69, 1685);
+    assert.equal(openapi.length, 2032);
+    assert.equal(1963 + 69, 2032);
     assert.equal(operationalOpenApi.length + platformOpenApi.length, openapi.length);
   });
 
@@ -227,6 +257,20 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
     )) {
       buckets[name] = new Set(Object.keys(value ?? {}));
     }
+    // A `$ref` may point anywhere inside the document (for example into
+    // `.../HandymanStatusVisibilityReadView/properties/stages/properties/...`),
+    // so resolution walks the full JSON pointer instead of assuming a
+    // `#/components/<bucket>/<name>` shape.
+    const resolvePointer = (ref: string): unknown => {
+      let current: unknown = SPEC;
+      for (const rawPart of ref.slice(2).split('/')) {
+        const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (current === null || typeof current !== 'object') return undefined;
+        current = (current as Record<string, unknown>)[part];
+        if (current === undefined) return undefined;
+      }
+      return current;
+    };
     const broken: string[] = [];
     const walk = (value: unknown): void => {
       if (!value || typeof value !== 'object') return;
@@ -235,11 +279,8 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
         return;
       }
       const record = value as Record<string, unknown>;
-      if (typeof record.$ref === 'string' && record.$ref.startsWith('#/components/')) {
-        const parts = record.$ref.slice(2).split('/');
-        const bucket = parts[1] ?? '';
-        const tail = parts.slice(2).join('/');
-        if (!buckets[bucket]?.has(tail)) broken.push(record.$ref);
+      if (typeof record.$ref === 'string' && record.$ref.startsWith('#/')) {
+        if (resolvePointer(record.$ref) === undefined) broken.push(record.$ref);
       }
       for (const child of Object.values(record)) walk(child);
     };

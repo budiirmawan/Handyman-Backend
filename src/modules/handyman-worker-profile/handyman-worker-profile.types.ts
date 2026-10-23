@@ -1,4 +1,5 @@
 import type { SkillCategory } from '../skills';
+import type { WorkforceCertificationMobileSummary } from '../workforce-certifications/workforce-certification.types';
 import type { ProficiencyLevel } from '../workforce-skills/workforce-skill.types';
 
 export type HandymanWorkerAuthorizedRole =
@@ -23,10 +24,14 @@ export interface HandymanWorkerProfileProjection {
   providerAssociation: {
     clientId: string;
     providerContextId: string;
-    providerCode: string;
+    /** PART 03B2D — VENDOR (subcontractor pool) or DIRECT (own workforce). */
+    providerType: string;
+    /** vendors.vendor_code; NULL for a DIRECT provider context. */
+    providerCode: string | null;
     providerStatus: string;
-    vendorId: string;
-    vendorStatus: string;
+    /** NULL for a DIRECT provider context (no vendor exists). */
+    vendorId: string | null;
+    vendorStatus: string | null;
     organizationId: string;
     organizationCode: string;
     organizationName: string;
@@ -71,7 +76,15 @@ export interface HandymanWorkerProfileProjection {
     }>;
   };
   certificationsAndExpiry: {
-    individualCertificateNumberModeled: false;
+    /**
+     * CR-HM-WORKER-COMPETENCY-01 PART 02 — individual per-worker certificate
+     * serial numbers ARE now modeled (`workforce_certifications`, migration
+     * 0461) and projected in `individualCertifications`. The flag flipped from
+     * `false` to `true`; it is additive for consumers, and the three existing
+     * fields below keep their exact previous meaning.
+     */
+    individualCertificateNumberModeled: true;
+    individualCertifications: WorkforceCertificationMobileSummary[];
     skillValidityWindows: Array<{
       skillId: string;
       skillCode: string;

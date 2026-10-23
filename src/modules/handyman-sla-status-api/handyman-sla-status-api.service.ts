@@ -146,6 +146,27 @@ export type HandymanStatusVisibilityReadView = {
       status: string | null;
       providerContextId: string | null;
       crewId: string | null;
+      responseStatus: string | null;
+      respondedByUserId: string | null;
+      respondedByWorkerId: string | null;
+      respondedAt: string | null;
+      declineReason: string | null;
+      responseNotes: string | null;
+      reassignmentRequired: boolean;
+    };
+    inspectorAssignment: {
+      assignmentId: string | null;
+      visitAppointmentId: string | null;
+      visitState: string | null;
+      inspectorUserId: string | null;
+      status: string | null;
+      responseStatus: string | null;
+      respondedByUserId: string | null;
+      respondedByWorkerId: string | null;
+      respondedAt: string | null;
+      declineReason: string | null;
+      responseNotes: string | null;
+      reassignmentRequired: boolean;
     };
     arrival: {
       arrivalVerificationResultId: string | null;
@@ -573,33 +594,88 @@ async function composeStatusVisibility(
   const requestId = requestRow.id;
   const executionScopeId = scopeRow?.id ?? null;
 
-  // 1. Request stage facts (triage, diagnosis, referral)
-  const [triageRes, diagnosisRes, referralRes] = await Promise.all([
-    pool.query<{ outcome: string }>(
-      `SELECT triage_disposition AS outcome
-         FROM handyman_request_triage_decisions
-        WHERE handyman_request_id = $1
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1`,
-      [requestId],
-    ),
-    pool.query<{ status: string }>(
-      `SELECT scope_classification AS status
-         FROM handyman_request_diagnoses
-        WHERE handyman_request_id = $1
-        ORDER BY diagnosed_at DESC, id DESC
-        LIMIT 1`,
-      [requestId],
-    ),
-    pool.query<{ referralType: string }>(
-      `SELECT referral_type AS "referralType"
-         FROM handyman_request_referrals
-        WHERE handyman_request_id = $1
-        ORDER BY referred_at DESC, id DESC
-        LIMIT 1`,
-      [requestId],
-    ),
-  ]);
+  // 1. Request stage facts (triage, diagnosis, referral, inspector assignment)
+  const [triageRes, diagnosisRes, referralRes, inspectorAssignRes] =
+    await Promise.all([
+      pool.query<{ outcome: string }>(
+        `SELECT triage_disposition AS outcome
+           FROM handyman_request_triage_decisions
+          WHERE handyman_request_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`,
+        [requestId],
+      ),
+      pool.query<{ status: string }>(
+        `SELECT scope_classification AS status
+           FROM handyman_request_diagnoses
+          WHERE handyman_request_id = $1
+          ORDER BY diagnosed_at DESC, id DESC
+          LIMIT 1`,
+        [requestId],
+      ),
+      pool.query<{ referralType: string }>(
+        `SELECT referral_type AS "referralType"
+           FROM handyman_request_referrals
+          WHERE handyman_request_id = $1
+          ORDER BY referred_at DESC, id DESC
+          LIMIT 1`,
+        [requestId],
+      ),
+      pool.query<{
+        id: string;
+        visitAppointmentId: string;
+        visitState: string;
+        inspectorUserId: string;
+        status: string;
+        responseStatus: string | null;
+        respondedByUserId: string | null;
+        respondedByWorkerId: string | null;
+        respondedAt: Date | null;
+        declineReason: string | null;
+        responseNotes: string | null;
+      }>(
+        `SELECT ia.id,
+                ia.visit_appointment_id AS "visitAppointmentId",
+                v.state AS "visitState",
+                ia.inspector_user_id AS "inspectorUserId",
+                ia.status,
+                COALESCE(ar.response_status, 'PENDING') AS "responseStatus",
+                ar.responded_by_user_id AS "respondedByUserId",
+                ar.responded_by_worker_id AS "respondedByWorkerId",
+                ar.responded_at AS "respondedAt",
+                ar.decline_reason AS "declineReason",
+                ar.response_notes AS "responseNotes"
+           FROM handyman_inspector_assignments ia
+           JOIN handyman_visit_appointments v ON v.id = ia.visit_appointment_id
+           LEFT JOIN handyman_assignment_responses ar
+             ON ar.assignment_id = ia.id
+            AND ar.assignment_target_type = 'INSPECTOR_VISIT_ASSIGNMENT'
+          WHERE ia.handyman_request_id = $1
+          ORDER BY (ia.status = 'ACTIVE') DESC, ia.assigned_at DESC, ia.id DESC
+          LIMIT 1`,
+        [requestId],
+      ),
+    ]);
+
+  const topInsp = inspectorAssignRes.rows[0] ?? null;
+  const inspRespStatus = topInsp ? (topInsp.responseStatus ?? 'PENDING') : null;
+  const inspectorAssignmentStage = {
+    assignmentId: topInsp?.id ?? null,
+    visitAppointmentId: topInsp?.visitAppointmentId ?? null,
+    visitState: topInsp?.visitState ?? null,
+    inspectorUserId: topInsp?.inspectorUserId ?? null,
+    status: topInsp?.status ?? null,
+    responseStatus: inspRespStatus,
+    respondedByUserId: topInsp?.respondedByUserId ?? null,
+    respondedByWorkerId: topInsp?.respondedByWorkerId ?? null,
+    respondedAt: topInsp?.respondedAt
+      ? topInsp.respondedAt.toISOString()
+      : null,
+    declineReason: topInsp?.declineReason ?? null,
+    responseNotes: topInsp?.responseNotes ?? null,
+    reassignmentRequired:
+      topInsp?.status === 'ACTIVE' && inspRespStatus === 'TIDAK_BISA',
+  };
 
   // 2. Readiness stage facts
   const [schedRes, accessRes, permitRes] = await Promise.all([
@@ -669,6 +745,13 @@ async function composeStatusVisibility(
     status: null as string | null,
     providerContextId: null as string | null,
     crewId: null as string | null,
+    responseStatus: null as string | null,
+    respondedByUserId: null as string | null,
+    respondedByWorkerId: null as string | null,
+    respondedAt: null as string | null,
+    declineReason: null as string | null,
+    responseNotes: null as string | null,
+    reassignmentRequired: false,
   };
   let assignmentCandidateIds: string[] = [];
 
@@ -752,14 +835,29 @@ async function composeStatusVisibility(
         status: string;
         providerContextId: string;
         crewId: string;
+        responseStatus: string | null;
+        respondedByUserId: string | null;
+        respondedByWorkerId: string | null;
+        respondedAt: Date | null;
+        declineReason: string | null;
+        responseNotes: string | null;
       }>(
-        `SELECT id,
-                status,
-                handyman_provider_context_id AS "providerContextId",
-                handyman_crew_id AS "crewId"
-           FROM handyman_execution_scope_assignments
-          WHERE execution_scope_id = $1
-          ORDER BY (status = 'ACTIVE') DESC, assigned_at DESC, id DESC`,
+        `SELECT a.id,
+                a.status,
+                a.handyman_provider_context_id AS "providerContextId",
+                a.handyman_crew_id AS "crewId",
+                COALESCE(ar.response_status, 'PENDING') AS "responseStatus",
+                ar.responded_by_user_id AS "respondedByUserId",
+                ar.responded_by_worker_id AS "respondedByWorkerId",
+                ar.responded_at AS "respondedAt",
+                ar.decline_reason AS "declineReason",
+                ar.response_notes AS "responseNotes"
+           FROM handyman_execution_scope_assignments a
+           LEFT JOIN handyman_assignment_responses ar
+             ON ar.assignment_id = a.id
+            AND ar.assignment_target_type = 'EXECUTION_SCOPE_ASSIGNMENT'
+          WHERE a.execution_scope_id = $1
+          ORDER BY (a.status = 'ACTIVE') DESC, a.assigned_at DESC, a.id DESC`,
         [executionScopeId],
       ),
       pool.query<{ id: string; status: string; primaryReason: string }>(
@@ -864,11 +962,21 @@ async function composeStatusVisibility(
 
     assignmentCandidateIds = assignmentsRes.rows.map((r) => r.id);
     if (assignmentsRes.rows[0]) {
+      const top = assignmentsRes.rows[0];
+      const respStatus = top.responseStatus ?? 'PENDING';
       assignmentStage = {
-        assignmentId: assignmentsRes.rows[0].id,
-        status: assignmentsRes.rows[0].status,
-        providerContextId: assignmentsRes.rows[0].providerContextId,
-        crewId: assignmentsRes.rows[0].crewId,
+        assignmentId: top.id,
+        status: top.status,
+        providerContextId: top.providerContextId,
+        crewId: top.crewId,
+        responseStatus: respStatus,
+        respondedByUserId: top.respondedByUserId ?? null,
+        respondedByWorkerId: top.respondedByWorkerId ?? null,
+        respondedAt: top.respondedAt ? top.respondedAt.toISOString() : null,
+        declineReason: top.declineReason ?? null,
+        responseNotes: top.responseNotes ?? null,
+        reassignmentRequired:
+          top.status === 'ACTIVE' && respStatus === 'TIDAK_BISA',
       };
     }
 
@@ -1034,6 +1142,7 @@ async function composeStatusVisibility(
         status: scopeRow?.status ?? null,
       },
       assignment: assignmentStage,
+      inspectorAssignment: inspectorAssignmentStage,
       arrival: arrivalStage,
       workSession: workSessionStage,
       materialExecution: materialExecutionStage,

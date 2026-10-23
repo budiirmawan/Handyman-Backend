@@ -1,14 +1,25 @@
 import { AppError } from '../../shared/errors';
+import {
+  HANDYMAN_ASSIGNMENT_RESPONSE_DECISIONS,
+  isHandymanAssignmentResponseDecision,
+  type HandymanAssignmentResponseDecision,
+} from '../assignment-responses';
 import { isValidUuid } from '../clients';
+import type { WorkOrderCompetencyDecisionAction } from '../worker-competency-eligibility/worker-competency-eligibility.types';
 import {
   isWorkOrderAssigneeType,
   isWorkOrderAssignmentStatus,
   WORK_ORDER_ASSIGNEE_TYPES,
   WORK_ORDER_ASSIGNMENT_STATUSES,
   type AssignWorkOrderInput,
+  type RespondToWorkOrderAssignmentInput,
   type UpdateWorkOrderAssignmentInput,
   type WorkOrderAssigneeType,
 } from './work-order-assignment.types';
+
+const MAX_REASON_LENGTH = 1000;
+const MAX_NOTES_LENGTH = 1000;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
 
 export type ValidationDetail = {
   field: string;
@@ -156,6 +167,131 @@ export function parseUpdateAssignmentBody(
   return { reassign: parseAssignWorkOrderBody(body) };
 }
 
+/**
+ * Parses `POST /work-orders/:id/assignments/:assignmentId/respond`.
+ *
+ * Accepts `decision` (or `responseStatus`) ∈ `['TERIMA', 'TIDAK_BISA']`.
+ * When `decision === 'TIDAK_BISA'`, a non-empty `declineReason` (or `reason`)
+ * is mandatory.
+ */
+export function parseRespondWorkOrderAssignmentBody(
+  body: unknown,
+): Omit<
+  RespondToWorkOrderAssignmentInput,
+  'workOrderId' | 'assignmentId' | 'actorUserId'
+> {
+  if (!isRecord(body)) {
+    throw AppError.validation('Request validation failed.', [
+      { field: 'body', message: 'Request body must be a JSON object.' },
+    ]);
+  }
+
+  const details: ValidationDetail[] = [];
+
+  const rawDecision = body.decision ?? body.responseStatus;
+  let decision: HandymanAssignmentResponseDecision | undefined;
+  if (!isHandymanAssignmentResponseDecision(rawDecision)) {
+    details.push({
+      field: 'decision',
+      message: `decision must be one of: ${HANDYMAN_ASSIGNMENT_RESPONSE_DECISIONS.join(', ')}.`,
+    });
+  } else {
+    decision = rawDecision;
+  }
+
+  const rawReason =
+    body.declineReason !== undefined ? body.declineReason : body.reason;
+  let declineReason: string | undefined;
+  if (rawReason !== undefined && rawReason !== null) {
+    if (typeof rawReason !== 'string') {
+      details.push({
+        field: 'declineReason',
+        message: 'declineReason must be a string.',
+      });
+    } else {
+      const trimmed = rawReason.trim();
+      if (trimmed.length > MAX_REASON_LENGTH) {
+        details.push({
+          field: 'declineReason',
+          message: `declineReason must be at most ${MAX_REASON_LENGTH} characters.`,
+        });
+      } else if (trimmed.length > 0) {
+        declineReason = trimmed;
+      }
+    }
+  }
+
+  if (decision === 'TIDAK_BISA' && !declineReason) {
+    details.push({
+      field: 'declineReason',
+      message: 'declineReason is required when decision is TIDAK_BISA.',
+    });
+  }
+
+  if (decision === 'TERIMA' && declineReason !== undefined) {
+    details.push({
+      field: 'declineReason',
+      message: 'declineReason is only allowed when decision is TIDAK_BISA.',
+    });
+  }
+
+  let notes: string | undefined;
+  if (body.notes !== undefined && body.notes !== null) {
+    if (typeof body.notes !== 'string') {
+      details.push({
+        field: 'notes',
+        message: 'notes must be a string.',
+      });
+    } else {
+      const trimmed = body.notes.trim();
+      if (trimmed.length > MAX_NOTES_LENGTH) {
+        details.push({
+          field: 'notes',
+          message: `notes must be at most ${MAX_NOTES_LENGTH} characters.`,
+        });
+      } else if (trimmed.length > 0) {
+        notes = trimmed;
+      }
+    }
+  }
+
+  let idempotencyKey: string | undefined;
+  if (body.idempotencyKey !== undefined && body.idempotencyKey !== null) {
+    if (typeof body.idempotencyKey !== 'string') {
+      details.push({
+        field: 'idempotencyKey',
+        message: 'idempotencyKey must be a string.',
+      });
+    } else {
+      const trimmed = body.idempotencyKey.trim();
+      if (trimmed.length === 0) {
+        details.push({
+          field: 'idempotencyKey',
+          message: 'idempotencyKey must not be empty.',
+        });
+      } else if (trimmed.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+        details.push({
+          field: 'idempotencyKey',
+          message: `idempotencyKey must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters.`,
+        });
+      } else {
+        idempotencyKey = trimmed;
+      }
+    }
+  }
+
+  if (details.length > 0 || !decision) {
+    throw AppError.validation('Request validation failed.', details);
+  }
+
+  return {
+    decision,
+    ...(declineReason === undefined ? {} : { declineReason }),
+    ...(notes === undefined ? {} : { notes }),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
 function readAssigneeType(
   value: unknown,
   details: ValidationDetail[],
@@ -186,4 +322,85 @@ function readOptionalUuid(
     return undefined;
   }
   return value.trim().toLowerCase();
+}
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2A — filters for the Work Order competency
+ * decision history. Unknown keys are ignored (read-only surface), while a value
+ * of the wrong type is a 400 rather than a silently empty page.
+ */
+export function parseCompetencyDecisionFilter(
+  query: Record<string, unknown>,
+): {
+  action?: WorkOrderCompetencyDecisionAction;
+  assignmentId?: string;
+  workforceProfileId?: string;
+  satisfied?: boolean;
+  enforcementLevel?: 'MANDATORY' | 'RECOMMENDED';
+} {
+  const details: ValidationDetail[] = [];
+  const filter: {
+    action?: WorkOrderCompetencyDecisionAction;
+    assignmentId?: string;
+    workforceProfileId?: string;
+    satisfied?: boolean;
+    enforcementLevel?: 'MANDATORY' | 'RECOMMENDED';
+  } = {};
+
+  // PART 03B2E — RECLASSIFIED joins the two assignment actions: the ledger now
+  // also records revalidation of an assignment that STAYED active when the
+  // Work Order's trade changed.
+  if (query.action !== undefined) {
+    if (
+      query.action !== 'ASSIGNED' &&
+      query.action !== 'REASSIGNED' &&
+      query.action !== 'RECLASSIFIED'
+    ) {
+      details.push({
+        field: 'action',
+        message: 'action must be one of ASSIGNED, REASSIGNED, RECLASSIFIED.',
+      });
+    } else {
+      filter.action = query.action;
+    }
+  }
+  for (const field of ['assignmentId', 'workforceProfileId'] as const) {
+    const raw = query[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string' || !isValidUuid(raw.trim())) {
+      details.push({ field, message: `${field} must be a valid UUID.` });
+    } else {
+      filter[field] = raw.trim().toLowerCase();
+    }
+  }
+  if (query.satisfied !== undefined) {
+    if (query.satisfied === 'true' || query.satisfied === true) {
+      filter.satisfied = true;
+    } else if (query.satisfied === 'false' || query.satisfied === false) {
+      filter.satisfied = false;
+    } else {
+      details.push({
+        field: 'satisfied',
+        message: 'satisfied must be true or false.',
+      });
+    }
+  }
+  if (query.enforcementLevel !== undefined) {
+    if (
+      query.enforcementLevel !== 'MANDATORY' &&
+      query.enforcementLevel !== 'RECOMMENDED'
+    ) {
+      details.push({
+        field: 'enforcementLevel',
+        message: 'enforcementLevel must be one of MANDATORY, RECOMMENDED.',
+      });
+    } else {
+      filter.enforcementLevel = query.enforcementLevel;
+    }
+  }
+
+  if (details.length > 0) {
+    throw AppError.validation('Request validation failed.', details);
+  }
+  return filter;
 }

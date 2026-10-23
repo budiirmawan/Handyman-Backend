@@ -11,6 +11,14 @@ import { migration0457TenantBatchImport } from './0457_tenant_batch_import';
 import { migration0458HandymanE2eFinancialReconciliationClose } from './0458_handyman_e2e_financial_reconciliation_close';
 import { migration0459HandymanRequestCancellation } from './0459_handyman_request_cancellation';
 import { migration0460HandymanSettlementDisputeAdjudication } from './0460_handyman_settlement_dispute_adjudication';
+import { migration0461CreateWorkforceCertifications } from './0461_create_workforce_certifications';
+import { migration0462WorkforceCertificationPermissions } from './0462_workforce_certification_permissions';
+import { migration0463ServiceCatalogCompetencyRequirements } from './0463_service_catalog_competency_requirements';
+import { migration0464WorkforceCompetencyDecisionHistory } from './0464_workforce_competency_decision_history';
+import { migration0465WorkOrderMultiTradeClassification } from './0465_work_order_multitrade_classification';
+import { migration0466DirectHandymanWorkforce } from './0466_direct_handyman_workforce';
+import { migration0467WorkOrderReclassificationDecision } from './0467_work_order_reclassification_decision';
+import { migration0468ExtendPermissionGrantAuditEvents } from './0468_extend_permission_grant_audit_events';
 import { migration0456ApartmentMasterData } from './0456_apartment_master_data';
 import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
 import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
@@ -495,6 +503,12 @@ import { migration0440CreateHandymanDispatchReleases }
   from './0440_create_handyman_dispatch_releases';
 import { migration0441HandymanDispatchReleaseReassignmentSupersede }
   from './0441_handyman_dispatch_release_reassignment_supersede';
+import { migration0470HandymanFieldExpenseReimbursement }
+  from './0470_handyman_field_expense_reimbursement';
+import { migration0471HandymanHelperAttendanceConfirmation }
+  from './0471_handyman_helper_attendance_confirmation';
+import { migration0472HandymanAssignmentResponses }
+  from './0472_handyman_assignment_responses';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -959,4 +973,15 @@ export const migrations: readonly Migration[] = [
   migration0458HandymanE2eFinancialReconciliationClose,
   migration0459HandymanRequestCancellation,
   migration0460HandymanSettlementDisputeAdjudication,
+  migration0461CreateWorkforceCertifications,
+  migration0462WorkforceCertificationPermissions,
+  migration0463ServiceCatalogCompetencyRequirements,
+  migration0464WorkforceCompetencyDecisionHistory,
+  migration0465WorkOrderMultiTradeClassification,
+  migration0466DirectHandymanWorkforce,
+  migration0467WorkOrderReclassificationDecision,
+  migration0468ExtendPermissionGrantAuditEvents,
+  migration0470HandymanFieldExpenseReimbursement,
+  migration0471HandymanHelperAttendanceConfirmation,
+  migration0472HandymanAssignmentResponses,
 ];

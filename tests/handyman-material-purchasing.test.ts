@@ -25,6 +25,7 @@ import { userRepository } from '../src/modules/users/user.repository';
 import { permissionService } from '../src/modules/permissions';
 import { createEvidenceStorage } from '../src/modules/evidence/storage';
 import { migration0436CreateHandymanMaterialPurchasing } from '../src/database/migrations/0436_create_handyman_material_purchasing';
+import { migration0470HandymanFieldExpenseReimbursement } from '../src/database/migrations/0470_handyman_field_expense_reimbursement';
 
 const CLIENT_A = '10000000-0000-4000-8000-000000000001';
 const PROPERTY_A = '10000000-0000-4000-8000-000000000011';
@@ -226,6 +227,9 @@ before(async () => {
       authorized_by_user_id uuid NOT NULL,
       authorized_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE work_orders(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, building_id uuid NOT NULL
+    );
     CREATE TABLE handyman_execution_scope_assignments(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
       handyman_provider_context_id uuid NOT NULL,
@@ -233,6 +237,7 @@ before(async () => {
       status text NOT NULL, assigned_by_user_id uuid NOT NULL,
       assigned_at timestamptz NOT NULL DEFAULT now(),
       supersedes_assignment_id uuid,
+      version int NOT NULL DEFAULT 1,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
@@ -274,6 +279,7 @@ before(async () => {
   const client = await pool.connect();
   try {
     await migration0436CreateHandymanMaterialPurchasing.up(client);
+    await migration0470HandymanFieldExpenseReimbursement.up(client);
   } finally {
     client.release();
   }

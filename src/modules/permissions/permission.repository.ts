@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewPermission,
@@ -80,8 +81,12 @@ async function createPermission(input: NewPermission): Promise<PermissionRecord>
   return mapPermissionRow(result.rows[0]);
 }
 
-async function findById(id: string): Promise<PermissionRecord | null> {
-  const result = await getPool().query<PermissionRow>(
+async function findById(
+  id: string,
+  client?: PoolClient,
+): Promise<PermissionRecord | null> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query<PermissionRow>(
     `SELECT ${PERMISSION_SELECT} FROM permissions WHERE id = $1`,
     [id],
   );
@@ -126,8 +131,10 @@ async function updateStatus(
 async function createAssignment(
   roleId: string,
   permissionId: string,
+  client?: PoolClient,
 ): Promise<RolePermissionAssignmentRecord> {
-  const result = await getPool().query<AssignmentRow>(
+  const queryable = client ?? getPool();
+  const result = await queryable.query<AssignmentRow>(
     `INSERT INTO role_permission_assignments (id, role_id, permission_id)
      VALUES ($1, $2, $3)
      RETURNING ${ASSIGNMENT_SELECT}`,
@@ -140,8 +147,10 @@ async function createAssignment(
 async function findActiveAssignment(
   roleId: string,
   permissionId: string,
+  client?: PoolClient,
 ): Promise<RolePermissionAssignmentRecord | null> {
-  const result = await getPool().query<AssignmentRow>(
+  const queryable = client ?? getPool();
+  const result = await queryable.query<AssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM role_permission_assignments
      WHERE role_id = $1 AND permission_id = $2 AND status = 'ACTIVE'`,
     [roleId, permissionId],
@@ -149,6 +158,58 @@ async function findActiveAssignment(
 
   const row = result.rows[0];
   return row ? mapAssignmentRow(row) : null;
+}
+
+/**
+ * CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — revokes the single ACTIVE grant of
+ * a permission on a role (soft revoke; the REVOKED row is retained as
+ * history, matching the user-role assignment model). Returns false when the
+ * grant is no longer ACTIVE so repeat requests stay consistent.
+ */
+async function revokeAssignment(
+  roleId: string,
+  permissionId: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query(
+    `UPDATE role_permission_assignments
+        SET status = 'REVOKED', updated_at = NOW()
+      WHERE role_id = $1 AND permission_id = $2 AND status = 'ACTIVE'`,
+    [roleId, permissionId],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — counts the remaining ACTIVE grants
+ * of a permission on ACTIVE roles (with ACTIVE permission rows), optionally
+ * excluding one role. Used to refuse removal of the last usable grant of an
+ * authority-defining permission — the role-permission analog of the last-owner
+ * protection. Grants on INACTIVE roles do not count: the effective-permission
+ * resolver never reads them.
+ */
+async function countActiveAssignmentsForPermission(
+  permissionId: string,
+  excludeRoleId?: string,
+  client?: PoolClient,
+): Promise<number> {
+  const queryable = client ?? getPool();
+  const result = await queryable.query<{ count: string }>(
+    `SELECT count(*)::text AS count
+       FROM role_permission_assignments rpa
+       JOIN roles r ON r.id = rpa.role_id
+       JOIN permissions p ON p.id = rpa.permission_id
+      WHERE rpa.permission_id = $1
+        AND rpa.status = 'ACTIVE'
+        AND r.status = 'ACTIVE'
+        AND p.status = 'ACTIVE'
+        AND ($2::uuid IS NULL OR rpa.role_id <> $2::uuid)`,
+    [permissionId, excludeRoleId ?? null],
+  );
+
+  return Number(result.rows[0]?.count ?? '0');
 }
 
 async function listActivePermissionsForRole(
@@ -198,6 +259,7 @@ async function listActivePermissionCodesForUser(userId: string): Promise<string[
 }
 
 export const permissionRepository = {
+  countActiveAssignmentsForPermission,
   createAssignment,
   createPermission,
   findActiveAssignment,
@@ -206,5 +268,6 @@ export const permissionRepository = {
   listActivePermissionCodesForUser,
   listActivePermissionsForRole,
   listPermissions,
+  revokeAssignment,
   updateStatus,
 };
