@@ -35,6 +35,7 @@ export type {
   WorkerCompetencyEligibility,
   WorkOrderCompetencyBlockingGap,
   WorkOrderCompetencyDecision,
+  WorkOrderCompetencyDecisionAction,
   WorkOrderCompetencyDecisionRow,
   WorkOrderCompetencyHistoryItem,
   WorkOrderCompetencySubject,

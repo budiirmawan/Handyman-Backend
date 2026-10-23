@@ -1,7 +1,8 @@
 # CR-HM-WORKER-COMPETENCY-01 — PART 03B Backlog / Handoff
 
-Basis: PART 03A selesai (`8c7e8ef`), **PART 03B1 selesai (`76eb66b`)**, **PART 03B2A selesai**, dan
-**PART 03B2B selesai** (koreksi business rule MULTI-SKILL WORKER) di branch
+Basis: PART 03A selesai (`8c7e8ef`), **PART 03B1 selesai (`76eb66b`)**, **PART 03B2A selesai**,
+**PART 03B2B selesai** (koreksi business rule MULTI-SKILL WORKER), **PART 03B2C selesai**, **PART 03B2D
+selesai**, dan **PART 03B2E selesai** (finalisasi klasifikasi Work Order) di branch
 `arena/3df97f5e-handyman-backend`.
 
 **Status per dokumen ini:** item **1** dan **2** sudah **DELIVERED pada PART 03B1** (detail:
@@ -94,9 +95,14 @@ warning RECOMMENDED menjadi penolakan.
     Assignment `VENDOR` menunjuk perusahaan, sehingga gate memakai aturan ANY atas worker terikat. Perlu
     keputusan governance: deklarasi worker sebelum mulai, atau verifikasi di lapangan.
 
-13. **Klasifikasi wajib untuk `work_type` berisiko (G4)**
-    Work Order boleh tetap tanpa klasifikasi (disengaja agar tidak ada regresi). Usulkan laporan aging
-    "unclassified Work Order" atau kewajiban klasifikasi untuk kategori tertentu.
+13. ~~**Klasifikasi wajib untuk `work_type` berisiko (G4)**~~ — **DONE (PART 03B2E)**
+    Work Order yang berasal dari Customer Care (`tenant_service_requests`) kini **wajib** diklasifikasikan
+    sebelum assignment/reassignment **baru**, dan penolakannya eksplisit (409
+    `WORK_ORDER_CLASSIFICATION_REQUIRED`) — tidak ada lagi jalan lolos diam-diam tanpa verdict. Klasifikasi
+    tetap **tidak** otomatis: `GENERAL_REPAIR` hanya bila Operations memilihnya secara eksplisit.
+    Work Order dari domain lain tetap opsional (nol regresi). Perubahan klasifikasi saat ada assignment
+    ACTIVE divalidasi ulang di transaksi yang sama (`RECLASSIFIED`, 409 `WORK_ORDER_CLASSIFICATION_CONFLICT`
+    bila gap MANDATORY).
 
 14. **Override/exception ber-approval (G5)**
     Penolakan kompetensi saat ini final. Bila lapangan butuh pengecualian, sediakan alur override dengan
@@ -154,3 +160,23 @@ jangan menandai pegawai sendiri `EXTERNAL` agar bisa ditugaskan. Jangan menambah
 otoritasnya tetap `handyman-scope-assignment.service.ts` dengan evaluator kompetensi yang sama. Detail:
 `CR-HM-WORKER-COMPETENCY-01_PART03B2D_DELIVERY_REPORT.md`.
 
+## Catatan lintas-CR — CR-HM-WORKER-COMPETENCY-01 PART 03B2E (selesai)
+
+Finalisasi klasifikasi Work Order. Klasifikasi adalah keputusan **Operations**, bukan bawaan intake:
+
+- `classificationRequired` adalah **turunan** (bukan kolom tersimpan): `EXISTS` atas `tenant_service_requests`
+  untuk `work_order_id` atau `work_request_id` bersama, sehingga aturan wajib klasifikasi hanya berlaku untuk
+  Work Order siklus Handyman (asal Customer Care) dan 21 berkas test lama tetap hijau;
+- `assignWorkOrder` / `reassignWorkOrder` menolak **sebelum** ada tulisan apa pun dengan 409
+  `WORK_ORDER_CLASSIFICATION_REQUIRED` — "belum diklasifikasi" bukan berarti "bebas";
+- `classifyWorkOrder` mengunci baris Work Order (`FOR UPDATE`), membaca klasifikasi sebelumnya, lalu
+  memvalidasi ulang assignment ACTIVE memakai evaluator yang sama **di dalam transaksi yang sama**
+  (aksi ledger `RECLASSIFIED`, migrasi `0467`); gap MANDATORY ⇒ 409 `WORK_ORDER_CLASSIFICATION_CONFLICT`
+  + rollback penuh; gap RECOMMENDED ⇒ peringatan saja;
+- menghapus klasifikasi (`tradeCategoryId = null`) pada Work Order wajib-klasifikasi yang masih punya
+  assignment ACTIVE ditolak dengan kode yang sama;
+- tidak ada auto-klasifikasi, tidak ada evaluator kedua, tidak ada jalur assignment kedua.
+
+**Aturan ke depan:** jangan pernah menyimpulkan trade dari `work_type` bebas-ketikan Customer Care dan jangan
+pernah membiarkan gate kompetensi "lulus" untuk Work Order yang belum diklasifikasi. Detail:
+`CR-HM-WORKER-COMPETENCY-01_PART03B2E_DELIVERY_REPORT.md`.

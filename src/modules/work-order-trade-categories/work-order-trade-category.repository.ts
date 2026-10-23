@@ -43,6 +43,15 @@ const SELECT = `
     FROM work_order_trade_categories tc
     LEFT JOIN handyman_disciplines hd ON hd.id = tc.handyman_discipline_id`;
 
+/**
+ * PART 03B2E — `classification_required` is DERIVED, never stored: a Work
+ * Order belongs to the Handyman lifecycle when Customer Care raised it, i.e.
+ * when a `tenant_service_requests` row points at it either directly
+ * (`work_order_id`, the SR→WO conversion) or through the shared
+ * `work_requests` row (`work_request_id`). Engineering/breakdown Work Orders
+ * have neither binding, so their classification stays optional exactly as
+ * before this PART.
+ */
 const CLASSIFICATION_SELECT = `
   SELECT wo.id                AS work_order_id,
          wo.client_id         AS client_id,
@@ -52,7 +61,16 @@ const CLASSIFICATION_SELECT = `
          tc.name              AS trade_category_name,
          wo.risk_level,
          wo.classified_at,
-         wo.classified_by_user_id
+         wo.classified_by_user_id,
+         EXISTS (
+           SELECT 1
+             FROM tenant_service_requests tsr
+            WHERE tsr.work_order_id = wo.id
+               OR (
+                 wo.work_request_id IS NOT NULL
+                 AND tsr.work_request_id = wo.work_request_id
+               )
+         ) AS classification_required
     FROM work_orders wo
     LEFT JOIN work_order_trade_categories tc
       ON tc.id = wo.trade_category_id`;
@@ -89,6 +107,7 @@ function mapClassification(row: Row): WorkOrderClassificationRecord {
     riskLevel: (row.risk_level as WorkOrderTradeRiskLevel | null) ?? null,
     classifiedAt: toIso(row.classified_at),
     classifiedByUserId: row.classified_by_user_id ?? null,
+    classificationRequired: row.classification_required === true,
   };
 }
 
@@ -216,6 +235,24 @@ async function findClassification(
 }
 
 /**
+ * PART 03B2E — serialize a classification change against the assignment
+ * authority for the same Work Order. The row lock is taken for its
+ * transaction-scoped effect only; the returned status lets the caller keep its
+ * existing lifecycle guard.
+ */
+async function lockWorkOrder(
+  executor: Pick<PoolClient, 'query'>,
+  workOrderId: string,
+): Promise<{ id: string; status: string } | null> {
+  const result = await executor.query(
+    `SELECT id, status FROM work_orders WHERE id = $1 FOR UPDATE`,
+    [workOrderId],
+  );
+  const row = result.rows[0];
+  return row ? { id: row.id, status: row.status } : null;
+}
+
+/**
  * Writes the classification in ONE statement. `tradeCategoryId: null` clears
  * it (and both the code snapshot and the risk level), returning the Work Order
  * to the unrestricted path required by the CR.
@@ -259,6 +296,7 @@ export const workOrderTradeCategoryRepository = {
   findByCode,
   findClassification,
   insert,
+  lockWorkOrder,
   list,
   setStatus,
   update,

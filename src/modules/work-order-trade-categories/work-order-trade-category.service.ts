@@ -7,11 +7,17 @@ import { workOrderNotFoundError, workOrderService } from '../work-orders';
 // registry's repository, so loading its index here would create a cycle.
 import { isWorkOrderAssignableStatus } from '../work-order-assignments/work-order-assignment.types';
 import {
+  workOrderClassificationClearBlockedError,
   workOrderTradeCategoryAlreadyExistsError,
   workOrderTradeCategoryInactiveError,
   workOrderTradeCategoryInvalidStateError,
   workOrderTradeCategoryNotFoundError,
 } from './work-order-trade-category.errors';
+// PART 03B2E — direct file import (same convention as the type import above):
+// the assignment module imports this registry's REPOSITORY, so the service may
+// reference the assignment SERVICE without an index-level load cycle.
+import { revalidateActiveAssignmentForClassification } from '../work-order-assignments/work-order-assignment.service';
+import { workOrderAssignmentRepository } from '../work-order-assignments/work-order-assignment.repository';
 import { workOrderTradeCategoryRepository } from './work-order-trade-category.repository';
 import type {
   ClassifyWorkOrderInput,
@@ -273,6 +279,30 @@ export async function classifyWorkOrder(
         : input.riskLevel;
 
   return withTransaction(async (tx) => {
+    // PART 03B2E — serialize against the assignment authority for this row, so
+    // "is there an ACTIVE assignment?" and "which classification does it run
+    // under?" cannot be read from two different transactions.
+    const locked = await workOrderTradeCategoryRepository.lockWorkOrder(tx, workOrderId);
+    if (!locked) throw workOrderNotFoundError();
+
+    const previous = await workOrderTradeCategoryRepository.findClassification(
+      tx,
+      workOrderId,
+    );
+    const previousCategoryId = previous?.tradeCategoryId ?? null;
+    const previousRiskLevel = previous?.riskLevel ?? null;
+    const classificationRequired = previous?.classificationRequired ?? false;
+
+    // Clearing the classification of a Handyman-lifecycle Work Order that is
+    // still assigned would return a gated, running job to the ungated path.
+    if (category === null && classificationRequired) {
+      const active = await workOrderAssignmentRepository.findActiveByWorkOrderId(
+        workOrderId,
+        tx,
+      );
+      if (active) throw workOrderClassificationClearBlockedError(active.id);
+    }
+
     const classification = await workOrderTradeCategoryRepository.classify(tx, {
       workOrderId,
       tradeCategoryId: category?.id ?? null,
@@ -281,6 +311,24 @@ export async function classifyWorkOrder(
       actorUserId,
     });
     if (!classification) throw workOrderNotFoundError();
+
+    // PART 03B2E — the classification only changes the requirements of FUTURE
+    // assignments if nobody is working yet. When an assignment is ACTIVE, the
+    // SAME gate revalidates it here; a MANDATORY gap throws and rolls the whole
+    // change back, so a running job can never be silently left non-compliant.
+    const classificationChanged =
+      (category?.id ?? null) !== previousCategoryId ||
+      (riskLevel ?? null) !== previousRiskLevel;
+    const revalidation =
+      category !== null && classificationChanged
+        ? await revalidateActiveAssignmentForClassification(tx, {
+            workOrderId,
+            clientId: workOrder.clientId,
+            tradeCategoryId: category.id,
+            tradeCategoryCode: category.code,
+            riskLevel,
+          })
+        : null;
 
     await recordOperationalEvent(
       {
@@ -302,6 +350,21 @@ export async function classifyWorkOrder(
           tradeCategoryId: category?.id ?? null,
           tradeCategoryCode: category?.code ?? null,
           riskLevel,
+          previousTradeCategoryId: previousCategoryId,
+          previousRiskLevel,
+          // Proof that an ACTIVE assignment was revalidated (or that there was
+          // nothing to revalidate), so the audit trail answers "why is the
+          // running assignment still valid under the new trade?".
+          revalidation:
+            revalidation === null
+              ? null
+              : {
+                  assignmentId: revalidation.assignmentId,
+                  satisfied: revalidation.satisfied,
+                  mandatoryRequirementCount:
+                    revalidation.mandatoryRequirementCount,
+                  advisoryCount: revalidation.advisory.length,
+                },
           ...(input.notes ? { notes: input.notes } : {}),
         },
       },

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient, QueryResultRow } from 'pg';
 import { getPool } from '../../database';
 import type {
+  WorkOrderCompetencyDecisionAction,
   WorkOrderCompetencyDecisionRow,
   WorkOrderCompetencyHistoryItem,
 } from './worker-competency-eligibility.types';
@@ -92,7 +93,7 @@ export type AppendWorkOrderDecisionRowsInput = {
   clientId: string;
   workOrderId: string;
   assignmentId: string;
-  action: 'ASSIGNED' | 'REASSIGNED';
+  action: WorkOrderCompetencyDecisionAction;
   assigneeType: 'WORKFORCE' | 'TEAM' | 'VENDOR' | 'VENDOR_WORKFORCE';
   tradeCategoryId: string | null;
   tradeCategoryCode: string | null;
@@ -169,7 +170,7 @@ async function listDecisionHistory(
     workOrderId: string;
     limit: number;
     offset: number;
-    action?: 'ASSIGNED' | 'REASSIGNED';
+    action?: WorkOrderCompetencyDecisionAction;
     assignmentId?: string;
     workforceProfileId?: string;
     satisfied?: boolean;
@@ -207,7 +208,7 @@ async function countDecisionHistory(
   input: {
     clientId: string;
     workOrderId: string;
-    action?: 'ASSIGNED' | 'REASSIGNED';
+    action?: WorkOrderCompetencyDecisionAction;
     assignmentId?: string;
     workforceProfileId?: string;
     satisfied?: boolean;

@@ -1981,6 +1981,17 @@ export const ERROR_CODES = {
     'WORK_ORDER_TRADE_CATEGORY_INVALID_STATE',
   WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED:
     'WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED',
+  // CR-HM-WORKER-COMPETENCY-01 PART 03B2E — a Handyman-lifecycle Work Order
+  // (Customer Care origin) must be classified before a NEW assignment. An
+  // unclassified Work Order may never slide through the competency gate as if
+  // it had no requirements; the caller is told exactly which decision is
+  // missing instead of receiving a silent success.
+  WORK_ORDER_CLASSIFICATION_REQUIRED: 'WORK_ORDER_CLASSIFICATION_REQUIRED',
+  // PART 03B2E — a classification change would leave the CURRENTLY ACTIVE
+  // assignment non-compliant with the new trade's MANDATORY requirements. The
+  // change is refused atomically instead of silently invalidating a running
+  // job (reassign first, then reclassify).
+  WORK_ORDER_CLASSIFICATION_CONFLICT: 'WORK_ORDER_CLASSIFICATION_CONFLICT',
   // CR-BE-SVC-01 PART 02 — Service Request catalog adoption. Governed anchor
   // validation on service_requests.service_catalog_id (same-Client, ACTIVE,
   // code equals service_type). Free service_type is retained unchanged.

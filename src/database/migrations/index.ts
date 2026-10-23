@@ -17,6 +17,7 @@ import { migration0463ServiceCatalogCompetencyRequirements } from './0463_servic
 import { migration0464WorkforceCompetencyDecisionHistory } from './0464_workforce_competency_decision_history';
 import { migration0465WorkOrderMultiTradeClassification } from './0465_work_order_multitrade_classification';
 import { migration0466DirectHandymanWorkforce } from './0466_direct_handyman_workforce';
+import { migration0467WorkOrderReclassificationDecision } from './0467_work_order_reclassification_decision';
 import { migration0456ApartmentMasterData } from './0456_apartment_master_data';
 import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
 import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
@@ -971,4 +972,5 @@ export const migrations: readonly Migration[] = [
   migration0464WorkforceCompetencyDecisionHistory,
   migration0465WorkOrderMultiTradeClassification,
   migration0466DirectHandymanWorkforce,
+  migration0467WorkOrderReclassificationDecision,
 ];

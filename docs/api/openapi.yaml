@@ -19346,7 +19346,6 @@ paths:
         VENDOR_WORKFORCE assignee. Requires `work_order.manage` and Building
         access.
 
-
         CR-HM-WORKER-COMPETENCY-01 PART 03B2B — Handyman uses a MULTI-SKILL
         worker model, never one worker = one trade. The assignee's trade,
         certificate category or first skill never restricts which Work Order
@@ -19355,6 +19354,13 @@ paths:
         `WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED`). An unmet RECOMMENDED
         requirement is returned as a warning in `data.competency.advisory` and
         never blocks. A trade with no configured requirement is unrestricted.
+
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2E — a Handyman-lifecycle Work Order
+        (Customer Care origin) that is not classified yet is refused with 409
+        `WORK_ORDER_CLASSIFICATION_REQUIRED`. An unclassified job is NOT an
+        unrestricted job: the competency gate must never report a verdict it
+        could not compute. Classify it first — GENERAL_REPAIR is the explicitly
+        chosen category for a generic minor repair, never an automatic one.
       tags: [Work Orders]
       security:
         - bearerAuth: []
@@ -19380,6 +19386,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /work-orders/{workOrderId}/assignments/current:
     get:
@@ -19444,7 +19451,7 @@ paths:
         - name: action
           in: query
           required: false
-          schema: { type: string, enum: [ASSIGNED, REASSIGNED] }
+          schema: { type: string, enum: [ASSIGNED, REASSIGNED, RECLASSIFIED] }
         - name: assignmentId
           in: query
           required: false
@@ -19529,7 +19536,7 @@ paths:
       operationId: classifyWorkOrder
       x-required-permission: work_order.manage
       x-building-scoped: true
-      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_INVALID_STATE]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORK_ORDER_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_NOT_FOUND, WORK_ORDER_TRADE_CATEGORY_INVALID_STATE, WORK_ORDER_CLASSIFICATION_CONFLICT]
       summary: Record the Operations classification decision for a Work Order
       description: >
         MUTATION — CR-HM-WORKER-COMPETENCY-01 PART 03B2A. Requires
@@ -19537,11 +19544,23 @@ paths:
         single ACTIVE trade category and, optionally, a risk level that
         overrides the category default. An unconfigured category default is
         never a silent requirement. `tradeCategoryId` = `null` clears the
-        classification and returns the Work Order to the unrestricted path.
+        classification for a Work Order that never used the trade registry.
         Refused with 409 `WORK_ORDER_TRADE_CATEGORY_INVALID_STATE` for an
         INACTIVE category or a terminal Work Order, and 409
         `WORK_ORDER_TRADE_CATEGORY_NOT_FOUND` for an unknown category. Writes a
         `WORK_ORDER_CLASSIFIED` history event in the same transaction.
+
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2E — reclassification while an
+        assignment is ACTIVE is supported and SAFE: the Work Order row is
+        locked, the current assignment is revalidated with the same competency
+        evaluator inside this transaction, and the outcome is appended to the
+        decision ledger as `RECLASSIFIED`. If the new trade's MANDATORY
+        requirements are not met by the people already assigned, the whole
+        change is refused with 409 `WORK_ORDER_CLASSIFICATION_CONFLICT` and
+        nothing is written — reassign first, then reclassify. Clearing the
+        classification of a Handyman-lifecycle Work Order that still has an
+        ACTIVE assignment is refused with the same code. Passing the same trade
+        and risk level is a no-op for the ledger.
       tags: [Work Orders]
       security: [{ bearerAuth: [] }]
       parameters:
@@ -19869,7 +19888,15 @@ paths:
     patch:
       operationId: updateWorkOrderAssignment
       summary: Deactivate or reassign a Work Order assignment
-      description: Requires `work_order.manage` and Building access.
+      description: >
+        Requires `work_order.manage` and Building access.
+
+        A reassignment runs the same competency gate as a new assignment, so a
+        Handyman-lifecycle Work Order that is not classified yet is refused with
+        409 `WORK_ORDER_CLASSIFICATION_REQUIRED` (CR-HM-WORKER-COMPETENCY-01
+        PART 03B2E), and an unmet MANDATORY requirement is refused with 409
+        `WORK_ORDER_ASSIGNMENT_COMPETENCY_REQUIRED` (PART 03B2A). Deactivating an
+        assignment is never gated.
       tags: [Work Orders]
       security:
         - bearerAuth: []
@@ -19902,6 +19929,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /work-orders/{workOrderId}/acknowledge:
     post:
@@ -92706,7 +92734,18 @@ components:
         notes: { type: string, nullable: true, maxLength: 1000 }
     WorkOrderClassification:
       type: object
-      description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A - the authoritative trade classification of a Work Order, as decided by Operations during triage. An unclassified Work Order carries nulls and stays assignable.
+      description: >-
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2A - the authoritative trade
+        classification of a Work Order, as decided by Operations during triage.
+        CR-HM-WORKER-COMPETENCY-01 PART 03B2E - `classificationRequired` is
+        derived from the Customer Care origin of the Work Order
+        (`tenant_service_requests` binding): when true, the Work Order cannot be
+        assigned or reassigned until it is classified. Work Orders from other
+        domains keep classification optional.
+      required:
+        [workOrderId, clientId, buildingId, tradeCategoryId, tradeCategoryCode,
+         tradeCategoryName, riskLevel, classifiedAt, classifiedByUserId,
+         classificationRequired]
       properties:
         workOrderId: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
@@ -92717,6 +92756,15 @@ components:
         riskLevel: { type: string, nullable: true, enum: [LOW, MEDIUM, HIGH] }
         classifiedAt: { type: string, format: date-time, nullable: true }
         classifiedByUserId: { type: string, format: uuid, nullable: true }
+        classificationRequired:
+          type: boolean
+          description: >-
+            True when the Work Order belongs to the Handyman lifecycle (raised
+            by Customer Care). Such a Work Order must be classified before a
+            new assignment, otherwise the assignment is refused with 409
+            WORK_ORDER_CLASSIFICATION_REQUIRED.
+            False for Work Orders that never used the Handyman trade registry,
+            whose classification stays optional.
     WorkOrderAssignmentCompetencyDecision:
       type: object
       description: CR-HM-WORKER-COMPETENCY-01 PART 03B2A - one append-only ledger row of the competency gate for a Work Order assignment or reassignment. Carries the minimum evidence only (opaque certificate id, verification status, expiry date, proficiency level) and never certificate numbers or document storage keys. `reason` is null exactly when `satisfied` is true.
@@ -92726,7 +92774,14 @@ components:
         clientId: { type: string, format: uuid }
         workOrderId: { type: string, format: uuid }
         assignmentId: { type: string, format: uuid }
-        action: { type: string, enum: [ASSIGNED, REASSIGNED] }
+        action:
+          type: string
+          enum: [ASSIGNED, REASSIGNED, RECLASSIFIED]
+          description: >-
+            ASSIGNED / REASSIGNED record the gate at assignment time;
+            RECLASSIFIED records revalidation of an assignment that stayed
+            ACTIVE when the Work Order's trade classification changed (PART
+            03B2E).
         assigneeType: { type: string, enum: [WORKFORCE, TEAM, VENDOR, VENDOR_WORKFORCE] }
         tradeCategoryId: { type: string, format: uuid, nullable: true }
         tradeCategoryCode: { type: string, nullable: true }

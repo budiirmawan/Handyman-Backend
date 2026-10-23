@@ -1,5 +1,6 @@
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
+import type { WorkOrderCompetencyDecisionAction } from '../worker-competency-eligibility/worker-competency-eligibility.types';
 import {
   isWorkOrderAssigneeType,
   isWorkOrderAssignmentStatus,
@@ -196,7 +197,7 @@ function readOptionalUuid(
 export function parseCompetencyDecisionFilter(
   query: Record<string, unknown>,
 ): {
-  action?: 'ASSIGNED' | 'REASSIGNED';
+  action?: WorkOrderCompetencyDecisionAction;
   assignmentId?: string;
   workforceProfileId?: string;
   satisfied?: boolean;
@@ -204,18 +205,25 @@ export function parseCompetencyDecisionFilter(
 } {
   const details: ValidationDetail[] = [];
   const filter: {
-    action?: 'ASSIGNED' | 'REASSIGNED';
+    action?: WorkOrderCompetencyDecisionAction;
     assignmentId?: string;
     workforceProfileId?: string;
     satisfied?: boolean;
     enforcementLevel?: 'MANDATORY' | 'RECOMMENDED';
   } = {};
 
+  // PART 03B2E — RECLASSIFIED joins the two assignment actions: the ledger now
+  // also records revalidation of an assignment that STAYED active when the
+  // Work Order's trade changed.
   if (query.action !== undefined) {
-    if (query.action !== 'ASSIGNED' && query.action !== 'REASSIGNED') {
+    if (
+      query.action !== 'ASSIGNED' &&
+      query.action !== 'REASSIGNED' &&
+      query.action !== 'RECLASSIFIED'
+    ) {
       details.push({
         field: 'action',
-        message: 'action must be one of ASSIGNED, REASSIGNED.',
+        message: 'action must be one of ASSIGNED, REASSIGNED, RECLASSIFIED.',
       });
     } else {
       filter.action = query.action;

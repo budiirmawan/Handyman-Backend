@@ -90,3 +90,50 @@ export function workOrderAssignmentCompetencyRequiredError(
     details: [...details],
   });
 }
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2E — a Handyman-lifecycle Work Order
+ * reached the assignment authority with no trade classification.
+ *
+ * Before this PART an unclassified Work Order evaluated as "no requirement",
+ * so the competency gate passed silently: the assignee looked validated while
+ * nobody had decided what the job actually is. Classification is Operations'
+ * triage decision and must exist BEFORE a new assignment, so the refusal is an
+ * explicit domain answer that names the missing step (and the endpoint that
+ * performs it) instead of a generic validation error.
+ */
+export function workOrderClassificationRequiredError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.WORK_ORDER_CLASSIFICATION_REQUIRED,
+    message:
+      'This work order is not classified yet. Operations must record its ' +
+      'trade category (PATCH /work-orders/{id}/classification) before it can ' +
+      'be assigned, so the competency gate can be applied to it. Choose the ' +
+      'closest trade, or GENERAL_REPAIR for a generic minor repair.',
+    statusCode: 409,
+  });
+}
+
+/**
+ * PART 03B2E — the requested classification change would leave the ACTIVE
+ * assignment below the new trade's MANDATORY requirements.
+ *
+ * `details` lists every gap (person × requirement × reason) so Operations can
+ * either pick a different trade, reassign to a qualified worker, or evidence
+ * the missing competency. Nothing is written: the classification AND the
+ * assignment stay exactly as they were.
+ */
+export function workOrderClassificationConflictError(
+  details: ReadonlyArray<Record<string, unknown>>,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.WORK_ORDER_CLASSIFICATION_CONFLICT,
+    message:
+      'The new trade classification would leave the active assignment below ' +
+      'its mandatory competency requirements. Reassign the work order to a ' +
+      'qualified worker, or classify it under a trade the current assignee ' +
+      'satisfies.',
+    statusCode: 409,
+    details: [...details],
+  });
+}

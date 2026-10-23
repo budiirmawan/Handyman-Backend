@@ -30,6 +30,7 @@ import { vendorBuildingRepository } from '../vendor-buildings';
 import {
   workOrderCompetencyService,
   type WorkOrderCompetencyDecision,
+  type WorkOrderCompetencyDecisionAction,
   type WorkOrderCompetencySubject,
 } from '../worker-competency-eligibility';
 // Direct file imports (not the module index) so the trade registry and the
@@ -44,6 +45,8 @@ import {
   workOrderAssignmentInvalidStateError,
   workOrderAssignmentNotFoundError,
   workOrderAssignmentVendorWorkforceMismatchError,
+  workOrderClassificationConflictError,
+  workOrderClassificationRequiredError,
 } from './work-order-assignment.errors';
 import { workOrderAssignmentRepository } from './work-order-assignment.repository';
 import {
@@ -311,6 +314,12 @@ type AssignableWorkOrder = {
   tradeCategoryId: string | null;
   tradeCategoryCode: string | null;
   riskLevel: WorkOrderTradeRiskLevel | null;
+  /**
+   * PART 03B2E — true when the Work Order belongs to the Handyman lifecycle
+   * (Customer Care origin). Such a Work Order may not be assigned before
+   * Operations has classified it.
+   */
+  classificationRequired: boolean;
 };
 
 async function loadAssignableWorkOrder(
@@ -336,7 +345,27 @@ async function loadAssignableWorkOrder(
     tradeCategoryId: classification?.tradeCategoryId ?? null,
     tradeCategoryCode: classification?.tradeCategoryCode ?? null,
     riskLevel: classification?.riskLevel ?? null,
+    classificationRequired: classification?.classificationRequired ?? false,
   };
+}
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2E — the competency gate may only run
+ * when there is something to gate against.
+ *
+ * For a Handyman-lifecycle Work Order, "unclassified" is not "unrestricted":
+ * it means Operations has not yet decided what the job is. Letting that pass
+ * would report a successful assignment as competency-checked when no check was
+ * possible, so it is refused with a dedicated domain error instead.
+ *
+ * Work Orders from other domains (engineering/breakdown, direct preventive
+ * work) keep their pre-03B2E behaviour: classification stays optional, because
+ * the trade registry is Handyman's and those flows never used it.
+ */
+function assertClassificationPresent(workOrder: AssignableWorkOrder): void {
+  if (workOrder.classificationRequired && workOrder.tradeCategoryId === null) {
+    throw workOrderClassificationRequiredError();
+  }
 }
 
 /**
@@ -350,9 +379,19 @@ type AssignmentSubjects = {
   rule: 'ALL' | 'ANY';
 };
 
+type AssignmentSubjectTarget = {
+  assigneeType: AssignWorkOrderInput['assigneeType'];
+  workforceProfileId?: string | undefined;
+  teamId?: string | undefined;
+  vendorId?: string | undefined;
+};
+
 async function resolveAssignmentSubjects(
-  workOrder: AssignableWorkOrder,
-  input: AssignWorkOrderInput,
+  workOrder: Pick<
+    AssignableWorkOrder,
+    'id' | 'clientId' | 'tradeCategoryId' | 'tradeCategoryCode' | 'riskLevel'
+  >,
+  input: AssignmentSubjectTarget,
 ): Promise<AssignmentSubjects> {
   switch (input.assigneeType) {
     case 'WORKFORCE':
@@ -419,12 +458,21 @@ async function resolveAssignmentSubjects(
  * Order is unclassified (or its trade has no ACTIVE requirement) the decision
  * is unrestricted and nothing is written.
  */
+type CompetencyGateWorkOrder = Pick<
+  AssignableWorkOrder,
+  | 'id'
+  | 'clientId'
+  | 'tradeCategoryId'
+  | 'tradeCategoryCode'
+  | 'riskLevel'
+>;
+
 async function applyCompetencyGate(
   executor: Pick<PoolClient, 'query'>,
-  workOrder: AssignableWorkOrder,
+  workOrder: CompetencyGateWorkOrder,
   input: AssignWorkOrderInput,
   assignmentId: string,
-  action: 'ASSIGNED' | 'REASSIGNED',
+  action: WorkOrderCompetencyDecisionAction,
 ): Promise<WorkOrderAssignmentCompetencyOutcome> {
   const { subjects, rule } = await resolveAssignmentSubjects(workOrder, input);
 
@@ -507,6 +555,8 @@ export async function assignWorkOrder(
   input: AssignWorkOrderInput,
 ): Promise<PublicWorkOrderAssignment> {
   const workOrder = await loadAssignableWorkOrder(input.workOrderId);
+  // PART 03B2E — no silent pass through the competency gate.
+  assertClassificationPresent(workOrder);
 
   const existing = await workOrderAssignmentRepository.findActiveByWorkOrderId(
     input.workOrderId,
@@ -629,6 +679,10 @@ export async function reassignWorkOrder(
   input: AssignWorkOrderInput,
 ): Promise<PublicWorkOrderAssignment> {
   const workOrder = await loadAssignableWorkOrder(workOrderId);
+  // PART 03B2E — a reassignment is a NEW assignment decision, so the
+  // classification must already exist (an unclassified Work Order is not an
+  // unrestricted one).
+  assertClassificationPresent(workOrder);
 
   const newAssignment = await resolveAssignee(workOrder, {
     ...input,
@@ -706,11 +760,143 @@ function isActiveAssignmentUniqueViolation(error: unknown): boolean {
   );
 }
 
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2E — revalidate the ACTIVE assignment
+ * against a NEW trade classification.
+ *
+ * Called by the classification authority (`classifyWorkOrder`) INSIDE its own
+ * transaction, after the new classification columns are written and before the
+ * commit. The SAME evaluator, the SAME subject rules (ALL for a person/team,
+ * ANY for a company) and the SAME ledger as assignment/reassignment are used —
+ * this is not a second workflow, it is the existing gate applied to a fact
+ * that changed after the gate ran.
+ *
+ * Outcomes:
+ *   no ACTIVE assignment  → nothing to revalidate (classification is only
+ *                           future-facing);
+ *   MANDATORY gap         → `WORK_ORDER_CLASSIFICATION_CONFLICT` (409), thrown
+ *                           so the classification itself rolls back. The
+ *                           running job is never silently invalidated;
+ *   any other outcome     → the classification stands and the evaluation is
+ *                           appended to the ledger as `RECLASSIFIED`
+ *                           (RECOMMENDED gaps included, as warnings).
+ */
+export async function revalidateActiveAssignmentForClassification(
+  executor: Pick<PoolClient, 'query'>,
+  input: {
+    workOrderId: string;
+    clientId: string;
+    tradeCategoryId: string;
+    tradeCategoryCode: string;
+    riskLevel: WorkOrderTradeRiskLevel | null;
+  },
+): Promise<{
+  assignmentId: string | null;
+  satisfied: boolean;
+  mandatoryRequirementCount: number;
+  advisory: WorkOrderAssignmentCompetencyWarning[];
+}> {
+  const active = await workOrderAssignmentRepository.findActiveByWorkOrderId(
+    input.workOrderId,
+    executor,
+  );
+  if (!active) {
+    return {
+      assignmentId: null,
+      satisfied: true,
+      mandatoryRequirementCount: 0,
+      advisory: [],
+    };
+  }
+
+  const gateWorkOrder: CompetencyGateWorkOrder = {
+    id: input.workOrderId,
+    clientId: input.clientId,
+    tradeCategoryId: input.tradeCategoryId,
+    tradeCategoryCode: input.tradeCategoryCode,
+    riskLevel: input.riskLevel,
+  };
+
+  const target: AssignmentSubjectTarget = {
+    assigneeType: active.assigneeType,
+    workforceProfileId: active.workforceProfileId ?? undefined,
+    teamId: active.teamId ?? undefined,
+    vendorId: active.vendorId ?? undefined,
+  };
+
+  const { subjects, rule } = await resolveAssignmentSubjects(gateWorkOrder, target);
+  const decision = await workOrderCompetencyService.evaluateWorkOrderCompetency(
+    executor,
+    {
+      clientId: input.clientId,
+      tradeCategoryId: input.tradeCategoryId,
+      tradeCategoryCode: input.tradeCategoryCode,
+      subjects,
+      rule,
+    },
+  );
+
+  if (!decision.satisfied) {
+    throw workOrderClassificationConflictError(
+      decision.blocking.map((gap) => ({
+        workforceProfileId: gap.workforceProfileId,
+        workforceProfileName: gap.workforceProfileName,
+        requirementId: gap.requirementId,
+        requirementType: gap.requirementType,
+        enforcementLevel: gap.enforcementLevel,
+        skillCode: gap.skillCode,
+        certificateName: gap.certificateName,
+        minimumProficiencyLevel: gap.minimumProficiencyLevel,
+        reason: gap.reason,
+        rule: decision.rule,
+      })),
+    );
+  }
+
+  await workOrderCompetencyService.recordWorkOrderCompetencyDecision(executor, {
+    clientId: input.clientId,
+    workOrderId: input.workOrderId,
+    assignmentId: active.id,
+    action: 'RECLASSIFIED',
+    assigneeType: active.assigneeType,
+    tradeCategoryId: decision.tradeCategoryId,
+    tradeCategoryCode: decision.tradeCategoryCode,
+    riskLevel: input.riskLevel,
+    rows: decision.rows,
+  });
+
+  const subjectNames = new Map(
+    subjects.map((subject) => [
+      subject.workforceProfileId,
+      subject.workforceProfileName,
+    ]),
+  );
+
+  return {
+    assignmentId: active.id,
+    satisfied: decision.satisfied,
+    mandatoryRequirementCount: decision.summary.mandatoryRequirementCount,
+    advisory: decision.rows
+      .filter((row) => !row.satisfied && row.enforcementLevel === 'RECOMMENDED')
+      .map((row) => ({
+        workforceProfileId: row.workforceProfileId,
+        workforceProfileName: subjectNames.get(row.workforceProfileId) ?? null,
+        requirementId: row.requirementId,
+        requirementType: row.requirementType,
+        skillCode: row.skillCode,
+        certificateName: row.certificateName,
+        minimumProficiencyLevel: row.minimumProficiencyLevel,
+        reason: row.reason ?? 'REQUIREMENT_NOT_MET',
+      })),
+  };
+}
+
 export const workOrderAssignmentService = {
   assignWorkOrder,
   deactivateWorkOrderAssignment,
   getCurrentWorkOrderAssignment,
   listWorkOrderAssignments,
   reassignWorkOrder,
+  revalidateActiveAssignmentForClassification,
   toPublicWorkOrderAssignment,
 };

@@ -34,6 +34,7 @@ import type {
   WorkerSkillRow,
   WorkOrderCompetencyBlockingGap,
   WorkOrderCompetencyDecision,
+  WorkOrderCompetencyDecisionAction,
   WorkOrderCompetencyDecisionRow,
   WorkOrderCompetencyHistoryItem,
   WorkOrderCompetencySubject,
@@ -905,7 +906,7 @@ export async function recordWorkOrderCompetencyDecision(
     clientId: string;
     workOrderId: string;
     assignmentId: string;
-    action: 'ASSIGNED' | 'REASSIGNED';
+    action: WorkOrderCompetencyDecisionAction;
     assigneeType: 'WORKFORCE' | 'TEAM' | 'VENDOR' | 'VENDOR_WORKFORCE';
     tradeCategoryId: string | null;
     tradeCategoryCode: string | null;
@@ -936,7 +937,7 @@ export async function recordWorkOrderCompetencyDecision(
 export async function listWorkOrderAssignmentCompetencyHistory(
   workOrderId: string,
   filter: {
-    action?: 'ASSIGNED' | 'REASSIGNED';
+    action?: WorkOrderCompetencyDecisionAction;
     assignmentId?: string;
     workforceProfileId?: string;
     satisfied?: boolean;

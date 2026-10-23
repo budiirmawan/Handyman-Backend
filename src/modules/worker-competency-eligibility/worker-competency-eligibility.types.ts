@@ -296,6 +296,26 @@ export type WorkOrderCompetencyBlockingGap = {
 };
 
 /** Ledger row for a Work Order assignment decision (one per subject × requirement). */
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 03B2E — the three moments at which a Work
+ * Order competency decision is recorded.
+ *
+ *   ASSIGNED      a new assignment was created;
+ *   REASSIGNED    the ACTIVE assignment was replaced by another one;
+ *   RECLASSIFIED  the Work Order's trade classification changed while an
+ *                 assignment stayed ACTIVE, so the SAME assignment was
+ *                 revalidated against the new requirement set.
+ *
+ * RECLASSIFIED exists because a revalidation is a real decision about real
+ * people: leaving it out of the ledger would make the ACTIVE assignment
+ * unexplainable (it would look like it was validated against the new trade at
+ * assignment time, which is false).
+ */
+export type WorkOrderCompetencyDecisionAction =
+  | 'ASSIGNED'
+  | 'REASSIGNED'
+  | 'RECLASSIFIED';
+
 export type WorkOrderCompetencyDecisionRow = {
   workforceProfileId: string;
   requirementId: string;
@@ -338,7 +358,7 @@ export type WorkOrderCompetencyHistoryItem = {
   clientId: string;
   workOrderId: string;
   assignmentId: string;
-  action: 'ASSIGNED' | 'REASSIGNED';
+  action: WorkOrderCompetencyDecisionAction;
   assigneeType: 'WORKFORCE' | 'TEAM' | 'VENDOR' | 'VENDOR_WORKFORCE';
   tradeCategoryId: string | null;
   tradeCategoryCode: string | null;

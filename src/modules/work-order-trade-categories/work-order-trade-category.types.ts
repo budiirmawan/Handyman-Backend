@@ -112,6 +112,17 @@ export type WorkOrderClassificationRecord = {
   riskLevel: WorkOrderTradeRiskLevel | null;
   classifiedAt: string | null;
   classifiedByUserId: string | null;
+  /**
+   * PART 03B2E — does this Work Order belong to the Handyman lifecycle
+   * (Tenant → Customer Care → Service Request → Work Order)?
+   *
+   * For those Work Orders classification is a REQUIRED Operations step before
+   * a new assignment, so the surface can tell the client whether it still
+   * owes that decision. Derived from the existing Customer Care binding
+   * (`tenant_service_requests.work_order_id` / `.work_request_id`), never from
+   * a new flag someone has to remember to set.
+   */
+  classificationRequired: boolean;
 };
 
 /** Permission vocabulary reused by the registry (no new permission codes). */

@@ -15,6 +15,7 @@ export {
   getCurrentWorkOrderAssignment,
   listWorkOrderAssignments,
   reassignWorkOrder,
+  revalidateActiveAssignmentForClassification,
   toPublicWorkOrderAssignment,
   workOrderAssignmentService,
 } from './work-order-assignment.service';
