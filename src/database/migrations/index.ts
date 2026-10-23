@@ -497,6 +497,8 @@ import { migration0441HandymanDispatchReleaseReassignmentSupersede }
   from './0441_handyman_dispatch_release_reassignment_supersede';
 import { migration0470HandymanFieldExpenseReimbursement }
   from './0470_handyman_field_expense_reimbursement';
+import { migration0471HandymanHelperAttendanceConfirmation }
+  from './0471_handyman_helper_attendance_confirmation';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -962,4 +964,5 @@ export const migrations: readonly Migration[] = [
   migration0459HandymanRequestCancellation,
   migration0460HandymanSettlementDisputeAdjudication,
   migration0470HandymanFieldExpenseReimbursement,
+  migration0471HandymanHelperAttendanceConfirmation,
 ];

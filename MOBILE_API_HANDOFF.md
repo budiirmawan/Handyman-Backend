@@ -713,3 +713,60 @@ Read-only projection of authoritative worker profile facts without fabricating u
 - Evidence-record compatibility with the generic `/evidence` module records (field-evidence uploads are a separate managed namespace, `hm-ev://`).
 - Material UOM catalog endpoint for mobile (commands accept an existing `uomId`/`uomCode`; no handyman-scoped UOM list is exposed here).
 - Cross-persona frontend handoffs beyond this document (Handyman-Mobile PR #9 consumption, operations web) remain with the respective frontend teams.
+
+---
+
+## 7. CR-HM-FIELD-EXPENSE-HELPER-01 PART 02 — Konfirmasi Kehadiran Helper (Mobile Lead & Operations)
+
+### 7.1 Domain Invariants for Mobile UI
+1. **Helpers without smartphones or Mobile accounts are first-class**: Helpers may have `helperUserId = null` and `hasMobileAccount = false`. Mobile UI must render Helper rows keyed by `helperWorkerId` (displaying `fullName`, `employeeCode`, `rosterSource`), never requiring a `userId`.
+2. **Roster & `helperPresence` snapshot are NOT verified attendance**: After Lead `POST .../work-sessions/check-in`, `handyman_work_session_helper_presence` records an unverified roster snapshot (`unverifiedPresenceSnapshotRecorded = true`), while every Helper starts in `attendanceStatus = "UNCONFIRMED"` and `attendanceVerified = false` (`summary.presenceSnapshotIsVerifiedProof = false`). Mobile UI MUST display a checklist prompting the Crew Lead (`PIC_PEKERJAAN`) to explicitly confirm `HADIR` or `TIDAK_HADIR` for each Helper on site.
+3. **Corrections require `correctionReason`**: Once a Helper has been confirmed (`attendanceVerified = true`), changing their status (e.g. `TIDAK_HADIR → HADIR` when arriving late, or `HADIR → TIDAK_HADIR` on error) requires a non-empty `correctionReason` (`422 HANDYMAN_HELPER_ATTENDANCE_CORRECTION_REASON_REQUIRED` if omitted). Every confirmation and correction is recorded in immutable `history[]`.
+4. **Personnel changes require Operations authorization**: Mobile Lead cannot confirm an unlisted Helper (`422 HANDYMAN_HELPER_ATTENDANCE_NOT_IN_ROSTER`). If a Helper is added, substituted, or removed on site, Operations must first call `POST /api/v1/handyman/execution-scopes/:executionScopeId/helper-attendance/personnel-changes` (`ADD_HELPER` / `SUBSTITUTE_HELPER` / `REMOVE_HELPER`). Added/substitute Helpers enter `roster[]` as `UNCONFIRMED` until the Crew Lead confirms their actual arrival on site.
+5. **No automatic fee approval**: Confirming Helper attendance never auto-approves fees or creates financial entitlements (`summary.feeApprovalAutomatic = false`).
+
+### 7.2 Mobile Crew Lead Reads Effective Helper Roster & Confirmation Status
+- **Endpoint**: `GET /api/v1/handyman/field/execution-scopes/:executionScopeId/helper-attendance` (optional `?workSessionId=<uuid>`)
+- **Authorized Persona**: Current authoritative assigned Crew Lead (`PIC_PEKERJAAN`) + exact-Building access.
+- **Operations Read Counterpart**: `GET /api/v1/handyman/execution-scopes/:executionScopeId/helper-attendance` (`tenant_company.read` + exact-Building access).
+
+### 7.3 Mobile Crew Lead Confirms or Corrects Actual Helper Attendance
+- **Endpoint**: `POST /api/v1/handyman/field/execution-scopes/:executionScopeId/helper-attendance/confirm`
+- **Authorized Persona**: Current authoritative assigned Crew Lead (`PIC_PEKERJAAN`) + active (non-`CHECKED_OUT`) Work Session (`409 HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED` if Lead has not checked in yet).
+- **Payload**:
+```json
+{
+  "workOrderId": "uuid (optional; verified against scope Building/Client & bound Work Order)",
+  "workSessionId": "uuid (optional; must match active session when supplied)",
+  "confirmations": [
+    {
+      "helperWorkerId": "uuid",
+      "attendanceStatus": "HADIR",
+      "notes": "Hadir tepat waktu membawa alat kerja"
+    },
+    {
+      "helperWorkerId": "uuid",
+      "attendanceStatus": "TIDAK_HADIR",
+      "notes": "Izin sakit",
+      "correctionReason": null
+    }
+  ],
+  "idempotencyKey": "hlp-att-001"
+}
+```
+
+### 7.4 Operations Authorizes Scope Helper Personnel Change
+- **Endpoint**: `POST /api/v1/handyman/execution-scopes/:executionScopeId/helper-attendance/personnel-changes`
+- **Authorized Persona**: Operations (`tenant_company.manage` + exact-Building access).
+- **Payload**:
+```json
+{
+  "workOrderId": "uuid (optional)",
+  "changeType": "SUBSTITUTE_HELPER",
+  "replacedHelperWorkerId": "uuid",
+  "targetHelperWorkerId": "uuid",
+  "reason": "Helper awal sakit mendadak, digantikan helper cadangan gedung",
+  "idempotencyKey": "ops-hlp-sub-001"
+}
+```
+

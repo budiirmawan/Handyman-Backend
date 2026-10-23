@@ -80441,6 +80441,168 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/field/execution-scopes/{executionScopeId}/helper-attendance:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Field Execution]
+      operationId: getFieldHandymanHelperAttendance
+      summary: Read effective Helper roster and verified attendance state (Crew Lead)
+      description: >-
+        Authentication only; requires exact-Building access and the current
+        authoritative assigned Crew Lead for the Execution Scope (403
+        HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN otherwise). Distinguishes
+        effective Helper roster and unverified check-in snapshot from
+        explicit verified attendance (HADIR / TIDAK_HADIR), supports
+        Helpers without Mobile accounts (helperUserId null), and never
+        grants automatic fee approval.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: workSessionId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED]
+      responses:
+        "200":
+          description: Effective Helper roster, verified attendance, personnel changes, and audit history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/field/execution-scopes/{executionScopeId}/helper-attendance/confirm:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    post:
+      tags: [Handyman Field Execution]
+      operationId: confirmFieldHandymanHelperAttendance
+      summary: Confirm or correct actual Helper attendance on site (Crew Lead)
+      description: >-
+        Authentication only; requires exact-Building access, the current
+        authoritative assigned Crew Lead, and an active field session on
+        the Execution Scope. Confirms HADIR or TIDAK_HADIR per Helper from
+        the effective authorized roster (including Helpers without Mobile
+        accounts), requires correctionReason when modifying an already
+        confirmed Helper, records append-only confirmation and correction
+        history, and never grants automatic fee approval.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, CONFLICT, WORK_ORDER_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED, HANDYMAN_HELPER_ATTENDANCE_NOT_IN_ROSTER, HANDYMAN_HELPER_ATTENDANCE_CORRECTION_REASON_REQUIRED, HANDYMAN_HELPER_CROSS_WORK_ORDER_MISMATCH]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmHandymanHelperAttendanceRequest" }
+      responses:
+        "200":
+          description: Helper attendance confirmed or replayed idempotently.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperAttendanceConfirmResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+  /handyman/execution-scopes/{executionScopeId}/helper-attendance:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    get:
+      tags: [Handyman Field Execution]
+      operationId: getOperationsHandymanHelperAttendance
+      x-required-permission: tenant_company.read
+      summary: Read effective Helper roster, verified attendance, and correction history (Operations)
+      description: >-
+        Requires tenant_company.read and exact-Building access. Returns the
+        effective Helper roster, Operations personnel change log, verified
+        Helper attendance confirmations, and append-only correction history
+        for the Execution Scope.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: workSessionId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ATTENDANCE_SESSION_REQUIRED]
+      responses:
+        "200":
+          description: Effective Helper roster, verified attendance, personnel changes, and audit history.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /handyman/execution-scopes/{executionScopeId}/helper-attendance/personnel-changes:
+    parameters:
+      - $ref: "#/components/parameters/ExecutionScopeIdPath"
+    post:
+      tags: [Handyman Field Execution]
+      operationId: authorizeHandymanScopeHelperPersonnelChange
+      x-required-permission: tenant_company.manage
+      summary: Authorize an Execution Scope Helper addition, substitution, or removal (Operations)
+      description: >-
+        Requires tenant_company.manage and exact-Building access. Authorizes
+        ADD_HELPER, SUBSTITUTE_HELPER, or REMOVE_HELPER for this Execution
+        Scope while preserving Helpers without Mobile accounts, validates
+        worker Building placement, supersedes any prior HADIR confirmation
+        for a removed/substituted Helper with an immutable audit event, and
+        requires on-site Crew Lead confirmation for newly added or
+        substitute Helpers.
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, CONFLICT, WORK_ORDER_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_HELPER_ATTENDANCE_FORBIDDEN, HANDYMAN_HELPER_ROSTER_CHANGE_CONFLICT, HANDYMAN_HELPER_CROSS_WORK_ORDER_MISMATCH]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuthorizeHandymanHelperPersonnelChangeRequest" }
+      responses:
+        "200":
+          description: Idempotent replay of an existing Helper personnel change.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperPersonnelChangeResult" }
+        "201":
+          description: Helper personnel change authorized.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HandymanHelperPersonnelChangeResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /handyman/field/execution-scopes/{executionScopeId}/material-purchases/requests:
     parameters:
       - $ref: "#/components/parameters/ExecutionScopeIdPath"
@@ -132141,3 +132303,298 @@ components:
             - SETTLED
         replayed:
           type: boolean
+    ConfirmHandymanHelperAttendanceItemInput:
+      type: object
+      additionalProperties: false
+      required:
+        - helperWorkerId
+        - attendanceStatus
+      properties:
+        helperWorkerId:
+          type: string
+          format: uuid
+        attendanceStatus:
+          type: string
+          enum: [HADIR, TIDAK_HADIR]
+        notes:
+          type: string
+          nullable: true
+          maxLength: 1000
+        correctionReason:
+          type: string
+          nullable: true
+          maxLength: 1000
+    ConfirmHandymanHelperAttendanceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - confirmations
+        - idempotencyKey
+      properties:
+        workOrderId:
+          type: string
+          format: uuid
+          nullable: true
+        workSessionId:
+          type: string
+          format: uuid
+          nullable: true
+        confirmations:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: "#/components/schemas/ConfirmHandymanHelperAttendanceItemInput" }
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+    AuthorizeHandymanHelperPersonnelChangeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - changeType
+        - reason
+        - idempotencyKey
+      properties:
+        workOrderId:
+          type: string
+          format: uuid
+          nullable: true
+        changeType:
+          type: string
+          enum: [ADD_HELPER, SUBSTITUTE_HELPER, REMOVE_HELPER]
+        targetHelperWorkerId:
+          type: string
+          format: uuid
+          nullable: true
+        replacedHelperWorkerId:
+          type: string
+          format: uuid
+          nullable: true
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+    HandymanScopeHelperPersonnelChangeRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - clientId
+        - buildingId
+        - handymanRequestId
+        - executionScopeId
+        - workOrderId
+        - assignmentId
+        - crewId
+        - workSessionId
+        - changeType
+        - targetHelperWorkerId
+        - targetHelperUserId
+        - replacedHelperWorkerId
+        - replacedHelperUserId
+        - reason
+        - authorizedByUserId
+        - authorizedAt
+        - idempotencyKey
+        - createdAt
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        assignmentId: { type: string, format: uuid }
+        crewId: { type: string, format: uuid }
+        workSessionId: { type: string, format: uuid, nullable: true }
+        changeType: { type: string, enum: [ADD_HELPER, SUBSTITUTE_HELPER, REMOVE_HELPER] }
+        targetHelperWorkerId: { type: string, format: uuid, nullable: true }
+        targetHelperUserId: { type: string, format: uuid, nullable: true }
+        replacedHelperWorkerId: { type: string, format: uuid, nullable: true }
+        replacedHelperUserId: { type: string, format: uuid, nullable: true }
+        reason: { type: string }
+        authorizedByUserId: { type: string, format: uuid }
+        authorizedAt: { type: string, format: date-time }
+        idempotencyKey: { type: string }
+        createdAt: { type: string, format: date-time }
+    HandymanHelperAttendanceEventRecord:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - confirmationId
+        - clientId
+        - buildingId
+        - handymanRequestId
+        - executionScopeId
+        - workOrderId
+        - workSessionId
+        - helperWorkerId
+        - helperUserId
+        - eventType
+        - previousStatus
+        - newStatus
+        - notes
+        - correctionReason
+        - actorUserId
+        - actorWorkerId
+        - actorRole
+        - idempotencyKey
+        - occurredAt
+      properties:
+        id: { type: string, format: uuid }
+        confirmationId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        workSessionId: { type: string, format: uuid }
+        helperWorkerId: { type: string, format: uuid }
+        helperUserId: { type: string, format: uuid, nullable: true }
+        eventType: { type: string, enum: [INITIAL_CONFIRMATION, STATUS_CORRECTION, ROSTER_REMOVED_SUPERSEDED] }
+        previousStatus: { type: string, enum: [HADIR, TIDAK_HADIR], nullable: true }
+        newStatus: { type: string, enum: [HADIR, TIDAK_HADIR] }
+        notes: { type: string, nullable: true }
+        correctionReason: { type: string, nullable: true }
+        actorUserId: { type: string, format: uuid }
+        actorWorkerId: { type: string, format: uuid, nullable: true }
+        actorRole: { type: string, enum: [CREW_LEAD, OPERATIONS] }
+        idempotencyKey: { type: string }
+        occurredAt: { type: string, format: date-time }
+    HandymanHelperRosterMemberProjection:
+      type: object
+      additionalProperties: false
+      required:
+        - helperWorkerId
+        - helperUserId
+        - hasMobileAccount
+        - fullName
+        - employeeCode
+        - workforceType
+        - rosterSource
+        - personnelChangeId
+        - replacesHelperWorkerId
+        - replacedByHelperWorkerId
+        - activeInRoster
+        - unverifiedPresenceSnapshotRecorded
+        - attendanceStatus
+        - attendanceVerified
+        - confirmedByUserId
+        - confirmedByWorkerId
+        - firstConfirmedAt
+        - lastConfirmedAt
+        - confirmationCount
+        - latestNotes
+        - latestCorrectionReason
+      properties:
+        helperWorkerId: { type: string, format: uuid }
+        helperUserId: { type: string, format: uuid, nullable: true }
+        hasMobileAccount: { type: boolean }
+        fullName: { type: string }
+        employeeCode: { type: string }
+        workforceType: { type: string }
+        rosterSource: { type: string, enum: [CREW_ROSTER, OPERATIONS_ADDITION, OPERATIONS_SUBSTITUTION] }
+        personnelChangeId: { type: string, format: uuid, nullable: true }
+        replacesHelperWorkerId: { type: string, format: uuid, nullable: true }
+        replacedByHelperWorkerId: { type: string, format: uuid, nullable: true }
+        activeInRoster: { type: boolean }
+        unverifiedPresenceSnapshotRecorded: { type: boolean }
+        attendanceStatus: { type: string, enum: [UNCONFIRMED, HADIR, TIDAK_HADIR] }
+        attendanceVerified: { type: boolean }
+        confirmedByUserId: { type: string, format: uuid, nullable: true }
+        confirmedByWorkerId: { type: string, format: uuid, nullable: true }
+        firstConfirmedAt: { type: string, format: date-time, nullable: true }
+        lastConfirmedAt: { type: string, format: date-time, nullable: true }
+        confirmationCount: { type: integer }
+        latestNotes: { type: string, nullable: true }
+        latestCorrectionReason: { type: string, nullable: true }
+    HandymanHelperAttendanceSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - totalEffectiveHelpers
+        - loginlessHelperCount
+        - unverifiedPresenceSnapshotCount
+        - confirmedPresentCount
+        - confirmedAbsentCount
+        - unconfirmedCount
+        - allHelpersConfirmed
+        - presenceSnapshotIsVerifiedProof
+        - feeApprovalAutomatic
+      properties:
+        totalEffectiveHelpers: { type: integer }
+        loginlessHelperCount: { type: integer }
+        unverifiedPresenceSnapshotCount: { type: integer }
+        confirmedPresentCount: { type: integer }
+        confirmedAbsentCount: { type: integer }
+        unconfirmedCount: { type: integer }
+        allHelpersConfirmed: { type: boolean }
+        presenceSnapshotIsVerifiedProof: { type: boolean, enum: [false] }
+        feeApprovalAutomatic: { type: boolean, enum: [false] }
+    HandymanHelperAttendanceProjection:
+      type: object
+      additionalProperties: false
+      required:
+        - executionScopeId
+        - handymanRequestId
+        - workOrderId
+        - buildingId
+        - assignmentId
+        - crewId
+        - leadWorkerId
+        - leadUserId
+        - workSessionId
+        - workSessionStatus
+        - roster
+        - removedHelpers
+        - personnelChanges
+        - history
+        - summary
+      properties:
+        executionScopeId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        workOrderId: { type: string, format: uuid, nullable: true }
+        buildingId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid, nullable: true }
+        crewId: { type: string, format: uuid, nullable: true }
+        leadWorkerId: { type: string, format: uuid, nullable: true }
+        leadUserId: { type: string, format: uuid, nullable: true }
+        workSessionId: { type: string, format: uuid, nullable: true }
+        workSessionStatus: { type: string, nullable: true }
+        roster:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanHelperRosterMemberProjection" }
+        removedHelpers:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanHelperRosterMemberProjection" }
+        personnelChanges:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanScopeHelperPersonnelChangeRecord" }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/HandymanHelperAttendanceEventRecord" }
+        summary: { $ref: "#/components/schemas/HandymanHelperAttendanceSummary" }
+    HandymanHelperAttendanceConfirmResult:
+      allOf:
+        - $ref: "#/components/schemas/HandymanHelperAttendanceProjection"
+        - type: object
+          required: [replayed]
+          properties:
+            replayed: { type: boolean }
+    HandymanHelperPersonnelChangeResult:
+      type: object
+      additionalProperties: false
+      required:
+        - personnelChange
+        - projection
+        - replayed
+      properties:
+        personnelChange: { $ref: "#/components/schemas/HandymanScopeHelperPersonnelChangeRecord" }
+        projection: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
+        replayed: { type: boolean }

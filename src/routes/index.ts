@@ -394,6 +394,7 @@ import { createHandymanCareStandaloneDiscoveryRouter } from '../modules/handyman
 import { createHandymanMaterialPurchasingRouter } from '../modules/handyman-material-purchasing/handyman-material-purchasing.routes';
 import { createHandymanFieldEvidenceRouter } from '../modules/handyman-field-evidence/handyman-field-evidence.routes';
 import { createHandymanWorkerProfileRouter } from '../modules/handyman-worker-profile/handyman-worker-profile.routes';
+import { createHandymanHelperAttendanceRouter } from '../modules/handyman-helper-attendance/handyman-helper-attendance.routes';
 import { createHealthRouter } from './health.routes';
 
 export function createApiRouter(): Router {
@@ -870,6 +871,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanMaterialPurchasingRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-C — Material & Purchasing Lifecycle
   router.use(createHandymanFieldEvidenceRouter()); // CR-HM-FIELD-AUTHORITY-01 P0-D — Genuine Binary Field Evidence Upload
   router.use(createHandymanWorkerProfileRouter()); // CR-HM-FIELD-AUTHORITY-01 P1 — Worker Profile Projection
+  router.use(createHandymanHelperAttendanceRouter()); // CR-HM-FIELD-EXPENSE-HELPER-01 PART 02 — Helper Attendance Confirmation & Operations Personnel Changes
   router.use(createHandymanCareAuthorityRouter()); // CR-HM-BM-CARE-AUTH-01 — Building Customer Care authority (Authority A: identity + exact Building reach only)
   router.use(createHandymanCareStandaloneDiscoveryRouter()); // CR-HM-BM-CARE-DISCOVERY-01 — Backend-session-only read discovery + safe progress
   router.use(createHandymanCareCommunicationsRouter()); // CR-HM-BM-CARE-EVIDENCE-01 — request-scoped non-executable communication intake
