@@ -12,6 +12,7 @@
  *
  * Usage: npx tsx tests/manual/release-integration-migration-check.ts
  */
+import { createHash } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -120,6 +121,88 @@ async function constraintExists(pool: Pool, name: string): Promise<boolean> {
     [name],
   );
   return res.rowCount === 1;
+}
+
+
+/**
+ * A deterministic fingerprint of the public schema.
+ *
+ * Two databases built by DIFFERENT routes must converge on exactly the same
+ * schema: a fresh install (A) and a production database upgraded in place (C).
+ * Anything that differs here is a real deployment hazard — a constraint that
+ * only exists on one path, an index that only the upgrade creates, a column
+ * whose default diverges.
+ */
+async function schemaFingerprint(pool: Pool): Promise<string[]> {
+  const out: string[] = [];
+
+  const columns = await pool.query<{
+    table_name: string;
+    column_name: string;
+    data_type: string;
+    udt_name: string;
+    is_nullable: string;
+    column_default: string | null;
+    character_maximum_length: number | null;
+    numeric_precision: number | null;
+    numeric_scale: number | null;
+  }>(
+    `SELECT table_name, column_name, data_type, udt_name, is_nullable,
+            column_default, character_maximum_length, numeric_precision,
+            numeric_scale
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+      ORDER BY table_name, column_name`,
+  );
+  for (const c of columns.rows) {
+    out.push(
+      `COLUMN ${c.table_name}.${c.column_name} ${c.data_type}/${c.udt_name} ` +
+        `nullable=${c.is_nullable} default=${c.column_default ?? '-'} ` +
+        `len=${c.character_maximum_length ?? '-'} ` +
+        `prec=${c.numeric_precision ?? '-'},${c.numeric_scale ?? '-'}`,
+    );
+  }
+
+  const indexes = await pool.query<{ indexname: string; indexdef: string }>(
+    `SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = 'public' ORDER BY indexname`,
+  );
+  for (const i of indexes.rows) out.push(`INDEX ${i.indexname} ${i.indexdef}`);
+
+  const constraints = await pool.query<{
+    conname: string;
+    contype: string;
+    def: string;
+  }>(
+    `SELECT c.conname, c.contype, pg_get_constraintdef(c.oid) AS def
+       FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = 'public'
+      ORDER BY c.conname`,
+  );
+  for (const c of constraints.rows) {
+    out.push(`CONSTRAINT ${c.conname} ${c.contype} ${c.def}`);
+  }
+
+  const triggers = await pool.query<{ tgname: string; def: string }>(
+    `SELECT t.tgname, pg_get_triggerdef(t.oid) AS def
+       FROM pg_trigger t
+       JOIN pg_class c ON c.oid = t.tgrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE NOT t.tgisinternal AND n.nspname = 'public'
+      ORDER BY t.tgname`,
+  );
+  for (const t of triggers.rows) out.push(`TRIGGER ${t.tgname} ${t.def}`);
+
+  return out;
+}
+
+async function ledgerFingerprint(pool: Pool): Promise<string> {
+  const res = await pool.query<{ id: string }>(
+    'SELECT id FROM schema_migrations ORDER BY id',
+  );
+  return createHash('sha256').update(res.rows.map((r) => r.id).join('\n')).digest('hex');
 }
 
 async function main(): Promise<void> {
@@ -269,6 +352,14 @@ async function main(): Promise<void> {
         `${(navAfter.rows[0]?.def ?? '').includes('EXECUTION_SCOPE_FIELD_WORK')}`,
     );
 
+    const freshSchema = await schemaFingerprint(pool);
+    const freshLedger = await ledgerFingerprint(pool);
+    record(
+      'K. Fresh schema + ledger fingerprint captured',
+      freshSchema.length > 0,
+      `${freshSchema.length} schema objects; ledger sha256=${freshLedger.slice(0, 16)}…`,
+    );
+
     await pool.end();
     await db.stop();
     dbStopped = true;
@@ -355,6 +446,26 @@ async function main(): Promise<void> {
         orgCount === beforeUsers,
         `users still ${orgCount}`,
       );
+
+      const upgradedSchema = await schemaFingerprint(upPool);
+      const upgradedLedger = await ledgerFingerprint(upPool);
+      const onlyFresh = freshSchema.filter((x) => !upgradedSchema.includes(x));
+      const onlyUpgraded = upgradedSchema.filter((x) => !freshSchema.includes(x));
+      record(
+        'L. SCHEMA COMPARISON: fresh install and upgraded Biznet converge exactly',
+        onlyFresh.length === 0 && onlyUpgraded.length === 0,
+        `${freshSchema.length} vs ${upgradedSchema.length} objects; ` +
+          `only-fresh=${onlyFresh.length} only-upgraded=${onlyUpgraded.length}` +
+          (onlyFresh.length || onlyUpgraded.length
+            ? `\n        only-fresh: ${onlyFresh.slice(0, 5).join(' | ')}` +
+              `\n        only-upgraded: ${onlyUpgraded.slice(0, 5).join(' | ')}`
+            : ''),
+      );
+      record(
+        'M. Ledger fingerprint identical on both build paths',
+        freshLedger === upgradedLedger,
+        `fresh=${freshLedger.slice(0, 16)}… upgraded=${upgradedLedger.slice(0, 16)}…`,
+      );
     } finally {
       await upDb.stop();
       await upPool.end();
@@ -374,6 +485,93 @@ async function main(): Promise<void> {
         /* best effort */
       }
     }
+  }
+
+  // ------------------------------------------------- N. FAILURE AND RECOVERY
+  // A migration failure must be CONTAINED: the failing migration leaves no
+  // history row and no partial DDL, later migrations never run, and recovery
+  // is a forward re-run (never a destructive rollback).
+  const failDir = await mkdtemp(join(tmpdir(), 'hm-release-failure-'));
+  const failDb = await startEmbeddedTestDatabase({
+    dir: failDir,
+    port: PORT + 2,
+    database: 'release_failure_check',
+  });
+  const failPool = new Pool({
+    host: '127.0.0.1',
+    port: PORT + 2,
+    user: 'postgres',
+    password: '',
+    database: 'release_failure_check',
+  });
+  failPool.on('error', () => undefined);
+  try {
+    const upTo0464 = migrations.filter(
+      (m) => m.id <= '0464_workforce_competency_decision_history',
+    );
+    await migrateUpWith(failPool, upTo0464);
+
+    // Inject a realistic deployment conflict: an object with the name 0465
+    // needs already exists (a hand-created table in production).
+    await failPool.query(
+      'CREATE TABLE work_order_trade_categories (id UUID PRIMARY KEY)',
+    );
+
+    let failureMessage = '';
+    try {
+      await migrateUp(failPool);
+    } catch (error) {
+      failureMessage = String(error);
+    }
+    record(
+      'N1. A conflicting object makes the migration run FAIL (it does not silently skip)',
+      failureMessage.length > 0,
+      failureMessage ? failureMessage.slice(0, 120) : 'migrateUp did NOT throw',
+    );
+
+    const hist = await failPool.query<{ id: string }>(
+      'SELECT id FROM schema_migrations ORDER BY id',
+    );
+    const histIds = hist.rows.map((r) => r.id);
+    record(
+      'N2. The failing migration is NOT recorded and later ones never ran',
+      !histIds.some((id) => id.startsWith('0465')) &&
+        !histIds.some((id) => id.startsWith('0472')) &&
+        histIds.length === upTo0464.length,
+      `history=${histIds.length} (expected ${upTo0464.length}); ` +
+        `0465 recorded=${histIds.some((id) => id.startsWith('0465'))}; ` +
+        `0472 recorded=${histIds.some((id) => id.startsWith('0472'))}`,
+    );
+
+    const partial = await failPool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM information_schema.tables
+        WHERE table_schema='public' AND table_name='work_order_assignment_competency_decisions'`,
+    );
+    record(
+      'N3. No partial DDL survives the aborted migration',
+      partial.rows[0]?.n === '0',
+      `work_order_assignment_competency_decisions tables=${partial.rows[0]?.n}`,
+    );
+
+    // RECOVERY: resolve the conflict forward, then re-run the SAME artifact.
+    await failPool.query('DROP TABLE work_order_trade_categories');
+    const recovered = await migrateUp(failPool);
+    const histAfter = await failPool.query<{ id: string }>(
+      'SELECT id FROM schema_migrations ORDER BY id',
+    );
+    record(
+      'N4. Forward recovery completes the release (no destructive rollback)',
+      histAfter.rows.length === migrations.length &&
+        histAfter.rows[histAfter.rows.length - 1]?.id ===
+          '0472_handyman_assignment_responses' &&
+        recovered.length === migrations.length - upTo0464.length,
+      `${recovered.length} migrations applied on recovery; ` +
+        `history=${histAfter.rows.length}/${migrations.length}; ` +
+        `tip=${histAfter.rows[histAfter.rows.length - 1]?.id}`,
+    );
+  } finally {
+    await failPool.end();
+    await failDb.stop();
   }
 
   const failed = reports.filter((r) => !r.ok);

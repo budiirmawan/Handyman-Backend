@@ -756,6 +756,113 @@ describe('release integration — competency gate × assignment response', () =>
     assert.equal(anonymous.status, 401);
   });
 
+  it('S10. CONCURRENCY: two simultaneous assignments produce exactly one ACTIVE row', async () => {
+    if (!pool) return;
+    const r = await realm();
+    const workerA = await worker(r);
+    const workerB = await worker(r);
+    const woId = await customerCareWorkOrder(r);
+    const general = await tradeCategoryId('GENERAL_REPAIR');
+    // A RECOMMENDED requirement makes the winner write a decision row, so the
+    // "the loser writes nothing" assertion is meaningful rather than vacuous.
+    const requirement = await api()
+      .post(
+        `${V1}/work-order-trade-categories/${general}/competency-requirements?clientId=${r.client.id}`,
+      )
+      .set(auth())
+      .send({
+        requirementType: 'CERTIFICATION',
+        certificateName: 'Sertifikat Umum',
+        enforcementLevel: 'RECOMMENDED',
+      });
+    assert.equal(requirement.status, 201, JSON.stringify(requirement.body));
+    await classify(woId, { tradeCategoryId: general });
+
+    const [first, second] = await Promise.all([
+      assign(woId, { assigneeType: 'WORKFORCE', workforceProfileId: workerA.id }),
+      assign(woId, { assigneeType: 'WORKFORCE', workforceProfileId: workerB.id }),
+    ]);
+
+    const statuses = [first.status, second.status].sort();
+    assert.deepEqual(statuses, [201, 409], JSON.stringify([first.body, second.body]));
+
+    // The partial unique index is the final authority: exactly ONE ACTIVE row,
+    // exactly ONE PENDING response, and exactly ONE competency decision.
+    const rows = await q(
+      'SELECT id, status FROM work_order_assignments WHERE work_order_id = $1',
+      [woId],
+    );
+    assert.equal(rows.rowCount, 1, 'only one assignment row may exist');
+    assert.equal(rows.rows[0].status, 'ACTIVE');
+    assert.equal((await responseRowsOf([rows.rows[0].id])).length, 1);
+
+    const ledger = await q<{ assignment_id: string }>(
+      'SELECT DISTINCT assignment_id FROM work_order_assignment_competency_decisions WHERE work_order_id = $1',
+      [woId],
+    );
+    assert.equal(ledger.rowCount, 1, 'only the winning attempt writes a decision');
+    assert.equal(ledger.rows[0].assignment_id, rows.rows[0].id);
+  });
+
+  it('S11. SUPERSEDED: responding to a superseded assignment is 409, never a silent write', async () => {
+    if (!pool) return;
+    const r = await realm();
+    const workerA = await workerWithSession(r);
+    const workerB = await worker(r);
+    const woId = await customerCareWorkOrder(r);
+    const general = await tradeCategoryId('GENERAL_REPAIR');
+    await classify(woId, { tradeCategoryId: general });
+
+    const firstAssign = await assign(woId, {
+      assigneeType: 'WORKFORCE',
+      workforceProfileId: workerA.profile.id,
+    });
+    assert.equal(firstAssign.status, 201, JSON.stringify(firstAssign.body));
+    const firstId = firstAssign.body.data.id as string;
+
+    // Supersede it.
+    const superseded = await api()
+      .patch(`${V1}/work-orders/${woId}/assignments/${firstId}`)
+      .set(auth())
+      .send({ assigneeType: 'WORKFORCE', workforceProfileId: workerB.id });
+    assert.equal(superseded.status, 200, JSON.stringify(superseded.body));
+
+    const stale = await respond(
+      woId,
+      firstId,
+      { decision: 'TERIMA' },
+      workerA.token,
+    );
+    assert.equal(stale.status, 409, JSON.stringify(stale.body));
+    assert.equal(stale.body.error.code, 'WORK_ORDER_ASSIGNMENT_SUPERSEDED');
+
+    // Supersession is recorded in the APPEND-ONLY event ledger (0472 keeps
+    // `response_status` limited to PENDING/TERIMA/TIDAK_BISA), and the old
+    // response is never deleted.
+    const oldResponse = await q(
+      'SELECT response_status FROM handyman_assignment_responses WHERE assignment_id = $1',
+      [firstId],
+    );
+    assert.equal(oldResponse.rowCount, 1, 'the superseded response row is kept');
+    assert.equal(oldResponse.rows[0]?.response_status, 'PENDING');
+
+    // The SEMANTIC of supersession is carried by `event_type`; `new_status`
+    // stays inside the PENDING/TERIMA/TIDAK_BISA vocabulary that 0472 enforces
+    // through `hm_assign_resp_evt_new_status_check`.
+    const events = await q<{ event_type: string; previous_status: string; new_status: string }>(
+      `SELECT event_type, previous_status, new_status
+         FROM handyman_assignment_response_events
+        WHERE assignment_id = $1 ORDER BY occurred_at ASC`,
+      [firstId],
+    );
+    assert.deepEqual(
+      events.rows.map((row) => row.event_type),
+      ['ASSIGNMENT_PENDING_CREATED', 'ASSIGNMENT_SUPERSEDED'],
+    );
+    assert.equal(events.rows[1].previous_status, 'PENDING');
+    assert.equal(events.rows[1].new_status, 'PENDING');
+  });
+
   it('S9. Building and Client isolation hold for the merged assignment routes', async () => {
     if (!pool) return;
     const r = await realm();
