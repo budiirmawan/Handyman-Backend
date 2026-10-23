@@ -32,6 +32,12 @@ export const ERROR_CODES = {
   PERMISSION_INACTIVE: 'PERMISSION_INACTIVE',
   PERMISSION_ALREADY_ASSIGNED: 'PERMISSION_ALREADY_ASSIGNED',
   ROLE_PERMISSION_ASSIGNMENT_NOT_FOUND: 'ROLE_PERMISSION_ASSIGNMENT_NOT_FOUND',
+  // CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — a system invariant, not a
+  // privilege: the last ACTIVE grant of an authority-defining permission
+  // (role.manage / permission.manage / user.manage / building.manage) must
+  // remain, or the installation would permanently lose that administrative
+  // capability. Grant it to another role first.
+  LAST_ADMIN_PERMISSION_REQUIRED: 'LAST_ADMIN_PERMISSION_REQUIRED',
   CLIENT_NOT_FOUND: 'CLIENT_NOT_FOUND',
   CLIENT_CODE_ALREADY_EXISTS: 'CLIENT_CODE_ALREADY_EXISTS',
   CLIENT_INACTIVE: 'CLIENT_INACTIVE',

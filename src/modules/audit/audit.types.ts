@@ -41,6 +41,11 @@ export const AUDIT_EVENT_TYPES = [
   'TENANT_IMPORT_COMMITTED',
   'TENANT_IMPORT_ABORTED',
   'TENANT_VERIFICATION_UPDATED',
+  // CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — role-permission grant lifecycle
+  // events (migration 0468). Mirrors ROLE_ASSIGNED/ROLE_REVOKED at the
+  // role-permission grant layer.
+  'PERMISSION_GRANTED',
+  'PERMISSION_REVOKED',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
