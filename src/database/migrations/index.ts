@@ -12,6 +12,7 @@ import { migration0458HandymanE2eFinancialReconciliationClose } from './0458_han
 import { migration0459HandymanRequestCancellation } from './0459_handyman_request_cancellation';
 import { migration0460HandymanSettlementDisputeAdjudication } from './0460_handyman_settlement_dispute_adjudication';
 import { migration0461CreateWorkforceCertifications } from './0461_create_workforce_certifications';
+import { migration0462WorkforceCertificationPermissions } from './0462_workforce_certification_permissions';
 import { migration0456ApartmentMasterData } from './0456_apartment_master_data';
 import { migration0445BindHandymanBastToQcPass } from './0445_bind_handyman_bast_to_qc_pass';
 import { migration0444VersionHandymanQcChecklists } from './0444_version_handyman_qc_checklists';
@@ -961,4 +962,5 @@ export const migrations: readonly Migration[] = [
   migration0459HandymanRequestCancellation,
   migration0460HandymanSettlementDisputeAdjudication,
   migration0461CreateWorkforceCertifications,
+  migration0462WorkforceCertificationPermissions,
 ];

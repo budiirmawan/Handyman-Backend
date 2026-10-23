@@ -25,6 +25,25 @@ export const WORKFORCE_CERTIFICATION_EXPIRY_STATUSES = [
 export type WorkforceCertificationExpiryStatus =
   (typeof WORKFORCE_CERTIFICATION_EXPIRY_STATUSES)[number];
 
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 02 — the certification authority codes.
+ *
+ * Individual worker certifications are their own authority domain: they are
+ * NOT skill assignments (BE-03D1/D2 `skill.*`), NOT workforce master data
+ * (`workforce.*`) and NOT vendor licences (`vendor_licenses_certifications`).
+ * A broad catalogue or tenant permission must therefore never be accepted as a
+ * substitute — see `workforce-certification.service.ts`.
+ *
+ * `verify` is withheld from every role by default (foundation seed +
+ * `UNASSIGNED_BY_DEFAULT_PERMISSION_CODES`): attesting a worker's competence is
+ * a deliberate, audited administrative grant.
+ */
+export const WORKFORCE_CERTIFICATION_PERMISSIONS = {
+  read: 'workforce_certification.read',
+  manage: 'workforce_certification.manage',
+  verify: 'workforce_certification.verify',
+} as const;
+
 export type WorkforceCertificationActor = {
   id: string;
   email?: string;
@@ -64,6 +83,18 @@ export type WorkforceCertificationRecord = {
   expiryDate: string | null;
   status: WorkforceCertificationStatus;
   expiryStatus: WorkforceCertificationExpiryStatus;
+  /**
+   * True when the expiry instant has passed. Never true for a certificate with
+   * no expiry date (a lifelong certificate simply never expires).
+   */
+  isExpired: boolean;
+  /**
+   * True only when the certificate can actually satisfy a certification
+   * requirement right now: ACTIVE, not past its expiry date, and VERIFIED.
+   * An unverified, rejected, inactive or expired certificate is never "valid",
+   * regardless of how recently it was issued.
+   */
+  isValid: boolean;
   verificationStatus: WorkforceCertificationVerificationStatus;
   verifiedByUserId: string | null;
   verifiedAt: string | null;
@@ -76,6 +107,51 @@ export type WorkforceCertificationRecord = {
   updatedAt: string;
 };
 
+/**
+ * PART 02 — one row of the expiry-watch read model. Unlike the per-profile
+ * list, the worker identity has to travel with the row because the caller is
+ * looking across every workforce profile inside their own Client scope.
+ */
+export type WorkforceCertificationExpiringItem = {
+  certification: WorkforceCertificationRecord;
+  workforceProfile: {
+    id: string;
+    fullName: string;
+    employeeCode: string;
+    organizationId: string;
+  };
+  /** Whole days between "now" and `expiryDate` (never negative). */
+  daysUntilExpiry: number;
+};
+
+/**
+ * PART 02 — the projection wired into the Mobile worker profile
+ * (`certificationsAndExpiry.individualCertifications`).
+ *
+ * Deliberately narrower than the operations DTO: it never carries a raw
+ * storage key. "Document availability" is expressed as a boolean plus the
+ * document id, so the storage path stays server-side and a future download
+ * endpoint can enforce its own scope.
+ */
+export type WorkforceCertificationMobileSummary = {
+  id: string;
+  certificateNumber: string;
+  certificateName: string;
+  issuingAuthority: string;
+  skillId: string | null;
+  skillCode: string | null;
+  skillName: string | null;
+  status: WorkforceCertificationStatus;
+  verificationStatus: WorkforceCertificationVerificationStatus;
+  issueDate: string;
+  expiryDate: string | null;
+  expiryStatus: WorkforceCertificationExpiryStatus;
+  isExpired: boolean;
+  isValid: boolean;
+  documentAvailable: boolean;
+  documentId: string | null;
+};
+
 export type CreateWorkforceCertificationInput = {
   skillId?: string | null;
   certificateNumber: string;
@@ -84,7 +160,6 @@ export type CreateWorkforceCertificationInput = {
   issueDate: string;
   expiryDate?: string | null;
   status?: WorkforceCertificationStatus;
-  verificationStatus?: WorkforceCertificationVerificationStatus;
   documentId?: string | null;
   fileReference?: string | null;
   notes?: string | null;
@@ -98,7 +173,6 @@ export type UpdateWorkforceCertificationInput = {
   issueDate?: string;
   expiryDate?: string | null;
   status?: WorkforceCertificationStatus;
-  verificationStatus?: WorkforceCertificationVerificationStatus;
   documentId?: string | null;
   fileReference?: string | null;
   notes?: string | null;
@@ -109,9 +183,20 @@ export type VerifyWorkforceCertificationInput = {
   notes?: string | null;
 };
 
+export type DeactivateWorkforceCertificationInput = {
+  reason?: string | null;
+};
+
 export type ListWorkforceCertificationsFilter = {
   status?: WorkforceCertificationStatus;
   verificationStatus?: WorkforceCertificationVerificationStatus;
   skillId?: string;
   currentOnly?: boolean;
+};
+
+export type ListExpiringWorkforceCertificationsFilter = {
+  /** Look-ahead window in days. Defaults to 30, bounded to 1..365. */
+  days: number;
+  workforceProfileId?: string;
+  verificationStatus?: WorkforceCertificationVerificationStatus;
 };

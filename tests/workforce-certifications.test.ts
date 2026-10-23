@@ -292,9 +292,15 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
     const mobileProfile = await readMyHandymanWorkerProfileProjection(
       crewA.leadUser.id,
     );
+    // PART 02 — the individual certificate number IS now modeled, and the list
+    // is present-but-empty for a worker without certificates.
     assert.equal(
       mobileProfile.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
+    );
+    assert.deepEqual(
+      mobileProfile.certificationsAndExpiry.individualCertifications,
+      [],
     );
     assert.ok(
       Array.isArray(mobileProfile.certificationsAndExpiry.skillValidityWindows),
@@ -309,7 +315,10 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
   it('creates, reads, updates, verifies, and deactivates an individual worker certification', async (t) => {
     if (!ready(t)) return;
 
-    const managerActor = actorFor(managerUserIdA, ['skill.manage']);
+    const managerActor = actorFor(managerUserIdA, [
+    'workforce_certification.manage',
+    'workforce_certification.verify',
+  ]);
     const certNumber = `CERT-K3-${suffix()}`;
 
     const created =
@@ -456,14 +465,24 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
           issuingAuthority: 'Kementerian Ketenagakerjaan RI',
           issueDate: ISSUE_DATE,
           expiryDate: FUTURE_DATE,
-          verificationStatus: 'VERIFIED',
           documentId: documentIdA,
         },
         managerActor,
       );
     assert.equal(reissued.status, 'ACTIVE');
-    assert.equal(reissued.verificationStatus, 'VERIFIED');
-    assert.equal(reissued.verifiedByUserId, managerUserIdA);
+    // PART 02 — a create can never mint a VERIFIED attestation; the decision is
+    // its own authority/endpoint.
+    assert.equal(reissued.verificationStatus, 'PENDING_VERIFICATION');
+    assert.equal(reissued.verifiedByUserId, null);
+    const reissuedVerified =
+      await workforceCertificationService.verifyWorkforceCertification(
+        crewA.profile.id,
+        reissued.id,
+        { verificationStatus: 'VERIFIED' },
+        managerActor,
+      );
+    assert.equal(reissuedVerified.verificationStatus, 'VERIFIED');
+    assert.equal(reissuedVerified.verifiedByUserId, managerUserIdA);
     // Falls back fileReference to linked document's fileReference when not explicitly provided
     assert.equal(
       reissued.fileReference,
@@ -474,7 +493,12 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
   it('enforces expiry status resolution and date consistency rules', async (t) => {
     if (!ready(t)) return;
 
-    const managerActor = actorFor(managerUserIdA, ['workforce.manage']);
+    // Read and manage are separate codes (manage is not a package that implies
+    // read), exactly as the mounted routes require.
+    const managerActor = actorFor(managerUserIdA, [
+      'workforce_certification.read',
+      'workforce_certification.manage',
+    ]);
 
     assert.equal(
       resolveWorkforceCertificationExpiryStatus('ACTIVE', FUTURE_DATE),
@@ -631,8 +655,12 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
   it('enforces multi-client isolation at both service and PostgreSQL trigger layers', async (t) => {
     if (!ready(t)) return;
 
-    const managerActorA = actorFor(managerUserIdA, ['skill.manage']);
-    const leadActorB = actorFor(crewB.leadUser.id, ['skill.manage']);
+    const managerActorA = actorFor(managerUserIdA, [
+    'workforce_certification.manage',
+  ]);
+    const leadActorB = actorFor(crewB.leadUser.id, [
+    'workforce_certification.manage',
+  ]);
 
     // Cross-client skillId is rejected by service
     await assert.rejects(
@@ -783,7 +811,9 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
 
     const leadActor = actorFor(crewA.leadUser.id, []);
     const helperActor = actorFor(helperUserIdA, []);
-    const readOnlyOpsActor = actorFor(managerUserIdA, ['skill.read']);
+    const readOnlyOpsActor = actorFor(managerUserIdA, [
+    'workforce_certification.read',
+  ]);
 
     // Worker can read their own certifications
     const ownCerts =
@@ -872,7 +902,7 @@ describe('CR-HM-WORKER-COMPETENCY-01 PART 01: Individual Worker Certification Fo
     );
     assert.equal(
       leadProfile.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
     );
 
     const helperProfileByLead = await readHandymanWorkerProfileByContextId(

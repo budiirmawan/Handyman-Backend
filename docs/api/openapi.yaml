@@ -62888,6 +62888,372 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
   # ---------------------------------------------------------------------------
+  # CR-HM-WORKER-COMPETENCY-01 PART 02 — SECTION 08B — INDIVIDUAL WORKER
+  # CERTIFICATION (`src/modules/workforce-certifications`, migration 0461).
+  #
+  # An individual worker certificate is its OWN authority domain. It is NOT a
+  # Skill assignment (`skill.*` administers the Client's Skill catalogue, and
+  # `workforce_skill_assignments` only carries proficiency + a validity window),
+  # NOT workforce master data (`workforce.*`), and NOT a vendor licence
+  # (`vendor_licenses_certifications` is company-level).
+  #
+  # Authority is the dedicated `workforce_certification.*` namespace
+  # (migration 0462), never `skill.*`, `workforce.*` or `tenant_company.*`:
+  #   read    → workforce_certification.read
+  #   manage  → workforce_certification.manage
+  #   verify  → workforce_certification.verify (withheld from every role by
+  #             default; an explicit administrative grant is required)
+  #
+  # Every operation additionally requires access to the Workforce Profile's
+  # OWN Client (proven from the caller's Building assignments), so no permission
+  # widens a read across Clients. Verification is separation of duties: the
+  # certificate owner can never decide on their own record.
+  # ---------------------------------------------------------------------------
+
+  /workforce/certifications/expiring:
+    get:
+      operationId: listExpiringWorkforceCertifications
+      summary: List certificates approaching expiry
+      description: >-
+        PART 02 expiry watch. Returns ACTIVE certificates whose `expiryDate` falls
+        inside `[now, now + days]` for every Workforce Profile in the caller's own
+        Client scope, ordered by `expiryDate` ascending. Requires
+        `workforce_certification.read`. The Client scope is derived server-side
+        from the caller's ACTIVE Building assignments and is NOT a query
+        parameter: a caller with no reachable Client receives `200` with an empty
+        array, never a global read. Already-expired and INACTIVE certificates are
+        excluded — they are not "approaching" expiry, and an INACTIVE certificate
+        is withdrawn. `days` defaults to 30 and is bounded to 1..365; anything
+        else is `400 VALIDATION_ERROR`. Each row carries the certificate plus the
+        worker identity (`fullName`, `employeeCode`) and `daysUntilExpiry`, because
+        the caller is reading across workers.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.read
+      x-error-codes: [VALIDATION_ERROR, WORKFORCE_CERTIFICATION_FORBIDDEN]
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: Look-ahead window in days (1..365). Defaults to 30.
+          schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+        - name: workforceProfileId
+          in: query
+          required: false
+          description: Restrict the watch to one Workforce Profile (still Client-scoped).
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: verificationStatus
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/WorkforceCertificationVerificationStatus"
+      responses:
+        "200":
+          description: Certificates approaching expiry inside the caller's Client scope.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceCertificationExpiringItem"
+                      meta:
+                        type: object
+                        properties:
+                          days:
+                            type: integer
+                            description: The effective look-ahead window.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /workforce/{workforceId}/certifications:
+    get:
+      operationId: listWorkforceCertifications
+      summary: List a Workforce Profile's individual certificates
+      description: >-
+        PART 02. Returns the individual certificates held by the Workforce Profile
+        taken from the route (ACTIVE, EXPIRED and INACTIVE rows — the full history),
+        ordered by issue date descending. This transport requires
+        `workforce_certification.read`. The domain service additionally defines the
+        field-authority reads used by other transports: the worker whose profile
+        this is may read their own records, and so may an ACTIVE Crew Lead of an
+        ACTIVE crew the worker belongs to; a plain peer crew member is `403
+        WORKFORCE_CERTIFICATION_FORBIDDEN`. The Mobile self view is served by
+        GET /handyman/field/me/profile and needs no certification permission. The Workforce Profile always comes from
+        the route — never from the body or the query — and the caller must reach
+        the profile's Client (`403 BUILDING_ACCESS_DENIED` otherwise, which is also
+        what an unknown-id probe from another Client would need). Filters:
+        `status`, `verificationStatus`, `skillId`, `currentOnly` (ACTIVE and not
+        past its expiry date). An unknown profile id is `404
+        WORKFORCE_PROFILE_NOT_FOUND`; a worker with no certificates is `200` with an
+        empty array — certificates are optional.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.read
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORKFORCE_CERTIFICATION_FORBIDDEN, WORKFORCE_PROFILE_NOT_FOUND]
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/WorkforceCertificationStatus" }
+        - name: verificationStatus
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/WorkforceCertificationVerificationStatus"
+        - name: skillId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: currentOnly
+          in: query
+          required: false
+          description: When true, only ACTIVE certificates inside their validity window.
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: The certificates held by the requested profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/WorkforceCertification"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createWorkforceCertification
+      summary: Register an individual certificate for a worker
+      description: >-
+        PART 02. Requires `workforce_certification.manage`. `certificateNumber`,
+        `certificateName`, `issuingAuthority` and `issueDate` are mandatory; the
+        number is 1..128 characters and unique per profile among ACTIVE rows
+        (`409 WORKFORCE_CERTIFICATION_ALREADY_ACTIVE`, case-insensitively). An
+        optional `skillId` must be an ACTIVE Skill of the SAME Client (`404
+        SKILL_NOT_FOUND`, `409 WORKFORCE_CERTIFICATION_CLIENT_MISMATCH`, `400
+        SKILL_INACTIVE`); an optional `documentId` must be an active document of
+        the SAME Client (`409 WORKFORCE_CERTIFICATION_DOCUMENT_MISMATCH` /
+        `WORKFORCE_CERTIFICATION_DOCUMENT_INVALID`); an optional `fileReference`
+        must be a safe relative storage key or canonical `hm-ev://<uuid>`
+        reference (`400 WORKFORCE_CERTIFICATION_INVALID_FILE_REFERENCE`).
+        `expiryDate` is optional (`null` = lifelong) and, when present, must not
+        precede `issueDate`. The effective `status` is derived: a past expiry date
+        yields `EXPIRED`, otherwise `ACTIVE` (`400
+        WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH` if an explicit status
+        contradicts the dates). A new certificate is ALWAYS created
+        `PENDING_VERIFICATION`; `verificationStatus` is rejected on this endpoint,
+        because verification is a separate authority. Responds 201.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.manage
+      x-error-codes: [VALIDATION_ERROR, SKILL_INACTIVE, SKILL_NOT_FOUND, WORKFORCE_CERTIFICATION_ALREADY_ACTIVE, WORKFORCE_CERTIFICATION_CLIENT_MISMATCH, WORKFORCE_CERTIFICATION_DOCUMENT_INVALID, WORKFORCE_CERTIFICATION_DOCUMENT_MISMATCH, WORKFORCE_CERTIFICATION_FORBIDDEN, WORKFORCE_CERTIFICATION_INVALID_FILE_REFERENCE, WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH, WORKFORCE_PROFILE_NOT_FOUND]
+      parameters:
+        - $ref: "#/components/parameters/WorkforceIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkforceCertificationRequest"
+      responses:
+        "201":
+          description: The registered certificate (PENDING_VERIFICATION).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceCertification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workforce/{workforceId}/certifications/{certificationId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkforceIdPathParam"
+      - $ref: "#/components/parameters/WorkforceCertificationIdPath"
+    get:
+      operationId: getWorkforceCertification
+      summary: Read one individual certificate
+      description: >-
+        PART 02. Same read authority and Client isolation as the list endpoint.
+        The certificate is addressed by the (workforce, certification) pair, so a
+        certificate of another worker — even inside the same Client — is `404
+        WORKFORCE_CERTIFICATION_NOT_FOUND` rather than a leak. This transport
+        requires `workforce_certification.read`; the service-side self-read and
+        Crew Lead read rules are the same as the list endpoint.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.read
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORKFORCE_CERTIFICATION_FORBIDDEN, WORKFORCE_CERTIFICATION_NOT_FOUND, WORKFORCE_PROFILE_NOT_FOUND]
+      responses:
+        "200":
+          description: The certificate.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceCertification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateWorkforceCertification
+      summary: Correct certificate metadata
+      description: >-
+        PART 02. Requires `workforce_certification.manage`. Mutable: `skillId`,
+        `certificateNumber`, `certificateName`, `issuingAuthority`, `issueDate`,
+        `expiryDate`, `status`, `documentId`, `fileReference`, `notes`. At least
+        one field is required (`400 VALIDATION_ERROR` otherwise). `expiryDate` and
+        `status` are re-validated against the STORED record on every partial
+        update: an ACTIVE status with a past expiry date is `400
+        WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH`, and a colliding ACTIVE
+        number is `409 WORKFORCE_CERTIFICATION_ALREADY_ACTIVE`. An INACTIVE
+        certificate may be reactivated by `status: "ACTIVE"`, but only while its
+        validity window still holds. `verificationStatus`
+        is NOT accepted here (`400 VALIDATION_ERROR`): verification has its own
+        authority and its own endpoint, so a metadata edit can never attest
+        competence. Use POST `.../deactivate` to withdraw a certificate.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.manage
+      x-error-codes: [VALIDATION_ERROR, SKILL_INACTIVE, SKILL_NOT_FOUND, WORKFORCE_CERTIFICATION_ALREADY_ACTIVE, WORKFORCE_CERTIFICATION_CLIENT_MISMATCH, WORKFORCE_CERTIFICATION_DOCUMENT_INVALID, WORKFORCE_CERTIFICATION_DOCUMENT_MISMATCH, WORKFORCE_CERTIFICATION_FORBIDDEN, WORKFORCE_CERTIFICATION_INVALID_FILE_REFERENCE, WORKFORCE_CERTIFICATION_NOT_FOUND, WORKFORCE_CERTIFICATION_STATUS_DATE_MISMATCH, WORKFORCE_PROFILE_NOT_FOUND]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkforceCertificationRequest"
+      responses:
+        "200":
+          description: The updated certificate.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceCertification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workforce/{workforceId}/certifications/{certificationId}/verify:
+    parameters:
+      - $ref: "#/components/parameters/WorkforceIdPathParam"
+      - $ref: "#/components/parameters/WorkforceCertificationIdPath"
+    post:
+      operationId: verifyWorkforceCertification
+      summary: Verify or reject an individual certificate
+      description: >-
+        PART 02 verification decision. Requires the dedicated
+        `workforce_certification.verify` permission — `workforce_certification.manage`
+        alone is NOT sufficient, and the permission is never granted by default.
+        Body: `verificationStatus` = `VERIFIED` | `REJECTED` |
+        `PENDING_VERIFICATION` (the last resets the decision and clears the
+        verifier audit fields), plus optional `notes`. The decision is audited
+        (`WORKFORCE_CERTIFICATION_VERIFIED` operational event with the previous and
+        new status). Rules: the actor must reach the profile's Client (`403
+        BUILDING_ACCESS_DENIED`); the certificate OWNER can never decide on their own
+        record (`403 WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN`, even when
+        they hold the permission); and an INACTIVE or already-expired certificate can
+        never be marked `VERIFIED` (`409 WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED`),
+        because an expired certificate must never satisfy a certification
+        requirement. `isValid` becomes true only for ACTIVE + unexpired + VERIFIED.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.verify
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, WORKFORCE_CERTIFICATION_FORBIDDEN, WORKFORCE_CERTIFICATION_NOT_FOUND, WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN, WORKFORCE_CERTIFICATION_VERIFICATION_ACTOR_REQUIRED, WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED, WORKFORCE_PROFILE_NOT_FOUND]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyWorkforceCertificationRequest"
+      responses:
+        "200":
+          description: The certificate with its new verification status.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceCertification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workforce/{workforceId}/certifications/{certificationId}/deactivate:
+    parameters:
+      - $ref: "#/components/parameters/WorkforceIdPathParam"
+      - $ref: "#/components/parameters/WorkforceCertificationIdPath"
+    post:
+      operationId: deactivateWorkforceCertification
+      summary: Deactivate an individual certificate
+      description: >-
+        PART 02 withdrawal. Requires `workforce_certification.manage`. Sets
+        `status` = `INACTIVE`; the row survives so the competency history stays
+        auditable, and it is never a DELETE. Optional body `{ "reason": "..." }`
+        (max 500 characters) is recorded as audit metadata on the
+        `WORKFORCE_CERTIFICATION_DEACTIVATED` operational event — it never
+        overwrites the certificate's own `notes`. Once INACTIVE the certificate
+        disappears from the Mobile worker profile, can no longer be VERIFIED, and
+        its number may be re-registered as a new ACTIVE certificate.
+      tags: [Workforce]
+      security: [{ bearerAuth: [] }]
+      x-required-permission: workforce_certification.manage
+      x-error-codes: [VALIDATION_ERROR, WORKFORCE_CERTIFICATION_FORBIDDEN, WORKFORCE_CERTIFICATION_NOT_FOUND, WORKFORCE_PROFILE_NOT_FOUND]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeactivateWorkforceCertificationRequest"
+      responses:
+        "200":
+          description: The deactivated certificate.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/WorkforceCertification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------------------------
   # CR-BE-CONFIG-OPENAPI-01 PART 01 — SECTION 09 — BE-03E WORKFORCE SHIFT
   # ASSIGNMENT (`src/modules/workforce-shifts`).
   #
@@ -83225,6 +83591,14 @@ components:
       in: path
       description: >-
         Skill id addressed inside the Workforce Profile's competency record.
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    WorkforceCertificationIdPath:
+      name: certificationId
+      in: path
+      description: >-
+        Individual certification id addressed inside the Workforce Profile's
+        certification record.
       required: true
       schema: { $ref: "#/components/schemas/Uuid" }
     ExternalOrganizationIdPath:
@@ -121787,6 +122161,283 @@ components:
           format: date-time
           nullable: true
 
+    # ------------------------------------------------------------------
+    # CR-HM-WORKER-COMPETENCY-01 PART 02 — individual worker certification
+    # (migration 0461) read model and command payloads.
+    # ------------------------------------------------------------------
+    WorkforceCertificationStatus:
+      type: string
+      enum: [ACTIVE, EXPIRED, INACTIVE]
+      description: >-
+        Lifecycle of the certificate itself. `EXPIRED` is derived from
+        `expiryDate` (never guessed), and `INACTIVE` is the administrative
+        withdrawal that keeps the history auditable.
+    WorkforceCertificationVerificationStatus:
+      type: string
+      enum: [PENDING_VERIFICATION, VERIFIED, REJECTED]
+      description: >-
+        Verification decision. Only a holder of
+        `workforce_certification.verify` — never the certificate owner — can move
+        this off `PENDING_VERIFICATION`.
+    WorkforceCertificationExpiryStatus:
+      type: string
+      enum: [VALID, EXPIRED, NOT_APPLICABLE]
+      description: >-
+        Expiry resolution: `VALID` (no expiry date, or still inside the window),
+        `EXPIRED` (past `expiryDate`), `NOT_APPLICABLE` (INACTIVE certificate).
+    WorkforceCertificationSkillReference:
+      type: object
+      description: The optional Skill catalog entry this certificate attests.
+      required: [id, code, name, category, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        category: { $ref: "#/components/schemas/SkillCategory" }
+        status: { type: string }
+    WorkforceCertificationDocumentReference:
+      type: object
+      description: >-
+        The optional shared document registry entry backing this certificate.
+        Client-scoped: a document of another Client can never be attached.
+      required: [id, documentNumber, documentType, title, fileReference, status]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        documentNumber: { type: string }
+        documentType: { type: string }
+        title: { type: string }
+        fileReference:
+          type: string
+          description: >-
+            Server-side storage key of the document. Exposed on the Operations
+            surface only; the Mobile projection never carries it.
+        status: { type: string }
+    WorkforceCertification:
+      type: object
+      description: >-
+        Source: WorkforceCertificationRecord
+        (workforce-certification.types.ts). One individual worker certificate.
+      required:
+        - id
+        - clientId
+        - workforceProfileId
+        - skillId
+        - skill
+        - certificateNumber
+        - certificateName
+        - issuingAuthority
+        - issueDate
+        - expiryDate
+        - status
+        - expiryStatus
+        - isExpired
+        - isValid
+        - verificationStatus
+        - verifiedByUserId
+        - verifiedAt
+        - documentId
+        - fileReference
+        - documentReference
+        - notes
+        - createdByUserId
+        - createdAt
+        - updatedAt
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        workforceProfileId: { $ref: "#/components/schemas/Uuid" }
+        skillId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        skill:
+          allOf: [{ $ref: "#/components/schemas/WorkforceCertificationSkillReference" }]
+          nullable: true
+        certificateNumber:
+          type: string
+          description: >-
+            Issuer-assigned serial number, 1..128 characters, unique per profile
+            among ACTIVE rows (case-insensitive).
+        certificateName: { type: string }
+        issuingAuthority: { type: string }
+        issueDate: { type: string, format: date-time }
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: "`null` means a lifelong certificate."
+        status: { $ref: "#/components/schemas/WorkforceCertificationStatus" }
+        expiryStatus: { $ref: "#/components/schemas/WorkforceCertificationExpiryStatus" }
+        isExpired:
+          type: boolean
+          description: True only when the expiry instant has already passed.
+        isValid:
+          type: boolean
+          description: >-
+            True only when the certificate can satisfy a certification
+            requirement right now: ACTIVE, not expired, and VERIFIED. An expired
+            certificate is never valid.
+        verificationStatus:
+          $ref: "#/components/schemas/WorkforceCertificationVerificationStatus"
+        verifiedByUserId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+        documentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        fileReference:
+          type: string
+          nullable: true
+          description: >-
+            Effective storage reference (`workforce_certifications.file_reference`
+            or the linked document's reference). Safe relative key or
+            `hm-ev://<uuid>` only.
+        documentReference:
+          allOf: [{ $ref: "#/components/schemas/WorkforceCertificationDocumentReference" }]
+          nullable: true
+        notes: { type: string, nullable: true }
+        createdByUserId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    WorkforceCertificationExpiringItem:
+      type: object
+      description: One row of the expiry watch (certificate + worker identity).
+      required: [certification, workforceProfile, daysUntilExpiry]
+      properties:
+        certification: { $ref: "#/components/schemas/WorkforceCertification" }
+        workforceProfile:
+          type: object
+          required: [id, fullName, employeeCode, organizationId]
+          properties:
+            id: { $ref: "#/components/schemas/Uuid" }
+            fullName: { type: string }
+            employeeCode: { type: string }
+            organizationId: { $ref: "#/components/schemas/Uuid" }
+        daysUntilExpiry:
+          type: integer
+          description: Whole days between the current instant and `expiryDate`.
+    CreateWorkforceCertificationRequest:
+      type: object
+      additionalProperties: false
+      required: [certificateNumber, certificateName, issuingAuthority, issueDate]
+      properties:
+        certificateNumber: { type: string, minLength: 1, maxLength: 128 }
+        certificateName: { type: string, minLength: 1, maxLength: 255 }
+        issuingAuthority: { type: string, minLength: 1, maxLength: 255 }
+        issueDate: { type: string, format: date-time }
+        expiryDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Must not precede `issueDate`. Omit or `null` for lifelong.
+        status:
+          $ref: "#/components/schemas/WorkforceCertificationStatus"
+          description: >-
+            Optional. When provided it must agree with `expiryDate`; otherwise
+            derived (past expiry → EXPIRED, else ACTIVE).
+        skillId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        documentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        fileReference:
+          type: string
+          nullable: true
+          description: Safe relative storage key or canonical `hm-ev://<uuid>`.
+        notes: { type: string, nullable: true, maxLength: 2000 }
+    UpdateWorkforceCertificationRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        At least one field is required. `verificationStatus` is deliberately
+        absent — use POST `.../verify`.
+      properties:
+        certificateNumber: { type: string, minLength: 1, maxLength: 128 }
+        certificateName: { type: string, minLength: 1, maxLength: 255 }
+        issuingAuthority: { type: string, minLength: 1, maxLength: 255 }
+        issueDate: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time, nullable: true }
+        status: { $ref: "#/components/schemas/WorkforceCertificationStatus" }
+        skillId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        documentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        fileReference: { type: string, nullable: true }
+        notes: { type: string, nullable: true, maxLength: 2000 }
+    VerifyWorkforceCertificationRequest:
+      type: object
+      additionalProperties: false
+      required: [verificationStatus]
+      properties:
+        verificationStatus:
+          $ref: "#/components/schemas/WorkforceCertificationVerificationStatus"
+        notes: { type: string, nullable: true, maxLength: 2000 }
+    DeactivateWorkforceCertificationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          nullable: true
+          maxLength: 500
+          description: Audit metadata only; never overwrites the certificate notes.
+    WorkforceCertificationMobileSummary:
+      type: object
+      description: >-
+        Source: WorkforceCertificationMobileSummary
+        (workforce-certification.types.ts). The Mobile-profile projection of one
+        individual certificate. Never carries a raw storage key: the client only
+        learns whether a document is available and its registry id.
+      required:
+        - id
+        - certificateNumber
+        - certificateName
+        - issuingAuthority
+        - skillId
+        - skillCode
+        - skillName
+        - status
+        - verificationStatus
+        - issueDate
+        - expiryDate
+        - expiryStatus
+        - isExpired
+        - isValid
+        - documentAvailable
+        - documentId
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        certificateNumber: { type: string }
+        certificateName: { type: string }
+        issuingAuthority: { type: string }
+        skillId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        skillCode: { type: string, nullable: true }
+        skillName: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/WorkforceCertificationStatus" }
+        verificationStatus:
+          $ref: "#/components/schemas/WorkforceCertificationVerificationStatus"
+        issueDate: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time, nullable: true }
+        expiryStatus: { $ref: "#/components/schemas/WorkforceCertificationExpiryStatus" }
+        isExpired: { type: boolean }
+        isValid: { type: boolean }
+        documentAvailable:
+          type: boolean
+          description: True when a resolvable document/storage reference exists.
+        documentId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+
     WorkforceShiftAssignment:
       type: object
       description: >-
@@ -129768,7 +130419,7 @@ components:
         materials: { $ref: "#/components/schemas/HandymanFieldMaterials" }
     HandymanWorkerProfile:
       type: object
-      description: "Source: HandymanWorkerProfileProjection (handyman-worker-profile.types.ts). Contract shape unchanged by CR-HM-WORKER-PROFILE-FIX-01; every value is resolved from a column that exists in the canonical migration registry."
+      description: "Source: HandymanWorkerProfileProjection (handyman-worker-profile.types.ts). Shape from CR-HM-WORKER-PROFILE-FIX-01, extended additively by CR-HM-WORKER-COMPETENCY-01 PART 02 (`certificationsAndExpiry.individualCertifications`); every value is resolved from a column that exists in the canonical migration registry."
       required: [workerIdentity, providerAssociation, roleAndAssignmentContext, skillsAndCategories, certificationsAndExpiry, workHistorySummary]
       properties:
         workerIdentity:
@@ -129872,9 +130523,31 @@ components:
                   validUntil: { type: string, format: date-time, nullable: true }
         certificationsAndExpiry:
           type: object
-          required: [individualCertificateNumberModeled, skillValidityWindows, providerLicensesAndCertifications]
+          description: >-
+            Three SEPARATE facts, deliberately kept apart:
+            `individualCertifications` are the worker's own certificates
+            (workforce_certifications, 0461/0462); `skillValidityWindows` are Skill
+            assignment windows (workforce_skill_assignments); and
+            `providerLicensesAndCertifications` are the EMPLOYER's company-level
+            licences (vendor_licenses_certifications). None reinterprets another.
+          required: [individualCertificateNumberModeled, individualCertifications, skillValidityWindows, providerLicensesAndCertifications]
           properties:
-            individualCertificateNumberModeled: { type: boolean, enum: [false] }
+            individualCertificateNumberModeled:
+              type: boolean
+              enum: [true]
+              description: >-
+                CR-HM-WORKER-COMPETENCY-01 PART 02 — flipped from `false` to
+                `true`: individual per-worker certificate numbers are now modeled
+                and projected in `individualCertifications`. Additive for
+                consumers.
+            individualCertifications:
+              type: array
+              description: >-
+                The worker's own certificates: ACTIVE and EXPIRED rows (INACTIVE
+                withdrawals are excluded), ordered ACTIVE-first then by expiry
+                date. OPTIONAL — a worker with no certificates always receives
+                `200` with an empty array.
+              items: { $ref: "#/components/schemas/WorkforceCertificationMobileSummary" }
             skillValidityWindows:
               type: array
               items:

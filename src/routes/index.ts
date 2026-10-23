@@ -342,6 +342,7 @@ import { createWorkforceReportingLineRouter } from '../modules/workforce-reporti
 import { createWorkforceReportingRouter } from '../modules/workforce-reporting/workforce-reporting.routes';
 import { createWorkforceShiftRouter } from '../modules/workforce-shifts/workforce-shift.routes';
 import { createWorkforceSkillRouter } from '../modules/workforce-skills/workforce-skill.routes';
+import { createWorkforceCertificationRouter } from '../modules/workforce-certifications/workforce-certification.routes';
 import { createTeamRouter } from '../modules/teams/team.routes';
 import { createSubscriptionRouter } from '../modules/subscriptions/subscription.routes';
 import { createUserRouter } from '../modules/users/user.routes';
@@ -417,6 +418,7 @@ export function createApiRouter(): Router {
   router.use(createWorkforceReportingRouter());
   router.use(createSkillRouter());
   router.use(createWorkforceSkillRouter());
+  router.use(createWorkforceCertificationRouter());
   router.use(createShiftRouter());
   router.use(createWorkforceShiftRouter());
   router.use(createWorkforceReportingLineRouter());

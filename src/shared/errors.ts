@@ -3066,6 +3066,16 @@ export const ERROR_CODES = {
     'WORKFORCE_CERTIFICATION_INVALID_FILE_REFERENCE',
   WORKFORCE_CERTIFICATION_VERIFICATION_ACTOR_REQUIRED:
     'WORKFORCE_CERTIFICATION_VERIFICATION_ACTOR_REQUIRED',
+  // CR-HM-WORKER-COMPETENCY-01 PART 02 — verification is an attestation made by
+  // a DIFFERENT authorized actor. The certificate owner may read their own
+  // record but can never decide its verification status.
+  WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN:
+    'WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN',
+  // A certificate that is INACTIVE or already past its expiry date can never be
+  // marked VERIFIED: an expired certificate must not satisfy a certification
+  // requirement.
+  WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED:
+    'WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED',
   WORKFORCE_CERTIFICATION_FORBIDDEN: 'WORKFORCE_CERTIFICATION_FORBIDDEN',
   /** Generic 409 conflict code (used by PART 11A for "unique effective
    * session" collisions where no domain-specific error is frozen). */

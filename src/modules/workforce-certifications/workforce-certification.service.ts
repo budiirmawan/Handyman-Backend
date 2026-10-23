@@ -2,6 +2,7 @@ import { getPool } from '../../database';
 import {
   buildingAccessDeniedError,
   contextAccessService,
+  getAccessibleClientIds,
 } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { permissionService } from '../permissions';
@@ -15,39 +16,51 @@ import {
   workforceCertificationDocumentMismatchError,
   workforceCertificationForbiddenError,
   workforceCertificationNotFoundError,
+  workforceCertificationSelfVerificationForbiddenError,
   workforceCertificationStatusDateMismatchError,
   workforceCertificationVerificationActorRequiredError,
+  workforceCertificationVerificationNotAllowedError,
 } from './workforce-certification.errors';
 import {
   workforceCertificationRepository,
   type WorkforceProfileClientContext,
 } from './workforce-certification.repository';
-import type {
-  CreateWorkforceCertificationInput,
-  ListWorkforceCertificationsFilter,
-  UpdateWorkforceCertificationInput,
-  VerifyWorkforceCertificationInput,
-  WorkforceCertificationActor,
-  WorkforceCertificationRecord,
-  WorkforceCertificationStatus,
-  WorkforceCertificationVerificationStatus,
+import {
+  WORKFORCE_CERTIFICATION_PERMISSIONS,
+  type CreateWorkforceCertificationInput,
+  type DeactivateWorkforceCertificationInput,
+  type ListExpiringWorkforceCertificationsFilter,
+  type ListWorkforceCertificationsFilter,
+  type UpdateWorkforceCertificationInput,
+  type VerifyWorkforceCertificationInput,
+  type WorkforceCertificationActor,
+  type WorkforceCertificationExpiringItem,
+  type WorkforceCertificationMobileSummary,
+  type WorkforceCertificationRecord,
+  type WorkforceCertificationStatus,
+  type WorkforceCertificationVerificationStatus,
 } from './workforce-certification.types';
 import { validateSafeCertificationFileReference } from './workforce-certification.validation';
 
-const READ_PERMISSIONS = [
-  'skill.read',
-  'skill.manage',
-  'workforce.read',
-  'workforce.manage',
-  'tenant_company.read',
-  'tenant_company.manage',
-] as const;
-
-const MANAGE_PERMISSIONS = [
-  'skill.manage',
-  'workforce.manage',
-  'tenant_company.manage',
-] as const;
+/**
+ * PART 02 — authority boundary.
+ *
+ * Individual worker certification is its own authority domain. Exactly three
+ * dedicated codes exist, and NOTHING else is accepted as a substitute:
+ *
+ *   - the generic tenant/ops codes (`tenant_company.*`) are too broad: they
+ *     authorize tenant administration, not a worker's competence record;
+ *   - `skill.*` administers the Skill CATALOG, not an individual's certificate;
+ *   - `workforce.*` administers workforce master data (the person), not the
+ *     evidentiary attestation attached to them;
+ *   - `vendor_licenses_certifications` is company-level and is never consulted.
+ *
+ * The Client boundary is enforced independently of permission breadth (see
+ * `ensureClientAccess`), so no permission can widen a read across Clients.
+ */
+const READ_PERMISSION = WORKFORCE_CERTIFICATION_PERMISSIONS.read;
+const MANAGE_PERMISSION = WORKFORCE_CERTIFICATION_PERMISSIONS.manage;
+const VERIFY_PERMISSION = WORKFORCE_CERTIFICATION_PERMISSIONS.verify;
 
 function isPgUniqueViolation(err: unknown): boolean {
   return (
@@ -110,9 +123,38 @@ async function resolveActorPermissions(
   return permissionService.resolvePermissionsForUser(actor.id);
 }
 
-async function ensureWorkforceProfileAndReadAccess(
+async function actorHoldsPermission(
+  actor: WorkforceCertificationActor | undefined,
+  code: string,
+): Promise<boolean> {
+  if (!actor?.id) {
+    return false;
+  }
+  const permissions = await resolveActorPermissions(actor);
+  return permissions.includes(code);
+}
+
+/**
+ * Client isolation is proven from the actor's OWN assignments, never from the
+ * permission they hold. This runs before every read and every mutation —
+ * including document-backed reads — so a wide permission can never become a
+ * cross-Client read.
+ */
+async function ensureClientAccess(
+  profile: WorkforceProfileClientContext,
+  actor: WorkforceCertificationActor,
+): Promise<void> {
+  const canAccessClient = await contextAccessService.canAccessClient(
+    actor.id,
+    profile.clientId,
+  );
+  if (!canAccessClient) {
+    throw buildingAccessDeniedError();
+  }
+}
+
+async function loadWorkforceProfile(
   workforceProfileId: string,
-  actor?: WorkforceCertificationActor,
 ): Promise<WorkforceProfileClientContext> {
   const profile =
     await workforceCertificationRepository.findWorkforceProfileClientContext(
@@ -121,68 +163,96 @@ async function ensureWorkforceProfileAndReadAccess(
   if (!profile) {
     throw workforceProfileNotFoundError();
   }
-
-  if (actor) {
-    const canAccessClient = await contextAccessService.canAccessClient(
-      actor.id,
-      profile.clientId,
-    );
-    if (!canAccessClient) {
-      throw buildingAccessDeniedError();
-    }
-
-    if (profile.userId !== actor.id) {
-      const perms = await resolveActorPermissions(actor);
-      const hasReadPerm = READ_PERMISSIONS.some((p) => perms.includes(p));
-      if (!hasReadPerm) {
-        const isCrewLead = await isActorCrewLeadForWorkforceProfile(
-          actor.id,
-          profile.clientId,
-          profile.id,
-        );
-        if (!isCrewLead) {
-          throw workforceCertificationForbiddenError(
-            'Actor is not authorized to read certifications for this workforce profile.',
-          );
-        }
-      }
-    }
-  }
-
   return profile;
 }
 
-async function ensureWorkforceProfileAndManageAccess(
-  workforceProfileId: string,
+/**
+ * Read authority, in order of narrowing:
+ *   1. the worker whose profile this is (self-read),
+ *   2. an ACTIVE Crew Lead of an ACTIVE crew the worker is an ACTIVE member of,
+ *   3. a holder of `workforce_certification.read`.
+ *
+ * A plain peer crew member is deliberately excluded.
+ */
+async function ensureReadAccess(
+  profile: WorkforceProfileClientContext,
   actor?: WorkforceCertificationActor,
-): Promise<WorkforceProfileClientContext> {
-  const profile =
-    await workforceCertificationRepository.findWorkforceProfileClientContext(
-      workforceProfileId,
-    );
-  if (!profile) {
-    throw workforceProfileNotFoundError();
+): Promise<void> {
+  if (!actor) {
+    return;
   }
 
-  if (actor) {
-    const canAccessClient = await contextAccessService.canAccessClient(
-      actor.id,
-      profile.clientId,
-    );
-    if (!canAccessClient) {
-      throw buildingAccessDeniedError();
-    }
+  await ensureClientAccess(profile, actor);
 
-    const perms = await resolveActorPermissions(actor);
-    const hasManagePerm = MANAGE_PERMISSIONS.some((p) => perms.includes(p));
-    if (!hasManagePerm) {
-      throw workforceCertificationForbiddenError(
-        'Actor is not authorized to manage workforce certifications.',
-      );
-    }
+  if (profile.userId === actor.id) {
+    return;
   }
 
-  return profile;
+  if (await actorHoldsPermission(actor, READ_PERMISSION)) {
+    return;
+  }
+
+  const isCrewLead = await isActorCrewLeadForWorkforceProfile(
+    actor.id,
+    profile.clientId,
+    profile.id,
+  );
+  if (!isCrewLead) {
+    throw workforceCertificationForbiddenError(
+      'Actor is not authorized to read certifications for this workforce profile.',
+    );
+  }
+}
+
+/**
+ * Manage authority (`workforce_certification.manage`). The permission alone is
+ * never enough: the Client scope must also resolve for the actor.
+ */
+async function ensureManageAccess(
+  profile: WorkforceProfileClientContext,
+  actor?: WorkforceCertificationActor,
+): Promise<void> {
+  if (!actor) {
+    return;
+  }
+
+  await ensureClientAccess(profile, actor);
+
+  if (!(await actorHoldsPermission(actor, MANAGE_PERMISSION))) {
+    throw workforceCertificationForbiddenError(
+      'Actor is not authorized to manage workforce certifications.',
+    );
+  }
+}
+
+/**
+ * Verification authority (`workforce_certification.verify`) — separation of
+ * duties on top of the manage side:
+ *
+ *   - the dedicated verification permission is REQUIRED (manage is not enough),
+ *   - the Client scope must resolve,
+ *   - and the actor may never decide on a certificate whose workforce profile is
+ *     their own.
+ */
+async function ensureVerifyAccess(
+  profile: WorkforceProfileClientContext,
+  actor?: WorkforceCertificationActor,
+): Promise<void> {
+  if (!actor?.id) {
+    throw workforceCertificationVerificationActorRequiredError();
+  }
+
+  await ensureClientAccess(profile, actor);
+
+  if (!(await actorHoldsPermission(actor, VERIFY_PERMISSION))) {
+    throw workforceCertificationForbiddenError(
+      'Actor is not authorized to verify or reject workforce certifications.',
+    );
+  }
+
+  if (profile.userId === actor.id) {
+    throw workforceCertificationSelfVerificationForbiddenError();
+  }
 }
 
 async function ensureSkillInClient(
@@ -204,6 +274,11 @@ async function ensureSkillInClient(
   }
 }
 
+/**
+ * Document references are Client-scoped: the document must exist, be ACTIVE and
+ * belong to the exact same Client as the workforce profile. A document id from
+ * another Client is a conflict (409), never a silent attach.
+ */
 async function ensureDocumentInClient(
   documentId: string,
   clientId: string,
@@ -244,14 +319,16 @@ function resolveEffectiveCertificationStatus(
   return requestedStatus;
 }
 
+/**
+ * PART 02 — the ONLY place a verification decision is written.
+ *
+ * A decision always carries the deciding actor and the decision instant; a
+ * reset to PENDING_VERIFICATION clears both, because an audit trail must never
+ * claim a decision that no longer holds.
+ */
 function resolveVerificationAuditFields(
   verificationStatus: WorkforceCertificationVerificationStatus,
   actor?: WorkforceCertificationActor,
-  existing?: {
-    verificationStatus: WorkforceCertificationVerificationStatus;
-    verifiedByUserId: string | null;
-    verifiedAt: string | null;
-  },
 ): {
   verifiedByUserId: string | null;
   verifiedAt: string | null;
@@ -260,19 +337,6 @@ function resolveVerificationAuditFields(
     return {
       verifiedByUserId: null,
       verifiedAt: null,
-    };
-  }
-
-  if (
-    existing &&
-    existing.verificationStatus === verificationStatus &&
-    existing.verifiedByUserId &&
-    existing.verifiedAt &&
-    !actor
-  ) {
-    return {
-      verifiedByUserId: existing.verifiedByUserId,
-      verifiedAt: existing.verifiedAt,
     };
   }
 
@@ -292,7 +356,8 @@ export const workforceCertificationService = {
     filter: ListWorkforceCertificationsFilter = {},
     actor?: WorkforceCertificationActor,
   ): Promise<WorkforceCertificationRecord[]> {
-    await ensureWorkforceProfileAndReadAccess(workforceProfileId, actor);
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureReadAccess(profile, actor);
     return workforceCertificationRepository.listByWorkforceProfileId(
       workforceProfileId,
       filter,
@@ -303,10 +368,38 @@ export const workforceCertificationService = {
     workforceProfileId: string,
     actor?: WorkforceCertificationActor,
   ): Promise<WorkforceCertificationRecord[]> {
-    await ensureWorkforceProfileAndReadAccess(workforceProfileId, actor);
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureReadAccess(profile, actor);
     return workforceCertificationRepository.listCurrentByWorkforceProfileId(
       workforceProfileId,
     );
+  },
+
+  /**
+   * PART 02 — expiry watch, scoped to the caller's own Clients.
+   *
+   * The Client set comes from the actor's ACTIVE Building assignments (never
+   * from a query parameter and never from the permission code). A caller with no
+   * reachable Client gets an empty list, not a 500 and not a global read.
+   */
+  async listExpiringWorkforceCertifications(
+    filter: ListExpiringWorkforceCertificationsFilter,
+    actor?: WorkforceCertificationActor,
+  ): Promise<WorkforceCertificationExpiringItem[]> {
+    if (!actor?.id) {
+      throw workforceCertificationForbiddenError(
+        'Actor is not authorized to read workforce certifications.',
+      );
+    }
+
+    if (!(await actorHoldsPermission(actor, READ_PERMISSION))) {
+      throw workforceCertificationForbiddenError(
+        'Actor is not authorized to read workforce certifications.',
+      );
+    }
+
+    const clientIds = await getAccessibleClientIds(actor.id);
+    return workforceCertificationRepository.listExpiring(clientIds, filter);
   },
 
   async getWorkforceCertificationById(
@@ -314,7 +407,8 @@ export const workforceCertificationService = {
     certificationId: string,
     actor?: WorkforceCertificationActor,
   ): Promise<WorkforceCertificationRecord> {
-    await ensureWorkforceProfileAndReadAccess(workforceProfileId, actor);
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureReadAccess(profile, actor);
     const record =
       await workforceCertificationRepository.findByIdInWorkforceProfile(
         workforceProfileId,
@@ -326,15 +420,19 @@ export const workforceCertificationService = {
     return record;
   },
 
+  /**
+   * PART 02 — every certification is created PENDING_VERIFICATION.
+   *
+   * A create can never mint a VERIFIED attestation: that would let a
+   * manage-only actor bypass the verification authority entirely.
+   */
   async createWorkforceCertification(
     workforceProfileId: string,
     input: CreateWorkforceCertificationInput,
     actor?: WorkforceCertificationActor,
   ): Promise<WorkforceCertificationRecord> {
-    const profile = await ensureWorkforceProfileAndManageAccess(
-      workforceProfileId,
-      actor,
-    );
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureManageAccess(profile, actor);
 
     const skillId = input.skillId ?? null;
     if (skillId !== null) {
@@ -355,13 +453,6 @@ export const workforceCertificationService = {
     const status = resolveEffectiveCertificationStatus(
       input.status,
       expiryDate,
-    );
-
-    const verificationStatus: WorkforceCertificationVerificationStatus =
-      input.verificationStatus ?? 'PENDING_VERIFICATION';
-    const verificationAudit = resolveVerificationAuditFields(
-      verificationStatus,
-      actor,
     );
 
     if (status === 'ACTIVE') {
@@ -387,9 +478,9 @@ export const workforceCertificationService = {
         issueDate: input.issueDate,
         expiryDate,
         status,
-        verificationStatus,
-        verifiedByUserId: verificationAudit.verifiedByUserId,
-        verifiedAt: verificationAudit.verifiedAt,
+        verificationStatus: 'PENDING_VERIFICATION',
+        verifiedByUserId: null,
+        verifiedAt: null,
         documentId,
         fileReference,
         notes: input.notes ?? null,
@@ -424,16 +515,22 @@ export const workforceCertificationService = {
     return created;
   },
 
+  /**
+   * PART 02 — metadata only.
+   *
+   * `verificationStatus` is not an updatable field: the verification decision
+   * has its own authority and its own endpoint, so a metadata edit can never
+   * silently attest competence. The status/expiry-date consistency rules are
+   * re-evaluated against the STORED record on every partial update.
+   */
   async updateWorkforceCertification(
     workforceProfileId: string,
     certificationId: string,
     input: UpdateWorkforceCertificationInput,
     actor?: WorkforceCertificationActor,
   ): Promise<WorkforceCertificationRecord> {
-    const profile = await ensureWorkforceProfileAndManageAccess(
-      workforceProfileId,
-      actor,
-    );
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureManageAccess(profile, actor);
 
     const existing =
       await workforceCertificationRepository.findByIdInWorkforceProfile(
@@ -505,25 +602,6 @@ export const workforceCertificationService = {
       }
     }
 
-    let verificationPatch: {
-      verificationStatus?: WorkforceCertificationVerificationStatus;
-      verifiedByUserId?: string | null;
-      verifiedAt?: string | null;
-    } = {};
-
-    if (input.verificationStatus !== undefined) {
-      const audit = resolveVerificationAuditFields(
-        input.verificationStatus,
-        actor,
-        existing,
-      );
-      verificationPatch = {
-        verificationStatus: input.verificationStatus,
-        verifiedByUserId: audit.verifiedByUserId,
-        verifiedAt: audit.verifiedAt,
-      };
-    }
-
     let updated: WorkforceCertificationRecord | null;
     try {
       updated = await workforceCertificationRepository.update(certificationId, {
@@ -542,7 +620,6 @@ export const workforceCertificationService = {
           ? { expiryDate: input.expiryDate }
           : {}),
         status: nextStatus,
-        ...verificationPatch,
         ...(input.documentId !== undefined
           ? { documentId: input.documentId }
           : {}),
@@ -581,16 +658,23 @@ export const workforceCertificationService = {
     return updated;
   },
 
+  /**
+   * PART 02 — verify / reject.
+   *
+   * Rules enforced here (not in the transport):
+   *   - the actor must hold `workforce_certification.verify`,
+   *   - the actor must reach the Client of the workforce profile,
+   *   - the actor may never decide on their OWN certificate,
+   *   - an INACTIVE or already-expired certificate can never become VERIFIED.
+   */
   async verifyWorkforceCertification(
     workforceProfileId: string,
     certificationId: string,
     input: VerifyWorkforceCertificationInput,
     actor?: WorkforceCertificationActor,
   ): Promise<WorkforceCertificationRecord> {
-    const profile = await ensureWorkforceProfileAndManageAccess(
-      workforceProfileId,
-      actor,
-    );
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureVerifyAccess(profile, actor);
 
     const existing =
       await workforceCertificationRepository.findByIdInWorkforceProfile(
@@ -599,6 +683,19 @@ export const workforceCertificationService = {
       );
     if (!existing) {
       throw workforceCertificationNotFoundError();
+    }
+
+    if (input.verificationStatus === 'VERIFIED') {
+      if (existing.status === 'INACTIVE') {
+        throw workforceCertificationVerificationNotAllowedError(
+          'A deactivated certificate can never be marked VERIFIED.',
+        );
+      }
+      if (existing.isExpired) {
+        throw workforceCertificationVerificationNotAllowedError(
+          'An expired certificate can never be marked VERIFIED.',
+        );
+      }
     }
 
     const audit = resolveVerificationAuditFields(
@@ -632,6 +729,7 @@ export const workforceCertificationService = {
           workforceProfileId,
           previousVerificationStatus: existing.verificationStatus,
           verificationStatus: updated.verificationStatus,
+          certificateExpiryStatus: updated.expiryStatus,
         },
       });
     }
@@ -643,11 +741,10 @@ export const workforceCertificationService = {
     workforceProfileId: string,
     certificationId: string,
     actor?: WorkforceCertificationActor,
+    input: DeactivateWorkforceCertificationInput = {},
   ): Promise<WorkforceCertificationRecord> {
-    const profile = await ensureWorkforceProfileAndManageAccess(
-      workforceProfileId,
-      actor,
-    );
+    const profile = await loadWorkforceProfile(workforceProfileId);
+    await ensureManageAccess(profile, actor);
 
     const existing =
       await workforceCertificationRepository.findByIdInWorkforceProfile(
@@ -681,10 +778,60 @@ export const workforceCertificationService = {
           workforceProfileId,
           previousStatus: existing.status,
           status: updated.status,
+          ...(input.reason ? { reason: input.reason } : {}),
         },
       });
     }
 
     return updated;
   },
+
+  /**
+   * PART 02 — Mobile profile projection source.
+   *
+   * Reads the worker's own certificates (ACTIVE + EXPIRED, never INACTIVE)
+   * pinned to the profile's authoritative Client. Certifications are optional:
+   * a worker with none yields an empty array.
+   */
+  async projectMobileCertifications(
+    workforceProfileId: string,
+    clientId: string,
+  ): Promise<WorkforceCertificationMobileSummary[]> {
+    const records =
+      await workforceCertificationRepository.listVisibleByWorkforceProfileId(
+        workforceProfileId,
+        clientId,
+      );
+    return records.map(toMobileCertificationSummary);
+  },
 };
+
+/**
+ * Projects one stored record into the Mobile contract.
+ *
+ * The raw `file_reference` storage key is deliberately NOT exposed: the Mobile
+ * client only learns whether a document is available and which document id it
+ * belongs to, so a download endpoint (or none at all) keeps its own scope.
+ */
+export function toMobileCertificationSummary(
+  record: WorkforceCertificationRecord,
+): WorkforceCertificationMobileSummary {
+  return {
+    id: record.id,
+    certificateNumber: record.certificateNumber,
+    certificateName: record.certificateName,
+    issuingAuthority: record.issuingAuthority,
+    skillId: record.skillId,
+    skillCode: record.skill?.code ?? null,
+    skillName: record.skill?.name ?? null,
+    status: record.status,
+    verificationStatus: record.verificationStatus,
+    issueDate: record.issueDate,
+    expiryDate: record.expiryDate,
+    expiryStatus: record.expiryStatus,
+    isExpired: record.isExpired,
+    isValid: record.isValid,
+    documentAvailable: Boolean(record.fileReference),
+    documentId: record.documentId,
+  };
+}

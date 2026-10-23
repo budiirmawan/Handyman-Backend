@@ -4,6 +4,7 @@ import { logger } from '../../shared/logger';
 import { contextAccessService } from '../context-access/context-access.service';
 import { permissionService } from '../permissions';
 import { workforceSkillRepository } from '../workforce-skills/workforce-skill.repository';
+import { workforceCertificationService } from '../workforce-certifications';
 import type { SkillCategory } from '../skills';
 import type { ProficiencyLevel } from '../workforce-skills/workforce-skill.types';
 import type {
@@ -422,6 +423,39 @@ async function buildWorkerProfileProjection(
     providerLicensesAndCertifications = [];
   }
 
+  // 6b. CR-HM-WORKER-COMPETENCY-01 PART 02 — individual worker certifications.
+  //
+  // Individual certificates (issuer, serial number, validity window,
+  // verification decision, evidence availability) come from
+  // `workforce_certifications` (0461), NOT from `workforce_skill_assignments`
+  // (competency windows, projected above) and NOT from
+  // `vendor_licenses_certifications` (company-level, projected above). The three
+  // lists keep their separate meanings; nothing here reinterprets the others.
+  //
+  // Certifications are OPTIONAL: a worker with zero rows, or an environment
+  // where the table has not been migrated yet, still yields a successful
+  // profile with an empty list — exactly like the skill/licence projections.
+  let individualCertifications: HandymanWorkerProfileProjection['certificationsAndExpiry']['individualCertifications'] =
+    [];
+  try {
+    individualCertifications =
+      await workforceCertificationService.projectMobileCertifications(
+        core.workforce_profile_id,
+        core.client_id,
+      );
+  } catch (error) {
+    logger.warn(
+      'Handyman worker profile individual certifications could not be projected.',
+      {
+        operation: 'handyman_worker_profile.individual_certifications',
+        result: 'degraded',
+        errorMessage:
+          error instanceof Error ? error.message : 'unknown error',
+      },
+    );
+    individualCertifications = [];
+  }
+
   // 7. Relevant operational work-history summary (strictly non-commercial)
   const historyRes = await pool.query<{
     execution_scope_id: string;
@@ -566,7 +600,10 @@ async function buildWorkerProfileProjection(
       })),
     },
     certificationsAndExpiry: {
-      individualCertificateNumberModeled: false,
+      // PART 02 — individual certificate numbers are modeled (0461) and
+      // projected below; the flag now reports the real capability.
+      individualCertificateNumberModeled: true,
+      individualCertifications,
       skillValidityWindows,
       providerLicensesAndCertifications,
     },

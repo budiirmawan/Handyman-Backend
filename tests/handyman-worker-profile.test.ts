@@ -604,6 +604,11 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
           };
           certificationsAndExpiry: {
             individualCertificateNumberModeled: boolean;
+            individualCertifications: Array<{
+              certificateNumber: string;
+              isValid: boolean;
+              documentAvailable: boolean;
+            }>;
             skillValidityWindows: Array<{ skillCode: string; isExpired: boolean }>;
             providerLicensesAndCertifications: Array<{ number: string }>;
           };
@@ -672,10 +677,14 @@ describe('CR-HM-FIELD-AUTHORITY-01 P1: Worker Profile Projection', () => {
     assert.deepEqual(p.skillsAndCategories.serviceCategories, ['TECHNICAL']);
     assert.equal(p.skillsAndCategories.effectiveSkills.length, 2);
 
+    // PART 02 — individual certificate numbers are modeled now, and this
+    // fixture has no workforce_certifications rows (the fixture schema predates
+    // 0461), so the list must degrade to empty instead of failing the profile.
     assert.equal(
       p.certificationsAndExpiry.individualCertificateNumberModeled,
-      false,
+      true,
     );
+    assert.deepEqual(p.certificationsAndExpiry.individualCertifications, []);
     assert.equal(p.certificationsAndExpiry.skillValidityWindows.length, 2);
     assert.equal(
       p.certificationsAndExpiry.providerLicensesAndCertifications[0]?.number,

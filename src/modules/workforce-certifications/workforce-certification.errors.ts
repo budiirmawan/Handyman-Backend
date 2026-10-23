@@ -80,3 +80,38 @@ export function workforceCertificationForbiddenError(
     statusCode: 403,
   });
 }
+
+/**
+ * CR-HM-WORKER-COMPETENCY-01 PART 02 — separation of duties.
+ *
+ * Verification is an attestation about a worker's competence. The worker who
+ * owns the certificate (and therefore every actor whose workforce profile is
+ * the subject of the decision) may read the record but can never decide its
+ * verification status, even when they happen to hold the verification
+ * permission. Client isolation is proven separately by the caller, so this
+ * guard only ever narrows authority.
+ */
+export function workforceCertificationSelfVerificationForbiddenError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.WORKFORCE_CERTIFICATION_SELF_VERIFICATION_FORBIDDEN,
+    message:
+      'The owner of a workforce certification can never verify or reject their own certificate.',
+    statusCode: 403,
+  });
+}
+
+/**
+ * An INACTIVE certificate, or one whose expiry date has already passed, can
+ * never become VERIFIED. Expiry is evaluated against the current instant, so a
+ * certificate that expires later cannot be "pre-verified" either: the decision
+ * endpoint re-reads the stored record each time.
+ */
+export function workforceCertificationVerificationNotAllowedError(
+  message = 'An inactive or expired certificate can never be marked VERIFIED.',
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.WORKFORCE_CERTIFICATION_VERIFICATION_NOT_ALLOWED,
+    message,
+    statusCode: 409,
+  });
+}

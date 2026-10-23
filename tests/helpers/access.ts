@@ -47,6 +47,19 @@ const FOUNDATION_PERMISSION_CODES: readonly { code: string; name: string }[] = [
   { code: 'workforce.manage', name: 'Manage Workforce Profiles' },
   { code: 'skill.read', name: 'Read Skills' },
   { code: 'skill.manage', name: 'Manage Skills' },
+  // CR-HM-WORKER-COMPETENCY-01 PART 02 — the dedicated individual worker
+  // certification authority (migration 0462). The full test administrator must
+  // mirror the production catalogue; the authority itself is still asserted
+  // explicitly by the PART 02 suite.
+  { code: 'workforce_certification.read', name: 'Read Workforce Certifications' },
+  {
+    code: 'workforce_certification.manage',
+    name: 'Manage Workforce Certifications',
+  },
+  {
+    code: 'workforce_certification.verify',
+    name: 'Verify or Reject Workforce Certifications',
+  },
   // BE-03E — Shift
   { code: 'shift.read', name: 'Read Shifts' },
   { code: 'shift.manage', name: 'Manage Shifts' },

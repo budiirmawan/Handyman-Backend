@@ -4,6 +4,8 @@ import {
   WORKFORCE_CERTIFICATION_STATUSES,
   WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES,
   type CreateWorkforceCertificationInput,
+  type DeactivateWorkforceCertificationInput,
+  type ListExpiringWorkforceCertificationsFilter,
   type ListWorkforceCertificationsFilter,
   type UpdateWorkforceCertificationInput,
   type VerifyWorkforceCertificationInput,
@@ -186,21 +188,14 @@ export function validateCreateWorkforceCertificationInput(
     }
   }
 
-  let verificationStatus: WorkforceCertificationVerificationStatus | undefined;
+  // PART 02 — verification is a separate, deliberately granted authority.
+  // Accepting `verificationStatus` on create/update would let a manage-only
+  // actor mint or flip a VERIFIED attestation without ever exercising the
+  // verification permission, so it is rejected outright instead of ignored.
   if (payload.verificationStatus !== undefined) {
-    if (
-      typeof payload.verificationStatus !== 'string' ||
-      !WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.includes(
-        payload.verificationStatus as WorkforceCertificationVerificationStatus,
-      )
-    ) {
-      details.push(
-        `verificationStatus must be one of: ${WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.join(', ')}.`,
-      );
-    } else {
-      verificationStatus =
-        payload.verificationStatus as WorkforceCertificationVerificationStatus;
-    }
+    details.push(
+      'verificationStatus cannot be set when creating a certification; use POST /workforce/:workforceId/certifications/:certificationId/verify.',
+    );
   }
 
   let skillId: string | null | undefined;
@@ -279,7 +274,6 @@ export function validateCreateWorkforceCertificationInput(
     issueDate: issueDate as string,
     ...(expiryDate !== undefined ? { expiryDate } : {}),
     ...(status !== undefined ? { status } : {}),
-    ...(verificationStatus !== undefined ? { verificationStatus } : {}),
     ...(skillId !== undefined ? { skillId } : {}),
     ...(documentId !== undefined ? { documentId } : {}),
     ...(fileReference !== undefined ? { fileReference } : {}),
@@ -387,21 +381,12 @@ export function validateUpdateWorkforceCertificationInput(
     }
   }
 
+  // PART 02 — verification status is never part of metadata update; the
+  // dedicated verify endpoint is the only way to record a decision.
   if (payload.verificationStatus !== undefined) {
-    hasUpdatableField = true;
-    if (
-      typeof payload.verificationStatus !== 'string' ||
-      !WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.includes(
-        payload.verificationStatus as WorkforceCertificationVerificationStatus,
-      )
-    ) {
-      details.push(
-        `verificationStatus must be one of: ${WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.join(', ')}.`,
-      );
-    } else {
-      result.verificationStatus =
-        payload.verificationStatus as WorkforceCertificationVerificationStatus;
-    }
+    details.push(
+      'verificationStatus cannot be updated here; use POST /workforce/:workforceId/certifications/:certificationId/verify.',
+    );
   }
 
   if (payload.skillId !== undefined) {
@@ -603,4 +588,122 @@ export function validateListWorkforceCertificationsFilter(
   }
 
   return filter;
+}
+
+/**
+ * PART 02 — optional deactivation reason.
+ *
+ * The reason is audit metadata only: it is written to the operational event and
+ * never mutates `notes`, so the certificate's own recorded metadata stays
+ * exactly as the issuer documented it.
+ */
+export function validateDeactivateWorkforceCertificationInput(
+  body: unknown,
+): DeactivateWorkforceCertificationInput {
+  if (body === undefined || body === null) {
+    return {};
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    throw AppError.validation('Request body must be a JSON object.', [
+      'Request body must be a JSON object.',
+    ]);
+  }
+
+  const payload = body as Record<string, unknown>;
+  if (payload.reason === undefined || payload.reason === null) {
+    return {};
+  }
+  if (typeof payload.reason !== 'string') {
+    throw AppError.validation('Request validation failed.', [
+      'reason must be a string or null.',
+    ]);
+  }
+  const reason = payload.reason.trim();
+  if (reason.length > 500) {
+    throw AppError.validation('Request validation failed.', [
+      'reason must be at most 500 characters.',
+    ]);
+  }
+  return { reason: reason.length > 0 ? reason : null };
+}
+
+export const EXPIRING_CERTIFICATION_DEFAULT_DAYS = 30;
+export const EXPIRING_CERTIFICATION_MAX_DAYS = 365;
+
+/**
+ * PART 02 — expiry-watch filter.
+ *
+ * The Client scope is never a query parameter: it is derived server-side from
+ * the caller's own access. `days` is bounded so one request can neither scan
+ * the whole table nor ask for an unbounded window.
+ */
+export function validateListExpiringWorkforceCertificationsFilter(
+  query: unknown,
+): ListExpiringWorkforceCertificationsFilter {
+  const params =
+    query && typeof query === 'object' && !Array.isArray(query)
+      ? (query as Record<string, unknown>)
+      : {};
+  const details: string[] = [];
+
+  let days = EXPIRING_CERTIFICATION_DEFAULT_DAYS;
+  if (params.days !== undefined) {
+    const raw = Array.isArray(params.days) ? params.days[0] : params.days;
+    const parsed =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && /^-?\d+$/.test(raw.trim())
+          ? Number(raw.trim())
+          : Number.NaN;
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < 1 ||
+      parsed > EXPIRING_CERTIFICATION_MAX_DAYS
+    ) {
+      details.push(
+        `days must be an integer between 1 and ${EXPIRING_CERTIFICATION_MAX_DAYS}.`,
+      );
+    } else {
+      days = parsed;
+    }
+  }
+
+  let workforceProfileId: string | undefined;
+  if (params.workforceProfileId !== undefined) {
+    if (
+      typeof params.workforceProfileId !== 'string' ||
+      !UUID_PATTERN.test(params.workforceProfileId)
+    ) {
+      details.push('workforceProfileId must be a valid UUID.');
+    } else {
+      workforceProfileId = params.workforceProfileId;
+    }
+  }
+
+  let verificationStatus: WorkforceCertificationVerificationStatus | undefined;
+  if (params.verificationStatus !== undefined) {
+    if (
+      typeof params.verificationStatus !== 'string' ||
+      !WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.includes(
+        params.verificationStatus as WorkforceCertificationVerificationStatus,
+      )
+    ) {
+      details.push(
+        `verificationStatus must be one of: ${WORKFORCE_CERTIFICATION_VERIFICATION_STATUSES.join(', ')}.`,
+      );
+    } else {
+      verificationStatus =
+        params.verificationStatus as WorkforceCertificationVerificationStatus;
+    }
+  }
+
+  if (details.length > 0) {
+    throw AppError.validation('Request validation failed.', details);
+  }
+
+  return {
+    days,
+    ...(workforceProfileId !== undefined ? { workforceProfileId } : {}),
+    ...(verificationStatus !== undefined ? { verificationStatus } : {}),
+  };
 }

@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { QueryResultRow } from 'pg';
 import { getPool } from '../../database';
 import type {
+  ListExpiringWorkforceCertificationsFilter,
   ListWorkforceCertificationsFilter,
   WorkforceCertificationDocumentSummary,
+  WorkforceCertificationExpiringItem,
   WorkforceCertificationExpiryStatus,
   WorkforceCertificationRecord,
   WorkforceCertificationSkillSummary,
@@ -48,6 +50,9 @@ type WorkforceCertificationRow = {
   created_by_user_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
+  profile_full_name?: string | null;
+  profile_employee_code?: string | null;
+  profile_organization_id?: string | null;
 };
 
 export type WorkforceProfileClientContext = {
@@ -150,6 +155,20 @@ function mapRow(
   const docSummary = mapDocumentSummary(row);
   const effectiveFileReference =
     row.file_reference ?? docSummary?.fileReference ?? null;
+  const expiryStatus = resolveWorkforceCertificationExpiryStatus(
+    row.status,
+    expiryDate,
+    now,
+  );
+  const isExpired = expiryStatus === 'EXPIRED';
+  // "Valid for a certification requirement" is stricter than "not expired":
+  // the record must be ACTIVE, inside its validity window AND verified. An
+  // unverified or rejected certificate never satisfies a requirement, and an
+  // expired one never does either.
+  const isValid =
+    row.status === 'ACTIVE' &&
+    !isExpired &&
+    row.verification_status === 'VERIFIED';
 
   return {
     id: row.id,
@@ -163,11 +182,9 @@ function mapRow(
     issueDate: toIso(row.issue_date),
     expiryDate,
     status: row.status,
-    expiryStatus: resolveWorkforceCertificationExpiryStatus(
-      row.status,
-      expiryDate,
-      now,
-    ),
+    expiryStatus,
+    isExpired,
+    isValid,
     verificationStatus: row.verification_status,
     verifiedByUserId: row.verified_by_user_id,
     verifiedAt: toNullableIso(row.verified_at),
@@ -181,41 +198,62 @@ function mapRow(
   };
 }
 
-const SELECT_WITH_RELATIONS = `
-  SELECT wc.id,
-         wc.client_id,
-         wc.workforce_profile_id,
-         wc.skill_id,
-         s.code AS skill_code,
-         s.name AS skill_name,
-         s.category AS skill_category,
-         s.status AS skill_status,
-         wc.certificate_number,
-         wc.certificate_name,
-         wc.issuing_authority,
-         wc.issue_date,
-         wc.expiry_date,
-         wc.status,
-         wc.verification_status,
-         wc.verified_by_user_id,
-         wc.verified_at,
-         wc.document_id,
-         wc.file_reference,
-         d.id AS doc_id,
-         d.document_number AS doc_number,
-         d.document_type AS doc_type,
-         d.title AS doc_title,
-         d.file_reference AS doc_file_reference,
-         d.status AS doc_status,
-         wc.notes,
-         wc.created_by_user_id,
-         wc.created_at,
-         wc.updated_at
-    FROM workforce_certifications wc
-    LEFT JOIN skills s
-      ON s.id = wc.skill_id
-    LEFT JOIN documents d
-      ON d.id = wc.document_id
+const CERTIFICATION_COLUMNS = `
+  wc.id,
+  wc.client_id,
+  wc.workforce_profile_id,
+  wc.skill_id,
+  s.code AS skill_code,
+  s.name AS skill_name,
+  s.category AS skill_category,
+  s.status AS skill_status,
+  wc.certificate_number,
+  wc.certificate_name,
+  wc.issuing_authority,
+  wc.issue_date,
+  wc.expiry_date,
+  wc.status,
+  wc.verification_status,
+  wc.verified_by_user_id,
+  wc.verified_at,
+  wc.document_id,
+  wc.file_reference,
+  d.id AS doc_id,
+  d.document_number AS doc_number,
+  d.document_type AS doc_type,
+  d.title AS doc_title,
+  d.file_reference AS doc_file_reference,
+  d.status AS doc_status,
+  wc.notes,
+  wc.created_by_user_id,
+  wc.created_at,
+  wc.updated_at
+`;
+
+const CERTIFICATION_FROM = `
+  FROM workforce_certifications wc
+  LEFT JOIN skills s
+    ON s.id = wc.skill_id
+  LEFT JOIN documents d
+    ON d.id = wc.document_id
+`;
+
+const SELECT_WITH_RELATIONS = `SELECT ${CERTIFICATION_COLUMNS} ${CERTIFICATION_FROM}`;
+
+/**
+ * PART 02 — expiry-watch select. The worker identity travels with the row
+ * because the caller reads across workforce profiles inside their own Client
+ * scope, and the profile join additionally proves the row still resolves under
+ * the same Client the certificate claims.
+ */
+const SELECT_EXPIRING = `
+  SELECT ${CERTIFICATION_COLUMNS},
+         wp.full_name AS profile_full_name,
+         wp.employee_code AS profile_employee_code,
+         wp.organization_id AS profile_organization_id
+  ${CERTIFICATION_FROM}
+  JOIN workforce_profiles wp
+    ON wp.id = wc.workforce_profile_id
 `;
 
 export const workforceCertificationRepository = {
@@ -376,6 +414,104 @@ export const workforceCertificationRepository = {
   ): Promise<WorkforceCertificationRecord[]> {
     return this.listByWorkforceProfileId(workforceProfileId, {
       currentOnly: true,
+    });
+  },
+
+  /**
+   * PART 02 — the Mobile worker-profile projection source.
+   *
+   * Administrative deactivation (INACTIVE) removes a certificate from the
+   * worker's own profile: it is withdrawn, not merely historical. EXPIRED rows
+   * stay visible so the worker can see exactly what lapsed and when.
+   *
+   * `clientId` is passed explicitly and re-asserted in the WHERE clause, so a
+   * profile id alone can never widen the read beyond the profile's Client.
+   */
+  async listVisibleByWorkforceProfileId(
+    workforceProfileId: string,
+    clientId: string,
+  ): Promise<WorkforceCertificationRecord[]> {
+    const result = await query<WorkforceCertificationRow>(
+      `${SELECT_WITH_RELATIONS}
+        WHERE wc.workforce_profile_id = $1
+          AND wc.client_id = $2
+          AND wc.status <> 'INACTIVE'
+        ORDER BY
+          CASE WHEN wc.status = 'ACTIVE' THEN 0 ELSE 1 END,
+          wc.expiry_date ASC NULLS LAST,
+          wc.issue_date DESC,
+          wc.id ASC`,
+      [workforceProfileId, clientId],
+    );
+    const now = new Date();
+    return result.rows.map((row) => mapRow(row, now));
+  },
+
+  /**
+   * PART 02 — expiry watch across every workforce profile inside the caller's
+   * Client scope.
+   *
+   * The scope is an explicit, server-derived client-id set; an empty set
+   * short-circuits to an empty result instead of a full-table read. Only ACTIVE
+   * certificates with a real expiry date inside `[now, now + days]` are
+   * returned — an already-expired certificate is not "approaching" expiry and
+   * an INACTIVE one is withdrawn.
+   */
+  async listExpiring(
+    clientIds: readonly string[],
+    filter: ListExpiringWorkforceCertificationsFilter,
+    now: Date = new Date(),
+  ): Promise<WorkforceCertificationExpiringItem[]> {
+    if (clientIds.length === 0) {
+      return [];
+    }
+
+    const params: unknown[] = [clientIds, filter.days];
+    const conditions: string[] = [
+      `wc.client_id = ANY($1::uuid[])`,
+      `wc.status = 'ACTIVE'`,
+      `wc.expiry_date IS NOT NULL`,
+      `wc.expiry_date >= NOW()`,
+      // The window is expressed in whole days from the current instant. The
+      // multiplication is done in SQL so the boundary is evaluated by the same
+      // clock that produced NOW().
+      `wc.expiry_date <= NOW() + ($2::int * INTERVAL '1 day')`,
+    ];
+
+    if (filter.verificationStatus) {
+      params.push(filter.verificationStatus);
+      conditions.push(`wc.verification_status = $${params.length}`);
+    }
+
+    if (filter.workforceProfileId) {
+      params.push(filter.workforceProfileId);
+      conditions.push(`wc.workforce_profile_id = $${params.length}`);
+    }
+
+    const result = await query<WorkforceCertificationRow>(
+      `${SELECT_EXPIRING}
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY wc.expiry_date ASC, wc.id ASC`,
+      params,
+    );
+
+    return result.rows.map((row) => {
+      const record = mapRow(row, now);
+      const expiry = new Date(record.expiryDate as string).getTime();
+      const daysUntilExpiry = Math.max(
+        0,
+        Math.ceil((expiry - now.getTime()) / 86_400_000),
+      );
+      return {
+        certification: record,
+        workforceProfile: {
+          id: row.workforce_profile_id,
+          fullName: row.profile_full_name ?? '',
+          employeeCode: row.profile_employee_code ?? '',
+          organizationId: row.profile_organization_id ?? '',
+        },
+        daysUntilExpiry,
+      };
     });
   },
 
