@@ -24988,6 +24988,179 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /mobile/push-subscriptions:
+    post:
+      operationId: registerBrowserPushSubscription
+      summary: Register (or rotate) a browser push subscription
+      description: >
+        CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the BROWSER half of the
+        multi-client push contract, distinct from the native APK token surface
+        (`/mobile/push-tokens`).
+
+        Registers the push service endpoint the browser was handed together
+        with the subscriber key pair (the browser keeps the private half).
+        Re-registering the same `deviceId` ROTATES the endpoint and the key
+        pair on the existing ACTIVE registration; an endpoint that reappears
+        under another account retires the previous owner's registration, so one
+        subscription can never route to two active users.
+
+        The endpoint must be an HTTPS URL on a known browser push service
+        origin: it is a capability URL, and an arbitrary URL would turn the
+        backend into a relay that posts to any host the caller names.
+
+        Registration is NOT delivery, and provider acceptance is NOT
+        delivery. A successful registration creates no notification and sends
+        nothing. A push is only ever produced by the shared outbound delivery
+        engine from an existing notification, and the backend cannot observe
+        whether the browser received, displayed or read it.
+
+        The registration is self-scoped: it is bound to the authenticated
+        `userId` and requires no permission code, and a user can only ever
+        see or revoke their own subscriptions. The endpoint, the subscriber
+        public key and the auth secret are never returned by this contract.
+      tags: [Mobile Execution]
+      security:
+        - bearerAuth: []
+      x-recipient-scoped: true
+      x-push-delivery-failure-behavior: >-
+        A browser subscription the push service proved is gone is retired to
+        INVALID and stays visible as such through `listBrowserPushSubscriptions`;
+        a client must treat INVALID as "re-register this browser". A
+        transport failure is retried by the SHARED outbound retry engine
+        under the same budget as the other channels. Provider acceptance means
+        the service QUEUED the message — it is NOT proof the browser
+        received, displayed or read it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, endpoint, p256dh, auth]
+              properties:
+                deviceId:
+                  type: string
+                  maxLength: 128
+                  description: Stable client-generated browser installation label.
+                endpoint:
+                  type: string
+                  maxLength: 2048
+                  description: >
+                    The push service endpoint URL. Must be HTTPS on a known
+                    browser push service origin.
+                p256dh:
+                  type: string
+                  description: >
+                    The subscriber's P-256 public key, base64url encoded
+                    (65 bytes, uncompressed point).
+                auth:
+                  type: string
+                  description: >
+                    The subscriber's auth secret, base64url encoded (16 bytes).
+                userAgent:
+                  type: string
+                  maxLength: 256
+                  nullable: true
+      responses:
+        "201":
+          description: The ACTIVE browser push subscription registration.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/BrowserPushSubscriptionRegistration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      operationId: listBrowserPushSubscriptions
+      summary: List the authenticated user's browser push subscriptions
+      description: >
+        Returns the user's own browser push subscriptions (newest first),
+        including the retired INACTIVE and INVALID history. Scoped to the
+        authenticated user only.
+      tags: [Mobile Execution]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The user's browser push subscriptions.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BrowserPushSubscriptionRegistration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      operationId: revokeAllBrowserPushSubscriptions
+      summary: Revoke every browser push subscription of the authenticated user
+      description: >
+        Revokes EVERY active browser push subscription of the authenticated
+        user (the "sign out of all browsers" action). The rows are retained as
+        INACTIVE history and are never deleted.
+      tags: [Mobile Execution]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The number of revoked subscriptions.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/BrowserPushSubscriptionRevocationResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /mobile/push-subscriptions/{subscriptionId}:
+    delete:
+      operationId: revokeBrowserPushSubscription
+      summary: Revoke one browser push subscription
+      description: >
+        Revokes one browser push subscription of the authenticated user. Only
+        the subscription's owner can revoke it. The row is kept as INACTIVE
+        history.
+      tags: [Mobile Execution]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: subscriptionId
+          in: path
+          description: Browser push subscription id.
+          required: true
+          schema:
+            $ref: "#/components/schemas/Uuid"
+      responses:
+        "200":
+          description: The revoked subscription.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/BrowserPushSubscriptionRegistration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
   /notification-templates:
@@ -25020,7 +25193,7 @@ paths:
                   description: Notification type stamped on rendered notifications.
                 channel:
                   type: string
-                  enum: [IN_APP]
+                  enum: [IN_APP, EMAIL, WHATSAPP, PUSH]
                 subject:
                   type: string
                   maxLength: 500
@@ -105780,6 +105953,77 @@ components:
           format: date-time
 
     # ------------------------------------------------------------------
+    # CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the BROWSER half of the
+    # multi-client push contract. Distinct from the native APK token
+    # surface above: the browser registers a SUBSCRIPTION, the APK
+    # registers a provider TOKEN.
+    # ------------------------------------------------------------------
+    BrowserPushSubscriptionRegistration:
+      type: object
+      description: >
+        A browser push subscription registration. The browser registers the
+        push service ENDPOINT it was handed together with the subscriber key
+        pair (the browser keeps the private half). `status` is ACTIVE while
+        the subscription is usable; a user revocation keeps the row as
+        INACTIVE history, and a subscription the push service proved is gone
+        is retained as INVALID history. The listing returns every one of the
+        user's subscriptions regardless of status, so all three values are
+        observable.
+
+        The endpoint, the subscriber public key and the auth secret are
+        credential-grade and are NEVER returned by this contract: the client
+        already owns them, so echoing them would only widen the blast radius
+        of a leaked credential. The registration is identified by `id` and
+        `deviceId` only.
+
+        Registration is NOT delivery. A successful registration creates no
+        notification and sends nothing; a push is only ever produced by the
+        shared outbound delivery engine from an existing notification.
+      required:
+        [id, userId, deviceId, status, registeredAt, lastSeenAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/Uuid"
+        userId:
+          $ref: "#/components/schemas/Uuid"
+        deviceId:
+          type: string
+          description: >
+            Stable client-generated browser installation label. Re-registering
+            the same label ROTATES the endpoint and the key pair on the
+            existing ACTIVE registration.
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, INVALID]
+          description: >-
+            ACTIVE — usable subscription. INACTIVE — the user revoked it.
+            INVALID — the push service proved the subscription is gone; the row
+            is retained as history, and a client must treat INVALID as
+            "re-register this browser". The backend never deletes a
+            subscription row.
+        registeredAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    BrowserPushSubscriptionRevocationResult:
+      type: object
+      description: The number of browser subscriptions revoked by the request.
+      required: [revokedCount]
+      properties:
+        revokedCount:
+          type: integer
+          minimum: 0
+
+    # ------------------------------------------------------------------
     # BE-26A — Notification foundation (in-app inbox). Foundation only:
     # no push/email/WhatsApp/SMS delivery, no create endpoint.
     # ------------------------------------------------------------------
@@ -105961,7 +106205,9 @@ components:
         stable unique template identifier; `type` is the notification type
         stamped on rendered notifications. `subject` / `body` are templates
         with `{{variable}}` placeholders; `variables` lists the declared
-        variable names. `channel` is IN_APP in this foundation.
+        variable names. `channel` names the channel the template renders for:
+        IN_APP is the in-app inbox, EMAIL / WHATSAPP / PUSH are the
+        outbound-intent channels.
       required: [id, key, type, channel, subject, variables, status, createdAt]
       properties:
         id:
@@ -105972,7 +106218,7 @@ components:
           type: string
         channel:
           type: string
-          enum: [IN_APP]
+          enum: [IN_APP, EMAIL, WHATSAPP, PUSH]
         subject:
           type: string
         body:

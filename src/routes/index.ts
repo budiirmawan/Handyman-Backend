@@ -268,6 +268,7 @@ import { createMobileQrResolutionRouter } from '../modules/mobile-qr-resolution/
 import { createMobileSyncRouter } from '../modules/mobile-sync/mobile-sync.routes';
 import { createMobileVerificationRouter } from '../modules/mobile-verification/mobile-verification.routes';
 import { createPushTokenRouter } from '../modules/push-tokens/push-token.routes';
+import { createBrowserPushSubscriptionRouter } from '../modules/browser-push-subscriptions/browser-push-subscription.routes';
 import { createAppVersionRouter } from '../modules/app-versions/app-version.routes';
 import { createMobileDiagnosticsRouter } from '../modules/mobile-diagnostics/mobile-diagnostics.routes';
 import { createMobileCurrentShiftRouter } from '../modules/mobile-current-shift/mobile-current-shift.routes';
@@ -495,6 +496,9 @@ export function createApiRouter(): Router {
   router.use(createMobileSyncRouter());
   router.use(createMobileVerificationRouter());
   router.use(createPushTokenRouter());
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the BROWSER half of the
+  // multi-client push contract (distinct from the native APK token surface).
+  router.use(createBrowserPushSubscriptionRouter());
   router.use(createAppVersionRouter());
   router.use(createMobileDiagnosticsRouter());
   router.use(createMobileCurrentShiftRouter());
