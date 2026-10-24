@@ -338,3 +338,79 @@ or any change to the E2E branch.
 * PART 02 — `docs/handyman/CR-HM-SERVICE-CATALOG-01_PART02.md`
 * PART 03 — `docs/handyman/CR-HM-SERVICE-CATALOG-01_PART03.md`
 * This review — `docs/handyman/CR-HM-SERVICE-CATALOG-01_FINAL_REVIEW.md`
+
+---
+
+## 10. POST-MERGE RECONCILIATION RECORD (executed 2026-10-24)
+
+PR #59 (`CR-HM-FIELD-OPERATIONS-01`) was merged first: `main` = `31529d5`
+(“Merge pull request #59 …”), carrying `0473`–`0475` (PR #58) and `0476`
+(PR #59). `origin/main` was then merged **into this release branch** with a
+normal merge (no rebase, no force push); merge commit `7be04a2`, parents
+`f06017b` (this CR) and `31529d5` (`main`).
+
+### 10.1 Conflicts and their resolution
+
+| File | Resolution |
+|---|---|
+| `src/database/migrations/index.ts` | Union in numeric order: `0470`–`0472`, `0473`/`0474`/`0475`, `0476`, `0477`–`0480`. Nothing dropped from either side, nothing duplicated |
+| `tests/handyman-contract-freeze-03-openapi.test.ts` | Re-pinned by measurement: **301** operations / **203** annotated |
+| `tests/openapi-operational-final-parity.test.ts` | Re-pinned by measurement (see 10.2) |
+| `tests/openapi-operational-structural-closure.test.ts` | Re-pinned by measurement (see 10.2) |
+
+Auto-merged and verified additive: `docs/api/openapi.yaml` (PR #59’s G-2/G-3
+contract plus this CR’s catalogue contract), `src/routes/index.ts` (both
+routers mounted), `src/shared/errors.ts` (both error-code blocks).
+
+### 10.2 Measured census on the merged tree
+
+Every figure below was produced by running the suites against the merged tree
+and reading the assertions’ measured values — none was copied from either
+parent. They match the predictions in §6/§8 of this review exactly.
+
+| Metric | Value |
+|---|---|
+| Total runtime routes | **2,067** |
+| Operational runtime | **1,998** (1 root + 1,997 in-scope) |
+| In-scope operational runtime | **1,997** |
+| Distinct in-scope operational | **1,996** |
+| Operational OpenAPI | **1,996** |
+| OpenAPI total | **2,065** (1,996 + 69 platform) |
+| Handyman surface / annotated | **301 / 203** |
+| Migrations in the registry | **478** (unique, ascending, 1:1 with files) |
+| Class A gap | **1** (the duplicate `GET /tasks/:id` mount — unchanged) |
+
+Structural invariants were not touched: unmapped = 0, speculative = 0, platform
+69/69, duplicate `operationId` = 0, all local `$ref`s resolve.
+
+### 10.3 Genuine post-merge failure found and fixed
+
+`tests/handyman-arrival-configuration-part04.test.ts` (PR #59’s suite) test
+`CT-05/CT-06/CT-07 (AC-9)` asserted “PART 04 adds no migration” with an
+**open-ended** git range (`git diff --name-only eed1225 --
+src/database/migrations`). Once this unrelated CR is on the same branch, that
+range also reports `0477`–`0480`, so the assertion failed even though PART 04
+did add no migration.
+
+The range is now pinned to PART 04’s own commit (`eed1225..c2f045f`) — the
+claim is identical, verifiable forever, and immune to later CRs. No assertion
+was deleted, skipped or loosened. Result: **24/24** green.
+
+This is the only genuine failure the merge produced. No baseline-identical test
+debt was observed in the batches executed for this reconciliation.
+
+### 10.4 Verification executed (small bounded batches, disposable PostgreSQL 18.4)
+
+| Batch | Result |
+|---|---|
+| `tsc --noEmit` | clean |
+| `db:migrate` on a fresh database | 478/478 applied, `0476` then `0477`–`0480`, status head `0480` |
+| freeze + final-parity + structural | 28/28 |
+| `handyman-arrival-configuration-part04` | 24/24 |
+| `cr-hm-service-catalog-01-part01` + `part02` | 27/27 |
+| `cr-hm-service-catalog-01-part03` + `service-catalog-openapi` | 12/12 |
+| `service-catalog` | 13/13 |
+| `openapi-contract` + `mobile-openapi-completeness` | 12/12 |
+| `price-catalog-openapi` + `handyman-field-ops-ack-part02` | 14/14 |
+
+0 failures, 0 skips across all batches. The full suite was deliberately not run.
