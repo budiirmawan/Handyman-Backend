@@ -138,6 +138,67 @@ row counts, schema dump, reference CSV, file manifest and safe copy.
 
 ## 6. Operational incident playbooks
 
+### 0478 populated SERVICE-price recovery safety (Part 04 / BA-03)
+
+The current runner treats **every populated SERVICE price catalog as forward-only
+for 0478**. Its preflight runs under the existing advisory lock and per-migration
+transaction, before historical 0478 DDL. Non-empty tier keys cannot be represented
+by the old exclusion; plain SERVICE rows would also lose key identity and the
+historical up has no populated-row key backfill. Empty-data 0478 down/up remains
+available for disposable development, but is not production recovery approval.
+
+An unsafe `db:migrate:down` exits non-zero with `Unsafe downgrade
+0478_service_price_tier_key refused`, total/keyed SERVICE row counts, and
+forward-fix/paired-restore guidance. It emits **no** `Rolled back …` message and
+leaves schema, tiers and ledger unchanged. Never bypass this control by calling a
+migration's `down` directly, deleting price rows to make the old constraint fit,
+editing `schema_migrations`, or rewriting/renumbering applied history. The raw
+historical failure is PostgreSQL SQLSTATE `23P01` while recreating
+`price_catalog_entries_service_window_exclusion`; transaction rollback is a safety
+net, not a recovery strategy.
+
+0477 price rules and quotation snapshots plus current price repositories depend on
+tier-aware behavior. 0479/0480 add no direct `service_price_key` DDL dependency,
+but normal runner order is still 0480, 0479, then guarded 0478. Preserve that
+registry order; do not create a second migration authority.
+
+**Preferred A+B recovery:**
+
+1. **Forward fix (B):** keep 0478–0480 and their ledger IDs applied, fence writers
+   when required, capture a valid pair before repair, and deploy a reviewed
+   code/forward-migration fix through the existing one-shot `migrateUp` runner.
+   A failed new migration rolls back its own DDL/ledger insertion; diagnose and
+   re-run the corrected artifact. Do not down applied migrations or manually mark
+   readiness. Verify exact history, constraints, representative tier pricing and
+   quotation reads before promotion.
+2. **Paired restore (A):** name the recovery point and approve any excluded writes
+   or data-loss window **before** destructive recovery. Freeze API, scheduler,
+   integration and admin writers; capture/verify the native PostgreSQL dump and
+   matching evidence artifacts in the same window. Restore into an isolated empty
+   DB/volume using sections 3–4, never `--clean` over the only copy. Compare
+   migration IDs **and timestamps**, public tables, price-table columns and all
+   constraints, catalog/tier rows, evidence references/hashes, grants and full row
+   counts. Start the matching Backend privately, verify readiness and authenticated
+   price/quotation/evidence reads, then choose one authoritative target and resume
+   writes once. Keep both old and recovered writers fenced until that decision.
+
+**Application rollback (C) is not certified.** An older artifact's canonical
+registry rejects 0478–0480 as unknown/newer history, and its SERVICE insert path
+does not populate the non-null tier key. Do not bypass readiness or retain the new
+schema with an older image unless both exact-history and every affected read/write
+have separately passed a reviewed compatibility rehearsal. Historical down
+modification (D) was not used and is not an incident shortcut.
+
+**RPO/RTO and freeze assumptions:** a stopped-writer snapshot has zero recovery-
+point loss only for writes completed before that frozen capture; writes after the
+snapshot are excluded and require explicit approval/reconciliation. The daily
+backup policy still implies up to 24h RPO. RTO is the measured sum of writer
+drain/freeze, backup and transfer, restore, validation, and one-writer cutover—not
+merely process start time. Disposable test timings are not production RTO. The
+write freeze remains in force through restore validation and authoritative-target
+selection; validation reads that create sessions/audit rows are writes and must be
+included in the approved test-write disposition.
+
 | Symptom | Safe response |
 |---|---|
 | Database unavailable at startup | Keep traffic fenced. Check DB provision/health, private DNS/port, DB name/role/password, TLS chain, firewall and connection capacity. Correct configuration, retry intentionally. Never reset/seed schema. |
@@ -180,8 +241,25 @@ payloads. Restrict log access, retention and exports.
 ## Validation boundary
 
 Arena exercised disposable PostgreSQL bootstrap and outage/restart behavior,
-filesystem-copy round-trip and negative integrity/path tests. Native `pg_dump`,
-`pg_restore`, Docker daemon, Railway volumes and Biznet access were unavailable;
-**portable native backup/restore and live volume export/import remain operator
-validation gates**, not claimed PASS. The commands above are procedures to
-rehearse on the chosen production-compatible PostgreSQL version.
+filesystem-copy round-trip and negative integrity/path tests. Part 04 additionally
+executed a populated stopped-writer physical database recovery on PostgreSQL 18.4:
+a clean source shutdown/data-directory copy started as a separate isolated server
+without reinitialization; all 478 ledger IDs/timestamps, public tables, every
+price-table column/constraint, representative catalog data and two ACTIVE keyed
+tiers survived. Exact-history readiness and no-op `migrateUp` passed, and two
+authenticated Price Catalog reads returned the restored tier keys. A synthetic
+failed migration also proved rollback followed by successful forward-fix re-run.
+The final local invocation measured freeze+backup **4,879 ms**, restored-server
+start **42 ms**, and validation **1,488 ms**. These components exclude native
+backup transfer, off-host retrieval, production validation and cutover; they are
+not an RTO estimate. These are real disposable database results, not unit-only
+restore claims.
+
+Native `pg_dump`, `pg_restore`, `psql`, Docker daemon, Railway volumes and Biznet
+access were unavailable. The Part 04 proof is **physical, database-only and
+non-production**; it includes no evidence-byte pair, native logical dump/restore,
+production data volume, encrypted off-host transfer, staging cutover, or measured
+production RTO. **Portable native backup/restore, live volume export/import and
+paired production-like recovery remain BA-08/BA-11 operator validation gates**,
+not claimed PASS. The commands above are procedures to rehearse on the chosen
+production-compatible PostgreSQL version.

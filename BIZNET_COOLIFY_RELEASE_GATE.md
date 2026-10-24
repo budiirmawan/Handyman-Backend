@@ -14,11 +14,10 @@
 
 ## 1. Why the gate is closed
 
-Part 01 found **11 unconditional P1 blockers**. Parts 02 and 03 closed BA-01 and BA-02 at implementation/OpenAPI/focused-test level, leaving **9 blockers: five Backend coding items and four environment/data/recovery workstreams**. BA-01 evidence: `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. BA-02 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.4 (post-fix 6/6, acceptance 65/65, shared currency 8/8, final OpenAPI 34/34, zero skips).
+Part 01 found **11 unconditional P1 blockers**. Parts 02, 03, and 04 closed BA-01, BA-02, and BA-03 at their documented local evidence boundaries, leaving **8 blockers: four Backend coding items and four environment/data/recovery workstreams**. BA-01 evidence: `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. BA-02 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.4 (post-fix 6/6, acceptance 65/65, shared currency 8/8, final OpenAPI 34/34, zero skips). BA-03 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.5 (pre-DDL runner/CLI refusal, 6/6 focused recovery tests, disposable isolated restore and forward recovery); staging/target and native paired recovery remain BA-08/BA-11.
 
 | Blocker | Gate meaning | Current evidence |
 |---|---|---|
-| **BA-03** | Safe populated migration rollback/recovery | Valid concurrent ACTIVE tiers make 0478 down fail while recreating the old exclusion. Transaction prevented partial corruption. |
 | **BA-04** | PIC-dependent lifecycle evidence | Current quotation 403 fixture failures plus historical work-session/building/scope fixture drift prevent reliable sign-off. |
 | **BA-05** | Crew/assignment safety evidence | Current 18/26 pass; eight cases stop on missing TEMP `handyman_assignment_responses`. |
 | **BA-06** | Deterministic readiness atomicity evidence | Three journal assertions depend on shared transaction timestamp + random UUID order. |
@@ -28,7 +27,7 @@ Part 01 found **11 unconditional P1 blockers**. Parts 02 and 03 closed BA-01 and
 | **BA-10** | Actual per-Client operational data | Engine/import tests exist; no launch-Client 8/24 population, real prices, monetary or BM commercial readback. |
 | **BA-11** | Backup and disaster recovery | No automatic backup/retention or executed paired DB+evidence restore; RPO/RTO unproven. |
 
-Part 03's broader bounded Price Catalog preservation run also disclosed 12 pre-existing residual reds (11 replacement/correction SQL failures and one stale direct-insert guard) among 107 tests; the BA-02, selection, OpenAPI, and variant/quotation assertions all passed. These residuals are explicitly not closed or counted as BA-02 evidence; see `FINAL_BACKEND_GAP_AUDIT.md` §3.4. No full-suite PASS is claimed.
+Part 03's broader bounded Price Catalog preservation run also disclosed 12 pre-existing residual reds (11 replacement/correction SQL failures and one stale direct-insert guard) among 107 tests; the BA-02, selection, OpenAPI, and variant/quotation assertions all passed. These residuals are explicitly not closed or counted as BA-02 evidence; see `FINAL_BACKEND_GAP_AUDIT.md` §3.4. Part 04 separately retains the same stale direct-insert red in an auxiliary 33-test mixed run (26 PASS / 1 FAIL / 6 SKIPPED), reran the six skips 6/6 with explicit DB configuration, and records a pre-existing whole-history down-test failure at intentionally irreversible 0369. No legacy assertion was weakened and no full-suite PASS is claimed.
 
 No P0 issue is claimed. The gate is NO-GO because these P1 release controls are open, not because a cross-tenant or financial-authority exploit was found.
 
@@ -37,14 +36,14 @@ No P0 issue is claimed. The gate is NO-GO because these P1 release controls are 
 | Gate | Required evidence | Current status | Release effect |
 |---|---|---|---|
 | **RG-01 — Baseline identity** | PRs #58/#59/#60 merged; exact SHA/image recorded; no unreviewed open PR included | **PASS for source identity** at `fb65c17…`; release image not built/deployed | Source baseline known; image identity still required under BA-08 |
-| **RG-02 — Implementation integrity** | BA-01/02/03 fixed with focused HTTP/secret/migration evidence | **OPEN — BLOCKER:** BA-01 CLOSED in Part 02; BA-02 CLOSED in Part 03; BA-03 remains | NO-GO |
+| **RG-02 — Implementation integrity** | BA-01/02/03 fixed with focused HTTP/secret/migration evidence | **PASS locally:** BA-01 CLOSED in Part 02; BA-02 CLOSED in Part 03; BA-03 CLOSED in Part 04 with 6/6 focused recovery evidence | Local implementation gate closed; overall release remains NO-GO for BA-04 through BA-11 |
 | **RG-03 — Core lifecycle evidence** | BA-04/05/06 affected suites green with zero hidden skips | **OPEN — BLOCKER** | NO-GO |
 | **RG-04 — Static API contract** | OpenAPI parity, unique IDs, refs, auth/permission metadata | **PASS locally after Part 03:** 34/34 combined (existing operational/structural/freeze 28/28 + Price Catalog 6/6); 2,065 normalized operations, 301 Handyman operations | Static evidence only; actual consumer compatibility remains BA-08 |
-| **RG-05 — Type safety** | Typecheck on exact release SHA | **PASS locally after Part 03:** `npm run typecheck` | Re-run on the final release SHA; no build PASS claimed |
+| **RG-05 — Type safety** | Typecheck on exact release SHA | **PASS locally after Part 04:** `npm run typecheck` | Re-run on the final release SHA; no build PASS claimed |
 | **RG-06 — CI/required checks** | Hermetic workflow, required branch checks, migration and notification lanes | **OPEN — BLOCKER (BA-07)** | NO-GO |
 | **RG-07 — Consumer compatibility** | Care → Operations/Manager → PWA → Android signed integration reports | **OPEN — BLOCKER (BA-08)**; historical consumer PR claims are unverified | NO-GO |
 | **RG-08 — Migration up/status** | Target status, expected pending IDs, no unknown/newer history, one-shot apply log | **NOT RUN on target**; only disposable fresh apply succeeded | Production migration NO-GO |
-| **RG-09 — Migration down/recovery** | Populated 0478 down/up or approved lossless recovery on staging copy | **FAILED in disposable reproduction (BA-03)** | Production migration NO-GO |
+| **RG-09 — Migration down/recovery** | Populated 0478 pre-DDL refusal plus approved forward-fix/paired recovery on staging copy | **PASS locally for BA-03:** populated runner/CLI refusal, schema/data/ledger preservation, disposable isolated restore and forward recovery; **NOT RUN on staging/target** | Target evidence remains under BA-08; production migration NO-GO |
 | **RG-10 — IAM and tenant isolation** | Live role/permission/Building census and positive/negative journeys | **Local source/focused evidence PASS; live census OPEN (BA-08)** | NO-GO until live proof; no new bypass found |
 | **RG-11 — Finance/Manager authority** | Finance verification/reconciliation/PAID and Manager-only close evidence | **PASS locally:** finance/arrival 32/32; canonical permission model traced | Re-verify on target; PR #47 remains excluded unless separately mandated |
 | **RG-12 — Notification activation** | Credentials, rules/templates, physical IN_APP/Web Push/FCM delivery, retry/dedupe/rotation/no-secret | **OPEN — BLOCKER (BA-09):** BA-01 response defect is closed; physical production P-6.5 evidence remains open | NO-GO for production notification activation |
@@ -62,25 +61,28 @@ No P0 issue is claimed. The gate is NO-GO because these P1 release controls are 
 - Current head **0480**; 0449 and 0469 are documented intentional/reserved gaps.
 - A disposable fresh apply reached the complete registry.
 - Down 0480 and 0479 succeeded in the focused reproduction.
-- The migration runner’s per-ID transaction preserved head 0478 and the `service_price_key` column when 0478 down failed; no partial schema corruption was observed.
+- The migration runner’s per-ID transaction preserved head 0478 and the `service_price_key` column when the raw 0478 down failed; no partial schema corruption was observed.
+- Part 04 now refuses populated 0478 down **before** its DDL, including a single non-conflicting keyed tier; CLI exits non-zero without a rollback-success message. Empty-data 0478 down/up still passes.
+- A disposable stopped-writer physical database restore preserved all 478 ledger IDs/timestamps, public tables, every price-table column/constraint, representative catalog data and both tiers; readiness and authenticated price reads passed. A synthetic failed migration recovered by forward fix without down.
+- Historical 0478 and the registry are unchanged. Application-image rollback is not certified: old exact-history readiness rejects newer IDs and old SERVICE writes omit the required key.
 
 ### 3.2 What is not proven
 
 - Pending/status state of staging, Biznet, Railway, or any real target.
 - Upgrade from the actual production/Railway schema and data volume.
-- Lossless rollback/recovery with valid concurrent 0478 service-price tiers.
+- Execution of the approved 0478 forward-fix/paired-recovery strategy on a staging or actual target copy, with production-shaped volume and native `pg_dump`/`pg_restore`; the Part 04 physical disposable proof does not fill this gate.
 - Target roles/extensions/index/constraint fingerprints, production locks, or application-image compatibility after rollback.
 - A validated pre-migration backup pair and its restore.
 - Live post-migration consumer and scheduler behavior.
 
 ### 3.3 Migration NO-GO rule
 
-Do not run a production migration while BA-03 or BA-08 target evidence is open. A later GO requires all of the following:
+Do not run a production migration while any P1 release gate or BA-08 target evidence is open. BA-03's local closure does not authorize target migration. A later GO requires all of the following:
 
 - [ ] Release SHA and canonical expected migration head are recorded after all approved repairs.
 - [ ] `db:migrate:status` on the actual target shows only expected pending IDs and no unknown/newer history.
 - [ ] A named, encrypted, off-host DB+evidence backup pair exists and its restore has been validated.
-- [ ] The populated 0478 rollback/recovery strategy passes on a staging copy without silently deleting/collapsing tiers.
+- [ ] The populated 0478 pre-DDL refusal and approved forward-fix/paired-restore strategy pass on a staging copy without silently deleting/collapsing tiers; no historical down is forced.
 - [ ] Writers/API/scheduler/external producers are fenced according to the cutover plan; exactly one authorized migration job runs.
 - [ ] Migration-owner and runtime roles are separate and least-privilege; the API container does not auto-migrate, seed, or reset.
 - [ ] The new schema is applied before the compatible application image starts; health/readiness, constraints, indexes, history, grants and representative reads are checked.
@@ -166,7 +168,7 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 
 | Sign-off | Required named evidence | Current |
 |---|---|---|
-| Backend code owner | BA-01/02/03 committed fixes + focused results | **BA-01 PART 02 AND BA-02 PART 03 EVIDENCE SUPPLIED; BA-03 NOT SUPPLIED** |
+| Backend code owner | BA-01/02/03 committed fixes + focused results | **BA-01 PART 02, BA-02 PART 03, AND BA-03 PART 04 LOCAL EVIDENCE SUPPLIED** |
 | Backend test owner | BA-04/05/06 green affected suites; P2 disposition | **NOT SUPPLIED** |
 | CI owner | BA-07 workflow/run/required checks | **NOT SUPPLIED** |
 | Platform/DBA | Target migration/up/recovery, infrastructure, persistence and monitoring | **NOT SUPPLIED** |
@@ -178,10 +180,10 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 
 ## 9. Final release statement
 
-The Part 01 baseline was **0 / 11 / 11** across 22 items. Current status after Part 03:
+The Part 01 baseline was **0 / 11 / 11** across 22 items. Current status after Part 04:
 
-- **P0/P1/P2:** **0 / 9 / 11** across **20 open items**; **BA-01 and BA-02 are closed**.
-- **Remaining Backend coding items:** **12** total, **5 release-blocking**.
+- **P0/P1/P2:** **0 / 8 / 11** across **19 open items**; **BA-01, BA-02, and BA-03 are closed**.
+- **Remaining Backend coding items:** **11** total, **4 release-blocking**.
 - **Backend FINAL FREEZE:** **NOT READY**.
 - **Production migration readiness:** **NO-GO**.
 - **Biznet/Coolify production readiness:** **NO-GO**.

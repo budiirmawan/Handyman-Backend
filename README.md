@@ -109,7 +109,11 @@ codes and the `PLATFORM_ADMIN` role (with all six permissions). It never
 seeds users, credentials, or passwords.
 
 `db:migrate:down` rolls back only the latest migration. Do not use it casually
-against important data. `npm test` never rolls back `asentra`.
+against important data. Populated 0478 SERVICE price data is forward-only: the
+runner rejects that downgrade before DDL rather than erasing tier identity; use
+the forward-fix/paired-restore procedure in
+`docs/HANDYMAN_DATABASE_EVIDENCE_BACKUP_RECOVERY.md`. `npm test` never rolls back
+`asentra`.
 
 ## Commands
 
