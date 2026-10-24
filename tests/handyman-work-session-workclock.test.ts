@@ -31,6 +31,8 @@ import { buildingAssignmentService }
 import { userService } from '../src/modules/users';
 import { vendorWorkforceService }
   from '../src/modules/vendor-workforce';
+import { assignBuildingToWorkforce }
+  from '../src/modules/workforce-building-assignments';
 import { workforceService } from '../src/modules/workforce';
 import { handymanWorkerContextService }
   from '../src/modules/handyman-providers';
@@ -40,6 +42,7 @@ import {
   crewFixture,
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
+import { releaseDispatchFixture } from './helpers/handyman-dispatch';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -166,6 +169,10 @@ async function authorityFixture() {
     workforceType: 'EXTERNAL',
     userId: helperUser.id,
   });
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: f.realm.building.id,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: crew.vendor.id,
     workforceProfileId: profile.id,
@@ -188,6 +195,12 @@ async function authorityFixture() {
     providerContextId: crew.providerContext.id,
     crewId: crew.crew.id,
   }, adminUserId);
+  await releaseDispatchFixture({
+    executionScopeId: f.scope.id,
+    handymanCrewId: crew.crew.id,
+    actorUserId: adminUserId,
+    query: q,
+  });
   return {
     ...f,
     crew,
