@@ -6,6 +6,7 @@ import { recordOperationalEvent } from '../operational-events';
 import { resolveHandymanExpectedArrivalLocation }
   from '../handyman-arrival-locations';
 import {
+  buildingGeospatialPolicyConflictError,
   buildingGeospatialPolicyValidationError,
   geofenceSignalValidationError,
 } from './handyman-geospatial-policy.errors';
@@ -181,6 +182,16 @@ export async function saveHandymanBuildingGeospatialPolicy(
     buildingId,
   });
   return withTransaction(async (tx) => {
+    // CR-HM-FIELD-OPERATIONS-01 PART 04 (G-3 concurrency) — serialize
+    // configuration writers per Building BEFORE reading the ACTIVE row.
+    // Two simultaneous PUTs therefore queue: the second transaction sees
+    // the first one's ACTIVE policy and performs a real history-preserving
+    // replace instead of racing the one-ACTIVE-per-Building index. The
+    // unique-violation mapping below stays as a defensive backstop.
+    await handymanGeospatialPolicyRepository.lockBuildingAuthority(
+      tx,
+      buildingId,
+    );
     const existing = await handymanGeospatialPolicyRepository
       .lockActivePolicyByBuilding(tx, buildingId);
     // Replacement: retire the old ACTIVE row FIRST (AE index forbids
@@ -192,8 +203,9 @@ export async function saveHandymanBuildingGeospatialPolicy(
         throw new Error('HANDYMAN_BLD_GEO_POLICY_REPLACE_CONFLICT');
       }
     }
-    const record = await handymanGeospatialPolicyRepository
-      .insertPolicy(tx, {
+    let record: HandymanBuildingGeospatialPolicyRecord;
+    try {
+      record = await handymanGeospatialPolicyRepository.insertPolicy(tx, {
         clientId: building.clientId,
         buildingId,
         referenceLatitude: Number(input.referenceLatitude),
@@ -206,6 +218,16 @@ export async function saveHandymanBuildingGeospatialPolicy(
           : null,
         createdByUserId: actorUserId,
       });
+    } catch (error) {
+      // Defensive: the per-Building row lock above makes this unreachable
+      // in normal operation; if the DB invariant still reports a
+      // duplicate ACTIVE row the caller gets a bounded 409, never a 500
+      // and never a second ACTIVE policy.
+      if ((error as { code?: string }).code === '23505') {
+        throw buildingGeospatialPolicyConflictError();
+      }
+      throw error;
+    }
     if (existing) {
       await journal(
         tx,
@@ -246,6 +268,41 @@ export async function getHandymanBuildingGeospatialPolicy(
     buildingId: record.buildingId,
   });
   return toPublic(record);
+}
+
+/**
+ * CR-HM-FIELD-OPERATIONS-01 PART 04 (G-3 history) — append-only configuration
+ * history for ONE Building: every retired (INACTIVE) policy plus the current
+ * ACTIVE one, newest first.
+ *
+ * Authority chain: Building exists + ACTIVE (400) → BE-02G exact-Building
+ * (403) → read. This read is what makes the frozen §10 "history preserved,
+ * never silent overwrite" guarantee auditable, so it must never be the
+ * privileged path that skips the Building wall.
+ */
+export async function listHandymanBuildingGeospatialPolicyHistory(
+  buildingId: string,
+  actorUserId: string,
+): Promise<{
+  buildingId: string;
+  policies: PublicHandymanBuildingGeospatialPolicy[];
+}> {
+  ensureUuid(buildingId, 'buildingId');
+  ensureUuid(actorUserId, 'actorUserId');
+  const building = await handymanGeospatialPolicyRepository
+    .findBuildingAuthority(undefined, buildingId);
+  if (!building || building.status !== 'ACTIVE') {
+    throw buildingGeospatialPolicyValidationError([
+      { field: 'buildingId', message: 'Building must exist and be ACTIVE.' },
+    ]);
+  }
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: building.clientId,
+    buildingId: building.id,
+  });
+  const records = await handymanGeospatialPolicyRepository
+    .listPoliciesByBuilding(undefined, buildingId);
+  return { buildingId, policies: records.map(toPublic) };
 }
 
 /**

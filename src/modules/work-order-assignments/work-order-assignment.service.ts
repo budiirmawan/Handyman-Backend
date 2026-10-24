@@ -2,7 +2,9 @@ import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { satisfyClock } from '../applied-slas/sla-clock-lifecycle.service';
 import {
+  assertClientKeyAvailableForAssignment,
   assignmentResponseConflictError,
+  normalizeAssignmentResponseClientKey,
   assignmentResponseLateError,
   assignmentResponseRepository,
   assignmentResponseSupersededError,
@@ -1075,6 +1077,7 @@ export async function reassignWorkOrder(
 export async function respondToWorkOrderAssignment(
   input: RespondToWorkOrderAssignmentInput,
 ): Promise<PublicWorkOrderAssignment> {
+  const clientKey = normalizeAssignmentResponseClientKey(input.idempotencyKey);
   const workOrder = await workOrderRepository.findById(input.workOrderId);
   if (!workOrder) {
     throw workOrderNotFoundError();
@@ -1147,6 +1150,19 @@ export async function respondToWorkOrderAssignment(
       );
     }
 
+    // CR-HM-FIELD-OPS-ACK-01 PART 01 — a device key may finalize ONE
+    // assignment per actor. The Standard Work Order lane has no Handyman
+    // appointment window, so its existing Work Order status guard above is
+    // the sole lifecycle/expiry gate (no deadline is invented here).
+    await assertClientKeyAvailableForAssignment(
+      {
+        actorUserId: input.actorUserId,
+        assignmentId: lockedAssignment.id,
+        clientIdempotencyKey: clientKey,
+      },
+      tx,
+    );
+
     if (input.decision === 'TERIMA') {
       if (currentWoStatus === 'OPEN') {
         await workOrderRepository.updateStatus(workOrder.id, 'ASSIGNED', tx);
@@ -1204,6 +1220,7 @@ export async function respondToWorkOrderAssignment(
           notes: input.notes ?? null,
           linkedWorkOrderActionId: action.id,
           idempotencyKey: input.idempotencyKey ?? null,
+          clientIdempotencyKey: clientKey,
         },
         tx,
       );
@@ -1231,6 +1248,7 @@ export async function respondToWorkOrderAssignment(
         declineReason,
         notes: input.notes ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
+        clientIdempotencyKey: clientKey,
       },
       tx,
     );

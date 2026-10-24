@@ -25,6 +25,10 @@ import { userService } from '../src/modules/users';
 import { createAdminUser } from './helpers/access';
 import { baseFixture, initHandymanFixtures } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-SEC-02 PART 05 — focused tests for the BE-02G exact-Building
@@ -86,11 +90,22 @@ import { ensureTestDatabase } from './helpers/postgres';
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
+// CR-HM-FIELD-OPS-ACK-01 PART 02 — this suite used to SKIP itself
+// when no external PostgreSQL was reachable, so the CR-HM-07
+// geofence evidence never actually ran. It now owns a disposable
+// embedded cluster like the other CR-HM-07 suites.
+const EMBEDDED_DIR = '/tmp/hm04-geospatial-scope-guard-pg';
+const EMBEDDED_PORT = 55592;
+let embedded: EmbeddedTestDatabase | null = null;
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 const REF = { latitude: -6.2, longitude: 106.816666 };
 
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -137,9 +152,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {

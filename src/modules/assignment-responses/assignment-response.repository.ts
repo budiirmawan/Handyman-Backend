@@ -32,6 +32,7 @@ type AssignmentResponseRow = {
   response_notes: string | null;
   linked_work_order_action_id: string | null;
   idempotency_key: string | null;
+  client_idempotency_key: string | null;
   version: number;
   created_at: Date;
   updated_at: Date;
@@ -79,6 +80,7 @@ const RESPONSE_SELECT = `
   response_notes,
   linked_work_order_action_id,
   idempotency_key,
+  client_idempotency_key,
   version,
   created_at,
   updated_at
@@ -129,6 +131,7 @@ function mapResponseRow(
     responseNotes: row.response_notes,
     linkedWorkOrderActionId: row.linked_work_order_action_id,
     idempotencyKey: row.idempotency_key,
+    clientIdempotencyKey: row.client_idempotency_key,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -208,6 +211,31 @@ async function findByAssignmentIdForUpdate(
       WHERE assignment_id = $1
       FOR UPDATE`,
     [assignmentId],
+  );
+  const row = result.rows[0];
+  return row ? mapResponseRow(row) : null;
+}
+
+/**
+ * CR-HM-FIELD-OPS-ACK-01 PART 01 — resolves a FINALIZED decision previously
+ * written with the SAME caller-supplied key by the SAME actor. Used to stop an
+ * offline/concurrent device replay from finalizing a DIFFERENT assignment
+ * after reassignment. Legacy rows (NULL key) are never matched.
+ */
+async function findFinalizedByClientKey(
+  actorUserId: string,
+  clientIdempotencyKey: string,
+  executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<HandymanAssignmentResponseRecord | null> {
+  const result = await executor.query<AssignmentResponseRow>(
+    `SELECT ${RESPONSE_SELECT}
+       FROM handyman_assignment_responses
+      WHERE responded_by_user_id = $1
+        AND client_idempotency_key = $2
+        AND response_status IN ('TERIMA', 'TIDAK_BISA')
+      ORDER BY updated_at ASC, id ASC
+      LIMIT 1`,
+    [actorUserId, clientIdempotencyKey],
   );
   const row = result.rows[0];
   return row ? mapResponseRow(row) : null;
@@ -341,6 +369,7 @@ async function recordDecision(
             response_notes = $7,
             linked_work_order_action_id = COALESCE($8, linked_work_order_action_id),
             idempotency_key = $9,
+            client_idempotency_key = COALESCE($10, client_idempotency_key),
             version = version + 1,
             updated_at = NOW()
       WHERE assignment_id = $1
@@ -355,6 +384,7 @@ async function recordDecision(
       input.notes ?? null,
       input.linkedWorkOrderActionId ?? null,
       idempotencyKey,
+      input.clientIdempotencyKey?.trim() || null,
     ],
   );
 
@@ -479,6 +509,7 @@ export const assignmentResponseRepository = {
   findByAssignmentId,
   findByAssignmentIdForUpdate,
   findByAssignmentIds,
+  findFinalizedByClientKey,
   listEventsByAssignmentId,
   recordDecision,
   recordSupersededEvent,

@@ -515,6 +515,8 @@ import { migration0474WidenNotificationTemplateChannelsForPush }
   from './0474_widen_notification_template_channels_for_push';
 import { migration0475CreateNotificationBrowserPushDeliveries }
   from './0475_create_notification_browser_push_deliveries';
+import { migration0476HandymanAssignmentResponseClientKeys }
+  from './0476_handyman_assignment_response_client_keys';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -993,4 +995,5 @@ export const migrations: readonly Migration[] = [
   migration0473CreateBrowserPushSubscriptions,
   migration0474WidenNotificationTemplateChannelsForPush,
   migration0475CreateNotificationBrowserPushDeliveries,
+  migration0476HandymanAssignmentResponseClientKeys,
 ];

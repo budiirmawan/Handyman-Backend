@@ -19,8 +19,11 @@ import {
 import {
   assignmentDeclineReasonForbiddenOnAcceptError,
   assignmentDeclineReasonRequiredError,
+  assertAssignmentResponseWindowOpen,
+  assertClientKeyAvailableForAssignment,
   assignmentResponseRepository,
   handymanAssignmentResponseConflictError,
+  normalizeAssignmentResponseClientKey,
   handymanAssignmentResponseForbiddenError,
   handymanAssignmentResponseLateError,
   handymanAssignmentResponseSupersededError,
@@ -820,6 +823,7 @@ export async function respondToHandymanExecutionScopeAssignment(
     throw AppError.validation('notes must not exceed 2000 characters.');
   }
   const normalizedNotes = rawNotes.length > 0 ? rawNotes : null;
+  const clientKey = normalizeAssignmentResponseClientKey(input.idempotencyKey);
 
   return withTransaction(async (tx) => {
     const scope = await handymanScopeAssignmentRepository.lockScopeById(
@@ -923,6 +927,10 @@ export async function respondToHandymanExecutionScopeAssignment(
           declineReason: existing.declineReason,
           responseNotes: existing.responseNotes,
           reassignmentRequired: existing.responseStatus === 'TIDAK_BISA',
+          acknowledgedAt:
+            existing.responseStatus === 'TERIMA' && existing.respondedAt
+              ? existing.respondedAt.toISOString()
+              : null,
           idempotentReplay: true,
         };
       }
@@ -950,6 +958,21 @@ export async function respondToHandymanExecutionScopeAssignment(
       throw handymanAssignmentResponseLateError();
     }
 
+    // CR-HM-FIELD-OPS-ACK-01 PART 01 — concurrent-device key guard and the
+    // authoritative appointment-window expiry guard. Both run after the
+    // identical-decision replay check, inside the SAME locked transaction.
+    await assertClientKeyAvailableForAssignment(
+      { actorUserId, assignmentId: assignment.id, clientIdempotencyKey: clientKey },
+      tx,
+    );
+    await assertAssignmentResponseWindowOpen(
+      {
+        assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+        assignmentId: assignment.id,
+      },
+      tx,
+    );
+
     const updated = await assignmentResponseRepository.recordDecision(
       {
         assignmentId: assignment.id,
@@ -958,6 +981,41 @@ export async function respondToHandymanExecutionScopeAssignment(
         actorWorkerId: target.leadWorkerContextId,
         declineReason: normalizedDeclineReason,
         notes: normalizedNotes,
+        clientIdempotencyKey: clientKey,
+      },
+      tx,
+    );
+
+    // Explicit acknowledgment / audit trail. Append-only operational event on
+    // the shared BE-07 store; the notification producer stays the ONLY writer
+    // of notifications (PR #58 preserved).
+    await recordOperationalEvent(
+      {
+        clientId: scope.clientId,
+        buildingId: scope.buildingId,
+        entityType: 'HANDYMAN_ASSIGNMENT_RESPONSE',
+        entityId: assignment.id,
+        actorUserId,
+        eventType:
+          input.responseStatus === 'TERIMA'
+            ? 'HANDYMAN_ASSIGNMENT_ACKNOWLEDGED'
+            : 'HANDYMAN_ASSIGNMENT_DECLINED',
+        summary:
+          input.responseStatus === 'TERIMA'
+            ? 'Execution scope crew assignment acknowledged (TERIMA)'
+            : 'Execution scope crew assignment declined (TIDAK_BISA)',
+        metadata: {
+          assignmentTargetType: 'EXECUTION_SCOPE_ASSIGNMENT',
+          assignmentId: assignment.id,
+          executionScopeId: scope.id,
+          handymanRequestId: scope.handymanRequestId,
+          crewId: target.crewId,
+          responseStatus: input.responseStatus,
+          actorWorkerId: target.leadWorkerContextId,
+          declineReason: normalizedDeclineReason,
+          clientKeyProvided: clientKey !== null,
+          respondedAt: updated.respondedAt?.toISOString() ?? null,
+        },
       },
       tx,
     );
@@ -1015,6 +1073,10 @@ export async function respondToHandymanExecutionScopeAssignment(
       declineReason: updated.declineReason,
       responseNotes: updated.responseNotes,
       reassignmentRequired: updated.responseStatus === 'TIDAK_BISA',
+      acknowledgedAt:
+        updated.responseStatus === 'TERIMA' && updated.respondedAt
+          ? updated.respondedAt.toISOString()
+          : null,
       idempotentReplay: false,
     };
   });
@@ -1068,6 +1130,12 @@ export async function listHandymanExecutionScopeAssignmentResponseHistory(
     responseNotes: response?.responseNotes ?? null,
     reassignmentRequired:
       assignment.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
+    acknowledgedAt:
+      responseStatus === 'TERIMA' && response?.respondedAt
+        ? response.respondedAt.toISOString()
+        : null,
+    acknowledgedByUserId:
+      responseStatus === 'TERIMA' ? (response?.respondedByUserId ?? null) : null,
     events: events.map(toPublicAssignmentResponseEvent),
   };
 }

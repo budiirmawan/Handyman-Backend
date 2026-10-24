@@ -155,7 +155,13 @@ before(async () => {
       id uuid PRIMARY KEY, client_id uuid NOT NULL, vendor_id uuid NOT NULL,
       provider_code text NOT NULL DEFAULT 'PROV', status text NOT NULL,
       notes text, created_by_user_id uuid,
-      created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+      created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+      -- CR-HM-FIELD-OPS-ACK-01 PART 02 repair: the production provider
+      -- context authority projects provider_type (VENDOR | DIRECT); the
+      -- stale fixture omitted it, so every case failed with
+      -- 'column "provider_type" does not exist' instead of exercising its
+      -- own assertion.
+      provider_type text NOT NULL DEFAULT 'VENDOR'
     );
     CREATE TABLE workforce_profiles(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, organization_id uuid NOT NULL,

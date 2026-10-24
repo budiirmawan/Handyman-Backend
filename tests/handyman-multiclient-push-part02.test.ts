@@ -1874,7 +1874,14 @@ describe('CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the browser subscription
 });
 
 describe('CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the migration upgrade path', () => {
-  it('upgrades a 0472 database to 0475 without losing data', async () => {
+  // CR-HM-FIELD-OPERATIONS-01 FINAL REVIEW (2026-10-24): this branch adds
+  // migration `0476_handyman_assignment_response_client_keys` (PART 01), so a
+  // database built from "every migration except the three PART 02 ones"
+  // legitimately stops at 0476 instead of 0472. The assertion below is no
+  // longer a hardcoded id: it proves the legacy database contains NONE of
+  // 0473/0474/0475 and that its head is exactly the newest applied id — the
+  // same invariant, stated without a stale pin.
+  it('upgrades a pre-PART-02 database to the current head without losing data', async () => {
     // A disposable database that is migrated to the PRE-PART-02 head first.
     // `createPool` is used on purpose: `initDatabase` would REPLACE the
     // process-wide pool that the rest of the suite uses.
@@ -1942,9 +1949,20 @@ describe('CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the migration upgrade pa
       const legacyHead = await upgradePool.query<{ id: string }>(
         `SELECT id FROM schema_migrations ORDER BY id DESC LIMIT 1`,
       );
+      const legacyIds = await upgradePool.query<{ id: string }>(
+        `SELECT id FROM schema_migrations ORDER BY id ASC`,
+      );
+      const appliedLegacyIds = legacyIds.rows.map((row) => row.id);
+      for (const part02 of ['0473_', '0474_', '0475_']) {
+        assert.equal(
+          appliedLegacyIds.some((id) => id.startsWith(part02)),
+          false,
+          `the legacy database must not contain ${part02} yet`,
+        );
+      }
       assert.equal(
         legacyHead.rows[0].id,
-        '0472_handyman_assignment_responses',
+        appliedLegacyIds[appliedLegacyIds.length - 1],
         'the legacy database stops at the pre-PART-02 head',
       );
 

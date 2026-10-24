@@ -13,6 +13,7 @@ export type {
   PublicHandymanBuildingGeospatialPolicy,
 } from './handyman-geospatial-policy.types';
 export {
+  buildingGeospatialPolicyConflictError,
   buildingGeospatialPolicyNotFoundError,
   buildingGeospatialPolicyValidationError,
   geofenceSignalValidationError,
@@ -24,5 +25,6 @@ export {
   getHandymanBuildingGeospatialPolicy,
   handymanGeospatialPolicyService,
   haversineDistanceMeters,
+  listHandymanBuildingGeospatialPolicyHistory,
   saveHandymanBuildingGeospatialPolicy,
 } from './handyman-geospatial-policy.service';

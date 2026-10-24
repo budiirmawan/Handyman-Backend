@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
+import { parseAssignmentResponseIdempotencyKey } from '../assignment-responses';
 import { handymanInspectorAssignmentService } from '../handyman-inspector-assignments';
 import {
   parseAssignInspectorBody,
@@ -155,6 +156,10 @@ export async function respondInspectorAssignmentHandler(
     const visitId = parseVisitIdParam(req.params.visitAppointmentId);
     const assignmentId = parseAssignmentIdParam(req.params.assignmentId);
     const body = parseRespondInspectorBody(req.body);
+    const idempotencyKey = parseAssignmentResponseIdempotencyKey(
+      req.header('Idempotency-Key'),
+      req.body,
+    );
     sendSuccess(
       res,
       await handymanInspectorAssignmentService.respondToInspectorVisitAssignment(
@@ -162,6 +167,7 @@ export async function respondInspectorAssignmentHandler(
           visitAppointmentId: visitId,
           assignmentId,
           ...body,
+          ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         },
         actor(req),
       ),

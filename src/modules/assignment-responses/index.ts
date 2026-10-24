@@ -7,10 +7,20 @@ export {
   assignmentResponseSupersededError,
   handymanAssignmentDeclinedError,
   handymanAssignmentResponseConflictError,
+  handymanAssignmentResponseExpiredError,
   handymanAssignmentResponseForbiddenError,
+  handymanAssignmentResponseIdempotencyConflictError,
   handymanAssignmentResponseLateError,
   handymanAssignmentResponseSupersededError,
 } from './assignment-response.errors';
+
+export {
+  assertAssignmentResponseWindowOpen,
+  assertClientKeyAvailableForAssignment,
+  normalizeAssignmentResponseClientKey,
+} from './assignment-response.guards';
+
+export { parseAssignmentResponseIdempotencyKey } from './assignment-response.validation';
 
 export {
   notifyExecutionScopeAssignmentAccepted,

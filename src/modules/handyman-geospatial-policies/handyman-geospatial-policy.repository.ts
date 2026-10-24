@@ -73,6 +73,42 @@ async function findActivePolicyByBuilding(
   return result.rows[0] ? map(result.rows[0]) : null;
 }
 
+/**
+ * CR-HM-FIELD-OPERATIONS-01 PART 04 (G-3 concurrency boundary) — serialize
+ * configuration writes per Building by locking the Building row inside the
+ * caller's transaction. Two concurrent PUTs therefore queue instead of
+ * racing the one-ACTIVE-per-Building index: the second transaction sees the
+ * first one's ACTIVE row and performs a proper history-preserving replace.
+ *
+ * Returns false when the Building does not exist (caller already validated
+ * existence, so this is a defensive false rather than a new error path).
+ */
+async function lockBuildingAuthority(
+  executor: Pick<PoolClient, 'query'>,
+  buildingId: string,
+): Promise<boolean> {
+  const result = await executor.query(
+    `SELECT id FROM buildings WHERE id = $1 FOR UPDATE`,
+    [buildingId],
+  );
+  return result.rows.length > 0;
+}
+
+/** Full policy history for one Building (append-only audit read). */
+async function listPoliciesByBuilding(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  buildingId: string,
+): Promise<HandymanBuildingGeospatialPolicyRecord[]> {
+  const result = await executor.query(
+    `${POLICY_SELECT}
+      WHERE building_id = $1
+      ORDER BY effective_from DESC, created_at DESC, id DESC
+      LIMIT 500`,
+    [buildingId],
+  );
+  return result.rows.map(map);
+}
+
 /** ACTIVE policy for a building, locked (replacement boundary). */
 async function lockActivePolicyByBuilding(
   executor: Pick<PoolClient, 'query'>,
@@ -145,7 +181,9 @@ async function deactivatePolicy(
 export const handymanGeospatialPolicyRepository = {
   findBuildingAuthority,
   findActivePolicyByBuilding,
+  lockBuildingAuthority,
   lockActivePolicyByBuilding,
+  listPoliciesByBuilding,
   insertPolicy,
   deactivatePolicy,
 };
