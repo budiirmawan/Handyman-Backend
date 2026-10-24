@@ -225,3 +225,51 @@ separate clone with its own disposable PostgreSQL:
   price authority.
 * The `crewId` leak in `HandymanExecutionScopeAssignmentResponseView` is a
   pre-existing defect of another CR and should be raised separately.
+
+---
+
+## 8. FINAL REVIEW — reconciliation with the latest `main`
+
+`origin/main` was re-fetched after PART 02 was pushed: it is still
+`ee20d21` (CR-HM-MULTICLIENT-NOTIFICATION-01), so the merge was RE-SIMULATED
+against the current branch (`dc4453d`) rather than reusing the PART 01
+simulation.
+
+| check | result |
+| --- | --- |
+| `origin/main` | `ee20d21` — unchanged since the PART 01 simulation |
+| merge conflicts | exactly ONE: `src/database/migrations/index.ts` (both sides add migrations in the same region) |
+| `docs/api/openapi.yaml` | auto-merges cleanly |
+| `src/routes/index.ts` | auto-merges cleanly |
+| migration order after the resolution | `0473`–`0475` (main) → `0476`, `0477`, `0478` (this CR) — no number collision |
+| `npx tsc --noEmit` on the merged tree | clean |
+| focused suites on the merged tree | **27 / 27 PASS** (15 PART 01 + 12 PART 02) |
+| OpenAPI census on the merged tree | 28 / 28 PASS **after** the re-pin below |
+
+### 8.1 The census re-pin at merge time (the same pre-existing `main` defect)
+
+`origin/main` still ships 4 runtime routes (`/mobile/push-subscriptions`
+POST/GET/DELETE/DELETE-one) that its own census pins never accounted for, so
+the merged tree carries main's +4 on top of this CR's +22. The five pins
+must therefore move once more:
+
+| pin | branch (standalone) | merged with `ee20d21` |
+| --- | --- | --- |
+| total runtime | 2,056 | **2,060** |
+| operational runtime | 1,987 | **1,991** |
+| in-scope operational | 1,986 | **1,990** |
+| operational OpenAPI | 1,985 | **1,989** |
+| OpenAPI total | 2,054 | **2,058** |
+
+The Handyman contract-freeze pin (294 operations / 197 permissions) and the
+platform pin (69) are unaffected by the merge.
+
+### 8.2 Merge checklist (final)
+
+1. `git merge arena/d4d4105f-handyman-backend` into the release branch.
+2. Resolve `src/database/migrations/index.ts` — keep both migration blocks in
+   numeric order (`0473`…`0478`).
+3. Re-pin the five census numbers to the merged reality (table above).
+4. Run `npm run typecheck`, `npm run build`, the census suites,
+   `tests/cr-hm-service-catalog-01-part01.test.ts` and
+   `tests/cr-hm-service-catalog-01-part02.test.ts`.

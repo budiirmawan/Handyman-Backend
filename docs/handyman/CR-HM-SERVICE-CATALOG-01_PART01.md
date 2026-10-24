@@ -315,16 +315,17 @@ PART 01 code at all:
 | operational OpenAPI | 1,963 | **1,967** |
 | OpenAPI total | 2,032 | **2,036** |
 
-PART 01 adds a clean **+18** on top of that (2,034 → 2,052 standalone).
-Therefore, at merge time the census pins must be set to the merged reality:
+PART 01 adds a clean **+18** on top of that (2,034 → 2,052 standalone), and
+PART 02 adds **+4** more (2,052 → 2,056). Therefore, at merge time the
+census pins must be set to the merged reality:
 
-| pin | PART 01 branch (standalone) | after merging `ee20d21` |
+| pin | PART 01 + PART 02 branch (standalone) | after merging `ee20d21` |
 | --- | --- | --- |
-| total runtime | 2,052 | **2,056** |
-| operational runtime | 1,983 | **1,987** |
-| in-scope operational | 1,982 | **1,986** |
-| operational OpenAPI | 1,981 | **1,985** |
-| OpenAPI total | 2,050 | **2,054** |
+| total runtime | 2,056 | **2,060** |
+| operational runtime | 1,987 | **1,991** |
+| in-scope operational | 1,986 | **1,990** |
+| operational OpenAPI | 1,985 | **1,989** |
+| OpenAPI total | 2,054 | **2,058** |
 
 Those five numbers live in `tests/openapi-operational-final-parity.test.ts` and
 `tests/openapi-operational-structural-closure.test.ts`. With them re-pinned,
@@ -336,7 +337,7 @@ the merge.
 
 1. `git merge arena/d4d4105f-handyman-backend` into the release branch.
 2. Resolve `src/database/migrations/index.ts` — keep both migration blocks in
-   numeric order (`0473`…`0477`).
+   numeric order (`0473`…`0478`; PART 02 adds `0478`).
 3. Re-pin the five census numbers to the merged reality (table above).
 4. Run `npm run typecheck`, `npm run build`, the census suites and
    `tests/cr-hm-service-catalog-01-part01.test.ts`.
