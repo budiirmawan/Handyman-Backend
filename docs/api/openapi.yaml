@@ -33358,6 +33358,383 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /service-catalog/catalog:
+    get:
+      operationId: getServiceCatalogReadModel
+      x-required-permission: service_catalog.read
+      x-building-scoped: true
+      summary: Authoritative Service Catalog read model
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. Returns the governed Service
+        Categories with their ACTIVE Service Items for one Client, plus a flat
+        item list. Each item carries its category, Client/Building availability
+        and an optional composed reference price. `referencePrice` is null unless
+        a `buildingId` + `currency` are supplied AND a governed SERVICE price
+        catalog entry resolves — never a default or nominal amount.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: buildingId
+          in: query
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: currency
+          in: query
+          schema: { $ref: "#/components/schemas/PriceCatalogCurrency" }
+      responses:
+        "200":
+          description: Scoped catalog read model (empty when the Client is out of reach).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCatalogReadModel" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /service-catalog/service-categories:
+    get:
+      operationId: listServiceCategories
+      x-required-permission: service_catalog.read
+      x-building-scoped: true
+      summary: List governed Service Categories
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. Governed, Client-scoped Service
+        Category master (migration 0473). An out-of-reach `clientId` filter
+        returns an empty list (no existence oracle).
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: clientId
+          in: query
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ServiceCategoryStatus" }
+      responses:
+        "200":
+          description: Scoped category list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ServiceCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createServiceCategory
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Create a governed Service Category (ACTIVE)
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. Requires `service_catalog.manage` plus
+        Client access. `code` is unique per Client; created ACTIVE. Audit:
+        `SERVICE_CATEGORY_CREATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateServiceCategoryRequest" }
+      responses:
+        "201":
+          description: Created category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /service-catalog/service-categories/{id}:
+    get:
+      operationId: getServiceCategory
+      x-required-permission: service_catalog.read
+      x-building-scoped: true
+      summary: Read one Service Category
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCategoryIdPath"
+      responses:
+        "200":
+          description: The category (any status).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateServiceCategory
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Edit a Service Category (non-identity fields only)
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. `code` and `clientId` are immutable;
+        only `name` and `description` are editable. Audit:
+        `SERVICE_CATEGORY_UPDATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCategoryIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateServiceCategoryRequest" }
+      responses:
+        "200":
+          description: Updated category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /service-catalog/service-categories/{id}/deactivate:
+    post:
+      operationId: deactivateServiceCategory
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Deactivate a Service Category (terminal)
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. ACTIVE → INACTIVE (terminal). Refused
+        while ACTIVE service items are still linked (`SERVICE_CATEGORY_IN_USE`).
+        Audit: `SERVICE_CATEGORY_DEACTIVATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ServiceCategoryIdPath"
+      responses:
+        "200":
+          description: Deactivated category.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCategory" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /service-catalog/entries/{serviceCatalogId}/availability:
+    parameters:
+      - $ref: "#/components/parameters/ServiceCatalogId"
+    get:
+      operationId: listServiceCatalogAvailability
+      x-required-permission: service_catalog.read
+      x-building-scoped: true
+      summary: List a Service Item's building availability grants
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Availability grants for the service item.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ServiceCatalogAvailability" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/CatalogueNotFound" }
+    post:
+      operationId: grantServiceCatalogAvailability
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Grant a Service Item availability in one Building
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. The Building must belong to the
+        service item's Client. Once at least one grant exists the item becomes
+        explicitly Building-scoped (available only where an ACTIVE grant
+        exists); with no grants it is available client-wide. Audit:
+        `SERVICE_CATALOG_AVAILABILITY_CREATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AvailabilityGrantRequest" }
+      responses:
+        "201":
+          description: Created availability grant.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCatalogAvailability" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/CatalogueNotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /service-catalog/entries/{serviceCatalogId}/availability/{availabilityId}/deactivate:
+    parameters:
+      - $ref: "#/components/parameters/ServiceCatalogId"
+      - $ref: "#/components/parameters/ServiceCatalogAvailabilityIdPath"
+    post:
+      operationId: deactivateServiceCatalogAvailability
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Revoke a Service Item's building availability grant
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. ACTIVE → INACTIVE (terminal). Audit:
+        `SERVICE_CATALOG_AVAILABILITY_DEACTIVATED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Deactivated availability grant.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCatalogAvailability" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /service-catalog/entries/{serviceCatalogId}/category:
+    parameters:
+      - $ref: "#/components/parameters/ServiceCatalogId"
+    post:
+      operationId: linkServiceItemCategory
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Link a Service Item to a governed Service Category
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. Links an existing Service Item to a
+        governed ACTIVE Service Category in the same Client; the item's category
+        text is derived from the master. Audit:
+        `SERVICE_CATALOG_ENTRY_CATEGORY_LINKED`.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LinkServiceCategoryRequest" }
+      responses:
+        "200":
+          description: Linked service item.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ServiceCatalogCategoryLink" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /service-catalog/starter-pack/import:
+    post:
+      operationId: importServiceCatalogStarterPack
+      x-required-permission: service_catalog.manage
+      x-building-scoped: true
+      summary: Import the Apartment Indonesia Service Starter Pack (idempotent)
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. Explicitly imports the frozen 8
+        categories / 24 services into one ACTIVE Client. Idempotent and
+        concurrency-safe (single transaction + unique constraints + ON CONFLICT
+        DO NOTHING); re-runs create nothing new. Requires `Idempotency-Key`.
+        No price is imported or invented.
+      tags: [Service Catalog]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StarterPackImportRequest" }
+      responses:
+        "201":
+          description: Import summary (fresh import).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/StarterPackImportResult" }
+        "200":
+          description: Import summary (replayed idempotent retry).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/StarterPackImportResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /service-catalog/entries/{id}/competency-requirements:
     get:
       operationId: listServiceCatalogCompetencyRequirements
@@ -83969,6 +84346,20 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/Uuid"
+    ServiceCategoryIdPath:
+      name: id
+      in: path
+      description: Authoritative `service_category.id`.
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
+    ServiceCatalogAvailabilityIdPath:
+      name: availabilityId
+      in: path
+      description: Authoritative `service_catalog_availability.id`.
+      required: true
+      schema:
+        $ref: "#/components/schemas/Uuid"
     CompetencyRequirementIdPath:
       name: requirementId
       in: path
@@ -115371,6 +115762,214 @@ components:
         name: { type: string }
         description: { type: string, nullable: true, maxLength: 1000 }
         category: { type: string }
+
+    ServiceCategoryStatus:
+      type: string
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01 — governed Service Category
+        lifecycle. INACTIVE is terminal; the row is retained for history.
+      enum: [ACTIVE, INACTIVE]
+
+    ServiceCatalogSource:
+      type: string
+      description: >
+        Whether a catalogue row came from the governed starter import or a
+        manual create. Never a price source.
+      enum: [MANUAL, STARTER_PACK]
+
+    ServiceCategory:
+      type: object
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01 — governed, Client-scoped Service
+        Category master (migration 0473). `code` is unique per Client and
+        immutable; lifecycle ACTIVE/INACTIVE.
+      required:
+        [id, clientId, code, name, description, status, source,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        code:
+          type: string
+          description: Uppercase `/^[A-Z][A-Z0-9_-]*$/`, 2–64 chars, unique per Client.
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/ServiceCategoryStatus" }
+        source: { $ref: "#/components/schemas/ServiceCatalogSource" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateServiceCategoryRequest:
+      type: object
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. `code` is normalized to uppercase and
+        is immutable once created. Created ACTIVE, source MANUAL.
+      required: [clientId, code, name]
+      properties:
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        code:
+          type: string
+          description: Uppercase `/^[A-Z][A-Z0-9_-]*$/`, 2–64 chars.
+        name: { type: string }
+        description: { type: string, nullable: true, maxLength: 1000 }
+
+    UpdateServiceCategoryRequest:
+      type: object
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01. `code` and `clientId` are immutable;
+        only `name` and `description` are editable.
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true, maxLength: 1000 }
+
+    ServiceCatalogAvailability:
+      type: object
+      description: >
+        CR-HM-SERVICE-CATALOG-01 PART 01 — a Client/Building availability grant
+        for one Service Item. Unique per (service, building); a service with no
+        grants is available client-wide.
+      required:
+        [id, clientId, serviceCatalogId, buildingId, status,
+         createdByUserId, createdAt, updatedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+        status: { $ref: "#/components/schemas/ServiceCategoryStatus" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    AvailabilityGrantRequest:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — grant availability in one Building.
+      required: [buildingId]
+      properties:
+        buildingId: { $ref: "#/components/schemas/Uuid" }
+
+    ServiceCatalogCategoryLink:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — result of linking a Service Item to a Category.
+      required:
+        [serviceCatalogId, clientId, code, name, categoryId, categoryCode, categoryName]
+      properties:
+        serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        categoryId: { $ref: "#/components/schemas/Uuid" }
+        categoryCode: { type: string }
+        categoryName: { type: string }
+
+    LinkServiceCategoryRequest:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — link an existing Service Item to a Category.
+      required: [serviceCategoryId]
+      properties:
+        serviceCategoryId: { $ref: "#/components/schemas/Uuid" }
+
+    ServiceCatalogReferencePrice:
+      type: object
+      description: >
+        Composed from the governed `price_catalog_entries` SERVICE authority at
+        read time. Present only when a Building + currency were supplied and a
+        governed price resolved; never a default or nominal amount.
+      required: [unitPrice, currency, effectiveFrom, effectiveTo, scopeTier]
+      properties:
+        unitPrice: { type: number }
+        currency: { $ref: "#/components/schemas/PriceCatalogCurrency" }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveTo: { type: string, format: date-time, nullable: true }
+        scopeTier: { $ref: "#/components/schemas/PriceCatalogScopeTier" }
+
+    ServiceCatalogItemView:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — one Service Item in the read model.
+      required:
+        [id, clientId, code, name, description, status, source, categoryId,
+         categoryCode, categoryName, availableInBuilding, availabilityScope,
+         referencePrice]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/ServiceCatalogStatus" }
+        source: { $ref: "#/components/schemas/ServiceCatalogSource" }
+        categoryId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        categoryCode: { type: string, nullable: true }
+        categoryName: { type: string, nullable: true }
+        availableInBuilding:
+          type: boolean
+          nullable: true
+          description: null when no Building scope was requested.
+        availabilityScope:
+          type: string
+          enum: [CLIENT_WIDE, BUILDING_SCOPED]
+        referencePrice:
+          allOf: [{ $ref: "#/components/schemas/ServiceCatalogReferencePrice" }]
+          nullable: true
+
+    ServiceCatalogCategoryView:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — a Category with its ACTIVE Service Items.
+      allOf:
+        - $ref: "#/components/schemas/ServiceCategory"
+        - type: object
+          properties:
+            services:
+              type: array
+              items: { $ref: "#/components/schemas/ServiceCatalogItemView" }
+
+    ServiceCatalogReadModel:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — authoritative catalog read model.
+      required: [clientId, buildingId, currency, asOf, categories, services]
+      properties:
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        buildingId:
+          allOf: [{ $ref: "#/components/schemas/Uuid" }]
+          nullable: true
+        currency:
+          allOf: [{ $ref: "#/components/schemas/PriceCatalogCurrency" }]
+          nullable: true
+        asOf: { type: string, format: date-time }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceCatalogCategoryView" }
+        services:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceCatalogItemView" }
+
+    StarterPackImportRequest:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — explicit per-Client starter import.
+      required: [clientId]
+      properties:
+        clientId: { $ref: "#/components/schemas/Uuid" }
+
+    StarterPackImportResult:
+      type: object
+      description: CR-HM-SERVICE-CATALOG-01 PART 01 — idempotent import summary.
+      required:
+        [clientId, operationKey, categoriesCreated, categoriesSkipped,
+         servicesCreated, servicesSkipped, totalCategories, totalServices,
+         replayed]
+      properties:
+        clientId: { $ref: "#/components/schemas/Uuid" }
+        operationKey: { type: string }
+        categoriesCreated: { type: integer }
+        categoriesSkipped: { type: integer }
+        servicesCreated: { type: integer }
+        servicesSkipped: { type: integer }
+        totalCategories: { type: integer }
+        totalServices: { type: integer }
+        replayed: { type: boolean }
 
     PriceCatalogLookupResolution:
       type: string
