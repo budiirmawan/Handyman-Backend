@@ -11982,6 +11982,16 @@ paths:
         unchecked, so an unknown attribute or an unconfigured size reaches
         the price engine, which then refuses to price it and demands an
         inspection instead of inventing an amount.
+
+        CR-HM-SERVICE-CATALOG-01 PART 03 - VARIANT INHERITANCE. When
+        serviceVariantId is given, the ACTIVE values the variant configures
+        are inherited by the item and materialised on it; the effective
+        attribute set is returned in `attributeValues` and its inherited
+        part in `inheritedAttributeValues`. An explicit value that
+        CONTRADICTS a variant-configured value is refused (400) - the item
+        may not state a different size or drive type than the variant it
+        selected. A retired variant, or a variant of another service or
+        Client, is refused as well.
       requestBody:
         required: true
         content:
@@ -12034,6 +12044,16 @@ paths:
         CR-HM-SERVICE-CATALOG-01 PART 01. A correction before the quotation
         is issued. After an inspection changed the scope, the correction is
         a quotation REVISION, never an edit of an issued version.
+
+        CR-HM-SERVICE-CATALOG-01 PART 03 - `attributeValues` is a MERGE
+        over the item's OWN values; the values inherited from the variant
+        are not part of the caller's view. Stating a value for an inherited
+        attribute is a governed CORRECTION: the corrected value becomes the
+        item's own value, the price re-resolves against it, and a price tier
+        that no longer matches fails closed to MANUAL_REVIEW. Re-selecting
+        `serviceVariantId` re-applies that variant's configuration and
+        refuses an explicit contradiction; the values an item was authored
+        with are never rewritten by a later catalogue change.
       requestBody:
         required: true
         content:
@@ -12049,7 +12069,7 @@ paths:
                   additionalProperties: { type: string }
                 accessCondition:
                   type: string
-                  enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED]
+                  enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
       responses:
         '200':
           description: Item updated
@@ -132334,10 +132354,22 @@ components:
         quantity: { type: number }
         attributeValues:
           type: object
+          description: >-
+            The EFFECTIVE attribute set of the item: the values inherited
+            from the service variant plus the values stated for the item.
+            This is exactly what the price resolution reads.
+          additionalProperties: { type: string }
+        inheritedAttributeValues:
+          type: object
+          description: >-
+            CR-HM-SERVICE-CATALOG-01 PART 03 - the PROVENANCE: the part of
+            attributeValues that the service variant supplied. It is written
+            once, when the item is authored, so a later change of the
+            variant can never rewrite the item or an issued quotation.
           additionalProperties: { type: string }
         accessCondition:
           type: string
-          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED]
+          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
         status: { type: string, enum: [ACTIVE, REMOVED] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

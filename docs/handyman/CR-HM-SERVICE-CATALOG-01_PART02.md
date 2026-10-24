@@ -220,6 +220,11 @@ separate clone with its own disposable PostgreSQL:
   value is not yet inherited by the items that reference it. Inheriting it
   would change the resolution semantics of every existing variant, so it is
   a separate, explicitly governed decision.
+  **CLOSED by PART 03** — the inheritance is materialised on the item at
+  write time, with the provenance in
+  `handyman_service_request_items.inherited_attribute_values`
+  (migration `0479`). See
+  `docs/handyman/CR-HM-SERVICE-CATALOG-01_PART03.md`.
 * The access vocabulary is fixed. A per-service access policy (which
   complexity a service may carry) would need a governed dimension in the
   price authority.

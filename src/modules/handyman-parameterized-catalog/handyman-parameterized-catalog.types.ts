@@ -282,7 +282,16 @@ export type HandymanServicePriceRuleRecord = {
   updatedAt: Date;
 };
 
-/** Request item record — one service/size/attribute combination. */
+/**
+ * Request item record — one service/size/attribute combination.
+ *
+ * CR-HM-SERVICE-CATALOG-01 PART 03 — `attributeValues` is the EFFECTIVE
+ * set (the values the price resolution reads) and
+ * `inheritedAttributeValues` is the PROVENANCE: the part that the service
+ * variant supplied. The provenance is what lets a governed correction
+ * recompute the effective set without re-reading a catalogue value that may
+ * have moved in the meantime.
+ */
 export type HandymanServiceRequestItemRecord = {
   id: string;
   clientId: string;
@@ -291,6 +300,7 @@ export type HandymanServiceRequestItemRecord = {
   serviceVariantId: string | null;
   quantity: number;
   attributeValues: Record<string, string>;
+  inheritedAttributeValues: Record<string, string>;
   accessCondition: HandymanServiceAccessCondition;
   status: 'ACTIVE' | 'REMOVED';
   createdByUserId: string;

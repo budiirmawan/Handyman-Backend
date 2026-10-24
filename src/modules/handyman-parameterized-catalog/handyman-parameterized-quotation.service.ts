@@ -122,12 +122,25 @@ function buildLineDescription(
   item: HandymanServiceRequestItemRecord,
   serviceCode: string,
   serviceName: string,
+  variantCode: string | null = null,
 ): string {
   const attributes = Object.entries(item.attributeValues)
-    .map(([code, value]) => `${code}=${value}`)
+    .map(([code, value]) => {
+      // CR-HM-SERVICE-CATALOG-01 PART 03 — the description records WHICH
+      // values were inherited from the variant, so the snapshot explains
+      // itself without reading the catalogue again.
+      const inherited = Object.prototype.hasOwnProperty.call(
+        item.inheritedAttributeValues ?? {},
+        code,
+      )
+        ? '*'
+        : '';
+      return `${code}${inherited}=${value}`;
+    })
     .join(', ');
   const parts = [
     `${serviceCode} ${serviceName}`,
+    variantCode ? `variant ${variantCode}` : '',
     attributes.length > 0 ? `[${attributes}]` : '',
     `qty ${item.quantity}`,
     `access ${item.accessCondition}`,
@@ -304,6 +317,13 @@ export async function prepareHandymanCatalogQuotation(
       undefined,
       item.serviceCatalogId,
     );
+    const variant =
+      item.serviceVariantId !== null
+        ? await handymanParameterizedCatalogRepository.findVariantById(
+            undefined,
+            item.serviceVariantId,
+          )
+        : null;
     const line = await addHandymanQuotationLine(
       version.id,
       {
@@ -312,6 +332,7 @@ export async function prepareHandymanCatalogQuotation(
           item,
           service?.code ?? 'SERVICE',
           service?.name ?? 'Handyman service',
+          variant?.code ?? null,
         ),
         quantity: item.quantity,
         uomId: draft.uomId as string,
@@ -461,6 +482,13 @@ export async function reviseHandymanCatalogQuotation(
       undefined,
       item.serviceCatalogId,
     );
+    const variant =
+      item.serviceVariantId !== null
+        ? await handymanParameterizedCatalogRepository.findVariantById(
+            undefined,
+            item.serviceVariantId,
+          )
+        : null;
     const line = await addHandymanQuotationLine(
       version.id,
       {
@@ -469,6 +497,7 @@ export async function reviseHandymanCatalogQuotation(
           item,
           service?.code ?? 'SERVICE',
           service?.name ?? 'Handyman service',
+          variant?.code ?? null,
         ),
         quantity: item.quantity,
         uomId: draft.uomId as string,

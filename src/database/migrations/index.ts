@@ -515,6 +515,8 @@ import { migration0477ServicePriceTierKey }
   from './0477_service_price_tier_key';
 import { migration0478HandymanServiceVariantAttributeLifecycle }
   from './0478_handyman_service_variant_attribute_lifecycle';
+import { migration0479HandymanServiceRequestItemInheritedAttributes }
+  from './0479_handyman_service_request_item_inherited_attributes';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -993,4 +995,5 @@ export const migrations: readonly Migration[] = [
   migration0476HandymanParameterizedServiceCatalog,
   migration0477ServicePriceTierKey,
   migration0478HandymanServiceVariantAttributeLifecycle,
+  migration0479HandymanServiceRequestItemInheritedAttributes,
 ];

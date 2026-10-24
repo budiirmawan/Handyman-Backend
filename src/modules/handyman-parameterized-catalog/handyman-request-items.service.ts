@@ -11,6 +11,12 @@ import {
   handymanParameterizedCatalogRepository,
 } from './handyman-parameterized-catalog.repository';
 import {
+  composeCorrectedItemAttributes,
+  composeEffectiveItemAttributes,
+  loadVariantAttributeValues,
+  splitItemAttributes,
+} from './handyman-variant-inheritance.service';
+import {
   handymanServiceRequestItemInvalidError,
   handymanServiceRequestItemNotFoundError,
 } from './handyman-parameterized-catalog.errors';
@@ -222,6 +228,8 @@ export async function addHandymanServiceRequestItem(
   }
 
   let serviceVariantId: string | null = null;
+  let variantLabel: string | null = null;
+  let variantValues: Record<string, string> = {};
   if (input.serviceVariantId !== undefined && input.serviceVariantId !== null) {
     if (!isValidUuid(input.serviceVariantId)) {
       throw handymanServiceRequestItemInvalidError(
@@ -248,7 +256,24 @@ export async function addHandymanServiceRequestItem(
       );
     }
     serviceVariantId = variant.id;
+    variantLabel = variant.code;
+    // CR-HM-SERVICE-CATALOG-01 PART 03 — the variant's ACTIVE configured
+    // values are read ONCE, here, and materialised on the item.
+    variantValues = await loadVariantAttributeValues(
+      request.clientId,
+      variant.id,
+    );
   }
+
+  // CR-HM-SERVICE-CATALOG-01 PART 03 — the effective attribute set of the
+  // item: the variant's values plus the caller's own values. An explicit
+  // value that CONTRADICTS the variant is refused (never a silent
+  // "last write wins").
+  const effective = composeEffectiveItemAttributes({
+    variantValues,
+    ownValues: attributeValues,
+    variantLabel,
+  });
 
   return withTransaction(async (tx) => {
     const record = await handymanParameterizedCatalogRepository.insertRequestItem(
@@ -259,7 +284,8 @@ export async function addHandymanServiceRequestItem(
         serviceCatalogId: service.id,
         serviceVariantId,
         quantity,
-        attributeValues,
+        attributeValues: effective.attributeValues,
+        inheritedAttributeValues: effective.inheritedAttributeValues,
         accessCondition,
         status: 'ACTIVE',
         createdByUserId: actorUserId,
@@ -278,6 +304,9 @@ export async function addHandymanServiceRequestItem(
           requestItemId: record.id,
           serviceCatalogId: service.id,
           serviceCode: service.code,
+          serviceVariantId: record.serviceVariantId,
+          serviceVariantCode: variantLabel,
+          inheritedAttributeCodes: effective.inheritedCodes,
           quantity: record.quantity,
           accessCondition: record.accessCondition,
         },
@@ -343,13 +372,11 @@ export async function updateHandymanServiceRequestItem(
     serviceVariantId?: string | null;
     quantity?: number;
     attributeValues?: Record<string, string>;
+    inheritedAttributeValues?: Record<string, string>;
     accessCondition?: string;
   } = {};
   if (input.quantity !== undefined) {
     patch.quantity = normalizeQuantity(input.quantity);
-  }
-  if (input.attributeValues !== undefined) {
-    patch.attributeValues = normalizeAttributeValues(input.attributeValues);
   }
   if (input.accessCondition !== undefined) {
     if (!isHandymanServiceAccessCondition(input.accessCondition)) {
@@ -359,9 +386,15 @@ export async function updateHandymanServiceRequestItem(
     }
     patch.accessCondition = input.accessCondition;
   }
+  // CR-HM-SERVICE-CATALOG-01 PART 03 — the variant of an item may only be
+  // re-selected to an ACTIVE variant of THIS service and THIS client.
+  let variantReselected = false;
+  let variantLabel: string | null = null;
+  let variantValues: Record<string, string> = {};
   if (input.serviceVariantId !== undefined) {
     if (input.serviceVariantId === null) {
       patch.serviceVariantId = null;
+      variantReselected = existing.serviceVariantId !== null;
     } else {
       if (!isValidUuid(input.serviceVariantId)) {
         throw handymanServiceRequestItemInvalidError(
@@ -382,9 +415,57 @@ export async function updateHandymanServiceRequestItem(
           'serviceVariantId must reference a variant of this service.',
         );
       }
+      if (variant.status !== 'ACTIVE') {
+        throw handymanServiceRequestItemInvalidError(
+          'The referenced service variant is not ACTIVE.',
+        );
+      }
       patch.serviceVariantId = variant.id;
+      variantLabel = variant.code;
+      variantReselected = variant.id !== existing.serviceVariantId;
+      if (variantReselected) {
+        variantValues = await loadVariantAttributeValues(
+          request.clientId,
+          variant.id,
+        );
+      }
     }
   }
+
+  // CR-HM-SERVICE-CATALOG-01 PART 03 — the effective attribute set of the
+  // corrected item.
+  //
+  //   * the variant is RE-SELECTED -> the new variant's values are
+  //     authoritative and an explicit contradiction is refused (the same
+  //     contract as authoring);
+  //   * the variant is UNCHANGED -> the values the item was authored with
+  //     stay pinned (a catalogue change never rewrites an existing item)
+  //     and the caller's explicit values are a GOVERNED CORRECTION.
+  const stored = splitItemAttributes({
+    attributeValues: existing.attributeValues,
+    inheritedAttributeValues: existing.inheritedAttributeValues ?? {},
+  });
+  const statedValues =
+    input.attributeValues === undefined
+      ? {}
+      : normalizeAttributeValues(input.attributeValues);
+  const ownValues: Record<string, string> = { ...stored.ownValues };
+  for (const [code, value] of Object.entries(statedValues)) {
+    ownValues[code] = value;
+  }
+
+  const effective = variantReselected
+    ? composeEffectiveItemAttributes({
+        variantValues,
+        ownValues,
+        variantLabel,
+      })
+    : composeCorrectedItemAttributes({
+        ownValues,
+        pinnedInherited: stored.inherited,
+      });
+  patch.attributeValues = effective.attributeValues;
+  patch.inheritedAttributeValues = effective.inheritedAttributeValues;
 
   return withTransaction(async (tx) => {
     const updated = await handymanParameterizedCatalogRepository.updateRequestItem(
@@ -404,6 +485,10 @@ export async function updateHandymanServiceRequestItem(
         summary: `Handyman service request item updated (${updated.serviceCatalogId}).`,
         metadata: {
           requestItemId: updated.id,
+          serviceVariantId: updated.serviceVariantId,
+          serviceVariantCode: variantLabel,
+          inheritedAttributeCodes: effective.inheritedCodes,
+          correctedAttributeCodes: Object.keys(statedValues).sort(),
           quantity: updated.quantity,
           accessCondition: updated.accessCondition,
         },

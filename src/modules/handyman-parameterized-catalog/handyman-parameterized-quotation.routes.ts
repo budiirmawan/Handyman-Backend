@@ -135,7 +135,7 @@ export function createHandymanParameterizedQuotationRouter(): Router {
           details.push({
             field: 'accessCondition',
             message:
-              'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR or RESTRICTED.',
+              'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED or SPECIAL_EQUIPMENT.',
           });
         }
         if (
@@ -250,7 +250,7 @@ export function createHandymanParameterizedQuotationRouter(): Router {
           details.push({
             field: 'accessCondition',
             message:
-              'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR or RESTRICTED.',
+              'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED or SPECIAL_EQUIPMENT.',
           });
         }
         if (

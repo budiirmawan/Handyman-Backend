@@ -87,6 +87,17 @@ export type {
 } from './handyman-parameterized-catalog-import.service';
 
 export {
+  composeCorrectedItemAttributes,
+  composeEffectiveItemAttributes,
+  loadVariantAttributeValues,
+  splitItemAttributes,
+} from './handyman-variant-inheritance.service';
+export type {
+  EffectiveItemAttributes,
+  VariantAttributeValues,
+} from './handyman-variant-inheritance.service';
+
+export {
   resolveHandymanRequestItemPrice,
 } from './handyman-parameterized-catalog-pricing.service';
 export type {

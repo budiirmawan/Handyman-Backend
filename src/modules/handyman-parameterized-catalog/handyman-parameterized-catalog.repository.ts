@@ -468,6 +468,49 @@ async function listVariantAttributes(
 }
 
 /**
+ * CR-HM-SERVICE-CATALOG-01 PART 03 — the ACTIVE attribute values a variant
+ * configures, joined with the attribute DEFINITION so the caller gets the
+ * attribute CODE (the governance key) and the lifecycle status of both the
+ * choice and the attribute it configures.
+ */
+async function listVariantAttributeValues(
+  executor: QueryExecutor = getPool(),
+  clientId: string,
+  serviceVariantId: string,
+): Promise<
+  {
+    attributeId: string;
+    attributeCode: string;
+    attributeStatus: string;
+    choiceStatus: string;
+    valueText: string | null;
+    valueNumber: number | null;
+  }[]
+> {
+  const result = await executor.query<{
+    attributeId: string;
+    attributeCode: string;
+    attributeStatus: string;
+    choiceStatus: string;
+    valueText: string | null;
+    valueNumber: number | null;
+  }>(
+    `SELECT va.attribute_id AS "attributeId",
+            a.code AS "attributeCode",
+            a.status AS "attributeStatus",
+            va.status AS "choiceStatus",
+            va.value_text AS "valueText",
+            va.value_number::float8 AS "valueNumber"
+       FROM handyman_service_variant_attributes va
+       JOIN handyman_service_attributes a ON a.id = va.attribute_id
+      WHERE va.client_id = $1 AND va.service_variant_id = $2
+      ORDER BY a.code ASC`,
+    [clientId, serviceVariantId],
+  );
+  return result.rows;
+}
+
+/**
  * The variants of one service. The variant master is the EXISTING
  * `handyman_service_variants` table (0376) — this module only reads it.
  */
@@ -770,6 +813,7 @@ const REQUEST_ITEM_SELECT = `
   service_catalog_id AS "serviceCatalogId",
   service_variant_id AS "serviceVariantId", quantity::float8 AS quantity,
   attribute_values AS "attributeValues",
+  inherited_attribute_values AS "inheritedAttributeValues",
   access_condition AS "accessCondition", status,
   created_by_user_id AS "createdByUserId",
   created_at AS "createdAt", updated_at AS "updatedAt"
@@ -782,6 +826,8 @@ export type NewHandymanServiceRequestItem = {
   serviceVariantId: string | null;
   quantity: number;
   attributeValues: Record<string, string>;
+  /** The provenance: the values the variant supplied. */
+  inheritedAttributeValues: Record<string, string>;
   accessCondition: string;
   status: 'ACTIVE' | 'REMOVED';
   createdByUserId: string;
@@ -794,9 +840,10 @@ async function insertRequestItem(
   const result = await executor.query<HandymanServiceRequestItemRecord>(
     `INSERT INTO handyman_service_request_items
        (id, client_id, handyman_request_id, service_catalog_id,
-        service_variant_id, quantity, attribute_values, access_condition,
-        status, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+        service_variant_id, quantity, attribute_values,
+        inherited_attribute_values, access_condition, status,
+        created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11)
      RETURNING ${REQUEST_ITEM_SELECT}`,
     [
       randomUUID(),
@@ -806,6 +853,7 @@ async function insertRequestItem(
       input.serviceVariantId,
       input.quantity,
       JSON.stringify(input.attributeValues),
+      JSON.stringify(input.inheritedAttributeValues),
       input.accessCondition,
       input.status,
       input.createdByUserId,
@@ -851,6 +899,8 @@ export type UpdateHandymanServiceRequestItem = {
   serviceVariantId?: string | null;
   quantity?: number;
   attributeValues?: Record<string, string>;
+  /** The provenance: the values the variant supplied. */
+  inheritedAttributeValues?: Record<string, string>;
   accessCondition?: string;
   status?: 'ACTIVE' | 'REMOVED';
 };
@@ -873,6 +923,10 @@ async function updateRequestItem(
   if (patch.attributeValues !== undefined) {
     values.push(JSON.stringify(patch.attributeValues));
     sets.push(`attribute_values = $${values.length}::jsonb`);
+  }
+  if (patch.inheritedAttributeValues !== undefined) {
+    values.push(JSON.stringify(patch.inheritedAttributeValues));
+    sets.push(`inherited_attribute_values = $${values.length}::jsonb`);
   }
   if (patch.accessCondition !== undefined) {
     push('access_condition', patch.accessCondition);
@@ -1232,6 +1286,7 @@ export const handymanParameterizedCatalogRepository = {
   findVariantAttributeById,
   findVariantAttributeByVariantAndAttribute,
   listVariantAttributes,
+  listVariantAttributeValues,
   listVariantsByService,
   upsertCommercialProfile,
   insertCommercialProfileIfAbsent,

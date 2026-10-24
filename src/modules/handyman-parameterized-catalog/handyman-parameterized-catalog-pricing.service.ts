@@ -515,6 +515,17 @@ export async function resolveHandymanRequestItemPrice(
   }
 
   const unitAmount = Number(entry.unitPrice);
+  // CR-HM-SERVICE-CATALOG-01 PART 03 — a zero (or non-finite) amount is
+  // NEVER quoted: a Rp0 line is not a price, it is a missing price. The
+  // item fails closed instead.
+  if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
+    return notPriced(
+      item.id,
+      'MANUAL_REVIEW',
+      'PRICE_NOT_AVAILABLE',
+      'The governed price fact carries no usable amount; a zero-price line is never quoted.',
+    );
+  }
   const computedTotal = Math.round(item.quantity * unitAmount * 100) / 100;
   return {
     requestItemId: item.id,
