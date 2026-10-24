@@ -4,7 +4,7 @@
 **Audit date:** 2026-10-24 (UTC)
 **Audited baseline:** `fb65c17e7f48f4896df2104256aa5d25f6fd07b4` (`origin/main`, merged PR #60)
 **Working branch:** `arena/2d32486d-handyman-backend`
-**Mode:** audit only; static tracing plus small focused verification batches; no full-suite run, deployment, migration against a real environment, runtime/business change, or access to another repository.
+**Mode:** Part 01 used audit-only static tracing plus small focused verification batches. Parts 02–05 record separately authorized, scoped remediation and disposable verification; no full-suite run, real-environment deployment/migration, or access to another repository occurred.
 
 > ## Verdict
 >
@@ -19,10 +19,12 @@
 > **PART 03 UPDATE:** BA-02 is now **CLOSED** at implementation/OpenAPI/focused-test level. Price Catalog creation uses the existing typed Client-currency command authority; ACTIVE but disallowed USD returns 400 `CLIENT_CURRENCY_NOT_ALLOWED`, no price/event/outbox rows are written, and unexpected infrastructure failures remain HTTP 500.
 >
 > **PART 04 UPDATE:** BA-03 is now **CLOSED** at implementation/disposable-recovery level. The existing runner refuses a populated 0478 SERVICE-price downgrade before destructive DDL, with explicit forward-fix/paired-restore guidance; the historical migration and registry are unchanged. Raw failure atomicity, CLI failure reporting, an isolated stopped-writer database restore, catalog reads, and controlled forward recovery were executed on disposable PostgreSQL. This is not a staging/production or native paired DB+evidence restore claim. BA-04 through BA-11 remain open, so the overall verdict is unchanged.
+>
+> **PART 05 UPDATE:** the previously unregistered replacement/correction defect is now registered as **BA-23 (P1)** and **CLOSED** at implementation/focused-test level. Valid replacement and correction reached a 25-column insert with only 24 expressions; `insertWithId()` now supplies the missing `$25` for the already-aligned `created_by_user_id` value. All 11 original failures pass, invalid-command rollback and concurrent-replacement conflict guards were added, and the separate stale direct-insert fixture was corrected without weakening its assertion. No migration or contract change was made. BA-04 through BA-11 remain open, so the overall verdict is unchanged.
 
 ## 1. Final counts
 
-### Current open items after Part 04
+### Current open items after Part 05
 
 | Measure | Count |
 |---|---:|
@@ -35,7 +37,7 @@
 | └─ Non-blocking Backend coding/test/contract debt | **7** |
 | Items not requiring Backend coding | **8** |
 | Unconditional Biznet-blocking items | **8** |
-| Closed since Part 01 | **3 — BA-01, BA-02, BA-03** |
+| Closed register items after Part 01 | **4 — BA-01, BA-02, BA-03, BA-23** (BA-23 was added and closed in Part 05) |
 
 ### Part 01 baseline counts
 
@@ -51,7 +53,7 @@
 | Items not requiring Backend coding | **8** |
 | Unconditional Biznet-blocking items | **11** |
 
-“Backend coding” here means a change in this repository, including application code, tests, OpenAPI, migration-integrity code, or CI workflow configuration. It does not mean new business modules. Conditional work in BA-21/BA-22 and optional notification rewiring in BA-20 are **not** included in either the Part 01 baseline 14 or the current 11.
+“Backend coding” here means a change in this repository, including application code, tests, OpenAPI, migration-integrity code, or CI workflow configuration. It does not mean new business modules. Conditional work in BA-21/BA-22 and optional notification rewiring in BA-20 are **not** included in either the Part 01 baseline 14 or the current 11. BA-23 was newly registered as a P1 implementation defect and closed in Part 05, so its add-and-close has net-zero effect on the open counts; the current totals above are recalculated from the register rows, not by subtracting BA-23 from the historical baseline.
 
 ### Classification distribution
 
@@ -62,7 +64,7 @@
 | `TEST-DEBT` | 9 | BA-04, BA-05, BA-06, BA-12, BA-13, BA-14, BA-15, BA-16, BA-17 |
 | `CONFIGURATION` | 7 | BA-07, BA-08, BA-09, BA-10, BA-11, BA-21, BA-22 |
 | `FRONTEND-DEPENDENCY` | 1 | BA-18 |
-| `IMPLEMENTED` | 3 closed register items | BA-01 (Part 02), BA-02 (Part 03), BA-03 (Part 04); other implemented capabilities are in `E2E_CAPABILITY_MATRIX.md` |
+| `IMPLEMENTED` | 4 closed register items | BA-01 (Part 02), BA-02 (Part 03), BA-03 (Part 04), BA-23 (Part 05); other implemented capabilities are in `E2E_CAPABILITY_MATRIX.md` |
 
 ## 2. Authority model preserved by this audit
 
@@ -126,7 +128,7 @@ All Part 03 database runs used disposable PostgreSQL. Counts below are per invoc
 | Operational parity + structural closure + Handyman freeze + Price Catalog OpenAPI | **34 PASS / 0 FAIL / 0 SKIPPED** | The existing operational/structural/freeze trio remains 28/28 and Price Catalog adds 6/6 after documenting the two exact create-time currency errors. |
 | `npm run typecheck` | **PASS** | Final TypeScript check after implementation and test changes. |
 
-A broader bounded preservation invocation (`price-catalog-entries`, selection, vendor-tier, override, SERVICE reference price, BA-02, Price Catalog OpenAPI, and catalog parts 01–03) finished **95 PASS / 12 FAIL / 0 SKIPPED** out of 107. Every BA-02, selection, OpenAPI, and catalog variant/quotation assertion passed. The 12 reds are separate pre-existing residual failures, not BA-02 regressions: 11 replacement/correction cases reach the unchanged pristine-HEAD `insertWithId` SQL with 25 values but only 24 placeholders, and one unchanged direct-insert guard trips `price_catalog_entries_service_price_key_check` before its expected subject-shape CHECK. Part 03 did not repair, weaken, or conceal those failures and does not claim the complete Price Catalog lifecycle is green; their separate triage remains necessary. The register arithmetic in this document closes only BA-02 and does not mark those residual defects closed.
+A broader bounded preservation invocation (`price-catalog-entries`, selection, vendor-tier, override, SERVICE reference price, BA-02, Price Catalog OpenAPI, and catalog parts 01–03) finished **95 PASS / 12 FAIL / 0 SKIPPED** out of 107 at Part 03. Every BA-02, selection, OpenAPI, and catalog variant/quotation assertion passed. The 12 reds were separate pre-existing residual failures, not BA-02 regressions: 11 replacement/correction cases reached `insertWithId` SQL with 25 values but only 24 placeholders, and one direct-insert guard tripped `price_catalog_entries_service_price_key_check` before its expected subject-shape CHECK. Part 03 did not repair, weaken, or conceal those failures and closed only BA-02. **Part 05 subsequently resolved all 12:** the 11 runtime failures are registered and closed as BA-23, and the stale fixture now supplies a valid plain tier key so its original subject-shape assertion executes. See §3.6; this Part 03 result is retained as historical failing-first evidence, not a current red count.
 
 ### 3.5 Part 04 BA-03 remediation evidence
 
@@ -150,7 +152,31 @@ The recovery proof stopped writers and the source PostgreSQL cleanly, copied its
 
 This is **database-only physical disposable proof**, not a native `pg_dump`/`pg_restore` rehearsal, not a paired evidence-byte restore, and not a production RTO measurement. Native client binaries and live infrastructure were unavailable. Staging/target execution remains **BA-08**; scheduled encrypted off-host DB+evidence backup and measured paired restore remain **BA-11**. The recovery runbook records write freeze, recovery-point/RPO limits, RTO components, explicit loss approval, and single-writer cutover.
 
-Auxiliary results are not hidden: a mixed legacy invocation finished **26 PASS / 1 FAIL / 6 SKIPPED** out of 33. Its six variant skips were subsequently executed 6/6 as above; its sole red is the already disclosed stale direct-insert subject-shape assertion, which now trips the tier-key CHECK first. A separate legacy `migrate.test.ts` invocation finished **0 PASS / 1 FAIL / 0 SKIPPED**: after down succeeded through 0370, intentionally irreversible 0369 rejected every further down, so only 108 rather than all 478 IDs were pending on reapply. That pre-existing whole-history test limitation is outside BA-03; the new focused empty-data 0478 round-trip passed and no legacy assertion was weakened.
+Auxiliary results are not hidden: a mixed legacy invocation finished **26 PASS / 1 FAIL / 6 SKIPPED** out of 33. Its six variant skips were subsequently executed 6/6 as above; its sole red was the already disclosed stale direct-insert subject-shape assertion, which tripped the tier-key CHECK first and was corrected in Part 05 without weakening the assertion. A separate legacy `migrate.test.ts` invocation finished **0 PASS / 1 FAIL / 0 SKIPPED**: after down succeeded through 0370, intentionally irreversible 0369 rejected every further down, so only 108 rather than all 478 IDs were pending on reapply. That pre-existing whole-history test limitation is outside BA-03; the new focused empty-data 0478 round-trip passed and no legacy assertion was weakened.
+
+### 3.6 Part 05 BA-23 remediation evidence
+
+All Part 05 database reproductions and verification runs used fresh, migrated, disposable PostgreSQL 18.4. No Railway, Biznet, staging, or production database was accessed. Counts are per invocation; historical failing-first counts are not added to final coverage.
+
+| Focused invocation | Result | Evidence |
+|---|---:|---|
+| Original `price-catalog-entries` + `price-catalog-vendor-tier` + `price-catalog-override` before the fix | **25 PASS / 11 FAIL / 0 SKIPPED** out of 36 | Valid replacement/correction returned HTTP 500 `INTERNAL_SERVER_ERROR`; PostgreSQL logged `INSERT has more target columns than expressions` at `insertWithId()`. These are exactly the 11 previously disclosed runtime failures. |
+| Temporary pre-fix HTTP rollback probe | **1 PASS / 0 FAIL / 0 SKIPPED** | After both valid commands returned 500, the predecessor remained ACTIVE with original price/window, null successor/deactivation fields, one catalog row, only its original two operational events, no outbox marker, and no persisted replacement/correction idempotency key. The probe was removed after reproduction. |
+| Entries file with the two new replacement guards before the fix | **15 PASS / 3 FAIL / 0 SKIPPED** out of 18 | The original valid-replacement red plus both new guards failed: invalid replacement did not reach its governed overlap response and concurrent replacements produced 500/500. |
+| The three focused files after the fix | **38 PASS / 0 FAIL / 0 SKIPPED** | All 11 original failures now pass, as do the new invalid-replacement rollback and concurrent-replacement guards. Covers replacement/correction success, immutable history/audit, idempotency, currency and validity windows, Client/Building authorization, tier isolation, overlap rollback, and RFQ reference-snapshot stability. |
+| Complementary selection + Price Catalog OpenAPI + SERVICE reference + BA-02 currency + catalog parts 01–03 + variant-file invocation | **71 PASS / 0 FAIL / 6 SKIPPED** out of 77 | All executed tests passed, including the corrected subject-shape fixture, OpenAPI/runtime parity, quotation price bases/snapshots, tier and SERVICE pricing. The six skips were explicitly the older `handyman-service-variants` file's unavailable default database, not silent product skips. |
+| `handyman-service-variants` against an explicit disposable PostgreSQL listener | **6 PASS / 0 FAIL / 0 SKIPPED** | Executed all six cases skipped by the preceding invocation; no database skip remains unverified in the final coverage. |
+| `npm run typecheck` | **PASS** | Final TypeScript check after source, test, and fixture changes. |
+
+The disjoint final file sets therefore executed **115 unique tests with 115 PASS / 0 FAIL / 0 SKIPPED after the explicit variant rerun** (38 focused + 71 complementary + 6 variants). This is bounded Price Catalog/catalog evidence, not a full-repository suite PASS.
+
+The production root cause was narrow: `INSERT_COLUMNS` and `insertValues()` already defined the same 25 fields in the same order, and ordinary `insertEntry()` already used `$1` through `$25`. Only `insertWithId()`, called by replacement and correction after predecessor closure, stopped at `$24` while binding all 25 values. The omitted expression corresponded to the final `created_by_user_id` column. The repair adds only `$25`; column order, bound values, constraints, routes, permissions, service transactions, and update statements are unchanged. Related insert/update paths were inspected, no second caller or defect was found, and no migration was necessary.
+
+The final guards prove an invalid open-ended replacement that overlaps another ACTIVE same-tier authority returns 409 `PRICE_CATALOG_WINDOW_OVERLAP` with both predecessors still ACTIVE, no successor/idempotency row, and no replacement audit event. Two concurrent replacements of one predecessor serialize to one 201 successor and one 409 `PRICE_CATALOG_NOT_ACTIVE`, with one lineage link and one audit trail. Existing correction overlap rollback, sequential idempotency conflict, historical RFQ snapshot, quotation snapshot, currency, cross-Client, tier-key, validity-window, SERVICE variant, and OpenAPI checks all remain green.
+
+The separate stale fixture was not a second runtime defect: its SERVICE direct insert omitted the now-mandatory `service_price_key`, so the tier-key CHECK fired before the subject-shape CHECK it intended to test. The fixture now supplies the valid plain key `''`; the expected `price_catalog_entries_subject_shape_check` rejection is unchanged and now executes. No assertion or database constraint was weakened.
+
+BA-23 is closed only at local implementation/focused-test level. It does not close staging/consumer verification **BA-08**, per-Client price population **BA-10**, or paired backup/restore **BA-11**, and it does not claim production readiness.
 
 ## 4. Severity and blocking rules
 
@@ -174,6 +200,7 @@ Auxiliary results are not hidden: a mixed legacy invocation finished **26 PASS /
 | **BA-09** | **P1** | Platform/Operations + browser/Android / notification activation | VAPID/FCM credentials, provider selectors, per-tenant rules/templates, registered devices, real delivery, dedupe/retry, and no-secret evidence are proven. | Real IN_APP/Web Push/FCM adapters exist, but `.env.example:29` uses `PUSH_PROVIDER=noop`; `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_PRODUCTION_PREREQUISITES.md:115-137,145-167` records P-6.x/G-1…G-7 environment and real-device gates. The Part 01 BA-01 response violation is closed in Part 02; production P-6.5/provider/device evidence remains unexecuted. | `CONFIGURATION` | Deploying code alone produces no governed notification delivery; provider/device behavior remains unproven. | Provision secrets outside Git, configure `webpush`/`fcm` only in the intended environment, create ACTIVE templates/rules before fan-out, and run physical browser/Android delivery, rotation, retry, dedupe, isolation, and secret-sweep checks. | **NO** (apart from BA-01/BA-07) | **YES** |
 | **BA-10** | **P1** | Operations/Finance / per-Client catalog and commercial data | Each production Client has an explicit idempotent 8-category/24-service import, monetary context, ACTIVE tier price facts, and approved commercial/BM term/beneficiary configuration. | `handyman-parameterized-catalog.starter.ts:7-29` defines 8/24 and deliberately **no amounts**; import is explicit through `/service-catalog/parameterized/starter-import`, not automatic seed. Catalog engine tests are 37/37, but no persisted production population or pricing/BM readback was supplied. | `CONFIGURATION` | An implemented engine can still yield an empty/unpriced catalog or fail-closed quotation/BM evaluation. The engine must not be confused with actual 24-service operational data. | Run and record the import per Client; verify stable codes/counts/no duplicates; configure allowed currencies and real price tiers; approve commercial agreements and BM prerequisites; execute quote/settlement readbacks. | **NO** | **YES** |
 | **BA-11** | **P1** | Platform/DBA / backup and disaster recovery | Scheduled encrypted off-host paired PostgreSQL+evidence backups, retention, and a measured isolated restore drill prove RPO/RTO. | `docs/HANDYMAN_DATABASE_EVIDENCE_BACKUP_RECOVERY.md:3-6` explicitly says no automatic backup/retention/live restore; `:25-41` marks policy recommendations; `:75-104` is a procedure, not executed evidence. | `CONFIGURATION` | Database dumps alone omit evidence bytes; recovery, integrity, and restoration time are unproven. | Implement operator/platform-owned scheduling, encryption, off-host retention and alerting; perform a paired restore into isolation; verify DB/evidence references, hashes, migration history, grants, startup and restart; record RPO/RTO. | **NO** | **YES** |
+| **BA-23** | **P1** | Operations/catalog admin / Price Catalog replacement and governed correction | Valid replacement/correction creates exactly one ACTIVE successor atomically, preserves predecessor history and audit, and replays/conflicts under the established idempotency and row-lock policy. | **PART 05 STATUS — CLOSED locally:** failing-first reproduction returned HTTP 500 in 11 cases because `insertWithId()` supplied 24 expressions for 25 aligned columns/values. The repository now includes `$25` for `created_by_user_id`; ordinary creation and all service/update authorities are unchanged. Pre-fix rollback was observed directly; final focused 38/38, complementary 71/71 executed, explicit variants 6/6, and typecheck evidence are in §3.6. | `IMPLEMENTED` in Part 05 (newly registered P1 defect) | Before the fix, valid replacement and correction could not create successors; failed transactions left no partial writes. Normal creation was unaffected, and no cross-tenant, history-rewrite, or financial-authority defect was reproduced. | **Implemented and verified in Part 05:** add the missing placeholder, retain column/value order and database constraints, add invalid-replacement rollback and concurrent-replacement guards, and correct the separate stale fixture without weakening its subject-shape assertion. Reverify on the exact release candidate under BA-08. | **YES — completed** | **NO after Part 05; BA-04 through BA-11 remain blocking** |
 
 ## 6. P2 gap register — non-blocking debt and conditional decisions
 
@@ -222,7 +249,7 @@ The detailed route/service/table matrix is in `E2E_CAPABILITY_MATRIX.md`. Key co
 | FG-10 BM-fee migration pin | Current 5/6 run confirms one stale structural red, carried in BA-15; runtime configuration checks pass. |
 | PR #60 five quotation failures | Freshly reproduced as 6 PASS / 5 FAIL; split between BA-04 (three) and BA-14 (two). |
 | PR #60 three scope-variation failures | **Not reproduced:** current isolated suite is 3/3 PASS; no remaining variation gap is recorded. |
-| PR #60 price-catalog 47 historical failures | Not used as a current count. The invalid-currency 500 was independently reproduced and BA-02 is closed in Part 03. The separate 12 current pre-existing residual reds from the bounded Part 03 preservation run are explicitly recorded in §3.4 rather than being relabeled as the historical 47 or attributed to the currency fix. |
+| PR #60 price-catalog 47 historical failures | Not used as a current count. The invalid-currency 500 was independently reproduced and BA-02 is closed in Part 03. The separate 12 residual reds from the bounded Part 03 preservation run were recorded in §3.4 rather than relabeled as the historical 47 or attributed to the currency fix; Part 05 resolved the 11 runtime failures as BA-23 and corrected the one stale fixture (§3.6). |
 | PR #60 `crewId` “leak” | Current evidence shows the static assertion scans an unrelated assignment schema. No customer quotation leak is claimed; the test defect is BA-14. |
 | PR #58 G-8 inspection-event ratification | Closed; no open gap. GD-5/GD-7 decisions remain BA-20. |
 
@@ -231,14 +258,14 @@ The detailed route/service/table matrix is in `E2E_CAPABILITY_MATRIX.md`. Key co
 - **Authentication/RBAC:** canonical permissions, active session resolution, exact-Building access, PIC-personal decisions, current-Lead field authority, Finance permission separation, and Manager CLOSE dual guards are present in source and focused tests.
 - **Cross-Building/tenant:** focused finance/arrival/field-feed tests include sibling, foreign-Building, foreign-Client, inactive assignment, and superseded actor denials. No new cross-tenant bypass was found.
 - **Privilege escalation:** role names do not independently grant authority; production custom role/permission grants still need live census under BA-08.
-- **Idempotency/concurrency:** quotation decisions, assignment responses, variations, payment/close commands, outbound delivery keys, and work-session transitions use keyed replay/conflict and/or row/version guards. BA-06 means three readiness journal tests are not reliable evidence, not that a production atomicity violation was reproduced.
+- **Idempotency/concurrency:** quotation decisions, assignment responses, variations, payment/close commands, outbound delivery keys, and work-session transitions use keyed replay/conflict and/or row/version guards. Part 05 additionally executed Price Catalog replacement replay, invalid-command rollback, and concurrent replacement one-successor/one-conflict checks. BA-06 means three readiness journal tests are not reliable evidence, not that a production atomicity violation was reproduced.
 - **Audit history:** operational events and domain event tables preserve additive history; QC/BAST/warranty models avoid destructive reopen. No generic audit deletion path was identified in the traced Handyman lifecycle.
 - **Sensitive data:** BA-01 was a confirmed response-custody violation at the Part 01 baseline and is remediated by Part 02; production P-6.5 sweeps remain BA-09. Browser push response mappers omit endpoint/key secrets. QR opaque values are not recoverable from inventory and hashes are not publicly projected. Evidence bytes require persistent backup with the DB (BA-11).
 - **Migrations:** the inventory is coherent. BA-03 is closed locally by pre-DDL refusal and forward/recovery evidence; the raw failed down remained transactional and no corruption is asserted. Actual target rehearsal and native paired recovery remain BA-08/BA-11, so production migration stays NO-GO.
 
 ## 10. Release decision and handoff
 
-1. BA-01, BA-02, and BA-03 are closed in Parts 02, 03, and 04. Complete the four remaining release-blocking Backend repository items: **BA-04 through BA-07**.
+1. BA-01, BA-02, and BA-03 are closed in Parts 02, 03, and 04; newly registered BA-23 is closed in Part 05 with no net change to the historical open-item arithmetic. Complete the four remaining release-blocking Backend repository items: **BA-04 through BA-07**.
 2. In parallel, prepare—but do not activate prematurely—the four non-code release workstreams: **BA-08 through BA-11**.
 3. Re-run focused tests and OpenAPI after every contract/migration repair; then execute staged consumer, real-device, migration, persistence, and restore evidence.
 4. Handle P2 items according to `BACKEND_REMAINING_WORK_ROADMAP.md`; do not let conditional PR #47, PSrE, or optional notification wiring silently expand scope.

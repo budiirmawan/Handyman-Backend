@@ -2,14 +2,15 @@
 
 **Audit baseline:** `fb65c17e7f48f4896df2104256aa5d25f6fd07b4`
 **Current decision:** Backend FINAL FREEZE **NOT READY**; Biznet release and production migration **NO-GO**.
-**Scope discipline:** Part 02 explicitly authorized and completed BA-01 only; Part 03 explicitly authorized and completed BA-02 only; Part 04 explicitly authorized and completed BA-03 only. The remaining roadmap is not authorization to implement, merge, deploy, open a duplicate PR, revive PR #47, change another repository, or start Part 05 without explicit approval.
+**Scope discipline:** Part 02 explicitly authorized and completed BA-01 only; Part 03 explicitly authorized and completed BA-02 only; Part 04 explicitly authorized and completed BA-03 only; Part 05 explicitly authorized and completed the newly registered BA-23 Price Catalog repair only. The remaining roadmap is not authorization to implement, merge, deploy, open a duplicate PR, revive PR #47, change another repository, or start Part 06 without explicit approval.
 **Part 02 evidence:** `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`.
 **Part 03 evidence:** `FINAL_BACKEND_GAP_AUDIT.md` §3.4 and `tests/price-catalog-currency-validation.test.ts`; no production migration or deployment was performed.
 **Part 04 evidence:** `FINAL_BACKEND_GAP_AUDIT.md` §3.5, `tests/migration-0478-recovery.test.ts`, and the updated recovery runbooks; all database proof was disposable and no production downgrade/migration/deployment occurred.
+**Part 05 evidence:** `FINAL_BACKEND_GAP_AUDIT.md` §3.6, `src/modules/price-catalog-entries/price-catalog-entry.repository.ts`, and the focused Price Catalog tests; all 11 original failures pass, final disjoint coverage is 115/115 after the explicit variant rerun, typecheck passes, and no migration or production action occurred.
 
 ## 1. Work totals and execution rule
 
-Current totals subtract only closed BA-01, BA-02, and BA-03 from the Part 01 baseline (22 items, 14 Backend coding items).
+Current totals are recalculated from the register rows. BA-01, BA-02, and BA-03 remain closed against the Part 01 baseline (22 items, 14 Backend coding items); BA-23 was newly registered and closed in Part 05, so it has net-zero effect on open counts and is not subtracted from that historical baseline.
 
 | Work class | Release-blocking | Non-blocking / conditional | Total |
 |---|---:|---:|---:|
@@ -18,7 +19,7 @@ Current totals subtract only closed BA-01, BA-02, and BA-03 from the Part 01 bas
 | **Total open audit items** | **8** | **11** | **19** |
 | Severity | **P1 = 8** | **P2 = 11** | **P0 = 0** |
 
-Execution rule: close **BA-04 through BA-11** with evidence before declaring FINAL FREEZE or production GO. BA-01, BA-02, and BA-03 are closed at implementation/contract/focused-test or disposable-recovery level; BA-01 production device/provider follow-through remains within BA-09, BA-02 production data population remains within BA-10, and BA-03 target/native paired recovery remains within BA-08/BA-11. P2 hygiene may proceed in separate small CRs but must not expand the approved business authority or be hidden by disabling tests.
+Execution rule: close **BA-04 through BA-11** with evidence before declaring FINAL FREEZE or production GO. BA-01, BA-02, BA-03, and BA-23 are closed at their documented implementation/contract/focused-test or disposable-recovery boundaries; BA-01 production device/provider follow-through remains within BA-09, BA-02 production data population remains within BA-10, BA-23 exact-release consumer verification remains within BA-08 with real-price population still under BA-10, and BA-03 target/native paired recovery remains within BA-08/BA-11. P2 hygiene may proceed in separate small CRs but must not expand the approved business authority or be hidden by disabling tests.
 
 ## 2. Required execution order
 
@@ -26,7 +27,7 @@ Execution rule: close **BA-04 through BA-11** with evidence before declaring FIN
 FINAL REVIEW / owner approval
             │
             ▼
-Wave 1 — production-integrity repairs CLOSED (BA-01/02/03)
+Wave 1 — production-integrity repairs CLOSED (BA-01/02/03/23)
             │ focused tests + OpenAPI + disposable migration/recovery proof supplied
             ▼
 Wave 2 — three remaining core evidence repairs (BA-04, BA-05, BA-06)
@@ -51,15 +52,17 @@ Parallel, separately owned: P2 test hygiene/scalability and conditional policy
 
 ## 3. Wave 1 — production-integrity repairs (CLOSED)
 
-BA-01, BA-02, and BA-03 are complete at their documented local evidence boundaries. BA-03 remained small, independently reviewable, and free of new business modules or historical migration rewrites; no new PR was opened.
+BA-01, BA-02, BA-03, and BA-23 are complete at their documented local evidence boundaries. BA-03 and BA-23 remained small and independently reviewable; BA-23 added no migration or business module, and no new PR was opened.
 
 | ID | Implementation plan | Primary files / contract | Acceptance evidence | Dependencies |
 |---|---|---|---|---|
 | **BA-01 — CLOSED (PART 02)** | Native push tokens are write-only in public responses; internal full-record delivery access is preserved. | `src/modules/push-tokens/push-token.service.ts`, `push-token.types.ts`, `docs/api/openapi.yaml`, native HTTP/foundation/OpenAPI tests | **Evidence supplied:** typecheck PASS; native HTTP/foundation 34/34; fan-out/provider 50/50; browser 36/36; current OpenAPI 28/28; zero skips. See `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. | Android must not read response tokens. Production physical-device P-6.5 and provider activation remain BA-09. |
-| **BA-02 — CLOSED (PART 03)** | Price Catalog create now uses the existing typed command guard; the wrapper translates only the two known currency domain errors and rethrows infrastructure failures. Historical reads and the raw internal authority are unchanged. | `src/modules/price-catalog-entries/price-catalog-entry.service.ts`, `src/modules/client-monetary-contexts/index.ts`, `tests/price-catalog-currency-validation.test.ts`, Price Catalog fixtures/OpenAPI | **Evidence supplied:** failing-first 500 reproduced with rollback; post-fix 6/6; focused acceptance 65/65; shared currency consumers 8/8; final OpenAPI 34/34; typecheck PASS; zero skips. Disallowed ACTIVE USD is 400 `CLIENT_CURRENCY_NOT_ALLOWED`, no price/event/outbox is written, genuine DB failure stays 500. Existing valid create/idempotent replay passed in the broader run. | Closed before BA-10 production price population. Broader-run residual replacement/correction SQL and stale direct-insert failures are separately disclosed in `FINAL_BACKEND_GAP_AUDIT.md` §3.4, not hidden or attributed to BA-02. |
+| **BA-02 — CLOSED (PART 03)** | Price Catalog create now uses the existing typed command guard; the wrapper translates only the two known currency domain errors and rethrows infrastructure failures. Historical reads and the raw internal authority are unchanged. | `src/modules/price-catalog-entries/price-catalog-entry.service.ts`, `src/modules/client-monetary-contexts/index.ts`, `tests/price-catalog-currency-validation.test.ts`, Price Catalog fixtures/OpenAPI | **Evidence supplied:** failing-first 500 reproduced with rollback; post-fix 6/6; focused acceptance 65/65; shared currency consumers 8/8; final OpenAPI 34/34; typecheck PASS; zero skips. Disallowed ACTIVE USD is 400 `CLIENT_CURRENCY_NOT_ALLOWED`, no price/event/outbox is written, genuine DB failure stays 500. Existing valid create/idempotent replay passed in the broader run. | Closed before BA-10 production price population. Its broader-run residual replacement/correction SQL and stale direct-insert failures were separately disclosed in `FINAL_BACKEND_GAP_AUDIT.md` §3.4, not hidden or attributed to BA-02; Part 05 resolved them under BA-23 and §3.6. |
 | **BA-03 — CLOSED (PART 04)** | Installed A+B forward-only safety: the existing runner refuses populated 0478 SERVICE-price down before DDL and directs forward fix or paired restore. No historical migration edit, renumbering, second registry, or application-image rollback is used. | `src/database/migrate.ts`, `tests/migration-0478-recovery.test.ts`, `docs/HANDYMAN_DATABASE_EVIDENCE_BACKUP_RECOVERY.md`, deployment/migration runbooks | **Evidence supplied:** raw 23P01 + atomicity; runner/CLI pre-DDL refusal; single-tier loss prevention; empty-data round-trip; 6/6 focused; 43/43 catalog/BA-02; 6/6 variants; isolated stopped-writer restore with ledger/schema/tier/read checks; controlled forward recovery; typecheck PASS. | Local implementation/disposable recovery closed. Actual staging/target execution remains BA-08; native automated paired DB+evidence restore and RPO/RTO approval remain BA-11. |
 
-**Wave 1 exit:** BA-01/BA-02/BA-03 local evidence is supplied. The Android response-token handoff must still be acknowledged during BA-08/BA-09, and the exact release-candidate forward/recovery strategy must still be approved and rehearsed on the target copy under BA-08/BA-11.
+| **BA-23 — CLOSED (PART 05)** | Added the missing `$25` to the shared replacement/correction successor INSERT. The existing 25-column order and 25 bound values, including final `created_by_user_id`, are unchanged; no migration or contract change. | `src/modules/price-catalog-entries/price-catalog-entry.repository.ts`; `tests/price-catalog-entries.test.ts`; `tests/price-catalog-override.test.ts`; `tests/price-catalog-vendor-tier.test.ts`; `tests/service-reference-price.test.ts` | **Evidence supplied:** original 25 PASS / 11 FAIL / 0 SKIPPED reproduction; direct failed-command rollback probe; final focused 38/38, complementary 71/71 executed, explicit variants 6/6, and typecheck PASS. All 11 original cases pass; invalid replacement rolls back and concurrent replacement returns one 201/one 409. The stale direct-insert fixture now reaches its unchanged subject-shape assertion. | Local implementation/focused-test closure only. Exact-release consumer/staging verification remains BA-08, real per-Client pricing BA-10, and paired recovery BA-11. |
+
+**Wave 1 exit:** BA-01/BA-02/BA-03/BA-23 local evidence is supplied. The Android response-token handoff must still be acknowledged during BA-08/BA-09, the exact release-candidate Price Catalog behavior must be included in BA-08/BA-10 verification, and the forward/recovery strategy must still be approved and rehearsed on the target copy under BA-08/BA-11.
 
 ## 4. Wave 2 — restore core safety evidence (3 Backend coding items)
 
@@ -184,7 +187,7 @@ H-1 through H-6 are current test/documentation hygiene. H-7 is accepted current-
 - **PR #58 / #59 / #60:** merged and included in the audited baseline; do not duplicate them.
 - **PR #47:** open, conflicting, and excluded. It is not a dependency unless Product/Finance makes bank attestation mandatory.
 - **Consumer PRs mentioned by older freeze records:** Frontend #33, Operations #22/#23, and Mobile #14 were only *reported* merged in historical documentation. They were not accessed or verified here. BA-08 requires their actual integration reports against this Backend baseline.
-- **No new Backend PR before FINAL REVIEW:** Part 01 created documentation only; Parts 02–04 stayed on the approved working branch and opened no PR. Future hotfix/test/CI changes require explicit review and must stay on the approved branch/PR workflow.
+- **No new Backend PR before FINAL REVIEW:** Part 01 created documentation only; Parts 02–05 stayed on the approved working branch and opened no PR. Future hotfix/test/CI changes require explicit review and must stay on the approved branch/PR workflow.
 - **No other repository changes:** Android/PWA/admin work is handed off through OpenAPI and consumer-signed integration evidence, not performed from this checkout.
 
 ## 10. FINAL FREEZE exit checklist
@@ -194,6 +197,7 @@ A future reviewer may change the verdict only when all are true:
 - [x] BA-01 implementation evidence is committed and its focused response-security tests are green (Part 02).
 - [x] BA-02 implementation evidence is committed and its focused currency/rollback tests are green (Part 03).
 - [x] BA-03 implementation/disposable-recovery evidence is committed and focused migration tests are green (Part 04); target rehearsal remains under BA-08/BA-11.
+- [x] BA-23 implementation evidence is committed and all 11 original replacement/correction failures plus focused rollback/concurrency/contract preservation checks are green (Part 05); exact-release consumer and real-price verification remain under BA-08/BA-10.
 - [ ] BA-04/05/06 affected suites are green with zero hidden skips and unchanged production authority.
 - [ ] BA-07 CI and required branch checks are observable on the release candidate.
 - [ ] BA-08 consumer, staging, migration, IAM, persistence, and load evidence is attached.
@@ -204,4 +208,4 @@ A future reviewer may change the verdict only when all are true:
 - [ ] Final OpenAPI/typecheck/focused regression rerun passes on the exact release SHA.
 - [ ] Production migration and rollback/cutover decisions are signed using `BIZNET_COOLIFY_RELEASE_GATE.md`.
 
-Until then: **11 Backend repository items remain (4 release-blocking), 19 total audit items remain, and production migration remains NO-GO. BA-01, BA-02, and BA-03 are closed; no other registered gap is reclassified by Part 04.**
+Until then: **11 Backend repository items remain (4 release-blocking), 19 total audit items remain, and production migration remains NO-GO. BA-01, BA-02, BA-03, and BA-23 are closed; BA-23 was newly registered and closed by Part 05 with net-zero open-count effect, and no other registered gap is reclassified.**

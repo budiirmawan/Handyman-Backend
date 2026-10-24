@@ -148,15 +148,17 @@ describe('CR-BE-SVC-01 PART 05 — SERVICE price authority', () => {
     const fx = await fixture();
     const service = await makeCatalog(fx.client.id, 'GUARD');
     // The discriminated-union subject shape CHECK rejects a SERVICE row that
-    // carries an item/UOM (it must carry a service_id instead).
+    // carries an item/UOM (it must carry a service_id instead). Supply the
+    // otherwise-valid plain tier key so the independent tier-key CHECK does
+    // not mask the subject-shape guarantee this direct DB probe intends to hit.
     await assert.rejects(
       pool!.query(
         `INSERT INTO price_catalog_entries
-           (id, client_id, source_mode, entry_kind, item_id, uom_id, currency,
-            unit_price, effective_from, idempotency_key, idempotency_fingerprint,
-            created_by_user_id)
-         VALUES (gen_random_uuid(), $1, 'SERVICE', 'REFERENCE', $2, $3, 'IDR',
-                 10, NOW(), 'SVC_SHAPE_GUARD', repeat('b', 64), $4)`,
+           (id, client_id, source_mode, entry_kind, item_id, uom_id,
+            service_price_key, currency, unit_price, effective_from,
+            idempotency_key, idempotency_fingerprint, created_by_user_id)
+         VALUES (gen_random_uuid(), $1, 'SERVICE', 'REFERENCE', $2, $3, '',
+                 'IDR', 10, NOW(), 'SVC_SHAPE_GUARD', repeat('b', 64), $4)`,
         [fx.client.id, randomUUID(), randomUUID(), adminUserId],
       ),
       /price_catalog_entries_subject_shape_check/,

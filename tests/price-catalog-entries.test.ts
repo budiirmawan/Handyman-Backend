@@ -567,6 +567,116 @@ describe('CR-BE-PRICE-01 PART 01 — replacement history', () => {
     assert.equal(second.body.error.code, 'PRICE_CATALOG_NOT_ACTIVE');
   });
 
+  it('rolls back an invalid replacement without closing either authority', async (t) => {
+    if (!requireDatabase(t)) return;
+    const fx = await fixture();
+    const item = await makeItem(fx.client.id);
+    const uom = await makeUom(fx.client.id);
+
+    const early = await createEntry(entryBody(fx, item, uom, {
+      unitPrice: 100,
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: '2026-06-01T00:00:00.000Z',
+    }));
+    const late = await createEntry(entryBody(fx, item, uom, {
+      unitPrice: 200,
+      effectiveFrom: '2026-06-01T00:00:00.000Z',
+      effectiveTo: null,
+    }));
+    assert.equal(early.status, 201, JSON.stringify(early.body));
+    assert.equal(late.status, 201, JSON.stringify(late.body));
+    const earlyId = early.body.data.id as string;
+    const lateId = late.body.data.id as string;
+    assert.equal((await activateEntry(earlyId)).status, 200);
+    assert.equal((await activateEntry(lateId)).status, 200);
+
+    // The successor starts inside the predecessor's own window, but its open
+    // end would overlap the other ACTIVE authority. The exclusion constraint
+    // fires after closeForReplacement, so this probes transaction rollback.
+    const key = `REPL_OVERLAP_${suffix()}`;
+    const overlap = await api()
+      .post(`/api/v1/price-catalog/entries/${earlyId}/replace`)
+      .set(auth())
+      .set('Idempotency-Key', key)
+      .send({
+        unitPrice: 150,
+        effectiveFrom: '2026-03-01T00:00:00.000Z',
+        effectiveTo: null,
+      });
+    assert.equal(overlap.status, 409, JSON.stringify(overlap.body));
+    assert.equal(overlap.body.error.code, 'PRICE_CATALOG_WINDOW_OVERLAP');
+
+    for (const [id, originalPrice] of [[earlyId, 100], [lateId, 200]] as const) {
+      const stored = await api()
+        .get(`/api/v1/price-catalog/entries/${id}`)
+        .set(auth());
+      assert.equal(stored.status, 200, JSON.stringify(stored.body));
+      assert.equal(stored.body.data.status, 'ACTIVE');
+      assert.equal(stored.body.data.unitPrice, originalPrice);
+      assert.equal(stored.body.data.replacedByEntryId, null);
+      assert.equal(stored.body.data.deactivatedAt, null);
+      assert.equal(stored.body.data.deactivatedByUserId, null);
+    }
+    const rows = await pool!.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+         FROM price_catalog_entries
+        WHERE item_id = $1 OR idempotency_key = $2`,
+      [item.id, key],
+    );
+    assert.equal(rows.rows[0]?.count, '2');
+    assert.equal(await eventCount('PRICE_CATALOG_ENTRY_REPLACED', earlyId), 0);
+  });
+
+  it('serializes concurrent replacements into one successor and one conflict', async (t) => {
+    if (!requireDatabase(t)) return;
+    const fx = await fixture();
+    const item = await makeItem(fx.client.id);
+    const uom = await makeUom(fx.client.id);
+    const created = await createEntry(entryBody(fx, item, uom, {
+      effectiveFrom: '2026-01-01T00:00:00.000Z',
+      effectiveTo: null,
+    }));
+    const predecessorId = created.body.data.id as string;
+    assert.equal((await activateEntry(predecessorId)).status, 200);
+
+    const attempts = await Promise.allSettled([
+      replaceEntry(predecessorId, {
+        unitPrice: 1400,
+        effectiveFrom: '2026-06-01T00:00:00.000Z',
+        effectiveTo: null,
+      }),
+      replaceEntry(predecessorId, {
+        unitPrice: 1500,
+        effectiveFrom: '2026-06-01T00:00:00.000Z',
+        effectiveTo: null,
+      }),
+    ]);
+    const responses = attempts.map((attempt) => {
+      if (attempt.status === 'rejected') throw attempt.reason;
+      return attempt.value;
+    });
+    assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
+    const accepted = responses.find((response) => response.status === 201);
+    const rejected = responses.find((response) => response.status === 409);
+    assert.ok(accepted && rejected);
+    assert.equal(rejected.body.error.code, 'PRICE_CATALOG_NOT_ACTIVE');
+
+    const successorId = accepted.body.data.id as string;
+    const predecessor = await api()
+      .get(`/api/v1/price-catalog/entries/${predecessorId}`)
+      .set(auth());
+    assert.equal(predecessor.body.data.status, 'INACTIVE');
+    assert.equal(predecessor.body.data.replacedByEntryId, successorId);
+    const rows = await pool!.query<{ count: string }>(
+      'SELECT COUNT(*)::text AS count FROM price_catalog_entries WHERE item_id = $1',
+      [item.id],
+    );
+    assert.equal(rows.rows[0]?.count, '2');
+    assert.equal(await eventCount('PRICE_CATALOG_ENTRY_REPLACED', predecessorId), 1);
+    assert.equal(await eventCount('PRICE_CATALOG_ENTRY_CREATED', successorId), 1);
+    assert.equal(await eventCount('PRICE_CATALOG_ENTRY_ACTIVATED', successorId), 1);
+  });
+
   it('refuses a replacement window that rewrites the past', async (t) => {
     if (!requireDatabase(t)) return;
     const fx = await fixture();
