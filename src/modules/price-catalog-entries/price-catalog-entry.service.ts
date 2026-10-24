@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
-import { assertActiveAllowedCurrency } from '../client-monetary-contexts';
+import { assertActiveAllowedCurrencyCommand } from '../client-monetary-contexts';
 import {
   buildingAccessDeniedError,
   contextAccessService,
@@ -407,7 +407,7 @@ export async function createPriceCatalogEntry(
       approvedByUserId: input.approvedByUserId ?? null,
     };
 
-    await assertActiveAllowedCurrency(input.clientId, input.currency);
+    await assertActiveAllowedCurrencyCommand(input.clientId, input.currency);
     await validateReferences(client, context);
     assertValidWindow(context.effectiveFrom, context.effectiveTo);
 

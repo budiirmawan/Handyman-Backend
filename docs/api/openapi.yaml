@@ -33742,7 +33742,10 @@ paths:
         Requires `price_catalog.manage` plus access to the entry's scope.
         Creates a DRAFT (no effectiveness; never selected until activation).
         MATERIAL-only authority: one Inventory Item priced per 1 unit of an
-        explicit UOM in one supported currency. Scope tiers are expressed via
+        explicit UOM in one supported currency. The currency must be globally
+        ACTIVE and allowed for the selected Client; violations return 400
+        `CURRENCY_INACTIVE_OR_UNKNOWN` or `CLIENT_CURRENCY_NOT_ALLOWED`.
+        Scope tiers are expressed via
         nullable keys: Client-wide / Building / Vendor / Vendor+Building;
         `entryKind` is derived (`VENDOR_CONTRACT` exactly when `vendorId` is
         set). Approved-by attribution is optional and must reference an

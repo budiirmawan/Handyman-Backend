@@ -15,23 +15,25 @@
 > No P0 cross-tenant authorization bypass, wrong Finance/Manager authority decision, or partial schema corruption was found. Part 01 identified three reproduced implementation defects, three core test-evidence defects, absent CI, and four environment/data/disaster-recovery gates.
 >
 > **PART 02 UPDATE:** BA-01 is now **CLOSED** at implementation/OpenAPI/focused-test level by `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. Real-device/provider activation remains BA-09. The overall verdict is unchanged.
+>
+> **PART 03 UPDATE:** BA-02 is now **CLOSED** at implementation/OpenAPI/focused-test level. Price Catalog creation uses the existing typed Client-currency command authority; ACTIVE but disallowed USD returns 400 `CLIENT_CURRENCY_NOT_ALLOWED`, no price/event/outbox rows are written, and unexpected infrastructure failures remain HTTP 500. BA-03 through BA-11 remain open, so the overall verdict is unchanged.
 
 ## 1. Final counts
 
-### Current open items after Part 02
+### Current open items after Part 03
 
 | Measure | Count |
 |---|---:|
-| Open audit items | **21** |
+| Open audit items | **20** |
 | **P0** | **0** |
-| **P1 — release/freeze blockers** | **10** |
+| **P1 — release/freeze blockers** | **9** |
 | **P2 — non-blocking debt or conditional policy** | **11** |
-| Items requiring a change in this Backend repository | **13** |
-| ├─ Release-blocking Backend coding items | **6** |
+| Items requiring a change in this Backend repository | **12** |
+| ├─ Release-blocking Backend coding items | **5** |
 | └─ Non-blocking Backend coding/test/contract debt | **7** |
 | Items not requiring Backend coding | **8** |
-| Unconditional Biznet-blocking items | **10** |
-| Closed since Part 01 | **1 — BA-01** |
+| Unconditional Biznet-blocking items | **9** |
+| Closed since Part 01 | **2 — BA-01, BA-02** |
 
 ### Part 01 baseline counts
 
@@ -47,18 +49,18 @@
 | Items not requiring Backend coding | **8** |
 | Unconditional Biznet-blocking items | **11** |
 
-“Backend coding” here means a change in this repository, including application code, tests, OpenAPI, migration-integrity code, or CI workflow configuration. It does not mean new business modules. Conditional work in BA-21/BA-22 and optional notification rewiring in BA-20 are **not** included in the 14.
+“Backend coding” here means a change in this repository, including application code, tests, OpenAPI, migration-integrity code, or CI workflow configuration. It does not mean new business modules. Conditional work in BA-21/BA-22 and optional notification rewiring in BA-20 are **not** included in either the Part 01 baseline 14 or the current 12.
 
 ### Classification distribution
 
 | Classification | Count | IDs |
 |---|---:|---|
-| `PARTIAL` | 5 | BA-01, BA-02, BA-03, BA-19, BA-20 |
+| `PARTIAL` | 3 | BA-03, BA-19, BA-20 |
 | `MISSING` | 0 | — |
 | `TEST-DEBT` | 9 | BA-04, BA-05, BA-06, BA-12, BA-13, BA-14, BA-15, BA-16, BA-17 |
 | `CONFIGURATION` | 7 | BA-07, BA-08, BA-09, BA-10, BA-11, BA-21, BA-22 |
 | `FRONTEND-DEPENDENCY` | 1 | BA-18 |
-| `IMPLEMENTED` | 0 in the gap register | Implemented capabilities are in `E2E_CAPABILITY_MATRIX.md` |
+| `IMPLEMENTED` | 2 closed register items | BA-01 (Part 02), BA-02 (Part 03); other implemented capabilities are in `E2E_CAPABILITY_MATRIX.md` |
 
 ## 2. Authority model preserved by this audit
 
@@ -109,6 +111,21 @@ The first quotation attempts produced ten skips and one static failure because n
 
 Scratch databases/scripts used for reproductions were removed. No assertion was changed.
 
+### 3.4 Part 03 BA-02 remediation evidence
+
+All Part 03 database runs used disposable PostgreSQL. Counts below are per invocation, not additive: the 65-test acceptance batch reruns the six-test BA-02 suite and the six-test Price Catalog OpenAPI suite.
+
+| Focused invocation | Result | Evidence |
+|---|---:|---|
+| `price-catalog-currency-validation` before the production fix | **4 PASS / 2 FAIL / 0 SKIPPED** | Authorized ACTIVE-but-disallowed USD and INACTIVE JPY each returned the reproduced HTTP 500; price/event/outbox before-and-after equality assertions passed before the status assertions failed. |
+| The identical BA-02 suite after the fix | **6 PASS / 0 FAIL / 0 SKIPPED** | Allowed USD 201; disallowed USD 400 `CLIENT_CURRENCY_NOT_ALLOWED`; inactive JPY 400 `CURRENCY_INACTIVE_OR_UNKNOWN`; unknown THB 400 `VALIDATION_ERROR`; 401/403/cross-Client denial; zero invalid writes; injected currency-lookup outage remains 500 `INTERNAL_SERVER_ERROR`. |
+| BA-02 + Price Catalog OpenAPI + price selection + catalog parts 01–03 | **65 PASS / 0 FAIL / 0 SKIPPED** | Includes the 37 catalog variant/pricing/quotation tests and 16 selection tests; valid pricing and variant/quotation behavior remains green. |
+| `cur02-part01-command-currency` on a separate disposable database | **8 PASS / 0 FAIL / 0 SKIPPED** | Existing Vendor/Service Cost and Basic Expense consumers retain active/allowed, inactive, unknown, legacy-read, and cross-Client behavior after the shared wrapper was narrowed. |
+| Operational parity + structural closure + Handyman freeze + Price Catalog OpenAPI | **34 PASS / 0 FAIL / 0 SKIPPED** | The existing operational/structural/freeze trio remains 28/28 and Price Catalog adds 6/6 after documenting the two exact create-time currency errors. |
+| `npm run typecheck` | **PASS** | Final TypeScript check after implementation and test changes. |
+
+A broader bounded preservation invocation (`price-catalog-entries`, selection, vendor-tier, override, SERVICE reference price, BA-02, Price Catalog OpenAPI, and catalog parts 01–03) finished **95 PASS / 12 FAIL / 0 SKIPPED** out of 107. Every BA-02, selection, OpenAPI, and catalog variant/quotation assertion passed. The 12 reds are separate pre-existing residual failures, not BA-02 regressions: 11 replacement/correction cases reach the unchanged pristine-HEAD `insertWithId` SQL with 25 values but only 24 placeholders, and one unchanged direct-insert guard trips `price_catalog_entries_service_price_key_check` before its expected subject-shape CHECK. Part 03 did not repair, weaken, or conceal those failures and does not claim the complete Price Catalog lifecycle is green; their separate triage remains necessary. The register arithmetic in this document closes only BA-02 and does not mark those residual defects closed.
+
 ## 4. Severity and blocking rules
 
 - **P0:** proven critical exploit/data loss/wrong business authority or corruption requiring immediate incident handling.
@@ -121,13 +138,13 @@ Scratch databases/scripts used for reproductions were removed. No assertion was 
 | ID | Priority | Persona / stage | Expected behavior | Actual evidence and exact references | Classification | Impact | Required solution | Backend coding | Biznet-blocking |
 |---|---|---|---|---|---|---|---|---|---|
 | **BA-01** | **P1** | Android / push registration; sensitive data | FCM token is write-only in requests and absent from every response, evidence row, event, and log (PR #58 P-6.5). | `src/modules/push-tokens/push-token.service.ts:74-89` maps `pushToken`; the same mapper is used at `:276`, `:310`, `:324`, `:356`, `:372`. `src/modules/push-tokens/push-token.types.ts:63-77` and `docs/api/openapi.yaml:107225+` publish it. Browser responses omit equivalent secrets. Isolated lifecycle suite: 10/10, proving behavior but not secrecy. **PART 02 STATUS — CLOSED:** public mapper/type and OpenAPI no longer expose the token; native register/list/delete, delivery, browser and contract evidence is recorded in `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. Production device/provider sweeps remain BA-09. | `IMPLEMENTED` in Part 02 (was `PARTIAL`) | Credential reflection violates the approved custody law and can leak through client telemetry/logged responses; real-device P-6.5 cannot pass. | Remove the token from all registration/list/deactivation DTOs and OpenAPI responses, keep it required only on input, add response/log/evidence sweeps, and coordinate the Android contract change. **Implemented and verified in Part 02.** | **YES — completed** | **NO after Part 02; BA-09 remains blocking** |
-| **BA-02** | **P1** | Operations/catalog admin / SERVICE price authoring | Disallowed ACTIVE currency returns governed 400 `CLIENT_CURRENCY_NOT_ALLOWED`, never an unhandled 500. | Reproduced HTTP 500 above. `src/modules/price-catalog-entries/price-catalog-entry.service.ts:410` calls raw `assertActiveAllowedCurrency`; raw errors are at `src/modules/client-monetary-contexts/index.ts:14-17`; the typed 400 wrapper already exists at `:25-30`. | `PARTIAL` | Invalid configuration produces a generic server fault and noisy raw error; authoring contract and operational diagnostics are unreliable. | Use the typed command guard on this path; add HTTP tests for inactive and disallowed currencies, exact error code, and no row/outbox write; update error metadata only if required. | **YES** | **YES** |
+| **BA-02** | **P1** | Operations/catalog admin / SERVICE price authoring | Disallowed ACTIVE currency returns governed 400 `CLIENT_CURRENCY_NOT_ALLOWED`, never an unhandled 500. | **PART 03 STATUS — CLOSED:** the create command now calls `assertActiveAllowedCurrencyCommand`; the existing wrapper translates only `CLIENT_CURRENCY_NOT_ALLOWED` and `CURRENCY_INACTIVE_OR_UNKNOWN` and rethrows unexpected failures. Failing-first HTTP 500 and rollback evidence plus post-fix 6/6 HTTP regression, 65/65 acceptance, 8/8 shared-currency, 34/34 OpenAPI, and typecheck evidence are in §3.4. No migration was added; the create operation now names both exact 400 codes. | `IMPLEMENTED` in Part 03 (was `PARTIAL`) | The former generic server fault and noisy raw domain error are removed from Price Catalog creation; genuine infrastructure failures remain server errors. | **Implemented and verified in Part 03:** reuse the typed command guard, preserve the raw authority for internal callers, prove no price/event/outbox write, and retain valid creation/idempotent replay and tenant denial. | **YES — completed** | **NO after Part 03; BA-03 through BA-11 remain blocking** |
 | **BA-03** | **P1** | Platform/DBA / migration rollback | Rollback with valid 0478 data either restores the prior schema safely or stops before mutation with an explicit data decision; never silently deletes tiers. | Reproduced populated rollback failure above. `0478_service_price_tier_key.ts:76-103` recreates the old exclusion at `:81-95` before dropping `service_price_key` at `:100-103`; concurrent keyed ACTIVE tiers valid under `:59-73` cannot fit the old constraint. | `PARTIAL` | Documented rollback cannot handle valid production-shaped data. Transactionality prevented partial corruption in the reproduction, but recovery is not dependable. | Migration-owner-reviewed down repair or preflight guard/forward recovery strategy; preserve all price facts; add populated concurrent-tier down/up tests and execute the approved strategy on a staging copy. Do not rewrite applied up history blindly. | **YES** | **YES** |
 | **BA-04** | **P1** | Tenant PIC, Operations, Manager / quotation-dependent safety suites | Fixtures decide quotations as the active PIC-linked user, so assignment/work/BAST/finance assertions execute without weakening PIC-personal authority. | Current quotation cases 6/7/9 return 403 `HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN`. PR #59 measured 32 work-session failures plus two building-scope failures. The same stale pattern remains in `tests/handyman-bast-signoff-scope-guard.test.ts:435-437`, `tests/handyman-chargeable-additional-work-scope-guard.test.ts:472-474`, and `tests/handyman-customer-transaction-scope-guard.test.ts:371-373`, all deciding as `adminUserId` instead of the PIC user created earlier. | `TEST-DEBT` | Core work-session, scope, BAST, and transaction guards cannot all be cited as production evidence; false reds conceal the assertions that matter. | Repair fixtures to create/authenticate the linked PIC and use that actor; preserve the 403 negative cases; rerun every affected suite on disposable DBs and record exact counts. | **YES** | **YES** |
 | **BA-05** | **P1** | Operations/Crew Lead / worker admission and assignment | The isolated crew-admission harness models the current assignment-response dependency and executes all 26 safety cases. | Current run: **18 PASS / 8 FAIL**, each red is `42P01 relation "handyman_assignment_responses" does not exist`. `tests/handyman-crew-worker-admission.test.ts` creates TEMP fixtures but no assignment-response table; production reaches `src/modules/assignment-responses/assignment-response.repository.ts:278` from `src/modules/handyman-scope-assignments/handyman-scope-assignment.service.ts:431`. | `TEST-DEBT` | Eight assignment/revalidation/provider/Client-mismatch cases prove nothing beyond fixture failure. This is not evidence of a production missing table. | Add the current TEMP contract or use a fully migrated isolated schema; do not mock away `ensurePendingForAssignment`; rerun all 26 and retain the 18 passing negative checks. | **YES** | **YES** |
 | **BA-06** | **P1** | Operations / scheduling, permit, and unit-access readiness | The mutation+journal atomicity tests are deterministic and cannot pass/fail because of random UUID ordering. | `tests/handyman-permit-readiness.test.ts:450-464`, `tests/handyman-scheduling-readiness.test.ts:475-489`, and the analogous unit-access assertion use `ORDER BY created_at ASC, id ASC`. Rows in one transaction share `NOW()` and UUID tie-breaking is random; PR #58 D-02…D-04 and PR #59 D-3 document flaky results. | `TEST-DEBT` | The highest-value zero-partial-commit evidence is unreliable and can mask a real atomicity regression. | Assert the complete event set/count/content without assuming random order, or use a genuinely governed sequence only if order is a product contract. Repeat the three suites and failure-injection cases. | **YES** | **YES** |
 | **BA-07** | **P1** | CI/release owner / all stages | Required CI runs hermetic typecheck, contract, migration, lifecycle, and notification/push lanes with visible failures and branch checks. | No `.github/workflows/ci.yml` or other CI workflow exists. `tests/push01-part06-closure-and-final-freeze.test.ts:731-758` reads that absent file; PR #58 D-18/G-6 remains open. | `CONFIGURATION` | There is no automated merge/release signal; current red and flaky lanes cannot be systematically contained. | Add a least-privilege workflow and required checks with isolated PostgreSQL profiles, explicit focused release lanes, populated migration rollback, and no ignored failures. Configure GitHub branch protection separately. | **YES** | **YES** |
-| **BA-08** | **P1** | Care Frontend, Operations/Manager, PWA, Android, Platform / integrated staging | Real consumers and a production-like Coolify environment prove compatibility, exact IAM/Building grants, migrations, HTTPS/CORS, persistent evidence, one writer/scheduler, restart persistence, and load smoke. | `docs/contract-freeze/CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01_PENDING_GAP_REGISTER.md:24-25` records FG-03/FG-04 open. This audit ran only disposable/local evidence and did not enter consumer repositories. `docs/HANDYMAN_BIZNET_COOLIFY_DEPLOYMENT.md:120-145` is procedural; no staging/production migration status, live E2E, load test, or deployment evidence exists. | `CONFIGURATION` | Source-level parity cannot prove browser/APK compatibility or live infrastructure behavior. | With BA-01 closed and after BA-02…BA-07, deploy the release candidate to isolated staging; run consumer order Care → Operations/Manager → PWA → Android, positive/negative IAM cases, migration status/up and rollback rehearsal, storage restart, and load smoke. Attach consumer-signed reports. | **NO** | **YES** |
+| **BA-08** | **P1** | Care Frontend, Operations/Manager, PWA, Android, Platform / integrated staging | Real consumers and a production-like Coolify environment prove compatibility, exact IAM/Building grants, migrations, HTTPS/CORS, persistent evidence, one writer/scheduler, restart persistence, and load smoke. | `docs/contract-freeze/CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01_PENDING_GAP_REGISTER.md:24-25` records FG-03/FG-04 open. This audit ran only disposable/local evidence and did not enter consumer repositories. `docs/HANDYMAN_BIZNET_COOLIFY_DEPLOYMENT.md:120-145` is procedural; no staging/production migration status, live E2E, load test, or deployment evidence exists. | `CONFIGURATION` | Source-level parity cannot prove browser/APK compatibility or live infrastructure behavior. | With BA-01/BA-02 closed and after BA-03…BA-07, deploy the release candidate to isolated staging; run consumer order Care → Operations/Manager → PWA → Android, positive/negative IAM cases, migration status/up and rollback rehearsal, storage restart, and load smoke. Attach consumer-signed reports. | **NO** | **YES** |
 | **BA-09** | **P1** | Platform/Operations + browser/Android / notification activation | VAPID/FCM credentials, provider selectors, per-tenant rules/templates, registered devices, real delivery, dedupe/retry, and no-secret evidence are proven. | Real IN_APP/Web Push/FCM adapters exist, but `.env.example:29` uses `PUSH_PROVIDER=noop`; `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_PRODUCTION_PREREQUISITES.md:115-137,145-167` records P-6.x/G-1…G-7 environment and real-device gates. The Part 01 BA-01 response violation is closed in Part 02; production P-6.5/provider/device evidence remains unexecuted. | `CONFIGURATION` | Deploying code alone produces no governed notification delivery; provider/device behavior remains unproven. | Provision secrets outside Git, configure `webpush`/`fcm` only in the intended environment, create ACTIVE templates/rules before fan-out, and run physical browser/Android delivery, rotation, retry, dedupe, isolation, and secret-sweep checks. | **NO** (apart from BA-01/BA-07) | **YES** |
 | **BA-10** | **P1** | Operations/Finance / per-Client catalog and commercial data | Each production Client has an explicit idempotent 8-category/24-service import, monetary context, ACTIVE tier price facts, and approved commercial/BM term/beneficiary configuration. | `handyman-parameterized-catalog.starter.ts:7-29` defines 8/24 and deliberately **no amounts**; import is explicit through `/service-catalog/parameterized/starter-import`, not automatic seed. Catalog engine tests are 37/37, but no persisted production population or pricing/BM readback was supplied. | `CONFIGURATION` | An implemented engine can still yield an empty/unpriced catalog or fail-closed quotation/BM evaluation. The engine must not be confused with actual 24-service operational data. | Run and record the import per Client; verify stable codes/counts/no duplicates; configure allowed currencies and real price tiers; approve commercial agreements and BM prerequisites; execute quote/settlement readbacks. | **NO** | **YES** |
 | **BA-11** | **P1** | Platform/DBA / backup and disaster recovery | Scheduled encrypted off-host paired PostgreSQL+evidence backups, retention, and a measured isolated restore drill prove RPO/RTO. | `docs/HANDYMAN_DATABASE_EVIDENCE_BACKUP_RECOVERY.md:3-6` explicitly says no automatic backup/retention/live restore; `:25-41` marks policy recommendations; `:75-104` is a procedure, not executed evidence. | `CONFIGURATION` | Database dumps alone omit evidence bytes; recovery, integrity, and restoration time are unproven. | Implement operator/platform-owned scheduling, encryption, off-host retention and alerting; perform a paired restore into isolation; verify DB/evidence references, hashes, migration history, grants, startup and restart; record RPO/RTO. | **NO** | **YES** |
@@ -179,7 +196,7 @@ The detailed route/service/table matrix is in `E2E_CAPABILITY_MATRIX.md`. Key co
 | FG-10 BM-fee migration pin | Current 5/6 run confirms one stale structural red, carried in BA-15; runtime configuration checks pass. |
 | PR #60 five quotation failures | Freshly reproduced as 6 PASS / 5 FAIL; split between BA-04 (three) and BA-14 (two). |
 | PR #60 three scope-variation failures | **Not reproduced:** current isolated suite is 3/3 PASS; no remaining variation gap is recorded. |
-| PR #60 price-catalog 47 historical failures | Not used as a current count. The underlying invalid-currency 500 was independently reproduced once through real HTTP and is BA-02. |
+| PR #60 price-catalog 47 historical failures | Not used as a current count. The invalid-currency 500 was independently reproduced and BA-02 is closed in Part 03. The separate 12 current pre-existing residual reds from the bounded Part 03 preservation run are explicitly recorded in §3.4 rather than being relabeled as the historical 47 or attributed to the currency fix. |
 | PR #60 `crewId` “leak” | Current evidence shows the static assertion scans an unrelated assignment schema. No customer quotation leak is claimed; the test defect is BA-14. |
 | PR #58 G-8 inspection-event ratification | Closed; no open gap. GD-5/GD-7 decisions remain BA-20. |
 
@@ -195,7 +212,7 @@ The detailed route/service/table matrix is in `E2E_CAPABILITY_MATRIX.md`. Key co
 
 ## 10. Release decision and handoff
 
-1. BA-01 is closed in Part 02. Complete the six remaining release-blocking Backend repository items: **BA-02 through BA-07**.
+1. BA-01 and BA-02 are closed in Parts 02 and 03. Complete the five remaining release-blocking Backend repository items: **BA-03 through BA-07**.
 2. In parallel, prepare—but do not activate prematurely—the four non-code release workstreams: **BA-08 through BA-11**.
 3. Re-run focused tests and OpenAPI after every contract/migration repair; then execute staged consumer, real-device, migration, persistence, and restore evidence.
 4. Handle P2 items according to `BACKEND_REMAINING_WORK_ROADMAP.md`; do not let conditional PR #47, PSrE, or optional notification wiring silently expand scope.

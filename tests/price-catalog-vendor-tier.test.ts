@@ -157,6 +157,12 @@ async function fixture(assignUserId: string | null = adminUserId) {
       });
     }
   }
+  // Valid Price Catalog commands require explicit Client currency grants.
+  await pool!.query(
+    `INSERT INTO client_allowed_transaction_currencies (client_id, currency_code)
+     VALUES ($1, 'IDR'), ($1, 'USD') ON CONFLICT DO NOTHING`,
+    [client.id],
+  );
   return { client, property, buildingA, buildingB };
 }
 

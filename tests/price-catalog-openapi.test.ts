@@ -184,6 +184,13 @@ describe('CR-BE-PRICE-01 PART 06 — OpenAPI vocabulary vs runtime source of tru
     ]);
   });
 
+  it('documents active/allowed Client currency failures on create', () => {
+    const op = spec.paths['/price-catalog/entries'].post;
+    assert.ok(op.responses['400']);
+    assert.match(op.description, /CURRENCY_INACTIVE_OR_UNKNOWN/);
+    assert.match(op.description, /CLIENT_CURRENCY_NOT_ALLOWED/);
+  });
+
   it('documents the resolver probe vocabulary and typed outcomes', () => {
     const op = spec.paths['/price-catalog/lookup'].get;
     // CR-BE-SVC-01 PART 06 — buildingId/currency/asOf stay required; with

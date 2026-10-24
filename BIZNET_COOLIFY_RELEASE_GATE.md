@@ -14,11 +14,10 @@
 
 ## 1. Why the gate is closed
 
-Part 01 found **11 unconditional P1 blockers**. Part 02 closed BA-01 at implementation/OpenAPI/focused-test level, leaving **10 blockers: six Backend coding items and four environment/data/recovery workstreams**. BA-01 evidence: `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`.
+Part 01 found **11 unconditional P1 blockers**. Parts 02 and 03 closed BA-01 and BA-02 at implementation/OpenAPI/focused-test level, leaving **9 blockers: five Backend coding items and four environment/data/recovery workstreams**. BA-01 evidence: `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. BA-02 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.4 (post-fix 6/6, acceptance 65/65, shared currency 8/8, final OpenAPI 34/34, zero skips).
 
 | Blocker | Gate meaning | Current evidence |
 |---|---|---|
-| **BA-02** | Governed price-catalog error contract | Real HTTP disallowed-currency create returned 500 instead of typed 400. |
 | **BA-03** | Safe populated migration rollback/recovery | Valid concurrent ACTIVE tiers make 0478 down fail while recreating the old exclusion. Transaction prevented partial corruption. |
 | **BA-04** | PIC-dependent lifecycle evidence | Current quotation 403 fixture failures plus historical work-session/building/scope fixture drift prevent reliable sign-off. |
 | **BA-05** | Crew/assignment safety evidence | Current 18/26 pass; eight cases stop on missing TEMP `handyman_assignment_responses`. |
@@ -29,6 +28,8 @@ Part 01 found **11 unconditional P1 blockers**. Part 02 closed BA-01 at implemen
 | **BA-10** | Actual per-Client operational data | Engine/import tests exist; no launch-Client 8/24 population, real prices, monetary or BM commercial readback. |
 | **BA-11** | Backup and disaster recovery | No automatic backup/retention or executed paired DB+evidence restore; RPO/RTO unproven. |
 
+Part 03's broader bounded Price Catalog preservation run also disclosed 12 pre-existing residual reds (11 replacement/correction SQL failures and one stale direct-insert guard) among 107 tests; the BA-02, selection, OpenAPI, and variant/quotation assertions all passed. These residuals are explicitly not closed or counted as BA-02 evidence; see `FINAL_BACKEND_GAP_AUDIT.md` §3.4. No full-suite PASS is claimed.
+
 No P0 issue is claimed. The gate is NO-GO because these P1 release controls are open, not because a cross-tenant or financial-authority exploit was found.
 
 ## 2. Release-gate scorecard
@@ -36,10 +37,10 @@ No P0 issue is claimed. The gate is NO-GO because these P1 release controls are 
 | Gate | Required evidence | Current status | Release effect |
 |---|---|---|---|
 | **RG-01 — Baseline identity** | PRs #58/#59/#60 merged; exact SHA/image recorded; no unreviewed open PR included | **PASS for source identity** at `fb65c17…`; release image not built/deployed | Source baseline known; image identity still required under BA-08 |
-| **RG-02 — Implementation integrity** | BA-01/02/03 fixed with focused HTTP/secret/migration evidence | **OPEN — BLOCKER:** BA-01 CLOSED in Part 02; BA-02/BA-03 remain | NO-GO |
+| **RG-02 — Implementation integrity** | BA-01/02/03 fixed with focused HTTP/secret/migration evidence | **OPEN — BLOCKER:** BA-01 CLOSED in Part 02; BA-02 CLOSED in Part 03; BA-03 remains | NO-GO |
 | **RG-03 — Core lifecycle evidence** | BA-04/05/06 affected suites green with zero hidden skips | **OPEN — BLOCKER** | NO-GO |
-| **RG-04 — Static API contract** | OpenAPI parity, unique IDs, refs, auth/permission metadata | **PASS locally after Part 02:** 28/28; 2,065 normalized operations, 301 Handyman operations | Re-run after BA-02; does not prove consumers |
-| **RG-05 — Type safety** | Typecheck on exact release SHA | **PASS locally:** `npm run typecheck` | Re-run after repairs; no build PASS claimed |
+| **RG-04 — Static API contract** | OpenAPI parity, unique IDs, refs, auth/permission metadata | **PASS locally after Part 03:** 34/34 combined (existing operational/structural/freeze 28/28 + Price Catalog 6/6); 2,065 normalized operations, 301 Handyman operations | Static evidence only; actual consumer compatibility remains BA-08 |
+| **RG-05 — Type safety** | Typecheck on exact release SHA | **PASS locally after Part 03:** `npm run typecheck` | Re-run on the final release SHA; no build PASS claimed |
 | **RG-06 — CI/required checks** | Hermetic workflow, required branch checks, migration and notification lanes | **OPEN — BLOCKER (BA-07)** | NO-GO |
 | **RG-07 — Consumer compatibility** | Care → Operations/Manager → PWA → Android signed integration reports | **OPEN — BLOCKER (BA-08)**; historical consumer PR claims are unverified | NO-GO |
 | **RG-08 — Migration up/status** | Target status, expected pending IDs, no unknown/newer history, one-shot apply log | **NOT RUN on target**; only disposable fresh apply succeeded | Production migration NO-GO |
@@ -165,7 +166,7 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 
 | Sign-off | Required named evidence | Current |
 |---|---|---|
-| Backend code owner | BA-01/02/03 merged fixes + focused results | **BA-01 PART 02 EVIDENCE SUPPLIED; BA-02/BA-03 NOT SUPPLIED** |
+| Backend code owner | BA-01/02/03 committed fixes + focused results | **BA-01 PART 02 AND BA-02 PART 03 EVIDENCE SUPPLIED; BA-03 NOT SUPPLIED** |
 | Backend test owner | BA-04/05/06 green affected suites; P2 disposition | **NOT SUPPLIED** |
 | CI owner | BA-07 workflow/run/required checks | **NOT SUPPLIED** |
 | Platform/DBA | Target migration/up/recovery, infrastructure, persistence and monitoring | **NOT SUPPLIED** |
@@ -177,10 +178,10 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 
 ## 9. Final release statement
 
-The Part 01 baseline was **0 / 11 / 11** across 22 items. Current status after Part 02:
+The Part 01 baseline was **0 / 11 / 11** across 22 items. Current status after Part 03:
 
-- **P0/P1/P2:** **0 / 10 / 11** across **21 open items**; **BA-01 is closed**.
-- **Remaining Backend coding items:** **13** total, **6 release-blocking**.
+- **P0/P1/P2:** **0 / 9 / 11** across **20 open items**; **BA-01 and BA-02 are closed**.
+- **Remaining Backend coding items:** **12** total, **5 release-blocking**.
 - **Backend FINAL FREEZE:** **NOT READY**.
 - **Production migration readiness:** **NO-GO**.
 - **Biznet/Coolify production readiness:** **NO-GO**.

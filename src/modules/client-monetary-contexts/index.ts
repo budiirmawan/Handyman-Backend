@@ -25,6 +25,7 @@ export async function assertActiveAllowedCurrency(clientId:string,currencyCode:s
 export async function assertActiveAllowedCurrencyCommand(clientId:string,currencyCode:string):Promise<void>{
   try{await assertActiveAllowedCurrency(clientId,currencyCode)}catch(e){
     const code=typeof e==='object'&&e!==null&&'code'in e?String((e as{code?:unknown}).code):'';
+    if(code!=='CLIENT_CURRENCY_NOT_ALLOWED'&&code!=='CURRENCY_INACTIVE_OR_UNKNOWN')throw e;
     const message=e instanceof Error?e.message:'Currency is not usable for this client.';
     throw new AppError({code:code==='CLIENT_CURRENCY_NOT_ALLOWED'?ERROR_CODES.CLIENT_CURRENCY_NOT_ALLOWED:ERROR_CODES.CURRENCY_INACTIVE_OR_UNKNOWN,message,statusCode:400});
   }

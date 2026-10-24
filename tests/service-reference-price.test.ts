@@ -95,6 +95,12 @@ async function fixture() {
   const property = await propertyService.createProperty({ clientId: client.id, code: `PROP_${suffix()}`, name: 'SVC05 Property' });
   const building = await buildingService.createBuilding({ propertyId: property.id, code: `BLDG_${suffix()}`, name: 'SVC05 Building' });
   await buildingAssignmentService.createAssignment(adminUserId, { buildingId: building.id });
+  // Valid Price Catalog commands require explicit Client currency grants.
+  await pool!.query(
+    `INSERT INTO client_allowed_transaction_currencies (client_id, currency_code)
+     VALUES ($1, 'IDR'), ($1, 'USD') ON CONFLICT DO NOTHING`,
+    [client.id],
+  );
   return { client, building };
 }
 
