@@ -159,11 +159,16 @@ describe('BE-26B notification templates — create', () => {
     assert.ok(!Number.isNaN(Date.parse(data.createdAt)));
   });
 
-  it('rejects an unsupported channel (only IN_APP exists)', async () => {
+  it('rejects an unsupported channel and accepts the governed channel vocabulary', async () => {
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — S-5 SUPERSESSION
+    // (2026-10-24): the channel vocabulary is now
+    // IN_APP | EMAIL | WHATSAPP | PUSH (the notification engine of the
+    // multi-client transport). The rejection this guard protects is still
+    // enforced: a channel OUTSIDE the vocabulary is refused.
     const response = await createTemplate(adminToken, {
-      key: 'push_template',
+      key: 'sms_template',
       type: 'WORK_ORDER_ASSIGNED',
-      channel: 'PUSH',
+      channel: 'SMS',
       subject: 'Hello',
       variables: [],
     });
@@ -174,6 +179,16 @@ describe('BE-26B notification templates — create', () => {
         (detail: { field: string }) => detail.field === 'channel',
       ),
     );
+
+    const push = await createTemplate(adminToken, {
+      key: 'push_template',
+      type: 'WORK_ORDER_ASSIGNED',
+      channel: 'PUSH',
+      subject: 'Hello',
+      variables: [],
+    });
+    assert.equal(push.status, 201);
+    assert.equal(push.body.data.channel, 'PUSH');
   });
 
   it('rejects a template referencing an undeclared variable', async () => {

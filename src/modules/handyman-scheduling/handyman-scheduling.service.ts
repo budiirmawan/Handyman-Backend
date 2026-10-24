@@ -1,5 +1,6 @@
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import { buildingRepository } from '../buildings';
 import {
@@ -175,6 +176,26 @@ export async function createHandymanSchedulingReadiness(
         },
         tx,
       );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred scheduling readiness, on the SAME
+      // transaction. The notification entity is the readiness OCCURRENCE.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+          clientId: request.clientId,
+          entityId: row.id,
+          buildingId: request.buildingId,
+          variables: {
+            handymanRequestId: request.id,
+            readinessId: row.id,
+            timezone: row.timezone,
+            preferredWindowStart: row.preferredWindowStart.toISOString(),
+            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+            buildingId: request.buildingId,
+          },
+        },
+        { executor: tx },
+      );
       return toPublic(row);
     });
   } catch (error) {
@@ -277,6 +298,27 @@ export async function supersedeHandymanSchedulingReadiness(
           },
         },
         tx,
+      );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred scheduling readiness (the supersession path
+      // writes a NEW ACTIVE readiness row — its own occurrence), on the SAME
+      // transaction.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+          clientId: current.clientId,
+          entityId: row.id,
+          buildingId: request.buildingId,
+          variables: {
+            handymanRequestId: current.handymanRequestId,
+            readinessId: row.id,
+            timezone: row.timezone,
+            preferredWindowStart: row.preferredWindowStart.toISOString(),
+            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+            buildingId: request.buildingId,
+          },
+        },
+        { executor: tx },
       );
       return toPublic(row);
     });

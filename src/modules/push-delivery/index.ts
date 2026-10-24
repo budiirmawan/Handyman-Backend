@@ -72,3 +72,61 @@ export type {
   FcmPushAdapterOptions,
   FcmPushConfig,
 } from './fcm-push-adapter';
+
+/**
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the BROWSER transport port.
+ *
+ * Same boundary discipline as the native port above: the provider
+ * vocabulary stays sealed behind this module and consumers OUTSIDE it depend
+ * on the ROLE (a delivery port), never on the vendor plumbing.
+ */
+export {
+  AVAILABLE_BROWSER_PUSH_PROVIDERS,
+  BROWSER_PUSH_DEFAULT_ENDPOINT_HOSTS,
+  BROWSER_PUSH_DEFAULTS,
+  BROWSER_PUSH_PAYLOAD_LIMITS,
+  BROWSER_PUSH_PROVIDER,
+  CREDENTIAL_LESS_BROWSER_PUSH_PROVIDERS,
+  CaptureBrowserPushAdapter,
+  BrowserPushWebPushAdapter,
+  NoopBrowserPushAdapter,
+  allowedBrowserPushEndpointHosts,
+  browserSubscriptionFingerprint,
+  buildVapidAuthorizationHeader,
+  buildVapidToken,
+  classifyBrowserPushStatus,
+  createFetchBrowserPushTransport,
+  encryptBrowserPushPayload,
+  extractUncompressedPublicPoint,
+  hkdfExpand,
+  isAllowedBrowserPushEndpoint,
+  normalizeBrowserPushPrivateKey,
+  readBrowserPushConfig,
+  resolveBrowserPushAdapter,
+  sanitizeBrowserPushError,
+  validateBrowserPushPayload,
+  WEB_PUSH_RECORD_SIZE,
+} from './browser-push-adapter';
+export type {
+  BrowserPushAdapter,
+  BrowserPushAdapterOptions,
+  BrowserPushConfig,
+  BrowserPushEncryptionOverrides,
+  BrowserPushHttpRequest,
+  BrowserPushHttpResponse,
+  BrowserPushHttpTransport,
+  BrowserPushSendInput,
+  BrowserPushSubscriptionTarget,
+  CapturedBrowserPushSend,
+  SimulatedBrowserPushOutcome,
+} from './browser-push-adapter';
+/**
+ * The browser port, published under the same role-neutral name as the native
+ * one, so the dispatch seam never learns a provider name.
+ */
+export {
+  resolveBrowserPushAdapter as resolveBrowserPushDeliveryPort,
+} from './browser-push-adapter';
+export type {
+  BrowserPushAdapter as BrowserPushDeliveryPort,
+} from './browser-push-adapter';

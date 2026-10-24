@@ -1,5 +1,6 @@
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import {
   handymanServiceRequestNotFoundError,
@@ -197,6 +198,27 @@ export async function createHandymanPermitReadiness(
         },
         tx,
       );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred permit readiness, on the SAME transaction.
+      // The notification entity is the readiness OCCURRENCE (the row), so a
+      // supersession (a NEW readiness row) is its own notification.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_PERMIT_READINESS_CREATED',
+          clientId: request.clientId,
+          entityId: row.id,
+          buildingId: location.buildingId,
+          variables: {
+            handymanRequestId: request.id,
+            readinessId: row.id,
+            permitType: row.permitType,
+            validFrom: row.validFrom.toISOString(),
+            validUntil: row.validUntil.toISOString(),
+            buildingId: location.buildingId,
+          },
+        },
+        { executor: tx },
+      );
       return toPublic(row);
     });
   } catch (error) {
@@ -304,6 +326,27 @@ export async function supersedeHandymanPermitReadiness(
           },
         },
         tx,
+      );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred permit readiness (the supersession path
+      // writes a NEW ACTIVE readiness row — its own occurrence), on the
+      // SAME transaction.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_PERMIT_READINESS_CREATED',
+          clientId: current.clientId,
+          entityId: row.id,
+          buildingId: location.buildingId,
+          variables: {
+            handymanRequestId: current.handymanRequestId,
+            readinessId: row.id,
+            permitType: row.permitType,
+            validFrom: row.validFrom.toISOString(),
+            validUntil: row.validUntil.toISOString(),
+            buildingId: location.buildingId,
+          },
+        },
+        { executor: tx },
       );
       return toPublic(row);
     });

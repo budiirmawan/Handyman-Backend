@@ -20,6 +20,12 @@ export type NormalizedDeliveryEvent = {
   entityId: string;
   buildingId: string | null;
   variables: Record<string, string | number>;
+  /**
+   * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — the AUTHORITATIVE recipient
+   * set supplied by the producing domain (null = "resolve from the
+   * subscription rule", the pre-existing behaviour).
+   */
+  recipients: string[] | null;
 };
 
 export function normalizeDeliveryEvent(
@@ -52,6 +58,32 @@ export function normalizeDeliveryEvent(
     details.push({ field: 'buildingId', message: 'buildingId must be a valid UUID.' });
   }
 
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — the authoritative recipient
+  // set is validated here so a malformed recipient can never reach a
+  // delivery seam (and never reaches the database as a broken FK).
+  let recipients: string[] | null = null;
+  if (event.recipients !== undefined) {
+    if (!Array.isArray(event.recipients)) {
+      details.push({
+        field: 'recipients',
+        message: 'recipients must be an array of User ids.',
+      });
+    } else {
+      const normalizedRecipients: string[] = [];
+      for (const recipient of event.recipients) {
+        if (typeof recipient !== 'string' || !isValidUuid(recipient)) {
+          details.push({
+            field: 'recipients',
+            message: 'Every recipient must be a valid User UUID.',
+          });
+          break;
+        }
+        normalizedRecipients.push(recipient.trim().toLowerCase());
+      }
+      recipients = normalizedRecipients;
+    }
+  }
+
   if (details.length > 0) {
     throw AppError.validation('Request validation failed.', details);
   }
@@ -66,5 +98,6 @@ export function normalizeDeliveryEvent(
         ? null
         : (event.buildingId as string).trim().toLowerCase(),
     variables: event.variables ?? {},
+    recipients,
   };
 }

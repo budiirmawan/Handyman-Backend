@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewNotification,
@@ -50,8 +51,14 @@ function listWhere(recipientUserId: string, filters: NotificationFilters): {
   return { where: clauses.join(' AND '), params };
 }
 
-async function create(input: NewNotification): Promise<NotificationRecord> {
-  const result = await getPool().query<NotificationRecord>(
+async function create(
+  input: NewNotification,
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — optional executor so a
+  // producer that owns a transaction writes the notification record ON that
+  // transaction. Defaults to the pool (unchanged behaviour).
+  q: Pick<Pool | PoolClient, 'query'> = getPool(),
+): Promise<NotificationRecord> {
+  const result = await q.query<NotificationRecord>(
     `INSERT INTO notifications (
        id, client_id, recipient_user_id, type, channel, status, title, body,
        source_entity_type, source_entity_id, source_event_type, template_key,

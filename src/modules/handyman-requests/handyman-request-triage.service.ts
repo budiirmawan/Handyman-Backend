@@ -2,6 +2,7 @@ import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
 import { handymanRequestTriageRepository } from './handyman-request-triage.repository';
@@ -176,6 +177,30 @@ export async function recordHandymanRequestTriage(
           },
         },
         tx,
+      );
+
+      // 7b) CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred triage decision. It reuses the PART 01
+      // producer seam and the reused BE-26 delivery chains; the intents are
+      // written ON this transaction, so the notification commits (or rolls
+      // back) with the decision. The audience stays the declarative
+      // subscription rule (the frozen CR-HM-16 contract), and the tenant is
+      // the request's own client. A notification configuration failure never
+      // fails the triage command.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_REQUEST_TRIAGED',
+          clientId: request.clientId,
+          entityId: record.id,
+          buildingId: request.buildingId,
+          variables: {
+            handymanRequestId: request.id,
+            triageDecisionId: record.id,
+            triageDisposition: input.triageDisposition,
+            buildingId: request.buildingId,
+          },
+        },
+        { executor: tx },
       );
 
       return toPublic(record);

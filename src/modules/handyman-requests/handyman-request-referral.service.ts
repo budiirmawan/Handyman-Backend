@@ -2,6 +2,7 @@ import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
 import { handymanRequestDiagnosisRepository } from './handyman-request-diagnosis.repository';
@@ -176,6 +177,29 @@ export async function recordHandymanReferral(
           },
         },
         tx,
+      );
+
+      // 7b) CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred referral, on the SAME transaction (so it
+      // commits or rolls back with the referral). The audience stays the
+      // declarative subscription rule; the tenant is the request's own
+      // client; a notification configuration failure never fails the
+      // referral command.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_REFERRAL_CREATED',
+          clientId: request.clientId,
+          entityId: record.id,
+          buildingId: request.buildingId,
+          variables: {
+            handymanRequestId: request.id,
+            referralId: record.id,
+            referralType,
+            disciplineCode: diagnosis.disciplineCode,
+            buildingId: request.buildingId,
+          },
+        },
+        { executor: tx },
       );
 
       return toPublic(record);

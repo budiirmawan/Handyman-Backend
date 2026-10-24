@@ -6,7 +6,13 @@ import {
   type PushDeliveryPort,
   type PushSendResult,
 } from '../push-delivery';
+import {
+  resolveBrowserPushDeliveryPort,
+  type BrowserPushDeliveryPort,
+  type BrowserPushSendInput,
+} from '../push-delivery';
 import { pushDeliveryRecordRepository } from '../notification-push-deliveries';
+import { browserPushDeliveryRecordRepository } from '../notification-browser-push-deliveries';
 import type { OutboundDeliveryRecord } from '../notification-outbound-deliveries';
 import type { BuildPushPointerPayloadOptions } from './outbound-push-payload';
 import {
@@ -66,7 +72,12 @@ import {
 
 /** Per-device evidence produced by one adapter call. */
 export type PushFanoutAttempt = {
-  pushTokenId: string;
+  /** Which transport this attempt used. */
+  targetKind: 'NATIVE' | 'BROWSER';
+  /** The native device registration this attempt targeted (NATIVE only). */
+  pushTokenId: string | null;
+  /** The browser subscription this attempt targeted (BROWSER only). */
+  browserSubscriptionId: string | null;
   deviceId: string;
   platform: string;
   outcome: PushDeliveryOutcome;
@@ -75,7 +86,7 @@ export type PushFanoutAttempt = {
   errorCode: string | null;
   error: string | null;
   sentAt: Date | null;
-  /** Id of the `notification_push_deliveries` row written for this attempt. */
+  /** Id of the attempt-evidence row written for this attempt. */
   attemptRecordId: string | null;
 };
 
@@ -107,14 +118,20 @@ export type PushFanoutExecution = {
 /** Human-readable, non-sensitive reason text for the zero-device outcomes. */
 const EMPTY_REASON_MESSAGES: Record<PushFanoutEmptyReason, string> = {
   NO_REGISTRATIONS:
-    'Push not delivered: the recipient has no registered devices.',
+    'Push not delivered: the recipient has no registered devices or browser subscriptions.',
   NO_ACTIVE_REGISTRATIONS:
-    'Push not delivered: the recipient has no active device registrations.',
+    'Push not delivered: the recipient has no active device registrations or browser subscriptions.',
 };
 
 export type ExecutePushFanoutOptions = BuildPushPointerPayloadOptions & {
   /** Test seam: inject a port implementation instead of resolving one. */
   adapter?: PushDeliveryPort;
+  /**
+   * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the BROWSER transport port
+   * override (test seam). Production resolves the browser port fail-closed
+   * inside this module.
+   */
+  browserAdapter?: BrowserPushDeliveryPort;
 };
 
 /**
@@ -168,7 +185,7 @@ function rollUpOutcome(
  */
 async function sendToDevice(
   adapter: PushDeliveryPort,
-  target: PushFanoutTarget,
+  target: Extract<PushFanoutTarget, { kind: 'NATIVE' }>,
   payload: { title: string; body: string | null; data: Record<string, string> },
   deliveryId: string,
 ): Promise<{ outcome: PushDeliveryOutcome; result: PushSendResult }> {
@@ -206,6 +223,52 @@ async function sendToDevice(
 }
 
 /**
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — sends one BROWSER
+ * subscription's copy through the browser port and normalizes the result.
+ *
+ * Identical containment rules as the native path: a transport throw is
+ * classified REJECTED_RETRYABLE and recorded as evidence, never propagated
+ * and never silently dropped.
+ */
+async function sendToSubscription(
+  adapter: BrowserPushDeliveryPort,
+  target: Extract<PushFanoutTarget, { kind: 'BROWSER' }>,
+  payload: { title: string; body: string | null; data: Record<string, string> },
+  deliveryId: string,
+): Promise<{ outcome: PushDeliveryOutcome; result: PushSendResult }> {
+  const input: BrowserPushSendInput = {
+    subscription: {
+      endpoint: target.endpoint,
+      p256dh: target.p256dh,
+      auth: target.auth,
+    },
+    title: payload.title,
+    body: payload.body,
+    data: payload.data,
+    deliveryId,
+  };
+  try {
+    const result = await adapter.send(input);
+    return { outcome: classifyPushResult(result), result };
+  } catch (error) {
+    const message = sanitizeProviderError(
+      error instanceof Error ? error.message : String(error),
+    );
+    return {
+      outcome: 'REJECTED_RETRYABLE',
+      result: {
+        status: 'FAILED',
+        provider: adapter.provider,
+        error: message,
+        errorCode: 'UNKNOWN_ERROR',
+        retryable: true,
+        sentAt: new Date(),
+      },
+    };
+  }
+}
+
+/**
  * Fans ONE PUSH ledger row out to the recipient's ACTIVE devices, invoking
  * the provider port once per device and writing one evidence row per call.
  *
@@ -222,7 +285,11 @@ export async function executePushFanout(
   record: OutboundDeliveryRecord,
   options: ExecutePushFanoutOptions = {},
 ): Promise<PushFanoutExecution | null> {
-  const { adapter: injected, ...payloadOptions } = options;
+  const {
+    adapter: injected,
+    browserAdapter: injectedBrowser,
+    ...payloadOptions
+  } = options;
 
   const plan = await resolvePushFanoutPlan(record, payloadOptions);
   if (!plan) {
@@ -233,6 +300,16 @@ export async function executePushFanout(
   // the same port instance, and the provider recorded on the evidence rows is
   // the one that actually ran.
   const adapter = injected ?? resolvePushDeliveryPort();
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the browser transport is
+  // resolved once as well, and only when the plan actually contains a
+  // browser subscription: a recipient with no browser registration never
+  // causes the browser provider configuration to be read.
+  const hasBrowserTargets = plan.targets.some(
+    (target) => target.kind === 'BROWSER',
+  );
+  const browserAdapter = hasBrowserTargets
+    ? injectedBrowser ?? resolveBrowserPushDeliveryPort()
+    : null;
 
   if (plan.targets.length === 0) {
     const reason = plan.emptyReason ?? 'NO_ACTIVE_REGISTRATIONS';
@@ -257,6 +334,57 @@ export async function executePushFanout(
 
   const attempts: PushFanoutAttempt[] = [];
   for (const target of plan.targets) {
+    if (target.kind === 'BROWSER') {
+      // The browser half: its own transport, its own evidence table, the
+      // SAME client-neutral payload.
+      const { outcome, result } = await sendToSubscription(
+        browserAdapter as BrowserPushDeliveryPort,
+        target,
+        { title: plan.payload.title, body: plan.payload.body, data },
+        plan.deliveryId,
+      );
+      const accepted = outcome === 'ACCEPTED';
+      const error = result.error ? boundError(result.error) : null;
+      const providerMessageId = result.providerMessageId ?? null;
+
+      // Immutable per-subscription evidence. The endpoint and the key
+      // material are NEVER stored: the subscription is identified by id.
+      const stored = await browserPushDeliveryRecordRepository.create({
+        clientId: record.clientId,
+        buildingId: record.buildingId,
+        recipientUserId: plan.recipientUserId,
+        browserSubscriptionId: target.browserSubscriptionId,
+        deviceId: target.deviceId,
+        platform: 'BROWSER',
+        templateKey: record.templateKey,
+        title: plan.payload.title,
+        body: plan.payload.body,
+        status: accepted ? 'SENT' : 'FAILED',
+        provider: result.provider ?? (browserAdapter as BrowserPushDeliveryPort).provider,
+        providerReference: providerMessageId,
+        errorMessage: accepted ? null : error,
+        errorCode: accepted ? null : (result.errorCode ?? null),
+        sentAt: accepted ? result.sentAt : null,
+        deliveryId: record.id,
+      });
+
+      attempts.push({
+        targetKind: 'BROWSER',
+        pushTokenId: null,
+        browserSubscriptionId: target.browserSubscriptionId,
+        deviceId: target.deviceId,
+        platform: 'BROWSER',
+        outcome,
+        provider: result.provider ?? (browserAdapter as BrowserPushDeliveryPort).provider,
+        providerMessageId,
+        errorCode: accepted ? null : (result.errorCode ?? null),
+        error: accepted ? null : error,
+        sentAt: accepted ? result.sentAt : null,
+        attemptRecordId: stored.id,
+      });
+      continue;
+    }
+
     const { outcome, result } = await sendToDevice(
       adapter,
       target,
@@ -291,7 +419,9 @@ export async function executePushFanout(
     });
 
     attempts.push({
+      targetKind: 'NATIVE',
       pushTokenId: target.pushTokenId,
+      browserSubscriptionId: null,
       deviceId: target.deviceId,
       platform: target.platform,
       outcome,
@@ -317,7 +447,7 @@ export async function executePushFanout(
     rolled === 'ACCEPTED'
       ? null
       : boundError(
-          `Push failed on ${attempts.length} device(s)` +
+          `Push failed on ${attempts.length} target(s)` +
             (invalidTokens > 0 ? `, ${invalidTokens} with an invalid token` : '') +
             (firstFailure?.error ? `: ${firstFailure.error}` : '.'),
         );
@@ -329,10 +459,17 @@ export async function executePushFanout(
     return !earliest || attempt.sentAt < earliest ? attempt.sentAt : earliest;
   }, null);
 
+  // The ledger-level provider is the transport that actually delivered: with a
+  // mixed fan-out (a native handset AND a browser) it is the provider of the
+  // first ACCEPTED attempt, and the provider of the first attempt when
+  // nothing was accepted.
+  const ledgerProvider =
+    acceptedAttempts[0]?.provider ?? attempts[0]?.provider ?? adapter.provider;
+
   return {
     deliveryId: plan.deliveryId,
     recipientUserId: plan.recipientUserId,
-    provider: adapter.provider,
+    provider: ledgerProvider,
     outcome: rolled,
     providerMessageId: acceptedAttempts[0]?.providerMessageId ?? null,
     error: rollupError,

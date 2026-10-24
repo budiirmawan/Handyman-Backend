@@ -232,7 +232,27 @@ describe('CR-BE-PUSH-01 PART 06 — §3 provider boundary is final', () => {
   });
 
   it('implements no direct APNs, Web Push, OneSignal or Expo transport', () => {
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — S-4 SUPERSESSION (2026-10-24).
+    //
+    // The ORIGINAL guard banned the browser transport vocabulary EVERYWHERE in
+    // `src/`, because the browser transport did not exist. The explicit
+    // supersession of `docs/CR-BE-PUSH-01_START_GOVERNANCE.md` §16.3
+    // (§16.3-A) converts that ban into a CONFINEMENT:
+    //
+    //   - the browser transport vocabulary is legal ONLY inside the governed
+    //     provider module `src/modules/push-delivery/`, and
+    //   - it is banned EVERYWHERE else, so no other module can grow a
+    //     browser transport, a second engine or a second credential model.
+    //
+    // The guard is therefore STRICTER, not weaker: before, the governed module
+    // was unconstrained; now it is the ONE place the browser transport may
+    // live, and the confinement is asserted.
+    //
+    // The APNs / OneSignal / Expo bans stay ABSOLUTE, everywhere, including
+    // inside the governed module.
     const offenders: string[] = [];
+    const confinedOffenders: string[] = [];
+    const GOVERNED_MODULE = join('src', 'modules', 'push-delivery');
     const walk = (dir: string): void => {
       for (const entry of readdirSync(join(REPO_ROOT, dir), { withFileTypes: true })) {
         const rel = join(dir, entry.name);
@@ -241,22 +261,31 @@ describe('CR-BE-PUSH-01 PART 06 — §3 provider boundary is final', () => {
           continue;
         }
         if (!entry.name.endsWith('.ts')) continue;
-        // Comments are stripped: the adapter documents that Web Push/VAPID and
-        // direct APNs are deliberately NOT used, and that prose must not trip
-        // a guard that is about real transport code.
+        // Comments are stripped: the adapters document that direct APNs and
+        // the other vendors are deliberately NOT used, and that prose must not
+        // trip a guard that is about real transport code.
         const source = stripComments(readSource(rel));
         // A real transport, not a mention: an endpoint host or a vendor client.
-        if (
+        const absoluteVendor =
           /api\.push\.apple\.com|api\.sandbox\.push\.apple\.com/i.test(source) ||
-          /onesignal\.com|exp\.host|fcm\.googleapis\.com\/fcm\/send/i.test(source) ||
-          /\bwebpush\b|\bVAPID\b/i.test(source)
-        ) {
+          /onesignal\.com|exp\.host|fcm\.googleapis\.com\/fcm\/send/i.test(source);
+        if (absoluteVendor) {
           offenders.push(rel);
+          continue;
+        }
+        const browserTransport = /\bwebpush\b|\bVAPID\b/i.test(source);
+        if (browserTransport && !rel.startsWith(GOVERNED_MODULE)) {
+          confinedOffenders.push(rel);
         }
       }
     };
     walk('src');
     assert.deepEqual(offenders, [], 'iOS is reached only through the FCM APNs relay');
+    assert.deepEqual(
+      confinedOffenders,
+      [],
+      'the browser transport may only be implemented inside the governed provider module',
+    );
   });
 
   it('confines provider implementation to the governed module', () => {
@@ -565,8 +594,15 @@ describe('CR-BE-PUSH-01 PART 06 — §10 operational event boundary', () => {
 
 describe('CR-BE-PUSH-01 PART 06 — §12/§13/§14 frozen contracts', () => {
   it('freezes the three public mobile push routes', () => {
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — S-4 SUPERSESSION
+    // (2026-10-24): the three NATIVE token routes stay frozen byte-for-byte
+    // and the four browser REGISTRATION routes are added beside them. The
+    // frozen properties that still hold: every push route is authenticated,
+    // every operation id is unique, and no push route is a send path.
     const documented = Object.keys(spec.paths).filter((p) => /push/i.test(p)).sort();
     assert.deepEqual(documented, [
+      '/mobile/push-subscriptions',
+      '/mobile/push-subscriptions/{subscriptionId}',
       '/mobile/push-tokens',
       '/mobile/push-tokens/{tokenId}',
     ]);
@@ -581,7 +617,15 @@ describe('CR-BE-PUSH-01 PART 06 — §12/§13/§14 frozen contracts', () => {
     }
     assert.deepEqual(
       ids.slice().sort(),
-      ['deactivatePushToken', 'listPushTokens', 'registerPushToken'],
+      [
+        'deactivatePushToken',
+        'listBrowserPushSubscriptions',
+        'listPushTokens',
+        'registerBrowserPushSubscription',
+        'registerPushToken',
+        'revokeAllBrowserPushSubscriptions',
+        'revokeBrowserPushSubscription',
+      ],
       'operation ids are unique and frozen',
     );
     assert.equal(new Set(ids).size, ids.length, 'no duplicate operationId on push routes');

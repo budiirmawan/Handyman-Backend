@@ -3,6 +3,7 @@ import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
 import { buildingAccessDeniedError, contextAccessService } from '../context-access';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import { workforceRepository } from '../workforce';
 import {
@@ -237,6 +238,23 @@ export async function createHandymanWorkCrew(
         },
         tx,
       );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred membership, on the SAME transaction. The
+      // notification entity is the MEMBERSHIP (the occurrence), so two
+      // members of the same crew are two distinct notifications.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_CREW_MEMBER_ADDED',
+          clientId: provider.clientId,
+          entityId: membership.id,
+          variables: {
+            crewId: crew.id,
+            membershipId: membership.id,
+            workerContextId: workerContext.id,
+          },
+        },
+        { executor: tx },
+      );
       await recordOperationalEvent(
         {
           ...journalBase,
@@ -252,6 +270,23 @@ export async function createHandymanWorkCrew(
           },
         },
         tx,
+      );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred designation, on the SAME transaction. The
+      // notification entity is the LEAD ROW (the occurrence), so a crew can
+      // never collapse two designations into one notification.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_CREW_LEAD_DESIGNATED',
+          clientId: provider.clientId,
+          entityId: lead.id,
+          variables: {
+            crewId: crew.id,
+            leadMembershipId: membership.id,
+            workerContextId: workerContext.id,
+          },
+        },
+        { executor: tx },
       );
 
       return {
@@ -332,6 +367,22 @@ export async function addHandymanCrewMember(
           },
         },
         tx,
+      );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred membership, on the SAME transaction. The
+      // notification entity is the MEMBERSHIP (the occurrence).
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_CREW_MEMBER_ADDED',
+          clientId: locked.clientId,
+          entityId: membership.id,
+          variables: {
+            crewId: locked.id,
+            membershipId: membership.id,
+            workerContextId: workerContext.id,
+          },
+        },
+        { executor: tx },
       );
 
       return toPublicMember(membership);
@@ -477,23 +528,40 @@ export async function designateHandymanCrewLead(
       actorUserId,
     );
 
-    await recordOperationalEvent(
-      {
-        clientId: crew.clientId,
-        eventType: 'HANDYMAN_CREW_LEAD_DESIGNATED',
-        entityType: 'HANDYMAN_WORK_CREW',
-        entityId: crew.id,
-        actorUserId,
-        summary: 'Lead Worker designation changed.',
-        metadata: {
-          crewId: crew.id,
-          leadMembershipId: membership.id,
-          workerContextId: workerContext.id,
-          fromLeadMembershipId: currentLead?.handymanCrewMembershipId ?? null,
+      await recordOperationalEvent(
+        {
+          clientId: crew.clientId,
+          eventType: 'HANDYMAN_CREW_LEAD_DESIGNATED',
+          entityType: 'HANDYMAN_WORK_CREW',
+          entityId: crew.id,
+          actorUserId,
+          summary: 'Lead Worker designation changed.',
+          metadata: {
+            crewId: crew.id,
+            leadMembershipId: membership.id,
+            workerContextId: workerContext.id,
+            fromLeadMembershipId: currentLead?.handymanCrewMembershipId ?? null,
+          },
         },
-      },
-      tx,
-    );
+        tx,
+      );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred designation, on the SAME transaction. The
+      // notification entity is the LEAD ROW (the occurrence), so a
+      // re-designation of the same membership is its own notification.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_CREW_LEAD_DESIGNATED',
+          clientId: crew.clientId,
+          entityId: lead.id,
+          variables: {
+            crewId: crew.id,
+            leadMembershipId: membership.id,
+            workerContextId: workerContext.id,
+          },
+        },
+        { executor: tx },
+      );
 
     // Notify old and new Crew Lead for any active Execution Scope assignments on this crew.
     // If the old Lead had already recorded a terminal decision (TERIMA or TIDAK_BISA)

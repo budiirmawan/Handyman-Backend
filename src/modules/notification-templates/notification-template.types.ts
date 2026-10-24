@@ -11,8 +11,19 @@
  * PART 03 widens the vocabulary additively with EMAIL / WHATSAPP (migration
  * 0300) so outbound delivery intents can render from templates. IN_APP stays
  * the in-app inbox channel; EMAIL / WHATSAPP are outbound-intent channels.
+ *
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 widens it additively with PUSH
+ * (migration 0474): the outbound ledger already admits the PUSH channel
+ * (migration 0335) and the execution engine already sends it, but without a
+ * PUSH template no push intent could ever be produced. IN_APP / EMAIL /
+ * WHATSAPP semantics are unchanged.
  */
-export const NOTIFICATION_TEMPLATE_CHANNELS = ['IN_APP', 'EMAIL', 'WHATSAPP'] as const;
+export const NOTIFICATION_TEMPLATE_CHANNELS = [
+  'IN_APP',
+  'EMAIL',
+  'WHATSAPP',
+  'PUSH',
+] as const;
 export type NotificationTemplateChannel =
   (typeof NOTIFICATION_TEMPLATE_CHANNELS)[number];
 

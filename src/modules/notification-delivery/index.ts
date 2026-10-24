@@ -59,5 +59,6 @@ export type {
   InAppDeliveryEvent,
   InAppDeliveryResult,
   NotificationDeliveryEvent,
+  NotificationDeliveryExecutor,
   OutboundDeliveryIntentResult,
 } from './notification-delivery.types';

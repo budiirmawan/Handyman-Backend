@@ -1,4 +1,5 @@
 import { getPool } from '../../database';
+import type { Pool, PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
 import { notificationTemplateRepository } from '../notification-templates';
 import { notificationSubscriptionRepository } from './notification-subscription.repository';
@@ -163,11 +164,16 @@ export async function updateNotificationEventSubscription(
 export async function findMatchingSubscriptions(
   eventType: string,
   context: SubscriptionMatchContext = {},
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — optional executor so a
+  // producer that owns a transaction reads the matching subscriptions ON
+  // that transaction. Defaults to the pool (unchanged behaviour).
+  executor: Pick<Pool | PoolClient, 'query'> = getPool(),
 ): Promise<PublicNotificationEventSubscription[]> {
   const rows = await notificationSubscriptionRepository.findMatching(
     eventType,
     context.clientId,
     context.buildingId,
+    executor,
   );
   return rows.map(toPublicNotificationEventSubscription);
 }

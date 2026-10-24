@@ -10,6 +10,7 @@ import { resolveRecipients } from '../recipient-resolution';
 import { normalizeDeliveryEvent } from './notification-delivery-event';
 import type {
   NotificationDeliveryEvent,
+  NotificationDeliveryExecutor,
   OutboundDeliveryIntentResult,
 } from './notification-delivery.types';
 
@@ -71,12 +72,13 @@ const OUTBOUND_CHANNELS: readonly OutboundDeliveryChannel[] = [
 async function resolveOutboundRecipientAddress(
   channel: OutboundDeliveryChannel,
   recipientUserId: string,
+  executor: NotificationDeliveryExecutor = getPool(),
 ): Promise<string | null> {
   if (channel === 'PUSH') {
     // Address the person; never a token, never a device id. The ACTIVE-user
     // guard matches the other channels: a deactivated user resolves to null
     // and is counted as a skip, exactly as EMAIL/WHATSAPP already behave.
-    const result = await getPool().query<{ id: string }>(
+    const result = await executor.query<{ id: string }>(
       `SELECT id FROM users WHERE id = $1 AND status = 'ACTIVE'`,
       [recipientUserId],
     );
@@ -85,7 +87,7 @@ async function resolveOutboundRecipientAddress(
   }
 
   if (channel === 'EMAIL') {
-    const result = await getPool().query<{ email: string }>(
+    const result = await executor.query<{ email: string }>(
       `SELECT email FROM users WHERE id = $1 AND status = 'ACTIVE'`,
       [recipientUserId],
     );
@@ -97,7 +99,7 @@ async function resolveOutboundRecipientAddress(
   // users.whatsapp_phone, guarded by the explicit consent-active rule —
   // ACTIVE user, phone present, opted in, and the last opt-in newer than any
   // opt-out. No number is ever inferred from tenant/vendor PIC contact data.
-  const result = await getPool().query<{ whatsapp_phone: string }>(
+  const result = await executor.query<{ whatsapp_phone: string }>(
     `SELECT whatsapp_phone
        FROM users
       WHERE id = $1
@@ -124,6 +126,7 @@ async function resolveOutboundRecipientAddress(
 export async function deliverOutboundNotifications(
   event: NotificationDeliveryEvent,
   channels: readonly OutboundDeliveryChannel[] = OUTBOUND_CHANNELS,
+  executor: NotificationDeliveryExecutor = getPool(),
 ): Promise<OutboundDeliveryIntentResult> {
   const normalized = normalizeDeliveryEvent(event);
   const requested = channels.filter((channel): channel is OutboundDeliveryChannel =>
@@ -141,17 +144,24 @@ export async function deliverOutboundNotifications(
     duplicatesSuppressed: 0,
   };
 
-  const subscriptions = await findMatchingSubscriptions(normalized.eventType, {
-    clientId: normalized.clientId,
-    ...(normalized.buildingId ? { buildingId: normalized.buildingId } : {}),
-  });
+  const subscriptions = await findMatchingSubscriptions(
+    normalized.eventType,
+    {
+      clientId: normalized.clientId,
+      ...(normalized.buildingId ? { buildingId: normalized.buildingId } : {}),
+    },
+    executor,
+  );
   result.subscriptionsMatched = subscriptions.length;
 
   for (const subscription of subscriptions) {
     // Only ACTIVE templates render. A deactivated template yields no intents
     // for this subscription (the subscription stays ACTIVE for when it is
     // re-enabled) — identical to the BE-26E semantics.
-    const template = await getActiveTemplateByKey(subscription.templateKey);
+    const template = await getActiveTemplateByKey(
+      subscription.templateKey,
+      executor,
+    );
     if (!template) {
       result.templatesSkipped += 1;
       continue;
@@ -173,16 +183,22 @@ export async function deliverOutboundNotifications(
     );
     const message = rendered.body ?? rendered.subject;
 
-    const recipientIds = await resolveRecipients(
-      subscription.recipientRule.specs,
-      subscription.recipientRule.scope,
-    );
+    // The AUTHORITATIVE recipient set wins when the producing domain supplied
+    // one; otherwise the subscription's recipient rule resolves the audience
+    // (BE-26C) exactly as before.
+    const recipientIds = normalized.recipients
+      ? normalized.recipients
+      : await resolveRecipients(
+          subscription.recipientRule.specs,
+          subscription.recipientRule.scope,
+        );
     result.recipientsResolved += recipientIds.length;
 
     for (const recipientUserId of recipientIds) {
       const recipientAddress = await resolveOutboundRecipientAddress(
         channel,
         recipientUserId,
+        executor,
       );
       if (!recipientAddress) {
         result.recipientsSkipped += 1;
@@ -197,23 +213,26 @@ export async function deliverOutboundNotifications(
         templateKey: subscription.templateKey,
       });
 
-      const { created } = await notificationOutboundDeliveryRepository.createOnConflictReturn({
-        clientId: normalized.clientId,
-        buildingId: normalized.buildingId,
-        recipientUserId,
-        channel,
-        templateKey: subscription.templateKey,
-        sourceEventType: normalized.eventType,
-        sourceEntityType: normalized.entityType,
-        sourceEntityId: normalized.entityId,
-        // EMAIL carries the rendered subject; WHATSAPP and PUSH have no
-        // subject line of their own (a PUSH title is derived at send time
-        // from the snapshotted content, CR-BE-PUSH-01 §9).
-        subject: channel === 'EMAIL' ? rendered.subject : null,
-        message,
-        recipientAddress,
-        idempotencyKey,
-      });
+      const { created } = await notificationOutboundDeliveryRepository.createOnConflictReturn(
+        {
+          clientId: normalized.clientId,
+          buildingId: normalized.buildingId,
+          recipientUserId,
+          channel,
+          templateKey: subscription.templateKey,
+          sourceEventType: normalized.eventType,
+          sourceEntityType: normalized.entityType,
+          sourceEntityId: normalized.entityId,
+          // EMAIL carries the rendered subject; WHATSAPP and PUSH have no
+          // subject line of their own (a PUSH title is derived at send time
+          // from the snapshotted content, CR-BE-PUSH-01 §9).
+          subject: channel === 'EMAIL' ? rendered.subject : null,
+          message,
+          recipientAddress,
+          idempotencyKey,
+        },
+        executor,
+      );
 
       if (created) {
         result.deliveriesCreated += 1;

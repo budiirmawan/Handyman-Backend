@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   CreateNotificationTemplateInput,
@@ -57,8 +58,13 @@ async function findById(id: string): Promise<NotificationTemplateRecord | null> 
   return result.rows[0] ?? null;
 }
 
-async function findByKey(key: string): Promise<NotificationTemplateRecord | null> {
-  const result = await getPool().query<NotificationTemplateRecord>(
+async function findByKey(
+  key: string,
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — optional executor; defaults
+  // to the pool (unchanged behaviour).
+  q: Pick<Pool | PoolClient, 'query'> = getPool(),
+): Promise<NotificationTemplateRecord | null> {
+  const result = await q.query<NotificationTemplateRecord>(
     `SELECT ${SELECT_COLUMNS}
        FROM notification_templates
       WHERE key = $1`,
