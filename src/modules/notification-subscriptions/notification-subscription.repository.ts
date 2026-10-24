@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Pool, PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   CreateNotificationEventSubscriptionInput,
@@ -148,6 +149,10 @@ async function findMatching(
   eventType: string,
   clientId?: string,
   buildingId?: string,
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — the executor is optional and
+  // defaults to the pool, so a producer that owns a transaction can read the
+  // matching subscriptions ON that transaction.
+  q: Pick<Pool | PoolClient, 'query'> = getPool(),
 ): Promise<NotificationEventSubscriptionRecord[]> {
   const clauses = [`status = 'ACTIVE'`, `event_type = $1`];
   const params: unknown[] = [eventType];
@@ -161,7 +166,7 @@ async function findMatching(
     clauses.push(`(building_id IS NULL OR building_id = $${params.length}::uuid)`);
   }
 
-  const result = await getPool().query<NotificationEventSubscriptionRecord>(
+  const result = await q.query<NotificationEventSubscriptionRecord>(
     `SELECT ${SELECT_COLUMNS}
        FROM notification_event_subscriptions
       WHERE ${clauses.join(' AND ')}

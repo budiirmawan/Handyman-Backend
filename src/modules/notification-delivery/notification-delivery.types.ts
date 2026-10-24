@@ -13,7 +13,18 @@
  * EMAIL / WHATSAPP — no provider contact, no claim/send execution here.
  */
 
+import type { Pool, PoolClient } from 'pg';
 import type { OutboundDeliveryChannel } from '../notification-outbound-deliveries';
+
+/**
+ * Any executor: the pool, or the caller's open transaction client.
+ *
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — the delivery chains accept an
+ * executor so a producer that already owns a domain transaction can write
+ * its notification intents ON that transaction. The default stays the pool,
+ * so every existing caller keeps its current behaviour.
+ */
+export type NotificationDeliveryExecutor = Pick<Pool | PoolClient, 'query'>;
 
 /**
  * An existing backend domain event being reacted to. `eventType` mirrors
@@ -30,6 +41,18 @@ export type NotificationDeliveryEvent = {
   buildingId?: string | null;
   /** Template variable values used when rendering the notification. */
   variables?: Record<string, string | number>;
+  /**
+   * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — the AUTHORITATIVE recipient
+   * set of the event, when the producing domain knows it (an assignment
+   * knows its assignee; a subscription rule cannot express that).
+   *
+   * When present, the delivery chains deliver to exactly these recipients
+   * instead of resolving them from the subscription's recipient rule. The
+   * subscription still owns WHICH CHANNEL and WHICH TEMPLATE apply — the
+   * domain owns WHO the event is about. An empty array means "this event has
+   * no recipient" and suppresses delivery entirely.
+   */
+  recipients?: string[];
 };
 
 /** BE-26E compatibility alias (the in-app chain's original event type). */

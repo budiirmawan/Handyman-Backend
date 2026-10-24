@@ -6,7 +6,9 @@ import { normalizeDeliveryEvent } from './notification-delivery-event';
 import type {
   InAppDeliveryEvent,
   InAppDeliveryResult,
+  NotificationDeliveryExecutor,
 } from './notification-delivery.types';
+import { getPool } from '../../database';
 
 /**
  * BE-26E — In-app delivery service.
@@ -22,6 +24,16 @@ import type {
  *
  * Business domains remain the source of truth; this service only reacts to
  * an event that already occurred. No email / WhatsApp / push delivery here.
+ *
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — two ADDITIVE seams:
+ *
+ *   - `executor` — the chain may run on the caller's open transaction, so a
+ *     notification record commits or rolls back with the domain fact that
+ *     produced it. The default stays the pool.
+ *   - `event.recipients` — when the producing domain knows the authoritative
+ *     recipient set (an assignment knows its assignee), the chain delivers
+ *     to those recipients instead of resolving them from the subscription
+ *     rule. The subscription still owns the channel/template selection.
  */
 
 /**
@@ -34,13 +46,18 @@ import type {
  */
 export async function deliverInAppNotifications(
   event: InAppDeliveryEvent,
+  executor: NotificationDeliveryExecutor = getPool(),
 ): Promise<InAppDeliveryResult> {
   const normalized = normalizeDeliveryEvent(event);
 
-  const subscriptions = await findMatchingSubscriptions(normalized.eventType, {
-    clientId: normalized.clientId,
-    ...(normalized.buildingId ? { buildingId: normalized.buildingId } : {}),
-  });
+  const subscriptions = await findMatchingSubscriptions(
+    normalized.eventType,
+    {
+      clientId: normalized.clientId,
+      ...(normalized.buildingId ? { buildingId: normalized.buildingId } : {}),
+    },
+    executor,
+  );
 
   let recipientsResolved = 0;
   let notificationsCreated = 0;
@@ -49,7 +66,10 @@ export async function deliverInAppNotifications(
     // Only ACTIVE templates render. A deactivated template yields no delivery
     // for this subscription (the subscription stays ACTIVE for when it is
     // re-enabled).
-    const template = await getActiveTemplateByKey(subscription.templateKey);
+    const template = await getActiveTemplateByKey(
+      subscription.templateKey,
+      executor,
+    );
     if (!template) {
       continue;
     }
@@ -59,26 +79,34 @@ export async function deliverInAppNotifications(
       normalized.variables,
     );
 
-    const recipientIds = await resolveRecipients(
-      subscription.recipientRule.specs,
-      subscription.recipientRule.scope,
-    );
+    // The AUTHORITATIVE recipient set wins when the producing domain supplied
+    // one; otherwise the subscription's recipient rule resolves the audience
+    // (BE-26C) exactly as before.
+    const recipientIds = normalized.recipients
+      ? normalized.recipients
+      : await resolveRecipients(
+          subscription.recipientRule.specs,
+          subscription.recipientRule.scope,
+        );
     recipientsResolved += recipientIds.length;
 
     for (const recipientUserId of recipientIds) {
-      await recordNotification({
-        clientId: normalized.clientId,
-        recipientUserId,
-        type: template.type,
-        channel: 'IN_APP',
-        title: rendered.subject,
-        body: rendered.body,
-        sourceEntityType: normalized.entityType,
-        sourceEntityId: normalized.entityId,
-        sourceEventType: normalized.eventType,
-        templateKey: subscription.templateKey,
-        metadata: { subscriptionKey: subscription.key },
-      });
+      await recordNotification(
+        {
+          clientId: normalized.clientId,
+          recipientUserId,
+          type: template.type,
+          channel: 'IN_APP',
+          title: rendered.subject,
+          body: rendered.body,
+          sourceEntityType: normalized.entityType,
+          sourceEntityId: normalized.entityId,
+          sourceEventType: normalized.eventType,
+          templateKey: subscription.templateKey,
+          metadata: { subscriptionKey: subscription.key },
+        },
+        executor,
+      );
       notificationsCreated += 1;
     }
   }
