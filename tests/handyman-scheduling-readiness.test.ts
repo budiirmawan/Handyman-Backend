@@ -463,7 +463,7 @@ describe('CR-HM-05 PART 01 — scheduling readiness foundation', () => {
     assert.equal(await tableCount('handyman_scheduling_readiness'), beforeRows);
     assert.equal(await tableCount('operational_events'), beforeEv);
     // happy path: supersede commits row pair + 2 events atomically
-    await handymanSchedulingReadinessService
+    const replacement = await handymanSchedulingReadinessService
       .supersedeHandymanSchedulingReadiness(
         created.id,
         { preferredWindowStart: START2, preferredWindowEnd: END2 },
@@ -472,20 +472,21 @@ describe('CR-HM-05 PART 01 — scheduling readiness foundation', () => {
     assert.equal(
       await tableCount('handyman_scheduling_readiness'), beforeRows + 1);
     assert.equal(await tableCount('operational_events'), beforeEv + 2);
+    // NOW() is transaction-scoped and id is a random UUID, not an insertion
+    // sequence. Assert exact event/entity multiplicity without inventing order.
     const events = await q(
-      `SELECT event_type FROM operational_events
+      `SELECT event_type, entity_id FROM operational_events
        WHERE entity_type = 'HANDYMAN_SCHEDULING_READINESS'
-         AND metadata->>'handymanRequestId' = $1
-       ORDER BY created_at ASC, id ASC`,
+         AND metadata->>'handymanRequestId' = $1`,
       [f.request.id],
     );
     assert.deepEqual(
-      events.rows.map((r) => r.event_type),
+      events.rows.map((r) => `${r.event_type}:${r.entity_id}`).sort(),
       [
-        'HANDYMAN_SCHEDULING_READINESS_CREATED',
-        'HANDYMAN_SCHEDULING_READINESS_SUPERSEDED',
-        'HANDYMAN_SCHEDULING_READINESS_CREATED',
-      ],
+        `HANDYMAN_SCHEDULING_READINESS_CREATED:${created.id}`,
+        `HANDYMAN_SCHEDULING_READINESS_CREATED:${replacement.id}`,
+        `HANDYMAN_SCHEDULING_READINESS_SUPERSEDED:${created.id}`,
+      ].sort(),
     );
   });
 
