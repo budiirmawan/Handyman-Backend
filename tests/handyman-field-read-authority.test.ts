@@ -112,7 +112,8 @@ before(async () => {
     CREATE TABLE handyman_provider_contexts(
       id uuid PRIMARY KEY, client_id uuid, vendor_id uuid, status text,
       created_by_user_id uuid, created_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
+      updated_at timestamptz DEFAULT now(),
+      provider_type text DEFAULT 'VENDOR'
     );
     CREATE TABLE workforce_profiles(
       id uuid PRIMARY KEY, organization_id uuid, department_id uuid,
@@ -207,6 +208,44 @@ before(async () => {
       handyman_provider_context_id uuid, handyman_crew_id uuid, status text,
       assigned_by_user_id uuid, assigned_at timestamptz DEFAULT now(),
       supersedes_assignment_id uuid, created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      -- CR-HM-FIELD-OPS-ACK-01 PART 02 repair: the authorized read path
+      -- projects the assignment version (PART 01 contract). Positional
+      -- fixtures below stay valid because the column trails with a
+      -- DEFAULT.
+      version int NOT NULL DEFAULT 1
+    );
+    CREATE TABLE handyman_assignment_responses(
+      id uuid PRIMARY KEY, client_id uuid, building_id uuid,
+      assignment_target_type text, assignment_id uuid,
+      work_order_id uuid, handyman_request_id uuid,
+      execution_scope_id uuid, visit_appointment_id uuid,
+      assigned_by_user_id uuid, assigned_at timestamptz DEFAULT now(),
+      response_status text, responded_by_user_id uuid,
+      responded_by_worker_id uuid, responded_at timestamptz,
+      decline_reason text, response_notes text,
+      linked_work_order_action_id uuid, idempotency_key text,
+      client_idempotency_key text, version int NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE TABLE handyman_work_sessions(
+      id uuid PRIMARY KEY, client_id uuid, assignment_id uuid, status text,
+      checked_in_at timestamptz DEFAULT now(),
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE TABLE handyman_dispatch_releases(
+      id uuid PRIMARY KEY, client_id uuid, execution_scope_id uuid,
+      assignment_id uuid, status text, released_at timestamptz,
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE TABLE handyman_inspector_assignments(
+      id uuid PRIMARY KEY, client_id uuid, handyman_request_id uuid,
+      visit_appointment_id uuid, inspector_user_id uuid, status text,
+      assigned_by_user_id uuid, assigned_at timestamptz DEFAULT now(),
+      supersedes_assignment_id uuid, reassignment_reason text,
+      version int NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now()
     );
     CREATE TABLE handyman_material_execution_lines(
@@ -416,6 +455,18 @@ before(async () => {
       VISIT_EXEC_1, SCOPE_1, crew1,
       randomUUID(), REQ_2, INSP_PROPOSED,
     ],
+  );
+
+  // CR-HM-FIELD-OPS-ACK-01 PART 02 repair: the authorized INSPECTOR lane
+  // resolves an ACTIVE inspector assignment row for the visit. Only the
+  // CONFIRMED inspection visit carries one — the PROPOSED-visit case in
+  // test 3 must keep failing closed.
+  await pool.query(
+    `INSERT INTO handyman_inspector_assignments
+       (id, client_id, handyman_request_id, visit_appointment_id,
+        inspector_user_id, status, assigned_by_user_id)
+     VALUES ($1,$2,$3,$4,$5,'ACTIVE',$6)`,
+    [randomUUID(), C1, REQ_1, VISIT_INSP_1, INSP_1, LEAD_1],
   );
 
   sessionService.resolveSessionContext = async (token: string) => {

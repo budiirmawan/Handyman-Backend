@@ -44,6 +44,8 @@ import { createHandymanReadinessApiRouter } from '../modules/handyman-readiness-
 import { createHandymanQuotationsApiRouter } from '../modules/handyman-quotations-api';
 import { createHandymanArrivalVerificationApiRouter }
   from '../modules/handyman-arrival-verification-api';
+import { createHandymanArrivalChallengeApiRouter }
+  from '../modules/handyman-arrival-challenge-api';
 import { createHandymanWorkSessionsApiRouter }
   from '../modules/handyman-work-sessions-api';
 import { createHandymanMaterialExecutionApiRouter }
@@ -876,6 +878,7 @@ export function createApiRouter(): Router {
   router.use(createWorkerCompetencyEligibilityRouter()); // CR-HM-WORKER-COMPETENCY-01 PART 03A — competency eligibility/candidates reads (assignment sub-resources; read-only)
   router.use(createHandymanInspectorAssignmentsApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-A — inspector visit assignment surface
   router.use(createHandymanDispatchApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-C/P0-D — dispatch readiness/release + identity projection
+  router.use(createHandymanArrivalChallengeApiRouter()); // CR-HM-FIELD-OPS-ACK-01 PART 02 — server-issued arrival challenge (the missing issuer command)
   router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification
   router.use(createHandymanWorkSessionsApiRouter()); // CR-HM-08 PART 05 — work session field-execution surface
   router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface

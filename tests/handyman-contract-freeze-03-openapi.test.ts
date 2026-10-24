@@ -65,10 +65,13 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   //                                            field expense/reimbursement and
   //                                            helper attendance surfaces)
   //   269 + 3 + 15 = 287.
+  //   CR-HM-FIELD-OPS-ACK-01 PART 02            +1  (.../arrival-challenge,
+  //                                             the missing issuer command)
+  //   287 + 1 = 288.
   // The runtime-parity assertion below is what actually guards the contract;
   // the constant only pins the size of the surface a reviewer should expect.
-  it('keeps the 287-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 287);
+  it('keeps the 288-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 288);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);

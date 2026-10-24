@@ -9596,6 +9596,33 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /handyman/execution-scopes/{executionScopeId}/arrival-challenge:
+    post:
+      tags: [Handyman Arrival Verification]
+      operationId: createHandymanArrivalChallenge
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_ARRIVAL_CHALLENGE_LIVE_CONFLICT, HANDYMAN_ARRIVAL_CHALLENGE_NOT_AUTHORIZED, HANDYMAN_ARRIVAL_CHALLENGE_SCOPE_NOT_AUTHORIZED, HANDYMAN_ASSIGNMENT_DECLINED, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
+      summary: Issue a single-use Handyman arrival challenge (CURRENT Crew Lead only)
+      description: "CR-HM-FIELD-OPS-ACK-01 PART 02 — thin HTTP exposure of the pre-existing CR-HM-07 PART 01 challenge issuer. The request carries NO body and NO caller-authored authority: the target is the URL scope and the actor is the authenticated session user. Server-side preconditions are the PART 01 chain only: execution scope exists with status AUTHORIZED → BE-02G exact-Building access → CR-HM-04 authoritative CURRENT Crew Lead → assignment not declined (TIDAK_BISA). TTL (120s), assignment binding and the token are server-derived; the raw token crosses this response exactly once and is never persisted or journaled. At most ONE live PENDING challenge exists per (scope, actor) — a second issuance while one is live returns 409 HANDYMAN_ARRIVAL_CHALLENGE_LIVE_CONFLICT. Issuance proves NOTHING about presence: it is not arrival verification, not check-in, not work start, not attendance and never billable."
+      parameters:
+        - $ref: '#/components/parameters/ExecutionScopeIdPath'
+      responses:
+        '201':
+          description: Challenge issued; the raw token is returned exactly once
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanArrivalChallengeIssued'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /handyman/execution-scopes/{executionScopeId}/arrival-verification:
     get:
       tags: [Handyman Arrival Verification]
@@ -9629,7 +9656,7 @@ paths:
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_ARRIVAL_CHALLENGE_INVALID, HANDYMAN_ARRIVAL_CHALLENGE_NOT_AUTHORIZED, HANDYMAN_ARRIVAL_CHALLENGE_NOT_FOUND, HANDYMAN_ARRIVAL_CHALLENGE_SCOPE_NOT_AUTHORIZED, HANDYMAN_ARRIVAL_RESULT_CONFLICT, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_INACTIVE, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_CONTEXT_MISMATCH, HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_LEAD_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND]
       summary: Terminal Handyman arrival verification (atomic, single-use)
-      description: "CR-HM-07 PART 04C — authenticated terminal arrival evaluation against the Execution Scope. Eligibility, challenge resolution, QR evaluation, expected-location comparison and per-Building geofence evaluation are authoritative server-side ONLY: the actor is the authenticated session's user (caller can never author actorUserId/workerId/crewId/assignmentId/clientId/expected location/policyId/distance/geofence/status/primaryReason; unknown authority-shaped body keys are structurally ignored). The bound Handyman arrival challenge is consumed exactly once and the immutable terminal result is persisted atomically; replaying the same token returns the EXISTING result unchanged (idempotent). Terminal FAILED / MANUAL_REVIEW_REQUIRED / EXPIRED are successful evaluation responses (200) — never HTTP failures. A VERIFIED result means ARRIVAL VERIFIED only: it does not check in, start work, record attendance/presence/billable time, create a work session, or touch FM. Reverse-geocode enrichment is NOT consulted by this authoritative decision."
+      description: "CR-HM-07 PART 04C — authenticated terminal arrival evaluation against the Execution Scope. The single-use `challengeToken` is obtained from `POST /handyman/execution-scopes/{executionScopeId}/arrival-challenge` (CR-HM-FIELD-OPS-ACK-01 PART 02); callers never mint one client-side. Eligibility, challenge resolution, QR evaluation, expected-location comparison and per-Building geofence evaluation are authoritative server-side ONLY: the actor is the authenticated session's user (caller can never author actorUserId/workerId/crewId/assignmentId/clientId/expected location/policyId/distance/geofence/status/primaryReason; unknown authority-shaped body keys are structurally ignored). The bound Handyman arrival challenge is consumed exactly once and the immutable terminal result is persisted atomically; replaying the same token returns the EXISTING result unchanged (idempotent). Terminal FAILED / MANUAL_REVIEW_REQUIRED / EXPIRED are successful evaluation responses (200) — never HTTP failures. A VERIFIED result means ARRIVAL VERIFIED only: it does not check in, start work, record attendance/presence/billable time, create a work session, or touch FM. Reverse-geocode enrichment is NOT consulted by this authoritative decision."
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
       requestBody:
@@ -91248,12 +91275,30 @@ components:
       properties:
         providerContextId: { type: string, format: uuid }
         crewId: { type: string, format: uuid }
+    HandymanArrivalChallengeIssued:
+      type: object
+      description: "CR-HM-FIELD-OPS-ACK-01 PART 02 — server-issued arrival challenge. challengeToken is the raw one-time token and is returned EXACTLY ONCE (only its SHA-256 hash is persisted); expiresAt is the server-clock TTL projection (120 seconds) and status is always PENDING at issuance. Internal binding ids (clientId, assignmentId, actorUserId) and any token/hash material are never projected. A CONSUMED/EXPIRED challenge can never be re-issued in place — issue a new one. Issuance is NOT arrival verification: it proves only that the server bound an authenticated CURRENT Crew Lead to this Execution Scope."
+      required: [id, executionScopeId, status, expiresAt, challengeToken]
+      properties:
+        id: { type: string, format: uuid }
+        executionScopeId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [PENDING]
+        expiresAt: { type: string, format: date-time }
+        challengeToken:
+          type: string
+          minLength: 1
+          description: One-time server-generated token; never cache or log it.
     HandymanArrivalVerificationRequest:
       type: object
       required: [challengeToken, qrOpaqueCode]
       description: "Bounded caller input ONLY. challengeToken is the one-time server-issued arrival challenge token; qrOpaqueCode is the scanned opaque QR code compared against the expected-location snapshot authority. deviceLocation carries (nullable) device coordinates; when omitted and an ACTIVE building geospatial policy exists, the terminal result is MANUAL_REVIEW_REQUIRED (never VERIFIED). Authority/derived keys (actorUserId/workerId/crewId/assignmentId/expected location/policyId/distanceMeters/geofenceSignal/status/primaryReason/clientId/enrichment fields) in the payload are structurally ignored — the server resolves everything authoritatively."
       properties:
-        challengeToken: { type: string, minLength: 1 }
+        challengeToken:
+          type: string
+          minLength: 1
+          description: The one-time token issued by POST .../arrival-challenge; never client-generated or cached.
         qrOpaqueCode: { type: string, minLength: 1 }
         deviceLocation:
           nullable: true
