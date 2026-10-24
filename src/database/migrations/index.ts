@@ -513,6 +513,8 @@ import { migration0476HandymanParameterizedServiceCatalog }
   from './0476_handyman_parameterized_service_catalog';
 import { migration0477ServicePriceTierKey }
   from './0477_service_price_tier_key';
+import { migration0478HandymanServiceVariantAttributeLifecycle }
+  from './0478_handyman_service_variant_attribute_lifecycle';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -990,4 +992,5 @@ export const migrations: readonly Migration[] = [
   migration0472HandymanAssignmentResponses,
   migration0476HandymanParameterizedServiceCatalog,
   migration0477ServicePriceTierKey,
+  migration0478HandymanServiceVariantAttributeLifecycle,
 ];

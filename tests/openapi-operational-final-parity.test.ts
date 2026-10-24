@@ -179,8 +179,8 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
     (o) => !runtimeCanon.has(`${o.method} ${o.canon}`),
   );
 
-  it('1. total runtime is 2052 and root GET / is the only infrastructure exclusion', () => {
-    assert.equal(runtime.length, 2052);
+  it('1. total runtime is 2056 and root GET / is the only infrastructure exclusion', () => {
+    assert.equal(runtime.length, 2056);
     const root = operationalRuntime.filter((r) => r.path === '/');
     assert.equal(root.length, 1);
     assert.equal(root[0]?.method, 'GET');
@@ -191,8 +191,8 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
     );
   });
 
-  it('2. in-scope operational runtime is 1982 and the task duplicate collapses to one operation', () => {
-    assert.equal(inScopeOperational.length, 1982);
+  it('2. in-scope operational runtime is 1986 and the task duplicate collapses to one operation', () => {
+    assert.equal(inScopeOperational.length, 1986);
     const taskGets = inScopeOperational.filter(
       (r) => r.method === 'GET' && r.canon === '/tasks/{p}',
     );
@@ -201,25 +201,25 @@ describe('OpenAPI operational final parity (INT-LC-19-BE PART 14)', () => {
       (o) => o.method === 'GET' && o.canon === '/tasks/{p}',
     );
     assert.equal(documentedTaskGets.length, 1);
-    assert.equal(new Set(inScopeOperational.map((r) => `${r.method} ${r.canon}`)).size, 1981);
+    assert.equal(new Set(inScopeOperational.map((r) => `${r.method} ${r.canon}`)).size, 1985);
   });
 
-  it('3. operational OpenAPI is 1981 and distinct operational gap is 0', () => {
-    assert.equal(operationalOpenApi.length, 1981);
+  it('3. operational OpenAPI is 1985 and distinct operational gap is 0', () => {
+    assert.equal(operationalOpenApi.length, 1985);
     assert.equal(inScopeOperational.length - operationalOpenApi.length, 1);
     assert.equal(unmapped.length, 0);
     assert.deepEqual(unmapped, []);
   });
 
-  it('4. platform SaaS remains 69 and normalized parity is 2050/2050', () => {
+  it('4. platform SaaS remains 69 and normalized parity is 2054/2054', () => {
     assert.equal(platformRuntime.length, 69);
     assert.equal(platformOpenApi.length, 69);
     const runtimeKeys = new Set(platformRuntime.map((r) => `${r.method} ${r.canon}`));
     const openapiKeys = new Set(platformOpenApi.map((o) => `${o.method} ${o.canon}`));
     assert.deepEqual([...runtimeKeys].filter((k) => !openapiKeys.has(k)), []);
     assert.deepEqual([...openapiKeys].filter((k) => !runtimeKeys.has(k)), []);
-    assert.equal(openapi.length, 2050);
-    assert.equal(1981 + 69, 2050);
+    assert.equal(openapi.length, 2054);
+    assert.equal(1985 + 69, 2054);
     assert.equal(operationalOpenApi.length + platformOpenApi.length, openapi.length);
   });
 

@@ -337,7 +337,10 @@ async function updateAttribute(
 const VARIANT_ATTRIBUTE_SELECT = `
   id, client_id AS "clientId", service_variant_id AS "serviceVariantId",
   attribute_id AS "attributeId", value_text AS "valueText",
-  value_number AS "valueNumber", created_by_user_id AS "createdByUserId",
+  value_number::float8 AS "valueNumber", status,
+  deactivated_at AS "deactivatedAt",
+  deactivated_by_user_id AS "deactivatedByUserId",
+  created_by_user_id AS "createdByUserId",
   created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
@@ -350,19 +353,35 @@ export type NewHandymanServiceVariantAttribute = {
   createdByUserId: string;
 };
 
-async function upsertVariantAttribute(
+export type UpdateHandymanServiceVariantAttribute = {
+  id: string;
+  clientId: string;
+  valueText: string | null;
+  valueNumber: number | null;
+  status: 'ACTIVE' | 'INACTIVE';
+  /** The actor who retires the choice (null when the row stays ACTIVE). */
+  deactivatedByUserId: string | null;
+};
+
+/**
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — the governed variant-attribute
+ * administration writes.
+ *
+ * `insertVariantAttribute` NEVER overwrites: a (variant, attribute) pair
+ * carries exactly ONE choice, so a second write for the same pair is a
+ * governance conflict that the service layer refuses with 409. Editing is a
+ * separate, explicit command, and retiring a choice is a STATUS change that
+ * keeps the row (and its history) visible.
+ */
+async function insertVariantAttribute(
   executor: QueryExecutor = getPool(),
   input: NewHandymanServiceVariantAttribute,
 ): Promise<HandymanServiceVariantAttributeRecord> {
   const result = await executor.query<HandymanServiceVariantAttributeRecord>(
     `INSERT INTO handyman_service_variant_attributes
        (id, client_id, service_variant_id, attribute_id, value_text, value_number,
-        created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (service_variant_id, attribute_id) DO UPDATE
-       SET value_text = EXCLUDED.value_text,
-           value_number = EXCLUDED.value_number,
-           updated_at = NOW()
+        status, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', $7)
      RETURNING ${VARIANT_ATTRIBUTE_SELECT}`,
     [
       randomUUID(),
@@ -377,17 +396,111 @@ async function upsertVariantAttribute(
   return result.rows[0];
 }
 
+async function updateVariantAttribute(
+  executor: QueryExecutor = getPool(),
+  input: UpdateHandymanServiceVariantAttribute,
+): Promise<HandymanServiceVariantAttributeRecord> {
+  const result = await executor.query<HandymanServiceVariantAttributeRecord>(
+    `UPDATE handyman_service_variant_attributes
+        SET value_text = $3,
+            value_number = $4,
+            status = $5,
+            deactivated_at = CASE WHEN $5 = 'INACTIVE' THEN NOW() ELSE NULL END,
+            deactivated_by_user_id = $6,
+            updated_at = NOW()
+      WHERE id = $1 AND client_id = $2
+      RETURNING ${VARIANT_ATTRIBUTE_SELECT}`,
+    [
+      input.id,
+      input.clientId,
+      input.valueText,
+      input.valueNumber,
+      input.status,
+      input.deactivatedByUserId,
+    ],
+  );
+  return result.rows[0];
+}
+
+async function findVariantAttributeById(
+  executor: QueryExecutor = getPool(),
+  id: string,
+): Promise<HandymanServiceVariantAttributeRecord | null> {
+  const result = await executor.query<HandymanServiceVariantAttributeRecord>(
+    `SELECT ${VARIANT_ATTRIBUTE_SELECT}
+       FROM handyman_service_variant_attributes
+      WHERE id = $1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findVariantAttributeByVariantAndAttribute(
+  executor: QueryExecutor = getPool(),
+  clientId: string,
+  serviceVariantId: string,
+  attributeId: string,
+): Promise<HandymanServiceVariantAttributeRecord | null> {
+  const result = await executor.query<HandymanServiceVariantAttributeRecord>(
+    `SELECT ${VARIANT_ATTRIBUTE_SELECT}
+       FROM handyman_service_variant_attributes
+      WHERE client_id = $1 AND service_variant_id = $2 AND attribute_id = $3`,
+    [clientId, serviceVariantId, attributeId],
+  );
+  return result.rows[0] ?? null;
+}
+
 async function listVariantAttributes(
   executor: QueryExecutor = getPool(),
   clientId: string,
   serviceVariantId: string,
+  status?: 'ACTIVE' | 'INACTIVE',
 ): Promise<HandymanServiceVariantAttributeRecord[]> {
   const result = await executor.query<HandymanServiceVariantAttributeRecord>(
     `SELECT ${VARIANT_ATTRIBUTE_SELECT}
        FROM handyman_service_variant_attributes
       WHERE client_id = $1 AND service_variant_id = $2
+        AND ($3::text IS NULL OR status = $3)
       ORDER BY attribute_id ASC`,
-    [clientId, serviceVariantId],
+    [clientId, serviceVariantId, status ?? null],
+  );
+  return result.rows;
+}
+
+/**
+ * The variants of one service. The variant master is the EXISTING
+ * `handyman_service_variants` table (0376) — this module only reads it.
+ */
+async function listVariantsByService(
+  executor: QueryExecutor = getPool(),
+  clientId: string,
+  serviceCatalogId: string,
+): Promise<
+  {
+    id: string;
+    clientId: string;
+    serviceCatalogId: string;
+    code: string;
+    name: string;
+    description: string | null;
+    status: string;
+  }[]
+> {
+  const result = await executor.query<{
+    id: string;
+    clientId: string;
+    serviceCatalogId: string;
+    code: string;
+    name: string;
+    description: string | null;
+    status: string;
+  }>(
+    `SELECT id, client_id AS "clientId",
+            service_catalog_id AS "serviceCatalogId", code, name, description, status
+       FROM handyman_service_variants
+      WHERE client_id = $1 AND service_catalog_id = $2
+      ORDER BY code ASC`,
+    [clientId, serviceCatalogId],
   );
   return result.rows;
 }
@@ -1038,15 +1151,24 @@ async function findUnitOfMeasureByCode(
 async function findVariantById(
   executor: QueryExecutor = getPool(),
   id: string,
-): Promise<{ id: string; clientId: string; serviceCatalogId: string; status: string } | null> {
+): Promise<{
+  id: string;
+  clientId: string;
+  serviceCatalogId: string;
+  code: string;
+  name: string;
+  status: string;
+} | null> {
   const result = await executor.query<{
     id: string;
     clientId: string;
     serviceCatalogId: string;
+    code: string;
+    name: string;
     status: string;
   }>(
     `SELECT id, client_id AS "clientId",
-            service_catalog_id AS "serviceCatalogId", status
+            service_catalog_id AS "serviceCatalogId", code, name, status
        FROM handyman_service_variants
       WHERE id = $1`,
     [id],
@@ -1105,8 +1227,12 @@ export const handymanParameterizedCatalogRepository = {
   findAttributeByCode,
   listAttributes,
   updateAttribute,
-  upsertVariantAttribute,
+  insertVariantAttribute,
+  updateVariantAttribute,
+  findVariantAttributeById,
+  findVariantAttributeByVariantAndAttribute,
   listVariantAttributes,
+  listVariantsByService,
   upsertCommercialProfile,
   insertCommercialProfileIfAbsent,
   findCommercialProfileByService,

@@ -86,12 +86,20 @@ export function isHandymanServicePricingMode(
   );
 }
 
-/** Access condition of a request item (execution/access fact). */
+/**
+ * Access condition of a request item (execution/access fact).
+ *
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — `SPECIAL_EQUIPMENT` joins the
+ * vocabulary: a job that needs a boom lift, a roof-crane lift or a scaffold
+ * is an access-complexity fact exactly like a high ceiling or a difficult
+ * outdoor unit.
+ */
 export const HANDYMAN_SERVICE_ACCESS_CONDITIONS = [
   'STANDARD',
   'DIFFICULT',
   'HIGH_FLOOR',
   'RESTRICTED',
+  'SPECIAL_EQUIPMENT',
 ] as const;
 export type HandymanServiceAccessCondition =
   (typeof HANDYMAN_SERVICE_ACCESS_CONDITIONS)[number];
@@ -124,6 +132,28 @@ export function isHandymanServiceQuoteOutcome(
 }
 
 /**
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — the RESERVED price-rule selector key
+ * for the access complexity of a request item.
+ *
+ * The selector of a price rule normally names a service ATTRIBUTE. The
+ * access complexity of a request item is not an attribute — it is an
+ * execution fact carried by the item — so it gets ONE reserved, governed
+ * selector key instead of a parallel pricing mechanism:
+ *
+ *   - a rule that names `ACCESS_CONDITION` prices EXACTLY that access
+ *     complexity, through the price TIER the administrator authored for it;
+ *   - a rule that does NOT name `ACCESS_CONDITION` prices the `STANDARD`
+ *     access complexity ONLY. It can never silently price a difficult, a
+ *     high-floor or a special-equipment job.
+ *
+ * There is no arithmetic anywhere in this dimension: the access tier is a
+ * COMPLETE governed price fact, never a base amount plus a computed
+ * surcharge. When no access tier exists, the item fails closed to
+ * MANUAL_REVIEW — the engine never invents an uplift.
+ */
+export const HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY = 'ACCESS_CONDITION';
+
+/**
  * The bounded reason vocabulary of a resolution. Every non-PRICED outcome
  * names exactly one of these reasons — there is no free-text escape hatch
  * and no way to say "priced somehow".
@@ -141,6 +171,9 @@ export const HANDYMAN_SERVICE_RESOLUTION_REASON_CODES = [
   'UNIT_OF_MEASURE_MISSING',
   'COMMERCIAL_PROFILE_MISSING',
   'SERVICE_VARIANT_MISMATCH',
+  // CR-HM-SERVICE-CATALOG-01 PART 02 — pricing-tier integrity.
+  'PRICE_TIER_MISMATCH',
+  'PRICE_FACT_SCOPE_MISMATCH',
 ] as const;
 export type HandymanServiceResolutionReasonCode =
   (typeof HANDYMAN_SERVICE_RESOLUTION_REASON_CODES)[number];
@@ -195,7 +228,14 @@ export type HandymanServiceAttributeRecord = {
   updatedAt: Date;
 };
 
-/** Configured attribute value of a variant. */
+/**
+ * Configured attribute value of a variant.
+ *
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — the row carries the same lifecycle
+ * vocabulary as the rest of the catalogue: `status` plus the deactivation
+ * audit columns. A retired choice stays visible (history is never
+ * destroyed) but is no longer offered to the administration surface.
+ */
 export type HandymanServiceVariantAttributeRecord = {
   id: string;
   clientId: string;
@@ -203,6 +243,9 @@ export type HandymanServiceVariantAttributeRecord = {
   attributeId: string;
   valueText: string | null;
   valueNumber: number | null;
+  status: 'ACTIVE' | 'INACTIVE';
+  deactivatedAt: Date | null;
+  deactivatedByUserId: string | null;
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -300,6 +343,11 @@ export type PublicHandymanServicePriceRule = Omit<
   HandymanServicePriceRuleRecord,
   'createdAt' | 'updatedAt'
 > & { createdAt: string; updatedAt: string };
+
+export type PublicHandymanServiceVariantAttribute = Omit<
+  HandymanServiceVariantAttributeRecord,
+  'createdAt' | 'updatedAt' | 'deactivatedAt'
+> & { createdAt: string; updatedAt: string; deactivatedAt: string | null };
 
 export type PublicHandymanServiceRequestItem = Omit<
   HandymanServiceRequestItemRecord,

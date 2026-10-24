@@ -15,6 +15,7 @@ import {
   handymanServiceRequestItemNotFoundError,
 } from './handyman-parameterized-catalog.errors';
 import {
+  HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY,
   isHandymanServiceAccessCondition,
   type HandymanServiceAccessCondition,
   type HandymanServiceRequestItemRecord,
@@ -184,11 +185,24 @@ export async function addHandymanServiceRequestItem(
   }
   const quantity = normalizeQuantity(input.quantity);
   const attributeValues = normalizeAttributeValues(input.attributeValues);
+  // CR-HM-SERVICE-CATALOG-01 PART 02 — the access complexity is a
+  // RESERVED price-rule selector key, never a service attribute: an item
+  // that tried to smuggle it in as an attribute would shadow the governed
+  // access dimension.
+  if (
+    Object.keys(attributeValues).some(
+      (key) => key.toUpperCase() === HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY,
+    )
+  ) {
+    throw handymanServiceRequestItemInvalidError(
+      `${HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY} is a reserved key; use accessCondition instead.`,
+    );
+  }
   const accessCondition: HandymanServiceAccessCondition =
     input.accessCondition ?? 'STANDARD';
   if (!isHandymanServiceAccessCondition(accessCondition)) {
     throw handymanServiceRequestItemInvalidError(
-      'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR or RESTRICTED.',
+      'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED or SPECIAL_EQUIPMENT.',
     );
   }
 
@@ -340,7 +354,7 @@ export async function updateHandymanServiceRequestItem(
   if (input.accessCondition !== undefined) {
     if (!isHandymanServiceAccessCondition(input.accessCondition)) {
       throw handymanServiceRequestItemInvalidError(
-        'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR or RESTRICTED.',
+        'accessCondition must be STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED or SPECIAL_EQUIPMENT.',
       );
     }
     patch.accessCondition = input.accessCondition;

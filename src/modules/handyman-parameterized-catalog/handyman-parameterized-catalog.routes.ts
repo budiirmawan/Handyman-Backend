@@ -6,6 +6,7 @@ import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
 import { isValidUuid } from '../clients';
 import {
+  addHandymanServiceVariantAttribute,
   createHandymanServiceAttribute,
   createHandymanServicePriceRule,
   getHandymanServiceCommercialProfile,
@@ -13,8 +14,11 @@ import {
   listHandymanServiceCatalogProjection,
   listHandymanServiceCategories,
   listHandymanServicePriceRules,
+  listHandymanServiceVariantAttributes,
+  listHandymanServiceVariants,
   updateHandymanServiceAttribute,
   updateHandymanServicePriceRule,
+  updateHandymanServiceVariantAttribute,
   upsertHandymanServiceCommercialProfile,
 } from './handyman-parameterized-catalog.service';
 import { importHandymanServiceCatalogStarter } from './handyman-parameterized-catalog-import.service';
@@ -39,6 +43,10 @@ import {
  *   GET   /service-catalog/parameterized/price-rules
  *   POST  /service-catalog/parameterized/entries/:serviceCatalogId/price-rules
  *   PATCH /service-catalog/parameterized/price-rules/:priceRuleId
+ *   GET   /service-catalog/parameterized/entries/:serviceCatalogId/variants
+ *   GET   /service-catalog/parameterized/entries/:serviceCatalogId/variants/:serviceVariantId/attributes
+ *   POST  /service-catalog/parameterized/entries/:serviceCatalogId/variants/:serviceVariantId/attributes
+ *   PATCH /service-catalog/parameterized/variant-attributes/:variantAttributeId
  *
  * RBAC: reads `service_catalog.read`, writes `service_catalog.manage` —
  * the EXISTING catalogue permissions (no new permission code, no widened
@@ -629,6 +637,186 @@ export function createHandymanParameterizedCatalogRouter(): Router {
                 ? {}
                 : { maxQuantity: body.maxQuantity as never }),
               ...(body.status === undefined ? {} : { status: body.status as never }),
+            },
+            actor(req),
+          ),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  /* ---------------------------------------------------------------- */
+  /* CR-HM-SERVICE-CATALOG-01 PART 02 — variant attribute administration */
+  /* ---------------------------------------------------------------- */
+
+  router.get(
+    '/service-catalog/parameterized/entries/:serviceCatalogId/variants',
+    auth,
+    read,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const serviceCatalogId = parseUuid(
+          param(req.params.serviceCatalogId),
+          'serviceCatalogId',
+        );
+        sendSuccess(
+          res,
+          await listHandymanServiceVariants(serviceCatalogId, actor(req)),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/service-catalog/parameterized/entries/:serviceCatalogId/variants/:serviceVariantId/attributes',
+    auth,
+    read,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const serviceCatalogId = parseUuid(
+          param(req.params.serviceCatalogId),
+          'serviceCatalogId',
+        );
+        const serviceVariantId = parseUuid(
+          param(req.params.serviceVariantId),
+          'serviceVariantId',
+        );
+        const query = req.query as Record<string, unknown>;
+        const unsupported = Object.keys(query).find((key) => key !== 'status');
+        if (unsupported) {
+          fail([
+            { field: unsupported, message: 'This query parameter is not accepted.' },
+          ]);
+        }
+        const status =
+          query.status === undefined ? undefined : String(query.status);
+        if (status !== undefined && status !== 'ACTIVE' && status !== 'INACTIVE') {
+          fail([{ field: 'status', message: 'status must be ACTIVE or INACTIVE.' }]);
+        }
+        sendSuccess(
+          res,
+          await listHandymanServiceVariantAttributes(
+            serviceCatalogId,
+            serviceVariantId,
+            actor(req),
+            status as 'ACTIVE' | 'INACTIVE' | undefined,
+          ),
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post(
+    '/service-catalog/parameterized/entries/:serviceCatalogId/variants/:serviceVariantId/attributes',
+    auth,
+    manage,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const serviceCatalogId = parseUuid(
+          param(req.params.serviceCatalogId),
+          'serviceCatalogId',
+        );
+        const serviceVariantId = parseUuid(
+          param(req.params.serviceVariantId),
+          'serviceVariantId',
+        );
+        const body = requireBody(req.body);
+        rejectUnknownKeys(body, [
+          'attributeId',
+          'valueText',
+          'valueNumber',
+        ]);
+        const details: { field: string; message: string }[] = [];
+        const attributeId = optionalString(body.attributeId, 'attributeId', 64, details);
+        if (!attributeId) {
+          details.push({ field: 'attributeId', message: 'attributeId is required.' });
+        }
+        if (body.valueText !== undefined && typeof body.valueText !== 'string') {
+          details.push({ field: 'valueText', message: 'valueText must be a string.' });
+        }
+        if (
+          body.valueNumber !== undefined &&
+          body.valueNumber !== null &&
+          !Number.isFinite(Number(body.valueNumber))
+        ) {
+          details.push({ field: 'valueNumber', message: 'valueNumber must be a number.' });
+        }
+        if (details.length) fail(details);
+        sendSuccess(
+          res,
+          await addHandymanServiceVariantAttribute(
+            serviceCatalogId,
+            serviceVariantId,
+            {
+              attributeId: attributeId as string,
+              ...(body.valueText === undefined
+                ? {}
+                : { valueText: body.valueText as string }),
+              ...(body.valueNumber === undefined
+                ? {}
+                : { valueNumber: Number(body.valueNumber) }),
+            },
+            actor(req),
+          ),
+          201,
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.patch(
+    '/service-catalog/parameterized/variant-attributes/:variantAttributeId',
+    auth,
+    manage,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const variantAttributeId = parseUuid(
+          param(req.params.variantAttributeId),
+          'variantAttributeId',
+        );
+        const body = requireBody(req.body);
+        rejectUnknownKeys(body, ['valueText', 'valueNumber', 'status']);
+        const details: { field: string; message: string }[] = [];
+        if (body.valueText !== undefined && typeof body.valueText !== 'string') {
+          details.push({ field: 'valueText', message: 'valueText must be a string.' });
+        }
+        if (
+          body.valueNumber !== undefined &&
+          body.valueNumber !== null &&
+          !Number.isFinite(Number(body.valueNumber))
+        ) {
+          details.push({ field: 'valueNumber', message: 'valueNumber must be a number.' });
+        }
+        if (
+          body.status !== undefined &&
+          body.status !== 'ACTIVE' &&
+          body.status !== 'INACTIVE'
+        ) {
+          details.push({ field: 'status', message: 'status must be ACTIVE or INACTIVE.' });
+        }
+        if (details.length) fail(details);
+        sendSuccess(
+          res,
+          await updateHandymanServiceVariantAttribute(
+            variantAttributeId,
+            {
+              ...(body.valueText === undefined
+                ? {}
+                : { valueText: body.valueText as string }),
+              ...(body.valueNumber === undefined
+                ? {}
+                : { valueNumber: Number(body.valueNumber) }),
+              ...(body.status === undefined
+                ? {}
+                : { status: body.status as 'ACTIVE' | 'INACTIVE' }),
             },
             actor(req),
           ),

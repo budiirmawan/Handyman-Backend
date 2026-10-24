@@ -10,6 +10,7 @@
  *   - the quotation lifecycle is the EXISTING CR-HM-06 surface.
  */
 export {
+  HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY,
   HANDYMAN_SERVICE_ACCESS_CONDITIONS,
   HANDYMAN_SERVICE_ATTRIBUTE_DATA_TYPES,
   HANDYMAN_SERVICE_PRICE_BASES,
@@ -39,6 +40,7 @@ export type {
   HandymanServiceResolutionReasonCode,
   HandymanServiceVariantAttributeRecord,
   PublicHandymanServiceAttribute,
+  PublicHandymanServiceVariantAttribute,
   PublicHandymanServiceCategory,
   PublicHandymanServiceCommercialProfile,
   PublicHandymanServicePriceRule,
@@ -57,6 +59,7 @@ export {
 } from './handyman-parameterized-catalog.starter';
 
 export {
+  addHandymanServiceVariantAttribute,
   createHandymanServiceAttribute,
   createHandymanServicePriceRule,
   getHandymanServiceCommercialProfile,
@@ -64,9 +67,15 @@ export {
   listHandymanServiceCatalogProjection,
   listHandymanServiceCategories,
   listHandymanServicePriceRules,
+  listHandymanServiceVariantAttributes,
+  listHandymanServiceVariants,
   updateHandymanServiceAttribute,
   updateHandymanServicePriceRule,
+  updateHandymanServiceVariantAttribute,
   upsertHandymanServiceCommercialProfile,
+} from './handyman-parameterized-catalog.service';
+export type {
+  HandymanServiceVariantProjection,
 } from './handyman-parameterized-catalog.service';
 
 export {
@@ -111,11 +120,16 @@ export {
   handymanServiceCategoryNotFoundError,
   handymanServiceCommercialProfileNotFoundError,
   handymanServicePriceRuleAlreadyExistsError,
+  handymanServicePriceRuleCollisionError,
   handymanServicePriceRuleInvalidError,
   handymanServicePriceRuleNotFoundError,
   handymanServiceQuoteResolutionInvalidError,
   handymanServiceRequestItemInvalidError,
   handymanServiceRequestItemNotFoundError,
+  handymanServiceVariantAttributeAlreadyExistsError,
+  handymanServiceVariantAttributeInvalidError,
+  handymanServiceVariantAttributeNotFoundError,
+  handymanServiceVariantNotFoundError,
 } from './handyman-parameterized-catalog.errors';
 
 export { createHandymanParameterizedCatalogRouter } from './handyman-parameterized-catalog.routes';

@@ -505,6 +505,27 @@ describe('CR-HM-SERVICE-CATALOG-01 PART 01 — mixed AC quotation', () => {
       priceCatalogEntryId: priceEntry,
       priceBasis: 'UNIT',
     });
+    // CR-HM-SERVICE-CATALOG-01 PART 02 — a non-standard access complexity
+    // is priced by its OWN governed tier; the standard rule can never
+    // price a high-floor or a difficult job.
+    const highFloorPrice = await servicePrice(realm.clientId, installId, 900_000, {
+      priceKey: 'AC_INSTALL_HIGH_FLOOR',
+    });
+    await priceRule(realm.clientId, installId, {
+      ruleCode: 'AC_INSTALL_HIGH_FLOOR',
+      priceCatalogEntryId: highFloorPrice,
+      priceBasis: 'UNIT',
+      attributeSelector: { ACCESS_CONDITION: 'HIGH_FLOOR' },
+    });
+    const difficultPrice = await servicePrice(realm.clientId, installId, 1_050_000, {
+      priceKey: 'AC_INSTALL_DIFFICULT',
+    });
+    await priceRule(realm.clientId, installId, {
+      ruleCode: 'AC_INSTALL_DIFFICULT',
+      priceCatalogEntryId: difficultPrice,
+      priceBasis: 'UNIT',
+      attributeSelector: { ACCESS_CONDITION: 'DIFFICULT' },
+    });
 
     const requestId = await requestFixture(realm);
 
@@ -575,8 +596,18 @@ describe('CR-HM-SERVICE-CATALOG-01 PART 01 — mixed AC quotation', () => {
     assert.deepEqual(quantities, [1, 1, 2]);
     for (const line of lines) {
       assert.equal(line.currency, 'IDR');
-      assert.equal(Number(line.finalQuotedUnitAmount), 750_000);
     }
+    // Each line carries the governed amount of ITS access tier: the
+    // standard job, the high-floor job and the difficult job are priced by
+    // three DIFFERENT facts, and no amount is added to another.
+    const unitAmounts = lines
+      .map((l) => Number(l.finalQuotedUnitAmount))
+      .sort((a, b) => a - b);
+    assert.deepEqual(unitAmounts, [750_000, 900_000, 1_050_000]);
+    const totals = lines
+      .map((l) => Number(l.lineTotal))
+      .sort((a, b) => a - b);
+    assert.deepEqual(totals, [750_000, 1_050_000, 1_800_000]);
 
     // The snapshot carries the governed price fact and the computed total.
     const resolutions = prepared.body.data.resolutions as {
@@ -588,13 +619,22 @@ describe('CR-HM-SERVICE-CATALOG-01 PART 01 — mixed AC quotation', () => {
       priceBasis: string;
       priceCatalogEntryId: string;
     }[];
+    const pricedFacts = new Set([
+      priceEntry,
+      highFloorPrice,
+      difficultPrice,
+    ]);
     for (const resolution of resolutions) {
       assert.equal(resolution.outcome, 'PRICED');
       assert.equal(resolution.reasonCode, 'PRICE_RESOLVED');
-      assert.equal(resolution.priceCatalogEntryId, priceEntry);
+      assert.ok(
+        pricedFacts.has(resolution.priceCatalogEntryId),
+        'every line is priced by a governed fact of its own tier',
+      );
       assert.equal(resolution.priceBasis, 'UNIT');
       assert.equal(resolution.computedTotal, resolution.unitAmount * resolution.quantity);
     }
+    assert.equal(new Set(resolutions.map((r) => r.priceCatalogEntryId)).size, 3);
   });
 
   it('selects the inverter price only for inverter units', async () => {

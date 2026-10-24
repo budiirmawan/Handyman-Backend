@@ -8,6 +8,7 @@ import type {
   HandymanServiceRequestItemRecord,
   HandymanServiceResolutionReasonCode,
 } from './handyman-parameterized-catalog.types';
+import { HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY } from './handyman-parameterized-catalog.types';
 import { HANDYMAN_STARTER_UOMS } from './handyman-parameterized-catalog.starter';
 
 /**
@@ -171,6 +172,22 @@ function validateItemAttributes(
   return null;
 }
 
+/**
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — the ACCESS COMPLEXITY dimension.
+ *
+ * A rule that names the reserved ACCESS_CONDITION selector prices EXACTLY
+ * that access complexity, through the price TIER the administrator authored
+ * for it. A rule that does NOT name it prices the STANDARD access
+ * complexity ONLY.
+ *
+ * This is the whole surcharge law, and it is deliberately tiny: the engine
+ * never adds anything to an amount. The difficult / high-floor /
+ * special-equipment price is a COMPLETE governed price fact that the
+ * administrator authored in the existing price authority; when that fact
+ * does not exist the item fails closed to MANUAL_REVIEW. There is no
+ * uplift formula, no percentage, no default and no fallback — a job with a
+ * hard access condition can never be priced at the standard access price.
+ */
 function ruleMatchesItem(
   rule: HandymanServicePriceRuleRecord,
   item: HandymanServiceRequestItemRecord,
@@ -178,11 +195,26 @@ function ruleMatchesItem(
   if (rule.serviceVariantId !== null && rule.serviceVariantId !== item.serviceVariantId) {
     return false;
   }
+  const accessSelector = rule.attributeSelector[
+    HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY
+  ];
   for (const [code, expected] of Object.entries(rule.attributeSelector)) {
+    if (code === HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY) {
+      if (item.accessCondition !== expected) {
+        return false;
+      }
+      continue;
+    }
     const actual = item.attributeValues[code];
     if (actual === undefined || actual.trim() !== expected.trim()) {
       return false;
     }
+  }
+  // A rule that does not name the access complexity prices the STANDARD
+  // access complexity only — never a difficult, high-floor or
+  // special-equipment job.
+  if (accessSelector === undefined && item.accessCondition !== 'STANDARD') {
+    return false;
   }
   if (rule.minQuantity !== null && item.quantity < rule.minQuantity) {
     return false;
@@ -203,6 +235,12 @@ function ruleSpecificity(rule: HandymanServicePriceRuleRecord): number[] {
   return [
     rule.serviceVariantId === null ? 0 : 1,
     -bandWidth,
+    // CR-HM-SERVICE-CATALOG-01 PART 02 — an access rule is more specific
+    // than a rule that says nothing about the access complexity.
+    rule.attributeSelector[HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY] ===
+    undefined
+      ? 0
+      : 1,
     Object.keys(rule.attributeSelector).length,
   ];
 }
@@ -315,11 +353,18 @@ export async function resolveHandymanRequestItemPrice(
   );
   const candidates = rules.filter((rule) => ruleMatchesItem(rule, item));
   if (candidates.length === 0) {
+    // CR-HM-SERVICE-CATALOG-01 PART 02 — an access-complexity job without
+    // an access price tier fails closed with a reason that names the
+    // missing tier. It is never priced at the standard access price.
+    const accessDetail =
+      item.accessCondition !== 'STANDARD'
+        ? ` No price rule prices the access condition ${item.accessCondition} for this service.`
+        : '';
     return notPriced(
       item.id,
       'MANUAL_REVIEW',
       'PRICE_RULE_NOT_FOUND',
-      'No price rule matches this service, attribute combination and quantity.',
+      `No price rule matches this service, attribute combination and quantity.${accessDetail}`,
     );
   }
 
@@ -386,6 +431,40 @@ export async function resolveHandymanRequestItemPrice(
       'MANUAL_REVIEW',
       'PRICE_NOT_AVAILABLE',
       'The governed price fact is not resolvable.',
+    );
+  }
+  // CR-HM-SERVICE-CATALOG-01 PART 02 — the PRICE TIER INTEGRITY checks.
+  // They run on the SELECTED rule, and a violation fails closed instead of
+  // falling back to a less specific rule: a drifted tier is a
+  // configuration error, not a reason to quote a different amount.
+  if (entry.clientId !== context.clientId) {
+    return notPriced(
+      item.id,
+      'MANUAL_REVIEW',
+      'PRICE_FACT_SCOPE_MISMATCH',
+      'The governed price fact does not belong to this client.',
+    );
+  }
+  const priceKey = entry.servicePriceKey ?? '';
+  if (priceKey !== '' && priceKey !== best.rule.ruleCode) {
+    return notPriced(
+      item.id,
+      'MANUAL_REVIEW',
+      'PRICE_TIER_MISMATCH',
+      `The governed price fact fills the catalogue price tier "${priceKey}" but is consumed by rule ${best.rule.ruleCode}.`,
+    );
+  }
+  if (
+    best.rule.attributeSelector[
+      HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY
+    ] !== undefined &&
+    priceKey !== best.rule.ruleCode
+  ) {
+    return notPriced(
+      item.id,
+      'MANUAL_REVIEW',
+      'PRICE_TIER_MISMATCH',
+      `An access rule must consume its own access price tier; the governed price fact carries the tier key "${priceKey}" instead of "${best.rule.ruleCode}".`,
     );
   }
   if (entry.status !== 'ACTIVE') {

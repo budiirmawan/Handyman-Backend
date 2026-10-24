@@ -137,10 +137,10 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
   const operationalOpenApi = openapi.filter((o) => !o.path.startsWith('/platform'));
 
   // 1. Reconciled operational census arithmetic & route disposition
-  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 2,052, IN_SCOPE = 1,982', () => {
-    assert.equal(runtime.length, 2052, 'Total runtime routes must be exactly 2,052');
+  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 2,056, IN_SCOPE = 1,986', () => {
+    assert.equal(runtime.length, 2056, 'Total runtime routes must be exactly 2,056');
     assert.equal(platformRuntime.length, 69, 'SaaS platform runtime routes must be exactly 69');
-    assert.equal(operationalRuntime.length, 1983, 'Operational runtime routes must be 1,983');
+    assert.equal(operationalRuntime.length, 1987, 'Operational runtime routes must be 1,987');
 
     // Root GET / is the single NON_OPENAPI_INFRASTRUCTURE_ROUTE
     const rootRoute = operationalRuntime.filter((r) => r.path === '/');
@@ -148,8 +148,8 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
     assert.equal(rootRoute[0].method, 'GET');
 
     const inScopeOperational = operationalRuntime.filter((r) => r.path !== '/');
-    assert.equal(inScopeOperational.length, 1982, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,982');
-    assert.equal(operationalOpenApi.length, 1981, 'OPENAPI_OPERATIONAL must be 1,981 after release integration');
+    assert.equal(inScopeOperational.length, 1986, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,986');
+    assert.equal(operationalOpenApi.length, 1985, 'OPENAPI_OPERATIONAL must be 1,985 after release integration');
 
     // Reconciled arithmetic: 1946 - 1945 = 1 (duplicate task mount only)
     const runtimeNotDocumented = inScopeOperational.length - operationalOpenApi.length;

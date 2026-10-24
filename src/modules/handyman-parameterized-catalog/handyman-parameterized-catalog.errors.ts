@@ -128,3 +128,52 @@ export function handymanServiceCatalogImportInvalidError(
     statusCode: 400,
   });
 }
+
+/* ------------------------------------------------------------------ */
+/* CR-HM-SERVICE-CATALOG-01 PART 02 — variant attributes              */
+/* ------------------------------------------------------------------ */
+
+export function handymanServiceVariantNotFoundError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SERVICE_VARIANT_NOT_FOUND,
+    message: 'Handyman service variant not found.',
+    statusCode: 404,
+  });
+}
+
+export function handymanServiceVariantAttributeNotFoundError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_NOT_FOUND,
+    message: 'Handyman service variant attribute not found.',
+    statusCode: 404,
+  });
+}
+
+export function handymanServiceVariantAttributeAlreadyExistsError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_ALREADY_EXISTS,
+    message:
+      'This variant already carries a choice for that attribute; edit or retire the existing choice instead.',
+    statusCode: 409,
+  });
+}
+
+export function handymanServiceVariantAttributeInvalidError(
+  message = 'Handyman service variant attribute validation failed.',
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_INVALID,
+    message,
+    statusCode: 400,
+  });
+}
+
+export function handymanServicePriceRuleCollisionError(
+  message = 'Handyman service price rule collides with an existing rule.',
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_SERVICE_PRICE_RULE_COLLISION,
+    message,
+    statusCode: 409,
+  });
+}

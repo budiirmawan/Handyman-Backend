@@ -21,13 +21,21 @@ import {
   handymanServiceAttributeNotFoundError,
   handymanServiceCommercialProfileNotFoundError,
   handymanServicePriceRuleAlreadyExistsError,
+  handymanServicePriceRuleCollisionError,
   handymanServicePriceRuleInvalidError,
   handymanServicePriceRuleNotFoundError,
+  handymanServiceVariantAttributeAlreadyExistsError,
+  handymanServiceVariantAttributeInvalidError,
+  handymanServiceVariantAttributeNotFoundError,
+  handymanServiceVariantNotFoundError,
 } from './handyman-parameterized-catalog.errors';
 import {
+  isHandymanServiceAccessCondition,
   isHandymanServiceAttributeDataType,
   isHandymanServicePriceBasis,
   isHandymanServicePricingMode,
+  HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY,
+  type HandymanServiceAccessCondition,
   type HandymanServiceAttributeAllowedValue,
   type HandymanServiceAttributeDataType,
   type HandymanServiceAttributeRecord,
@@ -39,6 +47,7 @@ import {
   type PublicHandymanServiceCategory,
   type PublicHandymanServiceCommercialProfile,
   type PublicHandymanServicePriceRule,
+  type PublicHandymanServiceVariantAttribute,
 } from './handyman-parameterized-catalog.types';
 
 /**
@@ -582,9 +591,100 @@ function normalizeAttributeSelector(
         `attributeSelector["${code}"] must be a non-empty string.`,
       );
     }
+    // CR-HM-SERVICE-CATALOG-01 PART 02 — the access complexity of a request
+    // item is NOT a service attribute; it is the reserved selector key
+    // ACCESS_CONDITION and its value must come from the governed access
+    // vocabulary. Every other key keeps the plain attribute-code rule.
+    if (code === HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY) {
+      const access = value.trim().toUpperCase();
+      if (!isHandymanServiceAccessCondition(access)) {
+        throw handymanServicePriceRuleInvalidError(
+          `attributeSelector["${HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY}"] must be one of STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED or SPECIAL_EQUIPMENT.`,
+        );
+      }
+      out[code] = access;
+      continue;
+    }
     out[code] = value.trim();
   }
   return out;
+}
+
+/**
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — the PRICE TIER coherence law between a
+ * price rule and the governed price fact it consumes.
+ *
+ *   - the plain service reference price ('') is usable by any rule;
+ *   - a tiered price must carry exactly this rule's code as its tier key;
+ *   - an ACCESS rule (a rule that names ACCESS_CONDITION) must consume its
+ *     OWN tier: the plain reference price is the client's STANDARD-access
+ *     baseline, so consuming it for a difficult / high-floor /
+ *     special-equipment job would silently price the wrong access tier.
+ */
+function assertPriceTierCoherence(
+  ruleCode: string,
+  attributeSelector: Record<string, string>,
+  entry: { servicePriceKey: string | null },
+): void {
+  const priceKey = entry.servicePriceKey ?? '';
+  if (priceKey !== '' && priceKey !== ruleCode) {
+    throw handymanServicePriceRuleInvalidError(
+      `The referenced price fills the catalogue price tier "${priceKey}"; only a rule with that code may consume it.`,
+    );
+  }
+  const accessKey = attributeSelector[
+    HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY
+  ];
+  if (accessKey !== undefined && priceKey !== ruleCode) {
+    throw handymanServicePriceRuleInvalidError(
+      `An access rule must consume its own access price tier; the referenced price carries the tier key "${priceKey}" instead of "${ruleCode}".`,
+    );
+  }
+}
+
+/**
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — the RULE COLLISION law.
+ *
+ * Two ACTIVE rules of the same service that select the SAME variant, the
+ * SAME attribute selection and the SAME quantity band can never be ordered
+ * against each other: the resolver would have to pick one arbitrarily. The
+ * administration layer refuses to create or move into such a pair, so the
+ * ambiguity can only ever arrive through a direct database write — and the
+ * resolver still fails closed on it.
+ */
+async function assertNoPriceRuleCollision(
+  clientId: string,
+  serviceCatalogId: string,
+  candidate: {
+    serviceVariantId: string | null;
+    attributeSelector: Record<string, string>;
+    minQuantity: number | null;
+    maxQuantity: number | null;
+  },
+  excludeRuleId: string | null,
+): Promise<void> {
+  const rules = await handymanParameterizedCatalogRepository.listPriceRules(
+    undefined,
+    clientId,
+    serviceCatalogId,
+    'ACTIVE',
+  );
+  for (const rule of rules) {
+    if (excludeRuleId !== null && rule.id === excludeRuleId) continue;
+    if (rule.serviceVariantId !== candidate.serviceVariantId) continue;
+    if (rule.minQuantity !== candidate.minQuantity) continue;
+    if (rule.maxQuantity !== candidate.maxQuantity) continue;
+    const a = Object.entries(rule.attributeSelector).sort();
+    const b = Object.entries(candidate.attributeSelector).sort();
+    if (
+      a.length === b.length &&
+      a.every(([key, value], index) => key === b[index][0] && value === b[index][1])
+    ) {
+      throw handymanServicePriceRuleCollisionError(
+        `Price rule ${rule.ruleCode} already selects the same variant, attributes and quantity band; two equally specific rules would be ambiguous.`,
+      );
+    }
+  }
 }
 
 export async function createHandymanServicePriceRule(
@@ -646,21 +746,15 @@ export async function createHandymanServicePriceRule(
       'priceCatalogEntryId must reference an ACTIVE-capable SERVICE price entry for this service.',
     );
   }
-  // CR-HM-SERVICE-CATALOG-01 PART 01 — the catalogue PRICE TIER of the price
-  // fact must be coherent with the rule that consumes it: the plain service
-  // reference price ('') is usable by any rule, and a tiered price must
-  // carry exactly this rule's code as its tier key. A rule can therefore
-  // never silently consume another tier's amount.
-  const priceKey = entry.servicePriceKey ?? '';
-  if (priceKey !== '' && priceKey !== ruleCode) {
-    throw handymanServicePriceRuleInvalidError(
-      `The referenced price fills the catalogue price tier "${priceKey}"; only a rule with that code may consume it.`,
-    );
-  }
+  // CR-HM-SERVICE-CATALOG-01 PART 01/02 — the catalogue PRICE TIER of the
+  // price fact must be coherent with the rule that consumes it (and, for an
+  // access rule, must be the rule's OWN access tier).
+  assertPriceTierCoherence(ruleCode, attributeSelector, entry);
 
   // The selector may only reference attribute definitions that actually
   // exist for this service — otherwise the rule could never match and would
-  // silently price nothing.
+  // silently price nothing. The reserved ACCESS_CONDITION key is not an
+  // attribute and is therefore exempt from this check.
   const attributes = await handymanParameterizedCatalogRepository.listAttributes(
     undefined,
     service.clientId,
@@ -668,12 +762,22 @@ export async function createHandymanServicePriceRule(
   );
   const knownCodes = new Set(attributes.map((a) => a.code));
   for (const code of Object.keys(attributeSelector)) {
+    if (code === HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY) continue;
     if (!knownCodes.has(code)) {
       throw handymanServicePriceRuleInvalidError(
         `attributeSelector references an unknown attribute code: ${code}.`,
       );
     }
   }
+
+  // CR-HM-SERVICE-CATALOG-01 PART 02 — no two ACTIVE rules of this service
+  // may select the same variant, attributes and quantity band.
+  await assertNoPriceRuleCollision(service.clientId, service.id, {
+    serviceVariantId: input.serviceVariantId ?? null,
+    attributeSelector,
+    minQuantity,
+    maxQuantity,
+  }, null);
 
   const existingRule =
     await handymanParameterizedCatalogRepository.findPriceRuleByCode(
@@ -782,12 +886,6 @@ export async function updateHandymanServicePriceRule(
         'priceCatalogEntryId must reference a SERVICE price entry for this service.',
       );
     }
-    const priceKey = entry.servicePriceKey ?? '';
-    if (priceKey !== '' && priceKey !== existing.ruleCode) {
-      throw handymanServicePriceRuleInvalidError(
-        `The referenced price fills the catalogue price tier "${priceKey}"; only a rule with that code may consume it.`,
-      );
-    }
     patch.priceCatalogEntryId = input.priceCatalogEntryId;
   }
   if (input.priceBasis !== undefined) {
@@ -817,6 +915,56 @@ export async function updateHandymanServicePriceRule(
       );
     }
     patch.status = input.status;
+  }
+
+  // CR-HM-SERVICE-CATALOG-01 PART 02 — the coherence and the collision law
+  // are asserted against the FINAL state of the rule (the merged selector,
+  // the merged variant, the merged quantity band and the consumed price
+  // fact), never against a partial view of it.
+  const finalSelector = patch.attributeSelector ?? existing.attributeSelector;
+  const finalVariant = patch.serviceVariantId ?? existing.serviceVariantId;
+  const finalMin = patch.minQuantity !== undefined ? patch.minQuantity : existing.minQuantity;
+  const finalMax = patch.maxQuantity !== undefined ? patch.maxQuantity : existing.maxQuantity;
+  if (patch.attributeSelector !== undefined) {
+    const attributes = await handymanParameterizedCatalogRepository.listAttributes(
+      undefined,
+      existing.clientId,
+      existing.serviceCatalogId,
+    );
+    const knownCodes = new Set(attributes.map((a) => a.code));
+    for (const code of Object.keys(finalSelector)) {
+      if (code === HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY) continue;
+      if (!knownCodes.has(code)) {
+        throw handymanServicePriceRuleInvalidError(
+          `attributeSelector references an unknown attribute code: ${code}.`,
+        );
+      }
+    }
+  }
+  const consumedEntryId = patch.priceCatalogEntryId ?? existing.priceCatalogEntryId;
+  const consumedEntry =
+    await handymanParameterizedCatalogRepository.findPriceCatalogEntryById(
+      undefined,
+      consumedEntryId,
+    );
+  if (!consumedEntry || consumedEntry.clientId !== existing.clientId) {
+    throw handymanServicePriceRuleInvalidError(
+      'priceCatalogEntryId must reference a price catalog entry of this client.',
+    );
+  }
+  assertPriceTierCoherence(existing.ruleCode, finalSelector, consumedEntry);
+  if ((patch.status ?? existing.status) === 'ACTIVE') {
+    await assertNoPriceRuleCollision(
+      existing.clientId,
+      existing.serviceCatalogId,
+      {
+        serviceVariantId: finalVariant,
+        attributeSelector: finalSelector,
+        minQuantity: finalMin,
+        maxQuantity: finalMax,
+      },
+      existing.id,
+    );
   }
 
   return withTransaction(async (tx) => {
@@ -943,4 +1091,400 @@ export async function listAccessibleClientIds(
   actorUserId: string,
 ): Promise<string[]> {
   return getAccessibleClientIds(actorUserId);
+}
+
+/* ------------------------------------------------------------------ */
+/* CR-HM-SERVICE-CATALOG-01 PART 02 — variant attribute administration */
+/* ------------------------------------------------------------------ */
+
+function toPublicVariantAttribute(
+  record: {
+    id: string;
+    clientId: string;
+    serviceVariantId: string;
+    attributeId: string;
+    valueText: string | null;
+    valueNumber: number | null;
+    status: 'ACTIVE' | 'INACTIVE';
+    deactivatedAt: Date | null;
+    deactivatedByUserId: string | null;
+    createdByUserId: string;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+): PublicHandymanServiceVariantAttribute {
+  return {
+    ...record,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+    deactivatedAt: record.deactivatedAt
+      ? record.deactivatedAt.toISOString()
+      : null,
+  };
+}
+
+/**
+ * CR-HM-SERVICE-CATALOG-01 PART 02 — the VALUE VALIDATION of a variant
+ * choice against the attribute it configures.
+ *
+ * The choice must be admissible for the attribute's data type, and it must
+ * be one of the attribute's allowed values unless the attribute explicitly
+ * allows a free value. The attribute must belong to the SAME service as the
+ * variant ("validasi pilihan terhadap jenis layanan"): a variant may never
+ * configure an attribute of another service.
+ */
+function validateVariantChoice(
+  attribute: HandymanServiceAttributeRecord,
+  value: { text?: string | null; number?: number | null },
+): { valueText: string | null; valueNumber: number | null } {
+  if (attribute.dataType === 'NUMBER') {
+    const parsed = Number(value.number);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw handymanServiceVariantAttributeInvalidError(
+        `Attribute ${attribute.code} is numeric; valueNumber must be a positive number.`,
+      );
+    }
+    if (value.text !== undefined && value.text !== null) {
+      throw handymanServiceVariantAttributeInvalidError(
+        `Attribute ${attribute.code} is numeric; valueText must be omitted.`,
+      );
+    }
+    return { valueText: null, valueNumber: parsed };
+  }
+
+  if (value.number !== undefined && value.number !== null) {
+    throw handymanServiceVariantAttributeInvalidError(
+      `Attribute ${attribute.code} is not numeric; valueNumber must be omitted.`,
+    );
+  }
+  const text = String(value.text ?? '').trim();
+  if (text.length < 1 || text.length > 200) {
+    throw handymanServiceVariantAttributeInvalidError(
+      `Attribute ${attribute.code} must carry a 1-200 character value.`,
+    );
+  }
+  if (attribute.dataType === 'BOOLEAN' && text !== 'true' && text !== 'false') {
+    throw handymanServiceVariantAttributeInvalidError(
+      `Attribute ${attribute.code} is boolean; value must be "true" or "false".`,
+    );
+  }
+  if (
+    attribute.allowedValues.length > 0 &&
+    !attribute.allowFreeValue &&
+    !attribute.allowedValues.some((allowed) => allowed.code === text)
+  ) {
+    throw handymanServiceVariantAttributeInvalidError(
+      `Attribute ${attribute.code} value "${text}" is not one of the allowed values.`,
+    );
+  }
+  return { valueText: text, valueNumber: null };
+}
+
+/** The variant of one service, proven to belong to that service. */
+async function requireVariantOfService(
+  serviceCatalogId: string,
+  serviceVariantId: string,
+  clientId: string,
+): Promise<{ id: string; code: string; name: string; status: string }> {
+  const variant =
+    await handymanParameterizedCatalogRepository.findVariantById(
+      undefined,
+      serviceVariantId,
+    );
+  if (
+    !variant ||
+    variant.clientId !== clientId ||
+    variant.serviceCatalogId !== serviceCatalogId
+  ) {
+    throw handymanServiceVariantNotFoundError();
+  }
+  const listed =
+    await handymanParameterizedCatalogRepository.listVariantsByService(
+      undefined,
+      clientId,
+      serviceCatalogId,
+    );
+  const found = listed.find((v) => v.id === serviceVariantId);
+  if (!found) throw handymanServiceVariantNotFoundError();
+  return found;
+}
+
+/**
+ * The variants of one service with their configured choices.
+ *
+ * The variant master is the EXISTING `handyman_service_variants` table
+ * (0376); the choices are the `handyman_service_variant_attributes` rows.
+ */
+export type HandymanServiceVariantProjection = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  status: string;
+  attributes: PublicHandymanServiceVariantAttribute[];
+};
+
+export async function listHandymanServiceVariants(
+  serviceCatalogId: string,
+  actorUserId: string,
+): Promise<HandymanServiceVariantProjection[]> {
+  const service = await requireServiceEntry(serviceCatalogId, actorUserId);
+  const variants =
+    await handymanParameterizedCatalogRepository.listVariantsByService(
+      undefined,
+      service.clientId,
+      service.id,
+    );
+  const out: HandymanServiceVariantProjection[] = [];
+  for (const variant of variants) {
+    const attributes =
+      await handymanParameterizedCatalogRepository.listVariantAttributes(
+        undefined,
+        service.clientId,
+        variant.id,
+      );
+    out.push({
+      id: variant.id,
+      code: variant.code,
+      name: variant.name,
+      description: variant.description,
+      status: variant.status,
+      attributes: attributes.map(toPublicVariantAttribute),
+    });
+  }
+  return out;
+}
+
+/** The configured choices of ONE variant. */
+export async function listHandymanServiceVariantAttributes(
+  serviceCatalogId: string,
+  serviceVariantId: string,
+  actorUserId: string,
+  status?: 'ACTIVE' | 'INACTIVE',
+): Promise<PublicHandymanServiceVariantAttribute[]> {
+  const service = await requireServiceEntry(serviceCatalogId, actorUserId);
+  const variant = await requireVariantOfService(
+    service.id,
+    serviceVariantId,
+    service.clientId,
+  );
+  const attributes =
+    await handymanParameterizedCatalogRepository.listVariantAttributes(
+      undefined,
+      service.clientId,
+      variant.id,
+      status,
+    );
+  return attributes.map(toPublicVariantAttribute);
+}
+
+export type AddHandymanServiceVariantAttributeInput = {
+  attributeId: string;
+  valueText?: string | null;
+  valueNumber?: number | null;
+};
+
+/**
+ * Add ONE configured choice to a variant.
+ *
+ * The (variant, attribute) pair carries exactly ONE choice: a second write
+ * for the same pair is refused with 409 instead of overwriting the first
+ * one. Editing and retiring are explicit, separate commands.
+ */
+export async function addHandymanServiceVariantAttribute(
+  serviceCatalogId: string,
+  serviceVariantId: string,
+  input: AddHandymanServiceVariantAttributeInput,
+  actorUserId: string,
+): Promise<PublicHandymanServiceVariantAttribute> {
+  const service = await requireServiceEntry(serviceCatalogId, actorUserId, {
+    requireActive: true,
+  });
+  const variant = await requireVariantOfService(
+    service.id,
+    serviceVariantId,
+    service.clientId,
+  );
+  if (!isValidUuid(input.attributeId)) {
+    throw handymanServiceVariantAttributeInvalidError(
+      'attributeId must be a valid UUID.',
+    );
+  }
+  const attribute =
+    await handymanParameterizedCatalogRepository.findAttributeById(
+      undefined,
+      input.attributeId,
+    );
+  if (
+    !attribute ||
+    attribute.clientId !== service.clientId ||
+    attribute.serviceCatalogId !== service.id
+  ) {
+    throw handymanServiceVariantAttributeInvalidError(
+      'attributeId must reference an attribute of this service.',
+    );
+  }
+  if (attribute.status !== 'ACTIVE') {
+    throw handymanServiceVariantAttributeInvalidError(
+      'attributeId must reference an ACTIVE attribute.',
+    );
+  }
+  const value = validateVariantChoice(attribute, {
+    text: input.valueText ?? null,
+    number: input.valueNumber ?? null,
+  });
+
+  const existing =
+    await handymanParameterizedCatalogRepository.findVariantAttributeByVariantAndAttribute(
+      undefined,
+      service.clientId,
+      variant.id,
+      attribute.id,
+    );
+  if (existing) throw handymanServiceVariantAttributeAlreadyExistsError();
+
+  return withTransaction(async (tx) => {
+    const record =
+      await handymanParameterizedCatalogRepository.insertVariantAttribute(
+        tx as never,
+        {
+          clientId: service.clientId,
+          serviceVariantId: variant.id,
+          attributeId: attribute.id,
+          valueText: value.valueText,
+          valueNumber: value.valueNumber,
+          createdByUserId: actorUserId,
+        },
+      );
+    await recordOperationalEvent(
+      {
+        clientId: service.clientId,
+        eventType: 'HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_CREATED',
+        entityType: 'HANDYMAN_SERVICE_VARIANT_ATTRIBUTE',
+        entityId: record.id,
+        actorUserId,
+        summary: `Variant ${variant.code} of service ${service.code} now configures attribute ${attribute.code}.`,
+        metadata: {
+          serviceCatalogId: service.id,
+          serviceVariantId: variant.id,
+          attributeId: attribute.id,
+          attributeCode: attribute.code,
+        },
+      },
+      tx,
+    );
+    return toPublicVariantAttribute(record);
+  });
+}
+
+export type UpdateHandymanServiceVariantAttributeInput = {
+  valueText?: string | null;
+  valueNumber?: number | null;
+  status?: 'ACTIVE' | 'INACTIVE';
+};
+
+/**
+ * Edit OR retire ONE configured choice.
+ *
+ * Retiring keeps the row (and its value) visible — history is never
+ * destroyed — and records WHO retired it and WHEN. Re-activating is the
+ * same command with `status: ACTIVE`.
+ */
+export async function updateHandymanServiceVariantAttribute(
+  variantAttributeId: string,
+  input: UpdateHandymanServiceVariantAttributeInput,
+  actorUserId: string,
+): Promise<PublicHandymanServiceVariantAttribute> {
+  if (!isValidUuid(variantAttributeId)) {
+    throw AppError.validation('Catalog validation failed.', [
+      {
+        field: 'variantAttributeId',
+        message: 'variantAttributeId must be a valid UUID.',
+      },
+    ]);
+  }
+  const existing =
+    await handymanParameterizedCatalogRepository.findVariantAttributeById(
+      undefined,
+      variantAttributeId,
+    );
+  if (!existing) throw handymanServiceVariantAttributeNotFoundError();
+  await assertClientAccess(actorUserId, existing.clientId);
+
+  const variant =
+    await handymanParameterizedCatalogRepository.findVariantById(
+      undefined,
+      existing.serviceVariantId,
+    );
+  if (!variant || variant.clientId !== existing.clientId) {
+    throw handymanServiceVariantNotFoundError();
+  }
+  const attribute =
+    await handymanParameterizedCatalogRepository.findAttributeById(
+      undefined,
+      existing.attributeId,
+    );
+  if (
+    !attribute ||
+    attribute.clientId !== existing.clientId ||
+    attribute.serviceCatalogId !== variant.serviceCatalogId
+  ) {
+    throw handymanServiceVariantAttributeInvalidError(
+      'The configured choice no longer matches an attribute of this service.',
+    );
+  }
+
+  const value =
+    input.valueText !== undefined || input.valueNumber !== undefined
+      ? validateVariantChoice(attribute, {
+          text: input.valueText ?? null,
+          number: input.valueNumber ?? null,
+        })
+      : { valueText: existing.valueText, valueNumber: existing.valueNumber };
+
+  const status = input.status ?? existing.status;
+  if (status !== 'ACTIVE' && status !== 'INACTIVE') {
+    throw handymanServiceVariantAttributeInvalidError(
+      'status must be ACTIVE or INACTIVE.',
+    );
+  }
+
+  return withTransaction(async (tx) => {
+    const updated =
+      await handymanParameterizedCatalogRepository.updateVariantAttribute(
+        tx as never,
+        {
+          id: existing.id,
+          clientId: existing.clientId,
+          valueText: value.valueText,
+          valueNumber: value.valueNumber,
+          status,
+          deactivatedByUserId:
+            status === 'INACTIVE' ? actorUserId : null,
+        },
+      );
+    if (!updated) throw handymanServiceVariantAttributeNotFoundError();
+    await recordOperationalEvent(
+      {
+        clientId: updated.clientId,
+        eventType:
+          status === 'INACTIVE'
+            ? 'HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_DEACTIVATED'
+            : 'HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_UPDATED',
+        entityType: 'HANDYMAN_SERVICE_VARIANT_ATTRIBUTE',
+        entityId: updated.id,
+        actorUserId,
+        summary: `Variant ${variant.code} choice for attribute ${attribute.code} ${status === 'INACTIVE' ? 'retired' : 'updated'}.`,
+        metadata: {
+          serviceCatalogId: variant.serviceCatalogId,
+          serviceVariantId: variant.id,
+          attributeId: attribute.id,
+          attributeCode: attribute.code,
+          status,
+        },
+      },
+      tx,
+    );
+    return toPublicVariantAttribute(updated);
+  });
 }

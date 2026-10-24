@@ -12240,6 +12240,156 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /service-catalog/parameterized/entries/{serviceCatalogId}/variants:
+    parameters:
+      - $ref: '#/components/parameters/ServiceCatalogId'
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanCatalogServiceVariants
+      x-required-permission: service_catalog.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND]
+      summary: Service variants of one catalogue service with their configured choices
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 02. The variant master is the EXISTING
+        `handyman_service_variants` table; the configured choices are the
+        `handyman_service_variant_attributes` rows. The Client is derived
+        from the addressed service entry - never from the caller.
+      responses:
+        '200':
+          description: Service variants
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanCatalogServiceVariant' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+  /service-catalog/parameterized/entries/{serviceCatalogId}/variants/{serviceVariantId}/attributes:
+    parameters:
+      - $ref: '#/components/parameters/ServiceCatalogId'
+      - $ref: '#/components/parameters/ServiceVariantId'
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanServiceVariantAttributes
+      x-required-permission: service_catalog.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND, HANDYMAN_SERVICE_VARIANT_NOT_FOUND]
+      summary: Configured attribute choices of one service variant
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 02. A retired choice stays visible with
+        its deactivation stamp; it is never deleted, so the history of a
+        quotation can always be explained.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Variant attribute choices
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanServiceVariantAttribute' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+    post:
+      tags: [Catalogue Administration]
+      operationId: addHandymanServiceVariantAttribute
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND, HANDYMAN_SERVICE_VARIANT_NOT_FOUND, HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_INVALID, HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_ALREADY_EXISTS]
+      summary: Configure one attribute choice on a service variant
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 02. The attribute must belong to the
+        SAME service as the variant, and the value must be admissible for
+        the attribute data type (an ENUM attribute accepts only one of its
+        allowed values unless it allows a free value). A (variant, attribute)
+        pair carries exactly ONE choice: a second write is refused with 409
+        instead of overwriting the first one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [attributeId]
+              properties:
+                attributeId: { type: string, format: uuid }
+                valueText: { type: string, maxLength: 200 }
+                valueNumber: { type: number }
+      responses:
+        '201':
+          description: The configured choice
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceVariantAttribute' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+  /service-catalog/parameterized/variant-attributes/{variantAttributeId}:
+    parameters:
+      - $ref: '#/components/parameters/VariantAttributeId'
+    patch:
+      tags: [Catalogue Administration]
+      operationId: updateHandymanServiceVariantAttribute
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_NOT_FOUND, HANDYMAN_SERVICE_VARIANT_ATTRIBUTE_INVALID]
+      summary: Edit or retire one configured attribute choice of a service variant
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 02. Retiring keeps the row and stamps
+        WHO retired it and WHEN; re-activating is the same command with
+        status ACTIVE. A change never rewrites an existing quotation: the
+        quotation keeps the price snapshot it was issued with.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                valueText: { type: string, maxLength: 200 }
+                valueNumber: { type: number }
+                status: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: The updated choice
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceVariantAttribute' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
   /handyman/requests/{id}/status-visibility:
     get:
       tags: [Handyman SLA & Status Visibility]
@@ -86432,6 +86582,16 @@ components:
       required: true
       description: The Unit identity — the existing `spaces.id`.
       schema: { type: string, format: uuid }
+    ServiceVariantId:
+      name: serviceVariantId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VariantAttributeId:
+      name: variantAttributeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     ServiceCatalogId:
       name: serviceCatalogId
       in: path
@@ -132106,6 +132266,32 @@ components:
               label: { type: string }
         sortOrder: { type: integer }
         status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanCatalogServiceVariant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        attributes:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanServiceVariantAttribute' }
+    HandymanServiceVariantAttribute:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        serviceVariantId: { type: string, format: uuid }
+        attributeId: { type: string, format: uuid }
+        valueText: { type: [string, 'null'] }
+        valueNumber: { type: [number, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        deactivatedAt: { type: [string, 'null'], format: date-time }
+        deactivatedByUserId: { type: [string, 'null'], format: uuid }
+        createdByUserId: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     HandymanServiceCommercialProfile:
