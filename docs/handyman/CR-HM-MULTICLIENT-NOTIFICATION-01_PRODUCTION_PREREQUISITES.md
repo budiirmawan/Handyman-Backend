@@ -160,6 +160,9 @@ physical phone with a real browser).
 | **G-5** | The template rows (`HANDYMAN_<EVENT>`) | Operations | every delivery |
 | **G-6** | The CI gate B-03 + the real-device E2E | CI owner + QA | the release sign-off |
 | **G-7** | The 18 release debts triaged to their owners | §the debt register | release hygiene |
-| **G-8** | The CR-owner ratification of `HANDYMAN_INSPECTION_RECORDED` | CR owner | the PR (gate P-7 of the governance record) |
+| **G-8** | The CR-owner ratification of `HANDYMAN_INSPECTION_RECORDED` | CR owner | ✅ **RECORDED 2026-10-24** (OPTION A) — see the FINAL REVIEW governance record §2.5 |
 
-**All eight gates are open.** None of them is a code change in this repository.
+**Seven gates remain open** (G-8 — the CR-owner ratification of
+`HANDYMAN_INSPECTION_RECORDED` — was **recorded on 2026-10-24**, OPTION A).
+None of the remaining gates is a code change in this repository: each is
+configuration, an operation, or a client integration.

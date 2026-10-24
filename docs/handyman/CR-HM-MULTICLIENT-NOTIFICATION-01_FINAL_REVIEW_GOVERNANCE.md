@@ -58,12 +58,18 @@
 
 ## 2. The ratification record — `HANDYMAN_INSPECTION_RECORDED` (FINAL REVIEW, item 3)
 
-> ## ⚠️ **STATUS: PROPOSED — NOT APPROVED**
+> ## ✅ **STATUS: APPROVED — the CR owner ratified OPTION A on 2026-10-24**
 >
-> This addendum is prepared in the shape of the **recommended OPTION A** and is
-> **subject to explicit CR-owner approval**. **No approval is recorded.** The
-> approval block in §2.5 is **unsigned**. Nothing in this CR claims, implies or
-> depends on an approval that has not been given.
+> The CR owner of CR-HM-MULTICLIENT-NOTIFICATION-01 granted the **OPTION A**
+> approval at this FINAL REVIEW. The approval is **recorded** in §2.5 (approver,
+> role, date, record location) and is **not** inferred from anything else. The
+> addendum is therefore in force: the certified vocabulary is **13 frozen
+> entries + 12 assignment (PART 01) + 1 ratified (PART 03) = 26 event types**,
+> and the **frozen thirteen-entry CR-HM-16 contract is byte-for-byte unchanged**.
+>
+> **No runtime code was changed to give effect to the ratification** — the
+> shipped additive contract file *was* the ratification's governed
+> implementation (§2.4).
 
 ### 2.1 The question
 
@@ -130,7 +136,7 @@ assignment / PART 03 domain). **The frozen file is read, never written.**
 implementation already *is* the amendment; approving it changes documentation
 and governance state only.
 
-### 2.5 The approval block — **NOT RECORDED**
+### 2.5 The approval block — **RECORDED**
 
 ```text
 CR-HM-MULTICLIENT-NOTIFICATION-01 — PART 03 vocabulary ratification
@@ -138,28 +144,55 @@ Decision:   OPTION A — additive certified-vocabulary addendum (14th entry)
 Scope:      HANDYMAN_INSPECTION_RECORDED only. No other entry, no other
             vocabulary, no change to the frozen thirteen.
 
-Approved by (CR owner):   ______________________  (NOT RECORDED)
-Role:                      ______________________
-Date:                      ______________________
-Recorded in:               ______________________
+Approved by (CR owner):   budiirmawan
+Role:                      CR Owner — CR-HM-MULTICLIENT-NOTIFICATION-01
+                           (the notification-contract authority of CR-HM-16)
+Date:                      2026-10-24 (UTC)
+Approval given:           at the FINAL REVIEW of PART 01-04, in the CR owner's
+                           own instruction, in these terms:
+                           "Saya sebagai CR Owner menyetujui OPTION A —
+                            Ratify HANDYMAN_INSPECTION_RECORDED sebagai tambahan
+                            certified notification vocabulary melalui governance
+                            addendum. Pertahankan frozen 13-entry CR-HM-16
+                            contract tanpa perubahan. Jangan mengubah runtime
+                            code yang sudah lulus sertifikasi. … Jangan merge
+                            otomatis dan jangan deploy ke Biznet."
+                           (the approval was granted by the CR owner in the
+                           FINAL REVIEW session; it is reproduced here verbatim
+                           and is not inferred from any other artifact)
+Recorded in:              this document — §2 (the addendum) and §2.5 (this
+                           block), in the FINAL REVIEW commit on
+                           arena/6b721660-handyman-backend
+Conditions attached:      (1) the frozen 13-entry CR-HM-16 contract is NOT
+                           modified — byte-for-byte, sha256
+                           c6dfa2386d7a17f90b9352e4f9d614b535e0c27822f6dd08fa533388f30dcd99;
+                           (2) NO runtime code is changed by the ratification —
+                           the certified runtime is unchanged;
+                           (3) NO automatic merge; (4) NO deployment to Biznet.
 ```
 
-> **Recorded state: no approval exists.** The certification report (§6, GD-1)
-> and the PART 03 governance record (§3.2) both carry this as **OPEN**. The
-> FINAL REVIEW has **prepared** the record; it has **not** granted it.
+> **Recorded state: the approval EXISTS.** The certification report (§6, GD-1)
+> and the PART 03 governance record (§3.2) carried this item as **OPEN**; the
+> FINAL REVIEW closes it. The approved decision is **OPTION A** — the additive
+> certified-vocabulary addendum of §2.2, governed by the implementation of
+> §2.4, with the frozen contract preserved byte-for-byte (§2.3).
 
-### 2.6 The effect while the ratification is pending
+### 2.6 The effect of the ratified addendum
 
-The inspection notification is **inert for release purposes**:
+The inspection notification is now a **certified vocabulary entry**. Its
+behaviour is unchanged and remains governed by the release gates:
 
 - its audience is the declarative `SUBSCRIPTION_RULE`, so **no recipient is
   notified until an operator creates a matching subscription rule** (release
   gate G-4) **and** the template row exists (G-5);
 - no recipient override exists anywhere in the call path, so the domain can
   never force an audience;
-- therefore the pending ratification is **not an exposure**, and the code may be
-  merged and deployed in either state — the *decision* is a governance debt, not
-  a technical risk.
+- the ratification changes **documentation and governance state only** — the
+  runtime is byte-for-byte the certified runtime.
+
+**The ratification is therefore neither an exposure nor a release blocker.**
+It closes the CR's governance obligation (GD-1 / G-8) and unblocks the PR
+(gate P-7).
 
 ### 2.7 The alternative (recorded for completeness, not recommended)
 
@@ -268,40 +301,37 @@ touch it.
 | **P-4** | The focused tests and the typecheck pass | §5 — 94/94, typecheck PASS | ✅ |
 | **P-5** | The 18 non-PASS tests are reconciled in a release debt register (not concealed) | `..._RELEASE_DEBT_REGISTER.md` | ✅ |
 | **P-6** | The production prerequisites are documented with owners | `..._PRODUCTION_PREREQUISITES.md` | ✅ |
-| **P-7** | **The CR-owner ratification of `HANDYMAN_INSPECTION_RECORDED` is recorded** | the approval block in §2.5 is **unsigned**; no approval exists in the repository | ❌ **NOT MET** |
+| **P-7** | **The CR-owner ratification of `HANDYMAN_INSPECTION_RECORDED` is recorded** | the approval block in §2.5 — **RECORDED 2026-10-24** (CR owner, OPTION A) | ✅ **MET** |
 | **P-8** | No production deployment; no production push activation | none performed | ✅ |
 
 ### 6.3 The decision
 
-> ## ⛔ **NO PR IS CREATED AT THIS TIME — ONE GATE IS OPEN (P-7).**
+> ## ✅ **ALL PR GATES ARE MET — THE PR IS CREATED (one PR, to `main`).**
 >
-> **The exact outstanding approval:**
+> Gate **P-7** was the last open gate: the CR owner ratified **OPTION A** at
+> this FINAL REVIEW, and the approval is recorded in §2.5 with the approver,
+> the role, the date and the record location. The ratification is
+> documentation-only — the frozen thirteen-entry CR-HM-16 contract is
+> byte-for-byte unchanged and **no runtime code was touched**.
 >
-> | | |
-> | --- | --- |
-> | **What is needed** | The **CR owner's** explicit approval of the **OPTION A** additive certified-vocabulary addendum for `HANDYMAN_INSPECTION_RECORDED` (§2), recorded in the approval block of §2.5 — with approver, role, date and record location. |
-> | **Who owns it** | The CR-HM-MULTICLIENT-NOTIFICATION-01 owner (the CR-HM-16 notification-contract authority). |
-> | **Why it is required** | The eleven other domain events are named by the **frozen** CR-HM-16 PART 02 contract. The inspection is not. PART 03 produced it under a **proposed** additive vocabulary. Until the owner ratifies it, the certified vocabulary has **13 entries** and the runtime carries **one event the authority has not yet named**. The certification report records this as **GD-1 / G-8, OPEN**. |
-> | **What is NOT needed** | No code change (Option A costs zero code), no re-implementation, no change to the frozen file, no re-run of the suites. |
-> | **What it blocks** | The PR (gate P-7). It does **not** block the release in any technical sense — the event is inert until a subscription rule and a template exist (G-4, G-5), and those are operations gates, not code gates. |
+> Everything else was already in place: the branch is 8 clean commits ahead of
+> `main`, the certification is complete, **94/94** focused tests and the
+> typecheck pass, the working tree is clean, the 18 baseline-identical
+> non-PASS tests are registered as release debt, the production prerequisites
+> are documented with owners, and **no duplicate PR exists**.
 >
-> **Everything else is ready**: the branch is 8 clean commits ahead of `main`,
-> the certification is complete, 94/94 focused tests and the typecheck pass,
-> the tree is clean, and there is no duplicate PR.
->
-> **When the approval is recorded, the PR is a single command** (the exact
-> title is §6.4) and it will open against `main` with a mergeable, linear diff.
+> The PR is opened with the exact title of §6.4. It is **not merged
+> automatically**, and **nothing is deployed**.
 
 > **Note on the certification report's earlier wording.** The PART 04 report
-> stated that the ratification does **not** block the PR (it listed it as
-> release-only). **This FINAL REVIEW tightens that reading**: a PR is the
-> artifact by which the CR's governance is published, and publishing a
-> certification that carries an unratified event type as a *certified* one
-> would overstate the record. The ratification is therefore treated here as a
-> **PR gate**, and the report's §1.1 is superseded by this §6.3. The *release*
-> consequence is unchanged.
+> listed the ratification as a release-only item (§1.1) and the FINAL REVIEW
+> briefly tightened it into a PR gate. **Both readings now agree**: the
+> ratification is recorded (§2.5), so the gate is met and the PR is opened.
+> The certification report's §1.1 is therefore **restored to force** by the
+> banner on that report. The *release* consequence is unchanged — the release
+> stays NO-GO until the gates G-1 … G-7 are closed.
 
-### 6.4 The prepared PR (to be opened once P-7 is met)
+### 6.4 The PR (opened at this FINAL REVIEW)
 
 ```text
 Title:  CR-HM-MULTICLIENT-NOTIFICATION-01 — Backend Multi-Client Notification Engine
@@ -309,7 +339,14 @@ Base:   main
 Head:   arena/6b721660-handyman-backend
 Body:   the certification report, the debt register, the production prerequisites,
         the ratification addendum, and the verification evidence.
+Merge:  NOT auto-merged — the merge is a separate, explicit human action.
+Deploy: none. Nothing is deployed to Biznet.
 ```
+
+The PR carries **one** consolidated, non-duplicative change set: the four
+PARTs of CR-HM-MULTICLIENT-NOTIFICATION-01 (the assignment producer, the
+multi-client push transport, the domain producers and the certification),
+with **no** unrelated change and **no** second PR.
 
 ---
 
@@ -368,8 +405,10 @@ closed from this repository.
   are untouched; PR #47 (Finance) is untouched.
 - **No failure relabelled as a pass** — the 18 baseline-identical non-PASS
   tests are registered as release debt with owners, severity and gates.
-- **No approval claimed** — the CR-owner ratification is prepared, **pending,
-  and explicitly unsigned**.
+- **No approval claimed beyond the one recorded** — the CR-owner ratification
+  of `HANDYMAN_INSPECTION_RECORDED` is **recorded** in §2.5 (approver, role,
+  date, conditions). No other approval is claimed or implied.
+- **No automatic merge, no deployment to Biznet** — as the CR owner required.
 
 ---
 

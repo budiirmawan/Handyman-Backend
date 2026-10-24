@@ -3,17 +3,23 @@
 > ### ⚠️ STATUS BANNER — added at the FINAL REVIEW (after this report was certified)
 >
 > This report was **certified at `404b7c8`** and every finding below stands —
-> **nothing in it was changed**. The FINAL REVIEW has since applied a
-> **stricter PR gate**, recorded in
+> **nothing in the report body was changed**. The FINAL REVIEW has since closed
+> the one open governance item, recorded in
 > `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FINAL_REVIEW_GOVERNANCE.md`:
 >
-> - **§1.1 (GO — PR readiness) is SUPERSEDED.** The FINAL REVIEW treats the
->   CR-owner ratification of `HANDYMAN_INSPECTION_RECORDED` (**GD-1 / G-8**) as
->   a **PR gate** (gate **P-7**), because a PR is the artifact by which this
->   CR's governance is published: publishing a certification that carries an
->   unratified event type as *certified* would overstate the record.
->   **The PR is therefore NOT created until that approval is recorded.**
-> - **§1.2 (NO-GO for production release) is UNCHANGED and remains in force.**
+> - **GD-1 / G-8 is now CLOSED.** The CR owner **ratified OPTION A** on
+>   **2026-10-24** — `HANDYMAN_INSPECTION_RECORDED` is an **additive
+>   certified-vocabulary entry** (the 14th), the **frozen thirteen-entry
+>   CR-HM-16 contract is byte-for-byte unchanged**, and **no runtime code was
+>   changed** by the ratification. The approval block (approver, role, date,
+>   conditions) is in §2.5 of the FINAL REVIEW record.
+> - **§1.1 (GO — PR readiness) therefore STANDS as written.** The single PR
+>   was opened at the FINAL REVIEW — **one** PR, to `main`, **not auto-merged**,
+>   **nothing deployed**.
+> - **§1.2 (NO-GO for production release) is UNCHANGED and remains in force** —
+>   the release still waits on the gates G-1 … G-7 (credentials, rules,
+>   templates, the CI gate, the real-device E2E, the migration evidence and
+>   the release-debt triage).
 > - The certification findings (C-1 … C-16), the non-PASS reconciliation and
 >   the governance decisions (GD-1 … GD-7) below are **unchanged**.
 >
