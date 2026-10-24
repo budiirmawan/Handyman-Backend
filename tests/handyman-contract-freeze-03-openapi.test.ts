@@ -65,10 +65,17 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   //                                            field expense/reimbursement and
   //                                            helper attendance surfaces)
   //   269 + 3 + 15 = 287.
+  //   CR-HM-SERVICE-CATALOG-01 PART 01              +7  (mixed catalogue
+  //                                                  items + initial quotation
+  //                                                  preparation + the
+  //                                                  post-inspection revision
+  //                                                  lane + the price
+  //                                                  resolution history)
+  //   287 + 7 = 294.
   // The runtime-parity assertion below is what actually guards the contract;
   // the constant only pins the size of the surface a reviewer should expect.
-  it('keeps the 287-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 287);
+  it('keeps the 294-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 294);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -176,7 +183,10 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
     //   PART 03B1 +1 (`tenant_company.read` on `.../competency/history`)
     //   assignment-response / field-expense / helper-attendance +8
     //   179 + 3 + 8 = 190.
-    assert.equal(annotated, 190);
+    //   CR-HM-SERVICE-CATALOG-01 PART 01 +7 route-guarded operations
+    //   (`tenant_company.read` / `tenant_company.manage`).
+    //   190 + 7 = 197.
+    assert.equal(annotated, 197);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

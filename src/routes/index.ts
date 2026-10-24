@@ -118,6 +118,14 @@ import { createWorkOrderTradeCategoryRouter } from '../modules/work-order-trade-
 import { createApartmentMasterRouter } from '../modules/apartment-master/apartment-master.routes';
 import { createTenantImportRouter } from '../modules/tenant-import';
 import { createHandymanCatalogueAdminRouter } from '../modules/handyman-catalog';
+// CR-HM-SERVICE-CATALOG-01 PART 01 — parameterized Handyman service
+// catalogue: admin CRUD (attributes, commercial posture, price rules,
+// starter import) and the mixed request-item / quotation preparation
+// surface.
+import {
+  createHandymanParameterizedCatalogRouter,
+  createHandymanParameterizedQuotationRouter,
+} from '../modules/handyman-parameterized-catalog';
 import { createEsgMetricDefinitionRouter } from '../modules/esg-metric-definitions/esg-metric-definition.routes';
 import { createEsgWasteRecordRouter } from '../modules/esg-waste-records/esg-waste-record.routes';
 import { createEsgMetricValueRouter } from '../modules/esg-metric-values/esg-metric-value.routes';
@@ -764,6 +772,11 @@ export function createApiRouter(): Router {
   // CR-HM-MASTER-IND-01 — catalogue administration transport for the
   // existing Service Variant / Common Material Profile services.
   router.use(createHandymanCatalogueAdminRouter());
+  // CR-HM-SERVICE-CATALOG-01 PART 01 — parameterized catalogue admin CRUD.
+  router.use(createHandymanParameterizedCatalogRouter());
+  // CR-HM-SERVICE-CATALOG-01 PART 01 — mixed request items + initial
+  // quotation preparation and the post-inspection revision lane.
+  router.use(createHandymanParameterizedQuotationRouter());
   // CR-BE-ESG-01 PART 01 — ESG Metric Definition Foundation (governed ESG
   // metric vocabulary; Client-scoped, identity only — no values/waste/baseline).
   router.use(createEsgMetricDefinitionRouter());

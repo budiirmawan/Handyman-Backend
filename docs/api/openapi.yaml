@@ -11927,6 +11927,319 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /handyman/requests/{handymanRequestId}/items:
+    parameters:
+      - $ref: '#/components/parameters/HandymanRequestIdPath'
+    get:
+      tags: [Handyman Quotations]
+      operationId: listHandymanServiceRequestItems
+      x-required-permission: tenant_company.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_REQUEST_ITEM_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_ITEM_INVALID]
+      summary: Mixed catalogue items of one Handyman Service Request
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. ONE request may carry several
+        services, several AC types and several AC capacities at the same
+        time - one item per service / variant / attribute combination, each
+        with its own quantity and access condition. The item is a
+        Building-scoped resource: the Client, Building and tenant lineage are
+        derived from the parent request, never from the caller.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, REMOVED] }
+      responses:
+        '200':
+          description: Request items
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanServiceRequestItem' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: The request or the item does not exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    post:
+      tags: [Handyman Quotations]
+      operationId: addHandymanServiceRequestItem
+      x-required-permission: tenant_company.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_REQUEST_ITEM_INVALID, HANDYMAN_SERVICE_REQUEST_ITEM_NOT_FOUND]
+      summary: Add one catalogue item to a Handyman Service Request
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. Intake records WHAT WAS REPORTED:
+        the attribute values are structurally bounded but semantically
+        unchecked, so an unknown attribute or an unconfigured size reaches
+        the price engine, which then refuses to price it and demands an
+        inspection instead of inventing an amount.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [serviceCatalogId, quantity]
+              properties:
+                serviceCatalogId: { type: string, format: uuid }
+                serviceVariantId: { type: string, format: uuid }
+                quantity: { type: number, exclusiveMinimum: 0 }
+                attributeValues:
+                  type: object
+                  additionalProperties: { type: string }
+                accessCondition:
+                  type: string
+                  enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED]
+      responses:
+        '201':
+          description: Item created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceRequestItem' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: The request does not exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/requests/{handymanRequestId}/items/{itemId}:
+    parameters:
+      - $ref: '#/components/parameters/HandymanRequestIdPath'
+      - $ref: '#/components/parameters/HandymanServiceRequestItemIdPath'
+    patch:
+      tags: [Handyman Quotations]
+      operationId: updateHandymanServiceRequestItem
+      x-required-permission: tenant_company.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_REQUEST_ITEM_INVALID, HANDYMAN_SERVICE_REQUEST_ITEM_NOT_FOUND]
+      summary: Update one catalogue item of a Handyman Service Request
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. A correction before the quotation
+        is issued. After an inspection changed the scope, the correction is
+        a quotation REVISION, never an edit of an issued version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                serviceVariantId: { type: string, format: uuid }
+                quantity: { type: number, exclusiveMinimum: 0 }
+                attributeValues:
+                  type: object
+                  additionalProperties: { type: string }
+                accessCondition:
+                  type: string
+                  enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED]
+      responses:
+        '200':
+          description: Item updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceRequestItem' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: The request or the item does not exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    delete:
+      tags: [Handyman Quotations]
+      operationId: removeHandymanServiceRequestItem
+      x-required-permission: tenant_company.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_REQUEST_ITEM_INVALID, HANDYMAN_SERVICE_REQUEST_ITEM_NOT_FOUND]
+      summary: Remove one catalogue item of a Handyman Service Request
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. Removal is SOFT: the row becomes
+        REMOVED and is never deleted, so an issued quotation keeps its
+        provenance.
+      responses:
+        '200':
+          description: Item removed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceRequestItem' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: The request or the item does not exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/requests/{handymanRequestId}/quotation/prepare:
+    parameters:
+      - $ref: '#/components/parameters/HandymanRequestIdPath'
+    post:
+      tags: [Handyman Quotations]
+      operationId: prepareHandymanCatalogQuotation
+      x-required-permission: tenant_company.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_QUOTE_RESOLUTION_INVALID, HANDYMAN_QUOTATION_DIAGNOSIS_REQUIRED, HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT, HANDYMAN_QUOTATION_ALREADY_EXISTS]
+      summary: Prepare the initial quotation of a request from its mixed catalogue items
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. COMPOSES the existing quotation
+        lifecycle - the quotation root and version 1 come from the existing
+        quotation engine, every line from the existing quotation line
+        authority. It adds only the governed SELECTION of what goes into a
+        line: the price rule, the price fact, the quantity, the effective
+        date and the resulting immutable snapshot.
+
+        NO FICTIONAL PRICE: when any item cannot be priced from the governed
+        facts, NO quotation and NO line is created - the outcome is
+        INSPECTION_REQUIRED or MANUAL_REVIEW with the reason recorded. The
+        caller may pass an explicit effectiveDate so the price facts are
+        resolved as of that instant.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                effectiveDate: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Preparation outcome with the recorded resolutions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCatalogQuotationPrepareResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: The request does not exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: The request already has a quotation thread, or the diagnosis is not quotable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/requests/{handymanRequestId}/quotation/revision:
+    parameters:
+      - $ref: '#/components/parameters/HandymanRequestIdPath'
+    post:
+      tags: [Handyman Quotations]
+      operationId: reviseHandymanCatalogQuotation
+      x-required-permission: tenant_company.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_QUOTE_RESOLUTION_INVALID, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_VERSION_NOT_FOUND]
+      summary: Revise the quotation of an inspected request from its current catalogue items
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The POST-INSPECTION correction
+        lane. A revision requires a recorded inspection and produces a NEW
+        immutable version through the existing revision authority - the
+        issued version is never rewritten, and the customer approval stays
+        the existing decision surface. Issuing stays with the existing
+        lifecycle operation; pass issue=true and validUntil to have the
+        SAME existing authority issue the revision.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                effectiveDate: { type: string, format: date-time }
+                validUntil: { type: string, format: date-time }
+                issue: { type: boolean }
+      responses:
+        '200':
+          description: Revision outcome with the recorded resolutions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCatalogQuotationPrepareResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: The request or the quotation thread does not exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /handyman/requests/{handymanRequestId}/price-resolution:
+    parameters:
+      - $ref: '#/components/parameters/HandymanRequestIdPath'
+    get:
+      tags: [Handyman Quotations]
+      operationId: listHandymanServiceQuoteResolutions
+      x-required-permission: tenant_company.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_QUOTE_RESOLUTION_INVALID]
+      summary: Recorded price resolutions (the price snapshot history) of a request
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. Every price resolution is written
+        as an APPEND-ONLY snapshot: the price rule, the price fact, the
+        currency, the unit amount, the quantity, the basis, the effective
+        window and the computed total. A later change to the catalogue can
+        never move a recorded snapshot.
+      responses:
+        '200':
+          description: Recorded resolutions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanServiceQuoteResolution' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: The request does not exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   /handyman/requests/{id}/status-visibility:
     get:
       tags: [Handyman SLA & Status Visibility]
@@ -79970,6 +80283,471 @@ paths:
                         items: { type: string }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /service-catalog/parameterized/categories:
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanServiceCategories
+      x-required-permission: service_catalog.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_SERVICE_CATEGORY_NOT_FOUND]
+      summary: Governed Handyman service categories of one Client
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The Client is addressed explicitly
+        and the caller's Client reach is proven; another Client's vocabulary
+        never leaks. The vocabulary is written by the starter import and is
+        never derived from a free-text category label.
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Governed categories
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanServiceCategory' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+  /service-catalog/parameterized/services:
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanServiceCatalogProjection
+      x-required-permission: service_catalog.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED]
+      summary: Parameterized catalogue projection of one Client
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. Each entry carries its technical
+        attribute definitions, its commercial posture (FIXED / ESTIMATED /
+        INSPECTION_FIRST) and its price rules. The projection exposes NO
+        amount: a price rule only SELECTS a governed price fact from the
+        existing price authority.
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: category
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Catalogue projection
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanServiceCatalogProjection' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+  /service-catalog/parameterized/starter-import:
+    post:
+      tags: [Catalogue Administration]
+      operationId: importHandymanServiceCatalogStarter
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_SERVICE_CATALOG_IMPORT_INVALID]
+      summary: Import the governed starter catalogue (24 services / 8 categories) for one Client
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. IDEMPOTENT, CONCURRENCY-SAFE and
+        NON-DESTRUCTIVE: a second import creates nothing and overwrites
+        nothing. The starter carries NO price rule and NO amount - a Client
+        prices its catalogue explicitly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [clientId]
+              properties:
+                clientId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Per-entity created/skipped counts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceStarterImportResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+  /service-catalog/parameterized/entries/{serviceCatalogId}/attributes:
+    parameters:
+      - $ref: '#/components/parameters/ServiceCatalogId'
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanServiceAttributes
+      x-required-permission: service_catalog.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND, HANDYMAN_SERVICE_ATTRIBUTE_NOT_FOUND]
+      summary: Technical attribute definitions of one catalogue service
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The Client is derived from the
+        addressed service entry - never from the caller.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Attribute definitions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanServiceAttribute' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+    post:
+      tags: [Catalogue Administration]
+      operationId: createHandymanServiceAttribute
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND, HANDYMAN_SERVICE_ATTRIBUTE_INVALID, HANDYMAN_SERVICE_ATTRIBUTE_ALREADY_EXISTS]
+      summary: Define a configurable technical attribute of one catalogue service
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The attribute vocabulary is
+        data-driven: an ENUM attribute requires at least one allowed value
+        and may forbid free values; a NUMBER/TEXT/BOOLEAN attribute carries
+        its own validation. The attribute code is unique per service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, name, dataType]
+              properties:
+                code: { type: string, maxLength: 64, pattern: '^[A-Z][A-Z0-9_-]*$' }
+                name: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 1000 }
+                dataType: { type: string, enum: [NUMBER, TEXT, ENUM, BOOLEAN] }
+                unit: { type: string, maxLength: 32 }
+                required: { type: boolean }
+                allowFreeValue: { type: boolean }
+                allowedValues:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [code, label]
+                    properties:
+                      code: { type: string, maxLength: 64 }
+                      label: { type: string, maxLength: 200 }
+                sortOrder: { type: integer }
+      responses:
+        '201':
+          description: Attribute created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceAttribute' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+        '409':
+          description: The attribute code already exists for this service.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /service-catalog/parameterized/attributes/{attributeId}:
+    parameters:
+      - $ref: '#/components/parameters/HandymanServiceAttributeIdPath'
+    patch:
+      tags: [Catalogue Administration]
+      operationId: updateHandymanServiceAttribute
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_SERVICE_ATTRIBUTE_NOT_FOUND, HANDYMAN_SERVICE_ATTRIBUTE_INVALID]
+      summary: Update one technical attribute definition
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The attribute CODE is immutable -
+        it is the identity every request item and price rule refers to.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 1000 }
+                unit: { type: string, maxLength: 32 }
+                required: { type: boolean }
+                allowFreeValue: { type: boolean }
+                allowedValues:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [code, label]
+                    properties:
+                      code: { type: string, maxLength: 64 }
+                      label: { type: string, maxLength: 200 }
+                sortOrder: { type: integer }
+                status: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Attribute updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceAttribute' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: Attribute not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /service-catalog/parameterized/entries/{serviceCatalogId}/commercial-profile:
+    parameters:
+      - $ref: '#/components/parameters/ServiceCatalogId'
+    get:
+      tags: [Catalogue Administration]
+      operationId: getHandymanServiceCommercialProfile
+      x-required-permission: service_catalog.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND, HANDYMAN_SERVICE_COMMERCIAL_PROFILE_NOT_FOUND]
+      summary: Commercial posture of one catalogue service
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. FIXED, ESTIMATED or
+        INSPECTION_FIRST. An INSPECTION_FIRST service is never priced from
+        the catalogue: it always produces an inspection need.
+      responses:
+        '200':
+          description: Commercial profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceCommercialProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+    put:
+      tags: [Catalogue Administration]
+      operationId: upsertHandymanServiceCommercialProfile
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND, HANDYMAN_SERVICE_COMMERCIAL_PROFILE_NOT_FOUND]
+      summary: Set the commercial posture of one catalogue service
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The posture is the administrator's
+        commercial decision; the price engine obeys it and never overrides
+        it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [pricingMode]
+              properties:
+                pricingMode: { type: string, enum: [FIXED, ESTIMATED, INSPECTION_FIRST] }
+                notes: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: Commercial profile stored
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServiceCommercialProfile' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+  /service-catalog/parameterized/price-rules:
+    get:
+      tags: [Catalogue Administration]
+      operationId: listHandymanServicePriceRules
+      x-required-permission: service_catalog.read
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_SERVICE_PRICE_RULE_NOT_FOUND]
+      summary: Price rules of one Client
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. A price rule binds a variant, an
+        attribute selector, a quantity band and a price basis to a governed
+        price fact. It stores NO amount of its own.
+      parameters:
+        - name: clientId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: serviceCatalogId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Price rules
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/HandymanServicePriceRule' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+  /service-catalog/parameterized/entries/{serviceCatalogId}/price-rules:
+    parameters:
+      - $ref: '#/components/parameters/ServiceCatalogId'
+    post:
+      tags: [Catalogue Administration]
+      operationId: createHandymanServicePriceRule
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, SERVICE_CATALOG_NOT_FOUND, HANDYMAN_SERVICE_PRICE_RULE_INVALID, HANDYMAN_SERVICE_PRICE_RULE_ALREADY_EXISTS]
+      summary: Create a price rule of one catalogue service
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The referenced price fact must be
+        a SERVICE price of THIS service and THIS Client; the attribute
+        selector may only reference attribute codes the service actually
+        defines. A price fact that fills a catalogue price tier may only be
+        consumed by the rule whose code is that tier.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ruleCode, priceCatalogEntryId, priceBasis]
+              properties:
+                ruleCode: { type: string, maxLength: 64, pattern: '^[A-Z][A-Z0-9_-]*$' }
+                priceCatalogEntryId: { type: string, format: uuid }
+                priceBasis: { type: string, enum: [UNIT, POINT, METER, SQM, VISIT] }
+                serviceVariantId: { type: string, format: uuid }
+                attributeSelector:
+                  type: object
+                  additionalProperties: { type: string }
+                minQuantity: { type: number, exclusiveMinimum: 0 }
+                maxQuantity: { type: number, exclusiveMinimum: 0 }
+      responses:
+        '201':
+          description: Price rule created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServicePriceRule' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404': { $ref: '#/components/responses/CatalogueNotFound' }
+        '409':
+          description: The rule code already exists for this client.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+  /service-catalog/parameterized/price-rules/{priceRuleId}:
+    parameters:
+      - $ref: '#/components/parameters/HandymanServicePriceRuleIdPath'
+    patch:
+      tags: [Catalogue Administration]
+      operationId: updateHandymanServicePriceRule
+      x-required-permission: service_catalog.manage
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_SERVICE_PRICE_RULE_NOT_FOUND, HANDYMAN_SERVICE_PRICE_RULE_INVALID]
+      summary: Update one price rule
+      description: |
+        CR-HM-SERVICE-CATALOG-01 PART 01. The rule CODE is immutable - it is
+        the identity the governed price tier key is shared with.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                priceCatalogEntryId: { type: string, format: uuid }
+                priceBasis: { type: string, enum: [UNIT, POINT, METER, SQM, VISIT] }
+                serviceVariantId: { type: string, format: uuid }
+                attributeSelector:
+                  type: object
+                  additionalProperties: { type: string }
+                minQuantity: { type: number, exclusiveMinimum: 0 }
+                maxQuantity: { type: number, exclusiveMinimum: 0 }
+                status: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Price rule updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanServicePriceRule' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/BuildingAccessDenied' }
+        '404':
+          description: Price rule not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   /service-catalog/entries/{serviceCatalogId}/variants:
     parameters:
       - $ref: '#/components/parameters/ServiceCatalogId'
@@ -83976,6 +84754,24 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/Uuid"
+    HandymanServiceAttributeIdPath:
+      name: attributeId
+      in: path
+      required: true
+      description: Authoritative `handyman_service_attributes.id`.
+      schema: { type: string, format: uuid }
+    HandymanServicePriceRuleIdPath:
+      name: priceRuleId
+      in: path
+      required: true
+      description: Authoritative `handyman_service_price_rules.id`.
+      schema: { type: string, format: uuid }
+    HandymanServiceRequestItemIdPath:
+      name: itemId
+      in: path
+      required: true
+      description: Authoritative `handyman_service_request_items.id`.
+      schema: { type: string, format: uuid }
     HandymanRequestIdPath:
       name: handymanRequestId
       in: path
@@ -115394,7 +116190,7 @@ components:
         in-place mutation; `replacedByEntryId` links the closing lineage.
       required:
         [id, clientId, buildingId, vendorId, sourceMode, entryKind, itemId,
-         uomId, serviceId, currency, unitPrice, effectiveFrom, effectiveTo,
+         uomId, serviceId, servicePriceKey, currency, unitPrice, effectiveFrom, effectiveTo,
          status, activatedAt, activatedByUserId, deactivatedAt,
          deactivatedByUserId, replacedByEntryId, sourceType, sourceReference,
          notes, approvedByUserId, approvedAt, createdByUserId, createdAt,
@@ -115426,6 +116222,15 @@ components:
           description: >
             SERVICE subject — a governed service_catalog entry (NULL for
             MATERIAL).
+        servicePriceKey:
+          type: string
+          nullable: true
+          maxLength: 200
+          description: >
+            CR-HM-SERVICE-CATALOG-01 PART 01 — the CATALOGUE PRICE TIER this
+            SERVICE reference price fills. NULL for MATERIAL; '' is the plain
+            service reference price; a non-empty key names a tier and is
+            shared with the catalogue price rule that consumes the price.
         currency: { $ref: "#/components/schemas/PriceCatalogCurrency" }
         unitPrice:
           type: number
@@ -115463,7 +116268,9 @@ components:
         approved-by attribution is optional human metadata, not an engine.
         `sourceMode` defaults to MATERIAL when omitted. MATERIAL requires
         `itemId` + `uomId`; SERVICE requires `serviceId` (no item/UOM) —
-        CR-BE-SVC-01 PART 05.
+        CR-BE-SVC-01 PART 05. A SERVICE entry may carry `servicePriceKey`,
+        the CATALOGUE PRICE TIER it fills (CR-HM-SERVICE-CATALOG-01 PART 01);
+        the plain service reference price is the empty key.
       required: [clientId, currency, unitPrice, effectiveFrom]
       properties:
         clientId: { $ref: "#/components/schemas/Uuid" }
@@ -115473,6 +116280,15 @@ components:
         itemId: { $ref: "#/components/schemas/Uuid", nullable: true }
         uomId: { $ref: "#/components/schemas/Uuid", nullable: true }
         serviceId: { $ref: "#/components/schemas/Uuid", nullable: true }
+        servicePriceKey:
+          type: string
+          maxLength: 200
+          description: >
+            CR-HM-SERVICE-CATALOG-01 PART 01 — the CATALOGUE PRICE TIER this
+            SERVICE reference price fills. '' (the default) is the plain
+            service reference price; a non-empty key names a tier and must
+            equal the catalogue price rule code that consumes the price.
+            SERVICE only.
         currency: { $ref: "#/components/schemas/PriceCatalogCurrency" }
         unitPrice: { type: number, exclusiveMinimum: 0 }
         effectiveFrom: { type: string, format: date-time }
@@ -131257,6 +132073,168 @@ components:
         status: { type: string, enum: [ACTIVE, INACTIVE] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    HandymanServiceCategory:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanServiceAttribute:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        dataType: { type: string, enum: [NUMBER, TEXT, ENUM, BOOLEAN] }
+        unit: { type: [string, 'null'] }
+        required: { type: boolean }
+        allowFreeValue: { type: boolean }
+        allowedValues:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              label: { type: string }
+        sortOrder: { type: integer }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanServiceCommercialProfile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        pricingMode: { type: string, enum: [FIXED, ESTIMATED, INSPECTION_FIRST] }
+        notes: { type: [string, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanServicePriceRule:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: [string, 'null'], format: uuid }
+        ruleCode: { type: string }
+        priceCatalogEntryId: { type: string, format: uuid }
+        priceBasis: { type: string, enum: [UNIT, POINT, METER, SQM, VISIT] }
+        attributeSelector:
+          type: object
+          additionalProperties: { type: string }
+        minQuantity: { type: [number, 'null'] }
+        maxQuantity: { type: [number, 'null'] }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanServiceRequestItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        serviceCatalogId: { type: string, format: uuid }
+        serviceVariantId: { type: [string, 'null'], format: uuid }
+        quantity: { type: number }
+        attributeValues:
+          type: object
+          additionalProperties: { type: string }
+        accessCondition:
+          type: string
+          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED]
+        status: { type: string, enum: [ACTIVE, REMOVED] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HandymanServiceQuoteResolution:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        requestItemId: { type: [string, 'null'], format: uuid }
+        outcome:
+          type: string
+          enum: [PRICED, INSPECTION_REQUIRED, MANUAL_REVIEW]
+        reasonCode: { type: string }
+        reasonDetail: { type: [string, 'null'] }
+        priceRuleId: { type: [string, 'null'], format: uuid }
+        priceCatalogEntryId: { type: [string, 'null'], format: uuid }
+        currency: { type: [string, 'null'] }
+        unitAmount: { type: [number, 'null'] }
+        quantity: { type: [number, 'null'] }
+        priceBasis:
+          type: [string, 'null']
+          enum: [UNIT, POINT, METER, SQM, VISIT, null]
+        effectiveFrom: { type: [string, 'null'], format: date-time }
+        effectiveTo: { type: [string, 'null'], format: date-time }
+        computedTotal: { type: [number, 'null'] }
+        quotationId: { type: [string, 'null'], format: uuid }
+        quotationVersionId: { type: [string, 'null'], format: uuid }
+        quotationLineId: { type: [string, 'null'], format: uuid }
+        resolvedByUserId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+    HandymanServiceCatalogProjection:
+      type: object
+      properties:
+        serviceCatalogId: { type: string, format: uuid }
+        serviceCode: { type: string }
+        serviceName: { type: string }
+        category: { type: string }
+        status: { type: string }
+        attributes:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanServiceAttribute' }
+        commercialProfile:
+          oneOf:
+            - { $ref: '#/components/schemas/HandymanServiceCommercialProfile' }
+            - { type: 'null' }
+        priceRules:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanServicePriceRule' }
+    HandymanServiceStarterImportCounts:
+      type: object
+      properties:
+        created: { type: integer }
+        skipped: { type: integer }
+    HandymanServiceStarterImportResult:
+      type: object
+      properties:
+        clientId: { type: string, format: uuid }
+        categories: { $ref: '#/components/schemas/HandymanServiceStarterImportCounts' }
+        services: { $ref: '#/components/schemas/HandymanServiceStarterImportCounts' }
+        attributes: { $ref: '#/components/schemas/HandymanServiceStarterImportCounts' }
+        variants: { $ref: '#/components/schemas/HandymanServiceStarterImportCounts' }
+        commercialProfiles: { $ref: '#/components/schemas/HandymanServiceStarterImportCounts' }
+        unitsOfMeasure: { $ref: '#/components/schemas/HandymanServiceStarterImportCounts' }
+        importedAt: { type: string, format: date-time }
+    HandymanCatalogQuotationPrepareResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [READY, INSPECTION_REQUIRED, MANUAL_REVIEW]
+        effectiveDate: { type: string, format: date-time }
+        resolutions:
+          type: array
+          items: { $ref: '#/components/schemas/HandymanServiceQuoteResolution' }
+        quotation:
+          oneOf:
+            - { $ref: '#/components/schemas/HandymanQuotationBundle' }
+            - { type: 'null' }
+        quotationVersion:
+          oneOf:
+            - { $ref: '#/components/schemas/HandymanQuotationVersionRecord' }
+            - { type: 'null' }
     ServiceVariant:
       type: object
       properties:

@@ -22,6 +22,7 @@ import {
   priceCatalogItemNotFoundError,
   priceCatalogNotActiveError,
   priceCatalogNotDraftError,
+  priceCatalogServicePriceKeyInvalidError,
   priceCatalogUomInvalidError,
   priceCatalogUomNotFoundError,
   priceCatalogVendorInvalidError,
@@ -77,6 +78,8 @@ type ReferenceContext = {
   itemId: string | null;
   uomId: string | null;
   serviceId: string | null;
+  /** CR-HM-SERVICE-CATALOG-01 PART 01 — the catalogue price tier key. */
+  servicePriceKey: string | null;
   currency: PriceCatalogEntryRecord['currency'];
   unitPrice: number;
   effectiveFrom: Date;
@@ -97,6 +100,7 @@ export function toPublicPriceCatalogEntry(record: PriceCatalogEntryRecord): Publ
     itemId: record.itemId,
     uomId: record.uomId,
     serviceId: record.serviceId,
+    servicePriceKey: record.servicePriceKey,
     currency: record.currency,
     unitPrice: record.unitPrice,
     effectiveFrom: record.effectiveFrom.toISOString(),
@@ -118,6 +122,28 @@ export function toPublicPriceCatalogEntry(record: PriceCatalogEntryRecord): Publ
   };
 }
 
+/**
+ * CR-HM-SERVICE-CATALOG-01 PART 01 — the CATALOGUE PRICE TIER key of a
+ * SERVICE reference price.
+ *
+ * '' is the plain service reference price (the client's baseline for the
+ * service). A non-empty key names a catalogue price tier and is shared with
+ * the catalogue price rule that consumes the price. The key is IMMUTABLE for
+ * the lifetime of the entry: it is part of the entry's identity, exactly
+ * like the subject it prices.
+ */
+function normalizeServicePriceKey(raw: unknown): string {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') {
+    throw priceCatalogServicePriceKeyInvalidError();
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length > 200) {
+    throw priceCatalogServicePriceKeyInvalidError();
+  }
+  return trimmed;
+}
+
 function createFingerprint(input: CreatePriceCatalogEntryInput): string {
   const canonical = JSON.stringify({
     clientId: input.clientId,
@@ -127,6 +153,10 @@ function createFingerprint(input: CreatePriceCatalogEntryInput): string {
     itemId: input.sourceMode === 'MATERIAL' ? input.itemId ?? null : null,
     uomId: input.sourceMode === 'MATERIAL' ? input.uomId ?? null : null,
     serviceId: input.sourceMode === 'SERVICE' ? input.serviceId ?? null : null,
+    servicePriceKey:
+      input.sourceMode === 'SERVICE'
+        ? normalizeServicePriceKey(input.servicePriceKey)
+        : null,
     currency: input.currency,
     unitPrice: input.unitPrice,
     effectiveFrom: new Date(input.effectiveFrom).toISOString(),
@@ -312,6 +342,7 @@ function entryMetadata(
     itemId: record.itemId,
     uomId: record.uomId,
     serviceId: record.serviceId,
+    servicePriceKey: record.servicePriceKey,
     currency: record.currency,
     unitPrice: record.unitPrice,
     buildingId: record.buildingId,
@@ -346,6 +377,15 @@ export async function createPriceCatalogEntry(
       return toPublicPriceCatalogEntry(existing);
     }
 
+    if (
+      input.sourceMode === 'MATERIAL' &&
+      input.servicePriceKey !== undefined &&
+      input.servicePriceKey !== null &&
+      String(input.servicePriceKey).trim() !== ''
+    ) {
+      throw priceCatalogServicePriceKeyInvalidError();
+    }
+
     const context: ReferenceContext = {
       clientId: input.clientId,
       buildingId: input.buildingId ?? null,
@@ -354,6 +394,10 @@ export async function createPriceCatalogEntry(
       itemId: input.sourceMode === 'MATERIAL' ? input.itemId ?? null : null,
       uomId: input.sourceMode === 'MATERIAL' ? input.uomId ?? null : null,
       serviceId: input.sourceMode === 'SERVICE' ? input.serviceId ?? null : null,
+      servicePriceKey:
+        input.sourceMode === 'SERVICE'
+          ? normalizeServicePriceKey(input.servicePriceKey)
+          : null,
       currency: input.currency,
       unitPrice: input.unitPrice,
       effectiveFrom: new Date(input.effectiveFrom),
@@ -698,6 +742,7 @@ export async function replacePriceCatalogEntry(
         entryKind: predecessor.entryKind,
         itemId: predecessor.itemId,
         uomId: predecessor.uomId,
+        servicePriceKey: predecessor.servicePriceKey,
         serviceId: predecessor.serviceId,
         currency: predecessor.currency,
         unitPrice: input.unitPrice,
@@ -873,6 +918,7 @@ export async function correctPriceCatalogEntry(
         itemId: predecessor.itemId,
         uomId: predecessor.uomId,
         serviceId: predecessor.serviceId,
+        servicePriceKey: predecessor.servicePriceKey,
         currency: predecessor.currency,
         unitPrice: input.unitPrice,
         effectiveFrom,

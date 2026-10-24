@@ -509,6 +509,10 @@ import { migration0471HandymanHelperAttendanceConfirmation }
   from './0471_handyman_helper_attendance_confirmation';
 import { migration0472HandymanAssignmentResponses }
   from './0472_handyman_assignment_responses';
+import { migration0476HandymanParameterizedServiceCatalog }
+  from './0476_handyman_parameterized_service_catalog';
+import { migration0477ServicePriceTierKey }
+  from './0477_service_price_tier_key';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -984,4 +988,6 @@ export const migrations: readonly Migration[] = [
   migration0470HandymanFieldExpenseReimbursement,
   migration0471HandymanHelperAttendanceConfirmation,
   migration0472HandymanAssignmentResponses,
+  migration0476HandymanParameterizedServiceCatalog,
+  migration0477ServicePriceTierKey,
 ];

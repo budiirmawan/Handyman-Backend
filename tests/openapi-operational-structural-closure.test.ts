@@ -19,11 +19,11 @@ import { createApp } from '../src/app';
  * operational API contract:
  *  1. Operational census arithmetic & route disposition (release-integration
  *     pins, CR-HM-BACKEND-RELEASE-INTEGRATION-01 PART 01):
- *     - TOTAL_RUNTIME = 2,034
+ *     - TOTAL_RUNTIME = 2,052
  *     - NON_OPENAPI_INFRASTRUCTURE_ROUTE = 1 (app root `GET /`)
- *     - IN_SCOPE_OPERATIONAL_RUNTIME = 1,964
- *     - OPENAPI_OPERATIONAL = 1,963
- *     - RUNTIME_NOT_DOCUMENTED (Class A) = 1 (1,964 - 1,963 = 1)
+ *     - IN_SCOPE_OPERATIONAL_RUNTIME = 1,982
+ *     - OPENAPI_OPERATIONAL = 1,981
+ *     - RUNTIME_NOT_DOCUMENTED (Class A) = 1 (1,982 - 1,981 = 1)
  *     - Duplicate runtime mount = 1 (`GET /tasks/:id` vs `GET /tasks/:taskId`)
  *  2. Exact Class A count after route disposition = 1
  *  3. All OpenAPI operations have unique operationId (0 missing)
@@ -137,10 +137,10 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
   const operationalOpenApi = openapi.filter((o) => !o.path.startsWith('/platform'));
 
   // 1. Reconciled operational census arithmetic & route disposition
-  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 2,034, IN_SCOPE = 1,964', () => {
-    assert.equal(runtime.length, 2034, 'Total runtime routes must be exactly 2,034');
+  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 2,052, IN_SCOPE = 1,982', () => {
+    assert.equal(runtime.length, 2052, 'Total runtime routes must be exactly 2,052');
     assert.equal(platformRuntime.length, 69, 'SaaS platform runtime routes must be exactly 69');
-    assert.equal(operationalRuntime.length, 1965, 'Operational runtime routes must be 1,965');
+    assert.equal(operationalRuntime.length, 1983, 'Operational runtime routes must be 1,983');
 
     // Root GET / is the single NON_OPENAPI_INFRASTRUCTURE_ROUTE
     const rootRoute = operationalRuntime.filter((r) => r.path === '/');
@@ -148,8 +148,8 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
     assert.equal(rootRoute[0].method, 'GET');
 
     const inScopeOperational = operationalRuntime.filter((r) => r.path !== '/');
-    assert.equal(inScopeOperational.length, 1964, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,964');
-    assert.equal(operationalOpenApi.length, 1963, 'OPENAPI_OPERATIONAL must be 1,963 after release integration');
+    assert.equal(inScopeOperational.length, 1982, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,982');
+    assert.equal(operationalOpenApi.length, 1981, 'OPENAPI_OPERATIONAL must be 1,981 after release integration');
 
     // Reconciled arithmetic: 1946 - 1945 = 1 (duplicate task mount only)
     const runtimeNotDocumented = inScopeOperational.length - operationalOpenApi.length;
