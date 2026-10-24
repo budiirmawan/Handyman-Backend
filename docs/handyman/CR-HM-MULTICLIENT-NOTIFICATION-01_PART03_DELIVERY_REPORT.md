@@ -106,6 +106,19 @@ All runs: `NODE_ENV=test npx tsx --test --test-concurrency=1 <file>`, against
 a disposable embedded PostgreSQL (the focused suite starts its own cluster on
 port 55587).
 
+> **REPRODUCTION PREREQUISITE (read before trusting a "green" run).** The
+> PART 03 focused suite starts its OWN embedded cluster, so it always has a
+> database. The **domain regression suites** do not: they resolve the database
+> from the environment (`DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` /
+> `DB_NAME`) and **silently SKIP (exit 0, "skipped: N")** when no server is
+> reachable. A run of the eight domain suites without a reachable PostgreSQL
+> reports `80 skipped / 0 failed` — that is **NOT** a pass. Start a cluster
+> first (`DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=postgres DB_PASSWORD= DB_NAME=asentra_test
+> DB_SSL=false`) and check the `skipped` counter, not only the exit code.
+> The numbers below were re-confirmed after the repository recovery of
+> 2026-10-24 (a fresh clone of the branch): PART 03 **26/26**, PART 01 +
+> PART 02 **45/45**, the eight domain suites **80/80 with 0 skipped**.
+
 ### 4.1 The new focused suite — 26/26 PASS
 
 ```
