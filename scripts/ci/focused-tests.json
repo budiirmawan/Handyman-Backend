@@ -1,0 +1,100 @@
+{
+  "static-contracts": {
+    "timeoutMs": 300000,
+    "tests": [
+      { "file": "tests/handyman-contract-freeze-03-openapi.test.ts", "pass": 13 },
+      { "file": "tests/openapi-operational-final-parity.test.ts", "pass": 7 },
+      { "file": "tests/openapi-operational-structural-closure.test.ts", "pass": 8 }
+    ]
+  },
+  "catalog-commerce": {
+    "timeoutMs": 900000,
+    "tests": [
+      { "file": "tests/cr-hm-service-catalog-01-part01.test.ts", "pass": 15 },
+      { "file": "tests/cr-hm-service-catalog-01-part02.test.ts", "pass": 12 },
+      { "file": "tests/cr-hm-service-catalog-01-part03.test.ts", "pass": 10 },
+      { "file": "tests/price-catalog-selection.test.ts", "pass": 16 },
+      { "file": "tests/service-reference-price.test.ts", "pass": 6 },
+      { "file": "tests/handyman-service-variants.test.ts", "pass": 6 },
+      { "file": "tests/price-catalog-currency-validation.test.ts", "pass": 6 },
+      { "file": "tests/cur02-part01-command-currency.test.ts", "pass": 8 },
+      { "file": "tests/price-catalog-entries.test.ts", "pass": 18 },
+      { "file": "tests/price-catalog-vendor-tier.test.ts", "pass": 11 },
+      { "file": "tests/price-catalog-override.test.ts", "pass": 9 },
+      { "file": "tests/price-catalog-openapi.test.ts", "pass": 6 }
+    ]
+  },
+  "core-lifecycle": {
+    "timeoutMs": 900000,
+    "tests": [
+      { "file": "tests/handyman-e2e-finance-close-api.test.ts", "pass": 6 },
+      { "file": "tests/handyman-e2e-financial-reconciliation-close.test.ts", "pass": 2 },
+      { "file": "tests/handyman-arrival-configuration-part04.test.ts", "pass": 24 },
+      { "file": "tests/handyman-field-feed-authority.test.ts", "pass": 22 },
+      { "file": "tests/handyman-scope-variations.test.ts", "pass": 3 },
+      { "file": "tests/handyman-work-session-checkin-start-scope-guard.test.ts", "pass": 2 },
+      { "file": "tests/handyman-work-session-close-scope-guard.test.ts", "pass": 2 },
+      { "file": "tests/handyman-work-session-commands.test.ts", "pass": 6 },
+      { "file": "tests/handyman-work-session-lifecycle.test.ts", "pass": 6 },
+      { "file": "tests/handyman-work-session-reads-scope-guard.test.ts", "pass": 2 },
+      { "file": "tests/handyman-work-session-workclock-scope-guard.test.ts", "pass": 2 },
+      { "file": "tests/handyman-work-session-workclock.test.ts", "pass": 6 },
+      { "file": "tests/handyman-work-sessions-api.test.ts", "pass": 6 },
+      { "file": "tests/handyman-work-sessions.test.ts", "pass": 10 },
+      { "file": "tests/handyman-building-scope-guard-part02.test.ts", "pass": 9 },
+      { "file": "tests/handyman-bast-signoff-scope-guard.test.ts", "pass": 2 },
+      { "file": "tests/handyman-chargeable-additional-work-scope-guard.test.ts", "pass": 2 },
+      { "file": "tests/handyman-customer-transaction-scope-guard.test.ts", "pass": 2 },
+      { "file": "tests/handyman-tenant-decision-authority.test.ts", "pass": 6 },
+      { "file": "tests/handyman-quotation-decision.test.ts", "pass": 12 },
+      { "file": "tests/handyman-execution-scope.test.ts", "pass": 10 },
+      {
+        "file": "tests/handyman-quotations-api.test.ts",
+        "pass": 10,
+        "namePattern": "^(?:[1-9]|11):",
+        "selectionReason": "BA-14: exclude only case 10, the registered over-broad schema selector; retain all ten currently green quotation HTTP/authority cases."
+      },
+      { "file": "tests/handyman-crew-worker-admission.test.ts", "pass": 26 },
+      { "file": "tests/handyman-assignment-response-part02b.test.ts", "pass": 5 },
+      { "file": "tests/handyman-competency-assignment.test.ts", "pass": 11 },
+      { "file": "tests/handyman-permit-readiness.test.ts", "pass": 10 },
+      { "file": "tests/handyman-scheduling-readiness.test.ts", "pass": 10 },
+      { "file": "tests/handyman-unit-access-readiness.test.ts", "pass": 10 },
+      { "file": "tests/handyman-readiness-api.test.ts", "pass": 10 },
+      { "file": "tests/handyman-care-workspace-admission.test.ts", "pass": 15 },
+      {
+        "file": "tests/handyman-bm-fee-prerequisite-configuration.test.ts",
+        "pass": 5,
+        "namePattern": "^t[2-6] ",
+        "selectionReason": "BA-15: exclude only t1, the registered stale migration-closure pin; retain all five green BM-fee runtime/configuration cases."
+      }
+    ]
+  },
+  "notification-security": {
+    "timeoutMs": 900000,
+    "tests": [
+      { "file": "tests/handyman-multiclient-notification-certification.test.ts", "pass": 17 },
+      { "file": "tests/handyman-notification-producer-part01.test.ts", "pass": 9 },
+      { "file": "tests/handyman-multiclient-notification-part03.test.ts", "pass": 26 },
+      { "file": "tests/handyman-multiclient-push-part02.test.ts", "pass": 36 },
+      { "file": "tests/mobile-push-token.test.ts", "pass": 10 },
+      { "file": "tests/push01-part01-device-registration-foundation.test.ts", "pass": 24 },
+      { "file": "tests/push01-part03b-device-fanout-and-payload.test.ts", "pass": 24 },
+      { "file": "tests/push01-part03c-provider-invocation-and-attempt-evidence.test.ts", "pass": 26 },
+      {
+        "file": "tests/push01-part05-mobile-contract-and-openapi.test.ts",
+        "pass": 17,
+        "skipPattern": "adds no migration",
+        "selectionReason": "BA-13: exclude only the stale global 0336 migration-cap assertion; retain all seventeen response-security, ownership, runtime/OpenAPI, and secret-custody cases."
+      },
+      { "file": "tests/mobile-push-delivery-boundary-contract.test.ts", "pass": 16 },
+      { "file": "tests/mobile-openapi-completeness.test.ts", "pass": 5 }
+    ]
+  },
+  "migration-recovery": {
+    "timeoutMs": 1800000,
+    "tests": [
+      { "file": "tests/migration-0478-recovery.test.ts", "pass": 6 }
+    ]
+  }
+}

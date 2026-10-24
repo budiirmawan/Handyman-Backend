@@ -14,11 +14,10 @@
 
 ## 1. Why the gate is closed
 
-Part 01 found **11 unconditional P1 blockers**. Parts 02, 03, and 04 closed BA-01, BA-02, and BA-03 at their documented local evidence boundaries. Part 05 newly registered and closed P1 BA-23 with net-zero historical open-count effect. Part 06 closed BA-04 locally. Part 07 closed BA-05 locally. Part 08 closed BA-06 locally, leaving **5 blockers: one Backend coding item and four environment/data/recovery workstreams**. BA-01 evidence: `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. BA-02 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.4 (post-fix 6/6, acceptance 65/65, shared currency 8/8, final OpenAPI 34/34, zero skips). BA-03 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.5 (pre-DDL runner/CLI refusal, 6/6 focused recovery tests, disposable isolated restore and forward recovery); staging/target and native paired recovery remain BA-08/BA-11. BA-23 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.6 (all 11 original failures now pass; focused 38/38, complementary 71/71 executed, variants 6/6, typecheck PASS); local tests do not close BA-08/BA-10/BA-11. BA-04 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.7 (fresh 23/45/0 baseline; final affected 67/1/0 with only BA-14's independent schema-selector red; dedicated authority 28/28 and zero skips); live consumer proof remains BA-08. BA-05 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.8 (fresh 18/8/0 reproduction; final admission 26/26, migration-backed assignment-response 5/5, competency 11/11, OpenAPI 28/28, typecheck PASS, zero skips); live consumer proof remains BA-08. BA-06 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.9 (fresh 29/1/0 reproduction; five repeated readiness-service rounds 150/150, readiness HTTP 10/10, OpenAPI 28/28, typecheck PASS, zero skips); production event semantics are unchanged and live consumer proof remains BA-08.
+Part 01 found **11 unconditional P1 blockers**. Parts 02, 03, and 04 closed BA-01, BA-02, and BA-03 at their documented local evidence boundaries. Part 05 newly registered and closed P1 BA-23 with net-zero historical open-count effect. Part 06 closed BA-04 locally. Part 07 closed BA-05 locally. Part 08 closed BA-06 locally. Part 09 closed BA-07 at the CR Owner-approved manual source-certification boundary, leaving **4 blockers: the BA-08 through BA-11 environment/consumer/data/recovery workstreams**, plus named release approval in Final Review. BA-01 evidence: `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. BA-02 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.4 (post-fix 6/6, acceptance 65/65, shared currency 8/8, final OpenAPI 34/34, zero skips). BA-03 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.5 (pre-DDL runner/CLI refusal, 6/6 focused recovery tests, disposable isolated restore and forward recovery); staging/target and native paired recovery remain BA-08/BA-11. BA-23 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.6 (all 11 original failures now pass; focused 38/38, complementary 71/71 executed, variants 6/6, typecheck PASS); local tests do not close BA-08/BA-10/BA-11. BA-04 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.7 (fresh 23/45/0 baseline; final affected 67/1/0 with only BA-14's independent schema-selector red; dedicated authority 28/28 and zero skips); live consumer proof remains BA-08. BA-05 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.8 (fresh 18/8/0 reproduction; final admission 26/26, migration-backed assignment-response 5/5, competency 11/11, OpenAPI 28/28, typecheck PASS, zero skips); live consumer proof remains BA-08. BA-06 evidence: `FINAL_BACKEND_GAP_AUDIT.md` §3.9 (fresh 29/1/0 reproduction; five repeated readiness-service rounds 150/150, readiness HTTP 10/10, OpenAPI 28/28, typecheck PASS, zero skips); production event semantics are unchanged and live consumer proof remains BA-08.
 
 | Blocker | Gate meaning | Current evidence |
 |---|---|---|
-| **BA-07** | Automated release enforcement | No `.github/workflows/ci.yml`; PR #58 B-03/G-6 remains open. |
 | **BA-08** | Real consumer/staging/Coolify proof | No consumer verification, staging migration status/E2E, live IAM matrix, persistence/load proof, or deployment evidence. |
 | **BA-09** | Notification production activation | No VAPID/FCM live delivery, per-tenant activation, physical-device, rotation/retry, or no-secret proof. |
 | **BA-10** | Actual per-Client operational data | Engine/import tests exist; no launch-Client 8/24 population, real prices, monetary or BM commercial readback. |
@@ -32,6 +31,8 @@ Part 07 also changed no runtime code, OpenAPI, migrations, or production data. I
 
 Part 08 also changed no runtime code, OpenAPI, migrations, or production data. Its bounded execution total is **188 PASS / 0 FAIL / 0 SKIPPED out of 188 executed results**: 150 repeated readiness-service results (30 distinct cases × five rounds), ten readiness HTTP/history/contract cases, and 28 OpenAPI checks. These are 68 distinct cases plus repetitions, not 188 unique tests. BA-06 is closed locally; BA-07 through BA-11 remain release-blocking, and BA-14 remains separately visible.
 
+Part 09 finalized manual source certification under the CR Owner policy and added no GitHub Actions workflow. Five previously executed local bounded lanes retain **621 PASS / 0 FAIL / 0 SKIPPED across 58 files**: static 28, catalog 123, core 254, notification 210, and migration recovery 6. Typecheck, 478/478 registry validation, fresh CLI apply/status 478, second-apply NO_OP, and deliberate failure/skip rejection were also recorded locally. The 621 tests were not repeated during clean-history reconstruction; these are local results, not hosted evidence or a new execution on the replacement SHA. Three explicit P2 selections exclude only the registered BA-13/BA-14/BA-15 stale structural cases; those items remain open and BA-14 remains separate P2. BA-07 is closed at the manual implementation/evidence boundary. Named approval before merging remains pending Final Review, and BA-08 through BA-11 keep the overall gate NO-GO.
+
 No P0 issue is claimed. The gate is NO-GO because these P1 release controls are open, not because a cross-tenant or financial-authority exploit was found.
 
 ## 2. Release-gate scorecard
@@ -39,11 +40,11 @@ No P0 issue is claimed. The gate is NO-GO because these P1 release controls are 
 | Gate | Required evidence | Current status | Release effect |
 |---|---|---|---|
 | **RG-01 — Baseline identity** | PRs #58/#59/#60 merged; exact SHA/image recorded; no unreviewed open PR included | **PASS for source identity** at `fb65c17…`; release image not built/deployed | Source baseline known; image identity still required under BA-08 |
-| **RG-02 — Implementation integrity** | BA-01/02/03/23 fixed with focused HTTP/secret/migration/Price Catalog evidence | **PASS locally:** BA-01 CLOSED in Part 02; BA-02 CLOSED in Part 03; BA-03 CLOSED in Part 04 with 6/6 focused recovery evidence; BA-23 CLOSED in Part 05 with all 11 original cases passing and 115/115 disjoint final coverage after the explicit variant rerun | Local implementation gate closed for these rows; overall release remains NO-GO for BA-07 through BA-11 |
-| **RG-03 — Core lifecycle evidence** | BA-04/05/06 affected safety evidence executes green with zero hidden skips | **PASS locally:** BA-04 CLOSED in Part 06, BA-05 CLOSED in Part 07, and BA-06 CLOSED in Part 08 with repeated zero-skip evidence. BA-14's separate P2 schema-selector red stays disclosed | Local core-evidence gate closed; integrated consumer/staging proof remains BA-08 and overall release remains NO-GO for BA-07 through BA-11 |
-| **RG-04 — Static API contract** | OpenAPI parity, unique IDs, refs, auth/permission metadata | **PASS locally after Part 08:** current operational/structural/freeze trio 28/28; Part 03 Price Catalog lane 6/6 and Part 05 complementary preservation remain supplied; 2,065 normalized operations, 301 Handyman operations | Static evidence only; actual consumer compatibility remains BA-08 |
-| **RG-05 — Type safety** | Typecheck on exact release SHA | **PASS locally after Part 08:** `npm run typecheck` | Re-run on the final release SHA; no build PASS claimed |
-| **RG-06 — CI/required checks** | Hermetic workflow, required branch checks, migration and notification lanes | **OPEN — BLOCKER (BA-07)** | NO-GO |
+| **RG-02 — Implementation integrity** | BA-01/02/03/23 fixed with focused HTTP/secret/migration/Price Catalog evidence | **PASS locally:** BA-01 CLOSED in Part 02; BA-02 CLOSED in Part 03; BA-03 CLOSED in Part 04 with 6/6 focused recovery evidence; BA-23 CLOSED in Part 05 with all 11 original cases passing and 115/115 disjoint final coverage after the explicit variant rerun | Local implementation gate closed for these rows; overall release remains NO-GO for BA-08 through BA-11 and final approval |
+| **RG-03 — Core lifecycle evidence** | BA-04/05/06 affected safety evidence executes green with zero hidden skips | **PASS locally:** BA-04 CLOSED in Part 06, BA-05 CLOSED in Part 07, and BA-06 CLOSED in Part 08 with repeated zero-skip evidence. BA-14's separate P2 schema-selector red stays disclosed | Local core-evidence gate closed; integrated consumer/staging proof remains BA-08 and overall release remains NO-GO for BA-08 through BA-11 and final approval |
+| **RG-04 — Static API contract** | OpenAPI parity, unique IDs, refs, auth/permission metadata | **PASS locally after Part 09:** current operational/structural/freeze trio 28/28; Part 03 Price Catalog lane 6/6 and Part 05 complementary preservation remain supplied; 2,065 normalized operations, 301 Handyman operations | Static evidence only; actual consumer compatibility remains BA-08 |
+| **RG-05 — Type safety** | Typecheck on exact release SHA | **PASS locally after Part 09:** `npm run typecheck` on the local CI implementation tree | Re-run in hosted CI and on the final release SHA; no build PASS claimed |
+| **RG-06 — Manual source certification** | Fail-closed local runner, exact TAP/counts, migration and notification lanes, retained SHA/timestamped evidence | **PASS AT OWNER-APPROVED LOCAL BOUNDARY (BA-07 CLOSED):** 621/0/0 previously recorded local product results, 478/478 registry and CLI lifecycle evidence, five lanes and self-tests retained. Paid GitHub Actions/required hosted checks deliberately not adopted; no hosted or branch-protection claim | Named manual approval before merging remains required; production NO-GO for BA-08 through BA-11 |
 | **RG-07 — Consumer compatibility** | Care → Operations/Manager → PWA → Android signed integration reports | **OPEN — BLOCKER (BA-08)**; historical consumer PR claims are unverified | NO-GO |
 | **RG-08 — Migration up/status** | Target status, expected pending IDs, no unknown/newer history, one-shot apply log | **NOT RUN on target**; only disposable fresh apply succeeded | Production migration NO-GO |
 | **RG-09 — Migration down/recovery** | Populated 0478 pre-DDL refusal plus approved forward-fix/paired recovery on staging copy | **PASS locally for BA-03:** populated runner/CLI refusal, schema/data/ledger preservation, disposable isolated restore and forward recovery; **NOT RUN on staging/target** | Target evidence remains under BA-08; production migration NO-GO |
@@ -55,6 +56,8 @@ No P0 issue is claimed. The gate is NO-GO because these P1 release controls are 
 | **RG-15 — Backup/restore** | Automated encrypted off-host pair, retention/alerting, measured paired restore | **OPEN — BLOCKER (BA-11)** | NO-GO |
 | **RG-16 — Cutover/rollback operations** | One writer/scheduler, fenced old environment, monitored activation and recovery decision | **Procedure exists; not executed (BA-08/BA-11)** | Keep production fenced |
 | **RG-17 — P2 debt/policy disposition** | P2 items fixed or explicitly accepted; conditional scope recorded | **OPEN but not independently blocking** | Cannot be used to hide mandatory scope; see §7 |
+
+**Manual approval before merging:** follow `docs/HANDYMAN_CI_SOURCE_CERTIFICATION.md` §§5–6. Verify the clean candidate SHA, Node 22/PostgreSQL 18 prerequisites, all five lane summaries, exact 621/0/0 expected results, typecheck/registry/CLI lifecycle logs, and zero unexpected skips. Retain TAP/JSON/Markdown artifacts with UTC start/finish timestamps, source SHA, archive SHA-256, reviewer identity, review time, and decision. A named reviewer must approve the exact source SHA before any merge; there is no automatic merge, hosted-check substitute, or production auto-deployment. Previous 621/621 evidence is Owner-accepted local BA-07 evidence, not a substitute for approval of a changed release candidate.
 
 ## 3. Production migration decision
 
@@ -154,10 +157,10 @@ The following do **not** independently hold the current NO-GO open, but must hav
 | ID | Gate disposition |
 |---|---|
 | **BA-12** | Repair the stale notification exact-record expectation; non-blocking test hygiene. |
-| **BA-13** | Rebaseline/scope legacy push migration closure guards; non-blocking test hygiene. |
-| **BA-14** | Part 06 repaired the live PIC session; narrow the remaining over-broad schema selector. Non-blocking residual test debt and the sole red in the Part 06 bounded set; it was not rerun or hidden in Part 08. |
-| **BA-15** | Repair the Care route-family and BM migration-list pins; non-blocking structural-test debt. |
-| **BA-16** | Make the native-token invocation hermetic; non-blocking independently of BA-07 CI. |
+| **BA-13** | Rebaseline/scope legacy push migration closure guards; non-blocking test hygiene. Part 09's explicit filter excludes only the stale global 0336-cap case and requires the other 17 cases green; it does not close this item. |
+| **BA-14** | Part 06 repaired the live PIC session; narrow the remaining over-broad schema selector. Non-blocking residual test debt and the sole red in the Part 06 bounded set. Part 09 explicitly selects cases 1–9 and 11 (10 green) while case 10 remains independently open P2. |
+| **BA-15** | Repair the Care route-family and BM migration-list pins; non-blocking structural-test debt. Part 09 selects only green BM-fee t2–t6 (5 green); stale t1 and the separate Care route pin remain open. |
+| **BA-16** | Make the native-token invocation hermetic by default; Part 09's isolated CI invocation passes its 10 lifecycle cases with zero skips, but this independent P2 harness-debt item is not reclassified. |
 | **BA-17** | Register or explicitly localize the two WhatsApp webhook literals; non-blocking contract hygiene. |
 | **BA-18** | Choose optional admin UI or the approved QR/geofence API runbook; no Backend coding required. |
 | **BA-19** | Current-volume accepted pagination debt; schedule by measured growth. |
@@ -173,7 +176,7 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 |---|---|---|
 | Backend code owner | BA-01/02/03/23 committed fixes + focused results | **BA-01 PART 02, BA-02 PART 03, BA-03 PART 04, AND BA-23 PART 05 LOCAL EVIDENCE SUPPLIED** |
 | Backend test owner | BA-04/05/06 green affected safety evidence; P2 disposition | **BA-04 PART 06, BA-05 PART 07, AND BA-06 PART 08 LOCAL EVIDENCE SUPPLIED; P2 DISPOSITION NOT SUPPLIED** |
-| CI owner | BA-07 workflow/run/required checks | **NOT SUPPLIED** |
+| Source-certification owner + release reviewer | BA-07 manual runner/evidence; exact-SHA approval before merge | **MANUAL IMPLEMENTATION AND 621/0/0 LOCAL EVIDENCE SUPPLIED; NAMED FINAL REVIEW/MERGE APPROVAL PENDING** |
 | Platform/DBA | Target migration/up/recovery, infrastructure, persistence and monitoring | **NOT SUPPLIED** |
 | Operations/Catalog + Finance | BA-10 launch-Client data readbacks | **NOT SUPPLIED** |
 | Notification/Web/Android owners | BA-09 provider/device/rotation/no-secret evidence | **NOT SUPPLIED** |
@@ -183,10 +186,10 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 
 ## 9. Final release statement
 
-The Part 01 baseline was **0 / 11 / 11** across 22 items. Current status after Part 08:
+The Part 01 baseline was **0 / 11 / 11** across 22 items. Current status after Part 09:
 
-- **P0/P1/P2:** **0 / 5 / 11** across **16 open items**; **BA-01, BA-02, BA-03, BA-23, BA-04, BA-05, and BA-06 are closed**. BA-23 has net-zero historical open-item effect; BA-04/BA-05/BA-06 closed locally in Parts 06/07/08.
-- **Remaining Backend coding items:** **8** total, **1 release-blocking**.
+- **P0/P1/P2:** **0 / 4 / 11** across **15 open items**; **BA-01, BA-02, BA-03, BA-23, BA-04, BA-05, BA-06, and BA-07 are closed**. BA-23 has net-zero historical open-item effect; BA-04/BA-05/BA-06 closed locally in Parts 06/07/08; BA-07 closed in Part 09 at the Owner-approved manual source-certification boundary.
+- **Remaining Backend coding items:** **7** total, **0 release-blocking**. Named manual release approval before merging remains pending Final Review.
 - **Backend FINAL FREEZE:** **NOT READY**.
 - **Production migration readiness:** **NO-GO**.
 - **Biznet/Coolify production readiness:** **NO-GO**.
