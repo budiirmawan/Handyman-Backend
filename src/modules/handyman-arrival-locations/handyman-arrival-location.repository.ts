@@ -134,6 +134,28 @@ async function findIdentifierById(
   return result.rows[0] ? map(result.rows[0]) : null;
 }
 
+/**
+ * CR-HM-FIELD-OPERATIONS-01 PART 04 (G-2 read surface) — registry listing
+ * for one Building. Deterministic newest-first order, optional status
+ * filter. Returns registry rows ONLY: the opaque value never exists here
+ * (hash-only storage) and the projection deliberately excludes the hash.
+ */
+async function listIdentifiersByBuilding(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  buildingId: string,
+  status?: 'ACTIVE' | 'INACTIVE',
+): Promise<HandymanArrivalLocationIdentifierRecord[]> {
+  const result = await executor.query(
+    `${IDENTIFIER_SELECT}
+      WHERE building_id = $1
+        AND ($2::text IS NULL OR status = $2)
+      ORDER BY created_at DESC, id DESC
+      LIMIT 500`,
+    [buildingId, status ?? null],
+  );
+  return result.rows.map(map);
+}
+
 /** The single permitted lifecycle projection: ACTIVE -> INACTIVE. */
 async function deactivateIdentifier(
   executor: Pick<PoolClient, 'query'>,
@@ -156,5 +178,6 @@ export const handymanArrivalLocationRepository = {
   insertIdentifier,
   findByOpaqueCodeHash,
   findIdentifierById,
+  listIdentifiersByBuilding,
   deactivateIdentifier,
 };

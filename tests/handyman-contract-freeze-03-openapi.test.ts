@@ -68,10 +68,16 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   //   CR-HM-FIELD-OPS-ACK-01 PART 02            +1  (.../arrival-challenge,
   //                                             the missing issuer command)
   //   287 + 1 = 288.
+  //   CR-HM-FIELD-OPERATIONS-01 PART 04 (G-2/G-3, approved gate §8)
+  //                                            +6  (arrival-location-identifier
+  //                                                 register/list/deactivate,
+  //                                                 geofence-policy put/get/
+  //                                                 history)
+  //   288 + 6 = 294.
   // The runtime-parity assertion below is what actually guards the contract;
   // the constant only pins the size of the surface a reviewer should expect.
-  it('keeps the 288-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 288);
+  it('keeps the 294-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 294);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -179,7 +185,10 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
     //   PART 03B1 +1 (`tenant_company.read` on `.../competency/history`)
     //   assignment-response / field-expense / helper-attendance +8
     //   179 + 3 + 8 = 190.
-    assert.equal(annotated, 190);
+    //   CR-HM-FIELD-OPERATIONS-01 PART 04 +6 (3 `building_configuration.manage`
+    //   writes + 3 `building_configuration.read` reads)
+    //   190 + 6 = 196.
+    assert.equal(annotated, 196);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

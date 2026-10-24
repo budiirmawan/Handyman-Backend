@@ -24,6 +24,7 @@ export {
   createHandymanArrivalLocationIdentifier,
   deactivateHandymanArrivalLocationIdentifier,
   handymanArrivalLocationService,
+  listHandymanArrivalLocationIdentifiers,
   resolveHandymanArrivalQrSignal,
   selectMostSpecificExpectedLocationLevel,
   resolveHandymanExpectedArrivalLocation,

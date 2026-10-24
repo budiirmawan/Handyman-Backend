@@ -7,6 +7,7 @@ import {
   arrivalChallengeNotAuthorizedError,
   arrivalChallengeNotFoundError,
   arrivalChallengeScopeNotAuthorizedError,
+  arrivalChallengeSupersededError,
   handymanArrivalChallengeRepository,
 } from '../handyman-arrival-challenges';
 import type { HandymanArrivalChallengeRecord }
@@ -183,6 +184,28 @@ export async function evaluateHandymanArrivalVerification(
     // Defensive impossibility under the atomicity guarantee: a
     // consumed challenge without a result must never be recreated.
     throw arrivalResultConflictError(challenge.id);
+  }
+
+  // CR-HM-FIELD-OPERATIONS-01 PART 04 (G-4, SG-3/SG-4 Option A) — NEW
+  // ATTEMPT against a SUPERSEDED binding. The challenge carries the
+  // assignment it was issued against (0397 snapshot); if that is no
+  // longer the scope's ACTIVE assignment (0396), Operations has
+  // reassigned/revoked the job and this token can never prove arrival.
+  //
+  // Position is the security contract:
+  //   - AFTER the immutable-result replay above, so an already-recorded
+  //     result is still returned unchanged (idempotent replay, AC-6);
+  //   - BEFORE any TTL/expiry evaluation and BEFORE actor/QR/geofence
+  //     work, so the refusal wins over CHALLENGE_EXPIRED (SG-4 Option A)
+  //     and no evidence is evaluated against a dead binding;
+  //   - the token is NOT consumed and NO result row is written, so the
+  //     challenge simply expires at its own server TTL;
+  //   - a still-ACTIVE assignment keeps the certified behaviour below
+  //     (a different actor still yields FAILED / ACTOR_ASSIGNMENT_INVALID).
+  const activeAssignment = await handymanScopeAssignmentRepository
+    .findActiveAssignmentByScope(undefined, scopeUuid);
+  if (!activeAssignment || activeAssignment.id !== challenge.assignmentId) {
+    throw arrivalChallengeSupersededError();
   }
 
   // Authority reads (pure; deterministic) — server-side only:

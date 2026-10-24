@@ -13,6 +13,7 @@ export type {
 } from './handyman-arrival-challenge.types';
 export {
   arrivalChallengeInvalidError,
+  arrivalChallengeSupersededError,
   arrivalChallengeLiveConflictError,
   arrivalChallengeNotAuthorizedError,
   arrivalChallengeNotFoundError,

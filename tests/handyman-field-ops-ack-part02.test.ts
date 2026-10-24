@@ -317,6 +317,13 @@ describe('CR-HM-FIELD-OPS-ACK-01 PART 02 — arrival challenge issuance', () => 
     );
 
     // (a) Stale challenge: the superseded Lead can never reach VERIFIED.
+    // CR-HM-FIELD-OPERATIONS-01 PART 04 (G-4, SG-3 Option A) refined this
+    // from the old 200/ACTOR_ASSIGNMENT_INVALID projection to the bounded
+    // 409 refusal: a challenge bound to a superseded assignment is
+    // refused BEFORE any TTL/actor/QR/geofence evaluation, and the token
+    // is neither consumed nor turned into a result row. The certified
+    // ACTOR_ASSIGNMENT_INVALID verdict still belongs to a STILL-ACTIVE
+    // binding (handyman-arrival-evaluation.test.ts case 6).
     const verify = await api()
       .post(verifyPath(f.scope.id))
       .set('Authorization', `Bearer ${f.token}`)
@@ -324,9 +331,25 @@ describe('CR-HM-FIELD-OPS-ACK-01 PART 02 — arrival challenge issuance', () => 
         challengeToken: staleToken,
         qrOpaqueCode: `unregistered-${randomUUID()}`,
       });
-    assert.equal(verify.status, 200);
-    assert.notEqual(verify.body.data.status, 'VERIFIED');
-    assert.equal(verify.body.data.primaryReason, 'ACTOR_ASSIGNMENT_INVALID');
+    assert.equal(verify.status, 409);
+    assert.equal(
+      verify.body.error.code,
+      'HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED',
+    );
+    const stale = await q(
+      `SELECT status, consumed_at, assignment_id
+         FROM handyman_arrival_challenges WHERE id = $1`,
+      [first.body.data.id],
+    );
+    assert.equal(stale.rows[0].status, 'PENDING');
+    assert.equal(stale.rows[0].consumed_at, null);
+    assert.equal(stale.rows[0].assignment_id, f.assignment.id);
+    const noResult = await q(
+      `SELECT count(*)::int AS n FROM handyman_arrival_verification_results
+        WHERE challenge_id = $1`,
+      [first.body.data.id],
+    );
+    assert.equal(noResult.rows[0].n, 0);
 
     // (b) Old Lead may not issue a replacement challenge.
     const oldAgain = await issue(f.scope.id, f.token);
