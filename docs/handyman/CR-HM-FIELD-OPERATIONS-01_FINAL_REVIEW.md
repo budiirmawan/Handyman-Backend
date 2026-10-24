@@ -1,8 +1,9 @@
 # CR-HM-FIELD-OPERATIONS-01 — FINAL REVIEW (PART 01–04)
 
 - Review date: **2026-10-24** (Asia/Jakarta).
-- Canonical branch: `arena/a61abf59-handyman-backend` (mirrored to the session
-  branch `arena/0cde2f6e-handyman-backend` — identical commit).
+- Canonical branch: `arena/a61abf59-handyman-backend` (`162e3d8`). The resumed
+  2026-10-24 session runs on `arena/f0c7714a-handyman-backend`, fast-forwarded
+  to that commit before re-validation (§8.1).
 - PART 04 HEAD reviewed: **`c2f045f`** (superseded only by the documentation +
   reconciliation commit that carries this file).
 - Reviewed baseline: `eed1225` (PART 03 sign-off gate, SIGNED) → PART 04.
@@ -257,11 +258,132 @@ only authority.
 ## 7. Pull request record
 
 - **PR #59 → `https://github.com/budiirmawan/Handyman-Backend/pull/59`**
-- Base `main` · head `arena/a61abf59-handyman-backend` (identical to the session
-  branch `arena/0cde2f6e-handyman-backend` at `3f9e085`).
+- Base `main` · head `arena/a61abf59-handyman-backend` at `162e3d8` (the
+  resumed session's `arena/f0c7714a-handyman-backend` is a fast-forward of the
+  same commit).
 - State at creation: **OPEN, MERGEABLE, not a draft, not merged.** The repository
   reports **no CI checks** on the branch (no workflow is configured for it), so
   every claim in this document rests on the commands recorded in §4, not on a
   pipeline.
 - Merge is the reviewer's decision; this review does not merge and does not
   deploy.
+- **Re-validated on 2026-10-24 by the resumed review session** — see §8. PR #59
+  was **not** re-created and remains the single PR for this CR (no duplicate
+  was opened).
+
+---
+
+## 8. RESUMED SESSION — recovery and independent re-validation (2026-10-24)
+
+The previous review session was terminated while a single long combined test
+command was still running (`timeout 1750`, ≈27 min). No result from that command
+was ever captured, so **none of its evidence is reused here**. This section is
+the record of the resumed session: what was recovered, what was re-executed in
+**small bounded batches**, and the verdict.
+
+### 8.1 Recovery (nothing was reset, nothing was rebuilt)
+
+| Check | Observed |
+| --- | --- |
+| Session checkout at start | `arena/f0c7714a-handyman-backend` @ `ee20d21`, clean tree, **shallow** clone (`ee20d21` grafted) |
+| Local `c2f045f` | **absent** — the crash left no object, no stash, no dangling commit (`git fsck --unreachable` empty, `git stash list` empty) |
+| Recovered from origin | `git fetch --depth=100 origin refs/heads/arena/a61abf59-handyman-backend` → `162e3d8` (PART 04 `c2f045f` → review record `3f9e085` → PR record `162e3d8`) |
+| Integration method | `git merge --ff-only origin/arena/a61abf59-handyman-backend` — **fast-forward, no reset, no force push, no rewrite** |
+| Ancestry | `ee20d21` (PR #58 merge, unchanged `main`) → `186628c` → `4eae70e` → `d5b7d11` → `eed1225` → `c2f045f` → `3f9e085` → `162e3d8`; **linear, 7 ahead / 0 behind `main`** |
+| PART 01–04 preserved | yes — all implementation files present and untouched by this session |
+| Migration `0476` preserved | yes — applied and verified (§8.2) |
+| PR #58 compatibility | yes — `git diff ee20d21 HEAD -- src/modules/handyman-notifications src/modules/notifications src/modules/mobile-push src/modules/whatsapp-callback` = **empty** |
+| Approved governance preserved | yes — PART 03 §8 gate + PART 04 record unmodified |
+| Recoverable FINAL REVIEW work | **none beyond `3f9e085`/`162e3d8`** — the crashed command produced no artifact |
+
+### 8.2 Test substrate used by every batch
+
+- **Real, disposable, ready and migrated PostgreSQL 18.4** on
+  `127.0.0.1:55432`, cluster directory `.data/fr-pg` (gitignored, disposable).
+- Pre-migrated before any test batch:
+  `db:migrate` → **474 migrations applied**, head
+  **`0476_handyman_assignment_response_client_keys`** (`db:migrate:status`
+  confirms `0476` is the newest applied id and nothing is pending).
+- Suites that manage their own cluster (42 files) were left to bootstrap and
+  destroy their own instance on their own port; the remaining suites were
+  pointed at the pre-migrated database via
+  `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSL`.
+- **No suite skipped for lack of a database** — every batch reports
+  `# skipped 0`, and the one suite with a skip fallback
+  (`handyman-p0-contract`) was given a live database and executed for real.
+- Each batch ran as its own process with its own `timeout` (600–900 s). No
+  batch approached its bound; the longest was ~128 s of wall clock.
+
+### 8.3 Batch ledger (each result preserved before the next batch started)
+
+| Batch | Suites (count) | Bound | Tests | Pass | Fail | Skip | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B1 | `npx tsc --noEmit` (typecheck) | 600 s | — | — | — | — | **PASS** (exit 0) |
+| B0 | `db:migrate` + `db:migrate:status` | 300 s | — | — | — | — | **PASS** (474 applied, head `0476`) |
+| B2 | contract-freeze-03-openapi, openapi-operational-final-parity, openapi-operational-structural-closure, handyman-p0-contract (4) | 600 s | 31 | 31 | 0 | 0 | **PASS** |
+| B3 | handyman-arrival-configuration-part04 (1) | 900 s | 24 | 24 | 0 | 0 | **PASS** (G-2/G-3/G-4 + AC-1…AC-10) |
+| B4 | field-ops-ack-part01, field-ops-ack-part02 (2) | 600 s | 14 | 14 | 0 | 0 | **PASS** |
+| B5a | arrival-challenges, arrival-results, arrival-evaluation, arrival-verification-api (4) | 900 s | 41 | 41 | 0 | 0 | **PASS** |
+| B5b | arrival-locations, arrival-location-scope-guard, arrival-scope-guard, geospatial-policies, geospatial-policy-scope-guard (5) | 900 s | 33 | 33 | 0 | 0 | **PASS** |
+| B6 | assignment-response-part02a/02b/02c (3) | 900 s | 19 | 19 | 0 | 0 | **PASS** |
+| B7 | execution-scope-assignments, …-assignment-scope-guard, …-assignment-service (3) | 900 s | 24 | 24 | 0 | 0 | **PASS** |
+| B8 | scope-assignments-api, field-feed-contract, field-feed-authority, available-actions (4) | 900 s | 67 | 67 | 0 | 0 | **PASS** |
+| B9a | notification-contract-part02, notification-producer-part01, multiclient-notification-part03 (3) | 900 s | 41 | 41 | 0 | 0 | **PASS** |
+| B9b | multiclient-notification-certification, multiclient-push-part02 (2) | 900 s | 53 | 53 | 0 | 0 | **PASS** |
+| B10 | handyman-readiness-api, building-configurations, config-perm-01-permission-registry (3) | 900 s | 31 | 31 | 0 | 0 | **PASS** |
+| B11 | permit-readiness, unit-access-readiness, scheduling-readiness (3) | 900 s | 30 | 28 | **2** | 0 | **FAIL — pre-existing D-3** (§8.5) |
+| B12 | building-scope-guard-part02, work-sessions-api (2) | 900 s | 15 | 7 | **8** | 0 | **FAIL — pre-existing D-1/D-2** (§8.5) |
+| B11-baseline | the B11 triplet in an `origin/main` (`ee20d21`) worktree | 900 s | 30 | 29 | 1 | 0 | same test fails — **baseline parity** |
+| B12-baseline | the B12 pair in the same `origin/main` worktree | 900 s | 15 | 7 | 8 | 0 | **byte-identical failure set** — baseline parity |
+
+**Green batches (B2–B10): 378 tests, 378 pass, 0 fail, 0 skip, across 34
+suites.** Every gate that this CR owns is green. The two red batches are the
+pre-existing debts, reproduced identically or more favourably on `main`.
+
+### 8.4 Gate results, explicitly
+
+| Gate | Method | Result |
+| --- | --- | --- |
+| Typecheck | `tsc --noEmit` | **PASS** |
+| OpenAPI parity — 294 Handyman operations | `handyman-contract-freeze-03-openapi` (`assert 294`, runtime set ≡ documented set) + independent census probe | **PASS** — 294 runtime / 294 documented, **0 undocumented**, **0 phantom**, 0 broken `$ref`s, 0 duplicate operationIds |
+| Total operational census | `openapi-operational-final-parity` + `…-structural-closure` | **PASS** — 2045 runtime = 1975 in-scope + 1 root + 69 platform; operational OpenAPI 1974; normalised 2043/2043 |
+| G-2 QR registry | B3 cases G2-01…G2-32 | **PASS** — value returned once, `sha256` at rest, secret-free list/deactivate, hierarchy validation, exact-Building 404, one-way idempotent deactivation, zero DELETE route |
+| G-3 Geofence policy | B3 cases G3-01…G3-32 | **PASS** — history-preserving replace, 404-before-authorization, new policy effective immediately, bounded values, 5-way concurrency → exactly 1 ACTIVE + 5 history rows + ordered journal |
+| G-4 Superseded challenge | B3 cases G4-01…G4-10 | **PASS** — `409 HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED` before TTL, no consume, no result row, replay unchanged, `ACTOR_ASSIGNMENT_INVALID` still reachable on a still-ACTIVE assignment |
+| AC-1…AC-10 | governance record §3 → each criterion's named cases, all inside B3 | **PASS (10/10)** |
+| Security guards | G2-10…G2-17, G2-18…G2-23, G3-10…G3-18, G4-08…G4-10 + B4/B5 scope-guard suites | **PASS** — sibling/cross-tenant/worker self-authorization/read-only denials, smuggled authority keys inert, non-enumerating 404s |
+| Migration delta | `git diff ee20d21 HEAD -- src/database/migrations` | **PASS** — only `0476` (+ `index.ts` registration); PART 04 adds **zero** migrations |
+| Permission/seed delta | `git diff ee20d21 HEAD -- src/database/seeds src/modules/permissions` | **PASS** — **empty** (zero new codes, roles or personas) |
+| Notification Engine (PR #58) untouched | `git diff ee20d21 HEAD -- src/modules/{handyman-notifications,notifications,mobile-push,whatsapp-callback}` | **PASS** — **empty** |
+
+### 8.5 Pre-existing debts — reconfirmed, not fixed, not caused here
+
+| Debt | Evidence in this session | Baseline parity |
+| --- | --- | --- |
+| **D-1 / D-2** tenant-decision-actor fixture drift | `handyman-building-scope-guard-part02` tests 8 & 9 + `handyman-work-sessions-api` tests 1–6 → 7 pass / 8 fail | **identical 7 pass / 8 fail** in the `origin/main` worktree |
+| **D-3** journal ordering tie | `handyman-permit-readiness` & `handyman-unit-access-readiness` test 9 → 28 pass / 2 fail on HEAD; **29 pass / 1 fail on `origin/main`** | same test, same assertion, different count → non-deterministic tie-break, **not a regression** |
+| **D-4** webhook `x-error-codes` literals | `docs/api/openapi.yaml` lines 23267/23298/23304 still name `WEBHOOK_SIGNATURE_INVALID` / `WEBHOOK_PAYLOAD_INVALID`, which exist only as literals in `whatsapp-callback.routes.ts` | file untouched vs `main` |
+
+No assertion was deleted, skipped or loosened in this session; **no source or
+test file was modified by the resumed session.**
+
+### 8.6 Correction to §4.1
+
+§4.1 recorded “`…-assignment-response-part02a/02b/02c` (49 combined)”. The
+measured figure for those three files alone, re-executed in B6, is **19**. The
+19 is authoritative; the 49 apparently aggregated neighbouring
+execution-scope suites and is superseded. The §4.1 total of 350 is likewise
+superseded by the **378** measured in §8.3 — the two figures cover different
+batch compositions, and §8.3 is the reproducible one.
+
+### 8.7 Verdict after the resumed review
+
+| Decision | Verdict |
+| --- | --- |
+| **Source certification (PART 01–04)** | **PASS** — all owned gates green, 378/378 in 34 suites, 0 skips, typecheck clean, census exact |
+| **Open ONE PR to `main`** | **GO** — and it already exists: **PR #59**, unchanged, OPEN, MERGEABLE, not a draft. No second PR was created |
+| **Merge** | **Not performed** — reviewer's decision |
+| **Production deployment (Biznet / Coolify)** | **NO-GO in this review**, unchanged from §6.1: no operator UI, live E2E not run, D-1/D-2 evidence gap |
+| **Other repositories** | untouched |
+| **Documentation commit** | this §8 is committed on the resumed session branch `arena/f0c7714a-handyman-backend` as a single fast-forward descendant of `162e3d8` (documentation only — **no source, test, migration or contract file changed**). PR #59 keeps its head `arena/a61abf59-handyman-backend`; nothing was force-pushed and no history was rewritten |
+
