@@ -1,5 +1,32 @@
 # CR-HM-MULTICLIENT-NOTIFICATION-01 — PART 04: FINAL CERTIFICATION
 
+> ### ⚠️ STATUS BANNER — added at the FINAL REVIEW (after this report was certified)
+>
+> This report was **certified at `404b7c8`** and every finding below stands —
+> **nothing in it was changed**. The FINAL REVIEW has since applied a
+> **stricter PR gate**, recorded in
+> `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FINAL_REVIEW_GOVERNANCE.md`:
+>
+> - **§1.1 (GO — PR readiness) is SUPERSEDED.** The FINAL REVIEW treats the
+>   CR-owner ratification of `HANDYMAN_INSPECTION_RECORDED` (**GD-1 / G-8**) as
+>   a **PR gate** (gate **P-7**), because a PR is the artifact by which this
+>   CR's governance is published: publishing a certification that carries an
+>   unratified event type as *certified* would overstate the record.
+>   **The PR is therefore NOT created until that approval is recorded.**
+> - **§1.2 (NO-GO for production release) is UNCHANGED and remains in force.**
+> - The certification findings (C-1 … C-16), the non-PASS reconciliation and
+>   the governance decisions (GD-1 … GD-7) below are **unchanged**.
+>
+> **Terminology.** The certified **runtime tree** is `e81ba67`; the commit that
+> **carries** this report — the *certified baseline* of the FINAL REVIEW — is
+> `404b7c8`. They are the same runtime: `404b7c8` adds only this report and the
+> certification guard suite (a test artifact), and no production file.
+>
+> **The only edit made to this certified document is this banner.** The report
+> body is unchanged.
+
+---
+
 | | |
 | --- | --- |
 | **CR** | CR-HM-MULTICLIENT-NOTIFICATION-01 (multiclient notification — assignment + Handyman domain producers, IN_APP + Web Push + FCM Android) |
