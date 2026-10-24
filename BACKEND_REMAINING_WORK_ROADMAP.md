@@ -2,18 +2,21 @@
 
 **Audit baseline:** `fb65c17e7f48f4896df2104256aa5d25f6fd07b4`
 **Current decision:** Backend FINAL FREEZE **NOT READY**; Biznet release and production migration **NO-GO**.
-**Scope discipline:** this is a post-audit roadmap, not authorization to implement, merge, deploy, open a duplicate PR, revive PR #47, or change another repository. Execute only after FINAL REVIEW and explicit owner approval.
+**Scope discipline:** Part 02 explicitly authorized and completed BA-01 only. The remaining roadmap is not authorization to implement, merge, deploy, open a duplicate PR, revive PR #47, change another repository, or start Part 03 without explicit approval.
+**Part 02 evidence:** `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`.
 
 ## 1. Work totals and execution rule
 
+Current totals subtract only closed BA-01 from the Part 01 baseline (22 items, 14 Backend coding items).
+
 | Work class | Release-blocking | Non-blocking / conditional | Total |
 |---|---:|---:|---:|
-| Backend repository coding/test/OpenAPI/migration/CI items | **7** | **7** | **14** |
+| Backend repository coding/test/OpenAPI/migration/CI items | **6** | **7** | **13** |
 | Environment, operations, consumer, or policy items | **4** | **4** | **8** |
-| **Total audit items** | **11** | **11** | **22** |
-| Severity | **P1 = 11** | **P2 = 11** | **P0 = 0** |
+| **Total open audit items** | **10** | **11** | **21** |
+| Severity | **P1 = 10** | **P2 = 11** | **P0 = 0** |
 
-Execution rule: close **BA-01 through BA-11** with evidence before declaring FINAL FREEZE or production GO. P2 hygiene may proceed in separate small CRs but must not expand the approved business authority or be hidden by disabling tests.
+Execution rule: close **BA-02 through BA-11** with evidence before declaring FINAL FREEZE or production GO. BA-01 is closed at implementation/contract/focused-test level; its production device/provider follow-through remains within BA-09. P2 hygiene may proceed in separate small CRs but must not expand the approved business authority or be hidden by disabling tests.
 
 ## 2. Required execution order
 
@@ -21,8 +24,8 @@ Execution rule: close **BA-01 through BA-11** with evidence before declaring FIN
 FINAL REVIEW / owner approval
             │
             ▼
-Wave 1 — three production-integrity repairs (BA-01, BA-02, BA-03)
-            │ focused tests + OpenAPI + populated migration proof
+Wave 1 — two remaining production-integrity repairs (BA-02, BA-03)
+            │ BA-01 CLOSED in Part 02; focused tests + OpenAPI + migration proof
             ▼
 Wave 2 — three core evidence repairs (BA-04, BA-05, BA-06)
             │ all affected focused suites green; no authority weakening
@@ -44,17 +47,17 @@ Parallel, separately owned: P2 test hygiene/scalability and conditional policy
 (BA-12 through BA-22), never used to bypass a P1 gate.
 ```
 
-## 3. Wave 1 — production-integrity repairs (3 Backend coding items)
+## 3. Wave 1 — production-integrity repairs (2 Backend coding items remain)
 
-These three fixes should be small, independently reviewable, and free of new business modules. They may be separate commits in one reviewed hotfix CR only if their verification remains distinct; no new PR is opened by this audit.
+BA-01 is complete. BA-02 and BA-03 should remain small, independently reviewable, and free of new business modules. They may be separate commits in one reviewed hotfix CR only if their verification remains distinct; no new PR is opened by this roadmap.
 
 | ID | Implementation plan | Primary files / contract | Acceptance evidence | Dependencies |
 |---|---|---|---|---|
-| **BA-01** | Make native push tokens write-only. Remove `pushToken` from public registration/list/deactivation mappers and response types; preserve internal full-record accessors for delivery. Add no-secret response assertions and an evidence/log sweep. | `src/modules/push-tokens/push-token.service.ts`, `push-token.types.ts`, native routes/controllers, `docs/api/openapi.yaml`, `tests/mobile-push-token.test.ts`, push contract/OpenAPI tests | Register, rotate, list, deactivate and re-register pass; no response contains the raw token; request still validates it; browser/native secret sweeps pass; typecheck and OpenAPI 28/28 pass. | Android consumer must stop reading the response token. Required before BA-09 real-device P-6.5. |
+| **BA-01 — CLOSED (PART 02)** | Native push tokens are write-only in public responses; internal full-record delivery access is preserved. | `src/modules/push-tokens/push-token.service.ts`, `push-token.types.ts`, `docs/api/openapi.yaml`, native HTTP/foundation/OpenAPI tests | **Evidence supplied:** typecheck PASS; native HTTP/foundation 34/34; fan-out/provider 50/50; browser 36/36; current OpenAPI 28/28; zero skips. See `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`. | Android must not read response tokens. Production physical-device P-6.5 and provider activation remain BA-09. |
 | **BA-02** | Replace the raw currency guard call with the existing typed command guard; preserve historical reads and valid currency behavior. | `src/modules/price-catalog-entries/price-catalog-entry.service.ts`, `src/modules/client-monetary-contexts/index.ts`, price-catalog HTTP/OpenAPI tests | ACTIVE but disallowed currency returns 400 `CLIENT_CURRENCY_NOT_ALLOWED`; inactive/unknown currency uses its governed 400; valid price creation and idempotent replay still pass; failed request writes no row/event/outbox. | Required before BA-10 production price population. |
 | **BA-03** | Open a migration-owner-reviewed integrity change for 0478 down/recovery. Preserve concurrent tier facts. Either repair the down behavior where policy permits or install an explicit preflight/forward recovery path that stops before mutation when lossless automatic reversal is impossible. | `src/database/migrations/0478_service_price_tier_key.ts` and/or an approved new migration/runbook; migration runner tests; deployment migration record | Fresh upgrade, populated two-tier down/up rehearsal, failure atomicity, migration-head/schema assertions and staging-copy output all pass. No silent deletion/collapse of price facts and no blind rewrite of applied up history. | Must close before production migration sign-off and before BA-08 rollback rehearsal. |
 
-**Wave 1 exit:** three defects have focused green evidence, no consumer secret dependency remains undocumented, and the exact release-candidate migration strategy is approved.
+**Wave 1 exit:** BA-01 evidence is supplied; BA-02/BA-03 must also have focused green evidence, the Android response-token handoff must be acknowledged during BA-08/BA-09, and the exact release-candidate migration strategy must be approved.
 
 ## 4. Wave 2 — restore core safety evidence (3 Backend coding items)
 
@@ -170,7 +173,7 @@ H-1 through H-6 are current test/documentation hygiene. H-7 is accepted current-
 | ID | Owner | Required decision / dependency | Scope effect |
 |---|---|---|---|
 | **BA-18** | Operations Frontend + Operations owner | Build QR/geofence `/admin` screens **or** formally approve the existing API-tooling runbook, including one-time QR printing and deactivation. | No Backend coding and no independent blocker if the runbook is accepted. |
-| **BA-20** | Notification contract owner | Ratify GD-5 unwired families and GD-7 IN_APP per-subscription/no-dedupe semantics, or approve a separately estimated change. | Current recommended acceptance needs no code. Optional producer/dedupe work is excluded from the 14-item count until approved. |
+| **BA-20** | Notification contract owner | Ratify GD-5 unwired families and GD-7 IN_APP per-subscription/no-dedupe semantics, or approve a separately estimated change. | Current recommended acceptance needs no code. Optional producer/dedupe work is excluded from the current 13-item Backend coding count until approved. |
 | **BA-21** | Product + Finance | Explicitly defer/close PR #47 or require bank-receipt attestation. If required, rebase the conflicting PR, renumber after the then-current migration head, review authority, and rerun tests. | Not merged authority and not a current blocker. Mandatory attestation would become a new P1 scope decision. |
 | **BA-22** | Product + Legal + Security | Accept internal BAST signatureDigest/evidence or mandate external PSrE/ECDSA through a new reviewed provider/security CR. | No external-signature claim today; no code before decision. Mandatory PSrE would change release scope explicitly. |
 
@@ -186,7 +189,8 @@ H-1 through H-6 are current test/documentation hygiene. H-7 is accepted current-
 
 A future reviewer may change the verdict only when all are true:
 
-- [ ] BA-01/02/03 implementation evidence is merged and focused tests are green.
+- [x] BA-01 implementation evidence is committed and its focused response-security tests are green (Part 02).
+- [ ] BA-02/BA-03 implementation evidence is merged and focused tests are green.
 - [ ] BA-04/05/06 affected suites are green with zero hidden skips and unchanged production authority.
 - [ ] BA-07 CI and required branch checks are observable on the release candidate.
 - [ ] BA-08 consumer, staging, migration, IAM, persistence, and load evidence is attached.
@@ -197,4 +201,4 @@ A future reviewer may change the verdict only when all are true:
 - [ ] Final OpenAPI/typecheck/focused regression rerun passes on the exact release SHA.
 - [ ] Production migration and rollback/cutover decisions are signed using `BIZNET_COOLIFY_RELEASE_GATE.md`.
 
-Until then: **14 Backend repository items remain (7 release-blocking), 22 total audit items remain, and production migration remains NO-GO.**
+Until then: **13 Backend repository items remain (6 release-blocking), 21 total audit items remain, and production migration remains NO-GO. BA-01 is closed; no other gap is reclassified by Part 02.**

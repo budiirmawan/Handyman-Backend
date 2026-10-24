@@ -143,9 +143,10 @@ after(async () => {
 
 describe('BE-25L push token registration — register', () => {
   it('registers a token with the full contract (user/device ref, metadata, timestamps, status)', async () => {
+    const rawToken = `fcm-token-${randomUUID().slice(0, 24)}`;
     const response = await register(adminToken, {
       deviceId: 'device-alpha-1',
-      pushToken: `fcm-token-${randomUUID().slice(0, 24)}`,
+      pushToken: rawToken,
       platform: 'ANDROID',
       appVersion: '1.2.3',
       deviceModel: 'Pixel 9',
@@ -163,7 +164,6 @@ describe('BE-25L push token registration — register', () => {
       'id',
       'lastSeenAt',
       'platform',
-      'pushToken',
       'registeredAt',
       'status',
       'updatedAt',
@@ -179,6 +179,18 @@ describe('BE-25L push token registration — register', () => {
     assert.ok(!Number.isNaN(Date.parse(data.registeredAt)));
     assert.equal(data.registeredAt, data.lastSeenAt);
     assert.ok(data.id);
+    assert.equal(data.pushToken, undefined, 'registration response is write-only');
+    assert.ok(!JSON.stringify(response.body).includes(rawToken));
+
+    const stored = await q(
+      'SELECT push_token FROM mobile_push_tokens WHERE id = $1',
+      [data.id],
+    );
+    assert.equal(
+      stored.rows[0].push_token,
+      rawToken,
+      'the internal delivery credential remains securely persisted',
+    );
 
     return data.id as string;
   });
@@ -197,9 +209,11 @@ describe('BE-25L push token registration — register', () => {
   });
 
   it('rotates the token when the SAME device re-registers (no duplicate ACTIVE row)', async () => {
+    const oldToken = `rotate-old-${randomUUID().slice(0, 20)}`;
+    const newToken = `rotate-new-${randomUUID().slice(0, 20)}`;
     const first = await register(adminToken, {
       deviceId: 'device-rotate-1',
-      pushToken: `rotate-old-${randomUUID().slice(0, 20)}`,
+      pushToken: oldToken,
       platform: 'ANDROID',
     });
     assert.equal(first.status, 201);
@@ -207,13 +221,15 @@ describe('BE-25L push token registration — register', () => {
 
     const rotated = await register(adminToken, {
       deviceId: 'device-rotate-1',
-      pushToken: `rotate-new-${randomUUID().slice(0, 20)}`,
+      pushToken: newToken,
       platform: 'ANDROID',
       appVersion: '2.0.0',
     });
     assert.equal(rotated.status, 201);
     assert.equal(rotated.body.data.id, firstId, 'same registration row updated');
-    assert.notEqual(rotated.body.data.pushToken, first.body.data.pushToken);
+    assert.equal(rotated.body.data.pushToken, undefined);
+    assert.ok(!JSON.stringify(first.body).includes(oldToken));
+    assert.ok(!JSON.stringify(rotated.body).includes(newToken));
     assert.equal(rotated.body.data.appVersion, '2.0.0');
 
     // registered_at preserved; last_seen_at refreshed.
@@ -223,10 +239,11 @@ describe('BE-25L push token registration — register', () => {
     );
 
     const rows = await q(
-      `SELECT count(*)::int AS n FROM mobile_push_tokens
+      `SELECT push_token FROM mobile_push_tokens
         WHERE device_id = 'device-rotate-1' AND status = 'ACTIVE'`,
     );
-    assert.equal(rows.rows[0].n, 1, 'exactly one ACTIVE row per device');
+    assert.equal(rows.rows.length, 1, 'exactly one ACTIVE row per device');
+    assert.equal(rows.rows[0].push_token, newToken, 'internal token rotated');
   });
 
   it('replaces the old device registration when the SAME token moves to another device', async () => {
@@ -273,6 +290,10 @@ describe('BE-25L push token registration — register', () => {
       assert.equal(response.status, 400, JSON.stringify(body));
       assert.equal(response.body.error.code, 'VALIDATION_ERROR');
       assert.ok(Array.isArray(response.body.error.details));
+      assert.ok(
+        !JSON.stringify(response.body.error).includes(String(body.pushToken)),
+        'validation errors must not echo the submitted token value',
+      );
     }
   });
 
@@ -289,15 +310,25 @@ describe('BE-25L push token registration — register', () => {
 
 describe('BE-25L push token registration — list and deactivate', () => {
   it('lists only the authenticated user’s registrations (newest first)', async () => {
-    // Admin has: alpha, beta, rotate (rotated), old(INACTIVE), new.
+    const rawToken = `list-token-${randomUUID().slice(0, 20)}`;
+    const created = await register(adminToken, {
+      deviceId: 'device-list-secret',
+      pushToken: rawToken,
+      platform: 'ANDROID',
+    });
+    assert.equal(created.status, 201);
+
+    // Admin has: alpha, beta, rotate (rotated), old(INACTIVE), new, list-secret.
     const list = await api()
       .get('/api/v1/mobile/push-tokens')
       .set('Authorization', `Bearer ${adminToken}`);
     assert.equal(list.status, 200);
     const items = list.body.data as any[];
     assert.ok(items.length >= 4);
+    assert.ok(!JSON.stringify(list.body).includes(rawToken));
     for (const item of items) {
       assert.equal(item.userId, adminUserId, 'no cross-user data');
+      assert.equal(item.pushToken, undefined, 'list responses are write-only');
     }
     // Newest first.
     const times = items.map((item) => Date.parse(item.registeredAt));
@@ -313,12 +344,32 @@ describe('BE-25L push token registration — list and deactivate', () => {
   });
 
   it('deactivates/unregisters a token (owner-only)', async () => {
-    const created = await register(adminToken, {
+    const rawToken = `deact-token-${randomUUID().slice(0, 20)}`;
+    const input = {
       deviceId: 'device-deact-1',
-      pushToken: `deact-token-${randomUUID().slice(0, 20)}`,
+      pushToken: rawToken,
       platform: 'IOS',
-    });
+    };
+    const created = await register(adminToken, input);
     const tokenId = created.body.data.id as string;
+
+    const replayed = await register(adminToken, input);
+    assert.equal(replayed.status, 201);
+    assert.equal(replayed.body.data.id, tokenId, 'registration replay is idempotent');
+    const active = await q(
+      `SELECT count(*)::int AS n FROM mobile_push_tokens
+        WHERE user_id = $1 AND device_id = $2 AND status = 'ACTIVE'`,
+      [adminUserId, input.deviceId],
+    );
+    assert.equal(active.rows[0].n, 1);
+
+    const otherList = await api()
+      .get('/api/v1/mobile/push-tokens')
+      .set('Authorization', `Bearer ${otherToken}`);
+    assert.ok(
+      !(otherList.body.data as any[]).some((item) => item.id === tokenId),
+      'another actor cannot read the device registration',
+    );
 
     // Another user cannot deactivate it.
     const forbidden = await api()
@@ -337,15 +388,23 @@ describe('BE-25L push token registration — list and deactivate', () => {
       .set('Authorization', `Bearer ${adminToken}`);
     assert.equal(deactivated.status, 200);
     assert.equal(deactivated.body.data.status, 'INACTIVE');
+    assert.equal(deactivated.body.data.pushToken, undefined);
+    assert.ok(!JSON.stringify(deactivated.body).includes(rawToken));
+    assert.ok(!JSON.stringify(forbidden.body).includes(rawToken));
 
     const row = await q(`SELECT status FROM mobile_push_tokens WHERE id = $1`, [tokenId]);
     assert.equal(row.rows[0].status, 'INACTIVE', 'kept as history');
 
-    // Deactivating again → 404 (no ACTIVE row).
+    // Deactivating again → 404 (no ACTIVE row), without changing the revoked state.
     const again = await api()
       .delete(`/api/v1/mobile/push-tokens/${tokenId}`)
       .set('Authorization', `Bearer ${adminToken}`);
     assert.equal(again.status, 404);
+    const repeated = await q(
+      'SELECT status FROM mobile_push_tokens WHERE id = $1',
+      [tokenId],
+    );
+    assert.equal(repeated.rows[0].status, 'INACTIVE');
   });
 
   it('re-registering the same device after deactivation creates a fresh ACTIVE row', async () => {

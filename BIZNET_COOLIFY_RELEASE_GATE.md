@@ -14,11 +14,10 @@
 
 ## 1. Why the gate is closed
 
-There are **11 unconditional P1 blockers**. Seven need changes in this Backend repository; four are environment/data/recovery workstreams.
+Part 01 found **11 unconditional P1 blockers**. Part 02 closed BA-01 at implementation/OpenAPI/focused-test level, leaving **10 blockers: six Backend coding items and four environment/data/recovery workstreams**. BA-01 evidence: `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_FCM_RESPONSE_SECURITY_REMEDIATION.md`.
 
 | Blocker | Gate meaning | Current evidence |
 |---|---|---|
-| **BA-01** | Native FCM response secret custody | Raw `pushToken` is returned by registration/list/deactivation; violates PR #58 P-6.5. |
 | **BA-02** | Governed price-catalog error contract | Real HTTP disallowed-currency create returned 500 instead of typed 400. |
 | **BA-03** | Safe populated migration rollback/recovery | Valid concurrent ACTIVE tiers make 0478 down fail while recreating the old exclusion. Transaction prevented partial corruption. |
 | **BA-04** | PIC-dependent lifecycle evidence | Current quotation 403 fixture failures plus historical work-session/building/scope fixture drift prevent reliable sign-off. |
@@ -37,9 +36,9 @@ No P0 issue is claimed. The gate is NO-GO because these P1 release controls are 
 | Gate | Required evidence | Current status | Release effect |
 |---|---|---|---|
 | **RG-01 — Baseline identity** | PRs #58/#59/#60 merged; exact SHA/image recorded; no unreviewed open PR included | **PASS for source identity** at `fb65c17…`; release image not built/deployed | Source baseline known; image identity still required under BA-08 |
-| **RG-02 — Implementation integrity** | BA-01/02/03 fixed with focused HTTP/secret/migration evidence | **OPEN — BLOCKER** | NO-GO |
+| **RG-02 — Implementation integrity** | BA-01/02/03 fixed with focused HTTP/secret/migration evidence | **OPEN — BLOCKER:** BA-01 CLOSED in Part 02; BA-02/BA-03 remain | NO-GO |
 | **RG-03 — Core lifecycle evidence** | BA-04/05/06 affected suites green with zero hidden skips | **OPEN — BLOCKER** | NO-GO |
-| **RG-04 — Static API contract** | OpenAPI parity, unique IDs, refs, auth/permission metadata | **PASS locally:** 28/28; 2,065 normalized operations, 301 Handyman operations | Re-run after BA-01/BA-02; does not prove consumers |
+| **RG-04 — Static API contract** | OpenAPI parity, unique IDs, refs, auth/permission metadata | **PASS locally after Part 02:** 28/28; 2,065 normalized operations, 301 Handyman operations | Re-run after BA-02; does not prove consumers |
 | **RG-05 — Type safety** | Typecheck on exact release SHA | **PASS locally:** `npm run typecheck` | Re-run after repairs; no build PASS claimed |
 | **RG-06 — CI/required checks** | Hermetic workflow, required branch checks, migration and notification lanes | **OPEN — BLOCKER (BA-07)** | NO-GO |
 | **RG-07 — Consumer compatibility** | Care → Operations/Manager → PWA → Android signed integration reports | **OPEN — BLOCKER (BA-08)**; historical consumer PR claims are unverified | NO-GO |
@@ -47,7 +46,7 @@ No P0 issue is claimed. The gate is NO-GO because these P1 release controls are 
 | **RG-09 — Migration down/recovery** | Populated 0478 down/up or approved lossless recovery on staging copy | **FAILED in disposable reproduction (BA-03)** | Production migration NO-GO |
 | **RG-10 — IAM and tenant isolation** | Live role/permission/Building census and positive/negative journeys | **Local source/focused evidence PASS; live census OPEN (BA-08)** | NO-GO until live proof; no new bypass found |
 | **RG-11 — Finance/Manager authority** | Finance verification/reconciliation/PAID and Manager-only close evidence | **PASS locally:** finance/arrival 32/32; canonical permission model traced | Re-verify on target; PR #47 remains excluded unless separately mandated |
-| **RG-12 — Notification activation** | Credentials, rules/templates, physical IN_APP/Web Push/FCM delivery, retry/dedupe/rotation/no-secret | **OPEN — BLOCKER (BA-09; BA-01 also open)** | NO-GO for production notification activation |
+| **RG-12 — Notification activation** | Credentials, rules/templates, physical IN_APP/Web Push/FCM delivery, retry/dedupe/rotation/no-secret | **OPEN — BLOCKER (BA-09):** BA-01 response defect is closed; physical production P-6.5 evidence remains open | NO-GO for production notification activation |
 | **RG-13 — Catalog/commercial data** | Per-Client 8/24 import replay, real prices, monetary and BM configuration/readback | **OPEN — BLOCKER (BA-10)**; engine 37/37 is not population evidence | NO-GO for launch Client |
 | **RG-14 — Evidence persistence** | Durable mount, restart/redeploy persistence, DB/file reference verification | **OPEN under BA-08/BA-11** | NO-GO |
 | **RG-15 — Backup/restore** | Automated encrypted off-host pair, retention/alerting, measured paired restore | **OPEN — BLOCKER (BA-11)** | NO-GO |
@@ -166,7 +165,7 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 
 | Sign-off | Required named evidence | Current |
 |---|---|---|
-| Backend code owner | BA-01/02/03 merged fixes + focused results | **NOT SUPPLIED** |
+| Backend code owner | BA-01/02/03 merged fixes + focused results | **BA-01 PART 02 EVIDENCE SUPPLIED; BA-02/BA-03 NOT SUPPLIED** |
 | Backend test owner | BA-04/05/06 green affected suites; P2 disposition | **NOT SUPPLIED** |
 | CI owner | BA-07 workflow/run/required checks | **NOT SUPPLIED** |
 | Platform/DBA | Target migration/up/recovery, infrastructure, persistence and monitoring | **NOT SUPPLIED** |
@@ -178,10 +177,10 @@ If CI policy later requires a fully green repository-wide suite, BA-12 through B
 
 ## 9. Final release statement
 
-At the audited baseline:
+The Part 01 baseline was **0 / 11 / 11** across 22 items. Current status after Part 02:
 
-- **P0/P1/P2:** **0 / 11 / 11** across **22** open items.
-- **Remaining Backend coding items:** **14** total, **7 release-blocking**.
+- **P0/P1/P2:** **0 / 10 / 11** across **21 open items**; **BA-01 is closed**.
+- **Remaining Backend coding items:** **13** total, **6 release-blocking**.
 - **Backend FINAL FREEZE:** **NOT READY**.
 - **Production migration readiness:** **NO-GO**.
 - **Biznet/Coolify production readiness:** **NO-GO**.

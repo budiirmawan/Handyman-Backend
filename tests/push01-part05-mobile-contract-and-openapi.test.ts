@@ -27,8 +27,8 @@ import { ensureTestDatabase, skipIfNoTestDatabase } from './helpers/postgres';
  *   - every status the runtime can return is declared in OpenAPI (the PART 04A
  *     INVALID state is observable through the public GET, so the spec must say
  *     so — the fix is the spec, never hiding the value),
- *   - the raw device token stays out of operational events, error payloads and
- *     logs even though the frozen BE-25L response shape carries it,
+ *   - the raw device token is write-only and stays out of public responses,
+ *     operational events, error payloads and logs,
  *   - a user reaches only their own registrations and a token is never auth,
  *   - the mobile surface stays provider-neutral,
  *   - EMAIL/WHATSAPP, history and the shared engines are untouched.
@@ -317,17 +317,42 @@ describe('CR-BE-PUSH-01 PART 05 — raw device token privacy', () => {
     );
   });
 
-  it('is the frozen BE-25L contract that keeps pushToken in the response', () => {
-    // Documented deliberately: the token is returned ONLY because the frozen
-    // BE-25L response shape requires it, not because PUSH added it.
-    const props = spec.components.schemas.PushTokenRegistration.properties;
-    assert.ok('pushToken' in props, 'the frozen contract carries pushToken');
-    const frozen = readSource('tests/push01-part01-device-registration-foundation.test.ts');
-    assert.match(
-      frozen,
-      /'pushToken'/,
-      'pushToken is a member of the frozen public key list',
+  it('keeps pushToken write-only across public responses and OpenAPI', async (t) => {
+    if (!(await skipIfNoTestDatabase(t))) return;
+
+    const rawToken = fcmShapedToken();
+    const created = await registerPushToken(userId, {
+      deviceId: `dev-${randomUUID()}`,
+      pushToken: rawToken,
+      platform: 'ANDROID',
+    });
+    const [listed] = await listPushTokens(userId);
+    const deactivated = await deactivatePushToken(userId, created.id);
+    assert.ok(deactivated);
+
+    for (const response of [created, listed, deactivated]) {
+      assert.equal(
+        'pushToken' in response,
+        false,
+        'no public registration response may contain pushToken',
+      );
+      assert.ok(!JSON.stringify(response).includes(rawToken));
+    }
+
+    const schema = spec.components.schemas.PushTokenRegistration;
+    assert.ok(!('pushToken' in schema.properties));
+    assert.ok(!(schema.required ?? []).includes('pushToken'));
+
+    const request =
+      spec.paths['/mobile/push-tokens'].post.requestBody.content['application/json'].schema;
+    assert.ok(request.required.includes('pushToken'), 'registration still accepts the token');
+    assert.equal(request.properties.pushToken.writeOnly, true);
+
+    const { rows } = await q(
+      'SELECT push_token FROM mobile_push_tokens WHERE id = $1',
+      [created.id],
     );
+    assert.equal(rows[0].push_token, rawToken, 'internal persistence is unchanged');
   });
 });
 

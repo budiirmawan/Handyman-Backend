@@ -610,7 +610,9 @@ token; `GET /mobile/push-tokens` lists the user's registrations;
 - **User/device reference** — the token always belongs to the AUTHENTICATED
   user (user_id comes from the session, never the body); `deviceId` is the
   stable client-generated device identifier.
-- **Push token** — provider opaque token (`pushToken`, 8–512 chars).
+- **Push token** — provider opaque token (`pushToken`, 8–512 chars), accepted
+  as write-only registration input and never returned by registration,
+  listing or deactivation responses.
 - **Platform/device type** — `platform` (ANDROID / IOS) plus optional
   `appVersion`, `deviceModel`, `deviceOsVersion` metadata.
 - **registered_at / last_seen_at** — `registeredAt` = first registration;
