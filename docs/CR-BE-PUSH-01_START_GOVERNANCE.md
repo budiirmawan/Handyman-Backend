@@ -57,6 +57,12 @@ CHECK of `ANDROID|IOS`. Adding a browser channel would require a new platform va
 new token format, VAPID key custody, and a Web frontend change — all outside the reopened
 boundary.
 
+**AMENDMENT (CR-HM-MULTICLIENT-NOTIFICATION-01, 2026-10-24): §16.3 is SUPERSEDED for
+the browser transport** — see **§16.3-A** below for the exact, named scope (S-1 … S-6),
+the parts of this document that are unaffected, and the amended boundary guards. The
+decision above stays in the record as the historical basis; it is not silently
+rewritten.
+
 **There is one hard in-repo blocker** (§13, B-01): `tests/mobile-push-delivery-boundary-contract.test.ts`
 asserts, by design, that everything this CR builds does **not** exist. It must be
 *rewritten*, PART by PART, from "PUSH must not exist" into "PUSH exists exactly here" —
@@ -817,6 +823,52 @@ push registration surface is `/mobile/push-tokens`, its platform CHECK is
 describes the surface as mobile-device registration. Adding it would require a new
 platform value, a distinct subscription object shape, VAPID key custody, and a Web
 frontend change — all outside the reopened boundary.
+
+#### 16.3-A SUPERSESSION — Web Push is IN SCOPE (2026-10-24)
+
+**Amendment (CR-HM-MULTICLIENT-NOTIFICATION-01, 2026-10-24): §16.3 is SUPERSEDED for
+the browser transport.** The OUT OF SCOPE decision above was correct on its evidence
+and is not re-litigated here: at the time, the only push registration surface was
+`/mobile/push-tokens` with a platform CHECK of `ANDROID|IOS`, and a browser needs a
+different object entirely.
+
+The trigger is a NEW requirement that the frozen contract did not contain: **one
+Backend notification engine must serve the Mobile Browser/PWA and the Android APK.**
+A browser cannot use a native provider token, so the browser half of that requirement
+is unreachable while §16.3 stands. The supersession is therefore GRANTED, explicitly
+and by name, by the CR-HM-MULTICLIENT-NOTIFICATION-01 owner.
+
+**The exact scope of this supersession (S-1 … S-6):**
+
+| # | Superseded item | What is now authorized |
+| --- | --- | --- |
+| **S-1** | "a new platform value" is required — the §16.3 objection to reusing `ANDROID\|IOS` | A **SEPARATE** browser registration authority: its own table (`browser_push_subscriptions`), its own lifecycle (`ACTIVE`/`INACTIVE`/`INVALID`), its own route family, and its own attempt-evidence table. The native `mobile_push_tokens` table, its `platform` CHECK and its frozen 0334 shape are **NOT** widened — a browser is never a fake platform value. |
+| **S-2** | "VAPID key custody" is required — a second credential custody model | A **second, separate** custody model for the application key pair (public key published to browsers, private key held by the backend and never persisted, never logged, never returned). It is read ONLY inside the governed provider module, exactly like the FCM service-account credentials. |
+| **S-3** | "a Web frontend change" is required | A browser transport adapter inside the **existing governed module** (`src/modules/push-delivery/`), behind the existing provider-neutral port, with credential-less `noop`/`capture` adapters and the same fail-closed provider resolution. |
+| **S-4** | The browser transport vocabulary is **banned everywhere in `src/`** by the permanent boundary guards (§15.3, B-01) | The ban becomes a **CONFINEMENT**: the browser transport vocabulary is legal ONLY inside the governed provider module — the browser adapter file and that module's re-export barrel — and the permanent guards are amended to assert exactly that (confine, do not merely allow). The APNs / OneSignal / Expo bans stay absolute, the "no push vendor dependency" rule (B-01j) stays absolute, and the **"no push SEND route" ban stays absolute**: the four browser routes are REGISTRATION surfaces, and the guards now assert that a registration surface never delivers. |
+| **S-5** | The template channel vocabulary had no PUSH value, so **no push intent could ever be produced** (the missing link between the existing push transport and the notification engine) | The template channel CHECK is widened additively with `'PUSH'` (migration `0474`, the `0300` precedent). The `notifications` inbox CHECK stays `IN_APP` only; the outbound ledger already admitted `PUSH` (migration `0335`). |
+| **S-6** | The ledger row must stay **device-agnostic** (it addresses the RECIPIENT, never a device — §10.2) | Confirmed and unchanged: one ledger row per (channel, recipient). The browser subscription, like the native device, is a **send-time** concern. The browser attempt evidence references the subscription by id and never stores the endpoint or the key material. |
+
+**What this supersession does NOT change:**
+
+* The native FCM transport, its credentials, its platform CHECK and its frozen attempt
+  table are **untouched**.
+* There is still **no second notification engine, no second ledger, no second
+  scheduler**: the browser transport produces rows in the SAME outbound ledger and is
+  drained by the SAME due-job dispatcher under the SAME retry budget.
+* There is still **no public send / test / resend route** for any push transport. The
+  four browser routes added by PART 02 are **registration** surfaces (register /
+  list / revoke); the send path stays inside the delivery engine, which owns no
+  route at all.
+* The push attempt evidence is still **internal**: it is not a notification-history
+  channel, and the history read model is unchanged.
+* The "no push vendor dependency" rule stands: the browser transport is implemented
+  with `node:crypto` alone (ES256 signing + RFC 8188/8291 content encryption), and
+  `package.json` gains **no** dependency.
+* The APNs / OneSignal / Expo bans stand, unchanged and absolute.
+
+**Record:** `docs/handyman/CR-HM-MULTICLIENT-NOTIFICATION-01_PART02_WEB_PUSH_SUPERSESSION.md`
+(full decision record, the boundary-guard amendments, and the evidence).
 
 ### 16.4 What was NOT done at START GOVERNANCE
 

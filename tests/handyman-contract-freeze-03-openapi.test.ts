@@ -65,17 +65,31 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   //                                            field expense/reimbursement and
   //                                            helper attendance surfaces)
   //   269 + 3 + 15 = 287.
-  //   CR-HM-SERVICE-CATALOG-01 PART 01              +7  (mixed catalogue
-  //                                                  items + initial quotation
-  //                                                  preparation + the
-  //                                                  post-inspection revision
-  //                                                  lane + the price
-  //                                                  resolution history)
-  //   287 + 7 = 294.
+  //   CR-HM-FIELD-OPS-ACK-01 PART 02            +1  (.../arrival-challenge,
+  //                                             the missing issuer command)
+  //   287 + 1 = 288.
+  //   CR-HM-FIELD-OPERATIONS-01 PART 04 (G-2/G-3, approved gate §8)
+  //                                            +6  (arrival-location-identifier
+  //                                                 register/list/deactivate,
+  //                                                 geofence-policy put/get/
+  //                                                 history)
+  //   288 + 6 = 294.
+  //   CR-HM-SERVICE-CATALOG-01 PART 01              +7  (parameterized
+  //                                                  catalogue admin: category,
+  //                                                  attribute, commercial
+  //                                                  profile, price rule,
+  //                                                  mixed request items,
+  //                                                  quotation preparation and
+  //                                                  the post-inspection
+  //                                                  revision lane)
+  //   294 + 7 = 301.
+  // MERGED RECONCILIATION (post PR #59): both additive lines are now on `main`,
+  // so the pin is the sum of the two disjoint deltas, measured on the merged
+  // tree — 294 (PR #59) + 7 (this CR) = 301.
   // The runtime-parity assertion below is what actually guards the contract;
   // the constant only pins the size of the surface a reviewer should expect.
-  it('keeps the 294-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 294);
+  it('keeps the 301-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 301);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -183,10 +197,13 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
     //   PART 03B1 +1 (`tenant_company.read` on `.../competency/history`)
     //   assignment-response / field-expense / helper-attendance +8
     //   179 + 3 + 8 = 190.
+    //   CR-HM-FIELD-OPERATIONS-01 PART 04 +6 (3 `building_configuration.manage`
+    //   writes + 3 `building_configuration.read` reads)
+    //   190 + 6 = 196.
     //   CR-HM-SERVICE-CATALOG-01 PART 01 +7 route-guarded operations
     //   (`tenant_company.read` / `tenant_company.manage`).
-    //   190 + 7 = 197.
-    assert.equal(annotated, 197);
+    //   196 + 7 = 203 (measured on the merged tree after PR #59).
+    assert.equal(annotated, 203);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

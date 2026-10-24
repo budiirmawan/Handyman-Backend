@@ -63,6 +63,8 @@ export type RespondToHandymanExecutionScopeAssignmentInput = {
   responseStatus: 'TERIMA' | 'TIDAK_BISA';
   declineReason?: string | null;
   notes?: string | null;
+  /** Optional concurrent-device key (`Idempotency-Key` header or body). */
+  idempotencyKey?: string | null;
 };
 
 export type HandymanExecutionScopeAssignmentResponseView = {
@@ -81,6 +83,8 @@ export type HandymanExecutionScopeAssignmentResponseView = {
   declineReason: string | null;
   responseNotes: string | null;
   reassignmentRequired: boolean;
+  /** Explicit acknowledgment instant (TERIMA only); null while pending/declined. */
+  acknowledgedAt: string | null;
   idempotentReplay: boolean;
 };
 
@@ -95,6 +99,8 @@ export type HandymanExecutionScopeAssignmentResponseHistoryView = {
   declineReason: string | null;
   responseNotes: string | null;
   reassignmentRequired: boolean;
+  acknowledgedAt: string | null;
+  acknowledgedByUserId: string | null;
   events: Array<{
     id: string;
     responseId: string;

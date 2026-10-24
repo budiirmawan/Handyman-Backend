@@ -7,6 +7,7 @@ import {
   hasPaginationParams,
   parsePagination,
 } from '../../shared/pagination';
+import { parseAssignmentResponseIdempotencyKey } from '../assignment-responses';
 import { workOrderCompetencyService } from '../worker-competency-eligibility';
 import { workOrderService } from '../work-orders';
 import { workOrderAssignmentService } from './work-order-assignment.service';
@@ -175,9 +176,17 @@ export async function respondToAssignmentHandler(
     await assertWorkOrderBuildingAccess(req.auth.userId, workOrderId);
 
     const body = parseRespondWorkOrderAssignmentBody(req.body);
+    // CR-HM-FIELD-OPS-ACK-01 PART 01 — the mobile `Idempotency-Key` header
+    // wins over the legacy body member; both are optional and never carry
+    // actor/tenant/assignment authority.
+    const idempotencyKey = parseAssignmentResponseIdempotencyKey(
+      req.header('Idempotency-Key'),
+      req.body,
+    );
     const assignment =
       await workOrderAssignmentService.respondToWorkOrderAssignment({
         ...body,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         workOrderId,
         assignmentId,
         actorUserId: req.auth.userId,

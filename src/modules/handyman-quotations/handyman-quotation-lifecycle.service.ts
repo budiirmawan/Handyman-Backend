@@ -1,6 +1,7 @@
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import { assertQuotationThreadBuildingAccess }
   from './handyman-quotation-access';
@@ -253,6 +254,25 @@ export async function issueHandymanQuotationVersion(
         },
         tx,
       );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred supersession, on the SAME transaction. The
+      // notification entity is the SUPERSEDED VERSION (the occurrence), so
+      // two supersessions of the same quotation never collapse into one.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_QUOTATION_SUPERSEDED',
+          clientId: quotation.clientId,
+          entityId: current.id,
+          variables: {
+            quotationId: quotation.id,
+            quotationVersionId: current.id,
+            versionNumber: current.versionNumber,
+            supersededByVersionId: version.id,
+            supersededByVersionNumber: version.versionNumber,
+          },
+        },
+        { executor: tx },
+      );
     }
 
     const issued = await handymanQuotationRepository
@@ -272,16 +292,33 @@ export async function issueHandymanQuotationVersion(
         entityId: version.id,
         actorUserId,
         summary: `Handyman quotation version ${version.versionNumber} issued.`,
-        metadata: {
-          quotationId: quotation.id,
-          quotationVersionId: version.id,
-          versionNumber: version.versionNumber,
-          validUntil: new Date(validUntilMs).toISOString(),
-          lineCount: lines.length,
+          metadata: {
+            quotationId: quotation.id,
+            quotationVersionId: version.id,
+            versionNumber: version.versionNumber,
+            validUntil: new Date(validUntilMs).toISOString(),
+            lineCount: lines.length,
+          },
         },
-      },
-      tx,
-    );
+        tx,
+      );
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred issuance, on the SAME transaction. The
+      // notification entity is the ISSUED VERSION (the occurrence).
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_QUOTATION_ISSUED',
+          clientId: quotation.clientId,
+          entityId: version.id,
+          variables: {
+            quotationId: quotation.id,
+            quotationVersionId: version.id,
+            versionNumber: version.versionNumber,
+            validUntil: new Date(validUntilMs).toISOString(),
+          },
+        },
+        { executor: tx },
+      );
     return toPublicVersion(issued);
   });
 }
@@ -331,6 +368,22 @@ export async function expireHandymanQuotationVersion(
       },
       tx,
     );
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification REACTION
+    // to the occurred expiry, on the SAME transaction.
+    await emitHandymanDomainNotificationIntent(
+      {
+        eventType: 'HANDYMAN_QUOTATION_EXPIRED',
+        clientId: quotation.clientId,
+        entityId: version.id,
+        variables: {
+          quotationId: quotation.id,
+          quotationVersionId: version.id,
+          versionNumber: version.versionNumber,
+          validUntil: version.validUntil.toISOString(),
+        },
+      },
+      { executor: tx },
+    );
     return toPublicVersion(expired);
   });
 }
@@ -375,6 +428,21 @@ export async function supersedeHandymanQuotationVersion(
         },
       },
       tx,
+    );
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification REACTION
+    // to the occurred supersession, on the SAME transaction.
+    await emitHandymanDomainNotificationIntent(
+      {
+        eventType: 'HANDYMAN_QUOTATION_SUPERSEDED',
+        clientId: quotation.clientId,
+        entityId: version.id,
+        variables: {
+          quotationId: quotation.id,
+          quotationVersionId: version.id,
+          versionNumber: version.versionNumber,
+        },
+      },
+      { executor: tx },
     );
     return toPublicVersion(superseded);
   });

@@ -146,10 +146,20 @@ describe('CR-BE-MOB-01 PART 07 — the four delivery stages stay separated', () 
     );
     // …and every operationId the whole spec publishes for push is read-only
     // registration management.
+    //
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the published push surface
+    // now has TWO registration families: the native APK token surface and the
+    // BROWSER subscription surface. Both are registration management only —
+    // there is still no published operation that sends, tests, resends or
+    // reports a push, which is the permanent half of this guard.
     assert.deepEqual(publishedPushOperationIds().sort(), [
       'deactivatePushToken',
+      'listBrowserPushSubscriptions',
       'listPushTokens',
+      'registerBrowserPushSubscription',
       'registerPushToken',
+      'revokeAllBrowserPushSubscriptions',
+      'revokeBrowserPushSubscription',
     ]);
   });
 
@@ -257,19 +267,50 @@ describe('CR-BE-MOB-01 PART 07 — documented channels equal implemented channel
 describe('CR-BE-MOB-01 PART 07 — no push engine, provider or table was created', () => {
   it('registers no push send / delivery route', () => {
     const pushRoutes = allRoutes().filter((route) => /push/i.test(route));
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — S-4 SUPERSESSION
+    // (2026-10-24): the browser SUBSCRIPTION registration routes are now
+    // permitted alongside the BE-25L token registration routes. Registration
+    // is not delivery, so the ban this guard exists to enforce is unchanged:
+    // no route may SEND or DISPATCH a push. The send path stays inside the
+    // delivery engine (the governed transport + the dispatch seam), which
+    // owns no route at all.
     assert.deepEqual(
       pushRoutes.sort(),
       [
+        'DELETE /mobile/push-subscriptions',
+        'DELETE /mobile/push-subscriptions/:subscriptionId',
         'DELETE /mobile/push-tokens/:tokenId',
+        'GET /mobile/push-subscriptions',
         'GET /mobile/push-tokens',
+        'POST /mobile/push-subscriptions',
         'POST /mobile/push-tokens',
       ],
-      'only BE-25L token registration routes may exist',
+      'only the token/subscription REGISTRATION routes may exist',
     );
+    for (const route of pushRoutes) {
+      const path = route.split(' ')[1];
+      assert.ok(
+        /^\/mobile\/push-(tokens|subscriptions)/.test(path),
+        `${route} must be a registration surface`,
+      );
+    }
+    // The browser registration module is transport-free: it records a
+    // subscription, it never talks to a push service.
+    const browserModule = join(MODULES_DIR, 'browser-push-subscriptions');
+    for (const name of readdirSync(browserModule)) {
+      if (!name.endsWith('.ts')) continue;
+      const source = readFileSync(join(browserModule, name), 'utf8');
+      assert.ok(
+        !/\bfetch\s*\(|\.send\s*\(|createFetchBrowserPushTransport/.test(source),
+        `${name} must not contain a send path — registration never delivers`,
+      );
+    }
     const documentedPushPaths = Object.keys(spec.paths).filter((p: string) =>
       /push/i.test(p),
     );
     assert.deepEqual(documentedPushPaths.sort(), [
+      '/mobile/push-subscriptions',
+      '/mobile/push-subscriptions/{subscriptionId}',
       '/mobile/push-tokens',
       '/mobile/push-tokens/{tokenId}',
     ]);
@@ -349,8 +390,11 @@ describe('CR-BE-MOB-01 PART 07 — no push engine, provider or table was created
         '0334_extend_mobile_push_tokens_for_delivery.ts',
         '0335_widen_outbound_delivery_channels_for_push.ts',
         '0336_create_notification_push_deliveries.ts',
+        '0473_create_browser_push_subscriptions.ts',
+        '0474_widen_notification_template_channels_for_push.ts',
+        '0475_create_notification_browser_push_deliveries.ts',
       ],
-      'only the BE-25L token table, its PART 01 extension, the PART 03A channel widening and the PART 03C evidence table may exist',
+      'only the BE-25L token table, its PART 01 extension, the PART 03A channel widening, the PART 03C evidence table and the CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 browser registration, template-channel and browser evidence migrations may exist',
     );
     // The extension must remain additive: it may not create a table.
     const extension = readSource(
@@ -388,6 +432,44 @@ describe('CR-BE-MOB-01 PART 07 — no push engine, provider or table was created
       !/\b(token_value|device_token|token\s+text|token\s+varchar)\b/i.test(evidence),
       'attempt evidence must not persist a raw device token value',
     );
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the browser migrations are
+    // ADDITIVE and SEPARATE: they create their own browser registration and
+    // browser attempt tables, and they never widen the frozen native shapes
+    // (the native token table, its platform CHECK and the 0336 evidence
+    // table are untouched).
+    const browserRegistration = readSource(
+      'src/database/migrations/0473_create_browser_push_subscriptions.ts',
+    );
+    assert.ok(
+      /CREATE\s+TABLE\s+browser_push_subscriptions/i.test(browserRegistration),
+      'the browser registration authority must own its own table',
+    );
+    assert.ok(
+      !/ALTER\s+TABLE\s+mobile_push_tokens/i.test(browserRegistration),
+      'the browser registration migration must not touch the native token table',
+    );
+    const templateWidening = readSource(
+      'src/database/migrations/0474_widen_notification_template_channels_for_push.ts',
+    );
+    assert.ok(
+      /notification_templates_channel_check/i.test(templateWidening),
+      'the template channel widening must replace the template channel CHECK',
+    );
+    assert.ok(
+      !/CREATE\s+(TABLE|INDEX)|ADD\s+COLUMN/i.test(templateWidening),
+      'the template channel widening must only replace the CHECK',
+    );
+    const browserEvidence = readSource(
+      'src/database/migrations/0475_create_notification_browser_push_deliveries.ts',
+    );
+    assert.ok(
+      /browser_subscription_id/i.test(browserEvidence),
+      'browser attempt evidence must reference the subscription by id',
+    );
+    assert.ok(
+      !/notification_push_deliveries\s*\(/i.test(browserEvidence),
+      'the browser evidence table must stay separate from the frozen native table',
+    );
   });
 
   it('integrates no push vendor or provider SDK outside the governed module', () => {
@@ -417,8 +499,24 @@ describe('CR-BE-MOB-01 PART 07 — no push engine, provider or table was created
     walk(MODULES_DIR);
     // Even inside the governed module, only FCM may appear: no direct APNs
     // client, no OneSignal/Expo, and no browser Web Push / VAPID (§5.2, D-02).
+    //
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — S-4 SUPERSESSION
+    // (2026-10-24): §5.2's browser exclusion is superseded for the governed
+    // module ONLY, and only for the ONE named browser adapter file. The
+    // browser transport may exist there; it may exist NOWHERE else, and the
+    // other governed files (including the native FCM adapter) keep the ban
+    // byte-for-byte. The direct APNs / OneSignal / Expo bans remain absolute
+    // for every file, including the browser adapter.
     const forbiddenVendors =
-      /(onesignal|expo-notifications|node-apn|@parse\/node-apn|web-push|vapid|applicationServerKey|apns-connect|http2\.connect)/i;
+      /(onesignal|expo-notifications|node-apn|@parse\/node-apn|apns-connect|http2\.connect)/i;
+    const browserTransportVocabulary = /(web-push|vapid|applicationServerKey)/i;
+    const BROWSER_ADAPTER_FILE = 'browser-push-adapter.ts';
+    // The adapter file holds the browser transport; the module barrel only
+    // re-exports it. Both are inside the governed module, and nowhere else.
+    const BROWSER_VOCABULARY_ALLOWED = new Set([
+      BROWSER_ADAPTER_FILE,
+      'index.ts',
+    ]);
     for (const name of readdirSync(PROVIDER_MODULE)) {
       // Comments legitimately NAME the banned vendors (to record that they are
       // out of scope); only executable code is checked.
@@ -427,9 +525,24 @@ describe('CR-BE-MOB-01 PART 07 — no push engine, provider or table was created
         .replace(/\/\/.*$/gm, '');
       assert.ok(
         !forbiddenVendors.test(source),
-        `${name} must use FCM only — no direct APNs, OneSignal, Expo or Web Push`,
+        `${name} must not integrate a direct APNs, OneSignal or Expo client`,
+      );
+      if (BROWSER_VOCABULARY_ALLOWED.has(name)) {
+        // The browser transport MAY live in the adapter and be re-exported by
+        // the governed module's barrel (S-4).
+        continue;
+      }
+      assert.ok(
+        !browserTransportVocabulary.test(source),
+        `${name} must not contain the browser transport vocabulary — only ${BROWSER_ADAPTER_FILE} (and the governed barrel) may`,
       );
     }
+    // The browser adapter itself must not smuggle in a vendor SDK.
+    const browserAdapter = readFileSync(join(PROVIDER_MODULE, BROWSER_ADAPTER_FILE), 'utf8');
+    assert.ok(
+      !/require\(|from\s+['"](web-push|vapid|firebase|node-apn)/i.test(browserAdapter),
+      'the browser transport must be implemented with node:crypto alone — no vendor SDK',
+    );
     const pkg = JSON.parse(readSource('package.json'));
     const deps = Object.keys({
       ...(pkg.dependencies ?? {}),
@@ -437,7 +550,7 @@ describe('CR-BE-MOB-01 PART 07 — no push engine, provider or table was created
     });
     for (const dep of deps) {
       assert.ok(
-        !/firebase|fcm|apn|onesignal|expo/i.test(dep),
+        !/firebase|fcm|apn|onesignal|expo|web-push|vapid/i.test(dep),
         `push vendor dependency ${dep} must not be added`,
       );
     }

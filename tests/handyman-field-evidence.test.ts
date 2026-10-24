@@ -136,7 +136,10 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
         id uuid PRIMARY KEY, client_id uuid NOT NULL, vendor_id uuid NOT NULL,
         provider_code text NOT NULL DEFAULT 'PROV', status text NOT NULL,
         notes text, created_by_user_id uuid,
-        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+        created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+        -- CR-HM-FIELD-OPS-ACK-01 PART 02 repair: production projects
+        -- provider_type (VENDOR | DIRECT); the stale fixture omitted it.
+        provider_type text NOT NULL DEFAULT 'VENDOR'
       );
       CREATE TABLE workforce_profiles(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, organization_id uuid NOT NULL,
@@ -266,6 +269,16 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
       await migration0435CreateHandymanScopeVariations.up(client);
       await migration0436CreateHandymanMaterialPurchasing.up(client);
       await migration0437CreateHandymanFieldEvidenceUploads.up(client);
+      // CR-HM-FIELD-OPS-ACK-01 PART 02 repair: the evidence service binds the
+      // receipt binary digest through `receipt_sha256_checksum` (added to this
+      // table by migration 0470). The stale fixture stopped at 0437, so this
+      // suite never exercised its own duplicate-digest assertion. Only the
+      // column the bound service reads is added here; 0470 itself needs
+      // `work_orders`, which this focused fixture intentionally omits.
+      await client.query(
+        `ALTER TABLE handyman_material_purchase_records
+           ADD COLUMN IF NOT EXISTS receipt_sha256_checksum VARCHAR(64)`,
+      );
     } finally {
       client.release();
     }

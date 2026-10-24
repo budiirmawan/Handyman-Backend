@@ -191,6 +191,69 @@ export async function crewFixture(
   };
 }
 
+/**
+ * CR-HM-FIELD-OPERATIONS-01 PART 04 (G-4 / AC-7) — Lead TRANSFER inside the
+ * SAME crew: a second eligible worker is added to the existing crew and
+ * designated Lead, so the Execution Scope assignment stays ACTIVE while the
+ * authoritative CURRENT Lead changes. This is the only way to still reach
+ * the certified `FAILED / ACTOR_ASSIGNMENT_INVALID` verdict once a
+ * SUPERSEDED binding is refused earlier (PART 04 G-4), so the certified
+ * behaviour keeps its own fixture instead of being inferred.
+ */
+export async function transferCrewLeadFixture(
+  crew: Awaited<ReturnType<typeof crewFixture>>,
+  realm: Awaited<ReturnType<typeof realmFixture>>,
+) {
+  const linkedUser = await userService.createUser({
+    email: `lead2-${suffix().toLowerCase()}@example.com`,
+    displayName: 'Second Crew Lead',
+  });
+  const profile = await workforceService.createWorkforceProfile({
+    organizationId: realm.organization.id,
+    departmentId: realm.department.id,
+    positionId: realm.position.id,
+    employeeCode: `LEAD2_${suffix()}`,
+    fullName: 'Second Lead Worker',
+    workforceType: 'EXTERNAL',
+    userId: linkedUser.id,
+  });
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: realm.building.id,
+  });
+  await vendorWorkforceService.createVendorWorkforceBinding({
+    vendorId: crew.vendor.id,
+    workforceProfileId: profile.id,
+    vendorPersonnelCode: `VP2_${suffix()}`,
+  });
+  const workerContext = await handymanWorkerContextService
+    .createHandymanWorkerContext(
+      {
+        handymanProviderContextId: crew.providerContext.id,
+        workforceProfileId: profile.id,
+      },
+      adminUserId,
+    );
+  await handymanWorkCrewService.addHandymanCrewMember(
+    {
+      handymanCrewId: crew.crew.id,
+      handymanWorkerContextId: workerContext.id,
+    },
+    adminUserId,
+  );
+  await handymanWorkCrewService.designateHandymanCrewLead(
+    {
+      handymanCrewId: crew.crew.id,
+      handymanWorkerContextId: workerContext.id,
+    },
+    adminUserId,
+  );
+  await buildingAssignmentService.createAssignment(linkedUser.id, {
+    buildingId: realm.building.id,
+  });
+  return { leadUser: linkedUser, profile, workerContext };
+}
+
 export async function scopeFixture(
   realm: Awaited<ReturnType<typeof realmFixture>>,
   chain: Awaited<ReturnType<typeof locationChain>>,

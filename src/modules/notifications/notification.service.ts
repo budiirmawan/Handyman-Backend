@@ -1,4 +1,6 @@
+import type { Pool, PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
+import { getPool } from '../../database';
 import { isValidUuid } from '../clients';
 import { notificationRepository } from './notification.repository';
 import { notificationNotFoundError } from './notification.errors';
@@ -133,22 +135,33 @@ function validateNewNotification(input: NewNotification): void {
   }
 }
 
-/** Creates a notification record (internal seam; no HTTP endpoint). */
+/**
+ * Creates a notification record (internal seam; no HTTP endpoint).
+ *
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — an optional executor lets a
+ * producer that already owns a domain transaction write the record ON that
+ * transaction, so the notification commits or rolls back with the domain
+ * fact. Defaults to the pool (unchanged behaviour).
+ */
 export async function recordNotification(
   input: NewNotification,
+  executor: Pick<Pool | PoolClient, 'query'> = getPool(),
 ): Promise<PublicNotification> {
   validateNewNotification(input);
-  const record = await notificationRepository.create({
-    ...input,
-    title: input.title.trim(),
-    type: input.type.trim(),
-    sourceEntityType: input.sourceEntityType.trim(),
-    body: input.body ?? null,
-    sourceEventType: input.sourceEventType ?? null,
-    templateKey: input.templateKey ?? null,
-    metadata: input.metadata ?? {},
-    navigationTarget: input.navigationTarget ?? null,
-  });
+  const record = await notificationRepository.create(
+    {
+      ...input,
+      title: input.title.trim(),
+      type: input.type.trim(),
+      sourceEntityType: input.sourceEntityType.trim(),
+      body: input.body ?? null,
+      sourceEventType: input.sourceEventType ?? null,
+      templateKey: input.templateKey ?? null,
+      metadata: input.metadata ?? {},
+      navigationTarget: input.navigationTarget ?? null,
+    },
+    executor,
+  );
   return toPublicNotification(record);
 }
 

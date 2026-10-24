@@ -61,6 +61,14 @@ import { vendorService } from '../src/modules/vendors';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
 import { ensureTestDatabase } from './helpers/postgres';
+import {
+  crewFixture as sharedCrewFixture,
+  initHandymanFixtures,
+} from './helpers/handyman-fixtures';
+import {
+  startEmbeddedTestDatabase,
+  type EmbeddedTestDatabase,
+} from './helpers/embedded-test-db';
 
 /**
  * CR-HM-07 Arrival Verification PART 03B — per-Building geospatial
@@ -76,6 +84,13 @@ import { ensureTestDatabase } from './helpers/postgres';
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
+// CR-HM-FIELD-OPS-ACK-01 PART 02 — this suite used to SKIP itself
+// when no external PostgreSQL was reachable, so the CR-HM-07
+// geofence evidence never actually ran. It now owns a disposable
+// embedded cluster like the other CR-HM-07 suites.
+const EMBEDDED_DIR = '/tmp/hm04-geospatial-policies-pg';
+const EMBEDDED_PORT = 55590;
+let embedded: EmbeddedTestDatabase | null = null;
 let disciplineId = '';
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
@@ -83,6 +98,10 @@ const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 const REF = { latitude: -6.2, longitude: 106.816666 };
 
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: EMBEDDED_DIR,
+    port: EMBEDDED_PORT,
+  });
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);
@@ -116,13 +135,29 @@ before(async () => {
   );
   if (!d) throw new Error('GENERAL_HANDYMAN discipline seed missing');
   disciplineId = d.id;
+  // CR-HM-FIELD-OPS-ACK-01 PART 02 repair: the shared fixtures must be
+  // initialised so this suite's crew chain matches the production
+  // eligibility preconditions the other CR-HM-07 suites already use.
+  initHandymanFixtures({
+    adminUserId,
+    disciplineId,
+    query: async (text, params = []) => {
+      if (!pool) throw new Error('db pool not initialized');
+      return pool.query(text, params);
+    },
+  });
   database = db;
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+    if (embedded) await embedded.stop();
+  } finally {
+    pool = null;
+    database = null;
+    embedded = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {
@@ -208,8 +243,15 @@ async function locationChain(
   return { floor, area, room, space };
 }
 
-/** Active provider context + ACTIVE crew (valid login-capable Lead). */
-async function crewFixture(
+/**
+ * Active provider context + ACTIVE crew (valid login-capable Lead).
+ *
+ * CR-HM-FIELD-OPS-ACK-01 PART 02 — delegates to the shared fixture: the
+ * local copy had drifted from the production workforce-eligibility
+ * preconditions and failed closed with HANDYMAN_WORKFORCE_BINDING_REQUIRED
+ * as soon as a real database was available.
+ */
+async function crewFixtureUnused(
   realm: Awaited<ReturnType<typeof realmFixture>>,
 ) {
   const vendor = await vendorService.createVendor({
@@ -262,6 +304,8 @@ async function crewFixture(
     workerContext, crew: bundle.crew,
   };
 }
+
+const crewFixture = sharedCrewFixture;
 
 /** AUTHORIZED execution scope via the full CR-HM-02→06 chain. */
 async function scopeFixture(
@@ -351,9 +395,15 @@ async function scopeFixture(
   await issueHandymanQuotationVersion(version.id, {
     validUntil: new Date(Date.now() + 3_600_000).toISOString(),
   }, adminUserId);
+  // CR-HM-FIELD-OPS-ACK-01 PART 02 repair: quotation APPROVE is a
+  // TENANT PIC decision (CR-HM-W03 PART 03E). This suite's local fixture
+  // still authored it as the platform admin, so every case failed once a
+  // real database was actually available. The decision is now authored by
+  // the fixture's own ACTIVE Tenant PIC user — the same authority the
+  // shared `tests/helpers/handyman-fixtures.ts` chain already used.
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   return { scope };

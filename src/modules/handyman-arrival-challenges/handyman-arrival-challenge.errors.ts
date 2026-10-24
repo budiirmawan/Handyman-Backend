@@ -60,3 +60,26 @@ export function arrivalChallengeInvalidError(): AppError {
     statusCode: 409,
   });
 }
+
+/**
+ * CR-HM-FIELD-OPERATIONS-01 PART 04 (SG-3/SG-4 Option A) — the challenge
+ * is bound to an assignment that is no longer the scope's ACTIVE
+ * assignment (reassigned/revoked by Operations). Refused as a NEW
+ * attempt BEFORE TTL evaluation: the token is NOT consumed and NO
+ * arrival result row is created, so the challenge simply expires at its
+ * own server TTL. Idempotent replay of an already-recorded result is
+ * unaffected (it returns the existing result before this guard).
+ *
+ * Deliberately distinct from `arrivalChallengeInvalidError` (generic,
+ * non-enumerating) so the field client can instruct the worker to ask
+ * Operations to reissue, instead of retrying a dead token.
+ */
+export function arrivalChallengeSupersededError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED,
+    message:
+      'Arrival challenge is bound to an assignment that has been ' +
+      'superseded; ask Operations to reassign and issue a new challenge.',
+    statusCode: 409,
+  });
+}

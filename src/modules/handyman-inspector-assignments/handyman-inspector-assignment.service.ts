@@ -8,8 +8,11 @@ import { recordOperationalEvent } from '../operational-events';
 import {
   assignmentDeclineReasonForbiddenOnAcceptError,
   assignmentDeclineReasonRequiredError,
+  assertAssignmentResponseWindowOpen,
+  assertClientKeyAvailableForAssignment,
   assignmentResponseRepository,
   handymanAssignmentResponseConflictError,
+  normalizeAssignmentResponseClientKey,
   handymanAssignmentResponseForbiddenError,
   handymanAssignmentResponseLateError,
   handymanAssignmentResponseSupersededError,
@@ -78,6 +81,10 @@ function toPublic(
     responseNotes: response?.responseNotes ?? null,
     reassignmentRequired:
       record.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
+    acknowledgedAt:
+      responseStatus === 'TERIMA' && response?.respondedAt
+        ? response.respondedAt.toISOString()
+        : null,
   };
 }
 
@@ -764,6 +771,7 @@ export async function respondToInspectorVisitAssignment(
     throw AppError.validation('notes must not exceed 2000 characters.');
   }
   const normalizedNotes = rawNotes.length > 0 ? rawNotes : null;
+  const clientKey = normalizeAssignmentResponseClientKey(input.idempotencyKey);
 
   return withTransaction(async (tx) => {
     const visit = await handymanInspectorAssignmentRepository.lockVisit(
@@ -865,6 +873,21 @@ export async function respondToInspectorVisitAssignment(
     );
     const respondedByWorkerId = workerRes.rows[0]?.workerContextId ?? null;
 
+    // CR-HM-FIELD-OPS-ACK-01 PART 01 — concurrent-device key guard and the
+    // authoritative visit-window expiry guard (after identical replay).
+    await assertClientKeyAvailableForAssignment(
+      { actorUserId, assignmentId: assignment.id, clientIdempotencyKey: clientKey },
+      tx,
+    );
+    await assertAssignmentResponseWindowOpen(
+      {
+        assignmentTargetType: 'INSPECTOR_VISIT_ASSIGNMENT',
+        assignmentId: assignment.id,
+        visitAppointmentId: visit.id,
+      },
+      tx,
+    );
+
     const updated = await assignmentResponseRepository.recordDecision(
       {
         assignmentId: assignment.id,
@@ -873,6 +896,39 @@ export async function respondToInspectorVisitAssignment(
         actorWorkerId: respondedByWorkerId,
         declineReason: normalizedDeclineReason,
         notes: normalizedNotes,
+        clientIdempotencyKey: clientKey,
+      },
+      tx,
+    );
+
+    // Explicit acknowledgment / audit trail (PR #58 notification producer is
+    // untouched; this is the existing BE-07 operational event store).
+    await recordOperationalEvent(
+      {
+        clientId: visit.clientId,
+        buildingId: visit.buildingId,
+        entityType: 'HANDYMAN_ASSIGNMENT_RESPONSE',
+        entityId: assignment.id,
+        actorUserId,
+        eventType:
+          input.responseStatus === 'TERIMA'
+            ? 'HANDYMAN_ASSIGNMENT_ACKNOWLEDGED'
+            : 'HANDYMAN_ASSIGNMENT_DECLINED',
+        summary:
+          input.responseStatus === 'TERIMA'
+            ? 'Inspector visit assignment acknowledged (TERIMA)'
+            : 'Inspector visit assignment declined (TIDAK_BISA)',
+        metadata: {
+          assignmentTargetType: 'INSPECTOR_VISIT_ASSIGNMENT',
+          assignmentId: assignment.id,
+          handymanRequestId: visit.handymanRequestId,
+          visitAppointmentId: visit.id,
+          responseStatus: input.responseStatus,
+          actorWorkerId: respondedByWorkerId,
+          declineReason: normalizedDeclineReason,
+          clientKeyProvided: clientKey !== null,
+          respondedAt: updated.respondedAt?.toISOString() ?? null,
+        },
       },
       tx,
     );
@@ -967,6 +1023,12 @@ export async function listInspectorVisitAssignmentResponseHistory(
     responseNotes: response?.responseNotes ?? null,
     reassignmentRequired:
       assignment.status === 'ACTIVE' && responseStatus === 'TIDAK_BISA',
+    acknowledgedAt:
+      responseStatus === 'TERIMA' && response?.respondedAt
+        ? response.respondedAt.toISOString()
+        : null,
+    acknowledgedByUserId:
+      responseStatus === 'TERIMA' ? (response?.respondedByUserId ?? null) : null,
     events: events.map(toPublicAssignmentResponseEvent),
   };
 }

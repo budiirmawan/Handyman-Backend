@@ -401,7 +401,18 @@ describe('CR-BE-PUSH-01 PART 05 — the mobile surface stays provider-neutral', 
     const pushPaths = Object.entries<any>(spec.paths).filter(([p]) => /push/i.test(p));
     assert.ok(pushPaths.length > 0, 'the push paths must exist');
     const raw = JSON.stringify(
-      Object.fromEntries(pushPaths.concat([['schema', spec.components.schemas.PushTokenRegistration]])),
+      Object.fromEntries(
+        pushPaths.concat([
+          ['schema', spec.components.schemas.PushTokenRegistration],
+          // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the browser
+          // registration contract is part of the published push surface and
+          // must be provider-neutral in exactly the same way.
+          [
+            'browserSchema',
+            spec.components.schemas.BrowserPushSubscriptionRegistration,
+          ],
+        ]),
+      ),
     );
 
     // One pre-existing BE-25L mention names the token FORMAT ("FCM/APNs style
@@ -451,8 +462,22 @@ describe('CR-BE-PUSH-01 PART 05 — the mobile surface stays provider-neutral', 
       !/send|test|resend|dispatch|broadcast/i.test(routes),
       'no send/test/resend route may exist on the mobile surface',
     );
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the published push surface
+    // has TWO registration families (native APK token, browser subscription).
+    // Both are registration management; neither may expose a send path.
+    const browserRoutes = stripComments(
+      readSource(
+        'src/modules/browser-push-subscriptions/browser-push-subscription.routes.ts',
+      ),
+    );
+    assert.ok(
+      !/send|test|resend|dispatch|broadcast/i.test(browserRoutes),
+      'no send/test/resend route may exist on the browser subscription surface',
+    );
     const documentedPushPaths = Object.keys(spec.paths).filter((p) => /push/i.test(p)).sort();
     assert.deepEqual(documentedPushPaths, [
+      '/mobile/push-subscriptions',
+      '/mobile/push-subscriptions/{subscriptionId}',
       '/mobile/push-tokens',
       '/mobile/push-tokens/{tokenId}',
     ]);

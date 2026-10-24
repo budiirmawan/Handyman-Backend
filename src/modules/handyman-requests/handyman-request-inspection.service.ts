@@ -2,6 +2,7 @@ import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import {
   handymanAssignmentDeclinedError,
@@ -236,6 +237,29 @@ export async function recordHandymanInspection(
           },
         },
         tx,
+      );
+
+      // 7b) CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+      // REACTION to the occurred inspection, on the SAME transaction (so it
+      // commits or rolls back with the inspection). The event type is the
+      // PART 03 ADDITIVE vocabulary (the frozen CR-HM-16 contract names the
+      // other domain events and stays untouched); the audience stays the
+      // declarative subscription rule; the tenant is the request's own
+      // client.
+      await emitHandymanDomainNotificationIntent(
+        {
+          eventType: 'HANDYMAN_INSPECTION_RECORDED',
+          clientId: request.clientId,
+          entityId: record.id,
+          buildingId: request.buildingId,
+          variables: {
+            handymanRequestId: request.id,
+            inspectionId: record.id,
+            inspectionResult: input.inspectionResult,
+            buildingId: request.buildingId,
+          },
+        },
+        { executor: tx },
       );
 
       return toPublic(record);

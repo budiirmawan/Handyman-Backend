@@ -509,6 +509,14 @@ import { migration0471HandymanHelperAttendanceConfirmation }
   from './0471_handyman_helper_attendance_confirmation';
 import { migration0472HandymanAssignmentResponses }
   from './0472_handyman_assignment_responses';
+import { migration0473CreateBrowserPushSubscriptions }
+  from './0473_create_browser_push_subscriptions';
+import { migration0474WidenNotificationTemplateChannelsForPush }
+  from './0474_widen_notification_template_channels_for_push';
+import { migration0475CreateNotificationBrowserPushDeliveries }
+  from './0475_create_notification_browser_push_deliveries';
+import { migration0476HandymanAssignmentResponseClientKeys }
+  from './0476_handyman_assignment_response_client_keys';
 import { migration0477HandymanParameterizedServiceCatalog }
   from './0477_handyman_parameterized_service_catalog';
 import { migration0478ServicePriceTierKey }
@@ -992,6 +1000,10 @@ export const migrations: readonly Migration[] = [
   migration0470HandymanFieldExpenseReimbursement,
   migration0471HandymanHelperAttendanceConfirmation,
   migration0472HandymanAssignmentResponses,
+  migration0473CreateBrowserPushSubscriptions,
+  migration0474WidenNotificationTemplateChannelsForPush,
+  migration0475CreateNotificationBrowserPushDeliveries,
+  migration0476HandymanAssignmentResponseClientKeys,
   migration0477HandymanParameterizedServiceCatalog,
   migration0478ServicePriceTierKey,
   migration0479HandymanServiceVariantAttributeLifecycle,

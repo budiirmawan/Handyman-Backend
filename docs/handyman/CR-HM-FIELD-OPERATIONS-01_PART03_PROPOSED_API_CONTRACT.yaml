@@ -1,0 +1,389 @@
+# APPROVED BY CR OWNER 2026-10-24 — STILL NOT APPLIED.
+# Review artefact for CR-HM-FIELD-OPERATIONS-01 PART 03.
+#
+# The CR Owner approved SG-1 (G-2 + G-3), SG-2 OPTION A (existing
+# building_configuration.read|manage), SG-3/SG-4 OPTION A (409
+# HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED, refused before TTL evaluation).
+# Signed record: CR-HM-FIELD-OPERATIONS-01_PART03_SIGNOFF_GATE.md §8;
+# binding implementation conditions: §9.
+#
+# This file is STILL a proposal: it is deliberately NOT part of
+# docs/api/openapi.yaml and is NOT served or validated by the runtime.
+# docs/api/openapi.yaml remains at 288 Handyman operations with exact
+# runtime parity. Applying it is PART 04 work and has not started.
+#
+# Authority reused (nothing new is invented):
+#   RBAC          building_configuration.manage | building_configuration.read
+#                 (existing codes, existing permission registry, no seed change)
+#   Scope         BE-02G exact-Building (assertBuildingScopedResourceAccess)
+#   Services      createHandymanArrivalLocationIdentifier
+#                 deactivateHandymanArrivalLocationIdentifier
+#                 saveHandymanBuildingGeospatialPolicy
+#                 getHandymanBuildingGeospatialPolicy
+#   Tables        0398 handyman_arrival_location_identifiers
+#                 0399 handyman_building_geospatial_policies
+#   Migrations    ZERO required (see governance record §7)
+
+openapi: 3.0.3
+info:
+  title: CR-HM-FIELD-OPERATIONS-01 PART 03 — proposed amendment (G-2, G-3)
+  version: 0.0.0-proposed
+  description: >-
+    PROPOSED contract for the two deferred CR-HM-07 configuration surfaces and
+    the G-4 superseded-challenge refusal. Every operation below is additive:
+    no existing operation changes path, method, status code or error code.
+
+paths:
+
+  # ───────────────────────────────────────────────────────────────────────
+  # G-2 — ARRIVAL QR REGISTRY (registration / listing / deactivation)
+  # ───────────────────────────────────────────────────────────────────────
+  /handyman/buildings/{buildingId}/arrival-location-identifiers:
+    post:
+      tags: [Handyman Arrival Configuration]
+      operationId: registerHandymanArrivalLocationIdentifier
+      x-required-permission: building_configuration.manage
+      x-scope-guard: BE-02G exact-Building
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_ARRIVAL_LOCATION_IDENTIFIER_VALIDATION]
+      summary: Register an opaque arrival QR identifier for a Building location
+      description: >-
+        Registers one opaque location identifier (QR) bound to the Building and,
+        optionally, to an exact floor/area/room/space chain of that Building.
+        The server GENERATES the opaque value, returns it EXACTLY ONCE and
+        persists only its SHA-256 hash. clientId, status and the hash are never
+        caller-authored. The Building must exist and be ACTIVE, and the caller
+        must hold building_configuration.manage PLUS an ACTIVE exact-Building
+        assignment (BE-02G). Registering an identifier is CONFIGURATION ONLY: it
+        creates no arrival verdict, consumes no challenge, and does not make the
+        caller a field actor.
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanArrivalLocationIdentifierRegistrationRequest'
+      responses:
+        '201':
+          description: Identifier registered; the opaque value is returned exactly once
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanArrivalLocationIdentifierIssued'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [Handyman Arrival Configuration]
+      operationId: listHandymanArrivalLocationIdentifiers
+      x-required-permission: building_configuration.read
+      x-scope-guard: BE-02G exact-Building
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED]
+      summary: List a Building's arrival QR identifiers (no secret material)
+      description: >-
+        Read-only registry projection for operators. Never returns the opaque
+        value or its hash — an issued code cannot be recovered, only re-registered
+        or deactivated. Bounded keyset-free list (deterministic order).
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - in: query
+          name: status
+          required: false
+          schema: { type: string, enum: [ACTIVE, INACTIVE] }
+      responses:
+        '200':
+          description: Registry rows (opaque value and hash omitted)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [buildingId, identifiers]
+                        properties:
+                          buildingId: { type: string, format: uuid }
+                          identifiers:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/HandymanArrivalLocationIdentifier'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /handyman/buildings/{buildingId}/arrival-location-identifiers/{identifierId}/deactivate:
+    post:
+      tags: [Handyman Arrival Configuration]
+      operationId: deactivateHandymanArrivalLocationIdentifier
+      x-required-permission: building_configuration.manage
+      x-scope-guard: BE-02G exact-Building
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_ARRIVAL_LOCATION_IDENTIFIER_NOT_FOUND]
+      summary: Deactivate an arrival QR identifier (the only permitted lifecycle write)
+      description: >-
+        ACTIVE -> INACTIVE only. Identity, hash and the location chain are
+        immutable (0398 trigger blocks DELETE and every other UPDATE). The
+        identifier's own authoritative client/building is used for the BE-02G
+        check, so a sibling-Building or cross-client caller cannot deactivate it.
+        A deactivated identifier makes a later scan resolve INACTIVE
+        (MANUAL_REVIEW_REQUIRED), never VERIFIED.
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+        - in: path
+          name: identifierId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Identifier deactivated (idempotent projection of the INACTIVE row)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanArrivalLocationIdentifier'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────────────────────────────────────────────────
+  # G-3 — BUILDING GEOFENCE POLICY (configure / read active / read history)
+  # ───────────────────────────────────────────────────────────────────────
+  /handyman/buildings/{buildingId}/geofence-policy:
+    put:
+      tags: [Handyman Arrival Configuration]
+      operationId: saveHandymanBuildingGeofencePolicy
+      x-required-permission: building_configuration.manage
+      x-scope-guard: BE-02G exact-Building
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_BUILDING_GEOSPATIAL_POLICY_VALIDATION]
+      summary: Create or replace the per-Building geofence policy (history preserved)
+      description: >-
+        First call activates the Building's policy; every later call RETIRES the
+        current ACTIVE row (INACTIVE, journalled REPLACED) and inserts a new
+        ACTIVE row atomically — 0399's one-ACTIVE-per-Building index guarantees
+        exactly one live policy and no historical row is ever overwritten or
+        deleted. Validation (400) precedes authorization (403) precedes any
+        mutation. Physical bounds are enforced server-side and are NOT policy
+        defaults: latitude -90..90, longitude -180..180, radius > 0, maxAccuracy
+        > 0, maxLocationAgeSeconds a positive integer, optional effectiveFrom a
+        valid timestamp. The Backend — never the caller, device, QR or provider —
+        computes distance and the INSIDE/OUTSIDE/LOW_ACCURACY/UNAVAILABLE signal.
+        A policy is configuration only: it creates no verdict and consumes no
+        challenge.
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandymanBuildingGeofencePolicyRequest'
+      responses:
+        '200':
+          description: Newly ACTIVE policy (the replaced row is returned by the history read)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBuildingGeofencePolicy'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [Handyman Arrival Configuration]
+      operationId: getHandymanBuildingGeofencePolicy
+      x-required-permission: building_configuration.read
+      x-scope-guard: BE-02G exact-Building
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED, HANDYMAN_BUILDING_GEOSPATIAL_POLICY_NOT_FOUND]
+      summary: Read the ACTIVE geofence policy for a Building
+      description: >-
+        Returns the single ACTIVE policy or 404 when the Building has never been
+        configured (an unconfigured Building is a real operational state, not an
+        error to hide). The 404 is evaluated before authorization on the row, so
+        it never leaks existence across clients.
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+      responses:
+        '200':
+          description: ACTIVE policy
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HandymanBuildingGeofencePolicy'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /handyman/buildings/{buildingId}/geofence-policy/history:
+    get:
+      tags: [Handyman Arrival Configuration]
+      operationId: listHandymanBuildingGeofencePolicyHistory
+      x-required-permission: building_configuration.read
+      x-scope-guard: BE-02G exact-Building
+      security: [{ bearerAuth: [] }]
+      x-error-codes: [VALIDATION_ERROR, BUILDING_ACCESS_DENIED]
+      summary: Read the append-only policy history for a Building
+      description: >-
+        Every retired (INACTIVE) policy plus the current ACTIVE one, newest
+        first, with its activation/retirement journal reference. This is the read
+        that makes the "history preserved, never overwritten" guarantee auditable
+        (frozen decision §10 ADMINISTRATION). Read-only.
+      parameters:
+        - $ref: '#/components/parameters/BuildingIdPath'
+      responses:
+        '200':
+          description: Full policy history for the Building
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [buildingId, policies]
+                        properties:
+                          buildingId: { type: string, format: uuid }
+                          policies:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/HandymanBuildingGeofencePolicy'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  parameters:
+    BuildingIdPath:
+      in: path
+      name: buildingId
+      required: true
+      schema: { type: string, format: uuid }
+
+  schemas:
+    HandymanArrivalLocationIdentifierRegistrationRequest:
+      type: object
+      description: >-
+        Caller input is the LOCATION CHAIN ONLY. clientId, status, id,
+        opaqueCode and opaqueCodeHash are server-derived and structurally
+        ignored if supplied. Deeper links require their parent link; each link
+        must belong to the Building in the URL and be ACTIVE.
+      properties:
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+
+    HandymanArrivalLocationIdentifier:
+      type: object
+      description: >-
+        Registry projection. The opaque value and its hash are NEVER returned
+        here; the value exists only in the 201 response of a registration.
+      required: [id, buildingId, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        floorId: { type: string, format: uuid, nullable: true }
+        areaId: { type: string, format: uuid, nullable: true }
+        roomId: { type: string, format: uuid, nullable: true }
+        spaceId: { type: string, format: uuid, nullable: true }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    HandymanArrivalLocationIdentifierIssued:
+      allOf:
+        - $ref: '#/components/schemas/HandymanArrivalLocationIdentifier'
+        - type: object
+          required: [opaqueCode]
+          properties:
+            opaqueCode:
+              type: string
+              minLength: 1
+              description: >-
+                The generated opaque QR payload. Returned EXACTLY ONCE and never
+                recoverable, logged or journaled. Only a SHA-256 hash persists.
+
+    HandymanBuildingGeofencePolicyRequest:
+      type: object
+      required: [referenceLatitude, referenceLongitude, geofenceRadiusMeters, maxAccuracyMeters, maxLocationAgeSeconds]
+      description: >-
+        Building authority configuration. buildingId comes from the URL; clientId,
+        status, createdByUserId and every computed/derived field are server-side
+        and structurally ignored if supplied. No business default or maximum is
+        implied by these bounds — they are physical sanity only.
+      properties:
+        referenceLatitude: { type: number, minimum: -90, maximum: 90 }
+        referenceLongitude: { type: number, minimum: -180, maximum: 180 }
+        geofenceRadiusMeters: { type: number, exclusiveMinimum: 0 }
+        maxAccuracyMeters: { type: number, exclusiveMinimum: 0 }
+        maxLocationAgeSeconds: { type: integer, exclusiveMinimum: 0 }
+        effectiveFrom: { type: string, format: date-time, nullable: true }
+
+    HandymanBuildingGeofencePolicy:
+      type: object
+      required: [id, buildingId, referenceLatitude, referenceLongitude, geofenceRadiusMeters, maxAccuracyMeters, maxLocationAgeSeconds, status, effectiveFrom, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        referenceLatitude: { type: number }
+        referenceLongitude: { type: number }
+        geofenceRadiusMeters: { type: number }
+        maxAccuracyMeters: { type: number }
+        maxLocationAgeSeconds: { type: integer }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+        effectiveFrom: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+# ─────────────────────────────────────────────────────────────────────────
+# G-4 — SUPERSEDED CHALLENGE REFUSAL (existing terminal command, additive
+# refusal path; NOT a new operation)
+# ─────────────────────────────────────────────────────────────────────────
+x-g4-delta:
+  operation: 'POST /handyman/execution-scopes/{executionScopeId}/arrival-verification'
+  new_error_code: HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED
+  http_status: 409
+  trigger: >-
+    The challenge's bound assignment_id is no longer the ACTIVE assignment of the
+    execution scope (the row is SUPERSEDED per 0396, or no ACTIVE row exists),
+    evaluated AFTER the replay short-circuit and BEFORE actor/QR/geofence work.
+  effects:
+    consume: NONE
+    result_row: NONE
+    challenge_lifecycle: unchanged (stays PENDING until its 120s TTL, then EXPIRED)
+    replay: unchanged — an already-stored result for the same challenge is still
+      returned unchanged (idempotency preserved)
+  unchanged_behaviour: >-
+    A different actor bound to a still-ACTIVE assignment keeps the certified
+    FAILED / ACTOR_ASSIGNMENT_INVALID terminal verdict.
+  certified_contract_change: >-
+    CR-HM-07 FINAL CERTIFICATION §8 and PART 04B precedence are narrowed for the
+    superseded-binding case only. Requires CR Owner approval (see sign-off gate).

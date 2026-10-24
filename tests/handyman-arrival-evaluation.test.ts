@@ -31,6 +31,7 @@ import {
   crewFixture,
   initHandymanFixtures,
   locationChain,
+  transferCrewLeadFixture,
 } from './helpers/handyman-fixtures';
 import { ensureTestDatabase } from './helpers/postgres';
 import {
@@ -392,23 +393,15 @@ describe('CR-HM-07 PART 04B — atomic terminal arrival evaluator', () => {
   it('6: non-authoritative actor => FAILED / ACTOR_ASSIGNMENT_INVALID', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await authorityFixture();
-    // Supersede the assignment with ANOTHER crew: the authenticated
-    // actor is no longer the authoritative CURRENT Lead; the caller's
-    // claim carries zero weight.
+    // CR-HM-FIELD-OPERATIONS-01 PART 04 (G-4, AC-7): the CERTIFIED
+    // ACTOR_ASSIGNMENT_INVALID verdict now belongs to the case where the
+    // assignment is STILL ACTIVE but the authoritative CURRENT Lead has
+    // been transferred (reassignment is refused earlier with
+    // HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED — see case 6b). The actor is
+    // therefore no longer the authoritative Lead while the binding stands,
+    // and the caller's claim still carries zero weight.
     const otherCrew = await crewFixture(f.realm);
-    // CR-HM-18: reassignment is hardened (expectedVersion + reason + key).
-    const current = await getHandymanExecutionScopeAssignment(
-      f.scope.id,
-      adminUserId,
-    );
-    await reassignHandymanExecutionScopeCrew({
-      executionScopeId: f.scope.id,
-      providerContextId: otherCrew.providerContext.id,
-      crewId: otherCrew.crew.id,
-      expectedVersion: current!.version,
-      reason: 'Supersede the assignment with another crew.',
-      idempotencyKey: `reassign-${randomUUID()}`,
-    }, adminUserId);
+    await transferCrewLeadFixture(f.crew, f.realm);
     const result = await evaluateHandymanArrivalVerification({
       executionScopeId: f.scope.id,
       challengeToken: f.challengeToken,
@@ -426,6 +419,49 @@ describe('CR-HM-07 PART 04B — atomic terminal arrival evaluator', () => {
     assert.equal(result.assignmentId, f.assignmentId,
       'result binds the ORIGINAL assignment (snapshot at issue time)');
     assert.equal(result.actorUserId, f.actorUserId);
+  });
+
+  it('6b: superseded assignment => 409 SUPERSEDED, no result, no consume', async (t) => {
+    if (!requireDatabase(t)) return;
+    const f = await authorityFixture();
+    // Operations replaces the crew: the issued challenge is bound to an
+    // assignment that is no longer the scope's ACTIVE one.
+    const otherCrew = await crewFixture(f.realm);
+    const current = await getHandymanExecutionScopeAssignment(
+      f.scope.id,
+      adminUserId,
+    );
+    await reassignHandymanExecutionScopeCrew({
+      executionScopeId: f.scope.id,
+      providerContextId: otherCrew.providerContext.id,
+      crewId: otherCrew.crew.id,
+      expectedVersion: current!.version,
+      reason: 'Supersede the assignment (PART 04 G-4).',
+      idempotencyKey: `reassign-${randomUUID()}`,
+    }, adminUserId);
+    await assert.rejects(
+      () => evaluateHandymanArrivalVerification({
+        executionScopeId: f.scope.id,
+        challengeToken: f.challengeToken,
+        qrOpaqueCode: f.matchingQr!.value,
+        deviceLocation: goodDevice(),
+      }, f.actorUserId),
+      (e: unknown) =>
+        (e as { code?: string }).code
+          === 'HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED',
+    );
+    // Nothing was consumed and no immutable result exists.
+    const row = await q(
+      `SELECT status, consumed_at FROM handyman_arrival_challenges
+        WHERE id = $1`,
+      [f.challenge!.id],
+    );
+    assert.equal(row.rows[0].status, 'PENDING');
+    assert.equal(row.rows[0].consumed_at, null);
+    assert.equal(
+      await findHandymanArrivalResultByChallengeId(f.challenge!.id),
+      null,
+    );
   });
 
   it('7: expired challenge => EXPIRED / CHALLENGE_EXPIRED', async (t) => {

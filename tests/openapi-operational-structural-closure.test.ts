@@ -19,11 +19,22 @@ import { createApp } from '../src/app';
  * operational API contract:
  *  1. Operational census arithmetic & route disposition (release-integration
  *     pins, CR-HM-BACKEND-RELEASE-INTEGRATION-01 PART 01):
- *     - TOTAL_RUNTIME = 2,052
+ *     - TOTAL_RUNTIME = 2,067
  *     - NON_OPENAPI_INFRASTRUCTURE_ROUTE = 1 (app root `GET /`)
- *     - IN_SCOPE_OPERATIONAL_RUNTIME = 1,982
- *     - OPENAPI_OPERATIONAL = 1,981
- *     - RUNTIME_NOT_DOCUMENTED (Class A) = 1 (1,982 - 1,981 = 1)
+ *     - IN_SCOPE_OPERATIONAL_RUNTIME = 1,997
+ *     - OPENAPI_OPERATIONAL = 1,996
+ *     - RUNTIME_NOT_DOCUMENTED (Class A) = 1 (1,997 - 1,996 = 1)
+ *
+ * CR-HM-FIELD-OPERATIONS-01 FINAL REVIEW (2026-10-24): the previous pins
+ * (2,034 / 1,964 / 1,963) were already stale on `main`. Re-derived from a
+ * measurement on `main` (2,038 / 1,968 / 1,967) plus the approved additive
+ * operations carried by this branch: PART 02 +1 and PART 04 +6.
+ *
+ * PR #60 MERGED RECONCILIATION (2026-10-24, after PR #59 landed on `main`):
+ * the pins below are re-measured on the merged tree — 2,067 runtime
+ * (1,998 operational runtime = 1 root + 1,997 in-scope, plus 69 platform),
+ * 1,996 operational OpenAPI, Class A gap still exactly 1 (the duplicate task
+ * mount). PR #59's own pins were 2,045 / 1,975 / 1,974.
  *     - Duplicate runtime mount = 1 (`GET /tasks/:id` vs `GET /tasks/:taskId`)
  *  2. Exact Class A count after route disposition = 1
  *  3. All OpenAPI operations have unique operationId (0 missing)
@@ -137,10 +148,10 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
   const operationalOpenApi = openapi.filter((o) => !o.path.startsWith('/platform'));
 
   // 1. Reconciled operational census arithmetic & route disposition
-  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 2,056, IN_SCOPE = 1,986', () => {
-    assert.equal(runtime.length, 2056, 'Total runtime routes must be exactly 2,056');
+  it('1. proves reconciled census arithmetic: TOTAL_RUNTIME = 2,067, IN_SCOPE = 1,997', () => {
+    assert.equal(runtime.length, 2067, 'Total runtime routes must be exactly 2,067');
     assert.equal(platformRuntime.length, 69, 'SaaS platform runtime routes must be exactly 69');
-    assert.equal(operationalRuntime.length, 1987, 'Operational runtime routes must be 1,987');
+    assert.equal(operationalRuntime.length, 1998, 'Operational runtime routes must be 1,998');
 
     // Root GET / is the single NON_OPENAPI_INFRASTRUCTURE_ROUTE
     const rootRoute = operationalRuntime.filter((r) => r.path === '/');
@@ -148,10 +159,10 @@ describe('OpenAPI Operational Structural Closure (INT-LC-19-BE PART 01)', () => 
     assert.equal(rootRoute[0].method, 'GET');
 
     const inScopeOperational = operationalRuntime.filter((r) => r.path !== '/');
-    assert.equal(inScopeOperational.length, 1986, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,986');
-    assert.equal(operationalOpenApi.length, 1985, 'OPENAPI_OPERATIONAL must be 1,985 after release integration');
+    assert.equal(inScopeOperational.length, 1997, 'IN_SCOPE_OPERATIONAL_RUNTIME must be exactly 1,997');
+    assert.equal(operationalOpenApi.length, 1996, 'OPENAPI_OPERATIONAL must be 1,996 after release integration');
 
-    // Reconciled arithmetic: 1946 - 1945 = 1 (duplicate task mount only)
+    // Reconciled arithmetic: 1,997 - 1,996 = 1 (duplicate task mount only)
     const runtimeNotDocumented = inScopeOperational.length - operationalOpenApi.length;
     assert.equal(runtimeNotDocumented, 1, 'RUNTIME_NOT_DOCUMENTED must be exactly 1');
   });

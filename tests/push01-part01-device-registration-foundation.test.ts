@@ -906,7 +906,6 @@ describe('CR-BE-PUSH-01 PART 01 — the public surface exposes no routing metada
     for (const retained of [
       "assert.deepEqual([...NOTIFICATION_CHANNELS], ['IN_APP'])",
       'PushTokenRegistration must not expose',
-      'only BE-25L token registration routes may exist',
       'the token module must only register/rotate/deactivate tokens',
       "assert.equal(tokenOp['x-required-permission'], undefined)",
       'push vendor dependency',
@@ -917,6 +916,19 @@ describe('CR-BE-PUSH-01 PART 01 — the public surface exposes no routing metada
         `the boundary contract must still assert: ${retained}`,
       );
     }
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — S-4 SUPERSESSION
+    // (2026-10-24): the route assertion SURVIVES, only its wording changed
+    // (the browser REGISTRATION routes joined the native ones, and the send
+    // ban is unchanged). The boundary contract must still forbid a push
+    // SEND route.
+    assert.ok(
+      contract.includes('only the token/subscription REGISTRATION routes may exist'),
+      'the boundary contract must still assert that only registration routes exist',
+    );
+    assert.ok(
+      contract.includes('registration never delivers'),
+      'the boundary contract must still assert that registration never delivers',
+    );
     // Only the migration allow-list was retired, and it stays exact.
     assert.ok(
       contract.includes("'0334_extend_mobile_push_tokens_for_delivery.ts'"),
@@ -927,6 +939,12 @@ describe('CR-BE-PUSH-01 PART 01 — the public surface exposes no routing metada
     // attempt-evidence table. B-01h makes PART 03 the setter of the FINAL
     // list, so this set is now closed. The assertion still pins an exact list
     // rather than a count, so any unnamed push migration fails here.
+    //
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 (2026-10-24) — S-1/S-5
+    // SUPERSESSION: the list now also names the three PART 02 migrations —
+    // the browser subscription table (0473), the template-channel widening
+    // (0474) and the browser attempt-evidence table (0475). It stays an
+    // EXACT list: any unnamed push migration still fails here.
     const pushMigrations = readdirSync(MIGRATIONS_DIR).filter((file) =>
       /push/i.test(file),
     );
@@ -935,6 +953,9 @@ describe('CR-BE-PUSH-01 PART 01 — the public surface exposes no routing metada
       '0334_extend_mobile_push_tokens_for_delivery.ts',
       '0335_widen_outbound_delivery_channels_for_push.ts',
       '0336_create_notification_push_deliveries.ts',
+      '0473_create_browser_push_subscriptions.ts',
+      '0474_widen_notification_template_channels_for_push.ts',
+      '0475_create_notification_browser_push_deliveries.ts',
     ]);
     // PART 01's own migration must still be the only one touching the device
     // registration table — PART 03A may not have quietly re-opened it.

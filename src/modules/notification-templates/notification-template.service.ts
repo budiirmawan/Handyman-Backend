@@ -1,4 +1,6 @@
 import { AppError } from '../../shared/errors';
+import { getPool } from '../../database';
+import type { Pool, PoolClient } from 'pg';
 import { notificationTemplateRepository } from './notification-template.repository';
 import {
   notificationTemplateKeyAlreadyExistsError,
@@ -150,8 +152,12 @@ export async function updateNotificationTemplate(
  */
 export async function getActiveTemplateByKey(
   key: string,
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 01 — optional executor so a
+  // producer that owns a transaction reads the template ON that transaction.
+  // Defaults to the pool (unchanged behaviour).
+  executor: Pick<Pool | PoolClient, 'query'> = getPool(),
 ): Promise<PublicNotificationTemplate | null> {
-  const record = await notificationTemplateRepository.findByKey(key);
+  const record = await notificationTemplateRepository.findByKey(key, executor);
   if (!record || record.status !== 'ACTIVE') {
     return null;
   }

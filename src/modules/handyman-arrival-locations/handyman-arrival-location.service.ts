@@ -294,12 +294,25 @@ export async function createHandymanArrivalLocationIdentifier(
 export async function deactivateHandymanArrivalLocationIdentifier(
   identifierId: string,
   actorUserId: string,
+  expectedBuildingId?: string,
 ): Promise<PublicHandymanArrivalLocationIdentifier> {
   ensureUuid(identifierId, 'identifierId');
   ensureUuid(actorUserId, 'actorUserId');
+  const buildingScope = expectedBuildingId === undefined
+    ? null
+    : ensureUuid(expectedBuildingId, 'buildingId');
   const existing = await handymanArrivalLocationRepository
     .findIdentifierById(undefined, identifierId);
   if (!existing) throw arrivalLocationIdentifierNotFoundError();
+  // CR-HM-FIELD-OPERATIONS-01 PART 04 (G-2 HTTP binding) — when the caller
+  // addresses the identifier THROUGH a Building, that Building must be the
+  // identifier's own authoritative Building. Without this, access to
+  // Building A plus a guessed id would otherwise reach Building B's row
+  // (BE-02G would re-check B, but the URL would be a lie). Unknown and
+  // mismatched ids share the SAME non-enumerating 404 shape.
+  if (buildingScope !== null && existing.buildingId !== buildingScope) {
+    throw arrivalLocationIdentifierNotFoundError();
+  }
   // CR-HM-SEC-01 PART 06B-2 — BE-02G exact-Building check on the
   // identifier's authoritative building/client, replacing the
   // client-level canAccessClient shortcut: a same-Client sibling
@@ -311,6 +324,15 @@ export async function deactivateHandymanArrivalLocationIdentifier(
     clientId: existing.clientId,
     buildingId: existing.buildingId,
   });
+  // CR-HM-FIELD-OPERATIONS-01 PART 04 (G-2 replay) — deactivation is a
+  // TERMINAL projection: repeating it is an idempotent replay of the same
+  // INACTIVE state, never a 404 and never a second journal entry. A
+  // retried operator request (or a double-clicked client) therefore cannot
+  // report "not found" for a row it can still see in the registry, and the
+  // audit trail keeps exactly one DEACTIVATED fact per identifier.
+  if (existing.status === 'INACTIVE') {
+    return toPublic(existing);
+  }
   return withTransaction(async (tx) => {
     const record = await handymanArrivalLocationRepository
       .deactivateIdentifier(tx, identifierId);
@@ -329,6 +351,44 @@ export async function deactivateHandymanArrivalLocationIdentifier(
     );
     return toPublic(record);
   });
+}
+
+/**
+ * CR-HM-FIELD-OPERATIONS-01 PART 04 (G-2 read surface) — operator registry
+ * listing for ONE Building. Authority chain is identical to registration:
+ * Building exists + ACTIVE (400) → BE-02G exact-Building access (403) →
+ * read. The projection carries NO secret material: the opaque value is
+ * unrecoverable by design (hash at rest) and the hash is never selected
+ * into the public shape. Read-only: no journal, no mutation.
+ */
+export async function listHandymanArrivalLocationIdentifiers(
+  input: {
+    buildingId: string;
+    status?: 'ACTIVE' | 'INACTIVE' | null;
+  },
+  actorUserId: string,
+): Promise<{
+  buildingId: string;
+  identifiers: PublicHandymanArrivalLocationIdentifier[];
+}> {
+  const buildingId = ensureUuid(input.buildingId, 'buildingId');
+  ensureUuid(actorUserId, 'actorUserId');
+  const building = await handymanArrivalLocationRepository
+    .findBuildingAuthority(undefined, buildingId);
+  if (!building || building.status !== 'ACTIVE') {
+    throw arrivalLocationIdentifierValidationError([
+      { field: 'buildingId', message: 'Building must exist and be ACTIVE.' },
+    ]);
+  }
+  // BE-02G exact-Building wall (same position as registration, before any
+  // read of the registry).
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: building.clientId,
+    buildingId: building.id,
+  });
+  const records = await handymanArrivalLocationRepository
+    .listIdentifiersByBuilding(undefined, buildingId, input.status ?? undefined);
+  return { buildingId, identifiers: records.map(toPublic) };
 }
 
 /**
@@ -391,5 +451,6 @@ export const handymanArrivalLocationService = {
   selectMostSpecificExpectedLocationLevel,
   createHandymanArrivalLocationIdentifier,
   deactivateHandymanArrivalLocationIdentifier,
+  listHandymanArrivalLocationIdentifiers,
   resolveHandymanArrivalQrSignal,
 };

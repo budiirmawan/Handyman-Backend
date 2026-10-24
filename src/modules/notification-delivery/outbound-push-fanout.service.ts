@@ -1,6 +1,8 @@
 import { getPool } from '../../database';
 import { listActivePushTokensForUser } from '../push-tokens';
 import type { PushPlatform, PushTokenRecord } from '../push-tokens';
+import { listActiveBrowserPushSubscriptionsForUser } from '../browser-push-subscriptions';
+import type { BrowserPushSubscriptionRecord } from '../browser-push-subscriptions';
 import type { OutboundDeliveryRecord } from '../notification-outbound-deliveries';
 import {
   buildPushPointerPayload,
@@ -50,8 +52,9 @@ export const PUSH_FANOUT_EMPTY_REASONS = [
 
 export type PushFanoutEmptyReason = (typeof PUSH_FANOUT_EMPTY_REASONS)[number];
 
-/** One device to send to. The token is carried for the SEND step only. */
-export type PushFanoutTarget = {
+/** One NATIVE device to send to. The token is carried for the SEND step only. */
+export type NativePushFanoutTarget = {
+  kind: 'NATIVE';
   /** `mobile_push_tokens.id` — the attempt row's device reference. */
   pushTokenId: string;
   /** The device's opaque provider token. Never logged, never persisted to the ledger. */
@@ -59,6 +62,30 @@ export type PushFanoutTarget = {
   platform: PushPlatform;
   deviceId: string;
 };
+
+/**
+ * One BROWSER subscription to send to.
+ *
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the browser half of the
+ * fan-out. The subscription material is credential-grade (the endpoint is a
+ * capability URL) and is carried for the SEND step only: it is never logged,
+ * never persisted to the ledger and never copied into the attempt evidence
+ * (the evidence references the subscription by id).
+ */
+export type BrowserPushFanoutTarget = {
+  kind: 'BROWSER';
+  /** `browser_push_subscriptions.id` — the attempt row's subscription reference. */
+  browserSubscriptionId: string;
+  endpoint: string;
+  /** The subscriber's P-256 public key, base64url. */
+  p256dh: string;
+  /** The subscriber's auth secret, base64url. */
+  auth: string;
+  deviceId: string;
+};
+
+/** One target of the send plan: a native device OR a browser subscription. */
+export type PushFanoutTarget = NativePushFanoutTarget | BrowserPushFanoutTarget;
 
 /** The resolved send plan for one ledger row. */
 export type PushFanoutPlan = {
@@ -112,6 +139,23 @@ function assertSingleRecipientOwnership(
 }
 
 /**
+ * The same safety net for the BROWSER subscriptions of the recipient
+ * (CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02).
+ */
+function assertSingleSubscriptionOwnership(
+  subscriptions: BrowserPushSubscriptionRecord[],
+  recipientUserId: string,
+): void {
+  for (const subscription of subscriptions) {
+    if (subscription.userId !== recipientUserId) {
+      throw new Error(
+        'Push fan-out aborted: browser subscription does not belong to the delivery recipient.',
+      );
+    }
+  }
+}
+
+/**
  * Resolves the ACTIVE devices for a PUSH ledger row and pairs them with the
  * §9 pointer payload.
  *
@@ -148,21 +192,45 @@ export async function resolvePushFanoutPlan(
   const activeTokens = await listActivePushTokensForUser(recipientUserId);
   assertSingleRecipientOwnership(activeTokens, recipientUserId);
 
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the BROWSER half of the
+  // fan-out. One ledger row fans out to the recipient's native devices AND
+  // their browser subscriptions: the client-neutral contract is delivered to
+  // every client the person actually uses.
+  const activeSubscriptions =
+    await listActiveBrowserPushSubscriptionsForUser(recipientUserId);
+  assertSingleSubscriptionOwnership(activeSubscriptions, recipientUserId);
+
   const payload = buildPushPointerPayload(record, options);
 
-  const targets: PushFanoutTarget[] = activeTokens.map((token) => ({
-    pushTokenId: token.id,
-    token: token.pushToken,
-    platform: token.platform,
-    deviceId: token.deviceId,
-  }));
+  const targets: PushFanoutTarget[] = [
+    ...activeTokens.map(
+      (token): NativePushFanoutTarget => ({
+        kind: 'NATIVE',
+        pushTokenId: token.id,
+        token: token.pushToken,
+        platform: token.platform,
+        deviceId: token.deviceId,
+      }),
+    ),
+    ...activeSubscriptions.map(
+      (subscription): BrowserPushFanoutTarget => ({
+        kind: 'BROWSER',
+        browserSubscriptionId: subscription.id,
+        endpoint: subscription.endpoint,
+        p256dh: subscription.p256dh,
+        auth: subscription.auth,
+        deviceId: subscription.deviceId,
+      }),
+    ),
+  ];
 
   return {
     deliveryId: record.id,
     recipientUserId,
     payload,
     targets,
-    emptyReason: targets.length > 0 ? null : await resolveEmptyReason(recipientUserId),
+    emptyReason:
+      targets.length > 0 ? null : await resolveEmptyReason(recipientUserId),
   };
 }
 
@@ -170,10 +238,18 @@ export async function resolvePushFanoutPlan(
  * Distinguishes "never registered" from "all registrations are dead". Only
  * consulted when the ACTIVE set is empty, so the common path costs no extra
  * query.
+ *
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the count spans BOTH
+ * registration authorities: a person who has neither an app nor a browser
+ * registration is a different operational signal from a person whose
+ * registrations are all retired.
  */
 async function resolveEmptyReason(recipientUserId: string): Promise<PushFanoutEmptyReason> {
   const result = await getPool().query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM mobile_push_tokens WHERE user_id = $1`,
+    `SELECT (
+        (SELECT COUNT(*) FROM mobile_push_tokens WHERE user_id = $1)
+        + (SELECT COUNT(*) FROM browser_push_subscriptions WHERE user_id = $1)
+      )::text AS count`,
     [recipientUserId],
   );
   const total = Number(result.rows[0]?.count ?? '0');

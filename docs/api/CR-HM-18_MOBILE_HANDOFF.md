@@ -70,15 +70,39 @@ ACTIVE building · the user holds an ACTIVE building assignment.
 
 ### 3.1b Arrival verification (Lead only, before check-in)
 
+**Step 1 — issue the challenge** (CR-HM-FIELD-OPS-ACK-01 PART 02):
+
+`POST /handyman/execution-scopes/{executionScopeId}/arrival-challenge` — no
+request body. Returns `201` with `{id, executionScopeId, status, expiresAt,
+challengeToken}`. The raw `challengeToken` is returned **exactly once** (only a
+hash is stored): send it straight to step 2 and never persist or log it.
+`expiresAt` is server-derived (`+120s`). A second call while a challenge is live
+returns `409 HANDYMAN_ARRIVAL_CHALLENGE_LIVE_CONFLICT` — consume the one you
+have or let it expire; do not loop. Only the CURRENT Crew Lead of the scope's
+ACTIVE assignment may issue (`403 HANDYMAN_ARRIVAL_CHALLENGE_NOT_AUTHORIZED`
+otherwise), the scope must be `AUTHORIZED` (`409
+HANDYMAN_ARRIVAL_CHALLENGE_SCOPE_NOT_AUTHORIZED`), the caller needs exact
+Building access (`403 BUILDING_ACCESS_DENIED`), and a declined assignment
+(`TIDAK_BISA`) is refused (`409 HANDYMAN_ASSIGNMENT_DECLINED`). This is the
+command behind the feed's `CREATE_ARRIVAL_CHALLENGE` action.
+
+**Step 2 — evaluate it:**
+
 `POST /handyman/execution-scopes/{executionScopeId}/arrival-verification` with
 `{challengeToken, qrOpaqueCode, deviceLocation?}` returns
-`PASS` · `MANUAL_REVIEW_REQUIRED` · `FAILED` plus a bounded `primaryReason`
-(`NO_GEOSPATIAL_POLICY`, geofence/QR/actor mismatches). Rules the app must honour:
+`VERIFIED` · `MANUAL_REVIEW_REQUIRED` · `FAILED` · `EXPIRED` plus a bounded
+`primaryReason` (`ALL_POSITIVE_EVIDENCE`, `QR_MISMATCH`, `QR_UNKNOWN`,
+`QR_INACTIVE`, `GEOFENCE_OUTSIDE`, `NO_GEOSPATIAL_POLICY`, `LOW_ACCURACY`,
+`GEOFENCE_UNAVAILABLE`, `ACTOR_ASSIGNMENT_INVALID`, `CHALLENGE_EXPIRED`). Rules
+the app must honour:
 
-- the challenge is **single-use** and issued to the CURRENT Lead — a superseded
+- the challenge is **single-use** and bound to the CURRENT Lead — a superseded
   Lead gets `ACTOR_ASSIGNMENT_INVALID`; never cache a challenge token;
-- `MANUAL_REVIEW_REQUIRED` is a **successful call** (HTTP 200) that needs a desk
-  decision — show it as "waiting for review", do not retry;
+- `MANUAL_REVIEW_REQUIRED` and `FAILED`/`EXPIRED` are **successful calls**
+  (HTTP 200) — terminal verdicts, not transport errors. Show
+  `MANUAL_REVIEW_REQUIRED` as "waiting for review" and do not retry;
+- replaying the same token returns the SAME stored result (idempotent); it never
+  creates a second result;
 - the result is append-only and carries no provider payload, raw GPS blob or
   FM/work-order coupling — never synthesise one client-side;
 - reading is `GET …/arrival-verification` (bounded, scope-walled).

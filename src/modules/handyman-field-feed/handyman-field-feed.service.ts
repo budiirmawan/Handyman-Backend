@@ -16,7 +16,10 @@ import { assignmentResponseRepository } from '../assignment-responses';
  */
 export const MY_JOBS_SQL = `
   SELECT DISTINCT es.id AS "executionScopeId", es.handyman_request_id AS "requestId",
-    es.building_id AS "buildingId", a.id AS "assignmentId", a.handyman_crew_id AS "crewId",
+    es.building_id AS "buildingId", a.id AS "assignmentId",
+    a.version AS "assignmentVersion", a.assigned_at AS "assignedAt",
+    COALESCE(ar.assignment_target_type, 'EXECUTION_SCOPE_ASSIGNMENT') AS "assignmentTargetType",
+    a.handyman_crew_id AS "crewId",
     COALESCE(ar.response_status, 'PENDING') AS "responseStatus",
     ar.responded_by_user_id AS "respondedByUserId",
     ar.responded_by_worker_id AS "respondedByWorkerId",
@@ -35,6 +38,7 @@ export const MY_JOBS_SQL = `
     AND a.client_id=es.client_id AND a.status='ACTIVE'
   LEFT JOIN handyman_assignment_responses ar
     ON ar.assignment_id=a.id AND ar.assignment_target_type='EXECUTION_SCOPE_ASSIGNMENT'
+   AND ar.client_id=es.client_id AND ar.building_id=es.building_id
   LEFT JOIN LATERAL (
     SELECT ws_row.status
       FROM handyman_work_sessions ws_row
@@ -87,6 +91,8 @@ export const MY_INSPECTIONS_SQL = `
     v.building_id AS "buildingId", v.start_at AS "startAt", v.end_at AS "endAt",
     v.timezone, v.state, v.version,
     ia.id AS "assignmentId", ia.version AS "assignmentVersion",
+    ia.assigned_at AS "assignedAt",
+    COALESCE(ar.assignment_target_type, 'INSPECTOR_VISIT_ASSIGNMENT') AS "assignmentTargetType",
     COALESCE(ar.response_status, 'PENDING') AS "responseStatus",
     ar.responded_by_user_id AS "respondedByUserId",
     ar.responded_by_worker_id AS "respondedByWorkerId",
@@ -95,9 +101,11 @@ export const MY_INSPECTIONS_SQL = `
     (COALESCE(ar.response_status, 'PENDING') = 'TIDAK_BISA') AS "reassignmentRequired"
   FROM handyman_visit_appointments v
   JOIN handyman_inspector_assignments ia
-    ON ia.visit_appointment_id = v.id AND ia.status = 'ACTIVE'
+    ON ia.visit_appointment_id = v.id AND ia.client_id = v.client_id
+   AND ia.handyman_request_id = v.handyman_request_id AND ia.status = 'ACTIVE'
   LEFT JOIN handyman_assignment_responses ar
     ON ar.assignment_id = ia.id AND ar.assignment_target_type = 'INSPECTOR_VISIT_ASSIGNMENT'
+   AND ar.client_id = v.client_id AND ar.building_id = v.building_id
   JOIN users u ON u.id=$1 AND u.status='ACTIVE'
   JOIN jsonb_to_recordset($2::jsonb) AS access("buildingId" uuid, "clientId" uuid)
     ON access."buildingId"=v.building_id AND access."clientId"=v.client_id
@@ -384,6 +392,7 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
        LEFT JOIN handyman_assignment_responses ar
          ON ar.assignment_id = a.id
         AND ar.assignment_target_type = 'EXECUTION_SCOPE_ASSIGNMENT'
+        AND ar.client_id = a.client_id
        LEFT JOIN LATERAL (
          SELECT ws_row.status
            FROM handyman_work_sessions ws_row
@@ -474,6 +483,7 @@ async function loadInspectorAssignmentContext(
        LEFT JOIN handyman_assignment_responses ar
          ON ar.assignment_id = ia.id
         AND ar.assignment_target_type = 'INSPECTOR_VISIT_ASSIGNMENT'
+        AND ar.client_id = ia.client_id
       WHERE ia.handyman_request_id = $1
         AND ia.client_id = $2
         AND ia.status = 'ACTIVE'
@@ -773,8 +783,14 @@ export async function readMyHandymanFieldFeed(actorUserId: string) {
   return {
     jobs: jobs.rows.map((row) => ({
       ...row,
+      assignedAt:
+        row.assignedAt instanceof Date ? row.assignedAt.toISOString() : null,
       respondedAt:
         row.respondedAt instanceof Date ? row.respondedAt.toISOString() : null,
+      acknowledgedAt:
+        row.responseStatus === 'TERIMA' && row.respondedAt instanceof Date
+          ? row.respondedAt.toISOString()
+          : null,
       declineReason: row.declineReason ?? null,
       reassignmentRequired: Boolean(row.reassignmentRequired),
       availableActions: computeHandymanFieldJobAvailableActions(
@@ -792,8 +808,14 @@ export async function readMyHandymanFieldFeed(actorUserId: string) {
     inspections: inspections.rows.map((row) => ({
       ...row,
       visitAppointmentId: row.visitAppointmentId ?? row.appointmentId,
+      assignedAt:
+        row.assignedAt instanceof Date ? row.assignedAt.toISOString() : null,
       respondedAt:
         row.respondedAt instanceof Date ? row.respondedAt.toISOString() : null,
+      acknowledgedAt:
+        row.responseStatus === 'TERIMA' && row.respondedAt instanceof Date
+          ? row.respondedAt.toISOString()
+          : null,
       declineReason: row.declineReason ?? null,
       reassignmentRequired: Boolean(row.reassignmentRequired),
       availableActions: computeHandymanFieldInspectionAvailableActions(

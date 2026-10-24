@@ -108,3 +108,28 @@ key/raw provider payload in the response.
 
 7 suites, 70 tests, 0 failures (real migrated PostgreSQL 18.4,
 `node --test` concurrency 1).
+
+---
+
+## Appendix A — Certification amendment annex (2026-10-24, ADDITIVE)
+
+> This appendix **adds** a record. It does not edit, reword or delete any
+> frozen text above. Authority:
+> `CR-HM-FIELD-OPERATIONS-01_PART03_SIGNOFF_GATE.md` §8 SG-3 / SG-5 (APPROVED,
+> OPTION A). Full record:
+> `CR-HM-FIELD-OPERATIONS-01_PART04_GOVERNANCE_RECORD.md` §4.
+
+**Narrowed:** invariants §8 (RESULT) — one case only. A **new attempt** whose
+`challengeToken` is bound to an assignment that is no longer the Execution
+Scope's ACTIVE assignment is refused **before** TTL/actor/QR/geofence
+evaluation with HTTP `409 HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED`; the challenge
+is **not** consumed (stays `PENDING`, `consumed_at` `NULL`) and **no** result row
+is written, so no result status is produced for that attempt. The refusal
+outranks expiry (SG-4 Option A).
+
+**Unchanged:** already-recorded results still replay unchanged (§9 atomicity);
+a **still-ACTIVE** assignment keeps the certified path including
+`FAILED / ACTOR_ASSIGNMENT_INVALID`; the four statuses, the reason pairing, the
+challenge status vocabulary, both partial unique indexes, and every downstream
+permit/work-start/attendance/billing guard. Zero migrations, zero new
+permission codes, zero Notification Engine changes.

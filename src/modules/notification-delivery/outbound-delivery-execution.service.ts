@@ -22,6 +22,8 @@ import type { WhatsAppAdapter } from '../whatsapp-delivery';
 import { sanitizeProviderError } from '../push-delivery';
 import { recordPushAttemptTelemetry } from '../push-tokens/push-token-delivery-telemetry.service';
 import { reconcileInvalidTokenEvidence } from '../push-tokens/push-token-invalidation.service';
+import { recordBrowserPushAttemptTelemetry } from '../browser-push-subscriptions/browser-push-subscription-telemetry.service';
+import { reconcileInvalidBrowserSubscriptionEvidence } from '../browser-push-subscriptions/browser-push-subscription-invalidation.service';
 import { executePushFanout } from './outbound-push-dispatch.service';
 import type { ExecutePushFanoutOptions } from './outbound-push-dispatch.service';
 
@@ -143,6 +145,13 @@ export type OutboundDeliveryAdapterOverrides = {
    * dispatch seam; nothing here ever constructs one.
    */
   PUSH?: NonNullable<ExecutePushFanoutOptions['adapter']>;
+  /**
+   * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the BROWSER transport port
+   * override (test seam). Typed through the dispatch seam's own option type
+   * for the same reason as the native override above: the provider vocabulary
+   * stays confined to the governed module.
+   */
+  PUSH_BROWSER?: NonNullable<ExecutePushFanoutOptions['browserAdapter']>;
 };
 
 /** Outcome of one execution attempt on one ledger row. */
@@ -243,7 +252,7 @@ async function runAdapter(
   // verbatim with EMAIL and WhatsApp. This branch returns BEFORE the
   // email/WhatsApp resolution below, so neither of those paths is altered.
   if (record.channel === 'PUSH') {
-    return runPushFanout(record, adapters?.PUSH);
+    return runPushFanout(record, adapters?.PUSH, adapters?.PUSH_BROWSER);
   }
 
   // Resolve the channel adapter ONCE per attempt (override → PART 01 resolver).
@@ -305,9 +314,13 @@ async function runAdapter(
 async function runPushFanout(
   record: OutboundDeliveryRecord,
   adapter?: OutboundDeliveryAdapterOverrides['PUSH'],
+  browserAdapter?: OutboundDeliveryAdapterOverrides['PUSH_BROWSER'],
 ): Promise<AdapterInteraction> {
   try {
-    const execution = await executePushFanout(record, adapter ? { adapter } : {});
+    const execution = await executePushFanout(
+      record,
+      adapter || browserAdapter ? { adapter, browserAdapter } : {},
+    );
     if (!execution) {
       return {
         outcome: 'REJECTED_PERMANENT',
@@ -330,7 +343,38 @@ async function runPushFanout(
     // INVALID_TOKEN attempt is counted exactly once, by PART 04A's invalidating
     // UPDATE, rather than here as well. Telemetry never changes the ledger
     // outcome and never throws.
-    await recordPushAttemptTelemetry(execution.attempts);
+    //
+    // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the fan-out may contain
+    // NATIVE device attempts and BROWSER subscription attempts. Each family
+    // has its own health counters, so the attempts are split by kind and
+    // folded into their own registry.
+    const nativeAttempts: {
+      pushTokenId: string;
+      outcome: string;
+      provider: string | null;
+    }[] = [];
+    const browserAttempts: {
+      browserSubscriptionId: string;
+      outcome: string;
+      provider: string | null;
+    }[] = [];
+    for (const attempt of execution.attempts) {
+      if (attempt.targetKind === 'NATIVE' && attempt.pushTokenId) {
+        nativeAttempts.push({
+          pushTokenId: attempt.pushTokenId,
+          outcome: attempt.outcome,
+          provider: attempt.provider,
+        });
+      } else if (attempt.targetKind === 'BROWSER' && attempt.browserSubscriptionId) {
+        browserAttempts.push({
+          browserSubscriptionId: attempt.browserSubscriptionId,
+          outcome: attempt.outcome,
+          provider: attempt.provider,
+        });
+      }
+    }
+    await recordPushAttemptTelemetry(nativeAttempts);
+    await recordBrowserPushAttemptTelemetry(browserAttempts);
 
     if (execution.invalidTokens > 0) {
       try {
@@ -338,6 +382,20 @@ async function runPushFanout(
       } catch (reconcileError) {
         logger.error(
           `Push token invalidation reconciliation failed for ${record.id}: ${
+            reconcileError instanceof Error
+              ? reconcileError.message
+              : String(reconcileError)
+          }`,
+        );
+      }
+      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the same lifecycle rule
+      // for the BROWSER half: a subscription the push service proved is gone
+      // is retired, and the evidence row stays as the audit trail.
+      try {
+        await reconcileInvalidBrowserSubscriptionEvidence(record.id);
+      } catch (reconcileError) {
+        logger.error(
+          `Browser push subscription invalidation reconciliation failed for ${record.id}: ${
             reconcileError instanceof Error
               ? reconcileError.message
               : String(reconcileError)
