@@ -76,6 +76,13 @@ export type PriceCatalogEntryRecord = {
    * service identity priced per 1 service in one currency (no UOM/quantity).
    */
   serviceId: string | null;
+  /**
+   * CR-HM-SERVICE-CATALOG-01 PART 01 — the CATALOGUE PRICE TIER this
+   * SERVICE reference price fills. NULL for MATERIAL; '' is the plain
+   * service reference price; a non-empty key is shared with the catalogue
+   * price rule that consumes the price.
+   */
+  servicePriceKey: string | null;
   currency: PriceCatalogCurrency;
   unitPrice: number;
   effectiveFrom: Date;
@@ -128,6 +135,7 @@ export type NewPriceCatalogEntry = {
   itemId: string | null;
   uomId: string | null;
   serviceId: string | null;
+  servicePriceKey: string | null;
   currency: PriceCatalogCurrency;
   unitPrice: number;
   effectiveFrom: Date;
@@ -151,6 +159,13 @@ export type CreatePriceCatalogEntryInput = {
   uomId?: string;
   /** SERVICE subject (required when sourceMode = SERVICE). */
   serviceId?: string;
+  /**
+   * CR-HM-SERVICE-CATALOG-01 PART 01 — the CATALOGUE PRICE TIER this SERVICE
+   * reference price fills. '' (the default) is the plain service reference
+   * price; a non-empty key names a tier and must equal the catalogue price
+   * rule code that consumes it. MATERIAL entries never carry a tier key.
+   */
+  servicePriceKey?: string;
   currency: PriceCatalogCurrency;
   unitPrice: number;
   effectiveFrom: string;

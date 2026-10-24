@@ -1520,8 +1520,13 @@ describe('CR-HM-FIELD-OPERATIONS-01 PART 04 — contract gates', () => {
 
   it('CT-05/CT-06/CT-07 (AC-9): zero migrations, PART 01/02 authorities and the Notification Engine untouched', async () => {
     const { execSync } = await import('node:child_process');
+    // AC-9 is a claim about the PART 04 COMMIT, so the range is pinned to that
+    // commit (PART 03 gate eed1225 -> PART 04 c2f045f). An open-ended range
+    // (`eed1225 -- <path>`) also counts migrations added by later, unrelated
+    // CRs that are now on the same branch (CR-HM-SERVICE-CATALOG-01 adds
+    // 0477-0480), which would misreport this CR as having added them.
     const changed = execSync(
-      'git diff --name-only eed1225 -- src/database/migrations',
+      'git diff --name-only eed1225 c2f045f -- src/database/migrations',
       { cwd: process.cwd(), encoding: 'utf8' },
     ).trim();
     assert.equal(changed, '', 'PART 04 must add no migration');

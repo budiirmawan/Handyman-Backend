@@ -32,6 +32,20 @@ export function priceCatalogIdempotencyConflictError(): AppError {
   });
 }
 
+/**
+ * CR-HM-SERVICE-CATALOG-01 PART 01 — the catalogue PRICE TIER key of a
+ * SERVICE reference price is invalid (too long, or carried by a MATERIAL
+ * entry).
+ */
+export function priceCatalogServicePriceKeyInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.PRICE_CATALOG_SERVICE_PRICE_KEY_INVALID,
+    message:
+      'servicePriceKey is only valid for a SERVICE price catalog entry and must be at most 200 characters.',
+    statusCode: 400,
+  });
+}
+
 export function priceCatalogClientInvalidError(): AppError {
   return new AppError({
     code: ERROR_CODES.PRICE_CATALOG_CLIENT_INVALID,

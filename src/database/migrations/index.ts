@@ -517,6 +517,14 @@ import { migration0475CreateNotificationBrowserPushDeliveries }
   from './0475_create_notification_browser_push_deliveries';
 import { migration0476HandymanAssignmentResponseClientKeys }
   from './0476_handyman_assignment_response_client_keys';
+import { migration0477HandymanParameterizedServiceCatalog }
+  from './0477_handyman_parameterized_service_catalog';
+import { migration0478ServicePriceTierKey }
+  from './0478_service_price_tier_key';
+import { migration0479HandymanServiceVariantAttributeLifecycle }
+  from './0479_handyman_service_variant_attribute_lifecycle';
+import { migration0480HandymanServiceRequestItemInheritedAttributes }
+  from './0480_handyman_service_request_item_inherited_attributes';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -996,4 +1004,8 @@ export const migrations: readonly Migration[] = [
   migration0474WidenNotificationTemplateChannelsForPush,
   migration0475CreateNotificationBrowserPushDeliveries,
   migration0476HandymanAssignmentResponseClientKeys,
+  migration0477HandymanParameterizedServiceCatalog,
+  migration0478ServicePriceTierKey,
+  migration0479HandymanServiceVariantAttributeLifecycle,
+  migration0480HandymanServiceRequestItemInheritedAttributes,
 ];

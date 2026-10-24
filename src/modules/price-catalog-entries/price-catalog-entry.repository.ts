@@ -27,6 +27,7 @@ type PriceCatalogEntryRow = {
   itemId: string | null;
   uomId: string | null;
   serviceId: string | null;
+  servicePriceKey: string | null;
   currency: PriceCatalogEntryRecord['currency'];
   unitPrice: string | number;
   effectiveFrom: Date;
@@ -59,6 +60,7 @@ const ENTRY_SELECT = `
   item_id AS "itemId",
   uom_id AS "uomId",
   service_id AS "serviceId",
+  service_price_key AS "servicePriceKey",
   currency,
   unit_price::text AS "unitPrice",
   effective_from AS "effectiveFrom",
@@ -90,9 +92,9 @@ function mapEntry(row: PriceCatalogEntryRow): PriceCatalogEntryRecord {
 
 const INSERT_COLUMNS = `
   (id, client_id, building_id, vendor_id, source_mode, entry_kind, item_id,
-   uom_id, service_id, currency, unit_price, effective_from, effective_to,
-   status, activated_at, activated_by_user_id, source_type, source_reference,
-   notes, approved_by_user_id, approved_at, idempotency_key,
+   uom_id, service_id, service_price_key, currency, unit_price, effective_from,
+   effective_to, status, activated_at, activated_by_user_id, source_type,
+   source_reference, notes, approved_by_user_id, approved_at, idempotency_key,
    idempotency_fingerprint, created_by_user_id)
 `.trim();
 
@@ -107,6 +109,7 @@ function insertValues(input: NewPriceCatalogEntry, activate: boolean): unknown[]
     input.itemId,
     input.uomId,
     input.serviceId,
+    input.servicePriceKey,
     input.currency,
     input.unitPrice,
     input.effectiveFrom,
@@ -132,7 +135,7 @@ async function insertEntry(
 ): Promise<{ record: PriceCatalogEntryRecord; created: boolean }> {
   const result = await client.query<PriceCatalogEntryRow>(
     `INSERT INTO price_catalog_entries ${INSERT_COLUMNS}
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
      ON CONFLICT (client_id, idempotency_key) DO NOTHING
      RETURNING ${ENTRY_SELECT}`,
     insertValues(input, activate),
@@ -211,9 +214,15 @@ async function listResolutionCandidates(input: {
   const isMaterial = input.sourceMode === 'MATERIAL';
   const subjectClause = isMaterial
     ? `AND item_id = $2 AND uom_id = $4`
-    : `AND service_id = $2`;
+    : `AND service_id = $2 AND service_price_key = ''`;
   // The placeholder order is shared: $2 subject, $3 currency, $4 uom (MATERIAL
   // only). SERVICE omits the UOM parameter.
+  //
+  // CR-HM-SERVICE-CATALOG-01 PART 01: a SERVICE row that carries a CATALOGUE
+  // PRICE TIER key belongs to a catalogue price rule, not to the plain
+  // effective-price lookup. The plain lookup therefore only ever sees the
+  // '' (plain) tier, which keeps its "at most one winner per scope tier"
+  // law intact even when a catalogue prices several tiers of one service.
   const params = isMaterial
     ? [input.clientId, input.itemId, input.currency, input.uomId, input.buildingId, input.vendorId, input.asOf]
     : [input.clientId, input.serviceId, input.currency, input.buildingId, input.vendorId, input.asOf];
@@ -253,7 +262,9 @@ async function listResolutionDiagnostics(input: {
   | { sourceMode: 'SERVICE'; serviceId: string }
 )): Promise<{ uomId: string | null; currency: string }[]> {
   const isMaterial = input.sourceMode === 'MATERIAL';
-  const subjectClause = isMaterial ? `AND item_id = $2` : `AND service_id = $2`;
+  const subjectClause = isMaterial
+    ? `AND item_id = $2`
+    : `AND service_id = $2 AND service_price_key = ''`;
   const params = [
     input.clientId,
     isMaterial ? input.itemId : input.serviceId,

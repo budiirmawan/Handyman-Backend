@@ -214,6 +214,14 @@ export function parseCreatePriceCatalogEntryBody(
     sourceMode === 'SERVICE',
     details,
   );
+  // CR-HM-SERVICE-CATALOG-01 PART 01 — the CATALOGUE PRICE TIER key of a
+  // SERVICE reference price. '' (the default) is the plain service reference
+  // price; a non-empty key names the tier and must equal the catalogue price
+  // rule code that consumes the price. MATERIAL entries never carry it.
+  const servicePriceKey =
+    sourceMode === 'SERVICE'
+      ? readText(body.servicePriceKey, 'servicePriceKey', 200, details) ?? ''
+      : '';
   const currency = readCurrency(body.currency, true, details);
   const unitPrice = readUnitPrice(body.unitPrice, true, details);
   const effectiveFrom = readIsoTimestamp(
@@ -266,6 +274,7 @@ export function parseCreatePriceCatalogEntryBody(
     itemId: sourceMode === 'MATERIAL' ? itemId! : undefined,
     uomId: sourceMode === 'MATERIAL' ? uomId! : undefined,
     serviceId: sourceMode === 'SERVICE' ? serviceId! : undefined,
+    servicePriceKey: sourceMode === 'SERVICE' ? servicePriceKey : undefined,
     currency,
     unitPrice,
     effectiveFrom,

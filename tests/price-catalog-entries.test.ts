@@ -628,10 +628,10 @@ describe('CR-BE-PRICE-01 PART 01 — reference validation', () => {
         `INSERT INTO price_catalog_entries
            (id, client_id, source_mode, entry_kind, item_id, uom_id, currency,
             unit_price, effective_from, idempotency_key,
-            idempotency_fingerprint, created_by_user_id)
+            idempotency_fingerprint, created_by_user_id, service_price_key)
          VALUES (gen_random_uuid(), $1, 'SERVICE', 'REFERENCE', $2, $3, 'IDR',
                  10, NOW(), 'SERVICE_DB_GUARD',
-                 repeat('b', 64), $4)`,
+                 repeat('b', 64), $4, '')`,
         [fx.client.id, item.id, uom.id, adminUserId],
       ),
       /price_catalog_entries_subject_shape_check/,

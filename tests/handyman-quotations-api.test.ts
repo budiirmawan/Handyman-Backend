@@ -817,7 +817,12 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     const quotationPaths = Object.keys(doc.paths).filter((p) =>
       p.startsWith('/handyman') && p.includes('quotation'),
     );
-    assert.equal(quotationPaths.length, 10);
+    // The guarded surface is the quotation API set. The count was already
+    // stale in the baseline (12 paths, expectation 10); the guard that
+    // matters is the forbidden-path filter below, which must stay empty.
+    // CR-HM-SERVICE-CATALOG-01 PART 01 added the two request-scoped
+    // quotation operations (prepare / revision).
+    assert.equal(quotationPaths.length, 14);
     assert.deepEqual(
       quotationPaths.filter((p) => forbiddenPath.test(p)),
       [],
