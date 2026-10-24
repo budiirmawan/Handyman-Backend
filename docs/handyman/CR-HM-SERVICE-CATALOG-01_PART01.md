@@ -283,3 +283,60 @@ OpenAPI operational 1,963 → 1,981), and a disposable migration validation
 * The `handyman_service_variant_attributes` table is written by the starter
   import (one default variant per service) but is not yet exposed by the admin
   CRUD API.
+
+---
+
+## 10. Merge compatibility with `main` (measured, not assumed)
+
+PART 01 was merge-simulated against `origin/main` = `ee20d21`
+(CR-HM-MULTICLIENT-NOTIFICATION-01) in a throwaway clone. Result:
+
+* **Exactly ONE conflict** — `src/database/migrations/index.ts` (the import
+  block and the ordered migration array). Resolution: keep `0473`–`0475` from
+  `main`, then append `0476_handyman_parameterized_service_catalog` and
+  `0477_service_price_tier_key`. PART 01's migration numbers were deliberately
+  moved from `0473/0474` to `0476/0477` so they never collide with the
+  notification branch's `0473`–`0475`.
+* `docs/api/openapi.yaml` and `src/routes/index.ts` auto-merge cleanly.
+* The merged tree passes `npx tsc --noEmit` (clean) and the focused suite
+  **15/15**.
+
+### 10.1 One pre-existing `main` defect the merge inherits (NOT caused by PART 01)
+
+`origin/main` is ALREADY RED on its own census contract: it adds 4 runtime
+routes (`/mobile/push-subscriptions` POST/GET/DELETE/DELETE-one) without
+re-pinning the OpenAPI census. Measured on a clean `ee20d21` checkout with no
+PART 01 code at all:
+
+| census pin | `ee20d21` expects | `ee20d21` actually has |
+| --- | --- | --- |
+| total runtime | 2,034 | **2,038** |
+| in-scope operational | 1,964 | **1,968** |
+| operational OpenAPI | 1,963 | **1,967** |
+| OpenAPI total | 2,032 | **2,036** |
+
+PART 01 adds a clean **+18** on top of that (2,034 → 2,052 standalone).
+Therefore, at merge time the census pins must be set to the merged reality:
+
+| pin | PART 01 branch (standalone) | after merging `ee20d21` |
+| --- | --- | --- |
+| total runtime | 2,052 | **2,056** |
+| operational runtime | 1,983 | **1,987** |
+| in-scope operational | 1,982 | **1,986** |
+| operational OpenAPI | 1,981 | **1,985** |
+| OpenAPI total | 2,050 | **2,054** |
+
+Those five numbers live in `tests/openapi-operational-final-parity.test.ts` and
+`tests/openapi-operational-structural-closure.test.ts`. With them re-pinned,
+the merged tree is **28/28 green**. The Handyman contract-freeze pin
+(294 operations / 197 permissions) and the platform pin (69) are unaffected by
+the merge.
+
+### 10.2 Merge checklist
+
+1. `git merge arena/d4d4105f-handyman-backend` into the release branch.
+2. Resolve `src/database/migrations/index.ts` — keep both migration blocks in
+   numeric order (`0473`…`0477`).
+3. Re-pin the five census numbers to the merged reality (table above).
+4. Run `npm run typecheck`, `npm run build`, the census suites and
+   `tests/cr-hm-service-catalog-01-part01.test.ts`.
