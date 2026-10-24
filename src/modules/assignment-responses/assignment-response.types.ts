@@ -80,6 +80,8 @@ export type HandymanAssignmentResponseRecord = {
   responseNotes: string | null;
   linkedWorkOrderActionId: string | null;
   idempotencyKey: string | null;
+  /** CR-HM-FIELD-OPS-ACK-01 PART 01 — caller-supplied concurrent-device key. */
+  clientIdempotencyKey: string | null;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -148,5 +150,8 @@ export type RecordAssignmentDecisionInput = {
   declineReason?: string | null;
   notes?: string | null;
   linkedWorkOrderActionId?: string | null;
+  /** Internal deterministic event key (unchanged behaviour). */
   idempotencyKey?: string | null;
+  /** Caller-supplied concurrent-device key; persisted only on a new decision. */
+  clientIdempotencyKey?: string | null;
 };

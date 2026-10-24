@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
+import { parseAssignmentResponseIdempotencyKey } from '../assignment-responses';
 import {
   assignHandymanExecutionScopeCrew,
   getHandymanExecutionScopeAssignment,
@@ -131,6 +132,10 @@ export async function respondHandymanExecutionScopeAssignmentHandler(
     );
     const assignmentId = parseAssignmentIdParam(p(req.params.assignmentId));
     const body = parseAssignmentResponseBody(req.body);
+    const idempotencyKey = parseAssignmentResponseIdempotencyKey(
+      req.header('Idempotency-Key'),
+      req.body,
+    );
     sendSuccess(
       res,
       await respondToHandymanExecutionScopeAssignment(
@@ -138,6 +143,7 @@ export async function respondHandymanExecutionScopeAssignmentHandler(
           executionScopeId,
           assignmentId,
           ...body,
+          ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         },
         actor(req),
       ),

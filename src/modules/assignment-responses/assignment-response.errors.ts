@@ -90,6 +90,39 @@ export function handymanAssignmentResponseLateError(
   });
 }
 
+/**
+ * CR-HM-FIELD-OPS-ACK-01 PART 01 — the authoritative appointment window for
+ * this assignment has elapsed. A worker must never acknowledge or decline a
+ * visit/execution slot that is already over; Operations must reschedule or
+ * reassign instead. Replaying an already-finalized identical decision is
+ * checked BEFORE this guard and therefore still succeeds.
+ */
+export function handymanAssignmentResponseExpiredError(
+  message = 'Assignment response is no longer allowed because the assigned visit window has expired.',
+): AppError {
+  return new AppError({
+    statusCode: 409,
+    code: 'HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED',
+    message,
+  });
+}
+
+/**
+ * CR-HM-FIELD-OPS-ACK-01 PART 01 — one actor + one caller key may finalize
+ * ONE assignment only. A device replay carrying the same key against a new
+ * (reassigned) assignment must fail closed instead of accepting on behalf of
+ * the new assignee.
+ */
+export function handymanAssignmentResponseIdempotencyConflictError(
+  message = 'This assignment-response key was already used for a different assignment.',
+): AppError {
+  return new AppError({
+    statusCode: 409,
+    code: 'HANDYMAN_ASSIGNMENT_RESPONSE_IDEMPOTENCY_CONFLICT',
+    message,
+  });
+}
+
 export function assignmentDeclineReasonRequiredError(
   message = 'declineReason is required (1-1000 characters) when responseStatus is TIDAK_BISA.',
 ): AppError {

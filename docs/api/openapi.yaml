@@ -9511,6 +9511,8 @@ paths:
         - HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED
         - HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT
         - HANDYMAN_ASSIGNMENT_RESPONSE_LATE
+        - HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED
+        - HANDYMAN_ASSIGNMENT_RESPONSE_IDEMPOTENCY_CONFLICT
       summary: Record Crew Lead response (TERIMA or TIDAK_BISA) for an Execution Scope assignment
       description: >
         Allows the authoritative active Crew Lead (and only the current Crew Lead)
@@ -9518,13 +9520,21 @@ paths:
         `TIDAK_BISA` requires a non-empty declineReason, sets
         `reassignmentRequired = true`, notifies Operations (`IN_APP`), and blocks
         arrival verification and work session check-in/start without cancelling
-        the Tenant request or Execution Scope.
+        the Tenant request or Execution Scope. An optional concurrent-device
+        `Idempotency-Key` (or legacy `idempotencyKey` body member) is bound to
+        the actor and may finalize exactly one assignment; identical decisions
+        replay without duplicating the decision event, the acknowledgment audit
+        row or the notification. A response is refused once the CONFIRMED /
+        IN_PROGRESS EXECUTION appointment window bound to this scope and crew has
+        elapsed (409 HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED); Operations must
+        reschedule or reassign. Superseded assignments are refused with 409.
       parameters:
         - $ref: '#/components/parameters/ExecutionScopeIdPath'
         - name: assignmentId
           in: path
           required: true
           schema: { $ref: '#/components/schemas/Uuid' }
+        - $ref: '#/components/parameters/AssignmentResponseIdempotencyKey'
       requestBody:
         required: true
         content:
@@ -20089,6 +20099,10 @@ paths:
         decline reason, preserves the Tenant Work Order, blocks execution under
         that assignment, and notifies Operations for reassignment. Requires
         `work_order.read`, exact-Building access, and active assignment ownership.
+        An optional concurrent-device `Idempotency-Key` (or legacy
+        `idempotencyKey` body member) is bound to the actor and may finalize
+        exactly one assignment; reusing it against a reassigned assignment
+        returns 409 HANDYMAN_ASSIGNMENT_RESPONSE_IDEMPOTENCY_CONFLICT.
       tags: [Work Orders]
       x-required-permission: work_order.read
       x-building-scoped: true
@@ -20103,6 +20117,7 @@ paths:
         - WORK_ORDER_ASSIGNMENT_SUPERSEDED
         - WORK_ORDER_ASSIGNMENT_RESPONSE_CONFLICT
         - WORK_ORDER_ASSIGNMENT_RESPONSE_LATE
+        - HANDYMAN_ASSIGNMENT_RESPONSE_IDEMPOTENCY_CONFLICT
       security:
         - bearerAuth: []
       parameters:
@@ -20111,6 +20126,7 @@ paths:
           in: path
           required: true
           schema: { $ref: "#/components/schemas/Uuid" }
+        - $ref: "#/components/parameters/AssignmentResponseIdempotencyKey"
       requestBody:
         required: true
         content:
@@ -81659,6 +81675,7 @@ paths:
         in: path
         required: true
         schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/AssignmentResponseIdempotencyKey"
     post:
       tags: [Handyman]
       operationId: respondHandymanInspectorAssignment
@@ -81669,6 +81686,11 @@ paths:
         sets `reassignmentRequired = true`, notifies Operations (`IN_APP`), and
         blocks the declined Inspector from recording the inspection without
         deleting or cancelling the Visit Appointment or Handyman Service Request.
+        An optional concurrent-device `Idempotency-Key` is bound to the actor and
+        may finalize exactly one assignment. A response is refused once the
+        inspection visit's `end_at` has elapsed (409
+        HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED); Operations must reschedule or
+        reassign. Superseded/revoked assignments are refused with 409.
       security: [{ bearerAuth: [] }]
       x-error-codes:
         - VALIDATION_ERROR
@@ -81678,6 +81700,8 @@ paths:
         - HANDYMAN_ASSIGNMENT_RESPONSE_SUPERSEDED
         - HANDYMAN_ASSIGNMENT_RESPONSE_CONFLICT
         - HANDYMAN_ASSIGNMENT_RESPONSE_LATE
+        - HANDYMAN_ASSIGNMENT_RESPONSE_EXPIRED
+        - HANDYMAN_ASSIGNMENT_RESPONSE_IDEMPOTENCY_CONFLICT
       requestBody:
         required: true
         content:
@@ -83893,6 +83917,22 @@ components:
         409 IDEMPOTENCY_CONFLICT.
       required: true
       schema: { type: string, minLength: 1, maxLength: 200 }
+    # CR-HM-FIELD-OPS-ACK-01 PART 01 — OPTIONAL concurrent-device key for the
+    # three assignment response commands. Distinct from the REQUIRED generic
+    # `IdempotencyKey` above: when supplied it is bound to the authenticated
+    # actor and may finalize exactly ONE assignment. A replay of the same key
+    # against a reassigned assignment returns 409, never a second decision.
+    AssignmentResponseIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        Optional per-device assignment-response key (8-128 characters,
+        trimmed). The header wins over the legacy `idempotencyKey` JSON member.
+        Two devices replaying the same decision converge on one decision event
+        and one acknowledgment audit row; the same key may finalize only ONE
+        assignment for this actor. Never an authority field.
+      schema: { type: string, minLength: 8, maxLength: 128 }
     SaaSCustomerIdPath:
       name: customerId
       in: path
@@ -100505,7 +100545,7 @@ components:
         declineReason: { type: string, minLength: 1, maxLength: 1000 }
         reason: { type: string, minLength: 1, maxLength: 1000 }
         notes: { type: string, maxLength: 1000 }
-        idempotencyKey: { type: string, minLength: 1, maxLength: 255 }
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
 
     RespondHandymanAssignmentRequest:
       type: object
@@ -100516,6 +100556,7 @@ components:
         declineReason: { type: string, minLength: 1, maxLength: 1000, nullable: true }
         reason: { type: string, minLength: 1, maxLength: 1000, nullable: true }
         notes: { type: string, maxLength: 2000, nullable: true }
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
 
     HandymanExecutionScopeAssignmentResponseView:
       type: object
@@ -100553,6 +100594,7 @@ components:
         declineReason: { type: string, nullable: true }
         responseNotes: { type: string, nullable: true }
         reassignmentRequired: { type: boolean }
+        acknowledgedAt: { type: string, format: date-time, nullable: true }
         idempotentReplay: { type: boolean }
 
     HandymanExecutionScopeAssignmentResponseHistoryView:
@@ -100581,6 +100623,8 @@ components:
         declineReason: { type: string, nullable: true }
         responseNotes: { type: string, nullable: true }
         reassignmentRequired: { type: boolean }
+        acknowledgedAt: { type: string, format: date-time, nullable: true }
+        acknowledgedByUserId: { type: string, format: uuid, nullable: true }
         events:
           type: array
           items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
@@ -100615,6 +100659,8 @@ components:
         declineReason: { type: string, nullable: true }
         responseNotes: { type: string, nullable: true }
         reassignmentRequired: { type: boolean }
+        acknowledgedAt: { type: string, format: date-time, nullable: true }
+        acknowledgedByUserId: { type: string, format: uuid, nullable: true }
         events:
           type: array
           items: { $ref: "#/components/schemas/HandymanAssignmentResponseEvent" }
@@ -132193,6 +132239,15 @@ components:
         version: { type: integer }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        responseStatus: { $ref: "#/components/schemas/HandymanAssignmentResponseStatus" }
+        respondedByUserId: { type: string, format: uuid, nullable: true }
+        respondedByWorkerId: { type: string, format: uuid, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+        declineReason: { type: string, nullable: true }
+        responseNotes: { type: string, nullable: true }
+        reassignmentRequired: { type: boolean }
+        acknowledgedAt: { type: string, format: date-time, nullable: true }
+        idempotentReplay: { type: boolean }
     HandymanEligibleInspector:
       type: object
       description: "Source: EligibleInspectorProjection (handyman-inspector-assignment.types.ts)."
