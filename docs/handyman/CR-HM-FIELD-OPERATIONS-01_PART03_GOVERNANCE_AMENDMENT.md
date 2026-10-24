@@ -4,9 +4,14 @@
 - **Repository:** `budiirmawan/Handyman-Backend` (only repository touched)
 - **Branch:** `arena/a61abf59-handyman-backend`
 - **Baseline:** `4eae70e` — PART 02 arrival challenge issuance (CR-HM-FIELD-OPS-ACK-01)
-- **Status:** **PROPOSAL — NOT IMPLEMENTED.** No runtime, no route, no migration, no
-  OpenAPI, no test added by this PART. Applying anything here is blocked on the
-  CR Owner sign-off gate (`CR-HM-FIELD-OPERATIONS-01_PART03_SIGNOFF_GATE.md`).
+- **Status:** **APPROVED BY CR OWNER — 2026-10-24 (Asia/Jakarta).** Gate
+  SG-1…SG-6 approved; SG-2 Option A (existing `building_configuration.read|manage`),
+  SG-3 Option A (`409 HANDYMAN_ARRIVAL_CHALLENGE_SUPERSEDED`), SG-4 Option A
+  (superseded binding refused before TTL evaluation). Signed record and binding
+  conditions: `CR-HM-FIELD-OPERATIONS-01_PART03_SIGNOFF_GATE.md` §8–§9.
+- **Implementation status: NOT STARTED.** This PART remains documentation-only:
+  no runtime, no route, no migration, no OpenAPI, no test. Authorised work is
+  **PART 04**, against the approved options and the §9 acceptance criteria.
 - **No PR. No Biznet deployment. No full test suite. No frozen feature implemented.**
 
 ---
@@ -254,6 +259,10 @@ preservation, verdict non-effect, and the G-4 superseded refusal invariants.
 
 ## 9. Sign-off
 
-Approval checklist, approvers and the exact consequences of approval/rejection
-are in `CR-HM-FIELD-OPERATIONS-01_PART03_SIGNOFF_GATE.md`. **Implementation does
-not start until that gate is signed.**
+**SIGNED — CR Owner approved SG-1…SG-6 on 2026-10-24 (Asia/Jakarta).** The gate
+record, the exact approved options and the ten binding implementation conditions
+(AC-1…AC-10) are in `CR-HM-FIELD-OPERATIONS-01_PART03_SIGNOFF_GATE.md` §8–§9.
+
+The gate being signed authorises **PART 04 implementation only**. Recording the
+approval did not change any runtime, route, migration, OpenAPI document or test,
+and PART 01 (`186628c`) / PART 02 (`4eae70e`) remain untouched.

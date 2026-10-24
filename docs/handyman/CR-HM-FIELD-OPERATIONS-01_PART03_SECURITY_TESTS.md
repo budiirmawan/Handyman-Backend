@@ -1,8 +1,9 @@
 # CR-HM-FIELD-OPERATIONS-01 — PART 03: PROPOSED SECURITY TESTS
 
-- Status: **PROPOSED, NOT IMPLEMENTED.** This document is a test *plan*. It adds
-  no test file and executes nothing.
-- To be implemented as `tests/handyman-arrival-configuration-part03.test.ts`
+- Status: **APPROVED BY CR OWNER 2026-10-24 — still a TEST PLAN, NOT IMPLEMENTED.**
+  This document adds no test file and executes nothing; the cases below are the
+  PART 04 acceptance contract (gate §8 approval, §9 conditions AC-1…AC-10).
+- To be implemented as `tests/handyman-arrival-configuration-part04.test.ts`
   (G-2 + G-3, new file) and as **additive cases** inside the existing
   `tests/handyman-arrival-verification-api.test.ts` / `-evaluation.test.ts`
   (G-4 — no duplicate suite).
