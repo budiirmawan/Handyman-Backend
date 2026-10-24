@@ -69,8 +69,8 @@ import type { Migration } from './types';
  * This migration creates NO quotation engine, NO price amount of its own, NO
  * request lifecycle, NO approval and NO customer-facing surface.
  */
-export const migration0476HandymanParameterizedServiceCatalog: Migration = {
-  id: '0476_handyman_parameterized_service_catalog',
+export const migration0477HandymanParameterizedServiceCatalog: Migration = {
+  id: '0477_handyman_parameterized_service_catalog',
 
   async up(client: PoolClient): Promise<void> {
     // ------------------------------------------------------------------

@@ -4,6 +4,12 @@
 `08733cd`, which already contains PART 01 + PART 02).
 **Scope:** PART 03 only. No merge, no deploy, no Biznet change, no PR.
 
+**Migration numbers.** PART 03 shipped `0480_handyman_service_request_item_inherited_attributes`
+— the FINAL REVIEW released `0476` to the in-flight E2E PR #59
+(`CR-HM-FIELD-OPERATIONS-01`) and moved this CR's migrations one step up
+(`0477`–`0480`), so that `main`'s `0473`–`0480` stays contiguous whichever
+order the two PRs land in.
+
 ---
 
 ## 1. What PART 03 settles
@@ -41,10 +47,10 @@ Read directly from the code on `08733cd`.
 
 | # | stage | where | what it owns today |
 | --- | --- | --- | --- |
-| 1 | Service Catalogue | `service_catalog` (+ `0476`) | the governed service and its attribute vocabulary |
+| 1 | Service Catalogue | `service_catalog` (+ `0477`) | the governed service and its attribute vocabulary |
 | 2 | Service Variant | `handyman_service_variants` (`0376`) | the catalogue-level configuration label of a service; `code`, `status` |
-| 3 | Variant Attributes | `handyman_service_variant_attributes` (`0476` + lifecycle `0478`) | the **configured value** of one attribute of one variant (`value_text` / `value_number`, `status`) |
-| 4 | Service Request Item | `handyman_service_request_items` (`0476`) | the **work fact**: quantity, access condition, the *reported* attribute values |
+| 3 | Variant Attributes | `handyman_service_variant_attributes` (`0477` + lifecycle `0479`) | the **configured value** of one attribute of one variant (`value_text` / `value_number`, `status`) |
+| 4 | Service Request Item | `handyman_service_request_items` (`0477`) | the **work fact**: quantity, access condition, the *reported* attribute values |
 | 5 | Price Rule Resolution | `handyman-parameterized-catalog-pricing.service.ts` | validates the item's attributes, selects the rule, reads the governed price fact |
 | 6 | Initial Quotation | `handyman-parameterized-quotation.service.ts` (`prepareHandymanCatalogQuotation`) | creates the root + version 1 DRAFT through the **existing** `createHandymanQuotation` / `addHandymanQuotationLine` |
 | 7 | Inspection | `handyman-requests` (inspection + diagnosis) | the request diagnosis lane; append-only `handyman_service_quote_resolutions` |
@@ -101,7 +107,7 @@ The contract lives in
 | R1 | **Deterministic inheritance** — the item's effective set = the variant's ACTIVE configured values + the caller's own values | `composeEffectiveItemAttributes`, materialised on the item row |
 | R2 | **No silent contradiction** — an explicit value that contradicts the variant is refused with the attribute code, the variant value and the submitted value | `400 HANDYMAN_SERVICE_REQUEST_ITEM_INVALID` |
 | R3 | **Governed correction** — after authoring, the inspection lane may correct an inherited value; the corrected value becomes the item's **own** value (it leaves the inherited set) and the price re-resolves; a tier that no longer matches fails closed | `composeCorrectedItemAttributes` |
-| R4 | **Retired choices are never inherited** — a retired variant choice (the `0478` lifecycle) never reaches a new item | `loadVariantAttributeValues` skips `choice_status <> 'ACTIVE'` |
+| R4 | **Retired choices are never inherited** — a retired variant choice (the `0479` lifecycle) never reaches a new item | `loadVariantAttributeValues` skips `choice_status <> 'ACTIVE'` |
 | R5 | **The catalogue never rewrites an existing item** — a later change of the variant does not flow into an item that already exists; the variant is re-read only when the variant is (re)selected | the item stores its own effective set + provenance |
 | R6 | **Variant scope** — the variant must belong to the right service **and** the right client; an INACTIVE variant is unavailable for a new request | `400` on the item route |
 | R7 | **A variant change never alters an old quotation** — the quotation is immutable; the price snapshot is append-only | existing lifecycle, proven by the test suite |
@@ -116,7 +122,7 @@ time. The item row carries:
 
 * `attribute_values` — the **effective** set (inherited + own);
 * `inherited_attribute_values` — the **provenance** (the part the variant
-  supplied) — NEW, migration `0479`.
+  supplied) — NEW, migration `0480`.
 
 Why materialised and not derived at read time:
 
@@ -226,15 +232,15 @@ the hand-written INSERT) were left as they are.
 
 | file | change |
 | --- | --- |
-| `src/database/migrations/0479_handyman_service_request_item_inherited_attributes.ts` | **NEW** — `inherited_attribute_values JSONB NOT NULL DEFAULT '{}'`, the object CHECK, the partial index |
-| `src/database/migrations/index.ts` | the `0479` registration (the only merge-conflict file) |
+| `src/database/migrations/0480_handyman_service_request_item_inherited_attributes.ts` | **NEW** — `inherited_attribute_values JSONB NOT NULL DEFAULT '{}'`, the object CHECK, the partial index |
+| `src/database/migrations/index.ts` | the `0480` registration (the only merge-conflict file) |
 | `src/modules/handyman-parameterized-catalog/handyman-variant-inheritance.service.ts` | **NEW** — the contract module (`loadVariantAttributeValues`, `composeEffectiveItemAttributes`, `composeCorrectedItemAttributes`, `splitItemAttributes`) |
 | `src/modules/handyman-parameterized-catalog/handyman-parameterized-catalog.repository.ts` | the `listVariantAttributeValues` join (the choice status + the attribute definition), the inherited column in SELECT / INSERT / UPDATE |
 | `src/modules/handyman-parameterized-catalog/handyman-parameterized-catalog.types.ts` | `HandymanServiceRequestItemRecord.inheritedAttributeValues` |
 | `src/modules/handyman-parameterized-catalog/handyman-request-items.service.ts` | the ADD path (inheritance + the contradiction refusal + the audit metadata) and the PATCH path (the merge, the correction, the re-selection, the detach + the audit metadata) |
 | `src/modules/handyman-parameterized-catalog/handyman-parameterized-catalog-pricing.service.ts` | the fail-closed guard: a non-positive amount is never quoted (defence in depth behind the DB CHECK) |
 | `src/modules/handyman-parameterized-catalog/handyman-parameterized-quotation.service.ts` | the line description carries the variant code and marks the inherited attributes (`code*=value`) |
-| `src/modules/handyman-parameterized-catalog/handyman-parameterized-quotation.routes.ts` | the `accessCondition` message names `SPECIAL_EQUIPMENT` (the vocabulary of `0478`) |
+| `src/modules/handyman-parameterized-catalog/handyman-parameterized-quotation.routes.ts` | the `accessCondition` message names `SPECIAL_EQUIPMENT` (the vocabulary of `0479`) |
 | `src/modules/handyman-parameterized-catalog/index.ts` | the barrel exports of the contract module |
 | `docs/api/openapi.yaml` | the item schema gains `inheritedAttributeValues` and the widened access vocabulary; the POST and PATCH descriptions state the inheritance, the contradiction refusal and the MERGE semantics |
 | `tests/cr-hm-service-catalog-01-part03.test.ts` | **NEW** — the 10 contract tests |
@@ -250,7 +256,7 @@ the hand-written INSERT) were left as they are.
 | OpenAPI / census suites (3 files) | **17 / 17 PASS** (the census pins are unchanged — PART 03 adds **no** path) |
 | `npm run typecheck` | clean |
 | `npm run build` | clean |
-| disposable PostgreSQL | **474** migrations apply (473 → 474); the column, the object CHECK and the index exist; `0479` rolls back (the column is gone) and re-applies cleanly |
+| disposable PostgreSQL | **474** migrations apply (473 → 474); the column, the object CHECK and the index exist; `0480` rolls back (the column is gone) and re-applies cleanly |
 | affected regression (11 suites, branch vs the untouched baseline) | 52 failures on **both** — the failing sets are identical, **0 new** |
 
 ### 6.3 The initial-quotation integration (what actually happens now)
@@ -292,12 +298,12 @@ POST /handyman/requests/{id}/quotation/revision   (after an inspection)
 
 | # | blocker | state |
 | --- | --- | --- |
-| 1 | merge with `origin/main` | `origin/main` is `ee20d21` (unchanged since the PART 02 simulation); `0479` is **free** on main (main ends at `0475`). The only merge-conflict file remains `src/database/migrations/index.ts` — the `0479` registration must survive the merge, and the census pins must be re-pinned if main moved again (they did not). |
+| 1 | merge with `origin/main` | `origin/main` is `ee20d21` (unchanged since the PART 02 simulation); `0480` is **free** on main (main ends at `0475`). The only merge-conflict file remains `src/database/migrations/index.ts` — the `0480` registration must survive the merge, and the census pins must be re-pinned if main moved again (they did not). |
 | 2 | the pre-existing price-catalogue red surface | **not a PART 03 blocker** — proven identical on the untouched baseline; it blocks `main`, not this CR. It must be triaged by whoever owns the price-catalogue entry creation path. |
 | 3 | the `crewId` schema leak | **not a PART 03 blocker** — another CR's defect; reported in §5.2. |
 | 4 | the price-catalogue `entry_kind` / amount validation asymmetry | the API validates `unitPrice > 0` (400), the service layer does not (the DB CHECK catches it). It is a pre-existing asymmetry of the price catalogue; PART 03 relies on the DB CHECK and adds a resolver guard. It is reported, not changed. |
 | 5 | the "one quotation thread per request" rule | the existing engine refuses a second quotation for one request, so the initial quotation can only be prepared once per request. This is the EXISTING contract and PART 03 does not change it — but an E2E that prepares twice must expect the `409`/`already exists` refusal. |
-| 6 | the access-condition dimension | the access vocabulary is fixed (`0478`). A per-service access policy would need a governed dimension in the price authority — a PART 04 candidate, not a PART 03 gap. |
+| 6 | the access-condition dimension | the access vocabulary is fixed (`0479`). A per-service access policy would need a governed dimension in the price authority — a PART 04 candidate, not a PART 03 gap. |
 
 ---
 

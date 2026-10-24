@@ -34,8 +34,8 @@ import type { Migration } from './types';
  * `attribute_values` keeps its meaning: the EFFECTIVE set (inherited values
  * plus the caller's own values). No other table, column or engine changes.
  */
-export const migration0479HandymanServiceRequestItemInheritedAttributes: Migration = {
-  id: '0479_handyman_service_request_item_inherited_attributes',
+export const migration0480HandymanServiceRequestItemInheritedAttributes: Migration = {
+  id: '0480_handyman_service_request_item_inherited_attributes',
 
   async up(client: PoolClient): Promise<void> {
     await client.query(`

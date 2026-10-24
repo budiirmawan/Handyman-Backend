@@ -30,8 +30,8 @@ import type { Migration } from './types';
  * the plain SERVICE lookup keeps its "at most one winner per tier" law
  * because keyed rows are excluded from it.
  */
-export const migration0477ServicePriceTierKey: Migration = {
-  id: '0477_service_price_tier_key',
+export const migration0478ServicePriceTierKey: Migration = {
+  id: '0478_service_price_tier_key',
   async up(client: PoolClient): Promise<void> {
     await client.query(`
       ALTER TABLE price_catalog_entries

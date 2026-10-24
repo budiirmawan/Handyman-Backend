@@ -3,7 +3,7 @@
 **Status:** PART 01 COMPLETE (coding + focused verification) — awaiting FINAL REVIEW
 **Repo:** Handyman-Backend
 **Branch:** `arena/d4d4105f-handyman-backend`
-**Migrations:** `0476_handyman_parameterized_service_catalog`, `0477_service_price_tier_key`
+**Migrations:** `0477_handyman_parameterized_service_catalog`, `0478_service_price_tier_key`
 
 ---
 
@@ -16,10 +16,10 @@ authorities and adds no parallel engine:
 |---|---|---|
 | Service master | `service_catalog` (0321) | **REUSE** — the starter import creates catalogue entries in the existing master; the parameterized layer is a child of it. |
 | Service variant | `handyman_service_variants` (0376) | **REUSE** — the default `STANDARD` variant of every starter service is a row of the existing variant master. |
-| Reference price | `price_catalog_entries` (0319 + 0325) | **REUSE + EXTEND (0477)** — the amount authority. 0477 adds ONE governed discriminator (`service_price_key`) so a service may carry several simultaneously ACTIVE catalogue price tiers. |
+| Reference price | `price_catalog_entries` (0319 + 0325) | **REUSE + EXTEND (0478)** — the amount authority. 0478 adds ONE governed discriminator (`service_price_key`) so a service may carry several simultaneously ACTIVE catalogue price tiers. |
 | Quotation lifecycle | `handyman-quotations` (0391–0394) | **REUSE** — the quotation root, versions, lines, issuing and the customer decision stay exactly where they are. |
 | Client/Building scope | `context-access` (BE-02G) | **REUSE** — exact-Building guard, no same-Client shortcut. |
-| Catalogue governance (attributes, commercial posture, price rules, starter import, request items, price snapshots) | none | **NEW** — migration 0476. |
+| Catalogue governance (attributes, commercial posture, price rules, starter import, request items, price snapshots) | none | **NEW** — migration 0477. |
 
 **Reference Price != Quotation != Final Charge** (CR-HM-02) is preserved: the
 catalogue selects a governed reference price; the quotation line is the
@@ -29,7 +29,7 @@ directly and the Handyman pays the BM cooperation fee.
 
 ---
 
-## 2. Data model (migration 0476)
+## 2. Data model (migration 0477)
 
 Seven additive tables, every one of them `client_id`-scoped and proven against
 its parent through a composite scope FK:
@@ -49,7 +49,7 @@ client_id)`, `handyman_service_requests(id, client_id)` and
 `price_catalog_entries(id, client_id)` are the composite scope anchors — a
 row can never reach across a Client.
 
-### 0477 — the catalogue price tier key
+### 0478 — the catalogue price tier key
 
 `price_catalog_entries` (0325) allows exactly ONE ACTIVE reference price per
 (client, service, currency, scope tier, effective window). That is the right
@@ -58,7 +58,7 @@ impossible: "1 PK non-inverter", "1 PK inverter" and "5+ units" are three
 different prices for the same catalogue service and all three must be ACTIVE
 at the same instant.
 
-0477 therefore widens the SERVICE half of the ACTIVE-window exclusion with one
+0478 therefore widens the SERVICE half of the ACTIVE-window exclusion with one
 governed, additive discriminator:
 
 * `price_catalog_entries.service_price_key TEXT`
@@ -267,7 +267,7 @@ Additional verification: `npm run typecheck` (clean), `npm run build`
 (clean), the OpenAPI census suites (28 assertions green — Handyman surface
 287 → 294, total runtime 2,034 → 2,052, in-scope operational 1,964 → 1,982,
 OpenAPI operational 1,963 → 1,981), and a disposable migration validation
-(472 migrations apply; 0477 and 0476 roll back and re-apply cleanly).
+(472 migrations apply; 0478 and 0477 roll back and re-apply cleanly).
 
 ---
 
@@ -293,10 +293,20 @@ PART 01 was merge-simulated against `origin/main` = `ee20d21`
 
 * **Exactly ONE conflict** — `src/database/migrations/index.ts` (the import
   block and the ordered migration array). Resolution: keep `0473`–`0475` from
-  `main`, then append `0476_handyman_parameterized_service_catalog` and
-  `0477_service_price_tier_key`. PART 01's migration numbers were deliberately
-  moved from `0473/0474` to `0476/0477` so they never collide with the
+  `main`, then append `0477_handyman_parameterized_service_catalog` and
+  `0478_service_price_tier_key`. PART 01's migration numbers were deliberately
+  moved from `0473/0474` to `0477/0478` so they never collide with the
   notification branch's `0473`–`0475`.
+* **FINAL REVIEW renumbering (2026-10-24).** The in-flight E2E PR #59
+  (`CR-HM-FIELD-OPERATIONS-01`) claims migration number `0476`
+  (`0476_handyman_assignment_response_client_keys`). This CR therefore
+  released `0476` to it and moved its own four migrations one step up:
+  `0477_handyman_parameterized_service_catalog`,
+  `0478_service_price_tier_key`,
+  `0479_handyman_service_variant_attribute_lifecycle`,
+  `0480_handyman_service_request_item_inherited_attributes`. The whole
+  `0473`–`0480` sequence on `main` is then contiguous, whichever order the
+  two PRs land in.
 * `docs/api/openapi.yaml` and `src/routes/index.ts` auto-merge cleanly.
 * The merged tree passes `npx tsc --noEmit` (clean) and the focused suite
   **15/15**.
@@ -337,7 +347,7 @@ the merge.
 
 1. `git merge arena/d4d4105f-handyman-backend` into the release branch.
 2. Resolve `src/database/migrations/index.ts` — keep both migration blocks in
-   numeric order (`0473`…`0478`; PART 02 adds `0478`).
+   numeric order (`0473`…`0479`; PART 02 adds `0479`).
 3. Re-pin the five census numbers to the merged reality (table above).
 4. Run `npm run typecheck`, `npm run build`, the census suites and
    `tests/cr-hm-service-catalog-01-part01.test.ts`.

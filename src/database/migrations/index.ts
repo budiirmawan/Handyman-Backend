@@ -509,14 +509,14 @@ import { migration0471HandymanHelperAttendanceConfirmation }
   from './0471_handyman_helper_attendance_confirmation';
 import { migration0472HandymanAssignmentResponses }
   from './0472_handyman_assignment_responses';
-import { migration0476HandymanParameterizedServiceCatalog }
-  from './0476_handyman_parameterized_service_catalog';
-import { migration0477ServicePriceTierKey }
-  from './0477_service_price_tier_key';
-import { migration0478HandymanServiceVariantAttributeLifecycle }
-  from './0478_handyman_service_variant_attribute_lifecycle';
-import { migration0479HandymanServiceRequestItemInheritedAttributes }
-  from './0479_handyman_service_request_item_inherited_attributes';
+import { migration0477HandymanParameterizedServiceCatalog }
+  from './0477_handyman_parameterized_service_catalog';
+import { migration0478ServicePriceTierKey }
+  from './0478_service_price_tier_key';
+import { migration0479HandymanServiceVariantAttributeLifecycle }
+  from './0479_handyman_service_variant_attribute_lifecycle';
+import { migration0480HandymanServiceRequestItemInheritedAttributes }
+  from './0480_handyman_service_request_item_inherited_attributes';
 import type { Migration } from './types';
 
 export type { Migration } from './types';
@@ -992,8 +992,8 @@ export const migrations: readonly Migration[] = [
   migration0470HandymanFieldExpenseReimbursement,
   migration0471HandymanHelperAttendanceConfirmation,
   migration0472HandymanAssignmentResponses,
-  migration0476HandymanParameterizedServiceCatalog,
-  migration0477ServicePriceTierKey,
-  migration0478HandymanServiceVariantAttributeLifecycle,
-  migration0479HandymanServiceRequestItemInheritedAttributes,
+  migration0477HandymanParameterizedServiceCatalog,
+  migration0478ServicePriceTierKey,
+  migration0479HandymanServiceVariantAttributeLifecycle,
+  migration0480HandymanServiceRequestItemInheritedAttributes,
 ];

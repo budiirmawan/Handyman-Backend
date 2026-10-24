@@ -25,8 +25,8 @@ import type { Migration } from './types';
  * and the access complexity is priced by a governed price TIER that the
  * administrator authors in that authority — never by a computed surcharge.
  */
-export const migration0478HandymanServiceVariantAttributeLifecycle: Migration = {
-  id: '0478_handyman_service_variant_attribute_lifecycle',
+export const migration0479HandymanServiceVariantAttributeLifecycle: Migration = {
+  id: '0479_handyman_service_variant_attribute_lifecycle',
 
   async up(client: PoolClient): Promise<void> {
     // ------------------------------------------------------------------

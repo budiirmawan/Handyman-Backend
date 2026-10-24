@@ -6,8 +6,8 @@ continues PART 01 (`09ff9b8`) and never re-opens it: the service master, the
 variant master, the price authority, the quotation lifecycle and the starter
 catalogue are all REUSED unchanged.
 
-**Migrations:** `0478_handyman_service_variant_attribute_lifecycle`
-(applied after PART 01's `0476` / `0477`).
+**Migrations:** `0479_handyman_service_variant_attribute_lifecycle`
+(applied after PART 01's `0477` / `0478`).
 
 **Governing law (unchanged from PART 01):** the amount authority is the
 EXISTING `price_catalog_entries`; the quotation lifecycle is the EXISTING
@@ -113,7 +113,7 @@ is the client's STANDARD-access baseline, so consuming it for a difficult
 job would price the wrong access tier. This is enforced at rule creation,
 at rule update and again at resolution time.
 
-`SPECIAL_EQUIPMENT` joins the access vocabulary (migration `0478` widens the
+`SPECIAL_EQUIPMENT` joins the access vocabulary (migration `0479` widens the
 request-item CHECK constraint).
 
 ---
@@ -142,8 +142,8 @@ through a direct database write.
 
 | file | change |
 | --- | --- |
-| `src/database/migrations/0478_handyman_service_variant_attribute_lifecycle.ts` | NEW — variant-attribute lifecycle + access vocabulary |
-| `src/database/migrations/index.ts` | registers `0478` |
+| `src/database/migrations/0479_handyman_service_variant_attribute_lifecycle.ts` | NEW — variant-attribute lifecycle + access vocabulary |
+| `src/database/migrations/index.ts` | registers `0479` |
 | `src/modules/handyman-parameterized-catalog/handyman-parameterized-catalog.types.ts` | `SPECIAL_EQUIPMENT`, the reserved `ACCESS_CONDITION` selector key, two new reason codes, the variant-attribute lifecycle fields |
 | `src/modules/handyman-parameterized-catalog/handyman-parameterized-catalog.errors.ts` | 5 new error factories |
 | `src/shared/errors.ts` | 5 new error codes |
@@ -157,7 +157,7 @@ through a direct database write.
 | `tests/cr-hm-service-catalog-01-part02.test.ts` | NEW — the PART 02 focused suite (12 assertions) |
 | `tests/cr-hm-service-catalog-01-part01.test.ts` | the mixed-AC test now prices each access tier with its OWN fact (the PART 02 law) |
 | `tests/handyman-quotations-api.test.ts` | the frozen quotation-path count (10) was already stale at the baseline (12); it is now 14 and the guard's intent is unchanged |
-| `tests/price-catalog-entries.test.ts` | the hand-written SERVICE INSERT now satisfies the `0477` tier-key CHECK so the intended constraint is the one reported |
+| `tests/price-catalog-entries.test.ts` | the hand-written SERVICE INSERT now satisfies the `0478` tier-key CHECK so the intended constraint is the one reported |
 | `tests/openapi-operational-*.test.ts` | the census pins +4 |
 
 ---
@@ -171,7 +171,7 @@ through a direct database write.
 | OpenAPI / census suites (3 files) | **28 / 28 PASS** |
 | `npm run typecheck` | clean |
 | `npm run build` | clean |
-| disposable PostgreSQL | 473 migrations apply; `0478` rolls back and re-applies cleanly; the access CHECK carries `SPECIAL_EQUIPMENT` |
+| disposable PostgreSQL | 473 migrations apply; `0479` rolls back and re-applies cleanly; the access CHECK carries `SPECIAL_EQUIPMENT` |
 | price-catalog regression (5 suites) | 47 pre-existing failures, **identical to the baseline** (see §6), 0 new |
 | quotation regression (6 suites) | 52 / 57 pass; the 5 failures are **identical to the baseline** (see §6) |
 
@@ -223,7 +223,7 @@ separate clone with its own disposable PostgreSQL:
   **CLOSED by PART 03** — the inheritance is materialised on the item at
   write time, with the provenance in
   `handyman_service_request_items.inherited_attribute_values`
-  (migration `0479`). See
+  (migration `0480`). See
   `docs/handyman/CR-HM-SERVICE-CATALOG-01_PART03.md`.
 * The access vocabulary is fixed. A per-service access policy (which
   complexity a service may carry) would need a governed dimension in the
@@ -246,7 +246,8 @@ simulation.
 | merge conflicts | exactly ONE: `src/database/migrations/index.ts` (both sides add migrations in the same region) |
 | `docs/api/openapi.yaml` | auto-merges cleanly |
 | `src/routes/index.ts` | auto-merges cleanly |
-| migration order after the resolution | `0473`–`0475` (main) → `0476`, `0477`, `0478` (this CR) — no number collision |
+| migration order after the resolution | `0473`–`0475` (main) → `0477`, `0478`, `0479` (this CR) — no number collision |
+| FINAL REVIEW renumbering | `0476` was released to the in-flight E2E PR #59 (`CR-HM-FIELD-OPERATIONS-01`); this CR moved to `0477`–`0480` (PART 03 adds `0480`) |
 | `npx tsc --noEmit` on the merged tree | clean |
 | focused suites on the merged tree | **27 / 27 PASS** (15 PART 01 + 12 PART 02) |
 | OpenAPI census on the merged tree | 28 / 28 PASS **after** the re-pin below |
@@ -273,7 +274,7 @@ platform pin (69) are unaffected by the merge.
 
 1. `git merge arena/d4d4105f-handyman-backend` into the release branch.
 2. Resolve `src/database/migrations/index.ts` — keep both migration blocks in
-   numeric order (`0473`…`0478`).
+   numeric order (`0473`…`0479`).
 3. Re-pin the five census numbers to the merged reality (table above).
 4. Run `npm run typecheck`, `npm run build`, the census suites,
    `tests/cr-hm-service-catalog-01-part01.test.ts` and
