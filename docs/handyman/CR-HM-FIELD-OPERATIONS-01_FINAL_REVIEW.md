@@ -256,7 +256,12 @@ only authority.
 
 ## 7. Pull request record
 
-- One PR to `main`, from `arena/a61abf59-handyman-backend` (same commit as the
-  session branch). **Not merged** — merge is the reviewer's decision.
-- PR URL: _recorded in the review message and in the PR body; see §7 note in the
-  session report._
+- **PR #59 → `https://github.com/budiirmawan/Handyman-Backend/pull/59`**
+- Base `main` · head `arena/a61abf59-handyman-backend` (identical to the session
+  branch `arena/0cde2f6e-handyman-backend` at `3f9e085`).
+- State at creation: **OPEN, MERGEABLE, not a draft, not merged.** The repository
+  reports **no CI checks** on the branch (no workflow is configured for it), so
+  every claim in this document rests on the commands recorded in §4, not on a
+  pipeline.
+- Merge is the reviewer's decision; this review does not merge and does not
+  deploy.
