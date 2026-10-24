@@ -1,6 +1,8 @@
 # CR-HM-FIELD-OPERATIONS-01 — PART 04: IMPLEMENTATION GOVERNANCE RECORD
 
-- **Status: IMPLEMENTED — awaiting FINAL REVIEW only.**
+- **Status: IMPLEMENTED — FINAL REVIEW PASSED (source certification).**
+  See `CR-HM-FIELD-OPERATIONS-01_FINAL_REVIEW.md` for the PART 01–04
+  certification, the reconciliation record and the GO/NO-GO position.
 - Baseline: `eed1225` (PART 03 sign-off gate, SIGNED). Branch:
   `arena/a61abf59-handyman-backend`.
 - Authority to implement: `CR-HM-FIELD-OPERATIONS-01_PART03_SIGNOFF_GATE.md` §8
@@ -233,8 +235,10 @@ surface guard).
    are out of scope for PART 04 (backend authority only).
 2. **No migration** — `0398`/`0399` were already sufficient; nothing was added
    "just in case".
-3. **Baseline-red non-Handyman census pins** (`openapi-operational-*`) remain red
-   as they were at baseline; they were not touched.
+3. **Baseline-red census pins** (`openapi-operational-*`) were re-derived at
+   FINAL REVIEW from a measurement on `main` plus the approved deltas (they are
+   now green); the pre-existing non-Handyman debts that remain are recorded
+   separately in the FINAL REVIEW (§4.3), not repaired inside this PART.
 4. **Single-Building configuration scale** — history reads are unbounded per
    Building (a Building's policy history is small by construction); pagination
    was deliberately not invented.

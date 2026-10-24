@@ -530,13 +530,61 @@ describe('CR-HM-05 PART 06A — readiness HTTP/OpenAPI surface', () => {
       );
     }
     // ZERO target-binding / crew-assignment / arrival / QR / geofence /
-    // check-in / FM work-order APIs anywhere under /handyman
+    // check-in / FM work-order APIs on the READINESS surface.
+    //
+    // CR-HM-FIELD-OPERATIONS-01 FINAL REVIEW (2026-10-24): this guard used to
+    // scan ALL of /handyman, which was correct when readiness was the only
+    // Handyman slice. Later approved CRs deliberately crossed that line
+    // (execution scopes CR-HM-04/07/08, finance-on-scope, and PART 04 G-2/G-3
+    // arrival-location identifiers + geofence policy). The guard is therefore
+    // scoped — and stays strict — as follows:
+    //   (a) the readiness surface itself must never carry these words;
+    //   (b) a path under /handyman that DOES carry them is only tolerated when
+    //       it belongs to an explicitly approved later family below; anything
+    //       else still fails.
     const forbiddenPath =
       /assign|target|executionscope|arrival|qr|geofence|check-?in|work-?order|permit-to-work/i;
+    const readinessLeak = Object.keys(surface).filter((p) =>
+      forbiddenPath.test(p),
+    );
+    assert.deepEqual(
+      readinessLeak,
+      [],
+      'the CR-HM-05 readiness surface itself must stay clean',
+    );
+    const approvedLaterFamilies = [
+      // CR-HM-04 / CR-HM-07 / CR-HM-08 + finance-on-scope settlement surfaces.
+      /^\/handyman\/execution-scopes\//,
+      // CR-HM-07 field execution (BAST, evidence, variations, materials,
+      // material purchases, helper attendance) and field work-orders.
+      /^\/handyman\/field\/(execution-scopes|work-orders)\//,
+      // CR-HM-04 inspector assignment/response work on visit appointments.
+      /^\/handyman\/visit-appointments\/[^/]+\/inspector(-assignments\/[^/]+\/(respond|response-history)|\/reassign)$/,
+      /^\/handyman\/requests\/[^/]+\/inspector-assignments\/history$/,
+      // CR-HM-FIELD-OPERATIONS-01 PART 04 (approved gate §8): G-2 registry.
+      /^\/handyman\/buildings\/\{buildingId\}\/arrival-location-identifiers(\/|$)/,
+      // CR-HM-FIELD-OPERATIONS-01 PART 04 (approved gate §8): G-3 policy.
+      /^\/handyman\/buildings\/\{buildingId\}\/geofence-policy(\/|$)/,
+    ];
     const leaked = Object.keys(doc.paths).filter((p) =>
       p.startsWith('/handyman') && forbiddenPath.test(p),
     );
-    assert.deepEqual(leaked, []);
+    const unapproved = leaked.filter(
+      (p) => !approvedLaterFamilies.some((family) => family.test(p)),
+    );
+    assert.deepEqual(
+      unapproved,
+      [],
+      'no unapproved forbidden-vocabulary Handyman path may appear',
+    );
+    // The approved families are the ONLY tolerated ones and they are all real.
+    for (const p of leaked) {
+      assert.equal(
+        approvedLaterFamilies.some((family) => family.test(p)),
+        true,
+        `${p} must be an approved later-CR surface`,
+      );
+    }
     // readiness schemas carry exactly the allowed fields
     const forbiddenField =
       /assign|target|scope|arrival|qr|geofence|scheduledwindow|workorder|fmpermit|crew|provider/i;
