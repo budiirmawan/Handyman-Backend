@@ -370,6 +370,62 @@ export async function runGuardedQcCycle(input: {
 }
 
 /**
+ * Add the current BAST prerequisites to an existing scope/crew fixture:
+ * one completed work session and a genuine versioned Supervisor QC PASS
+ * with verified bytes. This keeps older scope-guard suites on the same
+ * production readiness path as arrangeGuardedBast without replacing their
+ * tenant/building arrangement.
+ */
+export async function arrangeGuardedQcPass(input: {
+  realm: {
+    organization: { id: string };
+    department: { id: string };
+    position: { id: string };
+  };
+  buildingId: string;
+  scope: {
+    id: string;
+    clientId: string;
+    tenantCompanyId: string;
+    handymanRequestId: string;
+  };
+  crew: {
+    workerContext: { id: string; workforceProfileId: string };
+    leadUser: { id: string };
+  };
+  assignment: { id: string };
+  adminUserId: string;
+  q: GuardedQcQuery;
+}): Promise<void> {
+  const supervisor = await createGuardedQcSupervisor({
+    realm: {
+      ...input.realm,
+      building: { id: input.buildingId },
+    },
+    crew: input.crew,
+  });
+  await seedCheckedOutWorkSession(input.q, {
+    clientId: input.scope.clientId,
+    executionScopeId: input.scope.id,
+    assignmentId: input.assignment.id,
+    leadWorkerContextId: input.crew.workerContext.id,
+    leadUserId: input.crew.leadUser.id,
+  });
+  const { run } = await runGuardedQcCycle({
+    clientId: input.scope.clientId,
+    tenantCompanyId: input.scope.tenantCompanyId,
+    buildingId: input.buildingId,
+    handymanRequestId: input.scope.handymanRequestId,
+    executionScopeId: input.scope.id,
+    adminUserId: input.adminUserId,
+    supervisorUserId: supervisor.id,
+    uploaderUserId: input.crew.leadUser.id,
+    q: input.q,
+  });
+  assert.equal(run.status, 'PASSED');
+}
+
+/**
  * Arrange an AUTHORIZED scope with ACTIVE crew, a genuine guarded QC
  * PASS (work session + versioned supervisor run + verified bytes) and
  * a BAST advanced to `until`. `ACCEPTED` additionally signs off with a

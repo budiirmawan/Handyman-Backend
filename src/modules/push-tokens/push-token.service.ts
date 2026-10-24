@@ -66,17 +66,16 @@ const ROW_COLUMNS = `id, user_id AS "userId", device_id AS "deviceId",
 /**
  * Maps the persisted row to the PUBLIC registration shape.
  *
- * The shape is intentionally identical to the BE-25L contract: provider
- * identity, success/failure timestamps, failure counters and invalidation
- * reasons are internal routing/diagnostic metadata and are never returned to
- * a client.
+ * The raw provider token is credential-grade and write-only. Internal
+ * delivery reads PushTokenRecord directly; this mapper returns only approved
+ * non-secret registration metadata. Provider identity, success/failure
+ * timestamps, failure counters and invalidation reasons also stay internal.
  */
 export function toPublicPushToken(row: PushTokenRecord): PublicPushToken {
   return {
     id: row.id,
     userId: row.userId,
     deviceId: row.deviceId,
-    pushToken: row.pushToken,
     platform: row.platform,
     appVersion: row.appVersion,
     deviceModel: row.deviceModel,

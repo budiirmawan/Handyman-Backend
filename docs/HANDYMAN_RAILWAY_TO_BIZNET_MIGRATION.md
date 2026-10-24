@@ -25,9 +25,10 @@ live infrastructure**. Read [Railway](HANDYMAN_RAILWAY_STAGE1_DEPLOYMENT.md),
 
 1. Record Railway release SHA/image digest, PostgreSQL `SHOW server_version`,
    extensions (`SELECT extname, extversion FROM pg_extension ORDER BY extname`),
-   encoding/locale, timezone, database size and migration history. Canonical latest
-   in this release: 0451, 450 registered IDs; 0449 unclaimed. Derive future counts
-   from the matching release registry, never invent a missing migration.
+   encoding/locale, timezone, database size and migration history. For the Part 04
+   recovery release, canonical latest is **0480**, with **478 registered IDs**;
+   0449 and 0469 are intentionally unclaimed. For any other artifact, derive the
+   head/count from its matching release registry, never invent a missing migration.
 2. Confirm PostgreSQL destination major is the same initially and extension
    packages pgcrypto/btree_gist are available. `pg_dump` client must not be older
    than the source server; prefer matching source/destination major CLI tools.
@@ -255,3 +256,14 @@ do not merge databases by copying a few rows blindly. If reverting to the old
 snapshot with data loss is unavoidable, require explicit business approval of
 the loss window and a documented reconciliation process before resuming. No
 automatic down migration or application-image rollback can solve this.
+
+**0478 price-tier rule (Part 04):** populated SERVICE price data makes historical
+0478 down unsafe. The current runner rejects it before DDL, including when only
+one non-conflicting keyed tier exists; do not delete tiers or edit history to
+obtain a successful rollback. Use a reviewed forward fix or the paired-restore
+procedure above. Application-image rollback retaining 0478–0480 is not certified:
+older exact-history readiness and SERVICE writes are incompatible. See the
+[0478 recovery control](HANDYMAN_DATABASE_EVIDENCE_BACKUP_RECOVERY.md) for the
+preflight behavior, validation inventory, RPO/RTO assumptions and write-freeze
+boundary. Disposable Part 04 recovery proof does not replace the required staging
+or native paired-restore rehearsal.

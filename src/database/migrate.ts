@@ -29,6 +29,41 @@ export async function verifyMigrationReadiness(pool: Pool): Promise<void> {
   }
 }
 
+/**
+ * BA-03 — reject a populated 0478 downgrade before its destructive DDL.
+ *
+ * The pre-0478 exclusion cannot distinguish non-empty tier keys. Even a plain
+ * SERVICE row would lose its key, and 0478's historical up has no backfill for
+ * the non-null key check. The existing runner therefore treats every populated
+ * SERVICE catalog as forward-only; empty databases retain normal down behavior.
+ * This is a runner preflight, not a second migration registry or authority.
+ */
+async function assertMigrationDownSafe(
+  client: PoolClient,
+  migrationId: string,
+): Promise<void> {
+  if (migrationId !== '0478_service_price_tier_key') return;
+
+  const result = await client.query<{
+    service_rows: number;
+    keyed_rows: number;
+  }>(
+    `SELECT COUNT(*)::int AS service_rows,
+            (COUNT(*) FILTER (WHERE service_price_key <> ''))::int AS keyed_rows
+     FROM price_catalog_entries
+     WHERE source_mode = 'SERVICE'`,
+  );
+  const { service_rows: serviceRows, keyed_rows: keyedRows } = result.rows[0]!;
+  if (serviceRows === 0) return;
+
+  throw new DatabaseError(
+    `Unsafe downgrade ${migrationId} refused: ${serviceRows} SERVICE price ` +
+    `row(s), including ${keyedRows} with non-empty tier key(s), cannot be ` +
+    'downgraded without erasing price identity. Keep 0478 applied and use a ' +
+    'forward fix or paired backup/restore. No 0478 downgrade was attempted.',
+  );
+}
+
 async function withMigrationLock<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   let locked = false;
@@ -150,6 +185,7 @@ export async function migrateDown(pool: Pool): Promise<string | null> {
       return null;
     }
 
+    await assertMigrationDownSafe(client, current.id);
     await current.down(client);
     await client.query(`DELETE FROM ${HISTORY_TABLE} WHERE id = $1`, [
       current.id,

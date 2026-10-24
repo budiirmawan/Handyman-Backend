@@ -25499,7 +25499,9 @@ paths:
         token on the existing ACTIVE registration; a token re-registered
         from another device of the same user replaces the old device's
         registration. Returns the ACTIVE registration with registered_at /
-        last_seen_at / status.
+        last_seen_at / status. The provider token is write-only: it is accepted
+        in this request and is never returned by this operation, listing, or
+        deactivation. Responses contain non-secret registration metadata only.
 
         CR-BE-MOB-01 PART 07 / CR-BE-PUSH-01 PART 05 — registration is NOT
         delivery, and provider acceptance is NOT delivery. Storing a token
@@ -25600,6 +25602,7 @@ paths:
                 pushToken:
                   type: string
                   maxLength: 512
+                  writeOnly: true
                   description: Provider push token (FCM/APNs style opaque token).
                 platform:
                   type: string
@@ -25635,7 +25638,7 @@ paths:
     get:
       operationId: listPushTokens
       summary: List the authenticated user's push token registrations
-      description: Returns the user's own registrations (newest first). Scoped to the authenticated user only.
+      description: Returns the user's own registrations (newest first), scoped to the authenticated user only. Raw provider tokens are never returned.
       tags: [Mobile Execution]
       security:
         - bearerAuth: []
@@ -25662,7 +25665,8 @@ paths:
       description: >
         Deactivates (unregisters) the authenticated user's push token
         registration. Only the token's owner can deactivate it. The row is
-        kept as INACTIVE history.
+        kept as INACTIVE history. The response contains non-secret
+        registration metadata and never includes the raw provider token.
       tags: [Mobile Execution]
       security:
         - bearerAuth: []
@@ -33738,7 +33742,10 @@ paths:
         Requires `price_catalog.manage` plus access to the entry's scope.
         Creates a DRAFT (no effectiveness; never selected until activation).
         MATERIAL-only authority: one Inventory Item priced per 1 unit of an
-        explicit UOM in one supported currency. Scope tiers are expressed via
+        explicit UOM in one supported currency. The currency must be globally
+        ACTIVE and allowed for the selected Client; violations return 400
+        `CURRENCY_INACTIVE_OR_UNKNOWN` or `CLIENT_CURRENCY_NOT_ALLOWED`.
+        Scope tiers are expressed via
         nullable keys: Client-wide / Building / Vendor / Vendor+Building;
         `entryKind` is derived (`VENDOR_CONTRACT` exactly when `vendorId` is
         set). Approved-by attribution is optional and must reference an
@@ -107231,17 +107238,16 @@ components:
         listing returns every one of the user's registrations regardless of
         status, so all three values are observable. `registeredAt` is the
         first registration time; `lastSeenAt` refreshes on every
-        registration/touch of the device.
+        registration/touch of the device. The raw provider token is write-only
+        and is never present in this response representation.
       required:
-        [id, userId, deviceId, pushToken, platform, status, registeredAt, lastSeenAt]
+        [id, userId, deviceId, platform, status, registeredAt, lastSeenAt]
       properties:
         id:
           $ref: "#/components/schemas/Uuid"
         userId:
           $ref: "#/components/schemas/Uuid"
         deviceId:
-          type: string
-        pushToken:
           type: string
         platform:
           type: string

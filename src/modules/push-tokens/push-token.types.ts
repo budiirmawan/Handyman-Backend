@@ -55,16 +55,17 @@ export type PushTokenRecord = {
 };
 
 /**
- * The public registration shape — DELIBERATELY UNCHANGED by
- * CR-BE-PUSH-01 PART 01. No provider identity, no success/failure
- * timestamps, no failure counters, no invalidation reason: routing and
- * delivery-readiness metadata stay internal (§9, boundary guard B-01c).
+ * The public registration shape contains non-secret metadata only. The raw
+ * provider token is write-only: it is accepted by registration input and
+ * retained in PushTokenRecord for internal delivery, but is never returned
+ * by registration, listing, or deactivation. Provider identity,
+ * success/failure timestamps, failure counters, and invalidation reasons
+ * likewise remain internal.
  */
 export type PublicPushToken = {
   id: string;
   userId: string;
   deviceId: string;
-  pushToken: string;
   platform: PushPlatform;
   appVersion: string | null;
   deviceModel: string | null;

@@ -1,9 +1,9 @@
 # CR-BE-PUSH-01 — Mobile / Frontend Push Handoff
 
-Status: PART 05. Authoritative for client integration with push token
-registration and push payload handling. This document describes only what the
-backend actually implements today — it invents no endpoint, no field and no
-navigation scheme.
+Status: PART 05 + BA-01 response-security amendment (2026-10-24).
+Authoritative for client integration with push token registration and push
+payload handling. This document describes only what the backend actually
+implements today — it invents no endpoint, no field and no navigation scheme.
 
 ## 1. The three endpoints (all authenticated, all self-scoped)
 
@@ -37,7 +37,7 @@ updates the existing row and does not create a duplicate.
 | Field | Required | Notes |
 |---|---|---|
 | `deviceId` | yes | stable client-generated device identifier |
-| `pushToken` | yes | provider opaque token, 8–512 chars |
+| `pushToken` | yes | provider opaque token, 8–512 chars; **write-only** |
 | `platform` | yes | `ANDROID` or `IOS` |
 | `appVersion` | no | governed device metadata |
 | `deviceModel` | no | governed device metadata |
@@ -96,10 +96,11 @@ not** expect or invent a deep-link URL scheme — the backend does not emit one.
 
 ## 6. Privacy notes for client authors
 
-- The raw device token is accepted on registration and is echoed back in the
-  registration/listing response because that is the frozen BE-25L response
-  shape. It is not written to operational events, error payloads or logs —
-  diagnostics use a non-reversing fingerprint.
+- The raw device token is accepted on registration but is **never returned**
+  by registration, listing or deactivation. Keep it in the platform's secure
+  token storage; responses contain only the registration id and non-secret
+  lifecycle/device metadata. The token is not written to operational events,
+  error payloads or logs — diagnostics use a non-reversing fingerprint.
 - The public representation deliberately exposes **no** provider-internal
   state: no `provider`, `providerMessageId`, `lastSuccessAt`, `lastFailureAt`,
   `consecutiveFailureCount`, `invalidatedAt` or `invalidationReason`, and no

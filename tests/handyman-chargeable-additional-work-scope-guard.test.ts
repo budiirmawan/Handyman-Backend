@@ -62,8 +62,11 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { vendorService } from '../src/modules/vendors';
+import { assignBuildingToWorkforce }
+  from '../src/modules/workforce-building-assignments';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
+import { arrangeGuardedQcPass } from './helpers/handyman-guarded-bast';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -331,6 +334,10 @@ async function crewFixture(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: leadBuildingId,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: vendor.id,
     workforceProfileId: profile.id,
@@ -471,7 +478,7 @@ async function scopeFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
   }, adminUserId);
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   assert.equal(scope.buildingId, realm.buildingA1.id);
@@ -499,23 +506,32 @@ async function staffActor(buildingId: string): Promise<string> {
  */
 async function approvedClaimFixture(
   realm: Awaited<ReturnType<typeof realmFixture>>,
-  scopeId: string,
+  scope: Awaited<ReturnType<typeof scopeFixture>>['scope'],
   staff: string,
 ) {
   const crew = await crewFixture(realm, realm.buildingA1.id);
-  await assignHandymanExecutionScopeCrew({
-    executionScopeId: scopeId,
+  const assignment = await assignHandymanExecutionScopeCrew({
+    executionScopeId: scope.id,
     providerContextId: crew.providerContext.id,
     crewId: crew.crew.id,
   }, adminUserId);
+  await arrangeGuardedQcPass({
+    realm,
+    buildingId: realm.buildingA1.id,
+    scope,
+    crew,
+    assignment,
+    adminUserId,
+    q,
+  });
   const evidence = await createHandymanEvidenceRecord({
-    executionScopeId: scopeId,
+    executionScopeId: scope.id,
     stage: 'AFTER',
     description: 'After repair photo.',
     idempotencyKey: `ev-${randomUUID()}`,
   }, crew.leadUser.id);
   const prepared = await prepareHandymanBast(staff, {
-    executionScopeId: scopeId,
+    executionScopeId: scope.id,
     idempotencyKey: `bast-prepare-${randomUUID()}`,
   });
   const issued = await issueHandymanBast(staff, {
@@ -530,12 +546,12 @@ async function approvedClaimFixture(
   });
   assert.equal(accepted.bast.status, 'ACCEPTED');
   const started = await startHandymanServiceWarranty({
-    executionScopeId: scopeId,
+    executionScopeId: scope.id,
     idempotencyKey: `wstart-${randomUUID()}`,
   }, staff);
   assert.equal(started.warranty.status, 'ACTIVE');
   const claimEvidence = await createHandymanEvidenceRecord({
-    executionScopeId: scopeId,
+    executionScopeId: scope.id,
     stage: 'BEFORE',
     description: 'Claim defect photo.',
     idempotencyKey: `ev-claim-${randomUUID()}`,
@@ -556,20 +572,26 @@ async function approvedClaimFixture(
     decisionNote: 'Approved for chargeable additional work.',
   });
   assert.equal(approved.claim.status, 'CLAIM_APPROVED');
-  return { warranty: started.warranty, claim: approved.claim };
+  return {
+    warranty: started.warranty,
+    claim: approved.claim,
+    leadUserId: crew.leadUser.id,
+  };
 }
 
 describe('CR-HM-SEC-01 PART 06D-4B — chargeable additional work building-scope guard', () => {
-  it('1: authorized propose + accept — staff actor (exact Building) proposes, accepts with payment trigger, both idempotent', async (t) => {
+  it('1: authorized propose + accept — current Lead proposes; exact-Building staff accepts with payment trigger, both idempotent', async (t) => {
     if (!requireDatabase(t)) return;
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
-    const { claim } = await approvedClaimFixture(realm, scope.id, staff);
+    const { claim, leadUserId } = await approvedClaimFixture(
+      realm, scope, staff,
+    );
 
     // PROPOSE — the SINGLE separated chargeable referral of the claim.
     const proposeKey = `work-propose-${randomUUID()}`;
-    const proposed = await proposeHandymanChargeableAdditionalWork(staff, {
+    const proposed = await proposeHandymanChargeableAdditionalWork(leadUserId, {
       claimId: claim.id,
       idempotencyKey: proposeKey,
       scopeNote: 'Chargeable additional work.',
@@ -583,7 +605,7 @@ describe('CR-HM-SEC-01 PART 06D-4B — chargeable additional work building-scope
 
     // Per-key idempotent replay of PROPOSE returns the SAME work.
     const replayedPropose = await proposeHandymanChargeableAdditionalWork(
-      staff,
+      leadUserId,
       {
         claimId: claim.id,
         idempotencyKey: proposeKey,
@@ -647,10 +669,12 @@ describe('CR-HM-SEC-01 PART 06D-4B — chargeable additional work building-scope
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const staff = await staffActor(realm.buildingA1.id);
-    const { claim } = await approvedClaimFixture(realm, scope.id, staff);
+    const { claim, leadUserId } = await approvedClaimFixture(
+      realm, scope, staff,
+    );
     // Seed a lawful PROPOSED work so the denial is provably the
     // access wall, not an empty projection.
-    const proposed = await proposeHandymanChargeableAdditionalWork(staff, {
+    const proposed = await proposeHandymanChargeableAdditionalWork(leadUserId, {
       claimId: claim.id,
       idempotencyKey: `seed-${randomUUID()}`,
       scopeNote: 'Seeded chargeable work.',

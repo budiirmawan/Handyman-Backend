@@ -64,7 +64,7 @@ function readSource(relative: string): string {
   return readFileSync(resolve(REPO_ROOT, relative), 'utf8');
 }
 
-/** The BE-25L public registration shape — frozen by PART 01. */
+/** Non-secret public registration shape after the BA-01 security amendment. */
 const PUBLIC_REGISTRATION_KEYS = [
   'appVersion',
   'createdAt',
@@ -74,15 +74,15 @@ const PUBLIC_REGISTRATION_KEYS = [
   'id',
   'lastSeenAt',
   'platform',
-  'pushToken',
   'registeredAt',
   'status',
   'updatedAt',
   'userId',
 ];
 
-/** Internal delivery-readiness evidence that must never surface publicly. */
+/** Credential-grade token and internal delivery evidence must never surface publicly. */
 const FORBIDDEN_PUBLIC_KEYS = [
+  'pushToken',
   'provider',
   'lastSuccessAt',
   'lastFailureAt',
@@ -356,9 +356,11 @@ describe('CR-BE-PUSH-01 PART 01 — device lifecycle', () => {
 
   it('refreshing the same installation rotates in place and resets failure evidence', async (t) => {
     if (!ready(t)) return;
+    const oldToken = tokenValue('refresh-old');
+    const newToken = tokenValue('refresh-new');
     const first = await register(adminToken, {
       deviceId: 'push01-refresh',
-      pushToken: tokenValue('refresh-old'),
+      pushToken: oldToken,
       platform: 'ANDROID',
     });
     assert.equal(first.status, 201);
@@ -373,17 +375,15 @@ describe('CR-BE-PUSH-01 PART 01 — device lifecycle', () => {
 
     const refreshed = await register(adminToken, {
       deviceId: 'push01-refresh',
-      pushToken: tokenValue('refresh-new'),
+      pushToken: newToken,
       platform: 'ANDROID',
       appVersion: '4.0.0',
     });
     assert.equal(refreshed.status, 201);
     assert.equal(refreshed.body.data.id, id, 'same installation, same row');
-    assert.notEqual(
-      refreshed.body.data.pushToken,
-      first.body.data.pushToken,
-      'token value rotated',
-    );
+    assert.equal(refreshed.body.data.pushToken, undefined);
+    assert.ok(!JSON.stringify(first.body).includes(oldToken));
+    assert.ok(!JSON.stringify(refreshed.body).includes(newToken));
     assert.equal(
       refreshed.body.data.registeredAt,
       first.body.data.registeredAt,
@@ -391,6 +391,8 @@ describe('CR-BE-PUSH-01 PART 01 — device lifecycle', () => {
     );
 
     const after = await pushTokenService.findPushTokenById(id);
+    assert.equal(after?.pushToken, newToken, 'internal token value rotated');
+    assert.notEqual(after?.pushToken, oldToken);
     assert.equal(after?.consecutiveFailureCount, 0, 'streak reset');
     assert.equal(after?.invalidatedAt, null);
     assert.equal(after?.invalidationReason, null);
@@ -534,9 +536,10 @@ describe('CR-BE-PUSH-01 PART 01 — device lifecycle', () => {
 describe('CR-BE-PUSH-01 PART 01 — INVALID registrations are retained evidence', () => {
   it('marks a device INVALID with provenance and keeps the row', async (t) => {
     if (!ready(t)) return;
+    const rawToken = tokenValue('invalid');
     const created = await register(adminToken, {
       deviceId: 'push01-invalid',
-      pushToken: tokenValue('invalid'),
+      pushToken: rawToken,
       platform: 'ANDROID',
     });
     const id = created.body.data.id as string;
@@ -551,8 +554,8 @@ describe('CR-BE-PUSH-01 PART 01 — INVALID registrations are retained evidence'
     assert.equal(invalidated?.invalidationReason, 'UNREGISTERED');
     assert.equal(
       invalidated?.pushToken,
-      created.body.data.pushToken,
-      'token value retained for forensic linkage',
+      rawToken,
+      'token value retained internally for forensic linkage',
     );
     assert.equal(
       invalidated?.registeredAt.toISOString(),
@@ -741,12 +744,12 @@ describe('CR-BE-PUSH-01 PART 01 — ownership stays self-service only', () => {
     assert.equal(anonymous.status, 401);
     assert.equal(anonymous.body.error.code, 'AUTHENTICATION_REQUIRED');
 
-    const created = await register(adminToken, {
+    const pushToken = tokenValue('not-auth');
+    await register(adminToken, {
       deviceId: 'push01-not-auth',
-      pushToken: tokenValue('not-auth'),
+      pushToken,
       platform: 'ANDROID',
     });
-    const pushToken = created.body.data.pushToken as string;
     const withPushToken = await api()
       .get('/api/v1/mobile/push-tokens')
       .set('Authorization', `Bearer ${pushToken}`);
@@ -763,11 +766,12 @@ describe('CR-BE-PUSH-01 PART 01 — ownership stays self-service only', () => {
 // ---------------------------------------------------------------------------
 
 describe('CR-BE-PUSH-01 PART 01 — the public surface exposes no routing metadata', () => {
-  it('returns exactly the frozen registration shape', async (t) => {
+  it('returns exactly the non-secret registration shape', async (t) => {
     if (!ready(t)) return;
+    const rawToken = tokenValue('shape');
     const response = await register(adminToken, {
       deviceId: 'push01-shape',
-      pushToken: tokenValue('shape'),
+      pushToken: rawToken,
       platform: 'ANDROID',
       appVersion: '1.0.0',
     });
@@ -783,6 +787,7 @@ describe('CR-BE-PUSH-01 PART 01 — the public surface exposes no routing metada
       );
     }
     const serialized = JSON.stringify(response.body);
+    assert.ok(!serialized.includes(rawToken), 'the raw token is never serialized');
     assert.ok(
       !/invalidation|consecutive|lastSuccess|lastFailure/i.test(serialized),
       'no internal delivery evidence is serialized',
@@ -796,6 +801,7 @@ describe('CR-BE-PUSH-01 PART 01 — the public surface exposes no routing metada
       service.indexOf('function normalizeOptional'),
     );
     for (const forbidden of [
+      'pushToken',
       'provider',
       'lastSuccessAt',
       'lastFailureAt',

@@ -50,8 +50,11 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { vendorService } from '../src/modules/vendors';
+import { assignBuildingToWorkforce }
+  from '../src/modules/workforce-building-assignments';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
+import { arrangeGuardedQcPass } from './helpers/handyman-guarded-bast';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -294,6 +297,10 @@ async function crewFixture(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: leadBuildingId,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: vendor.id,
     workforceProfileId: profile.id,
@@ -434,7 +441,7 @@ async function scopeFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
   }, adminUserId);
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   assert.equal(scope.buildingId, realm.buildingA1.id);
@@ -475,11 +482,20 @@ describe('CR-HM-SEC-01 PART 05C-2 — BAST sign-off building-scope guard', () =>
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const crew = await crewFixture(realm, realm.buildingA1.id);
-    await assignHandymanExecutionScopeCrew({
+    const assignment = await assignHandymanExecutionScopeCrew({
       executionScopeId: scope.id,
       providerContextId: crew.providerContext.id,
       crewId: crew.crew.id,
     }, adminUserId);
+    await arrangeGuardedQcPass({
+      realm,
+      buildingId: realm.buildingA1.id,
+      scope,
+      crew,
+      assignment,
+      adminUserId,
+      q,
+    });
     // Same-scope evidence record (Lead-gated write, unchanged).
     const evidence = await createHandymanEvidenceRecord({
       executionScopeId: scope.id,
@@ -538,6 +554,21 @@ describe('CR-HM-SEC-01 PART 05C-2 — BAST sign-off building-scope guard', () =>
     if (!requireDatabase(t)) return;
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
+    const crew = await crewFixture(realm, realm.buildingA1.id);
+    const assignment = await assignHandymanExecutionScopeCrew({
+      executionScopeId: scope.id,
+      providerContextId: crew.providerContext.id,
+      crewId: crew.crew.id,
+    }, adminUserId);
+    await arrangeGuardedQcPass({
+      realm,
+      buildingId: realm.buildingA1.id,
+      scope,
+      crew,
+      assignment,
+      adminUserId,
+      q,
+    });
     const staff = await staffActor(realm.buildingA1.id);
     const bast = await seedIssuedBast(scope.id, staff);
     // Pre-denial baseline: ISSUED, PREPARE/ISSUE events, no sign-offs.

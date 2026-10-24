@@ -57,8 +57,11 @@ import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { vendorService } from '../src/modules/vendors';
+import { assignBuildingToWorkforce }
+  from '../src/modules/workforce-building-assignments';
 import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
+import { releaseDispatchFixture } from './helpers/handyman-dispatch';
 import { ensureTestDatabase } from './helpers/postgres';
 
 /**
@@ -313,6 +316,10 @@ async function crewFixture(
     workforceType: 'EXTERNAL',
     userId: linkedUser.id,
   });
+  await assignBuildingToWorkforce({
+    workforceProfileId: profile.id,
+    buildingId: leadBuildingId,
+  });
   await vendorWorkforceService.createVendorWorkforceBinding({
     vendorId: vendor.id,
     workforceProfileId: profile.id,
@@ -453,7 +460,7 @@ async function scopeFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
   }, adminUserId);
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   assert.equal(scope.buildingId, realm.buildingA1.id);
@@ -521,6 +528,12 @@ describe('CR-HM-SEC-01 PART 03C-3 — work-session complete/check-out building-s
       providerContextId: crew.providerContext.id,
       crewId: crew.crew.id,
     }, adminUserId);
+    await releaseDispatchFixture({
+      executionScopeId: scope.id,
+      handymanCrewId: crew.crew.id,
+      actorUserId: adminUserId,
+      query: q,
+    });
     await arriveVerified(realm, chain, scope, crew.leadUser.id);
     await checkInHandymanWorkSession({
       executionScopeId: scope.id,
@@ -580,6 +593,12 @@ describe('CR-HM-SEC-01 PART 03C-3 — work-session complete/check-out building-s
       providerContextId: crew.providerContext.id,
       crewId: crew.crew.id,
     }, adminUserId);
+    await releaseDispatchFixture({
+      executionScopeId: scope.id,
+      handymanCrewId: crew.crew.id,
+      actorUserId: adminUserId,
+      query: q,
+    });
     await arriveVerified(realm, chain, scope, crew.leadUser.id);
     await checkInHandymanWorkSession({
       executionScopeId: scope.id,

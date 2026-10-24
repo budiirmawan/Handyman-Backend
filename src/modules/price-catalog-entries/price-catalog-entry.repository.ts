@@ -418,7 +418,7 @@ async function insertWithId(
   values[0] = id;
   const result = await client.query<PriceCatalogEntryRow>(
     `INSERT INTO price_catalog_entries ${INSERT_COLUMNS}
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
      ON CONFLICT (client_id, idempotency_key) DO NOTHING
      RETURNING ${ENTRY_SELECT}`,
     values,

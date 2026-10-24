@@ -32,6 +32,8 @@ let db: Client;
 let pool: Pool;
 const tables = ['clients','properties','buildings','users','user_building_assignments',
   'handyman_service_requests','handyman_execution_scopes','handyman_execution_scope_assignments',
+  'handyman_assignment_responses','handyman_assignment_response_events',
+  'notifications','notification_event_subscriptions',
   'handyman_work_crews','handyman_crew_leads','handyman_crew_memberships',
   'handyman_worker_contexts','workforce_profiles','handyman_visit_appointments',
   'vendors','organizations','handyman_provider_contexts','vendor_workforce_bindings','workforce_building_assignments','operational_events','handyman_execution_scope_assignment_history','handyman_work_sessions','handyman_dispatch_releases',
@@ -65,6 +67,52 @@ before(async () => {
       id uuid, assigned_by_user_id uuid, supersedes_assignment_id uuid, assigned_at timestamptz DEFAULT NOW(), created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW(),
       version integer NOT NULL DEFAULT 1);
     CREATE UNIQUE INDEX one_active_test_assignment ON handyman_execution_scope_assignments(execution_scope_id) WHERE status='ACTIVE';
+    -- Current assignment-response authority (0472 + 0476). The real service
+    -- writes PENDING response/history rows on assignment and reassignment;
+    -- these TEMP tables preserve that path instead of mocking it away.
+    CREATE TEMP TABLE handyman_assignment_responses(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, building_id uuid NOT NULL,
+      assignment_target_type text NOT NULL, assignment_id uuid NOT NULL UNIQUE,
+      work_order_id uuid, handyman_request_id uuid, execution_scope_id uuid,
+      visit_appointment_id uuid, assigned_by_user_id uuid NOT NULL,
+      assigned_at timestamptz NOT NULL DEFAULT NOW(),
+      response_status text NOT NULL DEFAULT 'PENDING',
+      responded_by_user_id uuid, responded_by_worker_id uuid,
+      responded_at timestamptz, decline_reason text, response_notes text,
+      linked_work_order_action_id uuid, idempotency_key text,
+      client_idempotency_key text, version integer NOT NULL DEFAULT 1,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW(),
+      UNIQUE(assignment_target_type,assignment_id));
+    CREATE TEMP TABLE handyman_assignment_response_events(
+      id uuid PRIMARY KEY, response_id uuid NOT NULL,
+      client_id uuid NOT NULL, building_id uuid NOT NULL,
+      assignment_target_type text NOT NULL, assignment_id uuid NOT NULL,
+      work_order_id uuid, handyman_request_id uuid, execution_scope_id uuid,
+      visit_appointment_id uuid, event_type text NOT NULL,
+      previous_status text, new_status text NOT NULL, decline_reason text,
+      notes text, actor_user_id uuid NOT NULL, actor_worker_id uuid,
+      idempotency_key text NOT NULL,
+      occurred_at timestamptz NOT NULL DEFAULT NOW(),
+      UNIQUE(assignment_id,idempotency_key));
+    -- Assignment notification intent remains on the production path. No
+    -- subscription is seeded, so the outbound chain legitimately has no
+    -- template/delivery work; IN_APP dedupe still uses its real unique key.
+    CREATE TEMP TABLE notifications(
+      id uuid PRIMARY KEY, client_id uuid, recipient_user_id uuid,
+      type text, channel text, status text, title text, body text,
+      source_entity_type text, source_entity_id uuid, source_event_type text,
+      template_key text, metadata jsonb, navigation_target_type text,
+      navigation_target_id uuid);
+    CREATE UNIQUE INDEX notifications_assignment_response_test_dedup
+      ON notifications(recipient_user_id,source_entity_type,source_entity_id,source_event_type)
+      WHERE source_entity_type IN (
+        'WORK_ORDER_ASSIGNMENT','EXECUTION_SCOPE_ASSIGNMENT','INSPECTOR_VISIT_ASSIGNMENT')
+      AND source_event_type IS NOT NULL;
+    CREATE TEMP TABLE notification_event_subscriptions(
+      id uuid, key text, event_type text, template_key text,
+      recipient_rule jsonb, client_id uuid, building_id uuid, status text,
+      created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE handyman_work_sessions(id uuid, execution_scope_id uuid, status text);
     CREATE TEMP TABLE handyman_dispatch_releases(id uuid, client_id uuid, execution_scope_id uuid, assignment_id uuid,
       appointment_id uuid, status text, released_by_user_id uuid, released_at timestamptz,
@@ -180,16 +228,29 @@ const proposeExecution = () => createVisitProposal(id.request,{
 async function assertNoAssignmentOrAudit() {
   assert.equal((await db.query('SELECT count(*)::int AS count FROM handyman_execution_scope_assignments')).rows[0].count,0);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM operational_events')).rows[0].count,0);
+  assert.equal((await db.query('SELECT count(*)::int AS count FROM handyman_assignment_responses')).rows[0].count,0);
+  assert.equal((await db.query('SELECT count(*)::int AS count FROM handyman_assignment_response_events')).rows[0].count,0);
+  assert.equal((await db.query('SELECT count(*)::int AS count FROM notifications')).rows[0].count,0);
 }
 test('registered Crew assigns and reassigns atomically without booking or acceptance',async () => {
   const first = await assign();
   assert.equal(first.status,'ACTIVE');
+  assert.equal(first.responseStatus,'PENDING');
   const second = await reassignHandymanExecutionScopeCrew(
     {...input, crewId:id.oldCrew, expectedVersion:1, reason:'crew rotation'}, id.user);
   assert.equal(second.supersedesAssignmentId,first.id);
   assert.equal(second.status,'ACTIVE');
+  assert.equal(second.responseStatus,'PENDING');
   assert.equal((await db.query("SELECT count(*)::int AS count FROM handyman_execution_scope_assignments WHERE status='ACTIVE'")).rows[0].count,1);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM operational_events')).rows[0].count,3);
+  assert.equal((await db.query('SELECT count(*)::int AS count FROM handyman_assignment_responses')).rows[0].count,2);
+  assert.deepEqual((await db.query(
+    `SELECT event_type, count(*)::int AS count
+       FROM handyman_assignment_response_events
+      GROUP BY event_type ORDER BY event_type`)).rows,[
+    {event_type:'ASSIGNMENT_PENDING_CREATED',count:2},
+    {event_type:'ASSIGNMENT_SUPERSEDED',count:1},
+  ]);
   assert.equal((await db.query('SELECT count(*)::int AS count FROM handyman_visit_appointments')).rows[0].count,0);
   // The resolver reports the CURRENT assignment's lead — oldCrew was
   // registered with oldWorker as its lead, so after the rotation the

@@ -370,7 +370,7 @@ async function scopeFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
   }, adminUserId);
   const decision = await decideHandymanQuotation(version.id, {
     decision: 'APPROVE', idempotencyKey: `k-${randomUUID()}`,
-  }, adminUserId);
+  }, linkedUser.id);
   const scope = decision.executionScope!;
   assert.equal(scope.status, 'AUTHORIZED');
   assert.equal(scope.buildingId, realm.buildingA1.id);

@@ -45,7 +45,7 @@ import { tenantCompanyService } from '../src/modules/tenant-companies';
 import { tenantPicService } from '../src/modules/tenant-pics';
 import { tenantSpaceService } from '../src/modules/tenant-spaces';
 import { userService } from '../src/modules/users';
-import { credentialService } from '../src/modules/auth';
+import { credentialService, sessionService } from '../src/modules/auth';
 import {
   permissionRepository,
   permissionService,
@@ -377,14 +377,17 @@ async function requestFixture(realm: Awaited<ReturnType<typeof realmFixture>>) {
  */
 async function createScopedActor(
   buildingIds: readonly string[],
+  existingUserId?: string,
 ): Promise<{ token: string; userId: string }> {
   const tag = suffix();
   const password = 'ScopedPass123';
-  const user = await userService.createUser({
+  const user = existingUserId ? undefined : await userService.createUser({
     email: `guard2-${tag.toLowerCase()}@example.com`,
     displayName: 'PART 02 Scope Guard Actor',
   });
-  await credentialService.createInitialCredential({ userId: user.id, password });
+  const userId = existingUserId ?? user?.id;
+  if (!userId) throw new Error('scoped actor user was not created');
+  await credentialService.createInitialCredential({ userId, password });
 
   const role = await roleService.createRole({
     code: `GUARD2_${tag}`,
@@ -400,18 +403,22 @@ async function createScopedActor(
       }));
     await permissionService.assignPermissionToRole(role.id, permission.id);
   }
-  await roleService.assignRoleToUser(user.id, role.id);
+  await roleService.assignRoleToUser(userId, role.id);
 
   for (const buildingId of buildingIds) {
-    await buildingAssignmentService.createAssignment(user.id, { buildingId });
+    await buildingAssignmentService.createAssignment(userId, { buildingId });
   }
 
+  if (!user) {
+    const session = await sessionService.createSessionForUser(userId);
+    return { token: session.sessionToken, userId };
+  }
   const login = await api().post('/api/v1/auth/login').send({
     email: user.email,
     password,
   });
   assert.equal(login.status, 200, JSON.stringify(login.body));
-  return { token: login.body.data.sessionToken as string, userId: user.id };
+  return { token: login.body.data.sessionToken as string, userId };
 }
 
 /**
@@ -993,9 +1000,10 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
   it('8: decision (decide + read) — same building allowed; sibling and permission-only denied with zero mutation', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const same = await createScopedActor([f.realm.buildingA1.id]);
+    // requestFixture already grants the PIC exact Building A1 access.
+    const same = await createScopedActor([], f.linkedUser.id);
 
-    // Positive: the same-building actor decides over HTTP (201) — REJECT
+    // Positive: the same-building PIC decides over HTTP (201) — REJECT
     // creates no execution scope.
     const resDecide = await api()
       .post(`${HM}/quotation-versions/${f.version.id}/decision`)
@@ -1044,7 +1052,8 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
   it('9: execution-scope read + presented read — same building allowed; sibling denied', async (t) => {
     if (!requireDatabase(t)) return;
     const f = await issuedFixture();
-    const same = await createScopedActor([f.realm.buildingA1.id]);
+    // requestFixture already grants the PIC exact Building A1 access.
+    const same = await createScopedActor([], f.linkedUser.id);
 
     // Positive: presented read while the version is ISSUED (APPROVE later
     // transitions ISSUED -> APPROVED, leaving no ISSUED version).
@@ -1055,7 +1064,7 @@ describe('CR-HM-SEC-01 PART 02 — request + quotation building-scope guard', ()
     assert.ok(presented);
     assert.equal(presented?.id, f.version.id);
 
-    // APPROVE by the same-building actor creates the execution scope.
+    // APPROVE by the same-building PIC creates the execution scope.
     const approved = await decideHandymanQuotation(
       f.version.id,
       { decision: 'APPROVE', idempotencyKey: `appr-${randomUUID()}` },

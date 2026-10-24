@@ -155,3 +155,13 @@ or evidence changes. Unknown/newer schema history intentionally blocks an older
 artifact. Prefer compatible forward repair; use paired restore only with explicit
 loss/reconciliation decisions. After Biznet accepts writes, **DNS-only rollback
 is unsafe**; follow the migration runbook's post-write recovery plan.
+
+For migration 0478 specifically, the current runner refuses to down any populated
+SERVICE price catalog before destructive DDL. Treat its non-zero refusal as a
+safety control, not an error to bypass by deleting tiers, editing ledger/history,
+or calling the historical down directly. Keep 0478 applied and fix forward, or use
+the paired-restore decision gate in the recovery runbook. An older application
+image is not compatible merely because the database still has the new schema:
+exact-history readiness rejects unknown IDs and old SERVICE writes omit the
+required tier key. Prove the target forward/recovery path on a staging copy under
+BA-08; automated native DB+evidence recovery and measured RPO/RTO remain BA-11.

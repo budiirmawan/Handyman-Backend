@@ -6,6 +6,7 @@ import type { DatabaseConfig } from '../src/config';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
 import {
+  credentialService,
   hashSessionToken,
   sessionService,
 } from '../src/modules/auth';
@@ -288,14 +289,20 @@ async function insertActivePriceEntry(
   return entry;
 }
 
-async function createTenantReadSession(tenantUserId: string): Promise<string> {
-  const permission = await permissionRepository.findByCode('tenant_company.read');
-  if (!permission) throw new Error('tenant_company.read permission missing');
-  const role = await roleService.createRole({
-    code: `TENANT_READ_${suffix()}`,
-    name: 'Tenant Quotation Read Only',
+async function createTenantSession(tenantUserId: string): Promise<string> {
+  await credentialService.createInitialCredential({
+    userId: tenantUserId,
+    password: 'TenantPass123',
   });
-  await permissionService.assignPermissionToRole(role.id, permission.id);
+  const role = await roleService.createRole({
+    code: `TENANT_QUOTE_${suffix()}`,
+    name: 'Tenant Quotation PIC',
+  });
+  for (const code of ['tenant_company.read', 'tenant_company.manage'] as const) {
+    const permission = await permissionRepository.findByCode(code);
+    if (!permission) throw new Error(`${code} permission missing`);
+    await permissionService.assignPermissionToRole(role.id, permission.id);
+  }
   await roleService.assignRoleToUser(tenantUserId, role.id);
   return (await sessionService.createSessionForUser(tenantUserId)).sessionToken;
 }
@@ -549,14 +556,24 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       preScope.body.error.code,
       'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND',
     );
-    const approved = await api().post(`${VERSION(versionId)}/decision`)
+    const nonPic = await api().post(`${VERSION(versionId)}/decision`)
       .set(auth())
+      .set('Idempotency-Key', `k-${randomUUID()}`)
+      .send({ decision: 'APPROVE' });
+    assert.equal(nonPic.status, 403, JSON.stringify(nonPic.body));
+    assert.equal(
+      nonPic.body.error.code,
+      'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN',
+    );
+    const tenantToken = await createTenantSession(f.linkedUser.id);
+    const approved = await api().post(`${VERSION(versionId)}/decision`)
+      .set(auth(tenantToken))
       .set('Idempotency-Key', `k-${randomUUID()}`)
       .send({ decision: 'APPROVE' });
     assert.equal(approved.status, 201, JSON.stringify(approved.body));
     assert.equal(approved.body.data.decision, 'APPROVE');
     assert.equal(approved.body.data.quotationVersionId, versionId);
-    assert.equal(approved.body.data.decidedByUserId, adminUserId);
+    assert.equal(approved.body.data.decidedByUserId, f.linkedUser.id);
     const scope = approved.body.data.executionScope;
     assert.ok(scope, 'APPROVE must expose the authoritative scope');
     assert.equal(scope.status, 'AUTHORIZED');
@@ -566,7 +583,7 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     assert.equal(scope.handymanRequestId, f.request.id);
     assert.equal(scope.tenantCompanyId, f.company.id);
     assert.equal(scope.buildingId, f.building.id);
-    assert.equal(scope.createdByUserId, adminUserId,
+    assert.equal(scope.createdByUserId, f.linkedUser.id,
       'authorized decision mutation retains its actor audit fact');
     // The same authoritative scope is discoverable through the bounded read,
     // but internal actor identity is not part of the customer read contract.
@@ -604,8 +621,9 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     await api().post(`${VERSION(versionId)}/issue`)
       .set(auth())
       .send({ validUntil: FUTURE() });
+    const tenantToken = await createTenantSession(f.linkedUser.id);
     const rejected = await api().post(`${VERSION(versionId)}/decision`)
-      .set(auth())
+      .set(auth(tenantToken))
       .set('Idempotency-Key', `k-${randomUUID()}`)
       .send({ decision: 'REJECT' });
     assert.equal(rejected.status, 201, JSON.stringify(rejected.body));
@@ -727,13 +745,14 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     await api().post(`${VERSION(versionId)}/issue`)
       .set(auth())
       .send({ validUntil: FUTURE(), ...smuggle });
+    const tenantToken = await createTenantSession(f.linkedUser.id);
     const approved = await api().post(`${VERSION(versionId)}/decision`)
-      .set(auth())
+      .set(auth(tenantToken))
       .set('Idempotency-Key', `k-${randomUUID()}`)
       .send({ decision: 'APPROVE', ...smuggle });
     assert.equal(approved.status, 201, JSON.stringify(approved.body));
     assert.equal(approved.body.data.quotationVersionId, versionId);
-    assert.equal(approved.body.data.decidedByUserId, adminUserId);
+    assert.equal(approved.body.data.decidedByUserId, f.linkedUser.id);
     assert.ok(approved.body.data.executionScope);
     // Smuggled downstream fields are never echoed anywhere.
     const raw = JSON.stringify(approved.body.data);
@@ -1045,7 +1064,7 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
       .set(auth())
       .send({ validUntil: FUTURE() });
     assert.equal(issued.status, 200, JSON.stringify(issued.body));
-    const tenantToken = await createTenantReadSession(f.linkedUser.id);
+    const tenantToken = await createTenantSession(f.linkedUser.id);
 
     const read = await api().get(`${VERSION(versionId)}/lines`)
       .set(auth(tenantToken));
@@ -1114,7 +1133,7 @@ describe('CR-HM-06 PART 07A — handyman quotation API surface', () => {
     // The Customer Care read is customer-readable and source-free; the
     // final-charge read remains an independently authorized Crew Lead contract.
     const approved = await api().post(`${VERSION(versionId)}/decision`)
-      .set(auth())
+      .set(auth(tenantToken))
       .set('Idempotency-Key', `k-${randomUUID()}`)
       .send({ decision: 'APPROVE' });
     assert.equal(approved.status, 201, JSON.stringify(approved.body));
