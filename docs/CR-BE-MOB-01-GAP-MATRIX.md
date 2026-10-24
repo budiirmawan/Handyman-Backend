@@ -69,9 +69,25 @@ renumber them.
 | SYN-05 | Offline evidence byte queue | Bytes stay on `uploadMobileEvidence` / evidence file API. | `uploadMobileEvidence`, `uploadEvidenceFile`. Sync carries metadata only. | **NOT_REQUIRED** | Backend must not store an offline byte queue. | `DO_NOT_IMPLEMENT`. | BE-25E + BE-25G | — |
 | NTF-01 | Mobile notification — push token registration | BE-25L `mobile_push_tokens` (user + device, rotate, deactivate; migration 0235). | `registerPushToken`, `listPushTokens`, `deactivatePushToken`. | **EXISTING** | None for registration. PART 07 makes explicit that registration is **not** delivery: it creates no notification, no attempt and no provider send, and the schema exposes no delivery outcome field. | `NONE`. | BE-25L | — |
 | NTF-02 | Mobile notification — in-app delivery / inbox | BE-26A records from BE-26D subscriptions + BE-26B templates + BE-26C recipient resolution; BE-26E in-app delivery; BE-26K history. | `listNotifications`, `getNotification`, `markNotificationRead`, `listNotificationHistory`, `getNotificationHistoryItem`. | **EXISTING** | This is the authoritative mobile delivery path today. Record channel enum is `IN_APP` only; history channels are `IN_APP`/`EMAIL`/`WHATSAPP`. | `NONE`. | BE-26A/E/K | — |
-| NTF-03 | Mobile notification — push **delivery** contract | No push delivery attempt record, no PUSH history channel, no adapter, no token fan-out. Email/WhatsApp attempt tables + adapters exist; push has neither. | Token ops only (NTF-01). No `deliverPush`, no PUSH channel, no push route. | **MISSING** | Confirmed by review, not assumed. Split into stage 3 (delivery attempt — PARTIAL overall, PUSH missing) and stage 4 (provider delivery — MISSING), published machine-readably as `x-push-delivery-lifecycle` on `registerPushToken`. A missing push is invisible to the backend because no attempt row exists — hence MISSING, not degraded. | A later CR that is ALLOWED to add schema: (1) push delivery attempt table + migration mirroring `email_deliveries`; (2) adapter with the existing no-op/logging default; (3) `PUSH` in `NOTIFICATION_HISTORY_CHANNELS` + fan-out over ACTIVE tokens; (4) then the OpenAPI enums. Never `/mobile/push-send` as a separate domain. | BE-26 (+ BE-25L tokens) | P1 |
-| NTF-04 | Mobile notification — push **provider** integration | None. Repo-wide search finds no `sendPush`/`deliverPush`/`pushAdapter`/FCM/APNS/Firebase/OneSignal, no vendor dependency, and no push migration beyond the BE-25L token table. | — | **MISSING** | Distinct from NTF-03: even with an attempt record there is no vendor transport. Recorded separately so "we have tokens" is never mistaken for "we can send". A PART 07 test fails if a provider SDK, dependency or send route appears. | Separate CR together with NTF-03 step 2. Do not add a vendor before the attempt record exists. | BE-26 (+ BE-25L tokens) | P1 |
-| NTF-05 | Mobile notification — client-simulated / browser push | None, by design. | — | **NOT_REQUIRED** | A locally raised banner must never be reported as backend delivery, and the backend must never fabricate a delivery success. Mobile uses the IN_APP inbox (NTF-02) until NTF-03/04 land. | `DO_NOT_IMPLEMENT`. | — | — |
+| NTF-03 | Mobile notification — push **delivery** contract | CR-BE-PUSH-01 (merged): the PUSH attempt-evidence table `notification_push_deliveries` (migration 0336), the send-time fan-out over the recipient's ACTIVE devices, the shared claim-before-send retry engine, the `PUSH` channel in the outbound ledger (migration 0335), and the pointer-only payload. CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 adds the browser half: `notification_browser_push_deliveries` (migration 0475). | Token ops only (NTF-01) — still no public push **send** route: the delivery evidence is INTERNAL and is never a history channel. | **EXISTING** | The delivery attempt record, the fan-out and the retry engine now exist for BOTH transports (native APK device + browser subscription), and the push evidence stays internal. `PUSH` was deliberately NOT added to `NOTIFICATION_HISTORY_CHANNELS`: the inbox (NTF-02) remains the authoritative mobile record. | `NONE`. Never `/mobile/push-send` as a separate domain, and never a PUSH history channel. | BE-26 (+ BE-25L tokens) + CR-BE-PUSH-01 | — |
+| NTF-04 | Mobile notification — push **provider** integration | CR-BE-PUSH-01 (merged): the governed provider seam `src/modules/push-delivery/` with the hand-rolled FCM HTTP v1 adapter (`node:crypto` + `fetch`, no vendor SDK, no dependency). CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 adds the browser Web Push / VAPID adapter in the SAME governed module (ES256 + RFC 8188/8291, `node:crypto` only). | — | **EXISTING** | Distinct from NTF-03 and recorded separately: a transport exists now, for BOTH the APK (FCM) and the browser (Web Push). The rules that keep it safe still hold — no vendor SDK, no push-vendor dependency, no provider code outside the governed module, no public send route, and the browser vocabulary is CONFINED to that module. | `NONE`. | BE-26 (+ BE-25L tokens) + CR-BE-PUSH-01 + CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 | — |
+| NTF-05 | Mobile notification — client-simulated / browser push | **SPLIT (see the amendment below).** (a) *Client-simulated* push: none, by design. (b) *Browser* push: CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 — the browser registration authority (`browser_push_subscriptions`, migration 0473), the governed Web Push transport, and the distinct Browser contract (`/mobile/push-subscriptions`). | (b) `registerBrowserPushSubscription`, `listBrowserPushSubscriptions`, `revokeAllBrowserPushSubscriptions`, `revokeBrowserPushSubscription` — registration surfaces, never a send path. | **EXISTING** (browser half) / **NOT_REQUIRED** (client-simulated half) | (a) A locally raised banner must never be reported as backend delivery, and the backend must never fabricate a delivery success — this stays `DO_NOT_IMPLEMENT`, forever. (b) Real browser delivery now exists behind the same notification engine, and the push evidence stays internal. | (a) `DO_NOT_IMPLEMENT`. (b) `NONE`. | BE-26 + CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 | — |
+
+**AMENDMENT (CR-HM-MULTICLIENT-NOTIFICATION-01, 2026-10-24) — NTF-05 is split, and
+only the CLIENT-SIMULATED half keeps its `DO_NOT_IMPLEMENT` verdict.** NTF-05 bundled
+two different things: (a) a locally raised banner that must never be reported as
+backend delivery, and (b) REAL browser push delivery. (a) is unchanged and remains
+`DO_NOT_IMPLEMENT` forever: the backend never fabricates a delivery success, and the
+client never simulates one. (b) is **SUPERSEDED** and is now IMPLEMENTED under
+CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02, with an explicit supersession of
+`docs/CR-BE-PUSH-01_START_GOVERNANCE.md` §16.3 (see its §16.3-A): a browser
+registration authority, a governed browser transport, and a distinct Browser
+registration contract (`/mobile/push-subscriptions`) beside the existing APK token
+contract (`/mobile/push-tokens`).
+
+The rest of NTF-04 (native push provider) and NTF-05 (browser push) therefore now
+resolve to IMPLEMENTED, and the IN_APP inbox (NTF-02) remains the authoritative
+mobile record: push evidence is still internal and is never a history channel.
 
 ---
 
@@ -79,11 +95,16 @@ renumber them.
 
 | Status | Rows |
 |---|---:|
-| EXISTING | 21 |
+| EXISTING | 24 |
 | PARTIAL | 6 |
-| MISSING | 7 |
-| NOT_REQUIRED | 7 |
+| MISSING | 5 |
+| NOT_REQUIRED | 6 |
 | **Total** | **41** |
+
+CR-BE-PUSH-01 (merged) closed NTF-03 (push delivery contract) and NTF-04 (push
+provider integration). CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 closed the
+BROWSER half of NTF-05 — the client-simulated half stays `NOT_REQUIRED` /
+`DO_NOT_IMPLEMENT`, so the row is counted once, as EXISTING.
 
 PART 01 flipped HK-01, HK-02, HK-03, HK-07, HK-09 from PARTIAL → EXISTING
 (OpenAPI publish only). HK-05 consumable readiness remains PARTIAL.
@@ -150,6 +171,12 @@ remaining concerns: **NTF-04** (push provider integration) MISSING and
 channel enum to its implemented constant and fail if a push route, module,
 migration or vendor dependency appears.
 
+**SUPERSEDED (2026-10-24):** the three push rows above are no longer the
+current state. CR-BE-PUSH-01 (merged) closed NTF-03 and NTF-04, and
+CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02 closed the BROWSER half of NTF-05.
+The historical PART 07 finding above stays in the record; the current verdicts
+are the table rows and the amendment in this document.
+
 PART 08 changed no classification. It re-validated PART 01–07 together
 (`tests/mobile-cr-regression-contract.test.ts`) and found one real
 inconsistency: the `x-required-permission` / `x-building-scoped` convention
@@ -206,18 +233,19 @@ WO-02, WO-03, QR-01, SYN-01, SYN-02, SYN-03, NTF-01, NTF-02.
 |---|---|---|
 | QR-02, QR-03, QR-04, QR-05 | MISSING | An identifier authority for that domain, then `EXTEND_EXISTING` on `MOBILE_QR_TARGET_TYPES` |
 | WO-04 | MISSING | A PART allowed to change runtime; must not alter BE-08I rules |
-| NTF-03, NTF-04 | MISSING | A CR allowed to add a push delivery table + migration and a provider adapter |
+| ~~NTF-03, NTF-04~~ | **CLOSED** (CR-BE-PUSH-01, merged; the browser half by CR-HM-MULTICLIENT-NOTIFICATION-01 PART 02) | — the push delivery table + migration and the provider adapter now exist inside the governed module |
 | HK-05 | PARTIAL | Publish BE-11J/BE-16J readiness reads |
 | ENG-04, ENG-05 | PARTIAL | Optional `WORK_ORDER` verification composition / BE-18K abnormal review; no per-reading review engine |
 | ENG-06 | PARTIAL | Product decision on which meter authority mobile reads (BE-10C vs BE-18) |
 | WO-05 | PARTIAL | Only if an admin/web contract needs the master-data writes |
 | SYN-04 | PARTIAL | Envelope verbs / reservation decision / create-id convention |
 
-**3. Intentionally not required (NOT_REQUIRED, 7).** HK-04 reinspection
+**3. Intentionally not required (NOT_REQUIRED).** HK-04 reinspection
 domain, HK-06 HK stock-usage engine, SEC-04 occurrence domain, ENG-02
 diagnosis / test-result domain, QR-06 GPS / geofenced scan, SYN-05 offline
-evidence-byte queue, NTF-05 client-simulated push. Mobile must not implement a
-backend-shaped substitute for any of these.
+evidence-byte queue, and the **client-simulated** half of NTF-05 (the browser
+half of NTF-05 is now EXISTING — see the amendment in this document). Mobile must
+not implement a backend-shaped substitute for any of these.
 
 Binding guide: [`api/CR_BE_MOB_01_MOBILE_HANDOFF.md`](./api/CR_BE_MOB_01_MOBILE_HANDOFF.md).
 
