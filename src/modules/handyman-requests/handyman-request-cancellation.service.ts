@@ -2,6 +2,7 @@ import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanServiceRequestRepository } from './handyman-service-request.repository';
 import { handymanServiceRequestNotFoundError } from './handyman-request-triage.errors';
@@ -213,6 +214,29 @@ export async function cancelHandymanRequest(
         },
       },
       tx,
+    );
+
+    // 7b) CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+    // REACTION to the occurred cancellation, on the SAME transaction (so it
+    // commits or rolls back with the cancellation). The audience stays the
+    // declarative subscription rule; the tenant is the request's own client;
+    // a notification configuration failure never fails the cancellation
+    // command.
+    await emitHandymanDomainNotificationIntent(
+      {
+        eventType: 'HANDYMAN_REQUEST_CANCELLED',
+        clientId: request.clientId,
+        entityId: record.id,
+        buildingId: request.buildingId,
+        variables: {
+          handymanRequestId: request.id,
+          cancellationId: record.id,
+          previousStatus: request.status,
+          reason,
+          buildingId: request.buildingId,
+        },
+      },
+      { executor: tx },
     );
 
     return {

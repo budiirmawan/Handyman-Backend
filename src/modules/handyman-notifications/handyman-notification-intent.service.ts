@@ -21,6 +21,10 @@ import {
   isHandymanAssignmentNotificationEventType,
   type HandymanAssignmentNotificationAudience,
 } from './handyman-assignment-notification.contract';
+import {
+  handymanPart03NotificationContractFor,
+  isHandymanPart03NotificationEventType,
+} from './handyman-domain-notification.contract';
 
 /**
  * CR-HM-16 PART 02 — Handyman notification intent seam (governance
@@ -76,6 +80,16 @@ import {
  *    that the caller already owns the IN_APP record of this event (the
  *    assignment domain writes it, because the copy and the navigation target
  *    are assignment facts). The outbound intent chain still runs.
+ *
+ * CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the DOMAIN producers
+ * ------------------------------------------------------------
+ * The eleven CR-HM-16 PART 02 domain events are now PRODUCED by their own
+ * lifecycle authorities, through the additive PART 03 contract that lives
+ * BESIDE the frozen one (`handyman-domain-notification.contract.ts`). The
+ * frozen CR-HM-16 contract is UNCHANGED. The domain producers reach this
+ * seam through `handyman-domain-notification.producer.ts`, which binds the
+ * notification entity to the event, carries the fact's own tenant and writes
+ * the intents on the producing domain's transaction.
  */
 
 /** An admitted Handyman event being emitted to the notification INTENT flow. */
@@ -202,6 +216,20 @@ function resolveAdmittedContract(
   }
   if (isHandymanAssignmentNotificationEventType(eventType)) {
     const entry = handymanAssignmentNotificationContractFor(eventType);
+    if (entry) {
+      return {
+        eventType: entry.eventType,
+        meaning: entry.meaning,
+        audience: entry.audience,
+        templateKey: entry.templateKey,
+      };
+    }
+  }
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the produced Handyman DOMAIN
+  // vocabulary (the additive contract beside the frozen CR-HM-16 one). The
+  // frozen contract itself is UNCHANGED.
+  if (isHandymanPart03NotificationEventType(eventType)) {
+    const entry = handymanPart03NotificationContractFor(eventType);
     if (entry) {
       return {
         eventType: entry.eventType,

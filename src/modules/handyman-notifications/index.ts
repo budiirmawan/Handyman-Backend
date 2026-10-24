@@ -48,3 +48,29 @@ export type {
   HandymanAssignmentNotificationIntentInput,
   HandymanAssignmentNotificationIntentResult,
 } from './handyman-assignment-notification-producer.service';
+
+export {
+  HANDYMAN_DOMAIN_NOTIFICATION_ENTITY_TYPES,
+  HANDYMAN_DOMAIN_NOTIFICATION_FACTS,
+  HANDYMAN_PART03_NOTIFICATION_CONTRACT,
+  handymanDomainNotificationEntityTypeFor,
+  isHandymanDomainNotificationEntityType,
+  isHandymanDomainNotificationEventType,
+  isHandymanPart03NotificationEventType,
+} from './handyman-domain-notification.contract';
+export type {
+  HandymanDomainNotificationEntityType,
+  HandymanDomainNotificationEventType,
+  HandymanPart03NotificationContractEntry,
+  HandymanPart03NotificationEventType,
+} from './handyman-domain-notification.contract';
+
+export {
+  emitHandymanDomainNotificationIntent,
+  handymanDomainNotificationProducerService,
+} from './handyman-domain-notification.producer';
+export type {
+  HandymanDomainNotificationInput,
+  HandymanDomainNotificationOptions,
+  HandymanDomainNotificationResult,
+} from './handyman-domain-notification.producer';
