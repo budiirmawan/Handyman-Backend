@@ -101,6 +101,10 @@ before(async () => {
       address text, city text, country text, total_floors int,
       created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now()
     );
+    CREATE TABLE floors(id uuid PRIMARY KEY, building_id uuid);
+    CREATE TABLE areas(id uuid PRIMARY KEY, floor_id uuid);
+    CREATE TABLE rooms(id uuid PRIMARY KEY, area_id uuid);
+    CREATE TABLE spaces(id uuid PRIMARY KEY, room_id uuid, name text);
     CREATE TABLE users(id uuid PRIMARY KEY, status text);
     CREATE TABLE user_building_assignments(
       id uuid PRIMARY KEY, user_id uuid, building_id uuid, status text,

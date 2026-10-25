@@ -37,7 +37,7 @@ const tables = ['clients','properties','buildings','users','user_building_assign
   'handyman_work_crews','handyman_crew_leads','handyman_crew_memberships',
   'handyman_worker_contexts','workforce_profiles','handyman_visit_appointments',
   'handyman_assignment_responses','handyman_work_sessions',
-  'handyman_dispatch_releases','handyman_inspector_assignments'];
+  'handyman_dispatch_releases','handyman_inspector_assignments','spaces','rooms','areas','floors'];
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(),'hm-field-authority-'));
@@ -51,18 +51,22 @@ before(async () => {
   await db.query(`
     CREATE TEMP TABLE clients(id uuid);
     CREATE TEMP TABLE properties(id uuid, client_id uuid);
-    CREATE TEMP TABLE buildings(id uuid, property_id uuid, status text);
+    CREATE TEMP TABLE buildings(id uuid, property_id uuid, status text, name text DEFAULT 'Tower A');
+    CREATE TEMP TABLE floors(id uuid, building_id uuid);
+    CREATE TEMP TABLE areas(id uuid, floor_id uuid);
+    CREATE TEMP TABLE rooms(id uuid, area_id uuid);
+    CREATE TEMP TABLE spaces(id uuid, room_id uuid, name text);
     CREATE TEMP TABLE users(id uuid, status text);
     CREATE TEMP TABLE user_building_assignments(user_id uuid, building_id uuid, status text);
     CREATE TEMP TABLE handyman_service_requests(id uuid, client_id uuid, status text);
-    CREATE TEMP TABLE handyman_execution_scopes(id uuid, handyman_request_id uuid, client_id uuid, building_id uuid, status text);
+    CREATE TEMP TABLE handyman_execution_scopes(id uuid, handyman_request_id uuid, client_id uuid, building_id uuid, status text, space_id uuid);
     CREATE TEMP TABLE handyman_execution_scope_assignments(id uuid, execution_scope_id uuid, client_id uuid,
       handyman_crew_id uuid, handyman_provider_context_id uuid, status text, assigned_at timestamptz, version integer);
     CREATE TEMP TABLE handyman_work_crews(id uuid, client_id uuid, handyman_provider_context_id uuid, status text);
     CREATE TEMP TABLE handyman_crew_leads(handyman_crew_id uuid, handyman_crew_membership_id uuid, client_id uuid, lead_seq integer);
     CREATE TEMP TABLE handyman_crew_memberships(id uuid, handyman_crew_id uuid, handyman_worker_context_id uuid, client_id uuid, status text);
     CREATE TEMP TABLE handyman_worker_contexts(id uuid, workforce_profile_id uuid, client_id uuid, handyman_provider_context_id uuid, status text);
-    CREATE TEMP TABLE workforce_profiles(id uuid, user_id uuid, status text);
+    CREATE TEMP TABLE workforce_profiles(id uuid, user_id uuid, status text, full_name text DEFAULT 'Worker');
     CREATE TEMP TABLE handyman_visit_appointments(id uuid, execution_scope_id uuid, handyman_request_id uuid, client_id uuid, building_id uuid,
       kind text, resource_type text, resource_id uuid, state text, start_at timestamptz, end_at timestamptz, timezone text, version integer);
     CREATE TEMP TABLE handyman_assignment_responses(assignment_id uuid, assignment_target_type text,
@@ -304,4 +308,28 @@ test('unconfirmed proposal stays unbooked for jobs but remains a visible inspect
   assert.equal(feed.jobs[0].appointmentConfirmed,false);
   assert.equal(feed.inspections.length,1);
   assert.equal(feed.inspections[0].assignmentId,id.inspectorAssignment);
+});
+
+
+test('PART 05: authoritative labels and login-free active helpers only', async () => {
+  await db.query("UPDATE workforce_profiles SET user_id=NULL, full_name='Helper One' WHERE id=$1", [id.oldProfile]);
+  await db.query("UPDATE handyman_crew_memberships SET status='ACTIVE' WHERE id=$1", [id.oldMember]);
+  const feed = await readMyHandymanFieldFeed(id.user);
+  assert.equal(feed.jobs[0].buildingName, 'Tower A');
+  assert.equal(feed.jobs[0].unitLabel, null);
+  assert.deepEqual(feed.jobs[0].helpers, [{workerId:id.oldWorker, name:'Helper One'}]);
+  await db.query("UPDATE handyman_crew_memberships SET status='INACTIVE' WHERE id=$1", [id.oldMember]);
+  assert.deepEqual((await readMyHandymanFieldFeed(id.user)).jobs[0].helpers, []);
+});
+
+test('PART 05: Space label follows master hierarchy and rejects another Building', async () => {
+  const [floor, area, room, space] = Array.from({length:4}, () => randomUUID());
+  await db.query('INSERT INTO floors VALUES ($1,$2)', [floor,id.building]);
+  await db.query('INSERT INTO areas VALUES ($1,$2)', [area,floor]);
+  await db.query('INSERT INTO rooms VALUES ($1,$2)', [room,area]);
+  await db.query("INSERT INTO spaces VALUES ($1,$2,'Unit 1201')", [space,room]);
+  await db.query('UPDATE handyman_execution_scopes SET space_id=$1 WHERE id=$2', [space,id.scope]);
+  assert.equal((await readMyHandymanFieldFeed(id.user)).jobs[0].unitLabel,'Unit 1201');
+  await db.query('UPDATE floors SET building_id=$1 WHERE id=$2', [id.sibling,floor]);
+  assert.equal((await readMyHandymanFieldFeed(id.user)).jobs[0].unitLabel,null);
 });

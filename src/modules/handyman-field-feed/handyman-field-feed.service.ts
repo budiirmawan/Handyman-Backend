@@ -7,6 +7,33 @@ import { handymanInspectorAssignmentService } from '../handyman-inspector-assign
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments';
 import { assignmentResponseRepository } from '../assignment-responses';
 
+// Shared read-only projections: no user/login or presence dependency for helpers.
+export const FIELD_LOCATION_SQL = `
+  (SELECT b.name FROM buildings b JOIN properties p ON p.id=b.property_id
+    WHERE b.id=es.building_id AND p.client_id=es.client_id) AS "buildingName",
+  (SELECT s.name FROM spaces s
+    JOIN rooms rm ON rm.id=s.room_id
+    JOIN areas ar ON ar.id=rm.area_id
+    JOIN floors f ON f.id=ar.floor_id
+    JOIN buildings b ON b.id=f.building_id
+    JOIN properties p ON p.id=b.property_id
+    WHERE s.id=es.space_id AND b.id=es.building_id
+      AND p.client_id=es.client_id) AS "unitLabel"`;
+
+export const FIELD_HELPERS_SQL = `
+  (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'workerId', hw.id, 'name', hp.full_name) ORDER BY hw.id), '[]'::jsonb)
+    FROM handyman_crew_memberships hm
+    JOIN handyman_worker_contexts hw ON hw.id=hm.handyman_worker_context_id
+      AND hw.client_id=a.client_id
+      AND hw.handyman_provider_context_id=a.handyman_provider_context_id
+      AND hw.status='ACTIVE'
+    JOIN workforce_profiles hp ON hp.id=hw.workforce_profile_id AND hp.status='ACTIVE'
+    WHERE hm.handyman_crew_id=a.handyman_crew_id AND hm.client_id=a.client_id
+      AND hm.status='ACTIVE' AND crew.status='ACTIVE'
+      AND crew.handyman_provider_context_id=a.handyman_provider_context_id
+      AND hm.id IS DISTINCT FROM lead.handyman_crew_membership_id) AS helpers`;
+
 /**
  * Read-only field feed. The logged-in user is the identity; never accept
  * a caller-owned tenant, building, crew, request or inspector locator.
@@ -16,6 +43,7 @@ import { assignmentResponseRepository } from '../assignment-responses';
  */
 export const MY_JOBS_SQL = `
   SELECT DISTINCT es.id AS "executionScopeId", es.handyman_request_id AS "requestId",
+    ${FIELD_LOCATION_SQL}, ${FIELD_HELPERS_SQL},
     es.building_id AS "buildingId", a.id AS "assignmentId",
     a.version AS "assignmentVersion", a.assigned_at AS "assignedAt",
     COALESCE(ar.assignment_target_type, 'EXECUTION_SCOPE_ASSIGNMENT') AS "assignmentTargetType",
@@ -354,6 +382,7 @@ async function loadSanitizedQuotationSnapshot(
 async function loadAssignmentContext(executionScopeId: string, clientId: string) {
   const db = getPool();
   const res = await db.query<{
+    helpers: Array<{ workerId: string; name: string }>;
     assignment_id: string;
     provider_context_id: string;
     crew_id: string;
@@ -370,7 +399,7 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
     decline_reason: string | null;
     active_work_session_status: string | null;
   }>(
-    `SELECT a.id AS assignment_id,
+    `SELECT ${FIELD_HELPERS_SQL}, a.id AS assignment_id,
             a.handyman_provider_context_id AS provider_context_id,
             a.handyman_crew_id AS crew_id,
             crew.code AS crew_code,
@@ -428,6 +457,7 @@ async function loadAssignmentContext(executionScopeId: string, clientId: string)
   const responseStatus = row.response_status ?? 'PENDING';
   return {
     executionScopeId,
+    helpers: row.helpers ?? [],
     assignmentId: row.assignment_id,
     providerContextId: row.provider_context_id,
     crewId: row.crew_id,
@@ -840,6 +870,8 @@ export async function readAssignedFieldExecutionScopeDetail(
   const db = getPool();
 
   const scopeRes = await db.query<{
+    buildingName: string | null;
+    unitLabel: string | null;
     id: string;
     client_id: string;
     handyman_request_id: string;
@@ -861,7 +893,7 @@ export async function readAssignedFieldExecutionScopeDetail(
     request_created_at: Date;
     request_updated_at: Date;
   }>(
-    `SELECT es.id, es.client_id, es.handyman_request_id,
+    `SELECT ${FIELD_LOCATION_SQL}, es.id, es.client_id, es.handyman_request_id,
             es.quotation_id, es.approved_quotation_version_id,
             es.quotation_decision_id, es.tenant_company_id,
             es.building_id, es.floor_id, es.area_id, es.room_id, es.space_id,
@@ -931,6 +963,8 @@ export async function readAssignedFieldExecutionScopeDetail(
       serviceVariantId: scope.service_variant_id,
       tenantCompanyId: scope.tenant_company_id,
       buildingId: scope.building_id,
+      buildingName: scope.buildingName ?? null,
+      unitLabel: scope.unitLabel ?? null,
       floorId: scope.floor_id,
       areaId: scope.area_id,
       roomId: scope.room_id,
