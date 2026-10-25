@@ -1,3 +1,4 @@
+import { migration0481HandymanCommercialConsentBridge } from '../src/database/migrations/0481_handyman_commercial_consent_bridge';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -134,15 +135,20 @@ describe('CR-HM-BM-CARE-EVIDENCE-01 real authenticated HTTP intake', () => {
     assert.notEqual((await api().post(path).set(auth(f.token)).send(body)).status, 200);
     assert.notEqual((await api().get(path).set(auth(f.token))).status, 200);
   });
-  it('0451 rolls back and reapplies cleanly without changing evidence owner vocabulary', async () => {
+  it('0451 and its 0481 dependent roll back/reapply in dependency order without changing evidence owner vocabulary', async () => {
     const client = await pool.connect();
     try {
+      await client.query('BEGIN');
+      // Drop the additive bridge FK before its predecessor. Never weaken the
+      // production FK or use CASCADE merely to satisfy an isolated migration test.
+      await migration0481HandymanCommercialConsentBridge.down(client);
       await migration0451HandymanCareCommunications.down(client);
       await migration0451HandymanCareCommunications.up(client);
+      await migration0481HandymanCommercialConsentBridge.up(client);
       const types = await client.query(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conname='evidence_submission_execution'`);
       assert.equal(types.rows.length, 1);
       assert.match(types.rows[0].d, /HANDYMAN_REQUEST/);
       assert.equal((await client.query(`SELECT to_regclass('handyman_care_communications') AS t`)).rows[0].t, 'handyman_care_communications');
-    } finally { client.release(); }
+    } finally { await client.query('ROLLBACK'); client.release(); }
   });
 });

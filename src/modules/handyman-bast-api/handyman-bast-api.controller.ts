@@ -94,6 +94,7 @@ function toApprovedSignOffPayload(
     signatureDigest: binding.signatureDigest,
     evidenceRecordId: binding.evidenceRecordId,
     actorUserId: binding.actorUserId,
+    ...(binding.recordedByCareActorId ? { recordedByCareActorId: binding.recordedByCareActorId, commercialConsentId: binding.commercialConsentId } : {}),
     occurredAt: binding.occurredAt,
     createdAt: binding.createdAt,
   };
@@ -108,6 +109,7 @@ function toBastEventPayload(event: HandymanBastEventRecord) {
     eventType: event.eventType,
     idempotencyKey: event.idempotencyKey,
     actorUserId: event.actorUserId,
+    ...(event.actorCareActorId ? { actorCareActorId: event.actorCareActorId, commercialConsentId: event.commercialConsentId } : {}),
     occurredAt: event.occurredAt,
     createdAt: event.createdAt,
     // CR-HM-BAST-HTTP-01 — expose only the bounded audit field from the
@@ -132,7 +134,7 @@ function toBastSignOffPayload(signOff: HandymanBastSignOffRecord) {
   };
 }
 
-function toCommandPayload(result: HandymanBastCommandResult) {
+export function toHandymanBastCommandPayload(result: HandymanBastCommandResult) {
   const events = [result.event];
   const signOffs = result.signOff ? [result.signOff] : [];
   return {
@@ -218,7 +220,7 @@ export async function postBastAcceptHandler(
       evidenceRecordId: body.evidenceRecordId,
       rejectReason: body.rejectReason,
     });
-    sendSuccess(res, toCommandPayload(result), 200);
+    sendSuccess(res, toHandymanBastCommandPayload(result), 200);
   } catch (error) {
     next(error);
   }
@@ -239,7 +241,7 @@ export async function postBastRejectHandler(
       evidenceRecordId: body.evidenceRecordId,
       rejectReason: body.rejectReason,
     });
-    sendSuccess(res, toCommandPayload(result), 200);
+    sendSuccess(res, toHandymanBastCommandPayload(result), 200);
   } catch (error) {
     next(error);
   }
@@ -268,7 +270,7 @@ export async function postBastSignOffHandler(
           evidenceRecordId: body.evidenceRecordId,
           rejectReason: body.rejectReason,
         });
-    sendSuccess(res, toCommandPayload(result), 200);
+    sendSuccess(res, toHandymanBastCommandPayload(result), 200);
   } catch (error) {
     next(error);
   }

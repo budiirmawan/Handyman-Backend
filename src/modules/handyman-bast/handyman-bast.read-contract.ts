@@ -79,7 +79,8 @@ export function toHandymanBastArtifactReference(
 /**
  * CR-HM-17 P1 FIX01 — approved signature-evidence binding.
  * Present only when BAST status is ACCEPTED and the ACCEPT sign-off
- * carries backend-verified personal-PIC consent and a canonical digest.
+ * carries qualified direct-PIC or independently verified Care-recorded
+ * customer consent and a canonical digest.
  * Optional attachment evidence is byte-verified when supplied.
  * Required for sign-off completion; the Frontend MUST NOT accept
  * BAST sign-off without this binding being present.
@@ -89,7 +90,9 @@ export type HandymanBastApprovedSignOffBinding = {
   eventId: string;
   signatureDigest: string;
   evidenceRecordId: string | null;
-  actorUserId: string;
+  actorUserId: string | null;
+  recordedByCareActorId?: string;
+  commercialConsentId?: string;
   occurredAt: Date;
   createdAt: Date;
 };
@@ -116,6 +119,7 @@ export function resolveApprovedSignOff(
     signatureDigest: signOff.signatureDigest,
     evidenceRecordId: signOff.evidenceRecordId,
     actorUserId: acceptEvent.actorUserId,
+    ...(acceptEvent.actorCareActorId ? { recordedByCareActorId: acceptEvent.actorCareActorId, commercialConsentId: acceptEvent.commercialConsentId! } : {}),
     occurredAt: acceptEvent.occurredAt,
     createdAt: signOff.createdAt,
   };
@@ -123,7 +127,7 @@ export function resolveApprovedSignOff(
 
 /**
  * Bounded public read shape. The existing status ladder remains necessary;
- * customer acceptance also requires the immutable backend personal-consent
+ * customer acceptance also requires an immutable backend-qualified customer-consent
  * attestation. Legacy staff/digest-only rows remain history, not certification.
  *
  * CR-HM-17 P1 FIX01 adds:

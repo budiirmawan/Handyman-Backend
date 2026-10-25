@@ -28,7 +28,8 @@ type Row = {
   room_id: string | null;
   space_id: string | null;
   status: HandymanExecutionScopeRecord['status'];
-  created_by_user_id: string;
+  created_by_user_id: string | null;
+  created_by_care_actor_id: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -38,7 +39,7 @@ const SCOPE_SELECT = `
          quotation_id, approved_quotation_version_id,
          quotation_decision_id, tenant_company_id, tenant_pic_id,
          building_id, floor_id, area_id, room_id, space_id, status,
-         created_by_user_id, created_at, updated_at
+         created_by_user_id, created_by_care_actor_id, created_at, updated_at
     FROM handyman_execution_scopes`;
 
 function map(row: Row): HandymanExecutionScopeRecord {
@@ -59,6 +60,7 @@ function map(row: Row): HandymanExecutionScopeRecord {
     spaceId: row.space_id,
     status: row.status,
     createdByUserId: row.created_by_user_id,
+    ...(row.created_by_care_actor_id ? { createdByCareActorId: row.created_by_care_actor_id } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -74,15 +76,15 @@ async function insertScope(
        quotation_id, approved_quotation_version_id,
        quotation_decision_id, tenant_company_id, tenant_pic_id,
        building_id, floor_id, area_id, room_id, space_id,
-       status, created_by_user_id
+       status, created_by_user_id, created_by_care_actor_id
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'AUTHORIZED',$15
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'AUTHORIZED',$15,$16
      )
      RETURNING id, client_id, handyman_request_id, channel_attribution_id,
                quotation_id, approved_quotation_version_id,
                quotation_decision_id, tenant_company_id, tenant_pic_id,
                building_id, floor_id, area_id, room_id, space_id, status,
-               created_by_user_id, created_at, updated_at`,
+               created_by_user_id, created_by_care_actor_id, created_at, updated_at`,
     [
       randomUUID(),
       input.clientId,
@@ -99,6 +101,7 @@ async function insertScope(
       input.roomId,
       input.spaceId,
       input.createdByUserId,
+      input.createdByCareActorId ?? null,
     ],
   );
   return map(result.rows[0]);

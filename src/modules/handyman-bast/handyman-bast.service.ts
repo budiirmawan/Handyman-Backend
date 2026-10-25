@@ -1,3 +1,8 @@
+import { resolveCareWorkspacePrincipal } from '../handyman-care-workspace/care-workspace.service';
+import { handymanExecutionScopeRepository } from '../handyman-quotations/handyman-execution-scope.repository';
+import { assertCareConsentWriteFresh, verifyCareCommercialConsent, type CareDecisionChannel } from '../handyman-commercial-consent/commercial-consent.service';
+import { bastCommercialTarget } from '../handyman-commercial-consent/commercial-consent.targets';
+import { handymanServiceRequestRepository } from '../handyman-requests/handyman-service-request.repository';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
@@ -8,6 +13,7 @@ import { assertBuildingScopedResourceAccess } from '../context-access';
 import { assertHandymanCustomerScopeAuthority }
   from '../handyman-tenant-decision-authority/handyman-customer-scope-authority';
 import {
+  HANDYMAN_BAST_CARE_CONSENT_PROTOCOL,
   HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD,
   HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
   computeHandymanBastCustomerConsentDigest,
@@ -44,7 +50,8 @@ import type {
 
 /**
  * Existing BAST lifecycle. PART 04 separates provider preparation/issuance
- * from authenticated personal-PIC customer consent; HTTP routes are unchanged.
+ * from authenticated personal-PIC customer consent; the additive verified Care
+ * recording channel uses these same decision transactions.
  */
 
 export type HandymanBastPrepareInput = {
@@ -322,28 +329,28 @@ export async function voidHandymanBast(
 }
 
 export async function acceptHandymanBast(
-  actorUserId: string,
+  actorUserId: string | CareDecisionChannel,
   input: HandymanBastSignOffInput,
 ): Promise<HandymanBastCommandResult> {
   return applyCustomerSignOff(actorUserId, input, 'ACCEPT');
 }
 
 export async function rejectHandymanBast(
-  actorUserId: string,
+  actorUserId: string | CareDecisionChannel,
   input: HandymanBastSignOffInput,
 ): Promise<HandymanBastCommandResult> {
   return applyCustomerSignOff(actorUserId, input, 'REJECT');
 }
 
 async function applyCustomerSignOff(
-  actorUserId: string,
+  channel: string | CareDecisionChannel,
   input: HandymanBastSignOffInput,
   action: 'ACCEPT' | 'REJECT',
 ): Promise<HandymanBastCommandResult> {
-  const actor = ensureUuid(actorUserId, 'actorUserId');
+  const actor = typeof channel === 'string' ? ensureUuid(channel, 'actorUserId') : null;
   const bastId = ensureUuid(input.bastId, 'bastId');
   const idempotencyKey = ensureKey(input.idempotencyKey);
-  const suppliedDigest = assertHandymanBastSignature(action, input.signatureDigest).toLowerCase();
+  const suppliedDigest = actor !== null ? assertHandymanBastSignature(action, input.signatureDigest).toLowerCase() : '';
   const evidenceRecordId = input.evidenceRecordId == null || input.evidenceRecordId === ''
     ? null : ensureUuid(input.evidenceRecordId, 'evidenceRecordId');
   if (input.rejectReason != null && typeof input.rejectReason !== 'string') {
@@ -354,20 +361,36 @@ async function applyCustomerSignOff(
     throw handymanBastValidationError('rejectReason');
   }
 
+  const carePrincipal = typeof channel === 'string' ? null : await resolveCareWorkspacePrincipal(channel.workspaceToken);
   return withTransaction(async (client) => {
-    const { bast } = await lockBastContext(client, bastId);
-    // Live RBAC + exact request/Company/PIC/Building, BEFORE replay or writes.
-    // PART 03 holds PIC/account SHARE locks until this transaction commits.
-    const { scope, tenantPicId } = await assertHandymanCustomerScopeAuthority(
-      client, bast.executionScopeId, actor,
-    );
+    const locked = await lockBastContext(client, bastId);
+    const { bast } = locked;
+    const scope = await handymanExecutionScopeRepository.findScopeById(client, bast.executionScopeId);
+    if (!scope) throw handymanExecutionScopeNotFoundError();
+    // Personal authority remains unchanged. The Care branch must produce a
+    // separately verified, exact-target customer receipt, never a role override.
+    let tenantPicId: string | null;
+    let consent = null;
+    if (typeof channel === 'string') {
+      ({ tenantPicId } = await assertHandymanCustomerScopeAuthority(client, bast.executionScopeId, actor!));
+    } else {
+      const request = await handymanServiceRequestRepository.findById(client, scope.handymanRequestId);
+      if (!request || request.clientId !== scope.clientId || request.tenantCompanyId !== scope.tenantCompanyId ||
+          request.tenantPicId !== scope.tenantPicId || request.buildingId !== scope.buildingId || request.spaceId !== scope.spaceId) {
+        throw handymanBastValidationError('bastId', 'BAST request identity mismatch.');
+      }
+      tenantPicId = request.tenantPicId;
+      consent = await verifyCareCommercialConsent(client, channel, request, await bastCommercialTarget(client, bast, scope), action, carePrincipal!, rejectReason);
+    }
     if (scope.clientId !== bast.clientId) throw handymanBastValidationError('bastId', 'BAST scope identity mismatch.');
     const replay = await handymanBastRepository.findEventByIdempotency(
       client, bast.id, action, idempotencyKey,
     );
     if (replay) {
       const existing = await handymanBastRepository.findSignOffByEventId(client, replay.id);
-      if (!existing || replay.actorUserId !== actor || existing.decision !== action ||
+      if (!existing || replay.actorUserId !== actor ||
+          (replay.actorCareActorId ?? null) !== (consent?.careActorId ?? null) ||
+          (replay.commercialConsentId ?? null) !== (consent?.id ?? null) || existing.decision !== action ||
           existing.evidenceRecordId !== evidenceRecordId || existing.rejectReason !== rejectReason ||
           (suppliedDigest !== '' && suppliedDigest !== existing.signatureDigest) ||
           !verifiedHandymanBastCustomerConsent(bast, replay, existing)) {
@@ -391,27 +414,32 @@ async function applyCustomerSignOff(
     const evidence = await readHandymanBastConsentEvidence(client, evidenceRecordId, bast);
     const issuedArtifact = toHandymanBastArtifactReference(bast);
     const manifest: HandymanBastCustomerConsentManifest = {
-      protocol: HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
+      ...(consent ? { protocol: HANDYMAN_BAST_CARE_CONSENT_PROTOCOL, actorUserId: null,
+        tenantPicId, spaceId: scope.spaceId, careConsent: consent } : {
+        protocol: HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL, actorUserId: actor!, tenantPicId: tenantPicId!,
+      }),
       bastId: bast.id, executionScopeId: scope.id, approvedQuotationVersionId: scope.approvedQuotationVersionId,
       clientId: scope.clientId,
       handymanRequestId: scope.handymanRequestId, tenantCompanyId: scope.tenantCompanyId,
-      tenantPicId, buildingId: scope.buildingId,
+      buildingId: scope.buildingId,
       issuedArtifactRef: issuedArtifact.ref, issuedArtifactVersion: issuedArtifact.version,
       issueEventId: issueEvents[0]!.id, issuedAt: bast.issuedAt.toISOString(),
-      qcRunId: bast.qcRunId, actorUserId: actor, decision: action, rejectReason, evidence,
+      qcRunId: bast.qcRunId, decision: action, rejectReason, evidence,
     };
     const signatureDigest = computeHandymanBastCustomerConsentDigest(manifest);
     // ACCEPT must confirm the exact manifest. REJECT may omit its digest, in
     // which case the backend calculates it; a supplied value must still match.
-    if ((action === 'ACCEPT' || suppliedDigest !== '') && suppliedDigest !== signatureDigest) {
+    if (!consent && (action === 'ACCEPT' || suppliedDigest !== '') && suppliedDigest !== signatureDigest) {
       throw handymanBastValidationError('signatureDigest', 'Digest must match the canonical issued BAST customer-consent manifest.');
     }
+    if (consent) await assertCareConsentWriteFresh(client, consent, carePrincipal!);
     const updated = await handymanBastRepository.updateBastStatus(client, bast.id, next, bast.status);
     const event = await handymanBastRepository.insertEvent(client, {
       clientId: bast.clientId, bastId: bast.id, executionScopeId: bast.executionScopeId,
       eventType: action, idempotencyKey, actorUserId: actor,
+      actorCareActorId: consent?.careActorId ?? null, commercialConsentId: consent?.id ?? null,
       metadata: { customerConsent: {
-        method: HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, manifest, sha256Digest: signatureDigest,
+        method: consent?.method ?? HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, manifest, sha256Digest: signatureDigest,
       } },
     });
     const signOff = await handymanBastRepository.insertSignOff(client, {

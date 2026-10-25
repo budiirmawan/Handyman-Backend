@@ -83,6 +83,7 @@ export type {
 
 export {
   HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
+  HANDYMAN_BAST_CARE_CONSENT_PROTOCOL,
   HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD,
   serializeHandymanBastCustomerConsent,
   computeHandymanBastCustomerConsentDigest,

@@ -23,7 +23,9 @@ export type HandymanQuotationDecisionRecord = {
   tenantCompanyId: string;
   /** NULL when the authoritative request lineage has no PIC. */
   tenantPicId: string | null;
-  decidedByUserId: string;
+  decidedByUserId: string | null;
+  decidedByCareActorId?: string | null;
+  commercialConsentId?: string | null;
   idempotencyKey: string;
   requestFingerprint: string;
   decidedAt: Date;
@@ -55,7 +57,9 @@ export type NewHandymanQuotationDecision = {
   decision: HandymanQuotationDecision;
   tenantCompanyId: string;
   tenantPicId: string | null;
-  decidedByUserId: string;
+  decidedByUserId: string | null;
+  decidedByCareActorId?: string | null;
+  commercialConsentId?: string | null;
   idempotencyKey: string;
   requestFingerprint: string;
 };

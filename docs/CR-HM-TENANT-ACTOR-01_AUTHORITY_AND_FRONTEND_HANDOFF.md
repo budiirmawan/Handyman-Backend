@@ -1,5 +1,7 @@
 # CR-HM-TENANT-ACTOR-01 — Authority audit and Frontend handoff
 
+> **Commercial bridge PART01 addendum (2026-10-25):** the personal-PIC rules below remain unchanged for direct decisions. A separate default-BLOCKED BM Care-recording channel can feed the same quotation/BAST transactions after independent customer verification; it never grants Care customer authority or requires a customer account. Variation/rework/other personal decision rules are not expanded. See [bridge contract](handyman/CR-HM-COMMERCIAL-DECISION-BRIDGE-01_PART-01.md).
+
 ## Existing authority discovered
 
 * Authentication resolves a server-side session to `req.auth.userId`; decision actors are never accepted from request bodies.

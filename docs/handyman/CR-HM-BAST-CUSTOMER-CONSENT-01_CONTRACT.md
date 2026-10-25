@@ -1,5 +1,7 @@
 # PART 04 — Personal customer BAST consent contract
 
+> **Commercial bridge PART01 addendum (2026-10-25):** this document freezes the optional direct-PIC V1 channel, not a universal login requirement. A distinct, default-BLOCKED verified Care-recording receipt now composes the same BAST transaction and shared downstream qualifier. V1 bytes/meaning and all QC/identity/audit protections remain unchanged; no legacy receipt is upgraded. See [bridge contract](CR-HM-COMMERCIAL-DECISION-BRIDGE-01_PART-01.md).
+
 **CR-HM-BE-IAM-E2E-AUDIT-01 · 2026-10-25 · Backend contract, not production certification.**
 
 This is the explicitly approved **authenticated electronic consent** contract. It is **not a certified digital signature**, external signature verification, biometric identity verification, or an independently verified delegation facility. A SHA-256 value, uploaded image, role, Building assignment, email, phone, reporter or staff attestation is never customer authority.

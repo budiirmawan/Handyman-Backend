@@ -85014,8 +85014,156 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /handyman/care/requests/{requestId}/communications:
+    post:
+      operationId: recordWorkspaceCareCommunication
+      tags: [Handyman Customer Care]
+      summary: Record neutral communication as the actual BM Care actor
+      description: >-
+        Reuses the existing communications/evidence store. Requires the current
+        workspace actor, exact request hierarchy, property grant and represented
+        occupancy. Records no customer User. Always PENDING_VERIFICATION;
+        contact claims and attachments do not authorize a commercial decision.
+      security: [{ careWorkspaceSession: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanCareCommunicationCreateRequest' }
+      responses:
+        '201':
+          description: Neutral communication recorded; actual recorder is recorded_by_care_actor_id.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareCommunication' }
+        '200': { description: Exact actor-bound communication replay. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/care/requests/{requestId}/commercial-targets/{targetType}/{targetId}:
+    get:
+      operationId: getCareCommercialConsentTarget
+      tags: [Handyman Customer Care]
+      summary: Read the exact server-owned commercial consent target
+      description: >-
+        Scoped target identity/digest, not consent or proof of presentation.
+        Quote must be ISSUED/unexpired; BAST must be ISSUED. Present the actual
+        existing quotation/issued BAST to the customer, not an opaque hash.
+        No tenant account is required. This read does not enroll a consent issuer.
+      security: [{ careWorkspaceSession: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: targetType, in: path, required: true, schema: { type: string, enum: [QUOTATION_VERSION, BAST] } }
+        - { name: targetId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Exact target and server-resolved customer context; validUntil for quotes, artifactRef for BAST.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanCareCommercialTarget' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /handyman/care/requests/{requestId}/quotation-versions/{targetId}/decision:
+    post:
+      operationId: recordVerifiedCareQuotationDecision
+      tags: [Handyman Customer Care]
+      summary: Record independently verified customer quotation ACCEPT or REJECT
+      description: >-
+        DEFAULT BLOCKED. Requires an explicitly enrolled independent BM
+        customer-verification contract and a separate purpose-scoped server key;
+        no shipped integration is enrolled. Care, handoff/slot assertions,
+        statements and attachments cannot supply customer authority. Uses the
+        existing exact-version quotation decision/execution-scope transaction;
+        ACCEPT maps to APPROVE. Direct authenticated PIC approval remains optional.
+      security: [{ careWorkspaceSession: [], commercialConsentSignature: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: targetId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanCareQuotationDecisionInput' }
+      responses:
+        '200':
+          description: Customer decision and optional approved scope; actual Care recorder is distinct from customer.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanQuotationDecisionResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: HANDYMAN_COMMERCIAL_CONSENT_INVALID; unverified/wrong-scope/wrong-target customer consent. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Immutable decision/nonce/communication or actor-bound replay conflict; no partial mutation. }
+        '503': { description: HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED; independent customer-consent contract or dedicated signing key missing. }
+  /handyman/care/requests/{requestId}/bast/{targetId}/decision:
+    post:
+      operationId: recordVerifiedCareBastDecision
+      tags: [Handyman Customer Care]
+      summary: Record independently verified customer BAST ACCEPT or REJECT
+      description: >-
+        DEFAULT BLOCKED until independent BM customer verification is enrolled.
+        Uses the existing BAST decision/sign-off transaction, exact ISSUED v2
+        digest and genuine current Supervisor QC PASS for ACCEPT. Care remains
+        recorder, never the customer. The shared qualified-receipt predicate
+        recognizes this verified mode without bypassing Finance/other close gates.
+        Historical personal-PIC V1 and legacy fail-closed behavior are preserved.
+      security: [{ careWorkspaceSession: [], commercialConsentSignature: [] }]
+      parameters:
+        - { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: targetId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HandymanCareBastDecisionInput' }
+      responses:
+        '200':
+          description: Existing BAST command result with qualified acceptance and separate Care recorder provenance.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanBastSignOffCommandResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: HANDYMAN_COMMERCIAL_CONSENT_INVALID; independent customer consent could not be verified. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: BAST lifecycle, QC or immutable actor/payload/consent replay conflict; transaction rolls back. }
+        '503': { description: HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED; no trustworthy commercial consent integration configured. }
+
 components:
   securitySchemes:
+    commercialConsentSignature:
+      type: apiKey
+      in: header
+      name: x-handyman-commercial-consent-signature
+      description: >-
+        Separate server-held, purpose-scoped HMAC-SHA256 from an explicitly
+        enrolled independent BM customer-verification backend. Not the Care,
+        handoff or slot key. Signing secrets must never reach browsers/Care.
+        Default BLOCKED without the reviewed verification contract and key.
     careWorkspaceSession:
       type: http
       scheme: bearer
@@ -93218,7 +93366,7 @@ components:
         bastId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
         status: { $ref: '#/components/schemas/HandymanBastStatus' }
-        customerAccepted: { type: boolean, description: 'Requires ACCEPTED plus verified immutable personal-PIC consent; legacy staff/digest-only accepted history is false.' }
+        customerAccepted: { type: boolean, description: 'Requires ACCEPTED plus verified immutable personal-PIC or independently verified Care-recorded customer consent; legacy staff/digest-only accepted history is false.' }
         warrantyStartEligible: { type: boolean, description: 'Requires verified customer acceptance, not raw status or a nonempty digest.' }
         issuedAt: { type: string, format: date-time, nullable: true }
         acceptedAt: { type: string, format: date-time, nullable: true }
@@ -93228,17 +93376,19 @@ components:
         approvedSignOff:
           type: object
           nullable: true
-          description: 'Existing runtime binding, now qualified by immutable authenticated personal-PIC consent. Null for legacy staff/digest-only history. An attachment is optional, not signer identity.'
+          description: 'Existing runtime binding, now qualified by immutable authenticated personal-PIC or independently verified Care-recorded customer consent. Null for legacy staff/digest-only history. An attachment is optional, not signer identity.'
           required: [signOffId, eventId, signatureDigest, evidenceRecordId, actorUserId, occurredAt, createdAt]
           properties:
             signOffId: { type: string, format: uuid }
             eventId: { type: string, format: uuid }
             signatureDigest: { type: string }
             evidenceRecordId: { type: string, format: uuid, nullable: true }
-            actorUserId: { type: string, format: uuid }
+            actorUserId: { type: string, format: uuid, nullable: true }
+            recordedByCareActorId: { type: string, format: uuid }
+            commercialConsentId: { type: string, format: uuid }
             occurredAt: { type: string, format: date-time }
             createdAt: { type: string, format: date-time }
-        signOffComplete: { type: boolean, description: 'Existing runtime flag; true only for ACCEPTED with a verified immutable personal-consent binding.' }
+        signOffComplete: { type: boolean, description: 'Existing runtime flag; true only for ACCEPTED with a verified immutable qualified customer-consent binding.' }
     HandymanBastEvent:
       type: object
       required:
@@ -93257,7 +93407,9 @@ components:
         executionScopeId: { type: string, format: uuid }
         eventType: { $ref: '#/components/schemas/HandymanBastEventType' }
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
-        actorUserId: { type: string, format: uuid }
+        actorUserId: { type: string, format: uuid, nullable: true }
+        actorCareActorId: { type: string, format: uuid, description: "Actual Care recorder; never an impersonated customer." }
+        commercialConsentId: { type: string, format: uuid }
         occurredAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
         voidReason: { type: string, nullable: true, maxLength: 2000, description: 'The preserved worker VOID justification; null for other events.' }
@@ -95550,7 +95702,9 @@ components:
           enum: [APPROVE, REJECT]
         tenantCompanyId: { type: string, format: uuid }
         tenantPicId: { type: string, format: uuid, nullable: true }
-        decidedByUserId: { type: string, format: uuid }
+        decidedByUserId: { type: string, format: uuid, nullable: true }
+        decidedByCareActorId: { type: string, format: uuid, description: "Actual Care recorder, not customer identity." }
+        commercialConsentId: { type: string, format: uuid }
         idempotencyKey: { type: string }
         decidedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
@@ -95604,7 +95758,8 @@ components:
         status:
           type: string
           enum: [AUTHORIZED]
-        createdByUserId: { type: string, format: uuid }
+        createdByUserId: { type: string, format: uuid, nullable: true }
+        createdByCareActorId: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     HandymanExecutionScopeCustomerProjection:
@@ -133404,7 +133559,8 @@ components:
         channel_reference: { type: string, nullable: true }
         statement: { type: string }
         reported_statement: { type: string, enum: [CONFIRM, REJECT, OTHER], nullable: true }
-        recorded_by_user_id: { type: string, format: uuid }
+        recorded_by_user_id: { type: string, format: uuid, nullable: true }
+        recorded_by_care_actor_id: { type: string, format: uuid, nullable: true }
         recorded_at: { type: string, format: date-time }
         verification_state: { type: string, enum: [PENDING_VERIFICATION] }
         idempotency_key: { type: string }
@@ -137303,3 +137459,77 @@ components:
         personnelChange: { $ref: "#/components/schemas/HandymanScopeHelperPersonnelChangeRecord" }
         projection: { $ref: "#/components/schemas/HandymanHelperAttendanceProjection" }
         replayed: { type: boolean }
+    HandymanCommercialConsentAssertion:
+      type: object
+      additionalProperties: false
+      description: >-
+        Strict independent BM customer-verification assertion, NOT a Care report.
+        All scope fields must equal stored request lineage; nullable PIC does not
+        require a linked account. No existing handoff/slot signature can qualify.
+        HMAC over purpose + NUL + stableJson(assertion); fresh first use <=300s.
+        BM must retain genuine subject/intent verification referenced here;
+        Backend cryptographic verification alone does not prove a human consented.
+      required: [iss, aud, purpose, method, jti, iat, exp, careActorId, clientId, handymanRequestId, tenantCompanyId, tenantPicId, buildingId, spaceId, communicationId, customerReference, verificationReference, targetType, targetId, targetDigest, decision, rejectReason]
+      properties:
+        iss: { type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' }
+        aud: { type: string, enum: [handyman-backend] }
+        purpose: { type: string, enum: [HANDYMAN_CUSTOMER_COMMERCIAL_DECISION_V1] }
+        method: { type: string, enum: [BM_VERIFIED_CUSTOMER_CHANNEL_V1] }
+        jti: { type: string, minLength: 16, maxLength: 128 }
+        iat: { type: string, format: date-time }
+        exp: { type: string, format: date-time }
+        careActorId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        handymanRequestId: { type: string, format: uuid }
+        tenantCompanyId: { type: string, format: uuid }
+        tenantPicId: { type: string, format: uuid, nullable: true }
+        buildingId: { type: string, format: uuid }
+        spaceId: { type: string, format: uuid, nullable: true }
+        communicationId: { type: string, format: uuid }
+        customerReference: { type: string, minLength: 1, maxLength: 200 }
+        verificationReference: { type: string, minLength: 1, maxLength: 200 }
+        targetType: { type: string, enum: [QUOTATION_VERSION, BAST] }
+        targetId: { type: string, format: uuid }
+        targetDigest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        decision: { type: string, enum: [ACCEPT, REJECT] }
+        rejectReason: { type: string, nullable: true, maxLength: 2000, description: 'Null for quotation and ACCEPT; exact normalized reason for BAST REJECT.' }
+    HandymanCareQuotationDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decision, idempotencyKey, consentAssertion]
+      properties:
+        decision: { type: string, enum: [ACCEPT, REJECT] }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        consentAssertion: { $ref: '#/components/schemas/HandymanCommercialConsentAssertion' }
+    HandymanCareBastDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decision, idempotencyKey, consentAssertion]
+      properties:
+        decision: { type: string, enum: [ACCEPT, REJECT] }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+        consentAssertion: { $ref: '#/components/schemas/HandymanCommercialConsentAssertion' }
+        rejectReason: { type: string, nullable: true, maxLength: 2000 }
+    HandymanCareCommercialTarget:
+      type: object
+      required: [target, customer]
+      properties:
+        target:
+          type: object
+          required: [type, id, digest]
+          properties:
+            type: { type: string, enum: [QUOTATION_VERSION, BAST] }
+            id: { type: string, format: uuid }
+            digest: { type: string, pattern: '^[a-f0-9]{64}$' }
+        customer:
+          type: object
+          required: [handymanRequestId, clientId, tenantCompanyId, tenantPicId, buildingId, spaceId]
+          properties:
+            handymanRequestId: { type: string, format: uuid }
+            clientId: { type: string, format: uuid }
+            tenantCompanyId: { type: string, format: uuid }
+            tenantPicId: { type: string, format: uuid, nullable: true }
+            buildingId: { type: string, format: uuid }
+            spaceId: { type: string, format: uuid, nullable: true }
+        validUntil: { type: string, format: date-time }
+        artifactRef: { type: string }

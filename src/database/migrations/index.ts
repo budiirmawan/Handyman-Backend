@@ -1,3 +1,4 @@
+import { migration0481HandymanCommercialConsentBridge } from './0481_handyman_commercial_consent_bridge';
 import { migration0446HandymanBastWorkerTransport } from './0446_handyman_bast_worker_transport';
 import { migration0447NetHandymanAllocationCaps } from './0447_net_handyman_allocation_caps';
 import { migration0448HandymanFinanceAuthorityPermissions } from './0448_handyman_finance_authority_permissions';
@@ -1008,4 +1009,5 @@ export const migrations: readonly Migration[] = [
   migration0478ServicePriceTierKey,
   migration0479HandymanServiceVariantAttributeLifecycle,
   migration0480HandymanServiceRequestItemInheritedAttributes,
+  migration0481HandymanCommercialConsentBridge,
 ];

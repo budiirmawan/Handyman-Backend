@@ -92,7 +92,9 @@ export type HandymanBastEventRecord = {
   executionScopeId: string;
   eventType: HandymanBastEventType;
   idempotencyKey: string;
-  actorUserId: string;
+  actorUserId: string | null;
+  actorCareActorId?: string | null;
+  commercialConsentId?: string | null;
   occurredAt: Date;
   createdAt: Date;
   /**
@@ -109,7 +111,9 @@ export type NewHandymanBastEvent = {
   executionScopeId: string;
   eventType: HandymanBastEventType;
   idempotencyKey: string;
-  actorUserId: string;
+  actorUserId: string | null;
+  actorCareActorId?: string | null;
+  commercialConsentId?: string | null;
   /** CR-HM-BAST-HTTP-01 — append-only audit extras; default `{}`. */
   metadata?: Record<string, unknown> | null;
 };

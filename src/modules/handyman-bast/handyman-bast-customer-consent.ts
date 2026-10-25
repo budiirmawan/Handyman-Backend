@@ -1,3 +1,6 @@
+import { stableJson } from '../../shared/stable-json';
+import { COMMERCIAL_CONSENT_METHOD, COMMERCIAL_CONSENT_PURPOSE, commercialConsentHash, freshCommercialConsent, parseCommercialConsentAssertion } from '../handyman-commercial-consent/commercial-consent.assertion';
+import type { VerifiedCareConsent } from '../handyman-commercial-consent/commercial-consent.service';
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { isValidUuid } from '../clients';
@@ -12,6 +15,7 @@ import type {
 /** Authenticated electronic consent, NOT a certified digital signature. */
 export const HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL = 'HM-BAST-CUSTOMER-CONSENT-SHA256-V1';
 export const HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD = 'AUTHENTICATED_REQUEST_PIC';
+export const HANDYMAN_BAST_CARE_CONSENT_PROTOCOL = 'HM-BAST-VERIFIED-CARE-CONSENT-SHA256-V1';
 
 export type HandymanBastConsentEvidence = {
   recordId: string;
@@ -21,7 +25,7 @@ export type HandymanBastConsentEvidence = {
   }>;
 };
 
-export type HandymanBastCustomerConsentManifest = {
+type PersonalBastConsentManifest = {
   protocol: typeof HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL;
   bastId: string;
   executionScopeId: string;
@@ -42,6 +46,13 @@ export type HandymanBastCustomerConsentManifest = {
   evidence: HandymanBastConsentEvidence | null;
 };
 
+export type HandymanBastCustomerConsentManifest = PersonalBastConsentManifest |
+  (Omit<PersonalBastConsentManifest, 'protocol' | 'actorUserId' | 'tenantPicId'> & {
+    protocol: typeof HANDYMAN_BAST_CARE_CONSENT_PROTOCOL;
+    actorUserId: null; tenantPicId: string | null; spaceId: string | null;
+    careConsent: VerifiedCareConsent;
+  });
+
 /**
  * Frozen V1 wire serialization: UTF-8 JSON of this ORDERED ARRAY, not a JSON
  * object, hex SHA-256 lowercase. Files sort by lowercase UUID, ascending ASCII.
@@ -53,7 +64,7 @@ export function serializeHandymanBastCustomerConsent(
   manifest: HandymanBastCustomerConsentManifest,
 ): string {
   const evidence = manifest.evidence;
-  return JSON.stringify([
+  const fields: unknown[] = [
     manifest.protocol, manifest.bastId, manifest.executionScopeId, manifest.approvedQuotationVersionId, manifest.clientId,
     manifest.handymanRequestId, manifest.tenantCompanyId, manifest.tenantPicId,
     manifest.buildingId, manifest.issuedArtifactRef, manifest.issuedArtifactVersion,
@@ -64,7 +75,11 @@ export function serializeHandymanBastCustomerConsent(
       [...evidence.files].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
         .map((file) => [file.id, file.mediaKind, file.contentType, file.byteSize, file.sha256Digest]),
     ],
-  ]);
+  ];
+  // Keep personal V1 serialization byte-for-byte; JSONB key order cannot
+  // affect the new immutable receipt's canonical serialization.
+  if (manifest.protocol === HANDYMAN_BAST_CARE_CONSENT_PROTOCOL) fields.push(manifest.spaceId, stableJson(manifest.careConsent));
+  return JSON.stringify(fields);
 }
 
 export function computeHandymanBastCustomerConsentDigest(
@@ -132,11 +147,31 @@ function iso(value: Date | string | null): string | null {
 
 function validManifest(value: unknown): value is HandymanBastCustomerConsentManifest {
   const m = asObject(value);
-  if (!m || m.protocol !== HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL ||
+  if (!m || ![HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL, HANDYMAN_BAST_CARE_CONSENT_PROTOCOL].includes(String(m.protocol)) ||
       !['ACCEPT', 'REJECT'].includes(String(m.decision))) return false;
+  const care = m.protocol === HANDYMAN_BAST_CARE_CONSENT_PROTOCOL;
+  if (care) {
+    if (m.actorUserId !== null || (m.tenantPicId !== null && (typeof m.tenantPicId !== 'string' || !isValidUuid(m.tenantPicId))) ||
+        (m.spaceId !== null && (typeof m.spaceId !== 'string' || !isValidUuid(m.spaceId)))) return false;
+    const proof = asObject(m.careConsent);
+    if (!proof || proof.method !== COMMERCIAL_CONSENT_METHOD ||
+        !['id', 'integrationId', 'careActorId'].every(k => typeof proof[k] === 'string' && isValidUuid(proof[k] as string)) ||
+        typeof proof.contractReference !== 'string' || !proof.contractReference.trim() || proof.contractReference.length > 200 ||
+        typeof proof.recordedAt !== 'string' || iso(proof.recordedAt) !== proof.recordedAt) return false;
+    const a = parseCommercialConsentAssertion(proof.assertion);
+    if (!a || !freshCommercialConsent(a, new Date(proof.recordedAt)) || proof.assertionHash !== commercialConsentHash(a) || a.careActorId !== proof.careActorId ||
+        a.targetType !== 'BAST' || a.targetId !== m.bastId || a.handymanRequestId !== m.handymanRequestId ||
+        a.clientId !== m.clientId || a.tenantCompanyId !== m.tenantCompanyId || a.tenantPicId !== m.tenantPicId ||
+        a.buildingId !== m.buildingId || a.spaceId !== m.spaceId || a.decision !== m.decision || a.rejectReason !== m.rejectReason ||
+        a.targetDigest !== commercialConsentHash([COMMERCIAL_CONSENT_PURPOSE, 'BAST', m.bastId,
+          m.executionScopeId, m.approvedQuotationVersionId, m.clientId, m.handymanRequestId,
+          m.tenantCompanyId, m.tenantPicId, m.buildingId, m.spaceId, m.issuedArtifactRef,
+          m.issuedArtifactVersion, m.issueEventId, m.issuedAt, m.qcRunId])) return false;
+  } else if (m.careConsent !== undefined || typeof m.actorUserId !== 'string' || !isValidUuid(m.actorUserId) ||
+      typeof m.tenantPicId !== 'string' || !isValidUuid(m.tenantPicId)) return false;
   for (const field of [
     'bastId', 'executionScopeId', 'approvedQuotationVersionId', 'clientId', 'handymanRequestId', 'tenantCompanyId',
-    'tenantPicId', 'buildingId', 'issueEventId', 'qcRunId', 'actorUserId',
+    'buildingId', 'issueEventId', 'qcRunId',
   ]) if (typeof m[field] !== 'string' || !isValidUuid(m[field] as string)) return false;
   if (m.issuedArtifactVersion !== 2 || m.issuedArtifactRef !== `BAST/${m.bastId}/v2` ||
       typeof m.issuedAt !== 'string' || iso(m.issuedAt) !== m.issuedAt ||
@@ -162,7 +197,8 @@ function validManifest(value: unknown): value is HandymanBastCustomerConsentMani
 
 /**
  * Verify the immutable BACKEND attestation, not a free-standing digest. The
- * event metadata is written only after personal-PIC/session + current QC and
+ * event metadata is written only after personal-PIC/session OR independently
+ * verified Care-recorded customer consent, plus current QC and
  * issued-manifest validation. Body metadata/signer claims are never persisted.
  * Do not re-resolve today's PIC: a later legitimate relink cannot rewrite or
  * transfer the recorded actor's past consent. Legacy staff/digest-only history
@@ -174,8 +210,13 @@ export function verifiedHandymanBastCustomerConsent(
   signOff: HandymanBastSignOffRecord,
 ): HandymanBastCustomerConsentManifest | null {
   const receipt = asObject(event.metadata?.customerConsent);
-  if (!receipt || receipt.method !== HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD || !validManifest(receipt.manifest)) return null;
+  if (!receipt || !validManifest(receipt.manifest)) return null;
   const m = receipt.manifest;
+  if (m.protocol === HANDYMAN_BAST_CARE_CONSENT_PROTOCOL) {
+    if (receipt.method !== COMMERCIAL_CONSENT_METHOD || event.actorUserId !== null ||
+        event.actorCareActorId !== m.careConsent.careActorId || event.commercialConsentId !== m.careConsent.id) return null;
+  } else if (receipt.method !== HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD ||
+      event.actorCareActorId != null || event.commercialConsentId != null) return null;
   if (iso(event.occurredAt) === null || iso(signOff.createdAt) === null) return null;
   if (m.bastId !== bast.id || m.clientId !== bast.clientId || m.executionScopeId !== bast.executionScopeId ||
       m.issuedAt !== iso(bast.issuedAt) || m.qcRunId !== bast.qcRunId ||

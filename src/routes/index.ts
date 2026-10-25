@@ -1,3 +1,4 @@
+import { createCommercialConsentBridgeRouter } from '../modules/handyman-commercial-consent/commercial-consent.routes';
 import { createHandymanFieldFeedRouter } from '../modules/handyman-field-feed/handyman-field-feed.routes';
 import { createHandymanVisitApiRouter } from '../modules/handyman-appointment-contract/handyman-visit-api.routes';
 import { createHandymanTenantSlotConsentRouter } from '../modules/handyman-appointment-contract/handyman-tenant-slot-consent.routes';
@@ -867,6 +868,7 @@ export function createApiRouter(): Router {
   // session is not a substitute, and none is created).
   router.use(createHandoffHandymanRouter());
   router.use(createCareWorkspaceRouter());
+  router.use(createCommercialConsentBridgeRouter());
   // CR-HM-02 PART 05A — customer-facing Handyman catalogue (READ ONLY),
   // attribution-bound request intake, and bounded INTAKE evidence upload
   // (frozen D1–D4). No lifecycle/triage/quotation/material-execution surface
