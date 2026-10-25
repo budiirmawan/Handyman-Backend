@@ -1,3 +1,4 @@
+import { handymanBmFeeFiscalBasis } from '../handyman-customer-transactions/handyman-financial-tax.service';
 import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { isValidUuid } from '../clients';
@@ -177,7 +178,8 @@ export async function deriveHandymanFinancialEntitlements(
     const material = cents(ledger.totals.materialNet);
     cents(ledger.totals.adjustedTransactionScope);
     if (charged < 0n || labor < 0n || material < 0n) throw conflict();
-    const fee = feeCents(labor, term.ratePercent);
+    const fiscalBasis = await handymanBmFeeFiscalBasis(tx, executionScopeId, binding.agreementVersionId, ledger.totals.laborNet);
+    const fee = feeCents(cents(fiscalBasis.laborBasis), term.ratePercent);
     if (fee > labor || fee > charged) throw conflict();
     const common = {
       clientId: ledger.transaction.clientId,
@@ -286,6 +288,12 @@ export async function deriveHandymanFinancialEntitlements(
         throw err;
       }
       facts.push({ row: existing, replayed: false });
+    }
+    if (fiscalBasis.tenantProfileId && fiscalBasis.bmProfileId) {
+      const bmFact = facts[1].row;
+      await tx.query(`INSERT INTO handyman_bm_fee_fiscal_bases(entitlement_id,tenant_profile_id,bm_profile_id,basis_ex_vat)
+        VALUES($1,$2,$3,$4) ON CONFLICT(entitlement_id) DO NOTHING`,
+        [bmFact.id,fiscalBasis.tenantProfileId,fiscalBasis.bmProfileId,fiscalBasis.laborBasis]);
     }
     return {
       provider: { id: facts[0].row.id, amount: provider.amount,

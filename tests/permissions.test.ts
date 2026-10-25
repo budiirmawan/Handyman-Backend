@@ -10,33 +10,41 @@ import {
 } from '../src/modules/permissions';
 import { roleService } from '../src/modules/roles';
 import { userService } from '../src/modules/users';
-import { createAdminSession } from './helpers/access';
+import { createOwnerSession } from './helpers/access';
+import { startEmbeddedTestDatabase, type EmbeddedTestDatabase } from './helpers/embedded-test-db';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminToken = '';
+let embedded: EmbeddedTestDatabase | null = null;
 
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({
+    dir: '/tmp/hm-iam-permission-contract-pg',
+    port: 55580,
+  });
   const db = await ensureTestDatabase();
-  if (!db) {
-    return;
-  }
+  assert.ok(db, 'disposable permission contract database must be available');
 
   pool = await initDatabase(db);
   await migrateUp(pool);
   await pool.query('TRUNCATE users, roles, permissions CASCADE');
-  adminToken = await createAdminSession();
+  // Minting arbitrary new grants is Owner authority, not delegated management.
+  adminToken = await createOwnerSession();
   database = db;
 });
 
 after(async () => {
-  if (pool) {
-    await closePool(pool);
+  try {
+    if (pool) await closePool(pool);
+  } finally {
+    if (embedded) await embedded.stop();
     pool = null;
+    database = null;
+    embedded = null;
   }
-  database = null;
 });
 
 function requireDatabase(t: TestContext): boolean {

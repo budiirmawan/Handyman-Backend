@@ -101,12 +101,13 @@ REJECT  : ISSUED  → REJECTED  (customer lane only)
 - Customer Care retains its full BAST reads: `GET /handyman/execution-scopes/:executionScopeId/bast` and `GET /handyman/bast/:bastId` (`tenant_company.read` + exact Building); these may include full event history and sign-off rows. The worker read is separate: `GET /handyman/field/execution-scopes/:executionScopeId/bast` (`handyman.bast.manage` + exact Building + CURRENT Crew Lead) returns only the safe worker projection documented in the [Mobile handoff](./CR-HM-BAST-WORKER-READ-01_MOBILE_HANDOFF.md): no tenant/building fields, sign-off rows/evidence, or ACCEPT/REJECT event details. It uses the existing active-then-latest document selection and does not mutate state. Command responses remain immediately consistent for read-after-write.
 - QC evidence bytes remain under the existing field-evidence contract (`POST /handyman/field/execution-scopes/:executionScopeId/evidence/upload` → `hm-ev://<uuid>` references). The BAST artifact reference `BAST/<id>/v<N>` is server-computed metadata for UI tracking — it is not a storage key and must never be generated client-side.
 
-## Existing Customer ACCEPT/REJECT contract (unchanged)
+## Customer ACCEPT/REJECT — PART 04 personal-consent hardening
 
-- `POST /handyman/bast/:bastId/accept` — `tenant_company.manage` + exact Building; legal only from ISSUED; requires `idempotencyKey` + `signatureDigest` (≤512 chars) + optional `evidenceRecordId`; rechecks the anchored QC PASS; records an ACCEPT sign-off row; status → ACCEPTED.
-- `POST /handyman/bast/:bastId/reject` — same authority; optional `rejectReason` (≤2000)/`signatureDigest`/`evidenceRecordId`; status → REJECTED.
-- `POST /handyman/bast/:bastId/sign-off` — combined `decision: "ACCEPT" | "REJECT"` wrapper. `PREPARE`/`ISSUE`/`VOID`/alias decisions are rejected 400.
-- Only ACCEPTED (with signature evidence) implies `customerAccepted` / `warrantyStartEligible`. A Crew Lead with `handyman.bast.manage` still cannot accept — the customer lane requires `tenant_company.manage`.
+- Existing `/handyman/bast/:bastId/accept`, `/reject`, and `/sign-off` require the personal authenticated **current exact-request PIC**, live `tenant_company.manage`, exact Building and PART 03 active Company/PIC/account/current-occupancy checks. A generic grant or a staff attestation does not authorize consent.
+- `/sign-off` remains the customer `decision: "ACCEPT" | "REJECT"` alias, not provider signing. Provider PREPARE/ISSUE/VOID and Supervisor QC never imply customer approval.
+- ACCEPT confirms the canonical V1 SHA-256 of the authoritative **issued v2** BAST/approved quotation/QC/evidence manifest and rechecks current bound Supervisor PASS. REJECT can omit its digest for backend calculation. Optional attachments must be finalized, nonempty, same-scope and byte-verified; arbitrary digests and body signer/scope claims fail closed.
+- Head/event/sign-off remain atomic and immutable. Replay requires original actor and identical intent; PIC relink cannot transfer old consent. Raw legacy ACCEPTED/nonempty digest is not qualified customer acceptance and cannot pass warranty/variation-final-charge/close BAST gates.
+- This is authenticated electronic consent, **not certified digital signature**. [Exact manifest, request/error, replay and legacy rollout contract](./CR-HM-BAST-CUSTOMER-CONSENT-01_CONTRACT.md). No new route/migration/public response field.
 
 ## Expected Operations UI integration
 
@@ -114,7 +115,7 @@ REJECT  : ISSUED  → REJECTED  (customer lane only)
 2. **VOID UX:** collect a non-empty reason (≤2000 chars) before enabling the action; it is permanently recorded as `event.voidReason`.
 3. **QC gate UX:** 409 `HANDYMAN_BAST_QC_NOT_READY` is a data-state message (missing/invalid latest QC PASS or open defects) — link the user to the QC/defect screens instead of retrying.
 4. **Provisioning:** grant `handyman.bast.manage` explicitly to the intended field role(s) after deploying this backend. Until then the endpoints answer 403 `PERMISSION_DENIED` by design. Do not grant it to Customer Care roles for this purpose — customer sign-off is a different lane.
-5. **Customer Care screens:** keep using the existing reads + accept/reject/sign-off; the worker command responses can render the same acceptance contract to show that ISSUED ≠ ACCEPTED.
+5. **Customer Care screens:** keep the existing scoped reads, but do not submit customer accept/reject/sign-off or offer a staff surrogate; send the personal customer to the consent flow above; the worker command responses can render the same acceptance contract to show that ISSUED ≠ ACCEPTED.
 
 ## Validation and delivery
 

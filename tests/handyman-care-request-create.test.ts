@@ -1,3 +1,6 @@
+import { supersedeHandymanSchedulingReadiness, getHandymanSchedulingReadiness } from '../src/modules/handyman-scheduling';
+import { withTransaction } from '../src/database';
+import { migration0483HandymanCareInitialSchedulingPreference } from '../src/database/migrations/0483_handyman_care_initial_scheduling_preference';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
@@ -381,7 +384,7 @@ describe('PART 04 — Customer Care request creation authority', () => {
     const dto = spec.components.schemas.CreateCareHandymanServiceRequest;
     assert.deepEqual(dto.required, ['exchangeToken', 'serviceCatalogId']);
     assert.equal(dto.additionalProperties, false);
-    assert.deepEqual(Object.keys(dto.properties), ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description']);
+    assert.deepEqual(Object.keys(dto.properties), ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'preferredWindowStart', 'preferredWindowEnd']);
     assert.equal(dto.properties.exchangeToken.minLength, 1);
     assert.equal(dto.properties.exchangeToken.maxLength, 512);
     assert.equal(dto.properties.serviceCatalogId.$ref, '#/components/schemas/Uuid');
@@ -395,4 +398,126 @@ describe('PART 04 — Customer Care request creation authority', () => {
     assert.deepEqual(local.security, [{ bearerAuth: [] }]);
     assert.equal(local.requestBody.content['application/json'].schema.$ref, '#/components/schemas/CreateHandymanServiceRequest');
   });
+  it('CARE DATE: BM-hosted Care atomically records a preference using its real Care attribution, without a local User or tenant login', async (t) => {
+    if (!ready(t)) return;
+    const f = await fixture(); const i = await integration(); await grant(f,i);
+    await db().query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1",[f.building.id]);
+    const claim = assertion(f,i); delete claim.tenantPicId;
+    const x = await accept(claim);
+    const before = await counts();
+    const response = await care(x.exchangeToken,f.service.id,{preferredWindowStart:'2031-12-10T10:00:00+07:00',preferredWindowEnd:'2031-12-10T12:00:00+07:00'});
+    assert.equal(response.status,201,JSON.stringify(response.body));
+    const request=response.body.data; const pref=request.schedulingReadiness;
+    assert.equal(request.createdByUserId,null); assert.equal(request.tenantPicId,null);
+    assert.equal(pref.timezone,'Asia/Jakarta'); assert.equal(pref.status,'ACTIVE');
+    assert.equal(pref.preferredWindowStart,'2031-12-10T03:00:00.000Z');
+    assert.equal(pref.preferredWindowEnd,'2031-12-10T05:00:00.000Z');
+    assert.equal(pref.supersedesReadinessId,null);
+    assert.equal('clientId' in pref,false); assert.equal('createdByUserId' in pref,false);
+    const row=(await db().query('SELECT * FROM handyman_scheduling_readiness WHERE id=$1',[pref.id])).rows[0];
+    assert.equal(row.client_id,f.client.id); assert.equal(row.handyman_request_id,request.id);
+    assert.equal(row.created_by_user_id,null,'No customer, admin or phantom User is borrowed');
+    const event=(await db().query("SELECT actor_user_id,metadata FROM operational_events WHERE entity_id=$1 AND event_type='HANDYMAN_SCHEDULING_READINESS_CREATED'",[pref.id])).rows[0];
+    assert.equal(event.actor_user_id,null); assert.equal(event.metadata.careActorId,i.actor.id);
+    assert.equal(event.metadata.channelAttributionId,request.channelAttributionId);
+    assert.equal(JSON.stringify(event.metadata).includes(x.exchangeToken),false);
+    assert.equal((await counts()).sessions,before.sessions);
+    assert.equal((await db().query('SELECT count(*)::int AS n FROM handyman_visit_appointments WHERE handyman_request_id=$1',[request.id])).rows[0].n,0);
+    assert.equal((await db().query('SELECT count(*)::int AS n FROM handyman_execution_scopes WHERE handyman_request_id=$1',[request.id])).rows[0].n,0);
+    assert.equal((await care(x.exchangeToken,f.service.id,{preferredWindowStart:'2031-12-10T10:00:00+07:00',preferredWindowEnd:'2031-12-10T12:00:00+07:00'})).status,401);
+    assert.equal((await db().query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE handyman_request_id=$1',[request.id])).rows[0].n,1);
+  });
+
+  it('CARE DATE: BM invalid pairs/overrides do not consume the credential; timezone failure rolls all creation writes back', async (t) => {
+    if (!ready(t)) return;
+    const f=await fixture(); const i=await integration(); await grant(f,i);
+    const x=await accept(assertion(f,i)); const before=await counts();
+    const dates={preferredWindowStart:'2031-12-10T10:00:00Z',preferredWindowEnd:'2031-12-10T12:00:00Z'};
+    for(const bad of [{preferredWindowStart:dates.preferredWindowStart},
+      {preferredWindowStart:dates.preferredWindowStart,preferredWindowEnd:null},
+      {preferredWindowStart:'2031-02-30T10:00:00Z',preferredWindowEnd:'2031-03-01T12:00:00Z'},
+      {...dates,timezone:'UTC'},{...dates,createdByUserId:f.linkedUser.id}]) {
+      assert.equal((await care(x.exchangeToken,f.service.id,bad)).status,400);
+      assert.deepEqual(await counts(),before);
+    }
+    for (const zone of [null,'Invalid/Zone']) {
+      await db().query('UPDATE buildings SET timezone=$1 WHERE id=$2',[zone,f.building.id]);
+      const bad=await care(x.exchangeToken,f.service.id,dates);
+      assert.equal(bad.status,400,JSON.stringify(bad.body));
+      assert.equal(bad.body.error.code,'HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE');
+      assert.deepEqual(await counts(),before);
+      assert.equal((await db().query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE client_id=$1',[f.client.id])).rows[0].n,0);
+    }
+    await db().query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1",[f.building.id]);
+    assert.equal((await care(x.exchangeToken,f.service.id,dates)).status,201);
+  });
+
+  it('CARE DATE: BM audit failure rolls the preference, request, attribution and single-use exchange back together', async (t) => {
+    if (!ready(t)) return;
+    const f=await fixture(); const i=await integration(); await grant(f,i);
+    await db().query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1",[f.building.id]);
+    const x=await accept(assertion(f,i)); const before=await counts();
+    const dates={preferredWindowStart:'2031-12-10T10:00:00Z',preferredWindowEnd:'2031-12-10T12:00:00Z'};
+    await db().query("ALTER TABLE operational_events ADD CONSTRAINT care_date_fail_audit CHECK (event_type <> 'HANDYMAN_SCHEDULING_READINESS_CREATED') NOT VALID");
+    try {
+      assert.equal((await care(x.exchangeToken,f.service.id,dates)).status,500);
+      assert.deepEqual(await counts(),before);
+      assert.equal((await db().query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE client_id=$1',[f.client.id])).rows[0].n,0);
+    } finally { await db().query('ALTER TABLE operational_events DROP CONSTRAINT care_date_fail_audit'); }
+    assert.equal((await care(x.exchangeToken,f.service.id,dates)).status,201,'Failed atomic intake did not consume the exchange');
+  });
+
+  it('CARE DATE: simultaneous use of a dated Care exchange produces exactly one request and preference', async (t) => {
+    if (!ready(t)) return;
+    const f=await fixture(); const i=await integration(); await grant(f,i);
+    await db().query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1",[f.building.id]);
+    const x=await accept(assertion(f,i));
+    const dates={preferredWindowStart:'2031-12-10T10:00:00Z',preferredWindowEnd:'2031-12-10T12:00:00Z'};
+    const responses=await Promise.all([care(x.exchangeToken,f.service.id,dates),care(x.exchangeToken,f.service.id,dates)]);
+    assert.deepEqual(responses.map(r=>r.status).sort(),[201,401]);
+    const created=responses.find(r=>r.status===201)!.body.data;
+    assert.equal((await db().query('SELECT count(*)::int AS n FROM handyman_scheduling_readiness WHERE handyman_request_id=$1',[created.id])).rows[0].n,1);
+  });
+
+  it('CARE DATE: Ops supersession preserves the original Care date/actor; database guards reject borrowed creators and null-actor revisions', async (t) => {
+    if (!ready(t)) return;
+    const f=await fixture(); const i=await integration(); await grant(f,i);
+    await db().query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1",[f.building.id]);
+    const x=await accept(assertion(f,i));
+    const dates={preferredWindowStart:'2031-12-10T10:00:00Z',preferredWindowEnd:'2031-12-10T12:00:00Z'};
+    const response=await care(x.exchangeToken,f.service.id,dates);
+    assert.equal(response.status,201,JSON.stringify(response.body));
+    const first=response.body.data.schedulingReadiness;
+    await assert.rejects(()=>db().query('UPDATE handyman_scheduling_readiness SET created_by_user_id=$1 WHERE id=$2',[f.linkedUser.id,first.id]),(error:any)=>error.code==='23514');
+    const revised=await supersedeHandymanSchedulingReadiness(first.id,{preferredWindowStart:'2031-12-11T10:00:00Z',preferredWindowEnd:'2031-12-11T12:00:00Z',changeReason:'Operations recorded tenant-coordinated revision'},adminId);
+    const history=await getHandymanSchedulingReadiness(response.body.data.id,adminId);
+    assert.equal(history.current!.id,revised.id); assert.equal(revised.supersedesReadinessId,first.id);
+    assert.equal(history.history.length,2); assert.equal(history.history[0].createdByUserId,null);
+    assert.equal(history.history[0].preferredWindowStart,'2031-12-10T10:00:00.000Z');
+    assert.equal(history.history[0].status,'INACTIVE'); assert.equal(history.history[1].createdByUserId,adminId);
+    await assert.rejects(()=>db().query(`INSERT INTO handyman_scheduling_readiness
+      (id,client_id,handyman_request_id,timezone,preferred_window_start,preferred_window_end,created_by_user_id,supersedes_readiness_id)
+      VALUES ($1,$2,$3,'Asia/Jakarta',$4,$5,NULL,$6)`,[randomUUID(),f.client.id,response.body.data.id,dates.preferredWindowStart,dates.preferredWindowEnd,revised.id]),(error:any)=>error.code==='23514');
+    await assert.rejects(()=>withTransaction(client=>migration0483HandymanCareInitialSchedulingPreference.down(client)),(error:any)=>error.code==='23514', 'Rollback never erases Care history or invents a User');
+  });
+
+  it('CARE DATE: nullable creators cannot be used for non-Care requests or foreign-client preferences', async (t) => {
+    if (!ready(t)) return;
+    const f=await fixture(); const i=await integration(); await grant(f,i);
+    const legacy=await accept(assertion(f,i,false));
+    const attr=await bindHandoffExchangeToChannelAttribution(legacy.exchangeToken);
+    const local=await api().post('/api/v1/handyman/requests').set('Authorization',`Bearer ${adminToken}`)
+      .send({channelAttributionId:attr.id,serviceCatalogId:f.service.id});
+    assert.equal(local.status,201);
+    const insert=(clientId:string,requestId:string)=>db().query(`INSERT INTO handyman_scheduling_readiness
+      (id,client_id,handyman_request_id,timezone,preferred_window_start,preferred_window_end,created_by_user_id)
+      VALUES ($1,$2,$3,'Asia/Jakarta','2031-12-10T10:00:00Z','2031-12-10T12:00:00Z',NULL)`,[randomUUID(),clientId,requestId]);
+    await assert.rejects(()=>insert(f.client.id,local.body.data.id),(error:any)=>error.code==='23514');
+    const other=await fixture();
+    const x=await accept(assertion(f,i));
+    const cared=await care(x.exchangeToken,f.service.id);
+    assert.equal(cared.status,201);
+    await assert.rejects(()=>insert(other.client.id,cared.body.data.id),(error:any)=>error.code==='23514');
+  });
+
 });

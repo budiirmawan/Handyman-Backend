@@ -1,3 +1,4 @@
+import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
@@ -180,6 +181,8 @@ export async function createHandymanQuotation(
     if (!QUOTABLE_SCOPE_CLASSES.has(diagnosis.scopeClassification)) {
       throw handymanQuotationScopeInsufficientError();
     }
+
+    await assertHandymanQuotationInspectionReady(tx, request.id);
 
     // 4) One quotation thread per request (server-side check + UNIQUE).
     const existing = await handymanQuotationRepository.findQuotationByRequest(

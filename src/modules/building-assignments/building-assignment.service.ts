@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { recordEvent, type AuditRequestContext } from '../audit';
 import { contextAccessService } from '../context-access';
 import { PROTECTED_ROLE_CODE } from '../users/privileged-account.guard';
@@ -145,27 +146,29 @@ export async function listUserAssignments(
  * Reusable Building-context resolver: User → ACTIVE User Building Assignments
  * → ACTIVE Buildings → Property → Client. Returns only the User's explicitly
  * assigned, active Building contexts (no implicit sibling/global access).
+ * An optional transaction executor avoids nested pool borrows by mutation guards.
  */
 export async function resolveBuildingsForUser(
   userId: string,
+  executor?: PoolClient,
 ): Promise<UserBuildingContext[]> {
-  const user = await userRepository.findById(userId);
+  const user = await userRepository.findById(userId, executor);
   if (!user) {
     return [];
   }
 
-  const assignments = await buildingAssignmentRepository.listActiveByUser(userId);
+  const assignments = await buildingAssignmentRepository.listActiveByUser(userId, executor);
   const contexts: UserBuildingContext[] = [];
 
   for (const assignment of assignments) {
-    const building = await buildingRepository.findById(assignment.buildingId);
+    const building = await buildingRepository.findById(assignment.buildingId, executor);
     if (!building || building.status !== 'ACTIVE') {
       continue;
     }
 
-    const property = await propertyRepository.findById(building.propertyId);
+    const property = await propertyRepository.findById(building.propertyId, executor);
     const client = property
-      ? await clientRepository.findById(property.clientId)
+      ? await clientRepository.findById(property.clientId, executor)
       : null;
 
     contexts.push({

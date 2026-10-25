@@ -1,3 +1,4 @@
+import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worker-eligibility.repository';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import { withTransaction } from '../../database';
@@ -70,6 +71,7 @@ function toPublic(
 export async function recordHandymanInspection(
   input: CreateHandymanInspectionInput,
   actorUserId: string,
+  assignedInspectorOnly = false,
 ): Promise<PublicHandymanRequestInspection> {
   if (!isValidUuid(input.handymanRequestId)) {
     throw AppError.validation('Request validation failed.', [
@@ -129,6 +131,29 @@ export async function recordHandymanInspection(
         clientId: request.clientId,
         buildingId: request.buildingId,
       });
+
+      // The bounded Mobile RECORD_OUTCOME channel is not Operations manage
+      // authority. It requires the exact live assignment and its TERIMA; lock
+      // these rows so reassignment/decline cannot race the recorded result.
+      // Inspector assignment history owns the recorder (including reassigned
+      // Inspectors); immutable booking resource/capacity is not rewritten.
+      // This administrative observation does not confirm a visit or certify
+      // arrival, site access, capacity or execution readiness.
+      if (assignedInspectorOnly) {
+        const current = await tx.query(`SELECT a.id FROM handyman_inspector_assignments a
+          JOIN handyman_visit_appointments v ON v.id=a.visit_appointment_id
+            AND v.client_id=a.client_id AND v.handyman_request_id=a.handyman_request_id
+          JOIN handyman_assignment_responses ar ON ar.assignment_id=a.id
+            AND ar.assignment_target_type='INSPECTOR_VISIT_ASSIGNMENT' AND ar.client_id=a.client_id
+          WHERE a.handyman_request_id=$1 AND a.client_id=$2 AND a.inspector_user_id=$3
+            AND a.status='ACTIVE' AND ar.response_status='TERIMA'
+            AND v.kind='INSPECTION' AND v.resource_type='INSPECTOR_USER'
+            AND v.state IN ('PROPOSED','TENANT_SELECTED','CONFIRMED','IN_PROGRESS')
+          FOR SHARE OF a,v,ar`, [request.id, request.clientId, actorUserId]);
+        if (current.rowCount !== 1 || !await findEligibleHandymanWorker(tx, {
+          clientId: request.clientId, buildingId: request.buildingId, userId: actorUserId, requireLogin: true,
+        })) throw handymanAssignmentResponseForbiddenError('Only the current eligible assigned Inspector after TERIMA can record this outcome.');
+      }
 
       // 3b) CR-HM-ASSIGNMENT-RESPONSE-01 PART 02B:
       //     When inspector visit assignments exist for this request, enforce:

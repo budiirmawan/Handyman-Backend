@@ -42,8 +42,16 @@ export type ParsedBastSignOffBody = {
   rejectReason: string | null;
 };
 
-export function parseBastSignOffBody(body: unknown): ParsedBastSignOffBody {
+export function parseBastSignOffBody(
+  body: unknown, allowDecision = false,
+): ParsedBastSignOffBody {
   const obj = ensureObject(body);
+  // No caller-supplied signer, represented customer, tenant, scope or metadata.
+  const allowed = new Set(['idempotencyKey', 'signatureDigest', 'evidenceRecordId', 'rejectReason',
+    ...(allowDecision ? ['decision'] : [])]);
+  for (const field of Object.keys(obj)) {
+    if (!allowed.has(field)) fail(field, 'Unknown BAST decision field; identity and manifest are backend-derived.');
+  }
   const rawKey = typeof obj.idempotencyKey === 'string'
     ? obj.idempotencyKey.trim()
     : '';
@@ -119,7 +127,7 @@ export function parseBastDecisionSignOffBody(
   ) {
     fail('decision', 'decision must be ACCEPT or REJECT.');
   }
-  const parsed = parseBastSignOffBody(obj);
+  const parsed = parseBastSignOffBody(obj, true);
   return {
     ...parsed,
     decision: rawDecision as HandymanBastPart02EventType,

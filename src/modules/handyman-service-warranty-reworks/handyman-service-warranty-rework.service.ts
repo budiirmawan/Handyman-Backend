@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { canAccessBuildingScopedResource } from '../context-access';
+import { assertHandymanCustomerScopeAuthority }
+  from '../handyman-tenant-decision-authority/handyman-customer-scope-authority';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import {
@@ -121,16 +123,17 @@ function ensureOptionalUuid(
 async function assertReworkAuthority(
   actorUserId: string,
   executionScopeId: string,
+  executor?: PoolClient,
 ): Promise<void> {
   const scope = await handymanScopeAssignmentRepository.findScopeById(
-    undefined,
+    executor,
     executionScopeId,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
   if (!(await canAccessBuildingScopedResource(actorUserId, {
     clientId: scope.clientId,
     buildingId: scope.buildingId,
-  }))) {
+  }, executor))) {
     throw handymanServiceWarrantyReworkNotAuthorizedError();
   }
 }
@@ -146,8 +149,7 @@ async function assertReworkAuthority(
  * module's existing 403 vocabulary (HANDYMAN_SERVICE_WARRANTY_REWORK_
  * NOT_AUTHORIZED). Applies ONLY to the field-worker commands
  * (PROPOSE / START / COMPLETE / VERIFY); the customer-side AUTHORIZE
- * keeps building-wall-only authority — its action authority is the
- * customer-side acceptance, not the crew chain.
+ * uses the PART 03 personal request-PIC authority, not the crew chain.
  */
 async function assertReworkLeadAction(
   executionScopeId: string,
@@ -212,7 +214,7 @@ async function assertVerificationSources(
  * transaction, together with the actor's client authority.
  */
 async function lockClaimAndWarranty(
-  client: Pick<PoolClient, 'query'>,
+  client: PoolClient,
   claimId: string,
   warrantyId: string,
   actorUserId: string,
@@ -229,7 +231,7 @@ async function lockClaimAndWarranty(
       `claim-not-found=${claimId}`,
     );
   }
-  await assertReworkAuthority(actorUserId, claim.executionScopeId);
+  await assertReworkAuthority(actorUserId, claim.executionScopeId, client);
   const warranty = await handymanServiceWarrantyRepository.findWarrantyById(
     client,
     warrantyId,
@@ -374,11 +376,16 @@ async function applyReworkAction(
     // and stays free of the Lead check.
     if (action !== 'ACCEPT') {
       await assertReworkLeadAction(rework.executionScopeId, actorUuid);
+    } else {
+      await assertHandymanCustomerScopeAuthority(client, rework.executionScopeId, actorUuid);
     }
 
     const replay = await handymanServiceWarrantyReworkRepository
       .findReworkEventByIdempotency(client, rework.id, action, key);
     if (replay) {
+      if (action === 'ACCEPT' && replay.actorUserId !== actorUuid) {
+        throw handymanServiceWarrantyReworkConflictError('idempotency-actor-mismatch');
+      }
       return {
         rework,
         event: replay,

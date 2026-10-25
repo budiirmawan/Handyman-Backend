@@ -458,4 +458,24 @@ describe('PART 05B — workspace create-only exchange issuance', () => {
     assert.match(route.post.description, /single-use/);
     assert.match(route.post.description, /120 seconds/);
   });
+  it('CARE DATE: existing workspace -> create-exchange -> intake carries the date without User/PIC login or another booking flow', async () => {
+    await pool.query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1", [buildings[0][0]]);
+    const issued = await post();
+    assert.equal(issued.status, 201, JSON.stringify(issued.body));
+    const created = await care(issued.body.data.exchangeToken, {
+      preferredWindowStart: '2031-12-10T10:00:00+07:00',
+      preferredWindowEnd: '2031-12-10T12:00:00+07:00',
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    assert.equal(created.body.data.createdByUserId, null);
+    assert.equal(created.body.data.tenantPicId, null);
+    assert.equal(created.body.data.schedulingReadiness.preferredWindowStart, '2031-12-10T03:00:00.000Z');
+    assert.equal(created.body.data.schedulingReadiness.timezone, 'Asia/Jakarta');
+    const stored = (await pool.query('SELECT * FROM handyman_scheduling_readiness WHERE handyman_request_id=$1', [created.body.data.id])).rows;
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].id, created.body.data.schedulingReadiness.id);
+    assert.equal(stored[0].client_id, clientId);
+    assert.equal(stored[0].created_by_user_id, null);
+  });
+
 });

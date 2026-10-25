@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { resolveBuildingsForUser } from '../building-assignments';
 import { buildingAccessDeniedError } from './context-access.errors';
 
@@ -19,8 +20,8 @@ import { buildingAccessDeniedError } from './context-access.errors';
  * use via `WHERE building_id IN (...)` instead of filtering after a global
  * fetch.
  */
-export async function getAccessibleBuildingIds(userId: string): Promise<string[]> {
-  const contexts = await resolveBuildingsForUser(userId);
+export async function getAccessibleBuildingIds(userId: string, executor?: PoolClient): Promise<string[]> {
+  const contexts = await resolveBuildingsForUser(userId, executor);
   return contexts.map((context) => context.building.id);
 }
 
@@ -60,8 +61,9 @@ export async function canAccessProperty(
 export async function canAccessClient(
   userId: string,
   clientId: string,
+  executor?: PoolClient,
 ): Promise<boolean> {
-  const contexts = await resolveBuildingsForUser(userId);
+  const contexts = await resolveBuildingsForUser(userId, executor);
   return contexts.some((context) => context.client?.id === clientId);
 }
 
@@ -111,8 +113,9 @@ export type BuildingScopedResourceRef = {
 export async function canAccessBuildingScopedResource(
   userId: string,
   resource: BuildingScopedResourceRef,
+  executor?: PoolClient,
 ): Promise<boolean> {
-  const contexts = await resolveBuildingsForUser(userId);
+  const contexts = await resolveBuildingsForUser(userId, executor);
   return contexts.some(
     (context) =>
       context.building.id === resource.buildingId &&
@@ -131,8 +134,9 @@ export async function canAccessBuildingScopedResource(
 export async function assertBuildingScopedResourceAccess(
   userId: string,
   resource: BuildingScopedResourceRef,
+  executor?: PoolClient,
 ): Promise<void> {
-  if (!(await canAccessBuildingScopedResource(userId, resource))) {
+  if (!(await canAccessBuildingScopedResource(userId, resource, executor))) {
     throw buildingAccessDeniedError();
   }
 }

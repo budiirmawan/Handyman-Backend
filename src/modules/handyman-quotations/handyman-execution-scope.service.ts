@@ -108,7 +108,8 @@ export async function buildExecutionScopeInput(args: {
   tenantPicId: string | null;
   derivedBuildingId: string;
   derivedSpaceId: string | null;
-  createdByUserId: string;
+  createdByUserId: string | null;
+  createdByCareActorId?: string | null;
 }): Promise<NewHandymanExecutionScope> {
   const location = await deriveExecutionScopeLocation({
     buildingId: args.derivedBuildingId,
@@ -125,6 +126,7 @@ export async function buildExecutionScopeInput(args: {
     tenantPicId: args.tenantPicId,
     ...location,
     createdByUserId: args.createdByUserId,
+    ...(args.createdByCareActorId ? { createdByCareActorId: args.createdByCareActorId } : {}),
   };
 }
 
@@ -148,6 +150,7 @@ export function toPublicExecutionScope(
     spaceId: row.spaceId,
     status: row.status,
     createdByUserId: row.createdByUserId,
+    ...(row.createdByCareActorId ? { createdByCareActorId: row.createdByCareActorId } : {}),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

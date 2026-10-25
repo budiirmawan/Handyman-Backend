@@ -1,3 +1,4 @@
+import { assertHandymanBmFiscalSettlement } from '../handyman-customer-transactions/handyman-financial-tax.service';
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
@@ -315,6 +316,7 @@ export async function settleHandymanSettlement(scope: string, actor: string,
     const prior = await replay(tx,key,'SETTLE',unit,actor);
     if (prior) return { unitId:unit.id,state:'SETTLED' as const,replayed:true };
     if (await state(tx,unit) !== 'INCLUDED_IN_SETTLEMENT') throw conflict();
+    await assertHandymanBmFiscalSettlement(tx,scope);
     await clearExceptions(tx,unit);
     await clientWindow(ledger,actor);
     const e = await earned(tx,ledger);

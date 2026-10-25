@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewUserBuildingAssignment,
@@ -113,8 +114,9 @@ async function listByUserInBuildings(
 
 async function listActiveByUser(
   userId: string,
+  client?: PoolClient,
 ): Promise<UserBuildingAssignmentRecord[]> {
-  const result = await getPool().query<AssignmentRow>(
+  const result = await (client ?? getPool()).query<AssignmentRow>(
     `SELECT ${ASSIGNMENT_SELECT} FROM user_building_assignments
      WHERE user_id = $1 AND status = 'ACTIVE' ORDER BY assigned_at DESC`,
     [userId],

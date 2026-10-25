@@ -40,6 +40,7 @@ import {
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
+import { handymanCustomerForScope, handymanCustomerConsentInput } from './helpers/handyman-customer-consent';
 
 /**
  * CR-HM-BAST-HTTP-01 + CR-HM-BAST-WORKER-READ-01 — worker BAST transport
@@ -138,6 +139,13 @@ async function login(userId: string, email: string): Promise<string> {
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+async function customerSession(f: Fixture) {
+  const customer = await handymanCustomerForScope(f.scope.id);
+  await grant(customer.id, ['tenant_company.manage', 'tenant_company.read']);
+  return { ...customer, token: await login(customer.id, customer.email) };
+}
+
 
 async function fixture(configure = true) {
   const f = await baseFixture();
@@ -445,10 +453,10 @@ describe('CR-HM-BAST-WORKER-READ-01 — authorized worker BAST read', () => {
 
     // Acceptance is a separate Customer Care action. Worker GET only reports
     // the bounded resulting state; no customer sign-off evidence or event leaks.
-    const care = await staffSession(f.realm.building.id,
-      ['tenant_company.manage']);
-    const accepted = await post(care, `${V1}/handyman/bast/${bastId}/accept`,
-      { idempotencyKey: 'read-customer-accept', signatureDigest: 'c'.repeat(64) });
+    const customer = await customerSession(f);
+    const consent = await handymanCustomerConsentInput(bastId, customer.id);
+    const accepted = await post(customer.token, `${V1}/handyman/bast/${bastId}/accept`,
+      { idempotencyKey: 'read-customer-accept', signatureDigest: consent.signatureDigest });
     assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
     const acceptedRead = await get(token, readUrl(f.scope.id));
     assert.equal(acceptedRead.status, 200, JSON.stringify(acceptedRead.body));
@@ -1009,10 +1017,10 @@ describe('customer sign-off separation', () => {
     assert.equal(err(leadOnCustomer), 'PERMISSION_DENIED');
 
     // Customer ACCEPT remains the governed customer action on its own route.
-    const care = await staffSession(f.realm.building.id,
-      ['tenant_company.manage']);
-    const accepted = await post(care, `${V1}/handyman/bast/${bastId}/accept`,
-      { idempotencyKey: 'customer-accept', signatureDigest: 'a'.repeat(64) });
+    const customer = await customerSession(f);
+    const consent = await handymanCustomerConsentInput(bastId, customer.id);
+    const accepted = await post(customer.token, `${V1}/handyman/bast/${bastId}/accept`,
+      { idempotencyKey: 'customer-accept', signatureDigest: consent.signatureDigest });
     assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
     assert.equal(accepted.body.data.bast.status, 'ACCEPTED');
 

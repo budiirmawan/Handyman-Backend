@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
-import { getPool, withTransaction } from '../../database';
+import { withTransaction } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { recordOperationalEvent } from '../operational-events';
-import { tenantSlotConsentAuthorityConfigured } from './handyman-tenant-slot-authority';
 import {
   assertVisitResourceAdmission,
   encode,
@@ -17,7 +16,7 @@ import type { HandymanAppointmentRecord } from './handyman-appointment.repositor
  * CR-HM-FIELD-ASSIGN-01 PART 01D-2 — atomic booking confirmation (Operations).
  *
  * TENANT_SELECTED → CONFIRMED only when ALL of the following hold in ONE
- * transaction: fail-closed BM consent authority configured; the operator is
+ * transaction: the operator is
  * scoped to the exact request Building + Client; the row-locked visit is at the
  * exact TENANT_SELECTED version; its consent provenance exists and matches;
  * the Inspector/Crew is still eligible under the shared admission authority;
@@ -33,12 +32,12 @@ export const HANDYMAN_VISIT_CONFIRMED = 'HANDYMAN_VISIT_CONFIRMED';
 
 export type VisitConfirmationPorts = {
   admitResource: (tx: PoolClient, req: Awaited<ReturnType<typeof requestScope>>, target: VisitResourceTarget) => Promise<void>;
-  authorityConfigured: () => Promise<boolean>;
+  /** Legacy injection retained for callers; API provisioning is not booking authority. */
+  authorityConfigured?: () => Promise<boolean>;
   scope: (actorId: string, req: Awaited<ReturnType<typeof requestScope>>) => Promise<void>;
 };
 export const defaultVisitConfirmationPorts: VisitConfirmationPorts = {
   admitResource: assertVisitResourceAdmission,
-  authorityConfigured: () => tenantSlotConsentAuthorityConfigured(getPool()),
   scope: scoped,
 };
 
@@ -58,14 +57,10 @@ export async function confirmTenantSlotVisit(
   actorId: string,
   ports: VisitConfirmationPorts = defaultVisitConfirmationPorts,
 ): Promise<ReturnType<typeof encode> & { replayed: boolean }> {
-  // Fail closed before any lock or write while BM consent authority is not provisioned.
-  if (!await ports.authorityConfigured()) {
-    throw new AppError({
-      code: ERROR_CODES.HANDYMAN_VISIT_CONFIRMATION_DISABLED,
-      message: 'Visit confirmation is disabled until verified BM tenant consent authority is provisioned.',
-      statusCode: 409,
-    });
-  }
+  // Authority is the exact stored tenant choice, not whether a BM API/secret
+  // happens to be configured now. No preference becomes consent here: the
+  // state/version/provenance, eligibility and atomic capacity guards below
+  // remain mandatory, including when coordinating outside the platform.
 
   return withTransaction(async (tx: PoolClient) => {
     const req = await requestScope(tx, requestId, true);

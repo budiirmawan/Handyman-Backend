@@ -92,6 +92,17 @@ export async function postHandymanInspectionHandler(
   }
 }
 
+/** Existing inspection command, limited to the current accepted Inspector assignment. */
+export async function postAssignedHandymanInspectionHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const handymanRequestId = parseLifecycleHandymanRequestIdParam(p(req.params.handymanRequestId));
+    const input = parseLifecycleInspectionBody(req.body);
+    const record = await handymanServiceRequestInspectionService.recordHandymanInspection(
+      { ...input, handymanRequestId }, req.auth.userId, true);
+    sendSuccess(res, record, 201);
+  } catch (error) { next(error); }
+}
+
 /** GET /handyman/requests/:handymanRequestId/inspection — bounded existing record. */
 export async function getHandymanInspectionHandler(
   req: Request,

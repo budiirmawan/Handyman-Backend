@@ -6,7 +6,7 @@ import {migrations} from '../src/database/migrations';
 import {migration0434CreateHandymanTenantSlotConsents} from '../src/database/migrations/0434_create_handyman_tenant_slot_consents';
 import {AppError, ERROR_CODES} from '../src/shared/errors';
 import {acceptTenantSlotChoice, type TenantSlotConsentDeps} from '../src/modules/handyman-appointment-contract/handyman-tenant-slot-consent.service';
-import {confirmTenantSlotVisit} from '../src/modules/handyman-appointment-contract/handyman-visit-confirmation.service';
+import {defaultVisitConfirmationPorts} from '../src/modules/handyman-appointment-contract/handyman-visit-confirmation.service';
 import {createHandymanTenantSlotConsentRouter} from '../src/modules/handyman-appointment-contract/handyman-tenant-slot-consent.routes';
 import {
   signTenantSlotChoiceAssertion,
@@ -140,17 +140,10 @@ test('ingest and Ops confirm are mounted on their own router, not the R1C visit 
   ]);
 });
 
-test('confirmation is disabled and touches no database while BM consent authority is absent', async () => {
-  let touched = false;
-  await assert.rejects(confirmTenantSlotVisit(ids.request, randomUUID(), 2, randomUUID(), {
-    admitResource: async () => { touched = true; },
-    scope: async () => { touched = true; },
-    authorityConfigured: async () => false,
-  }), (error: unknown) => {
-    assert.ok(error instanceof AppError);
-    assert.equal(error.code, ERROR_CODES.HANDYMAN_VISIT_CONFIRMATION_DISABLED);
-    assert.equal(error.statusCode, 409);
-    return true;
-  });
-  assert.equal(touched, false, 'no scope check, lock or eligibility check when disabled');
+test('Operations confirmation depends on stored tenant coordination, not BM API provisioning', () => {
+  assert.equal(defaultVisitConfirmationPorts.authorityConfigured, undefined);
+  assert.equal(typeof defaultVisitConfirmationPorts.scope, 'function');
+  assert.equal(typeof defaultVisitConfirmationPorts.admitResource, 'function');
+  // Real state/provenance/capacity denials and confirmation without a deployed
+  // secret are exercised by handyman-tenant-slot-consent-db.test.ts.
 });

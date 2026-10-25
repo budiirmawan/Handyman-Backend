@@ -1,5 +1,9 @@
 # Handyman Backend — API Handoff: Customer Care (Frontend / Customer Care web)
 
+> **2026-10-25 Care request date integration:** both existing Care create endpoints now accept paired `preferredWindowStart`/`preferredWindowEnd` and atomically create the initial preference in existing Scheduling Readiness. No-date clients retain their behavior. Exact authentication, bodies, safe responses, idempotency and migration prerequisite: [Care date contract](CR-HM-CARE-REQUEST-DATE-INTEGRATION_HANDOFF.md). Preference is not a confirmed appointment or assignment.
+
+> **2026-10-25 PART01 addendum:** quotation/BAST recording may use the existing BM workspace credential, without a tenant login, only with independently verified exact-target customer consent. This is a separate, default-BLOCKED receiver; the local-session recipes below do not grant Care customer authority. See [commercial bridge contract](../handyman/CR-HM-COMMERCIAL-DECISION-BRIDGE-01_PART-01.md).
+
 **Repository**: `budiirmawan/Handyman-Backend` (backend ONLY).  
 **Branch**: `arena/c965a40c-handyman-backend` · **Date**: 2026-10-21 · **CR**: CR-HM-BACKEND-FULL-CAPABILITY-E2E-CLOSURE-01  
 **Companion**: `docs/api/HANDYMAN_BACKEND_API_HANDOFF.md` (shared transport contract, permissions, conventions — read first), `docs/handyman/HANDYMAN_E2E_PERSONA_CAPABILITY_MATRIX.md` (§20), `docs/api/openapi.yaml` (1432 paths, 1918 operations, 179 `/handyman` paths; freeze candidate CR-HM-FINAL-BACKEND-CONTRACT-FREEZE-01 v1.0).  

@@ -155,15 +155,16 @@ async function resolveItems(
   items: HandymanServiceRequestItemRecord[],
   effectiveAt: Date,
 ): Promise<HandymanPriceResolutionDraft[]> {
+  const inspection = items.length ? await handymanRequestInspectionRepository.findByRequest(undefined, items[0].handymanRequestId) : null;
+  const inspected = inspection?.inspectionResult === 'INSPECTED' && inspection.clientId === clientId && inspection.buildingId === buildingId;
   const drafts: HandymanPriceResolutionDraft[] = [];
   for (const item of items) {
-    drafts.push(
-      await resolveHandymanRequestItemPrice(item, {
-        clientId,
-        buildingId,
-        effectiveAt,
-      }),
-    );
+    const draft = await resolveHandymanRequestItemPrice(item, { clientId, buildingId, effectiveAt });
+    // No invented post-inspection price: hand off to the existing manual
+    // quotation/revision engine, rather than asking for the same visit again.
+    drafts.push(inspected && draft.reasonCode === 'PRICING_MODE_INSPECTION_FIRST'
+      ? { ...draft, outcome: 'MANUAL_REVIEW', reasonDetail: 'Inspection completed; prepare labor/material scope and price through the existing manual quotation or revision, then obtain customer approval.' }
+      : draft);
   }
   return drafts;
 }
@@ -411,9 +412,9 @@ export async function reviseHandymanCatalogQuotation(
     undefined,
     request.id,
   );
-  if (!inspection) {
+  if (!inspection || inspection.inspectionResult !== 'INSPECTED') {
     throw handymanServiceQuoteResolutionInvalidError(
-      'A quotation revision requires a recorded inspection for this request.',
+      'A post-inspection quotation revision requires a completed INSPECTED result for this request.',
     );
   }
 

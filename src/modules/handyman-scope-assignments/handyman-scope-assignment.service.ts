@@ -288,6 +288,7 @@ async function validateTarget(
   }
   const profile = await workforceRepository.findById(
     workerContext.workforceProfileId,
+    executor,
   );
   if (!profile || profile.userId === null) {
     throw handymanAssignmentLeadInvalidError();
@@ -736,11 +737,12 @@ export async function getHandymanExecutionScopeAssignment(
 export async function resolveHandymanAssignmentLead(
   executionScopeId: string,
   actorUserId: string,
+  executor?: PoolClient,
 ): Promise<HandymanAssignmentLeadResolution | null> {
   ensureUuid(executionScopeId, 'executionScopeId');
   ensureUuid(actorUserId, 'actorUserId');
   const scope = await handymanScopeAssignmentRepository.findScopeById(
-    undefined,
+    executor,
     executionScopeId,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
@@ -751,12 +753,12 @@ export async function resolveHandymanAssignmentLead(
   await assertBuildingScopedResourceAccess(actorUserId, {
     clientId: scope.clientId,
     buildingId: scope.buildingId,
-  });
+  }, executor);
   const current = await handymanScopeAssignmentRepository
-    .findActiveAssignmentByScope(undefined, executionScopeId);
+    .findActiveAssignmentByScope(executor, executionScopeId);
   if (!current) return null;
   const target = await validateTarget(
-    undefined,
+    executor,
     {
       providerContextId: current.handymanProviderContextId,
       crewId: current.handymanCrewId,

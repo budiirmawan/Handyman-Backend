@@ -11,6 +11,7 @@ import {
 import { readHandymanLedgerTransactionAt } from '../handyman-customer-ledger-read';
 import { assertCurrentGuardedHandymanQcPass } from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { handymanExecutionScopeRepository } from '../handyman-quotations';
+import { hasVerifiedHandymanBastCustomerAcceptance } from '../handyman-bast';
 import { recordOperationalEvent } from '../operational-events';
 
 type Executor = Pick<PoolClient, 'query'>;
@@ -720,7 +721,7 @@ async function evaluateFinalCloseGates(
     });
   }
 
-  // 6. BAST ACCEPTED by authorized Tenant/PIC
+  // 6. BAST ACCEPTED with qualified direct-PIC or verified Care-recorded customer consent
   const bastDocRes = await executor.query<{
     id: string;
     status: string;
@@ -755,12 +756,13 @@ async function evaluateFinalCloseGates(
     blockers.push({
       code: 'BAST_NOT_ACCEPTED',
       message:
-        'BAST must be ACCEPTED by an authorized Tenant/PIC and bound to the latest Supervisor QC PASS run.',
+        'BAST must carry qualified customer acceptance and be bound to the latest Supervisor QC PASS run.',
     });
-  } else if (!activeBast.has_accept_signoff) {
+  } else if (!activeBast.has_accept_signoff ||
+      !(await hasVerifiedHandymanBastCustomerAcceptance(executor, activeBast.id))) {
     blockers.push({
       code: 'BAST_SIGN_OFF_MISSING',
-      message: 'Accepted BAST must have a valid customer ACCEPT sign-off record.',
+      message: 'Accepted BAST must have a qualified direct-PIC or independently verified Care-recorded customer consent receipt; legacy staff/digest-only sign-offs do not qualify.',
     });
   } else {
     bastAccepted = true;

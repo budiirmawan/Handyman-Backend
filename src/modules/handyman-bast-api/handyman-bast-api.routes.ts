@@ -22,7 +22,9 @@ import {
  * BAST scope's server-derived Building (BE-02G — the former client-level
  * `canAccessClient` wall was replaced by CR-HM-SEC-01; a same-Client
  * sibling-Building assignment does NOT suffice). Customer sign-off
- * requires `tenant_company.manage` + the same exact-Building wall.
+ * additionally requires live `tenant_company.manage` + that wall + the
+ * personal current request-PIC authority (PART 03), verified canonical issued
+ * consent manifest and atomic immutable receipt (PART 04). No staff proxy.
  * Worker/provider BAST commands (`prepare`, `issue`, `void`) are NOT exposed
  * on this Customer Care surface — they live on the separate, Building-scoped
  * worker transport (`handyman-bast-worker-api`, CR-HM-BAST-HTTP-01) gated by
