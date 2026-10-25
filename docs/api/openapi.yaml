@@ -7619,6 +7619,53 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /handyman/field/requests/{handymanRequestId}/inspection:
+    parameters:
+      - name: handymanRequestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: recordAssignedHandymanInspection
+      x-required-permission: tenant_company.read
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_INSPECTION_REQUIRED, HANDYMAN_SERVICE_REQUEST_ALREADY_INSPECTED, HANDYMAN_ASSIGNMENT_RESPONSE_FORBIDDEN, BUILDING_ACCESS_DENIED]
+      summary: Current assigned Inspector records the existing inspection outcome
+      description: >-
+        PART02 bounded RECORD_OUTCOME channel, not a blanket manage permission.
+        Requires the exact live Inspector assignment, TERIMA response, current
+        worker registration/Building placement and request Building access.
+        Assignment, response and live visit rows are locked in the original
+        inspection transaction. Declined, pending, revoked, superseded and
+        other actors cannot record. Calls the original immutable inspection
+        engine, projecting INSPECTION_REQUIRED to DIAGNOSIS. This administrative
+        observation neither confirms/completes a booking nor certifies arrival,
+        site access, capacity, execution readiness or customer consent. Existing
+        request-scoped managed field evidence remains a separate upload authority.
+        INSPECTION_FIRST quotation requires INSPECTED, not NOT_INSPECTABLE.
+      tags: [Handyman Lifecycle]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordHandymanInspectionRequest' }
+      responses:
+        '201':
+          description: Immutable inspection result from the authenticated assigned Inspector.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/SuccessEnvelope' }
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/HandymanInspectionRecord' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /handyman/requests/{handymanRequestId}/inspection:
     parameters:
       - name: handymanRequestId

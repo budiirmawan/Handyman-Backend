@@ -319,6 +319,7 @@ before(async () => {
       approved_tax_amount numeric(18,2) NOT NULL,
       approved_total_amount numeric(18,2) NOT NULL,
       authorized_by_user_id uuid NOT NULL, created_by_user_id uuid NOT NULL,
+      created_by_care_actor_id uuid, -- additive Commercial Bridge provenance (NULL in this direct-PIC fixture)
       authorized_at timestamptz NOT NULL DEFAULT now(),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
@@ -397,7 +398,8 @@ before(async () => {
     CREATE TABLE handyman_bast_events(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, bast_id uuid NOT NULL REFERENCES handyman_bast_documents(id),
       execution_scope_id uuid NOT NULL, event_type text NOT NULL, idempotency_key text NOT NULL,
-      actor_user_id uuid NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now(),
+      actor_user_id uuid NOT NULL, actor_care_actor_id uuid, commercial_consent_id uuid,
+      occurred_at timestamptz NOT NULL DEFAULT now(),
       created_at timestamptz NOT NULL DEFAULT now(), metadata jsonb NOT NULL DEFAULT '{}'::jsonb
     );
     CREATE TABLE handyman_bast_sign_offs(
@@ -1361,6 +1363,16 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(quo.status, 200);
     assert.equal(quo.body.data.variation.quotedTotalDelta, '-100000.00');
     assert.equal(quo.body.data.variation.revisedQuotationVersionId, QVER_A3_REDUCE);
+    // Existing commercial reconciliation consumes the signed REDUCE delta;
+    // original and revised quotation versions remain separate authority rows.
+    const commercialEvent = quo.body.data.events.find((e: { eventType: string }) => e.eventType === 'REVISED_QUOTATION');
+    assert.equal(commercialEvent.metadata.quotedTotalDelta, '-100000.00');
+    const totals = await getPool().query(`SELECT quotation_version_id, SUM(line_total)::numeric(18,2)::text total
+      FROM handyman_quotation_lines WHERE quotation_version_id=ANY($1::uuid[]) GROUP BY quotation_version_id`,
+      [[QVER_A1, QVER_A3_REDUCE]]);
+    assert.equal(commercialEvent.metadata.originalQuotedTotal, totals.rows.find(r=>r.quotation_version_id===QVER_A1).total);
+    assert.equal(commercialEvent.metadata.revisedQuotedTotal, totals.rows.find(r=>r.quotation_version_id===QVER_A3_REDUCE).total);
+
 
     const ten = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${reduceVarId}/tenant-decision`,

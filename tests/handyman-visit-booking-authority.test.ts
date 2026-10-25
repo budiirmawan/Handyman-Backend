@@ -222,6 +222,21 @@ test('cancel requires the current version and audits only the successful transit
   assert.equal(audit[0].entity_id,appointmentId);
 });
 
+test('an unavailable proposed inspection is rescheduled by cancel/re-propose, preserving the old slot', async () => {
+  const created = await postProposal();
+  assert.equal(created.status, 201);
+  const old = created.body.data;
+  const cancelled = await cancel(old.id, old.version);
+  assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+  const next = await postProposal({...proposal, startAt:'2031-11-14T10:00:00+07:00',endAt:'2031-11-14T11:00:00+07:00'});
+  assert.equal(next.status, 201, JSON.stringify(next.body));
+  assert.notEqual(next.body.data.id, old.id);
+  const rows = (await db.query('SELECT id,state,start_at FROM handyman_visit_appointments ORDER BY start_at')).rows;
+  assert.deepEqual(rows.map(r=>r.state), ['CANCELLED','PROPOSED']);
+  assert.equal(rows[0].start_at.toISOString(), new Date(proposal.startAt).toISOString());
+  assert.equal(await count('operational_events'), 3);
+});
+
 test('proposal cancel can never move a non-PROPOSED visit and writes no audit for the refusal', async () => {
   const created = await postProposal();
   const appointmentId = created.body.data.id as string;

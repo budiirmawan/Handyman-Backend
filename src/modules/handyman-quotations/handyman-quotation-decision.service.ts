@@ -1,3 +1,4 @@
+import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
 import { resolveCareWorkspacePrincipal } from '../handyman-care-workspace/care-workspace.service';
 import { assertCareConsentWriteFresh, verifyCareCommercialConsent, type CareDecisionChannel } from '../handyman-commercial-consent/commercial-consent.service';
 import { quotationCommercialTarget } from '../handyman-commercial-consent/commercial-consent.targets';
@@ -226,6 +227,8 @@ export async function decideHandymanQuotation(
     if (!version.validUntil || version.validUntil.getTime() <= Date.now()) {
       throw handymanQuotationInvalidTransitionError();
     }
+
+    if (input.decision === 'APPROVE') await assertHandymanQuotationInspectionReady(tx, request.id);
 
     // 4/5) Immutable decision insert + bounded lifecycle projection
     //    (ISSUED → APPROVED | REJECTED) — atomic, single transaction.

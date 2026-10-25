@@ -1294,6 +1294,11 @@ describe('CR-HM-ASSIGNMENT-RESPONSE-01 PART 02C — Cross-App Projection & E2E',
     const inspAssign2Id = (reassignRes.body.data.assignmentId ??
       reassignRes.body.data.id) as string;
 
+    // A pending acknowledgment is not authority to record the final outcome.
+    const pendingOutcome = await api().post(`${V1}/handyman/field/requests/${requestId}/inspection`)
+      .set(auth(inspector2.token)).send({ result: 'INSPECTED', notes: 'Not accepted yet.' });
+    assert.equal(pendingOutcome.status, 403, JSON.stringify(pendingOutcome.body));
+
     // Inspector 2 responds TERIMA
     const accept2Res = await api()
       .post(
@@ -1335,6 +1340,21 @@ describe('CR-HM-ASSIGNMENT-RESPONSE-01 PART 02C — Cross-App Projection & E2E',
         .reassignmentRequired,
       false,
     );
+    // PART02: the advertised RECORD_OUTCOME action must work without
+    // granting Mobile Staff the unrelated Operations manage permission.
+    const outcomePath = `${V1}/handyman/field/requests/${requestId}/inspection`;
+    for (const credential of [inspector1.token, opsUser.token]) {
+      const denied = await api().post(outcomePath).set(auth(credential))
+        .send({ result: 'INSPECTED', notes: 'Cannot record another inspector outcome.' });
+      assert.equal(denied.status, 403, JSON.stringify(denied.body));
+    }
+    const recorded = await api().post(outcomePath).set(auth(inspector2.token))
+      .send({ result: 'INSPECTED', notes: 'Assigned inspector recorded the actual site findings.' });
+    assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
+    assert.equal(recorded.body.data.inspectedByUserId, inspector2.user.id);
+    assert.equal(recorded.body.data.inspectionResult, 'INSPECTED');
+    const persisted = (await q('SELECT status FROM handyman_service_requests WHERE id=$1', [requestId])).rows[0];
+    assert.equal(persisted.status, 'DIAGNOSIS');
   });
 
   it('4. Edge-Case Authority: Crew Lead change after TERIMA and after TIDAK_BISA rotates assignment version without overwriting prior Lead immutable decision', async () => {
