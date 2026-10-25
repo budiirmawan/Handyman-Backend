@@ -95,3 +95,30 @@ PART04 receives the **authorized original/revised quotation + execution-scope ID
 Consume these through existing scope/Client/tenant/Building authority, charge/allocation, corrected-ledger, invoice and close readiness APIs. Keep **current QC → canonical qualified customer BAST → reconciled invoice obligations/PAID → actual Manager FINAL CLOSE**; upfront funding, Care proof or BM settlement never substitutes for those gates. Resolve the listed live facts/enrollment and any applicable unsupported compensation first. Do not silently rewrite commercial history, duplicate fee/payment/VAT/BM basis, treat missing tax facts as exemption or resume implementation without explicit PART04 authorization.
 
 **STOP after PART03.**
+
+## PART15 — BE-19D commercial vs fiscal reconciliation
+
+- BE-19D `FINALIZED` freezes the existing correction-netted commercial invoice;
+  it does not issue, submit, or verify DJP e-Faktur. Missing external fiscal
+  documents alone no longer prevent commercial finalization. Configured tax
+  facts, effective dates, classification and supported inclusive-price basis
+  are still validated; unsupported fiscal treatment is not guessed.
+- Configured fiscal completeness is checked at Manager FINAL CLOSE, exposed as
+  `FISCAL_RECONCILIATION_REQUIRED`. Legacy commercial-only scopes retain their
+  existing behavior. Existing fiscal posting/adjustment authorization and
+  qualified delivery, bank-reconciliation and external-reference guards remain.
+- The existing `readyForInvoice` fiscal response field is retained for API
+  compatibility: it describes **fiscal reconciliation completeness**, not a DJP
+  issuance or a BE-19D commercial-finalization status (`djpSubmission=false`).
+- No VAT surcharge is added to approved VAT-inclusive charges. Inspection
+  discounts reduce the basis once. Certified PPh is a linked noncash correction,
+  not a cash payment: fiscal gross 1110 / VAT 110 / certificate 20 corresponds to
+  an existing commercial net receivable of 1090. Fiscal gross/DPP/PPN/PPh remain
+  available in tax reconciliation, separate from the BE-19D net invoice total.
+- DP/installments settle through verified allocations once, not by reducing
+  invoice charges and then deducting DP again. BM contractual fee and its fiscal
+  reconciliation remain separate from the tenant invoice and warranty.
+- A commercial adjustment is not a fiscal replacement/cancellation document.
+  Missing qualified delivery or actual external references blocks fiscal
+  adjustment. Real issuer/payer, bank and DJP facts remain external inputs;
+  regression fixtures use test-only references, not genuine certificates.

@@ -1313,24 +1313,23 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
       assert.equal(addLineRes.status, 201, JSON.stringify(addLineRes.body));
     }
 
-    // Configured PPN is fail-closed at commercial invoice finalization until
-    // the final external fiscal reference reconciles the qualified BAST.
-    const missingFiscal=await api().post(`${V1}/tenant-invoices/${invoiceId}/finalize`).set('Authorization',`Bearer ${financeVerifier.token}`).send({});
-    assert.equal(missingFiscal.status,409,JSON.stringify(missingFiscal.body));
-    assert.equal(missingFiscal.body.error.code,'HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED');
+    // PART15: commercial FINALIZED is not e-Faktur certification. Missing
+    // external references still block fiscal reconciliation / FINAL CLOSE.
+    const commercial=await api().post(`${V1}/tenant-invoices/${invoiceId}/finalize`).set('Authorization',`Bearer ${financeVerifier.token}`).send({});
+    assert.equal(commercial.status,200,JSON.stringify(commercial.body));
+    const missingFiscal=await readHandymanTaxReconciliation(executionScopeId,financeVerifier.userId);
+    assert.equal(missingFiscal.readyForInvoice,false);
+    const pendingFiscal=await api().get(`${V1}/handyman/execution-scopes/${executionScopeId}/final-close/readiness`).set('Authorization',`Bearer ${managerActor.token}`);
+    assert.equal(pendingFiscal.status,200,JSON.stringify(pendingFiscal.body));
+    assert.ok(pendingFiscal.body.data.blockers.some((b:{code:string})=>b.code==='FISCAL_RECONCILIATION_REQUIRED'));
     const delivered=(await q('SELECT accepted_at FROM handyman_bast_documents WHERE id=$1',[bast2Issued.bast.id])).rows[0].accepted_at as Date;
     const finalFiscal=await recordHandymanFiscalDocument(executionScopeId,{kind:'FINAL',taxPointAt:delivered.toISOString(),documentDate:jakartaDate(delivered),externalReference:`TEST-DJP-FINAL-${executionScopeId}`,previousDocumentId:precedingFiscalDocumentId,idempotencyKey:key()},financeVerifier.userId);
     assert.equal(finalFiscal.amounts.gross,'260.00');assert.equal(finalFiscal.amounts.vat,'25.77');
     const fiscalReady=await readHandymanTaxReconciliation(executionScopeId,financeVerifier.userId);
     assert.equal(fiscalReady.readyForInvoice,true);assert.equal('posted' in fiscalReady&&fiscalReady.posted?.vat,'37.66');
 
-    const finalizeInvRes = await api()
-      .post(`${V1}/tenant-invoices/${invoiceId}/finalize`)
-      .set('Authorization', `Bearer ${financeVerifier.token}`)
-      .send({});
-    assert.equal(finalizeInvRes.status, 200, JSON.stringify(finalizeInvRes.body));
-    assert.equal(finalizeInvRes.body.data.status, 'FINALIZED');
-    assert.equal(Number(finalizeInvRes.body.data.totalAmount).toFixed(2), '380.00');
+    assert.equal(commercial.body.data.status, 'FINALIZED');
+    assert.equal(Number(commercial.body.data.totalAmount).toFixed(2), '380.00');
 
     // Verify variation row was marked invoiced = TRUE upon invoice finalization
     const varAfterFinalize = await q(

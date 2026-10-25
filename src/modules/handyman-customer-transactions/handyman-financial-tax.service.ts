@@ -770,10 +770,15 @@ export async function readHandymanTaxReconciliation(scopeId: string, actor: stri
     throw e;
   }
 }
-/** Commercial invoices are not tax invoices. Once a quotation explicitly opts
- * into reviewed fiscal treatment, its invoice may not silently omit VAT/WH
- * obligations or outstanding actual document/certificate references. */
-export async function assertConfiguredHandymanInvoiceTax(tx: FinancialExecutor, scopeId: string) {
+/** BE-19D finalization freezes commercial, correction-netted receivables;
+ * it neither issues e-Faktur nor certifies externally posted fiscal documents.
+ * Validate configured inclusive-price/classification facts, but leave missing
+ * external references to fiscal posting/reconciliation rather than blocking a
+ * valid commercial invoice. VAT must not be added to inclusive charges again.
+ */
+export async function assertConfiguredHandymanInvoiceTax(
+  tx: FinancialExecutor, scopeId: string, requireFiscalReconciliation = false,
+) {
   const scope = (
     await tx.query('SELECT * FROM handyman_execution_scopes WHERE id=$1 FOR SHARE', [scopeId])
   ).rows[0];
@@ -788,9 +793,14 @@ export async function assertConfiguredHandymanInvoiceTax(tx: FinancialExecutor, 
     'SELECT id FROM handyman_customer_transactions WHERE execution_scope_id=$1 FOR UPDATE',
     [scopeId],
   );
-  const assessment = await assessHandymanTax(tx, scope);
-  if (!assessment.readyForInvoice)
-    financialConfig(`Fiscal obligations are incomplete: ${assessment.missing.join(', ')}.`);
+  if (requireFiscalReconciliation) {
+    const assessment = await assessHandymanTax(tx, scope);
+    if (!assessment.readyForInvoice)
+      financialConfig(`Fiscal obligations are incomplete: ${assessment.missing.join(', ')}.`);
+  } else {
+    const basis = await readHandymanScopeTaxBasis(tx, scope);
+    calculateHandymanIndonesiaTax(basis.facts, basis.grossLabor, basis.grossMaterial);
+  }
 }
 
 /** CR-HM-14 still owns the percentage calculation. This adapter only supplies

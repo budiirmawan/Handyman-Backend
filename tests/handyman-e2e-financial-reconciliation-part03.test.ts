@@ -130,6 +130,29 @@ const blocked = (e: unknown) => {
   );
   return true;
 };
+// Existing BE-19D contracts only; test credentials/references are not external verification.
+async function finalizeBilling(c: Awaited<ReturnType<typeof context>>, lineId: string, expected: number) {
+  await q("INSERT INTO client_allowed_transaction_currencies(client_id,currency_code) VALUES($1,'IDR') ON CONFLICT DO NOTHING", [c.realm.client.id]);
+  const manager = await session(c.realm.building.id, [
+    ...MANAGER_ROLE.permissions, 'handyman.finance.manage', 'tenant_invoice.manage',
+  ]);
+  const created = await api().post(`${V1}/tenant-companies/${c.company.id}/invoices`)
+    .set('Authorization', `Bearer ${manager.token}`).send({
+      buildingId:c.realm.building.id, spaceId:c.chain.space.id, invoiceNumber:`P15-${id()}`,
+      invoiceDate:jakartaDate(new Date()), dueDate:jakartaDate(new Date()), currencyCode:'IDR',
+    });
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const invoiceId = created.body.data.id;
+  const linked = await api().post(`${V1}/tenant-invoices/${invoiceId}/lines`)
+    .set('Authorization', `Bearer ${manager.token}`).send({sourceType:'HANDYMAN_CHARGE',sourceId:lineId});
+  assert.equal(linked.status,201,JSON.stringify(linked.body));
+  const finalized = await api().post(`${V1}/tenant-invoices/${invoiceId}/finalize`)
+    .set('Authorization', `Bearer ${manager.token}`).send({});
+  assert.equal(finalized.status,200,JSON.stringify(finalized.body));
+  assert.equal(finalized.body.data.totalAmount,expected);
+  assert.equal(finalized.body.data.lines[0].amount,expected);
+  return invoiceId;
+}
 describe('PART03 — explicit Indonesia tax configurations (no universal classification)', () => {
   it('PKP PMK131: 12% × 11/12 DPP; gross, net, VAT, PPh23 and cash stay distinct', () => {
     const r = tax(facts, '1110.00', '0.00', '2026-10-25');
@@ -500,6 +523,7 @@ describe('PART03 — real PostgreSQL financial integration (existing engines)', 
     const ledger = await readHandymanLedgerTransactionAt(job.scope.id, admin);
     assert.equal(ledger.totals.chargedNet, '999.00');
     assert.equal(ledger.payments.length, 0);
+    await finalizeBilling(c, line.id, 999);
     const feeTax = await readHandymanTaxReconciliation(fee.scope.id, admin),
       jobTax = await readHandymanTaxReconciliation(job.scope.id, admin);
     assert.equal(feeTax.amounts?.vat, '11.00');
@@ -673,6 +697,20 @@ describe('PART03 — real PostgreSQL financial integration (existing engines)', 
     const read = await readHandymanTaxReconciliation(job.scope.id, admin);
     assert.equal(read.readyForInvoice, true);
     assert.equal('posted' in read && read.posted?.vat, '110.00');
+    const line = await charge(job);
+    const invoiceId = await finalizeBilling(c, line.id, 1110);
+    for (const [payment,amount] of [[first,'333.00'],[second,'777.00']] as const) {
+      await allocateHandymanCustomerPayment({executionScopeId:job.scope.id,
+        paymentId:payment.id, chargeLineId:line.id, amount, idempotencyKey:id()},admin);
+    }
+    const summary = await api().get(`${V1}/handyman/execution-scopes/${job.scope.id}/invoice-reconciliation`)
+      .set('Authorization',`Bearer ${(await session(c.realm.building.id, ['handyman.finance.read'])).token}`);
+    assert.equal(summary.status,200,JSON.stringify(summary.body));
+    assert.equal(summary.body.data.invoice.invoiceId,invoiceId);
+    assert.equal(summary.body.data.invoice.grossTotal,'1110.00');
+    assert.equal(summary.body.data.invoice.dpDeductedAmount,'333.00');
+    assert.equal(summary.body.data.invoice.totalAppliedAmount,'1110.00');
+    assert.equal(summary.body.data.invoice.remainingBalance,'0.00');
   });
   it('qualified PPh23: verified cash + actual certificate credit are distinguishable; no synthetic cash payment and no double credit', async () => {
     const c = await context(),
@@ -720,6 +758,7 @@ describe('PART03 — real PostgreSQL financial integration (existing engines)', 
     const ledger = await readHandymanLedgerTransactionAt(job.scope.id, admin);
     assert.equal(ledger.totals.chargedNet, '1090.00');
     assert.equal(ledger.payments.length, 1);
+    await finalizeBilling(c, line.id, 1090);
     const another = await c.quote((await c.request()).id, 1110, facts),
       cash = await pay(another.scope.id, '1090.00'),
       received = new Date(Date.now() - 1000).toISOString();
@@ -1282,6 +1321,66 @@ describe('PART03 — real PostgreSQL financial integration (existing engines)', 
     ).rows[0].n;
     const returned = (await readHandymanLedgerTransactionAt(fee.scope.id, admin)).totals.refunded;
     assert.ok((spent === 1 && returned === '0.00') || (spent === 0 && returned === '111.00'));
+  });
+
+  it('PART15: commercial FINALIZED is independent of missing DJP references; fiscal actions stay closed', async () => {
+    for (const profile of [noWh, nonPkp]) {
+      const c = await context(), job = await c.quote((await c.request()).id, 1110, profile);
+      const line = await charge(job);
+      await q("INSERT INTO client_allowed_transaction_currencies(client_id,currency_code) VALUES($1,'IDR') ON CONFLICT DO NOTHING", [c.realm.client.id]);
+      const manager = await session(c.realm.building.id, [
+        ...MANAGER_ROLE.permissions, 'handyman.finance.manage', 'tenant_invoice.manage',
+      ]);
+      const invoice = await api().post(`${V1}/tenant-companies/${c.company.id}/invoices`)
+        .set('Authorization', `Bearer ${manager.token}`).send({
+          buildingId: c.realm.building.id, spaceId: c.chain.space.id,
+          invoiceNumber: `P15-${id()}`, invoiceDate: jakartaDate(new Date()),
+          dueDate: jakartaDate(new Date()), currencyCode: 'IDR',
+        });
+      assert.equal(invoice.status, 201, JSON.stringify(invoice.body));
+      const invoiceId = invoice.body.data.id;
+      const linked = await api().post(`${V1}/tenant-invoices/${invoiceId}/lines`)
+        .set('Authorization', `Bearer ${manager.token}`)
+        .send({sourceType:'HANDYMAN_CHARGE', sourceId:line.id});
+      assert.equal(linked.status, 201, JSON.stringify(linked.body));
+      const outsider = await session(c.realm.building.id, MANAGER_ROLE.permissions);
+      assert.equal((await api().post(`${V1}/tenant-invoices/${invoiceId}/finalize`)
+        .set('Authorization', `Bearer ${outsider.token}`).send({})).status, 403);
+      const finalized = await api().post(`${V1}/tenant-invoices/${invoiceId}/finalize`)
+        .set('Authorization', `Bearer ${manager.token}`).send({});
+      assert.equal(finalized.status, 200, JSON.stringify(finalized.body));
+      assert.equal(finalized.body.data.totalAmount, 1110);
+      const fiscal = await readHandymanTaxReconciliation(job.scope.id, manager.id);
+      assert.equal(fiscal.djpSubmission, false);
+      assert.equal('documents' in fiscal && fiscal.documents.length, 0);
+      assert.equal(fiscal.readyForInvoice, profile.providerStatus === 'NON_PKP');
+      assert.equal((await q('SELECT count(*)::int n FROM tenant_invoice_history WHERE tenant_invoice_id=$1 AND changed_by_user_id=$2',
+        [invoiceId,manager.id])).rows[0].n > 0, true);
+      await assert.rejects(recordHandymanFiscalDocument(job.scope.id, {
+        kind:'FINAL', taxPointAt:new Date().toISOString(), documentDate:jakartaDate(new Date()),
+        externalReference:'', idempotencyKey:id(),
+      }, manager.id));
+    }
+  });
+
+  it('PART15: commercial adjustments net once; missing delivery authority cannot post a fiscal adjustment', async () => {
+    const c = await context(), job = await c.quote((await c.request()).id,1110,noWh);
+    const line = await charge(job);
+    const input = {executionScopeId:job.scope.id, chargeLineId:line.id, amount:'111.00',
+      reason:'Test reviewed commercial reduction', idempotencyKey:id()};
+    await adjustHandymanCustomerLedger(input,admin);
+    await adjustHandymanCustomerLedger(input,admin);
+    await finalizeBilling(c,line.id,999);
+    const fiscal = await readHandymanTaxReconciliation(job.scope.id,admin);
+    assert.equal(fiscal.amounts?.gross,'999.00');
+    assert.equal(fiscal.amounts?.vat,'99.00');
+    assert.equal(fiscal.readyForInvoice,false);
+    // Explicit test-only reference cannot substitute for qualified BAST/delivery authority.
+    await assert.rejects(recordHandymanFiscalDocument(job.scope.id,{
+      kind:'ADJUSTMENT', taxPointAt:new Date().toISOString(), documentDate:jakartaDate(new Date()),
+      externalReference:`TEST-NOT-AN-ISSUED-DOCUMENT-${id()}`, idempotencyKey:id(),
+    },admin),blocked);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_fiscal_documents WHERE execution_scope_id=$1',[job.scope.id])).rows[0].n,0);
   });
 
   it('0482 can roll back and reapply on this disposable database without touching immutable source payments or quotes', async () => {

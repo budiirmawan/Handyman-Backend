@@ -1,3 +1,4 @@
+import { assertConfiguredHandymanInvoiceTax } from '../handyman-customer-transactions/handyman-financial-tax.service';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
@@ -161,6 +162,7 @@ export type HandymanFinalCloseBlockerCode =
   | 'FINAL_INVOICE_NOT_FINALIZED'
   | 'FINAL_INVOICE_LINES_INCOMPLETE'
   | 'FINAL_INVOICE_NOT_PAID'
+  | 'FISCAL_RECONCILIATION_REQUIRED'
   | 'OPEN_SETTLEMENT_EXCEPTION';
 
 export type HandymanFinalCloseBlocker = {
@@ -877,6 +879,15 @@ async function evaluateFinalCloseGates(
     } else {
       finalInvoicePaid = true;
     }
+  }
+
+  // Fiscal completeness belongs to final reconciliation, not commercial
+  // invoice issuance. Legacy commercial-only scopes remain unchanged.
+  try {
+    await assertConfiguredHandymanInvoiceTax(executor, executionScopeId, true);
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED') throw error;
+    blockers.push({code:'FISCAL_RECONCILIATION_REQUIRED', message:error.message});
   }
 
   // 9. Zero blocking settlement exceptions (while keeping settlement & warranty lifecycles separate)
