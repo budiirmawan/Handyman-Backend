@@ -1,3 +1,4 @@
+import { installIndependentBmTestDouble } from './helpers/handyman-bm-clearance';
 import assert from 'node:assert/strict';
 import { after, before, describe, it, type TestContext } from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -129,6 +130,8 @@ let disciplineId = '';
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 before(async () => {
+  // Explicit test boundary only; production BM verification stays unavailable.
+  installIndependentBmTestDouble();
   const db = await ensureTestDatabase();
   if (!db) return;
   pool = await initDatabase(db);

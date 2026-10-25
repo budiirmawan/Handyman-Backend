@@ -1815,6 +1815,9 @@ export async function recordVariationTenantDecision(
       : null;
 
   return withTransaction(async (tx) => {
+    // PART04: serialize work-revision changes with BM verification and new
+    // dispatch/check-in/start/resume. Scope first, then variation (QC order).
+    await lockHandymanQcScope(tx, ctx.executionScopeId);
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,
@@ -1997,6 +2000,9 @@ export async function authorizeVariationScope(
       : null;
 
   return withTransaction(async (tx) => {
+    // PART04: serialize work-revision changes with BM verification and new
+    // dispatch/check-in/start/resume. Scope first, then variation (QC order).
+    await lockHandymanQcScope(tx, ctx.executionScopeId);
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,

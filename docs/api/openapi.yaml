@@ -134245,7 +134245,7 @@ components:
         executionScopeId: { type: string, format: uuid }
         assignmentId: { type: string, format: uuid }
         appointmentId: { type: string, format: uuid, nullable: true }
-        status: { type: string, enum: [RELEASED, IN_PROGRESS, COMPLETED, CANCELLED] }
+        status: { type: string, enum: [RELEASED, IN_PROGRESS, COMPLETED, CANCELLED, SUPERSEDED] }
         releasedByUserId: { type: string, format: uuid }
         releasedAt: { type: string, format: date-time }
         cancelledByUserId: { type: string, format: uuid, nullable: true }
@@ -134261,13 +134261,13 @@ components:
     HandymanDispatchReadinessReport:
       type: object
       description: "Source: HandymanDispatchReadinessReport (handyman-dispatch.types.ts)."
-      required: [executionScopeId, ready, checks, failures, appointmentId, assignmentId]
+      required: [executionScopeId, ready, checks, failures, appointmentId, assignmentId, assignmentReadiness, bmClearance]
       properties:
         executionScopeId: { type: string, format: uuid }
         ready: { type: boolean }
         checks:
           type: object
-          required: [authorizedScope, confirmedAppointment, eligibleProvider, eligibleCrew, eligibleLead, noConflictingCommitment, permitClearance, unitAccessClearance, materialReady, assignmentCurrent]
+          required: [authorizedScope, confirmedAppointment, eligibleProvider, eligibleCrew, eligibleLead, noConflictingCommitment, permitClearance, unitAccessClearance, materialReady, assignmentCurrent, independentBmClearance]
           properties:
             authorizedScope: { type: boolean }
             confirmedAppointment: { type: boolean }
@@ -134279,6 +134279,23 @@ components:
             unitAccessClearance: { type: boolean }
             materialReady: { type: boolean }
             assignmentCurrent: { type: boolean }
+            independentBmClearance:
+              type: boolean
+              description: Fresh independent BM coverage of the exact work revision, location, visit, assignment and current Lead/helper roster. Local permit/access facts alone are insufficient.
+        assignmentReadiness:
+          type: string
+          enum: [UNASSIGNED, PLANNED, DISPATCH_READY]
+          description: Planning is allowed pending BM clearance. Only DISPATCH_READY may release; mobile check-in/start/resume reverify the same authority.
+        bmClearance:
+          type: object
+          required: [state, bindingDigest, verificationReference]
+          properties:
+            state:
+              type: string
+              enum: [VERIFIED, UNAVAILABLE, PENDING, REJECTED, REVOKED, EXPIRED, BINDING_MISMATCH, INVALID, LOCAL_FACTS_MISSING]
+            bindingDigest: { type: string, nullable: true, pattern: '^[a-f0-9]{64}$' }
+            verificationReference: { type: string, nullable: true }
+          description: Read-only assessment, never an approval command. No independent BM integration is configured; live applicable transitions remain BLOCKED. Missing facts are not exemptions.
         failures:
           type: array
           items: { type: string }

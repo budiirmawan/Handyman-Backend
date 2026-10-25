@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { getPool, withTransaction } from '../../database';
+import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
@@ -13,6 +13,8 @@ import {
   handymanDispatchReleaseNotFoundError,
 } from './handyman-dispatch.errors';
 import { handymanDispatchRepository } from './handyman-dispatch.repository';
+import { assessHandymanBmClearance, readBmCrewBinding, readBmWorkBinding } from './handyman-bm-clearance';
+import type { HandymanBmClearanceAssessment } from './handyman-bm-clearance';
 import type {
   HandymanDispatchReadinessCheck,
   HandymanDispatchReadinessReport,
@@ -44,16 +46,19 @@ function toPublic(
 
 type DispatchScope = NonNullable<Awaited<ReturnType<typeof handymanScopeAssignmentRepository.findScopeById>>>;
 type Executor = Pick<PoolClient, 'query'>;
+type DispatchAssignment = NonNullable<Awaited<ReturnType<typeof handymanScopeAssignmentRepository.findActiveAssignmentByScope>>>;
 
 /** PART05 consumer of existing readiness authorities, not a new readiness engine.
- * Write callers hold scope → visit → permit → access locks through commit.
+ * Callers hold scope → crew/roster → visit → permit → access locks through commit.
  * Absence is UNKNOWN, not an exemption: current schemas have no trusted
  * required/not-required decision. Never infer one from notes or caller flags.
  */
 async function readExecutionClearance(
-  db: Executor, scope: DispatchScope, crewId: string,
+  db: Executor, scope: DispatchScope, assignment: DispatchAssignment,
   appointmentId?: string | null, requireCurrentWindow = false,
 ) {
+  const crew = await readBmCrewBinding(db, { clientId: scope.clientId,
+    crewId: assignment.handymanCrewId, providerContextId: assignment.handymanProviderContextId });
   const visits = await db.query<{ id: string; start_at: Date; end_at: Date }>(
     `SELECT id, start_at, end_at FROM handyman_visit_appointments
       WHERE execution_scope_id = $1 AND client_id = $2
@@ -62,7 +67,7 @@ async function readExecutionClearance(
         AND state IN ('CONFIRMED','IN_PROGRESS')
         AND ($6::uuid IS NULL OR id = $6)
       ORDER BY created_at DESC LIMIT 1 FOR SHARE`,
-    [scope.id, scope.clientId, scope.handymanRequestId, scope.buildingId, crewId, appointmentId ?? null],
+    [scope.id, scope.clientId, scope.handymanRequestId, scope.buildingId, assignment.handymanCrewId, appointmentId ?? null],
   );
   const visit = visits.rows[0];
   const location = (await db.query<{
@@ -74,7 +79,8 @@ async function readExecutionClearance(
        JOIN rooms rm ON rm.id = s.room_id
        JOIN areas a ON a.id = rm.area_id
        JOIN floors f ON f.id = a.floor_id AND f.building_id = r.building_id
-      WHERE r.id = $1 AND r.client_id = $2 AND r.building_id = $3`,
+      WHERE r.id = $1 AND r.client_id = $2 AND r.building_id = $3
+      FOR SHARE OF r, s, rm, a, f`,
     [scope.handymanRequestId, scope.clientId, scope.buildingId],
   )).rows[0];
   // Re-read UNDER the repository's existing lock: a concurrent supersession
@@ -92,13 +98,35 @@ async function readExecutionClearance(
     row.clientId === scope.clientId && row.handymanRequestId === scope.handymanRequestId &&
     row.buildingId === scope.buildingId && row.spaceId === location.space_id &&
     row.roomId === location.room_id && row.areaId === location.area_id && row.floorId === location.floor_id;
+  const permitClearance = scheduled && sameLocation(permit) && !!permit &&
+    permit.validFrom <= visit.start_at && permit.validUntil >= visit.end_at;
+  const unitAccessClearance = scheduled && sameLocation(access) && !!access &&
+    access.accessWindowStart <= visit.start_at && access.accessWindowEnd >= visit.end_at;
+  let bmClearance: HandymanBmClearanceAssessment = {
+    state: 'LOCAL_FACTS_MISSING', bindingDigest: null, verificationReference: null,
+  };
+  if (scope.status === 'AUTHORIZED' && crew && location && visit && permit && access &&
+      permitClearance && unitAccessClearance) {
+    const work = await readBmWorkBinding(db, scope.id);
+    bmClearance = await assessHandymanBmClearance(db, {
+      protocol: 'HANDYMAN_BM_CLEARANCE_V1', clientId: scope.clientId,
+      buildingId: scope.buildingId, executionScopeId: scope.id,
+      handymanRequestId: scope.handymanRequestId, assignmentId: assignment.id,
+      ...work, ...crew,
+      location: { spaceId: location.space_id, roomId: location.room_id,
+        areaId: location.area_id, floorId: location.floor_id },
+      visit: { id: visit.id, startAt: visit.start_at.toISOString(), endAt: visit.end_at.toISOString() },
+      localPermit: { id: permit.id, permitType: permit.permitType,
+        validFrom: permit.validFrom.toISOString(), validUntil: permit.validUntil.toISOString() },
+      localAccess: { id: access.id, startAt: access.accessWindowStart.toISOString(),
+        endAt: access.accessWindowEnd.toISOString() },
+    });
+  }
   return {
     appointmentId: scheduled ? visit.id : null,
     startAt: visit?.start_at ?? null, endAt: visit?.end_at ?? null,
-    permitClearance: scheduled && sameLocation(permit) && !!permit &&
-      permit.validFrom <= visit.start_at && permit.validUntil >= visit.end_at,
-    unitAccessClearance: scheduled && sameLocation(access) && !!access &&
-      access.accessWindowStart <= visit.start_at && access.accessWindowEnd >= visit.end_at,
+    permitClearance, unitAccessClearance, bmClearance,
+    currentLeadUserId: crew?.leadUserId ?? null,
   };
 }
 
@@ -119,11 +147,13 @@ export async function assertDispatchExecutionClearance(
       !release || release.assignmentId !== assignment.id || !release.appointmentId) {
     throw handymanDispatchNotReadyError(['Current AUTHORIZED scope, assignment and dispatch release are required.']);
   }
-  const clearance = await readExecutionClearance(tx, scope, assignment.handymanCrewId, release.appointmentId, true);
+  const clearance = await readExecutionClearance(tx, scope, assignment, release.appointmentId, true);
   const failures = [];
   if (!clearance.appointmentId) failures.push('Released execution visit is not current/confirmed for this crew and Building.');
   if (!clearance.permitClearance) failures.push('No active, scope-matching permit covers the execution visit; absence is not an exemption.');
   if (!clearance.unitAccessClearance) failures.push('No active, scope-matching unit access covers the execution visit; absence is not an exemption.');
+  if (clearance.currentLeadUserId !== actorUserId) failures.push('Execution requires the current eligible Crew Lead under the roster lock.');
+  if (clearance.bmClearance.state !== 'VERIFIED') failures.push(`Independent BM clearance is ${clearance.bmClearance.state}; local readiness is not BM approval.`);
   if (failures.length) throw handymanDispatchNotReadyError(failures);
 }
 
@@ -140,9 +170,10 @@ export async function evaluateDispatchReadiness(
 ): Promise<HandymanDispatchReadinessReport> {
   const scopeId = ensureUuid(executionScopeId, 'executionScopeId');
   ensureUuid(actorUserId, 'actorUserId');
-  const db = executor ?? getPool();
+  if (!executor) return withTransaction((tx) => evaluateDispatchReadiness(scopeId, actorUserId, tx));
+  const db = executor;
 
-  const scope = await handymanScopeAssignmentRepository.findScopeById(
+  const scope = await handymanScopeAssignmentRepository.lockScopeById(
     db,
     scopeId,
   );
@@ -165,7 +196,7 @@ export async function evaluateDispatchReadiness(
 
   // 3. Existing confirmed visit + authoritative scoped/windowed readiness.
   const clearance = assignment
-    ? await readExecutionClearance(db, scope, assignment.handymanCrewId)
+    ? await readExecutionClearance(db, scope, assignment)
     : null;
   const appointmentId = clearance?.appointmentId ?? null;
   const confirmedAppointment = appointmentId !== null;
@@ -289,6 +320,7 @@ export async function evaluateDispatchReadiness(
     unitAccessClearance,
     materialReady,
     assignmentCurrent,
+    independentBmClearance: clearance?.bmClearance.state === 'VERIFIED',
   };
   const failures: string[] = [];
   if (!authorizedScope) failures.push('Execution scope is not AUTHORIZED.');
@@ -305,6 +337,7 @@ export async function evaluateDispatchReadiness(
   if (!permitClearance) failures.push('No active matching permit covers the visit; missing readiness is not a trusted exemption.');
   if (!unitAccessClearance) failures.push('No active matching unit access covers the visit; missing readiness is not a trusted exemption.');
   if (!materialReady) failures.push('Materials are not ready (open purchase).');
+  if (!checks.independentBmClearance) failures.push(`Independent BM clearance is ${clearance?.bmClearance.state ?? 'LOCAL_FACTS_MISSING'}; assignment planning is not dispatch authority.`);
 
   return {
     executionScopeId: scopeId,
@@ -313,6 +346,10 @@ export async function evaluateDispatchReadiness(
     failures,
     appointmentId,
     assignmentId: assignment?.id ?? null,
+    assignmentReadiness: failures.length === 0 ? 'DISPATCH_READY' : assignment ? 'PLANNED' : 'UNASSIGNED',
+    bmClearance: clearance?.bmClearance ?? {
+      state: 'LOCAL_FACTS_MISSING', bindingDigest: null, verificationReference: null,
+    },
   };
 }
 
@@ -362,7 +399,7 @@ export async function releaseHandymanDispatch(
       assignmentId: readiness.assignmentId!,
       appointmentId,
       releasedByUserId: actorUserId,
-      readinessSnapshot: readiness.checks as unknown as Record<string, unknown>,
+      readinessSnapshot: { ...readiness.checks, bmClearance: readiness.bmClearance },
     });
     await recordOperationalEvent(
       {

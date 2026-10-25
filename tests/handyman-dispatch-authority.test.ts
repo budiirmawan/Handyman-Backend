@@ -1,3 +1,6 @@
+import { bmClearanceTestFact, unavailableBmVerifier } from './helpers/handyman-bm-clearance';
+import { handymanBmBindingDigest, handymanBmClearanceVerifier } from '../src/modules/handyman-dispatch/handyman-bm-clearance';
+import { installIndependentBmTestDouble } from './helpers/handyman-bm-clearance';
 import assert from 'node:assert/strict';
 import { mkdir, rm } from 'node:fs/promises';
 import { after, before, describe, it, type TestContext } from 'node:test';
@@ -437,6 +440,8 @@ async function setupApprovedScope(
 }
 
 before(async () => {
+  // Explicit test boundary only; production BM verification stays unavailable.
+  installIndependentBmTestDouble();
   await rm(DIR, { recursive: true, force: true });
   await mkdir(DIR, { recursive: true });
   pgServer = new EmbeddedPostgres({
@@ -814,9 +819,10 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     scopeId: string,
     crew: { crew: { id: string } },
     startAt = new Date(Date.now() - 60_000),
+    endAt = new Date(Date.now() + 4 * 3600_000),
+    authorize = true,
   ): Promise<string> {
     const apptId = randomUUID();
-    const endAt = new Date(Date.now() + 4 * 3600_000);
     await q(
       `ALTER TABLE handyman_visit_appointments DISABLE TRIGGER ALL`);
     await q(
@@ -844,7 +850,7 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
       [randomUUID(), apptId, crew.crew.id, startAt, endAt],
     );
     const requestId = (await q('SELECT handyman_request_id FROM handyman_execution_scopes WHERE id=$1', [scopeId])).rows[0].handyman_request_id;
-    await authorizeClearances(requestId, startAt, endAt);
+    if (authorize) await authorizeClearances(requestId, startAt, endAt);
     return apptId;
   }
 
@@ -1091,6 +1097,136 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     } finally {
       await revoker.query('ROLLBACK'); revoker.release(); hook.mock.restore();
     }
+  });
+
+  it('PART04: unapproved quotation cannot supply an execution assignment', async () => {
+    const realm = await setupRealm();
+    const crew = await setupCrew(realm);
+    const { requestId } = await setupRequest(realm);
+    const draft = await createHandymanQuotation({ handymanRequestId: requestId }, adminUserId);
+    assert.equal((await q('SELECT id FROM handyman_execution_scopes WHERE handyman_request_id=$1', [requestId])).rows.length, 0);
+    await assert.rejects(() => assignHandymanExecutionScopeCrew({
+      executionScopeId: draft.versions[0].id, providerContextId: crew.providerContext.id, crewId: crew.crew.id,
+    }, adminUserId), (err: Error) => errorCode(err) === 'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND');
+  });
+
+  it('PART04: approved optional-inspection work can be PLANNED, but local facts/claimed BM approval cannot dispatch', async (t) => {
+    const f = await clearanceFixture();
+    const boundary = t.mock.method(handymanBmClearanceVerifier, 'verify', unavailableBmVerifier);
+    const before = await mutationFacts();
+    const report = await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId);
+    assert.equal(report.assignmentReadiness, 'PLANNED');
+    assert.equal(report.assignmentId, f.assignment.id);
+    assert.equal(report.checks.authorizedScope, true);
+    assert.equal(report.checks.permitClearance, true);
+    assert.equal(report.checks.unitAccessClearance, true);
+    assert.equal(report.checks.independentBmClearance, false);
+    assert.equal(report.bmClearance.state, 'UNAVAILABLE');
+    assert.equal(report.ready, false);
+    assert.equal((await q('SELECT id FROM handyman_request_inspections WHERE handyman_request_id=$1', [f.requestId])).rows.length, 0);
+    const claimed = parseReleaseBody({ appointmentId: f.appointmentId, bmApproved: true,
+      authority: 'BUILDING_MANAGEMENT', permitApproved: true, override: true });
+    await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId, ...claimed }, adminUserId),
+      (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+    assert.deepEqual(await mutationFacts(), before);
+    boundary.mock.restore();
+    const verified = await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId);
+    assert.equal(verified.assignmentReadiness, 'DISPATCH_READY');
+    assert.equal(verified.checks.independentBmClearance, true);
+    const released = await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId);
+    assert.equal(released.status, 'RELEASED');
+    assert.equal((released.readinessSnapshot as any).bmClearance.verificationReference, 'TEST-ONLY-NOT-LIVE-BM-PROOF');
+  });
+
+  for (const decision of ['PENDING', 'REJECTED', 'REVOKED', 'EXPIRED'] as const) {
+    it(`PART04: independent BM ${decision} blocks dispatch atomically`, async (t) => {
+      const f = await clearanceFixture();
+      t.mock.method(handymanBmClearanceVerifier, 'verify', async (binding) => bmClearanceTestFact(binding, { decision }));
+      const before = await mutationFacts();
+      const report = await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId);
+      assert.equal(report.bmClearance.state, decision);
+      assert.equal(report.assignmentReadiness, 'PLANNED');
+      await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId),
+        (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+      assert.deepEqual(await mutationFacts(), before);
+    });
+  }
+
+  it('PART04: foreign Client/Tenant/Building/unit, scope, visit, assignment and crew coverage cannot substitute', async (t) => {
+    const f = await clearanceFixture();
+    const before = await mutationFacts();
+    for (const key of ['clientId', 'tenantCompanyId', 'buildingId', 'executionScopeId', 'assignmentId', 'crewId',
+      'approvedQuotationVersionId', 'location', 'visit', 'members'] as const) {
+      const boundary = t.mock.method(handymanBmClearanceVerifier, 'verify', async (binding) => {
+        const wrong = structuredClone(binding);
+        if (key === 'location') wrong.location.spaceId = randomUUID();
+        else if (key === 'visit') wrong.visit.endAt = new Date(Date.parse(wrong.visit.endAt) + 60_000).toISOString();
+        else if (key === 'members') wrong.members[0].workerContextId = randomUUID();
+        else wrong[key] = randomUUID();
+        return bmClearanceTestFact(binding, { bindingDigest: handymanBmBindingDigest(wrong) });
+      });
+      try {
+        assert.equal((await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId)).bmClearance.state,
+          'BINDING_MISMATCH', key);
+        await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId),
+          (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+      } finally { boundary.mock.restore(); }
+    }
+    assert.deepEqual(await mutationFacts(), before);
+  });
+
+  it('PART04: unavailable, malformed, stale, expired or partial-window BM verification stays closed', async (t) => {
+    const f = await clearanceFixture();
+    const badFacts = [null, { decision: 'UNKNOWN' }, { authority: 'HANDYMAN_OPERATIONS' },
+      { verifiedAt: new Date(Date.now() - 120_000).toISOString() },
+      { verifiedAt: new Date(Date.now() + 120_000).toISOString() },
+      { validFrom: new Date(0).toISOString(), validUntil: new Date(Date.now() - 60_000).toISOString() },
+      { validUntil: new Date(Date.now() + 60_000).toISOString() },
+      { applicabilityReference: '' }];
+    for (const bad of badFacts) {
+      const boundary = t.mock.method(handymanBmClearanceVerifier, 'verify', async (binding) =>
+        bad === null ? null : bmClearanceTestFact(binding, bad));
+      try {
+        assert.equal((await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId)).ready, false);
+        await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId),
+          (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+      } finally { boundary.mock.restore(); }
+    }
+    t.mock.method(handymanBmClearanceVerifier, 'verify', async () => { throw new Error('Independent BM unavailable'); });
+    assert.equal((await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId)).bmClearance.state, 'UNAVAILABLE');
+  });
+
+  it('PART04: reassignment supersedes old release and requires fresh exact BM coverage for the replacement', async (t) => {
+    const f = await clearanceFixture();
+    let approved: ReturnType<typeof bmClearanceTestFact> | null = null;
+    t.mock.method(handymanBmClearanceVerifier, 'verify', async (binding) => approved ??= bmClearanceTestFact(binding));
+    const oldRelease = await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId);
+    const replacement = await setupCrew(f.realm);
+    const next = await reassignHandymanExecutionScopeCrew({ executionScopeId: f.scopeId,
+      providerContextId: replacement.providerContext.id, crewId: replacement.crew.id,
+      expectedVersion: f.assignment.version, reason: 'PART04 replacement crew',
+    }, adminUserId);
+    assert.equal((await q('SELECT status FROM handyman_dispatch_releases WHERE id=$1', [oldRelease.id])).rows[0].status, 'SUPERSEDED');
+    const oldVisit = (await q('SELECT start_at, end_at FROM handyman_visit_appointments WHERE id=$1', [f.appointmentId])).rows[0];
+    await withTransaction(async tx => {
+      await tx.query(`UPDATE handyman_visit_appointments SET state='CANCELLED',
+        cancelled_by_user_id=$2, cancelled_at=NOW(), version=version+1, updated_at=NOW() WHERE id=$1`,
+        [f.appointmentId, adminUserId]);
+      await tx.query(`UPDATE handyman_visit_capacity_reservations SET active=FALSE, released_at=NOW()
+        WHERE appointment_id=$1`, [f.appointmentId]);
+    });
+    // New confirmed visit uses the same local location/window facts; it cannot
+    // inherit BM coverage of the old assignment/crew/visit.
+    await seedConfirmedCrewAppointment(f.scopeId, replacement, oldVisit.start_at, oldVisit.end_at, false);
+    assert.equal((await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId)).bmClearance.state, 'BINDING_MISMATCH');
+    await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId),
+      (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+    approved = null; // Explicit independent-boundary re-verification, not an Operations approval.
+    const renewed = await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId);
+    assert.equal(renewed.assignmentId, next.id);
+    await assert.rejects(() => withTransaction(tx => handymanDispatchService.assertDispatchExecutionClearance(
+      tx, f.scopeId, f.crew.leadUser.id, f.assignment.id)),
+      (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
   });
 
 });

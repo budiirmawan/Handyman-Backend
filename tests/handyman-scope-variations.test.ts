@@ -1,3 +1,6 @@
+import { bmBindingTestFixture, bmClearanceTestFact } from './helpers/handyman-bm-clearance';
+import { assessHandymanBmClearance, handymanBmClearanceVerifier, readBmWorkBinding } from '../src/modules/handyman-dispatch/handyman-bm-clearance';
+import type { TestContext } from 'node:test';
 /**
  * CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / REDUCE)
  * Focused Lifecycle, Role Separation, Impersonation & Concurrency Test Suite.
@@ -125,6 +128,27 @@ async function verifiedEvidenceRef(
     [id, CLIENT_A, TENANT_A, BUILDING_A1, REQ_A1, SCOPE_A1, purpose, `evidence/${id}`, bytes.byteLength, sha, `hm-ev://${id}`, LEAD_USER_A, `seed-${id}`],
   );
   return `hm-ev://${id}`;
+}
+
+/** Real approved ADD/REDUCE lifecycle, test-only independent BM boundary.
+ * The surrounding binding shell is a unit fixture, NOT live BM coverage.
+ */
+async function assertBmWorkReassessment(t: TestContext,
+  before: Awaited<ReturnType<typeof readBmWorkBinding>>,
+  after: Awaited<ReturnType<typeof readBmWorkBinding>>,
+) {
+  assert.notDeepEqual(after, before, 'Approved work revision must change BM coverage input');
+  const shell = bmBindingTestFixture();
+  const oldBinding = { ...shell, ...before };
+  const newBinding = { ...shell, ...after };
+  const stale = t.mock.method(handymanBmClearanceVerifier, 'verify', async () => bmClearanceTestFact(oldBinding));
+  try {
+    assert.equal((await assessHandymanBmClearance(getPool(), newBinding)).state, 'BINDING_MISMATCH');
+  } finally { stale.mock.restore(); }
+  const renewed = t.mock.method(handymanBmClearanceVerifier, 'verify', async binding => bmClearanceTestFact(binding));
+  try {
+    assert.equal((await assessHandymanBmClearance(getPool(), newBinding)).state, 'VERIFIED');
+  } finally { renewed.mock.restore(); }
 }
 
 before(async () => {
@@ -799,7 +823,7 @@ async function apiGet(path: string, userId: string) {
 }
 
 describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / REDUCE)', () => {
-  it('1: governs full 9-stage ADD lifecycle (FIELD_FINDING -> PROPOSAL -> OPERATIONS_REVIEW -> REVISED_QUOTATION -> TENANT_DECISION -> AUTHORIZED_SCOPE -> EXECUTION -> QC -> FINAL_CHARGE_ELIGIBILITY) without mutating original scope or auto-invoicing', async () => {
+  it('1: governs full 9-stage ADD lifecycle (FIELD_FINDING -> PROPOSAL -> OPERATIONS_REVIEW -> REVISED_QUOTATION -> TENANT_DECISION -> AUTHORIZED_SCOPE -> EXECUTION -> QC -> FINAL_CHARGE_ELIGIBILITY) without mutating original scope or auto-invoicing', async (t) => {
     // Stage 1: Inspector submits technical finding (FIELD_FINDING)
     const s1 = await apiPost(
       `/handyman/field/execution-scopes/${SCOPE_A1}/variations/findings`,
@@ -1024,6 +1048,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       'HANDYMAN_VARIATION_ILLEGAL_TRANSITION',
     );
 
+    const bmBeforeAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
     // Stage 5: Authorized Tenant PIC user approves variation bound to QVER_A2_ADD (TENANT_DECISION)
     const s5 = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`,
@@ -1041,6 +1066,12 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s5.body.data.variation.status, 'TENANT_DECISION');
     assert.equal(s5.body.data.variation.tenantDecisionOutcome, 'APPROVED');
     assert.equal(s5.body.data.variation.tenantDecidedByUserId, TENANT_USER_A);
+    const bmApprovedAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
+    await assertBmWorkReassessment(t, bmBeforeAdd, bmApprovedAdd);
+    const addCoverage = bmApprovedAdd.approvedVariations.find(v => v.id === varId)!;
+    assert.equal(addCoverage.variationType, 'ADD');
+    assert.equal(addCoverage.revisedQuotationVersionId, QVER_A2_ADD);
+    assert.equal(addCoverage.authorized, false);
 
     // Stage 6: Operations/Manager authorizes scope (AUTHORIZED_SCOPE)
     const s6 = await apiPost(
@@ -1055,6 +1086,9 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     );
     assert.equal(s6.status, 200, JSON.stringify(s6.body));
     assert.equal(s6.body.data.variation.status, 'AUTHORIZED_SCOPE');
+    const bmAuthorizedAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
+    await assertBmWorkReassessment(t, bmApprovedAdd, bmAuthorizedAdd);
+    assert.equal(bmAuthorizedAdd.approvedVariations.find(v => v.id === varId)!.authorized, true);
     assert.equal(
       s6.body.data.reconciledAuthorizedScope.authorizedAddedItems.length,
       1,
@@ -1297,6 +1331,8 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s9.body.data.variation.qcRunId, QCRUN_PASSED_A1);
     assert.equal(s9.body.data.variation.bastId, BAST_A1);
     assert.equal(s9.body.data.events.length, 9);
+    assert.deepEqual(await readBmWorkBinding(getPool(), SCOPE_A1), bmAuthorizedAdd,
+      'Execution/QC/BAST/finance progress must not invent a changed work scope');
 
     // Verify original approved scope row & quotation lines are 100% untouched
     const origScopeRes = await getPool().query(
@@ -1306,7 +1342,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(origScopeRes.rows[0].approved_total_amount, '832500.00');
   });
 
-  it('2: governs REDUCE (Pekerjaan Kurang) lifecycle, reconciles remaining authorized quantity, and blocks over-reduction', async () => {
+  it('2: governs REDUCE (Pekerjaan Kurang) lifecycle, reconciles remaining authorized quantity, and blocks over-reduction', async (t) => {
     // PIC Pekerjaan proposes REDUCE of 4.000 pcs on original material line (10.000 pcs)
     const prop = await apiPost(
       `/handyman/field/execution-scopes/${SCOPE_A1}/variations/proposals`,
@@ -1374,6 +1410,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(commercialEvent.metadata.revisedQuotedTotal, totals.rows.find(r=>r.quotation_version_id===QVER_A3_REDUCE).total);
 
 
+    const bmBeforeReduce = await readBmWorkBinding(getPool(), SCOPE_A1);
     const ten = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${reduceVarId}/tenant-decision`,
       TENANT_USER_A,
@@ -1385,6 +1422,12 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       },
     );
     assert.equal(ten.status, 200);
+    const bmApprovedReduce = await readBmWorkBinding(getPool(), SCOPE_A1);
+    await assertBmWorkReassessment(t, bmBeforeReduce, bmApprovedReduce);
+    const reduceCoverage = bmApprovedReduce.approvedVariations.find(v => v.id === reduceVarId)!;
+    assert.equal(reduceCoverage.variationType, 'REDUCE');
+    assert.equal(reduceCoverage.targetQuotationLineId, QLINE_MAT_A1);
+    assert.equal(reduceCoverage.revisedQuotationVersionId, QVER_A3_REDUCE);
 
     const auth = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${reduceVarId}/authorize-scope`,
@@ -1392,6 +1435,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       { idempotencyKey: 'idem-red-auth-1' },
     );
     assert.equal(auth.status, 200);
+    await assertBmWorkReassessment(t, bmApprovedReduce, await readBmWorkBinding(getPool(), SCOPE_A1));
     const matLineAfter =
       auth.body.data.reconciledAuthorizedScope.reconciledOriginalLines.find(
         (l: { quotationLineId: string }) => l.quotationLineId === QLINE_MAT_A1,
