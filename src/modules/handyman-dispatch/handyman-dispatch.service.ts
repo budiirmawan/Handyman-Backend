@@ -153,7 +153,9 @@ export async function assertDispatchExecutionClearance(
   if (!clearance.permitClearance) failures.push('No active, scope-matching permit covers the execution visit; absence is not an exemption.');
   if (!clearance.unitAccessClearance) failures.push('No active, scope-matching unit access covers the execution visit; absence is not an exemption.');
   if (clearance.currentLeadUserId !== actorUserId) failures.push('Execution requires the current eligible Crew Lead under the roster lock.');
-  if (clearance.bmClearance.state !== 'VERIFIED') failures.push(`Independent BM clearance is ${clearance.bmClearance.state}; local readiness is not BM approval.`);
+  if (!['NOT_INTEGRATED', 'VERIFIED'].includes(clearance.bmClearance.state)) {
+    failures.push(`Optional BM verification is ${clearance.bmClearance.state}; it cannot override failed readiness.`);
+  }
   if (failures.length) throw handymanDispatchNotReadyError(failures);
 }
 
@@ -241,7 +243,8 @@ export async function evaluateDispatchReadiness(
       eligibleProvider = row.pc_status === 'ACTIVE';
       eligibleCrew = row.c_status === 'ACTIVE';
       leadDeclinedAssignment = row.response_status === 'TIDAK_BISA';
-      eligibleLead = row.lead_user_id !== null && !leadDeclinedAssignment;
+      eligibleLead = !!row.lead_user_id && !leadDeclinedAssignment &&
+        clearance?.currentLeadUserId === row.lead_user_id;
     }
   }
 
@@ -320,7 +323,6 @@ export async function evaluateDispatchReadiness(
     unitAccessClearance,
     materialReady,
     assignmentCurrent,
-    independentBmClearance: clearance?.bmClearance.state === 'VERIFIED',
   };
   const failures: string[] = [];
   if (!authorizedScope) failures.push('Execution scope is not AUTHORIZED.');
@@ -331,13 +333,15 @@ export async function evaluateDispatchReadiness(
   if (leadDeclinedAssignment) {
     failures.push('Crew Lead declined assignment (TIDAK_BISA); reassignment required.');
   } else if (!eligibleLead) {
-    failures.push('Crew Lead is not a valid active user.');
+    failures.push('Current Crew Lead or active worker roster is not eligible.');
   }
   if (!noConflictingCommitment) failures.push('Crew has another active work session.');
   if (!permitClearance) failures.push('No active matching permit covers the visit; missing readiness is not a trusted exemption.');
   if (!unitAccessClearance) failures.push('No active matching unit access covers the visit; missing readiness is not a trusted exemption.');
   if (!materialReady) failures.push('Materials are not ready (open purchase).');
-  if (!checks.independentBmClearance) failures.push(`Independent BM clearance is ${clearance?.bmClearance.state ?? 'LOCAL_FACTS_MISSING'}; assignment planning is not dispatch authority.`);
+  if (clearance && !['NOT_INTEGRATED', 'VERIFIED'].includes(clearance.bmClearance.state)) {
+    failures.push(`Optional BM verification is ${clearance.bmClearance.state}; no BM API is required for existing manual coordination.`);
+  }
 
   return {
     executionScopeId: scopeId,

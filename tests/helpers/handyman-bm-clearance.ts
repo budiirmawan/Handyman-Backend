@@ -1,11 +1,7 @@
-import { mock, type MockTracker } from 'node:test';
 import {
-  handymanBmBindingDigest, handymanBmClearanceVerifier,
+  handymanBmBindingDigest,
   type HandymanBmClearanceBinding,
 } from '../../src/modules/handyman-dispatch/handyman-bm-clearance';
-
-/** The unconfigured PRODUCTION boundary, captured before any test double. */
-export const unavailableBmVerifier = handymanBmClearanceVerifier.verify;
 
 /** TEST ONLY. Never live BM issuer/authentication/revocation evidence. */
 export function bmClearanceTestFact(
@@ -19,12 +15,6 @@ export function bmClearanceTestFact(
     bindingDigest: handymanBmBindingDigest(binding), verifiedAt: new Date().toISOString(),
     validFrom: binding.visit.startAt, validUntil: binding.visit.endAt, ...overrides,
   };
-}
-
-/** Legacy non-BM execution suites opt in explicitly, at suite setup. */
-export function installIndependentBmTestDouble(tracker: Pick<MockTracker, 'method'> = mock) {
-  return tracker.method(handymanBmClearanceVerifier, 'verify', async (binding: HandymanBmClearanceBinding) =>
-    bmClearanceTestFact(binding));
 }
 
 /** Complete test-only binding shell for work-revision consumer unit assertions. */

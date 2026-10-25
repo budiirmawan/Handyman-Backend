@@ -134267,7 +134267,7 @@ components:
         ready: { type: boolean }
         checks:
           type: object
-          required: [authorizedScope, confirmedAppointment, eligibleProvider, eligibleCrew, eligibleLead, noConflictingCommitment, permitClearance, unitAccessClearance, materialReady, assignmentCurrent, independentBmClearance]
+          required: [authorizedScope, confirmedAppointment, eligibleProvider, eligibleCrew, eligibleLead, noConflictingCommitment, permitClearance, unitAccessClearance, materialReady, assignmentCurrent]
           properties:
             authorizedScope: { type: boolean }
             confirmedAppointment: { type: boolean }
@@ -134279,9 +134279,6 @@ components:
             unitAccessClearance: { type: boolean }
             materialReady: { type: boolean }
             assignmentCurrent: { type: boolean }
-            independentBmClearance:
-              type: boolean
-              description: Fresh independent BM coverage of the exact work revision, location, visit, assignment and current Lead/helper roster. Local permit/access facts alone are insufficient.
         assignmentReadiness:
           type: string
           enum: [UNASSIGNED, PLANNED, DISPATCH_READY]
@@ -134292,10 +134289,10 @@ components:
           properties:
             state:
               type: string
-              enum: [VERIFIED, UNAVAILABLE, PENDING, REJECTED, REVOKED, EXPIRED, BINDING_MISMATCH, INVALID, LOCAL_FACTS_MISSING]
+              enum: [NOT_INTEGRATED, VERIFIED, UNAVAILABLE, PENDING, REJECTED, REVOKED, EXPIRED, BINDING_MISMATCH, INVALID, LOCAL_FACTS_MISSING]
             bindingDigest: { type: string, nullable: true, pattern: '^[a-f0-9]{64}$' }
             verificationReference: { type: string, nullable: true }
-          description: Read-only assessment, never an approval command. No independent BM integration is configured; live applicable transitions remain BLOCKED. Missing facts are not exemptions.
+          description: Optional read-only assessment, never an approval command. BM handles permits/access outside Handyman; no BM API is required. NOT_INTEGRATED is not verified BM approval. Existing scoped permit/access, visit, assignment and current roster guards remain mandatory; an optional reader outage is not a fallback to manual mode.
         failures:
           type: array
           items: { type: string }
@@ -134690,9 +134687,21 @@ components:
       description: >-
         Source: VisitProposalBody (handyman-visit-api.validation.ts). Strict
         allow-list; INSPECTION requires executionScopeId to be null,
-        EXECUTION requires a valid executionScopeId; the window must be in
-        the future and at most 24 hours.
-      required: [kind, resourceId, startAt, endAt]
+        EXECUTION requires a valid executionScopeId. INSPECTION supplies its
+        own startAt/endAt. EXECUTION can omit both and reuse the recorded
+        tenant choice or existing request scheduling preference; a partial pair
+        is invalid. An explicit revision must match coordinated tenant choice
+        or preserved scheduling readiness. Preference is not confirmation.
+        The resolved window must be future and at most 24 hours.
+      required: [kind, resourceId]
+      oneOf:
+        - required: [startAt, endAt]
+        - properties:
+            kind: { type: string, enum: [EXECUTION] }
+          not:
+            anyOf:
+              - required: [startAt]
+              - required: [endAt]
       properties:
         kind: { type: string, enum: [INSPECTION, EXECUTION] }
         resourceId: { type: string, format: uuid }
@@ -134708,14 +134717,15 @@ components:
         version: { type: integer, minimum: 1 }
     HandymanVisitProposalList:
       type: object
-      required: [requestId, appointments, bookingEnabled, confirmationEnabled]
+      required: [requestId, appointments, bookingEnabled, confirmationEnabled, schedulingReadiness]
       properties:
         requestId: { type: string, format: uuid }
         appointments:
           type: array
           items: { $ref: "#/components/schemas/HandymanVisitAppointment" }
         bookingEnabled: { type: boolean }
-        confirmationEnabled: { type: boolean }
+        confirmationEnabled: { type: boolean, description: "Stored tenant coordination may be confirmed without BM API provisioning; state/provenance/eligibility/capacity guards still apply." }
+        schedulingReadiness: { $ref: "#/components/schemas/HandymanSchedulingReadinessBundle" }
     TenantSlotChoiceAssertion:
       type: object
       additionalProperties: false
@@ -135689,7 +135699,7 @@ components:
     HandymanFieldScopeDetail:
       type: object
       description: "Source: readAssignedFieldExecutionScopeDetail. Also served identically at the work-orders alias path."
-      required: [actorRole, workOrder, visit, executionScopeSnapshot, approvedQuotation, assignmentContext, inspectionContext, materials]
+      required: [actorRole, workOrder, visit, schedulingReadiness, executionScopeSnapshot, approvedQuotation, assignmentContext, inspectionContext, materials]
       properties:
         actorRole: { type: string, enum: [PIC_PEKERJAAN, INSPECTOR] }
         workOrder:
@@ -135712,6 +135722,7 @@ components:
             createdAt: { type: string, format: date-time }
             updatedAt: { type: string, format: date-time }
         visit: { $ref: "#/components/schemas/HandymanFieldVisitContext" }
+        schedulingReadiness: { $ref: "#/components/schemas/HandymanSchedulingReadinessBundle" }
         executionScopeSnapshot: { $ref: "#/components/schemas/HandymanFieldExecutionScopeSnapshot" }
         approvedQuotation: { $ref: "#/components/schemas/HandymanFieldQuotationSnapshot" }
         assignmentContext: { $ref: "#/components/schemas/HandymanFieldAssignmentContext" }
@@ -135720,7 +135731,7 @@ components:
     HandymanFieldRequestDetail:
       type: object
       description: "Source: readAssignedFieldRequestDetail."
-      required: [actorRole, request, visit, inspectionContext, executionScopeSnapshot, approvedQuotation, assignmentContext, materials]
+      required: [actorRole, request, visit, schedulingReadiness, inspectionContext, executionScopeSnapshot, approvedQuotation, assignmentContext, materials]
       properties:
         actorRole: { type: string, enum: [PIC_PEKERJAAN, INSPECTOR] }
         request:
@@ -135738,6 +135749,7 @@ components:
             createdAt: { type: string, format: date-time }
             updatedAt: { type: string, format: date-time }
         visit: { $ref: "#/components/schemas/HandymanFieldVisitContext" }
+        schedulingReadiness: { $ref: "#/components/schemas/HandymanSchedulingReadinessBundle" }
         inspectionContext: { $ref: "#/components/schemas/HandymanFieldInspectionContext" }
         executionScopeSnapshot:
           allOf:

@@ -1,5 +1,7 @@
 # PART04 — Field assignment, BM permit and execution readiness
 
+> **PART04 correction (2026-10-25):** the mandatory BM API premise below is superseded. BM permit/access procedures remain external; existing manually recorded readiness and execution guards are reused without requiring BM integration. See [requested schedule / existing Surat Tugas correction](CR-HM-PART04-CORRECTION-REQUESTED-SCHEDULE-SURAT-TUGAS.md). The remainder is the historical delivery report.
+
 Date: 2026-10-25. Branch: `arena/3a9f4872-handyman-backend`. Baseline: `6532c4cbb8df8e4492f484c1b45b7e7d9bc3f97a`.
 
 ## Outcome

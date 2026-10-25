@@ -39,7 +39,7 @@ export function handymanBmBindingDigest(binding: HandymanBmClearanceBinding): st
 }
 
 export type HandymanBmClearanceState =
-  | 'VERIFIED' | 'UNAVAILABLE' | 'PENDING' | 'REJECTED' | 'REVOKED'
+  | 'NOT_INTEGRATED' | 'VERIFIED' | 'UNAVAILABLE' | 'PENDING' | 'REJECTED' | 'REVOKED'
   | 'EXPIRED' | 'BINDING_MISMATCH' | 'INVALID' | 'LOCAL_FACTS_MISSING';
 
 export type HandymanBmClearanceAssessment = {
@@ -49,22 +49,17 @@ export type HandymanBmClearanceAssessment = {
 };
 
 /**
- * READ-ONLY integration boundary, NOT a BM approval producer.
- *
- * An implementation must authenticate an independent BM issuer, read current
- * permit AND access decisions (including required/exempt/type policy and
- * revocations), and verify their exact coverage against this binding. APPROVED
- * means the COMPLETE applicable clearance, not merely a local readiness flag.
- * Its result must include authority=BUILDING_MANAGEMENT, issuerId,
- * applicabilityReference, verificationReference, bindingDigest, verifiedAt,
- * validFrom and validUntil. No transport/issuer/authentication/revocation
- * contract is available in this repository: the live dependency stays CLOSED.
- * No env flag, request body, local authorization note, or commercial consent
- * can activate this boundary. Tests must explicitly stub it at the boundary.
+ * Optional read-only verification seam, NOT a BM approval/permit module.
+ * BM handles permits/access outside Handyman. Operations records coordination
+ * using existing scoped permit/access readiness services; no BM API or issuer
+ * provisioning is a prerequisite for that lane. NOT_INTEGRATED is NOT a
+ * verified BM decision. If an independent reader is supplied, failed/revoked/
+ * stale results fail closed, never fall back to manual mode on an outage.
+ * Request bodies, notes and environment flags cannot select this mode.
  */
 export const handymanBmClearanceVerifier = {
   async verify(_binding: HandymanBmClearanceBinding): Promise<unknown> {
-    return { decision: 'UNAVAILABLE' };
+    return { decision: 'NOT_INTEGRATED' };
   },
 };
 
@@ -173,6 +168,10 @@ export async function assessHandymanBmClearance(
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result('INVALID');
   const fact = raw as Record<string, unknown>;
+  if (fact.decision === 'NOT_INTEGRATED') {
+    const now = (await db.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0].now.getTime();
+    return result(Date.parse(binding.visit.endAt) <= now ? 'EXPIRED' : 'NOT_INTEGRATED');
+  }
   if (fact.decision === 'UNAVAILABLE') return result('UNAVAILABLE');
   const text = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
   if (fact.authority !== 'BUILDING_MANAGEMENT' || !text(fact.issuerId) ||

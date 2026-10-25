@@ -49,7 +49,6 @@ export type HandymanDispatchReadinessCheck = {
   unitAccessClearance: boolean;
   materialReady: boolean;
   assignmentCurrent: boolean;
-  independentBmClearance: boolean;
 };
 
 export type HandymanDispatchReadinessReport = {

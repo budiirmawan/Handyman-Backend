@@ -137,6 +137,7 @@ async function readOperationalProjection(
               'id', sr.id, 'status', sr.status, 'timezone', sr.timezone,
               'preferredWindowStart', sr.preferred_window_start,
               'preferredWindowEnd', sr.preferred_window_end,
+              'supersedesReadinessId', sr.supersedes_readiness_id,
               'changeReason', sr.change_reason, 'createdAt', sr.created_at,
               'updatedAt', sr.updated_at)
               ORDER BY sr.created_at DESC, sr.id DESC)

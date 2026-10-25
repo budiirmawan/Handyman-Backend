@@ -1,3 +1,4 @@
+import { createHandymanSchedulingReadiness, supersedeHandymanSchedulingReadiness } from '../src/modules/handyman-scheduling';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
@@ -213,6 +214,33 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.equal((await getProjection(unitRequests[0], { ...unit(), unexpected: 'value' })).status, 400);
     assert.equal((await getCareWorkspaceOperationalProjection(token, unitRequests[0], unit(), { write: true })
       .then(() => false, () => true)), true);
+  });
+
+  it('PART04 correction: Care projection reuses original/revised scheduling records and parent IDs without treating preferences as bookings', async () => {
+    const requestId = await request(tenantId, buildings[0], chains[0].spaceId, services[0], true);
+    await pool.query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1", [buildings[0]]);
+    const start = new Date(Date.now() + 2 * 86_400_000);
+    const end = new Date(start.getTime() + 3_600_000);
+    const original = await createHandymanSchedulingReadiness({ handymanRequestId: requestId,
+      preferredWindowStart: start.toISOString(), preferredWindowEnd: end.toISOString() }, adminId);
+    const revised = await supersedeHandymanSchedulingReadiness(original.id, {
+      preferredWindowStart: new Date(start.getTime() + 86_400_000).toISOString(),
+      preferredWindowEnd: new Date(end.getTime() + 86_400_000).toISOString(),
+      changeReason: 'Tenant-coordinated revised preference',
+    }, adminId);
+    const response = await getProjection(requestId);
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const rows = response.body.data.scheduling.readiness;
+    const head = rows.find((r: any) => r.id === revised.id);
+    const first = rows.find((r: any) => r.id === original.id);
+    assert.equal(head.supersedesReadinessId, original.id);
+    assert.equal(first.supersedesReadinessId, null);
+    assert.equal(Date.parse(first.preferredWindowStart), start.getTime());
+    assert.equal(Date.parse(head.preferredWindowStart), start.getTime() + 86_400_000);
+    assert.equal(first.status, 'INACTIVE');
+    assert.equal(head.status, 'ACTIVE');
+    assert.deepEqual(response.body.data.scheduling.appointments, []);
+    notFound(await getProjection(requestId, { ...unit(), tenantCompanyId: newTenant }));
   });
 
   it('supports building-only requests without requiring a space relationship, but rejects a mismatched space selector', async () => {

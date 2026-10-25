@@ -6,6 +6,7 @@ import { buildingAccessDeniedError } from '../context-access';
 import { handymanInspectorAssignmentService } from '../handyman-inspector-assignments';
 import { resolveHandymanAssignmentLead } from '../handyman-scope-assignments';
 import { assignmentResponseRepository } from '../assignment-responses';
+import { getHandymanSchedulingReadiness } from '../handyman-scheduling/handyman-scheduling.service';
 
 /**
  * Read-only field feed. The logged-in user is the identity; never accept
@@ -623,8 +624,17 @@ async function loadVisitContext(params: {
       WHERE handyman_request_id = $1
         AND client_id = $2
         AND state IN ('CONFIRMED', 'IN_PROGRESS', 'COMPLETED')
+        AND (kind = 'INSPECTION' OR (
+          execution_scope_id = $3 AND resource_type = 'CREW' AND EXISTS (
+            SELECT 1 FROM handyman_execution_scope_assignments current_assignment
+             WHERE current_assignment.execution_scope_id = $3
+               AND current_assignment.client_id = handyman_visit_appointments.client_id
+               AND current_assignment.status = 'ACTIVE'
+               AND current_assignment.handyman_crew_id = handyman_visit_appointments.resource_id
+          )
+        ))
       ORDER BY created_at DESC`,
-    [params.handymanRequestId, params.clientId],
+    [params.handymanRequestId, params.clientId, params.executionScopeId ?? null],
   );
 
   const mapVisit = (v: (typeof visitsRes.rows)[number] | undefined) =>
@@ -897,7 +907,7 @@ export async function readAssignedFieldExecutionScopeDetail(
     actorUserId,
   });
 
-  const [approvedQuotation, assignmentContext, inspectionContext, visit] =
+  const [approvedQuotation, assignmentContext, inspectionContext, visit, schedulingReadiness] =
     await Promise.all([
       loadSanitizedQuotationSnapshot(
         scope.quotation_id,
@@ -910,6 +920,7 @@ export async function readAssignedFieldExecutionScopeDetail(
         clientId: scope.client_id,
         executionScopeId: scope.id,
       }),
+      getHandymanSchedulingReadiness(scope.handyman_request_id, actorUserId),
     ]);
 
   const materials = await loadRoleScopedMaterials({
@@ -939,6 +950,7 @@ export async function readAssignedFieldExecutionScopeDetail(
       updatedAt: scope.request_updated_at.toISOString(),
     },
     visit,
+    schedulingReadiness,
     executionScopeSnapshot: {
       id: scope.id,
       handymanRequestId: scope.handyman_request_id,
@@ -1062,6 +1074,7 @@ export async function readAssignedFieldRequestDetail(
     approvedQuotation,
     assignmentContext,
     inspectorAssignmentContext,
+    schedulingReadiness,
   ] = await Promise.all([
     loadInspectionContext(request.id, request.client_id),
     loadVisitContext({
@@ -1079,6 +1092,7 @@ export async function readAssignedFieldRequestDetail(
       ? loadAssignmentContext(scope.id, request.client_id)
       : Promise.resolve(null),
     loadInspectorAssignmentContext(request.id, request.client_id),
+    getHandymanSchedulingReadiness(request.id, actorUserId),
   ]);
 
   const materials = scope
@@ -1110,6 +1124,7 @@ export async function readAssignedFieldRequestDetail(
       updatedAt: request.updated_at.toISOString(),
     },
     visit,
+    schedulingReadiness,
     inspectionContext,
     executionScopeSnapshot: scope
       ? {
