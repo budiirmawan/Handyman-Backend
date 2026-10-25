@@ -15,6 +15,8 @@ function executor(rows: Array<{ tenant_pic_id: string }>) {
   return {
     query: async (text: string, values?: unknown[]) => {
       assert.match(text, /tp\.user_id = \$1/);
+      assert.match(text, /JOIN users u ON u\.id = tp\.user_id AND u\.status = 'ACTIVE'/);
+      assert.match(text, /FOR SHARE OF tp, u/);
       assert.match(text, /r\.id = \$2/);
       assert.match(text, /tc\.client_id = r\.client_id/);
       assert.match(text, /r\.tenant_company_id = \$4/);

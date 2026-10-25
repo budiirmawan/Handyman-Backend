@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   NewProperty,
@@ -81,8 +82,8 @@ async function createProperty(input: NewProperty): Promise<PropertyRecord> {
   return mapPropertyRow(result.rows[0]);
 }
 
-async function findById(id: string): Promise<PropertyRecord | null> {
-  const result = await getPool().query<PropertyRow>(
+async function findById(id: string, client?: PoolClient): Promise<PropertyRecord | null> {
+  const result = await (client ?? getPool()).query<PropertyRow>(
     `SELECT ${PROPERTY_SELECT} FROM properties WHERE id = $1`,
     [id],
   );

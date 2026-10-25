@@ -50,6 +50,7 @@ import { clientMonetaryContextService } from '../src/modules/client-monetary-con
 import { inventoryItemService } from '../src/modules/inventory-items';
 import { priceCatalogEntryService } from '../src/modules/price-catalog-entries';
 import { ensureTestDatabase } from './helpers/postgres';
+import { startEmbeddedTestDatabase, type EmbeddedTestDatabase } from './helpers/embedded-test-db';
 
 /**
  * CR-HM-06 PART 04 — focused tests for version-bound customer
@@ -63,13 +64,15 @@ const _keepRef = () => ({ handymanServiceRequestInspectionService });
 
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
+let embedded: EmbeddedTestDatabase | undefined;
 let adminUserId = '';
 let disciplineIds: Record<string, string> = {};
 const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 
 before(async () => {
+  embedded = await startEmbeddedTestDatabase({ dir: `/tmp/hm-quote-decision-${randomUUID()}`, port: 55586 });
   const db = await ensureTestDatabase();
-  if (!db) return;
+  assert.ok(db, 'disposable quotation-decision database must be available');
   pool = await initDatabase(db);
   await migrateUp(pool);
   await pool.query(`TRUNCATE handyman_request_diagnoses,
@@ -95,9 +98,13 @@ before(async () => {
 });
 
 after(async () => {
-  if (pool) await closePool(pool);
-  pool = null;
-  database = null;
+  try {
+    if (pool) await closePool(pool);
+  } finally {
+    await embedded?.stop();
+    pool = null;
+    database = null;
+  }
 });
 
 function requireDatabase(t: TestContext): boolean {

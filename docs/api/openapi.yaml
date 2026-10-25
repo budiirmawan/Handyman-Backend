@@ -9181,7 +9181,7 @@ paths:
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_EXECUTION_SCOPE_CONFLICT, HANDYMAN_EXECUTION_SCOPE_LOCATION_INCONSISTENT, HANDYMAN_QUOTATION_DECISION_CONFLICT, HANDYMAN_QUOTATION_INVALID_TRANSITION, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_VERSION_NOT_FOUND, HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN]
       summary: Customer decision (APPROVE or REJECT) bound to the exact ISSUED quotation version
-      description: "The decision is explicit and version-bound: actor is the authenticated session user; customer/tenant context is server-derived from the immutable request/attribution lineage; idempotency follows the existing Idempotency-Key header convention. A successful APPROVE atomically creates the authoritative Handyman Execution Scope and returns it on the decision result for downstream target discovery; REJECT never creates scope. Quotation approval is not BAST acceptance, not payment, and not authorization of payment. AUTHORITY (service-enforced, on top of the route's tenant_company.manage guard): the decision is PIC-personal — the authenticated user must be the request's immutable Tenant PIC (the platform User linked to the ACTIVE PIC of the ACTIVE tenant company, with a current occupancy of the exact space where one is bound), per assertHandymanTenantDecisionActor. Customer Care and Operations staff cannot approve or reject on the tenant's behalf and no delegation record exists; any other actor is refused 403 HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN. The PIC therefore acts with their own linked platform-user session (which must also hold tenant_company.manage and exact-Building access); tenant/PIC identity is never supplied in the body."
+      description: "The decision is explicit and version-bound: actor is the authenticated session user; customer/tenant context is server-derived from the immutable request/attribution lineage; idempotency follows the existing Idempotency-Key header convention. A successful APPROVE atomically creates the authoritative Handyman Execution Scope and returns it on the decision result for downstream target discovery; REJECT never creates scope. Quotation approval is not BAST acceptance, not payment, and not authorization of payment. AUTHORITY (service-enforced, on top of the route's tenant_company.manage guard): the decision is PIC-personal — the authenticated ACTIVE User must currently be linked to the request's designated ACTIVE Tenant PIC of the ACTIVE tenant company, with current occupancy of the exact space where one is bound, per assertHandymanTenantDecisionActor. The immutable reference is the request's PIC id, not an ungoverned User binding. PART 03 holds PIC/account share locks through the decision transaction, serializes governed PIC relinks, and rechecks current authority before idempotent replay; later identity changes never rewrite the original decidedByUserId. Customer Care and Operations staff cannot approve or reject on the tenant's behalf and no delegation record exists; any other actor is refused 403 HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN. The PIC therefore acts with their own linked platform-user session (which must also hold tenant_company.manage and exact-Building access); tenant/PIC identity is never supplied in the body."
       parameters:
         - name: quotationVersionId
           in: path
@@ -76364,12 +76364,18 @@ paths:
       operationId: createTenantPic
       summary: Create a Tenant PIC
       description: >-
-        BE-14B management. Creates a Tenant contact. The Tenant Company must be
-        ACTIVE. An inactive PIC cannot be primary. Optional `userId` must be an
-        existing User who can access the Tenant Client, and that User can be
-        linked only once per Tenant. Requires `tenant_company.manage` and
-        Client access. No Building isolation. No idempotency key. No optimistic
-        concurrency.
+        BE-14B management. Creates a Tenant contact; the Company must be
+        ACTIVE and an inactive PIC cannot be primary. Unbound contact creation
+        retains `tenant_company.manage` and Client access. PART 03: supplying
+        `userId` additionally requires an ACTIVE identity administrator with
+        live `user.manage`; new self-binding is forbidden. The target must be
+        an existing ACTIVE User with Client access, not already linked to a
+        different Tenant Company or another PIC in this Company. Existing
+        effective tenant locations require a shared exact Building; pre-occupancy
+        Client-scoped provisioning remains possible without granting request
+        approval rights. A successful identity link and its operational audit
+        commit atomically. No new User is created. No idempotency key or
+        optimistic-concurrency field.
       tags: [Tenant PIC]
       security: [{ bearerAuth: [] }]
       x-required-permission: tenant_company.manage
@@ -76468,17 +76474,32 @@ paths:
       operationId: updateTenantPic
       summary: Update a Tenant PIC
       description: >-
-        BE-14B management. Updates PIC fields. `tenantCompanyId` is immutable.
-        `userId`, email, phone, and role title may be cleared with null. An
-        inactive PIC cannot be primary; inactivating a primary PIC clears
-        `isPrimary` when it is not explicitly set. Requires
-        `tenant_company.manage` and Client access. No idempotency key. No
-        optimistic concurrency.
+        BE-14B management. `tenantCompanyId` is immutable. Contact maintenance
+        retains `tenant_company.manage` and Client access; omitted or unchanged
+        `userId` does not grant identity authority. Email, phone and role title
+        never rebind the approving User. PART 03: a changed non-null `userId`
+        requires an ACTIVE identity administrator with live `user.manage`, an
+        ACTIVE Company and existing ACTIVE target User, no new self-binding,
+        and no target binding to another Tenant Company or PIC. Actor and target
+        need exact access to every Building of requests designating this PIC;
+        non-terminal exact-space requests additionally need effective occupancy.
+        CANCELLED/REFERRED requests and CLOSED scopes retain Building scope but
+        do not require renewal of historical occupancy. Without designated
+        requests, existing effective tenant locations require a shared Building;
+        pre-occupancy Client provisioning remains possible. A current customer
+        may unlink their own binding with `userId: null` under the same actor
+        scope, but cannot transfer it to another User. Other unlinking requires
+        identity-administration authority. Identity authorization, fresh locked
+        comparison, mutation and operational audit are one transaction, serialized
+        against quotation/variation decisions. Stored decision actors/history
+        never change. Inactivating a primary PIC clears `isPrimary` when omitted;
+        an inactive PIC cannot be primary. No idempotency key or optimistic-
+        concurrency field; contact-only clients should omit `userId`.
       tags: [Tenant PIC]
       security: [{ bearerAuth: [] }]
       x-required-permission: tenant_company.manage
       x-client-scoped: true
-      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, TENANT_PIC_NOT_FOUND, TENANT_COMPANY_NOT_FOUND, TENANT_PIC_INACTIVE_PRIMARY, USER_NOT_FOUND, TENANT_PIC_USER_CLIENT_MISMATCH, TENANT_PIC_USER_ALREADY_LINKED]
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, BUILDING_ACCESS_DENIED, TENANT_PIC_NOT_FOUND, TENANT_COMPANY_NOT_FOUND, TENANT_COMPANY_INACTIVE, TENANT_PIC_INACTIVE_PRIMARY, USER_NOT_FOUND, TENANT_PIC_USER_CLIENT_MISMATCH, TENANT_PIC_USER_ALREADY_LINKED]
       parameters:
         - name: id
           in: path
@@ -84021,10 +84042,13 @@ paths:
         APPROVE/APPROVED or REJECT/REJECTED with a verified evidence
         reference). Authority is service-enforced and PIC-personal
         (`assertHandymanTenantDecisionActor`): the authenticated user must
-        be the request's immutable Tenant PIC (the platform User linked to
-        the ACTIVE PIC of the ACTIVE tenant company, with a current
-        occupancy of the exact space where one is bound), on top of
-        exact-Building access. There is deliberately NO Operations/Manager
+        be the ACTIVE platform User currently linked to the request's
+        designated ACTIVE PIC of the ACTIVE tenant company, with current
+        occupancy of the exact space where one is bound, on top of
+        exact-Building access. PART 03 holds PIC/account share locks through
+        the decision transaction, serializes governed relinks and checks
+        current authority before replay. Later PIC changes never rewrite
+        the original tenantDecidedByUserId or decision events. There is deliberately NO Operations/Manager
         or Customer Care recording path and no delegation: a staff actor
         who is not that PIC is refused 403
         HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN, and no tenant identity is
@@ -131876,6 +131900,10 @@ components:
         updatedAt: { type: string, format: date-time }
     CreateTenantPicRequest:
       type: object
+      description: >-
+        Contact creation remains separate from identity authorization. Supplying
+        userId requires the additional identity-administration policy documented
+        on createTenantPic; email and phone never establish a User binding.
       required: [picName]
       properties:
         userId: { $ref: "#/components/schemas/Uuid" }
@@ -131887,7 +131915,10 @@ components:
         status: { $ref: "#/components/schemas/TenantPicStatus" }
     UpdateTenantPicRequest:
       type: object
-      description: tenantCompanyId is immutable and rejected if present.
+      description: >-
+        tenantCompanyId is immutable and rejected if present. Omit userId for
+        contact-only maintenance; a changed value is an identity operation under
+        updateTenantPic policy, not a contact edit. Null requests an unlink.
       properties:
         userId:
           allOf: [{ $ref: "#/components/schemas/Uuid" }]
