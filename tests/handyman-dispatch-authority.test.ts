@@ -1337,4 +1337,49 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     assert.equal((await q('SELECT id FROM handyman_scheduling_readiness WHERE handyman_request_id=$1', [requestId])).rows[0].id, original.id);
   });
 
+  it('RELEASE SECURITY: cancelled visit denies Lead direct/presigned/staged evidence writes', async () => {
+    const f = await clearanceFixture();
+    const {credentialService} = await import('../src/modules/auth');
+    const {api} = await import('./helpers/http');
+    const {resetAppConfigCache} = await import('../src/config');
+    const storageDir = `/tmp/release-evidence-${randomUUID()}`;
+    const previousStorage = process.env.EVIDENCE_STORAGE_DIR;
+    process.env.EVIDENCE_STORAGE_DIR=storageDir;
+    resetAppConfigCache();
+    try {
+      await credentialService.createInitialCredential({userId:f.crew.leadUser.id,password:'TestPwd1!good'});
+      const email = (await q('SELECT email FROM users WHERE id=$1',[f.crew.leadUser.id])).rows[0].email;
+      const login = await api().post('/api/v1/auth/login').send({email,password:'TestPwd1!good'});
+      assert.equal(login.status,200,JSON.stringify(login.body));
+      const auth = `Bearer ${login.body.data.sessionToken}`;
+      const bytes = Buffer.from([0xff,0xd8,0xff,0xe0,0,0x10,0x4a,0x46,0x49,0x46,0,1,1,0,0,0x48,0,0x48,0,0,0xff,0xd9]);
+      const intent = () => api().post('/api/v1/handyman/field/evidence/presign').set('Authorization',auth)
+        .send({executionScopeId:f.scopeId,purpose:'BEFORE_AFTER_WORK',mimeType:'image/jpeg',originalFileName:'probe.jpg',declaredByteSize:bytes.length,idempotencyKey:randomUUID()});
+      // Pre-dispatch intent is legitimate and must remain available.
+      const staged = await intent();
+      assert.equal(staged.status,201,JSON.stringify(staged.body));
+      const evidenceId = staged.body.data.evidence.id;
+      const put = () => api().put(`/api/v1/handyman/field/evidence/${evidenceId}/bytes`)
+        .set('Authorization',auth).set('Content-Type','image/jpeg').send(bytes);
+      assert.equal((await put()).status,200);
+      await handymanDispatchService.releaseHandymanDispatch({executionScopeId:f.scopeId,appointmentId:f.appointmentId},adminUserId);
+      await withTransaction(async tx => {
+        await tx.query("UPDATE handyman_visit_appointments SET state='CANCELLED',cancelled_by_user_id=$2,cancelled_at=NOW(),version=version+1,updated_at=NOW() WHERE id=$1",[f.appointmentId,adminUserId]);
+        await tx.query('UPDATE handyman_visit_capacity_reservations SET active=FALSE,released_at=NOW() WHERE appointment_id=$1',[f.appointmentId]);
+      });
+      const res = await api().post(`/api/v1/handyman/field/execution-scopes/${f.scopeId}/evidence/upload`)
+        .set('Authorization',auth).field('purpose','BEFORE_AFTER_WORK').field('idempotencyKey',randomUUID())
+        .attach('file',bytes,{filename:'probe.jpg',contentType:'image/jpeg'});
+      assert.equal(res.status,409,JSON.stringify(res.body));
+      assert.equal((await intent()).status,409);
+      assert.equal((await put()).status,409);
+      assert.equal((await api().post(`/api/v1/handyman/field/evidence/${evidenceId}/confirm`).set('Authorization',auth).send({})).status,409);
+      assert.equal((await q('SELECT upload_status FROM handyman_field_evidence_uploads WHERE id=$1',[evidenceId])).rows[0].upload_status,'STAGED_BYTES');
+    } finally {
+      if (previousStorage === undefined) delete process.env.EVIDENCE_STORAGE_DIR;
+      else process.env.EVIDENCE_STORAGE_DIR=previousStorage;
+      resetAppConfigCache();
+      await rm(storageDir,{recursive:true,force:true});
+    }
+  });
 });
