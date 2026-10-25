@@ -1,7 +1,9 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { recordEvent, type AuditRequestContext } from '../audit';
+import { permissionDeniedError } from '../auth/auth.errors';
 import { privilegedRoleAssignmentDeniedError } from '../roles/role.errors';
+import { ROLE_MUTATION_LOCK } from '../roles/role.service';
 import {
   roleInactiveError,
   roleNotFoundError,
@@ -74,9 +76,10 @@ export async function listPermissions(): Promise<PublicPermission[]> {
 }
 
 /**
- * Assigns an ACTIVE permission to an existing ACTIVE role. Rejects unknown or
- * inactive roles/permissions and duplicate active assignments. The grant is
- * audited as `PERMISSION_GRANTED`.
+ * Assigns an ACTIVE permission to an existing ACTIVE role. Authenticated
+ * delegates may grant only permissions they currently hold, to non-privileged
+ * roles they do not hold. Owners retain privileged administration authority.
+ * Trusted in-process callers may omit the actor; HTTP handlers never do.
  */
 export async function assignPermissionToRole(
   roleId: string,
@@ -84,33 +87,45 @@ export async function assignPermissionToRole(
   actorUserId?: string,
   audit: AuditRequestContext = {},
 ): Promise<PublicPermission> {
-  const role = await roleRepository.findById(roleId);
-  if (!role) {
-    throw roleNotFoundError();
-  }
+  const granted = await withTransaction(async (client) => {
+    // Same order everywhere that takes both locks: user-role, then permission.
+    // Prevent role assignment/revocation or permission revocation from changing
+    // the actor's authority or the target's classification during this grant.
+    await client.query('SELECT pg_advisory_xact_lock($1)', [ROLE_MUTATION_LOCK]);
+    await client.query('SELECT pg_advisory_xact_lock($1)', [
+      ROLE_PERMISSION_MUTATION_LOCK,
+    ]);
 
-  if (role.status !== 'ACTIVE') {
-    throw roleInactiveError();
-  }
+    const role = await roleRepository.findById(roleId, client);
+    if (!role) {
+      throw roleNotFoundError();
+    }
+    if (role.status !== 'ACTIVE') {
+      throw roleInactiveError();
+    }
 
-  const permission = await permissionRepository.findById(permissionId);
-  if (!permission) {
-    throw permissionNotFoundError();
-  }
+    const permission = await permissionRepository.findById(permissionId, client);
+    if (!permission) {
+      throw permissionNotFoundError();
+    }
+    if (permission.status !== 'ACTIVE') {
+      throw permissionInactiveError();
+    }
 
-  if (permission.status !== 'ACTIVE') {
-    throw permissionInactiveError();
-  }
+    await assertPermissionGrantAuthorized(role, permission, actorUserId, client);
 
-  const existing = await permissionRepository.findActiveAssignment(
-    roleId,
-    permissionId,
-  );
-  if (existing) {
-    throw permissionAlreadyAssignedError();
-  }
+    const existing = await permissionRepository.findActiveAssignment(
+      roleId,
+      permissionId,
+      client,
+    );
+    if (existing) {
+      throw permissionAlreadyAssignedError();
+    }
 
-  await permissionRepository.createAssignment(roleId, permissionId);
+    await permissionRepository.createAssignment(roleId, permissionId, client);
+    return { role, permission };
+  });
 
   await recordEvent({
     eventType: 'PERMISSION_GRANTED',
@@ -120,40 +135,86 @@ export async function assignPermissionToRole(
     ipAddress: audit.ipAddress ?? null,
     userAgent: audit.userAgent ?? null,
     metadata: {
-      roleId: role.id,
-      roleCode: role.code,
-      permissionId: permission.id,
-      permissionCode: permission.code,
+      roleId: granted.role.id,
+      roleCode: granted.role.code,
+      permissionId: granted.permission.id,
+      permissionCode: granted.permission.code,
     },
   });
 
-  return toPublicPermission(permission);
+  return toPublicPermission(granted.permission);
 }
 
 /**
- * CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — serializes role-permission grant
- * mutations (revocations and the last-grant checks) so concurrent requests
- * cannot both observe another remaining grant and strip the last
- * administrative capability. Distinct from ROLE_MUTATION_LOCK (724196034).
+ * Serializes permission grants, revocations and last-grant checks. Grants also
+ * take ROLE_MUTATION_LOCK first to stabilize role membership/classification.
  */
 const ROLE_PERMISSION_MUTATION_LOCK = 724196035;
 
+async function assertPermissionGrantAuthorized(
+  role: RoleRecord,
+  permission: PermissionRecord,
+  actorUserId: string | undefined,
+  client: PoolClient,
+): Promise<void> {
+  if (!actorUserId) {
+    return; // Existing trusted in-process bootstrap/fixture convention only.
+  }
+
+  const actor = await userRepository.findById(actorUserId, client);
+  const effectivePermissions =
+    await permissionRepository.listActivePermissionCodesForUser(actorUserId, client);
+  if (
+    actor?.status !== 'ACTIVE' ||
+    !effectivePermissions.includes('permission.manage')
+  ) {
+    throw permissionDeniedError();
+  }
+
+  await assertPrivilegedPermissionMutationAuthorized(
+    role,
+    permission,
+    actorUserId,
+    client,
+  );
+
+  const actorIsOwner = await userRepository.hasActiveRole(
+    actorUserId,
+    PROTECTED_ROLE_CODE,
+    client,
+  );
+  if (actorIsOwner) {
+    return;
+  }
+
+  // A delegate must not consolidate authority into any role they hold, even
+  // if another active role already supplies the requested capability.
+  const actorHoldsTargetRole = await roleRepository.findActiveAssignment(
+    actorUserId,
+    role.id,
+    client,
+  );
+  if (actorHoldsTargetRole || !effectivePermissions.includes(permission.code)) {
+    throw permissionDeniedError();
+  }
+}
+
 /**
  * CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — privilege-escalation guard for
- * permission-grant revocation, mirroring the role-assignment guard in
+ * permission grants and revocations, mirroring the role-assignment guard in
  * `role.service`.
  *
- * A revocation is "privileged" when it touches an authority-defining
+ * A mutation is "privileged" when it touches an authority-defining
  * permission (`role.manage`, `permission.manage`, `user.manage`,
  * `building.manage`) or the target role is privileged (the owner role or a
  * role granting any authority-defining permission). Only an owner
  * (PLATFORM_ADMIN) may perform it, so a delegated `permission.manage` holder
- * cannot strip the system roles or the primary administrator's access.
+ * cannot extend or strip protected administrative authority.
  *
  * `actorUserId` is optional only for trusted in-process callers; every HTTP
  * handler passes the authenticated actor.
  */
-async function assertPrivilegedPermissionRevocationAuthorized(
+async function assertPrivilegedPermissionMutationAuthorized(
   role: RoleRecord,
   permission: PermissionRecord,
   actorUserId?: string,
@@ -239,7 +300,7 @@ export async function revokePermissionFromRole(
       throw rolePermissionAssignmentNotFoundError();
     }
 
-    await assertPrivilegedPermissionRevocationAuthorized(
+    await assertPrivilegedPermissionMutationAuthorized(
       role,
       permission,
       actorUserId,

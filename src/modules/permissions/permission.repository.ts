@@ -239,8 +239,12 @@ async function listActivePermissionsForRole(
  * walking: active user-role assignments → active roles → active
  * role-permission assignments → active permissions.
  */
-async function listActivePermissionCodesForUser(userId: string): Promise<string[]> {
-  const result = await getPool().query<{ code: string }>(
+async function listActivePermissionCodesForUser(
+  userId: string,
+  client?: PoolClient,
+): Promise<string[]> {
+  const executor = client ?? getPool();
+  const result = await executor.query<{ code: string }>(
     `SELECT DISTINCT p.code
      FROM user_role_assignments ura
      JOIN roles r ON r.id = ura.role_id

@@ -108,7 +108,7 @@ async function assertPrivilegedRoleMutationAuthorized(
  * or inactive roles, and duplicate active assignments. Privileged roles
  * additionally require an owner actor.
  */
-const ROLE_MUTATION_LOCK = 724196034;
+export const ROLE_MUTATION_LOCK = 724196034;
 
 export async function assignRoleToUser(
   userId: string,

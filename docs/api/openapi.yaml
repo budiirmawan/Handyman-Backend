@@ -13590,8 +13590,20 @@ paths:
       operationId: assignPermissionToRole
       summary: Assign an ACTIVE permission to an ACTIVE role
       description: >
-        Requires `permission.manage`. Returns the assigned permission.
+        Requires live `permission.manage`. Returns the assigned permission.
+        Authority-defining permissions (`role.manage`, `permission.manage`,
+        `user.manage`, `building.manage`), PLATFORM_ADMIN, and roles already
+        granting any authority-defining permission require an ACTIVE
+        PLATFORM_ADMIN actor; otherwise returns 403 PRIVILEGED_ROLE_ASSIGNMENT_DENIED.
+        Non-owner delegates may grant only an ACTIVE permission they currently
+        hold, to an ordinary role they do not hold; otherwise returns 403
+        PERMISSION_DENIED. Identity and effective authority are resolved from
+        authenticated backend state inside the grant transaction. Roles are
+        installation-wide metadata; grants do not assign Client/Building scope
+        or bypass scoped business-resource authorization.
       tags: [Roles & Permissions]
+      x-required-permission: permission.manage
+      x-error-codes: [VALIDATION_ERROR, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, PRIVILEGED_ROLE_ASSIGNMENT_DENIED, ROLE_NOT_FOUND, PERMISSION_NOT_FOUND, ROLE_INACTIVE, PERMISSION_INACTIVE, PERMISSION_ALREADY_ASSIGNED]
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/RoleIdPath"
