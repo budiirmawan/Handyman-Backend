@@ -1,3 +1,4 @@
+import { permissionService } from '../permissions';
 import type { NextFunction, Request, Response } from 'express';
 import { sendSuccess } from '../../shared/api-response';
 import { authenticationRequiredError } from '../auth';
@@ -53,6 +54,10 @@ function actor(req: Request): string {
   return req.auth.userId;
 }
 
+async function mayVerifyPayment(req:Request):Promise<boolean> {
+  return (await permissionService.resolvePermissionsForUser(actor(req))).includes('handyman.finance.manage');
+}
+
 function toChargeLinePayload(line: HandymanLedgerReadChargeLine) {
   return {
     chargeLineId: line.chargeLineId,
@@ -71,7 +76,7 @@ function toChargeLinePayload(line: HandymanLedgerReadChargeLine) {
   };
 }
 
-function toLedgerPaymentPayload(payment: HandymanLedgerReadPayment) {
+function toLedgerPaymentPayload(payment: HandymanLedgerReadPayment, canVerify = false) {
   return {
     paymentId: payment.paymentId,
     status: payment.status,
@@ -87,7 +92,7 @@ function toLedgerPaymentPayload(payment: HandymanLedgerReadPayment) {
     reversedPayment: payment.reversedPayment,
     netReceived: payment.netReceived,
     authoritativeForEntitlement: payment.authoritativeForEntitlement,
-    availableActions: computePaymentAvailableActions(payment.status),
+    availableActions: computePaymentAvailableActions(payment.status, canVerify),
   };
 }
 
@@ -149,7 +154,7 @@ function toTotalsPayload(totals: HandymanLedgerReadTotals) {
   };
 }
 
-function toTransactionReadPayload(read: HandymanLedgerTransactionRead) {
+function toTransactionReadPayload(read: HandymanLedgerTransactionRead, canVerify = false) {
   return {
     contractVersion: read.contractVersion,
     readOnly: read.readOnly,
@@ -162,7 +167,7 @@ function toTransactionReadPayload(read: HandymanLedgerTransactionRead) {
       createdAt: read.transaction.createdAt,
     },
     chargeLines: read.chargeLines.map(toChargeLinePayload),
-    payments: read.payments.map(toLedgerPaymentPayload),
+    payments: read.payments.map(payment=>toLedgerPaymentPayload(payment,canVerify)),
     allocations: read.allocations.map(toAllocationPayload),
     corrections: read.corrections.map(toCorrectionPayload),
     totals: toTotalsPayload(read.totals),
@@ -243,7 +248,7 @@ function toClientBasisReadPayload(read: HandymanLedgerClientBasisRead) {
   };
 }
 
-function toPaymentRecordPayload(payment: HandymanCustomerPaymentRecord) {
+function toPaymentRecordPayload(payment: HandymanCustomerPaymentRecord, canVerify = false) {
   return {
     id: payment.id,
     clientId: payment.clientId,
@@ -262,7 +267,7 @@ function toPaymentRecordPayload(payment: HandymanCustomerPaymentRecord) {
     decidedByUserId: payment.decidedByUserId,
     rejectionReason: payment.rejectionReason,
     createdAt: payment.createdAt,
-    availableActions: computePaymentAvailableActions(payment.status),
+    availableActions: computePaymentAvailableActions(payment.status, canVerify),
   };
 }
 
@@ -282,9 +287,10 @@ function toPaymentEventPayload(event: HandymanCustomerPaymentEventRecord) {
 
 function toPaymentCommandPayload(
   result: HandymanCustomerPaymentCommandResult,
+  canVerify = false,
 ) {
   return {
-    payment: toPaymentRecordPayload(result.payment),
+    payment: toPaymentRecordPayload(result.payment,canVerify),
     event: toPaymentEventPayload(result.event),
     replayed: result.replayed,
   };
@@ -303,7 +309,7 @@ export async function getExecutionScopeCustomerLedgerHandler(
       executionScopeId,
       actor(req),
     );
-    sendSuccess(res, toTransactionReadPayload(read), 200);
+    sendSuccess(res, toTransactionReadPayload(read, await mayVerifyPayment(req)), 200);
   } catch (error) {
     next(error);
   }
@@ -342,11 +348,12 @@ export async function getExecutionScopeCustomerPaymentsHandler(
       executionScopeId,
       actor(req),
     );
+    const canVerify=await mayVerifyPayment(req);
     sendSuccess(
       res,
       {
         executionScopeId,
-        payments: payments.map(toPaymentRecordPayload),
+        payments: payments.map(payment=>toPaymentRecordPayload(payment,canVerify)),
       },
       200,
     );
@@ -378,7 +385,7 @@ export async function postRecordCustomerPaymentHandler(
       },
       actor(req),
     );
-    sendSuccess(res, toPaymentCommandPayload(result), 200);
+    sendSuccess(res, toPaymentCommandPayload(result, await mayVerifyPayment(req)), 200);
   } catch (error) {
     next(error);
   }
@@ -403,7 +410,7 @@ export async function postConfirmCustomerPaymentHandler(
       },
       actor(req),
     );
-    sendSuccess(res, toPaymentCommandPayload(result), 200);
+    sendSuccess(res, toPaymentCommandPayload(result, await mayVerifyPayment(req)), 200);
   } catch (error) {
     next(error);
   }
@@ -429,7 +436,7 @@ export async function postRejectCustomerPaymentHandler(
       },
       actor(req),
     );
-    sendSuccess(res, toPaymentCommandPayload(result), 200);
+    sendSuccess(res, toPaymentCommandPayload(result, await mayVerifyPayment(req)), 200);
   } catch (error) {
     next(error);
   }

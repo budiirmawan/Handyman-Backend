@@ -9056,7 +9056,7 @@ paths:
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_QUOTATION_CURRENCY_MISMATCH, HANDYMAN_QUOTATION_LINE_INVALID, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_VERSION_NOT_DRAFT, HANDYMAN_QUOTATION_VERSION_NOT_FOUND]
       summary: Add an immutable commercial snapshot line (LABOR or MATERIAL) to a DRAFT version
-      description: "Lines are immutable snapshots of bounded commercial facts: the operator supplies description/quantity/UOM/currency and the final quoted unit amount; lineTotal is server-calculated only (quantity x final quoted unit amount) and a governed reference price (when available) is snapshotted for material provenance. Reference price is never the final quoted charge and is not returned in customer-facing HTTP projections. The response also omits sourceItemId and createdByUserId. Only DRAFT versions accept lines; one currency per version; no tax/discount exist."
+      description: "Lines are immutable snapshots of bounded commercial facts: the operator supplies description/quantity/UOM/currency and the final quoted unit amount; lineTotal is server-calculated only (quantity x final quoted unit amount) and a governed reference price (when available) is snapshotted for material provenance. Reference price is never the final quoted charge and is not returned in customer-facing HTTP projections. The response also omits sourceItemId and createdByUserId. Only DRAFT versions accept lines; one currency per version; no TAX/DISCOUNT quotation line types exist. PART03 fee/tax companion and forward-only ledger corrections are separate; amounts are not silently rewritten."
       parameters:
         - name: quotationVersionId
           in: path
@@ -85200,6 +85200,593 @@ paths:
         '409': { description: BAST lifecycle, QC or immutable actor/payload/consent replay conflict; transaction rolls back. }
         '503': { description: HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED; no trustworthy commercial consent integration configured. }
 
+  # PART03 — thin existing Handyman finance integration; no new payment/quotation engine.
+  /handyman/quotation-versions/{quotationVersionId}/inspection-fee-offer:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: prepareHandymanInspectionFeeOffer
+      summary: Bind previsit fee treatment before issuing the fee quote
+      description: CR-HM-E2E-FINANCIAL-RECONCILIATION-03. Reuses quotation/approval and inspection gates; immutable
+        commercial offer, not a payment.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: &a1
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanInspectionFeeOfferRequest"
+  /handyman/requests/{handymanRequestId}/inspection-fee:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: agreeHandymanInspectionFee
+      summary: Record FREE or separately approved paid inspection agreement
+      description: "CR-HM-E2E-FINANCIAL-RECONCILIATION-03. "
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - name: handymanRequestId
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanInspectionFeeAgreementRequest"
+    get:
+      tags:
+        - Handyman Customer Ledger
+      operationId: getHandymanInspectionFee
+      summary: Read distinct inspection agreement, payment and one-time credit history
+      description: CR-HM-E2E-FINANCIAL-RECONCILIATION-03. Agreed charge is not a new ledger posting; refundAutomatic
+        is false. Actual fee payments and credits remain distinct. Also visible to accountless Care through its
+        existing scoped operational projection.
+      security:
+        - bearerAuth: []
+      x-required-permission: tenant_company.read
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - name: handymanRequestId
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/inspection-credit:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: creditHandymanPaidInspection
+      summary: Apply exactly one agreed inspection discount through the existing ledger
+      description: "CR-HM-E2E-FINANCIAL-RECONCILIATION-03. "
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanInspectionCreditRequest"
+  /handyman/quotation-versions/{quotationVersionId}/tax-profile:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: prepareHandymanQuotationTaxProfile
+      summary: Bind reviewed tax facts to an exact DRAFT quotation version
+      description: "CR-HM-E2E-FINANCIAL-RECONCILIATION-03. "
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanFinancialTaxProfileRequest"
+  /handyman/commercial-agreement-versions/{agreementVersionId}/tax-profile:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: prepareHandymanAgreementTaxProfile
+      summary: Bind independent BM tax facts/timing to the exact DRAFT Client agreement
+      description: CR-HM-E2E-FINANCIAL-RECONCILIATION-03. Existing Client access wall applies to the agreement, not
+        a caller-supplied Building. Rate/base remain in the existing commercial agreement engine.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.commercial.manage
+      x-building-scoped: false
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - name: agreementVersionId
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanFinancialTaxProfileRequest"
+  /handyman/quotation-versions/{quotationVersionId}/financial-terms:
+    get:
+      tags:
+        - Handyman Customer Ledger
+      operationId: getHandymanQuotationFinancialTerms
+      summary: Read published fee/tax companion without changing quotation DTOs
+      description: "CR-HM-E2E-FINANCIAL-RECONCILIATION-03. "
+      security:
+        - bearerAuth: []
+      x-required-permission: tenant_company.read
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - name: quotationVersionId
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanQuotationFinancialTerms"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/reconciliation:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: reconcileHandymanCustomerPaymentBank
+      summary: Manager reconciles an existing verified payment to an actual bank receipt
+      description: CR-HM-E2E-FINANCIAL-RECONCILIATION-03. Care may report/upload proof only; explicit Finance
+        capability is required for this independent received-funds fact. A separate Finance persona/application
+        is not required.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+        - name: paymentId
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanPaymentBankReconciliationRequest"
+  /handyman/execution-scopes/{executionScopeId}/tax-reconciliation:
+    get:
+      tags:
+        - Handyman Customer Ledger
+      operationId: getHandymanTaxReconciliation
+      summary: Read fiscal obligations plus the existing authoritative cash ledger
+      description: "CR-HM-E2E-FINANCIAL-RECONCILIATION-03. "
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.read
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanTaxReconciliation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /handyman/execution-scopes/{executionScopeId}/fiscal-documents:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: recordHandymanFiscalDocument
+      summary: Reconcile actual advance/installment/final/adjustment fiscal references
+      description: "CR-HM-E2E-FINANCIAL-RECONCILIATION-03. "
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanFiscalDocumentRequest"
+  /handyman/execution-scopes/{executionScopeId}/fiscal-documents/{documentId}/withholding-credit:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: applyHandymanCertifiedWithholdingCredit
+      summary: Apply a certified noncash withholding credit exactly once
+      description: CR-HM-E2E-FINANCIAL-RECONCILIATION-03. Empty JSON object only. Source document/certificate and
+        charge line determine the adjustment. No synthetic CONFIRMED cash payment; actor-safe replay and global
+        payer/certificate reuse guard.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.finance.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+        - name: documentId
+          in: path
+          required: true
+          schema: *a1
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: []
+              properties: {}
+  /handyman/execution-scopes/{executionScopeId}/bm-fiscal-document:
+    post:
+      tags:
+        - Handyman Customer Ledger
+      operationId: recordHandymanBmFiscalDocument
+      summary: Reconcile separate BM payable VAT/withholding/cash before settlement
+      description: CR-HM-E2E-FINANCIAL-RECONCILIATION-03. Independent of tenant invoice and WO FINAL CLOSE. Existing
+        prepare/include/reconcile/settle engine remains authoritative. Only the explicitly configured supported
+        contract timing is accepted.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.settlement.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED
+        - HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT
+      parameters:
+        - $ref: "#/components/parameters/ExecutionScopeIdPath"
+      responses:
+        "200":
+          description: Authorized exact-resource result; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanFinancialFactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandymanBmFiscalDocumentRequest"
 components:
   securitySchemes:
     commercialConsentSignature:
@@ -87914,6 +88501,7 @@ components:
         - readOnly
         - request
         - inspection
+        - financialTerms
         - quotation
         - scheduling
         - quality
@@ -87934,6 +88522,8 @@ components:
         care-workspace-operational.repository.ts by
         CR-HM-BACKEND-CONTRACT-FREEZE-03.
       properties:
+        financialTerms:
+          $ref: "#/components/schemas/CareHandymanFinancialTerms"
         readOnly:
           type: boolean
           const: true
@@ -95710,7 +96300,7 @@ components:
         updatedAt: { type: string, format: date-time }
     HandymanQuotationTotals:
       type: object
-      description: Derived-from-lines totals (never persisted); no tax/discount exists.
+      description: Derived-from-lines historical quotation totals (never persisted); PART03 fee/tax companion and explicit forward-only ledger credits do not mutate these snapshots.
       properties:
         laborSubtotal: { type: number }
         materialSubtotal: { type: number }
@@ -137580,3 +138170,451 @@ components:
             spaceId: { type: string, format: uuid, nullable: true }
         validUntil: { type: string, format: date-time }
         artifactRef: { type: string }
+
+    # CR-HM-E2E-FINANCIAL-RECONCILIATION-03 — bounded fiscal/inspection integration.
+    HandymanFinancialTaxFacts:
+      type: object
+      additionalProperties: false
+      required:
+        - priceBasis
+        - providerStatus
+        - vatRegime
+        - incomeTax
+        - payerIsWithholder
+        - recipientKind
+        - incomeRecipientReference
+        - payerReference
+        - serviceClass
+        - hasNpwp
+        - qualification
+        - withholdingBasis
+        - effectiveFrom
+        - effectiveTo
+        - sourceReference
+        - classificationReference
+      properties:
+        priceBasis: &a11
+          type: string
+          enum:
+            - GROSS_INCLUSIVE
+        providerStatus: &a12
+          type: string
+          enum:
+            - PKP
+            - NON_PKP
+        vatRegime: &a13
+          type: string
+          enum:
+            - PMK131_ART3
+            - NON_PKP
+        incomeTax: &a14
+          type: string
+          enum:
+            - NONE
+            - PPH23
+            - PPH_FINAL_CONSTRUCTION
+        payerIsWithholder: &a2
+          type: boolean
+        recipientKind:
+          type: string
+          enum:
+            - DOMESTIC_BODY
+            - DOMESTIC_INDIVIDUAL
+        incomeRecipientReference: &a1
+          type: string
+          minLength: 1
+          maxLength: 200
+        payerReference: *a1
+        serviceClass: &a15
+          type: string
+          enum:
+            - ORDINARY_SERVICE
+            - CONSTRUCTION_WORK
+            - CONSTRUCTION_CONSULTANCY
+            - CONSTRUCTION_INTEGRATED
+        hasNpwp: *a2
+        qualification:
+          type: string
+          enum:
+            - NOT_APPLICABLE
+            - SMALL_CERTIFIED
+            - OTHER_CERTIFIED
+            - UNCERTIFIED
+        withholdingBasis:
+          type: string
+          enum:
+            - ALL_SERVICE_NET
+            - LABOR_NET
+        effectiveFrom: &a3
+          type: string
+          format: date
+        effectiveTo: *a3
+        sourceReference: *a1
+        classificationReference: *a1
+        exemptionReference: *a1
+        materialExclusionReference: *a1
+        certificateReference: *a1
+        bmSettlementTiming:
+          type: string
+          enum:
+            - AFTER_FULL_CUSTOMER_COLLECTION
+      description: Explicit, reviewed and effective-dated legal facts, never inferred from the Handyman
+        name/catalog. Ordinary PMK131 Art.3 gross-inclusive IDR and non-PKP only; special/exclusive/mixed regimes
+        require separate review. PPh23 requires a domestic body recipient, actual qualifying service and
+        withholding payer; LABOR_NET needs material-exclusion evidence. Construction needs an explicit legal class
+        and qualification, not an automatic Handyman classification. Taxpayer/source references are normalized.
+        Exemption/certification references and BM settlement timing are conditionally required by the service.
+        Does not assert DJP verification or issuance.
+    HandymanFinancialTaxProfileRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - facts
+      properties:
+        facts:
+          $ref: "#/components/schemas/HandymanFinancialTaxFacts"
+    HandymanInspectionFeeOfferRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - handymanRequestId
+        - treatment
+        - noProceedTreatment
+        - creditMode
+      properties:
+        handymanRequestId: &a4
+          type: string
+          format: uuid
+        treatment: &a8
+          type: string
+          enum:
+            - PAID_CREDITED
+            - PAID_SEPARATE
+        noProceedTreatment: &a9
+          type: string
+          enum:
+            - RETAIN_AGREED_FEE
+            - REFUND_AGREED_FEE
+        creditMode: &a10
+          type: string
+          enum:
+            - SEPARATE_SERVICE_DISCOUNT
+            - NOT_APPLICABLE
+      description: Bind to the exact DRAFT fee quotation before issue. Fee is a distinct approved single-LABOR
+        service in the same request customer/Client/Building/space context, not a fabricated main-job quote. The
+        required main inspection must actually be pending. SEPARATE_SERVICE_DISCOUNT is the only supported
+        credited arrangement; a true job advance is not reclassified as an inspection service.
+    HandymanInspectionFeeAgreementRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - treatment
+        - idempotencyKey
+      properties:
+        treatment: &a17
+          type: string
+          enum:
+            - FREE
+            - PAID_CREDITED
+            - PAID_SEPARATE
+        feeExecutionScopeId: *a4
+        idempotencyKey: *a1
+      description: Previsit only. Paid treatments require the separately approved fee scope and its issued
+        offer/customer decision. FREE forbids a fee scope and invents no charge. No inspection-required triage
+        means no inspection fee. Agreement facts are immutable; recorded staff is not impersonated customer
+        consent.
+    HandymanInspectionCreditRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - chargeLineId
+        - idempotencyKey
+      properties:
+        chargeLineId: *a4
+        idempotencyKey: *a1
+      description: Once-only existing ledger discount on the actual job charge line. Requires the exact agreement,
+        currency/context and Finance-confirmed, bank-reconciled unrefunded fee funds. Does not create another
+        payment/allocation. A spent credit blocks refund/reversal pending explicit compensation.
+    HandymanPaymentBankReconciliationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - bankReference
+        - actualReceivedAt
+        - idempotencyKey
+      properties:
+        bankReference: *a1
+        actualReceivedAt: &a6
+          type: string
+          format: date-time
+        idempotencyKey: *a1
+      description: Manager with Finance capability verifies an existing CONFIRMED payment against actual external
+        bank data. Receipt time must not be future or later than Finance confirmation. It is NOT the Care
+        reporting timestamp. Reference reuse or changed replay is denied; no live bank integration is implied.
+    HandymanFiscalDocumentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - taxPointAt
+        - documentDate
+        - externalReference
+        - idempotencyKey
+      properties:
+        kind:
+          type: string
+          enum:
+            - ADVANCE
+            - INSTALLMENT
+            - FINAL
+            - ADJUSTMENT
+        paymentId: *a4
+        grossLabor: &a5
+          type: string
+          pattern: ^(0|[1-9]\d{0,15})\.\d{2}$
+        grossMaterial: *a5
+        taxPointAt: *a6
+        documentDate: *a3
+        externalReference: *a1
+        withholdingReference: *a1
+        previousDocumentId: *a4
+        idempotencyKey: *a1
+      description: Reference an ACTUAL externally issued fiscal document; this API does not mint a DJP number or
+        file a return. Supported per-event documentDate equals the actual Jakarta tax-point date, from 2025-05-22.
+        ADVANCE/INSTALLMENT require an exact bank-reconciled payment and source-derived cumulative basis. Every
+        later document links the exact prior scope document. FINAL requires current QC and canonical qualified
+        BAST on its delivery date. ADJUSTMENT needs a reviewed linked replacement/cancellation; negative certified
+        withholding compensation, late/monthly documents and unsupported regimes fail closed. Monetary inputs are
+        checked against approved scope/variations/credits, never accepted as authority.
+    HandymanBmFiscalDocumentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - taxPointAt
+        - documentDate
+        - externalReference
+        - withholdingReference
+        - reconciliationReference
+        - idempotencyKey
+      properties:
+        taxPointAt: *a6
+        documentDate: *a3
+        externalReference: *a1
+        withholdingReference: *a1
+        reconciliationReference: *a1
+        idempotencyKey: *a1
+      description: Separate actual BM fee document/cash reconciliation against the existing contractual entitlement
+        and its BM tax profile; no universal percentage or tax. BM payer must match the actual Handyman provider.
+        A corrected claim cannot settle against stale fiscal data. This does not collect tenant money, authorize
+        work, close the WO or submit DJP filings.
+    HandymanFinancialTaxAmounts:
+      type: object
+      additionalProperties: false
+      required:
+        - grossLabor
+        - grossMaterial
+        - gross
+        - serviceNet
+        - dpp
+        - vat
+        - incomeTaxBase
+        - incomeTaxDue
+        - withholding
+        - selfRemittance
+        - cashDue
+      properties:
+        grossLabor: &a7
+          type: string
+          pattern: ^-?(0|[1-9]\d{0,15})\.\d{2}$
+        grossMaterial: *a7
+        gross: *a7
+        serviceNet: *a7
+        dpp: *a7
+        vat: *a7
+        incomeTaxBase: *a7
+        incomeTaxDue: *a7
+        withholding: *a7
+        selfRemittance: *a7
+        cashDue: *a7
+    HandymanFinancialFactResult:
+      type: object
+      description: Existing service immutable source/fact fields (database snake_case), with optional replay marker.
+        Financial records retain source IDs, actor and timestamps. Not a fabricated fiscal certificate, bank
+        callback or lifecycle command.
+      properties:
+        id: *a4
+        replayed: *a2
+        configured: *a2
+        amounts:
+          $ref: "#/components/schemas/HandymanFinancialTaxAmounts"
+      additionalProperties: true
+    HandymanQuotationFinancialTerms:
+      type: object
+      additionalProperties: false
+      required:
+        - quotationVersionId
+        - inspectionOffer
+        - tax
+        - unconfiguredTaxIsExempt
+      properties:
+        quotationVersionId: *a4
+        inspectionOffer:
+          type: object
+          nullable: true
+          properties:
+            handyman_request_id: *a4
+            treatment: *a8
+            no_proceed_treatment: *a9
+            credit_mode: *a10
+        tax:
+          type: object
+          additionalProperties: false
+          required:
+            - priceBasis
+            - providerStatus
+            - vatRegime
+            - incomeTax
+            - payerIsWithholder
+            - serviceClass
+          properties:
+            priceBasis: *a11
+            providerStatus: *a12
+            vatRegime: *a13
+            incomeTax: *a14
+            payerIsWithholder: *a2
+            serviceClass: *a15
+          nullable: true
+        unconfiguredTaxIsExempt:
+          type: boolean
+          const: false
+      description: Read companion; the original quotation/version/line response remains unchanged. Missing tax
+        configuration is NOT exemption. Offers/history and tax flags do not authorize customer consent or confirm
+        payment.
+    HandymanTaxReconciliation:
+      type: object
+      required:
+        - configured
+        - readyForInvoice
+        - missing
+        - cashLedger
+        - djpSubmission
+      properties:
+        configured: *a2
+        readyForInvoice: *a2
+        missing:
+          type: array
+          items: &a16
+            type: string
+        fiscalReadinessOnly:
+          type: boolean
+          const: true
+        djpSubmission:
+          type: boolean
+          const: false
+        profileId: *a4
+        facts:
+          $ref: "#/components/schemas/HandymanFinancialTaxFacts"
+        basisSource: *a16
+        amounts:
+          $ref: "#/components/schemas/HandymanFinancialTaxAmounts"
+        posted:
+          $ref: "#/components/schemas/HandymanFinancialTaxAmounts"
+        withholdingCredit: *a5
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/HandymanFinancialFactResult"
+        cashLedger:
+          type: object
+          nullable: true
+          description: The published existing ledger totals, not a second money engine. Null when no charge transaction
+            exists; null is not PAID. Contractual/fiscal readiness is not receipt/close readiness.
+          additionalProperties: true
+      description: Finance exact-scope read. Gross/base/VAT/income tax/cash/noncash certificate credits are
+        distinct. Known fiscal treatment gates actual invoice FINALIZE, not draft composition. Legacy
+        commercial-only invoices are not fiscal certification. Actual returned fields may include existing fact
+        metadata.
+      additionalProperties: true
+    CareHandymanFinancialTerms:
+      type: object
+      additionalProperties: false
+      required:
+        - unconfiguredTaxIsExempt
+        - inspectionAgreement
+        - inspectionOffers
+        - quotationTaxes
+      properties:
+        unconfiguredTaxIsExempt:
+          type: boolean
+          const: false
+        inspectionAgreement:
+          type: object
+          additionalProperties: false
+          required:
+            - treatment
+            - feeExecutionScopeId
+            - agreedAmount
+            - currency
+            - noProceedTreatment
+          properties:
+            treatment: *a17
+            feeExecutionScopeId:
+              type: string
+              format: uuid
+              nullable: true
+            agreedAmount: *a5
+            currency:
+              type: string
+              nullable: true
+            noProceedTreatment:
+              type: string
+              enum:
+                - NOT_APPLICABLE
+                - RETAIN_AGREED_FEE
+                - REFUND_AGREED_FEE
+          nullable: true
+        inspectionOffers:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - quotationVersionId
+              - treatment
+              - noProceedTreatment
+              - creditMode
+              - status
+              - gross
+            properties:
+              quotationVersionId: *a4
+              treatment: *a8
+              noProceedTreatment: *a9
+              creditMode: *a10
+              status: *a16
+              gross: *a5
+        quotationTaxes:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - quotationVersionId
+              - priceBasis
+              - providerStatus
+              - vatRegime
+              - incomeTax
+              - payerIsWithholder
+            properties:
+              quotationVersionId: *a4
+              priceBasis: *a11
+              providerStatus: *a12
+              vatRegime: *a13
+              incomeTax: *a14
+              payerIsWithholder: *a2
+      description: Read-only previsit/issued-version terms from the SAME selected-request single SQL statement and
+        live Care workspace/occupancy wall. No borrowed User/PIC, new login/persona, taxpayer identifiers,
+        internal source refs or bank references. Does not grant Finance authority or turn Care proof/statement
+        into customer commercial consent. Draft offers/tax profiles are not included; an empty tax list is not an
+        exemption.

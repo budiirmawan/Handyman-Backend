@@ -66,6 +66,34 @@ async function readOperationalProjection(
            WHERE x.handyman_request_id = s."requestId"
              AND x.client_id = s."clientId"
            LIMIT 1),
+        'financialTerms', jsonb_build_object(
+          'unconfiguredTaxIsExempt', FALSE,
+          'inspectionAgreement', (
+            SELECT jsonb_build_object('treatment', ft.treatment,
+              'feeExecutionScopeId', ft.fee_execution_scope_id,
+              'agreedAmount', ft.agreed_amount::numeric(18,2)::text,
+              'currency', ft.currency, 'noProceedTreatment', ft.no_proceed_treatment)
+            FROM handyman_inspection_fee_terms ft WHERE ft.handyman_request_id=s."requestId"),
+          'inspectionOffers', COALESCE((
+            SELECT jsonb_agg(o.item) FROM (
+              SELECT jsonb_build_object('quotationVersionId', f.quotation_version_id,
+                'treatment', f.treatment, 'noProceedTreatment', f.no_proceed_treatment,
+                'creditMode', f.credit_mode, 'status', v.status,
+                'gross', (SELECT SUM(l.line_total)::numeric(18,2)::text FROM handyman_quotation_lines l WHERE l.quotation_version_id=v.id)) item
+              FROM handyman_inspection_fee_offers f JOIN handyman_quotation_versions v ON v.id=f.quotation_version_id
+              WHERE f.handyman_request_id=s."requestId" AND v.status<>'DRAFT'
+              ORDER BY f.created_at DESC LIMIT 20
+            ) o), '[]'::jsonb),
+          'quotationTaxes', COALESCE((
+            SELECT jsonb_agg(t.item) FROM (
+              SELECT jsonb_build_object('quotationVersionId', v.id, 'priceBasis', p.facts->>'priceBasis',
+                'providerStatus', p.facts->>'providerStatus', 'vatRegime', p.facts->>'vatRegime',
+                'incomeTax', p.facts->>'incomeTax', 'payerIsWithholder', p.facts->'payerIsWithholder') item
+              FROM handyman_financial_tax_profiles p JOIN handyman_quotation_versions v ON v.id=p.quotation_version_id
+              JOIN handyman_quotations q ON q.id=v.quotation_id
+              WHERE q.handyman_request_id=s."requestId" AND q.client_id=s."clientId" AND v.status<>'DRAFT'
+              ORDER BY v.version_number DESC LIMIT 20
+            ) t), '[]'::jsonb)),
         'quotation', (
           SELECT jsonb_build_object(
             'id', q.id, 'createdAt', q.created_at,

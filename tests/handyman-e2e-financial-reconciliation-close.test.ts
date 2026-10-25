@@ -1,3 +1,5 @@
+import { prepareHandymanTaxProfile, reconcileHandymanPayment, recordHandymanFiscalDocument, readHandymanTaxReconciliation } from '../src/modules/handyman-customer-transactions/handyman-financial-tax.service';
+import { jakartaDate } from '../src/modules/handyman-pricing-contract/handyman-indonesia-tax';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -108,6 +110,8 @@ let adminId = '';
 let disciplineId = '';
 const id = () => randomUUID();
 const key = () => `e2e-rc-${randomUUID()}`;
+const fiscalFacts = {priceBasis:'GROSS_INCLUSIVE',providerStatus:'PKP',vatRegime:'PMK131_ART3',recipientKind:'DOMESTIC_BODY',incomeRecipientReference:'TEST Handyman taxpayer',payerReference:'TEST customer non-withholding taxpayer',serviceClass:'ORDINARY_SERVICE',payerIsWithholder:false,incomeTax:'NONE',hasNpwp:true,qualification:'NOT_APPLICABLE',withholdingBasis:'ALL_SERVICE_NET',effectiveFrom:'2025-01-01',effectiveTo:'2027-12-31',sourceReference:'TEST reviewed PKP inclusive-price facts',classificationReference:'TEST reviewed ordinary non-special maintenance'};
+
 const q = (sql: string, params: unknown[] = []) => pool.query(sql, params);
 
 function rolePermissions(code: string): readonly string[] {
@@ -463,6 +467,8 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
     assert.equal(materialLineRes.status, 201, JSON.stringify(materialLineRes.body));
     const materialQuotationLineId: string = materialLineRes.body.data.id;
 
+    await prepareHandymanTaxProfile({quotationVersionId:version1Id},fiscalFacts,financeVerifier.userId);
+
     // Issue quotation -> dpAmount auto-calculated as 40% of 300.00 = 120.00
     const issuedRes = await api()
       .post(`${V1}/handyman/quotation-versions/${version1Id}/issue`)
@@ -737,6 +743,17 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
     );
     assert.equal(reconcilAfterFullDp.body.data.scopeStatus, 'AUTHORIZED');
 
+    // PART03: real pre-delivery receipts, not Care reporting timestamps, own
+    // advance VAT timing. Cumulative tax documents never deduct the DP twice.
+    let precedingFiscalDocumentId:string|undefined;
+    for(const [paymentId,amount] of [[partialDpPaymentId,'50.00'],[remDpPaymentId,'70.00']] as const){
+      const verified=(await q('SELECT decided_at FROM handyman_customer_payments WHERE id=$1',[paymentId])).rows[0].decided_at as Date;
+      const actual=new Date(verified.getTime()-1000).toISOString();
+      await reconcileHandymanPayment(executionScopeId,paymentId,{bankReference:`TEST-BANK-${paymentId}`,actualReceivedAt:actual,idempotencyKey:key()},financeVerifier.userId);
+      const fiscal=await recordHandymanFiscalDocument(executionScopeId,{kind:'ADVANCE',paymentId,grossLabor:amount,taxPointAt:actual,documentDate:jakartaDate(new Date(actual)),externalReference:`TEST-DJP-${paymentId}`,previousDocumentId:precedingFiscalDocumentId,idempotencyKey:key()},financeVerifier.userId);
+      precedingFiscalDocumentId=fiscal.id;
+    }
+
     // Manager attempting FINAL CLOSE when only DP is verified must be rejected
     const prematureCloseRes = await api()
       .post(`${V1}/handyman/execution-scopes/${executionScopeId}/final-close`)
@@ -881,6 +898,8 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
       });
     assert.equal(varLaborLineRes.status, 201, JSON.stringify(varLaborLineRes.body));
     const varLaborQuotationLineId: string = varLaborLineRes.body.data.id;
+
+    await prepareHandymanTaxProfile({quotationVersionId:version2Id},fiscalFacts,financeVerifier.userId);
 
     await api()
       .post(`${V1}/handyman/quotation-versions/${version2Id}/issue`)
@@ -1294,6 +1313,17 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
       assert.equal(addLineRes.status, 201, JSON.stringify(addLineRes.body));
     }
 
+    // Configured PPN is fail-closed at commercial invoice finalization until
+    // the final external fiscal reference reconciles the qualified BAST.
+    const missingFiscal=await api().post(`${V1}/tenant-invoices/${invoiceId}/finalize`).set('Authorization',`Bearer ${financeVerifier.token}`).send({});
+    assert.equal(missingFiscal.status,409,JSON.stringify(missingFiscal.body));
+    assert.equal(missingFiscal.body.error.code,'HANDYMAN_FINANCIAL_CONFIGURATION_REQUIRED');
+    const delivered=(await q('SELECT accepted_at FROM handyman_bast_documents WHERE id=$1',[bast2Issued.bast.id])).rows[0].accepted_at as Date;
+    const finalFiscal=await recordHandymanFiscalDocument(executionScopeId,{kind:'FINAL',taxPointAt:delivered.toISOString(),documentDate:jakartaDate(delivered),externalReference:`TEST-DJP-FINAL-${executionScopeId}`,previousDocumentId:precedingFiscalDocumentId,idempotencyKey:key()},financeVerifier.userId);
+    assert.equal(finalFiscal.amounts.gross,'260.00');assert.equal(finalFiscal.amounts.vat,'25.77');
+    const fiscalReady=await readHandymanTaxReconciliation(executionScopeId,financeVerifier.userId);
+    assert.equal(fiscalReady.readyForInvoice,true);assert.equal('posted' in fiscalReady&&fiscalReady.posted?.vat,'37.66');
+
     const finalizeInvRes = await api()
       .post(`${V1}/tenant-invoices/${invoiceId}/finalize`)
       .set('Authorization', `Bearer ${financeVerifier.token}`)
@@ -1460,6 +1490,10 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
     assert.equal(readinessRes.status, 200, JSON.stringify(readinessRes.body));
     assert.equal(readinessRes.body.data.eligibleForFinalClose, true);
     assert.deepEqual(readinessRes.body.data.blockers, []);
+
+    const paidFiscal=await readHandymanTaxReconciliation(executionScopeId,financeVerifier.userId);
+    assert.equal(paidFiscal.readyForInvoice,true);assert.equal('posted' in paidFiscal&&paidFiscal.posted?.vat,'37.66');
+    assert.equal('documents' in paidFiscal&&paidFiscal.documents?.length,3);
 
     // Manager executes FINAL CLOSE
     const finalCloseIdemKey = key();
