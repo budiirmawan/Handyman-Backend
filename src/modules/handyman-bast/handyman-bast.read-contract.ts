@@ -11,6 +11,8 @@
  * server-side; the Frontend MUST NOT generate or forge it.
  */
 
+import { verifiedHandymanBastCustomerConsent } from './handyman-bast-customer-consent';
+
 import type {
   HandymanBastEventRecord,
   HandymanBastRecord,
@@ -77,7 +79,8 @@ export function toHandymanBastArtifactReference(
 /**
  * CR-HM-17 P1 FIX01 — approved signature-evidence binding.
  * Present only when BAST status is ACCEPTED and the ACCEPT sign-off
- * carries both a signature digest AND a bound evidence record.
+ * carries backend-verified personal-PIC consent and a canonical digest.
+ * Optional attachment evidence is byte-verified when supplied.
  * Required for sign-off completion; the Frontend MUST NOT accept
  * BAST sign-off without this binding being present.
  */
@@ -106,7 +109,7 @@ export function resolveApprovedSignOff(
   const signOff = signOffs.find(
     (s) => s.eventId === acceptEvent.id && s.decision === 'ACCEPT',
   );
-  if (!signOff) return null;
+  if (!signOff || !verifiedHandymanBastCustomerConsent(bast, acceptEvent, signOff)) return null;
   return {
     signOffId: signOff.id,
     eventId: acceptEvent.id,
@@ -119,8 +122,9 @@ export function resolveApprovedSignOff(
 }
 
 /**
- * Bounded public read shape. `status` is the sole acceptance
- * authority (sign-off rows are evidence, never truth).
+ * Bounded public read shape. The existing status ladder remains necessary;
+ * customer acceptance also requires the immutable backend personal-consent
+ * attestation. Legacy staff/digest-only rows remain history, not certification.
  *
  * CR-HM-17 P1 FIX01 adds:
  * - `artifactRef`: backend-owned versioned artifact reference.
@@ -143,6 +147,7 @@ export type HandymanBastAcceptanceReadContract = {
   signOffComplete: boolean;
 };
 
+/** Status predicate ONLY; runtime customer-consent gates must verify the receipt. */
 export function isHandymanCustomerBastAccepted(
   status: HandymanBastStatus,
 ): boolean {
@@ -168,22 +173,22 @@ export function toHandymanBastAcceptanceReadContract(
   events: HandymanBastEventRecord[] = [],
   signOffs: HandymanBastSignOffRecord[] = [],
 ): HandymanBastAcceptanceReadContract {
-  const customerAccepted = isHandymanCustomerBastAccepted(bast.status);
   const artifact = toHandymanBastArtifactReference(bast);
   const approvedSignOff = resolveApprovedSignOff(
     bast,
     events,
     signOffs,
   );
+  const customerAccepted = isHandymanCustomerBastAccepted(bast.status) && approvedSignOff !== null;
   return {
     bastId: bast.id,
     clientId: bast.clientId,
     executionScopeId: bast.executionScopeId,
     status: bast.status,
     customerAccepted,
-    warrantyStartEligible: isHandymanWarrantyStartEligible(bast.status),
+    warrantyStartEligible: customerAccepted && isHandymanWarrantyStartEligible(bast.status),
     issuedAt: bast.issuedAt,
-    acceptedAt: customerAccepted ? bast.acceptedAt : null,
+    acceptedAt: bast.status === 'ACCEPTED' ? bast.acceptedAt : null,
     rejectedAt: bast.status === 'REJECTED' ? bast.rejectedAt : null,
     voidedAt: bast.status === 'VOID' ? bast.voidedAt : null,
     artifactRef: artifact.ref,

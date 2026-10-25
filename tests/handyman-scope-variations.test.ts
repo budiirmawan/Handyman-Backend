@@ -15,7 +15,7 @@ import type { Pool } from 'pg';
 import EmbeddedPostgres from 'embedded-postgres';
 
 import { createApp } from '../src/app';
-import { closePool, getPool, initDatabase } from '../src/database';
+import { closePool, getPool, initDatabase, withTransaction } from '../src/database';
 import { sessionService } from '../src/modules/auth/session.service';
 import { buildingAssignmentRepository } from '../src/modules/building-assignments/building-assignment.repository';
 import { buildingRepository } from '../src/modules/buildings/building.repository';
@@ -24,6 +24,10 @@ import { clientRepository } from '../src/modules/clients/client.repository';
 import { userRepository } from '../src/modules/users/user.repository';
 import { permissionService } from '../src/modules/permissions';
 import { createEvidenceStorage } from '../src/modules/evidence/storage';
+import {
+  HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
+  computeHandymanBastCustomerConsentDigest, type HandymanBastCustomerConsentManifest,
+} from '../src/modules/handyman-bast';
 import { migration0435CreateHandymanScopeVariations } from '../src/database/migrations/0435_create_handyman_scope_variations';
 import { migration0443SeparateHandymanVariationQcAuthority }
   from '../src/database/migrations/0443_separate_handyman_variation_qc_authority';
@@ -385,12 +389,20 @@ before(async () => {
     );
     CREATE TABLE handyman_bast_documents(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+      qc_run_id uuid, rejected_at timestamptz,
       status text NOT NULL DEFAULT 'ISSUED', issued_at timestamptz, accepted_at timestamptz,
       voided_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE handyman_bast_events(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, bast_id uuid NOT NULL REFERENCES handyman_bast_documents(id),
+      execution_scope_id uuid NOT NULL, event_type text NOT NULL, idempotency_key text NOT NULL,
+      actor_user_id uuid NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now(), metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
     CREATE TABLE handyman_bast_sign_offs(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, bast_id uuid NOT NULL REFERENCES handyman_bast_documents(id),
+      event_id uuid NOT NULL REFERENCES handyman_bast_events(id), evidence_record_id uuid, reject_reason text,
       execution_scope_id uuid NOT NULL, decision text NOT NULL,
       signature_digest text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
     );
@@ -1210,16 +1222,39 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     );
     assert.equal(fceUnacceptedBast.status, 409);
 
-    // Record customer BAST acceptance + sign-off
-    await getPool().query(
-      `UPDATE handyman_bast_documents SET status = 'ACCEPTED', accepted_at = now() WHERE id = $1`,
-      [BAST_A1],
-    );
-    await getPool().query(
-      `INSERT INTO handyman_bast_sign_offs (id, client_id, bast_id, execution_scope_id, decision, signature_digest)
-       VALUES ($1, $2, $3, $4, 'ACCEPT', 'sha256:tenant-bast-signature-001')`,
-      [randomUUID(), CLIENT_A, BAST_A1, SCOPE_A1],
-    );
+    // BAST-consumer PRESTATE for this narrow variation/schema/auth-mocked
+    // suite, not an execution of personal consent. PART04's full-migration
+    // HTTP suite separately proves that only the real personal PIC can create
+    // this backend attestation. Do not substitute an arbitrary digest for it.
+    await withTransaction(async (tx) => {
+      const head = (await tx.query(`UPDATE handyman_bast_documents
+        SET status = 'ACCEPTED', accepted_at = NOW(), qc_run_id = $2 WHERE id = $1 RETURNING *`,
+      [BAST_A1, QCRUN_PASSED_A1])).rows[0];
+      const issueId = randomUUID();
+      const eventId = randomUUID();
+      const manifest: HandymanBastCustomerConsentManifest = {
+        protocol: HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL, bastId: BAST_A1,
+        executionScopeId: SCOPE_A1, approvedQuotationVersionId: QVER_A1, clientId: CLIENT_A,
+        handymanRequestId: REQ_A1, tenantCompanyId: TENANT_A, tenantPicId: TENANT_PIC_A,
+        buildingId: BUILDING_A1, issuedArtifactRef: `BAST/${BAST_A1}/v2`, issuedArtifactVersion: 2,
+        issueEventId: issueId, issuedAt: head.issued_at.toISOString(), qcRunId: QCRUN_PASSED_A1,
+        actorUserId: TENANT_USER_A, decision: 'ACCEPT', rejectReason: null, evidence: null,
+      };
+      const digest = computeHandymanBastCustomerConsentDigest(manifest);
+      await tx.query(`INSERT INTO handyman_bast_events
+        (id, client_id, bast_id, execution_scope_id, event_type, idempotency_key, actor_user_id, occurred_at)
+        VALUES ($1,$2,$3,$4,'ISSUE','prestate-issue',$5,$6)`,
+      [issueId, CLIENT_A, BAST_A1, SCOPE_A1, LEAD_USER_A, head.issued_at]);
+      await tx.query(`INSERT INTO handyman_bast_events
+        (id, client_id, bast_id, execution_scope_id, event_type, idempotency_key, actor_user_id, metadata)
+        VALUES ($1,$2,$3,$4,'ACCEPT','prestate-consent',$5,$6::jsonb)`,
+      [eventId, CLIENT_A, BAST_A1, SCOPE_A1, TENANT_USER_A, JSON.stringify({ customerConsent: {
+        method: HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, manifest, sha256Digest: digest,
+      } })]);
+      await tx.query(`INSERT INTO handyman_bast_sign_offs
+        (id, client_id, bast_id, event_id, execution_scope_id, decision, signature_digest)
+        VALUES ($1,$2,$3,$4,$5,'ACCEPT',$6)`, [randomUUID(), CLIENT_A, BAST_A1, eventId, SCOPE_A1, digest]);
+    });
 
     // CHECK 2 Guard F: FINAL_CHARGE_ELIGIBILITY blocked when a FINALIZED invoice already exists for the scope (duplicate invoice protection, 409)
     const fceFinalizedInvoice = await apiPost(

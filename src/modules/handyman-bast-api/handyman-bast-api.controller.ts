@@ -216,6 +216,7 @@ export async function postBastAcceptHandler(
       idempotencyKey: body.idempotencyKey,
       signatureDigest: body.signatureDigest,
       evidenceRecordId: body.evidenceRecordId,
+      rejectReason: body.rejectReason,
     });
     sendSuccess(res, toCommandPayload(result), 200);
   } catch (error) {
@@ -258,6 +259,7 @@ export async function postBastSignOffHandler(
           idempotencyKey: body.idempotencyKey,
           signatureDigest: body.signatureDigest,
           evidenceRecordId: body.evidenceRecordId,
+          rejectReason: body.rejectReason,
         })
       : await rejectHandymanBast(actor(req), {
           bastId,

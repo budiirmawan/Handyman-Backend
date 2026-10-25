@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, before, describe, it, type TestContext } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
@@ -56,54 +56,18 @@ import { workforceService } from '../src/modules/workforce';
 import { createAdminUser } from './helpers/access';
 import { arrangeGuardedQcPass } from './helpers/handyman-guarded-bast';
 import { ensureTestDatabase } from './helpers/postgres';
+import { startEmbeddedTestDatabase, type EmbeddedTestDatabase } from './helpers/embedded-test-db';
+import { resetAppConfigCache } from '../src/config';
+import { roleService } from '../src/modules/roles';
+import { permissionService, permissionRepository } from '../src/modules/permissions';
+import { handymanCustomerForScope, handymanCustomerConsentInput } from './helpers/handyman-customer-consent';
 
-/**
- * CR-HM-SEC-01 PART 05C-2 (ULTRA-LIGHT) — focused tests for the
- * CUSTOMER SIGN-OFF (ACCEPT/REJECT) authorization boundary in
- * handyman-bast: `applyCustomerSignOff`, reached via
- * `acceptHandymanBast` / `rejectHandymanBast`.
- *
- * Authority (audited in PART 05C-1, established in PART 01, reused
- * unchanged): BE-02G — a scoped resource requires the actor's
- * explicit ACTIVE `user_building_assignment` to its exact Building;
- * no same-Client shortcut; no client-wide privilege exists in any
- * role/scope contract. The sign-off actor is a LOCAL Customer Care
- * staff user (route `tenant_company.manage`; BM SSO principals have
- * no session userId and no path here — the customer signature is
- * attested data and the represented tenant stays server-resolved).
- * The BAST record is Client-scoped only (no building_id), so the
- * authoritative location is the server-derived
- * `handyman_execution_scopes.building_id` snapshot (migration 0395),
- * resolved from `bast.executionScopeId`, and the sign-off now
- * enforces the reusable guard on that exact Building instead of the
- * client-level `canAccessClient` wall. The guard keeps the wall's
- * original slot: after the BAST existence check, BEFORE the evidence
- * binding, the idempotent replay short-circuit, and the state
- * transition.
- *
- * Preserved: tenant attribution (server-resolved through the
- * execution-scope chain), signatureDigest semantics (ACCEPT requires
- * a non-empty digest; opaque attested data), same-scope evidence
- * validation, the ACCEPT/REJECT lifecycle (ISSUED → ACCEPTED|REJECTED
- * via `nextHandymanBastStatus` only), error vocabulary, the audit
- * chain (event + sign-off rows), single-transaction behavior, and
- * per-key idempotent replay. BAST prepare/issue/void (05B), BAST
- * reads (05A), the acceptance-sign-offs module, warranty, finance,
- * and unrelated code are NOT touched by this PART.
- *
- * Two focused cases:
- *   1. authorized exact-building staff ACCEPT — a Customer Care
- *      staff actor with an explicit ACTIVE assignment to the scope's
- *      exact Building accepts an ISSUED BAST with a valid signature
- *      and a same-scope evidence binding → ACCEPTED state, ACCEPT
- *      event, sign-off row, idempotent replay;
- *   2. sibling-building staff — a staff actor holding ONLY the
- *      same-Client SIBLING Building is denied 403
- *      BUILDING_ACCESS_DENIED on BOTH ACCEPT and REJECT, with ZERO
- *      mutation (status stays ISSUED, no sign-off event, no
- *      sign-off row).
+/** Exact-Building regression retained under PART04's personal PIC consent:
+ * same-Building staff is not a customer; a true PIC may consent using the
+ * canonical issued manifest. Sibling-Building staff still fails before replay.
+ * Disposable DB only; no unreachable-database skip may pass this suite.
  */
-
+let embedded: EmbeddedTestDatabase;
 let database: DatabaseConfig | null = null;
 let pool: Pool | null = null;
 let adminUserId = '';
@@ -112,8 +76,12 @@ const suffix = () => randomUUID().slice(0, 8).toUpperCase();
 const SIGNATURE = `sha256:${'c'.repeat(64)}`;
 
 before(async () => {
+  const dir = `/tmp/hm-bast-scope-part04-${randomUUID()}`;
+  process.env.EVIDENCE_STORAGE_DIR = `${dir}/evidence`;
+  resetAppConfigCache();
+  embedded = await startEmbeddedTestDatabase({ dir, port: 55288 });
   const db = await ensureTestDatabase();
-  if (!db) return;
+  assert.ok(db, 'disposable BAST scope database must be reachable');
   pool = await initDatabase(db);
   await migrateUp(pool);
   await pool.query(`TRUNCATE handyman_bast_sign_offs,
@@ -155,15 +123,11 @@ after(async () => {
   if (pool) await closePool(pool);
   pool = null;
   database = null;
+  if (embedded) await embedded.stop();
+  delete process.env.EVIDENCE_STORAGE_DIR;
+  resetAppConfigCache();
 });
 
-function requireDatabase(t: TestContext): boolean {
-  if (!database || !pool) {
-    t.skip('test database unavailable');
-    return false;
-  }
-  return true;
-}
 
 const q = async (text: string, params: unknown[] = []) => {
   if (!pool) throw new Error('database pool is not initialized');
@@ -477,8 +441,7 @@ async function seedIssuedBast(scopeId: string, staffUserId: string) {
 }
 
 describe('CR-HM-SEC-01 PART 05C-2 — BAST sign-off building-scope guard', () => {
-  it('1: authorized exact-building staff ACCEPT — valid signature + same-scope evidence → ACCEPTED, sign-off row, idempotent replay', async (t) => {
-    if (!requireDatabase(t)) return;
+  it('1: exact-building personal PIC confirms canonical issued digest → ACCEPTED with immutable receipt and safe replay', async () => {
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const crew = await crewFixture(realm, realm.buildingA1.id);
@@ -496,40 +459,39 @@ describe('CR-HM-SEC-01 PART 05C-2 — BAST sign-off building-scope guard', () =>
       adminUserId,
       q,
     });
-    // Same-scope evidence record (Lead-gated write, unchanged).
-    const evidence = await createHandymanEvidenceRecord({
-      executionScopeId: scope.id,
-      stage: 'AFTER',
-      description: 'After repair photo.',
-      idempotencyKey: `ev-${randomUUID()}`,
-    }, crew.leadUser.id);
     const staff = await staffActor(realm.buildingA1.id);
     const bast = await seedIssuedBast(scope.id, staff);
     assert.equal(bast.status, 'ISSUED');
 
-    // Governed ACCEPT: valid signature + same-scope evidence binding.
+    const customer = await handymanCustomerForScope(scope.id);
+    const role = await roleService.createRole({ code: `P04_CUSTOMER_${suffix()}`, name: 'Personal customer' });
+    const manage = await permissionRepository.findByCode('tenant_company.manage');
+    assert.ok(manage);
+    await permissionService.assignPermissionToRole(role.id, manage.id);
+    await roleService.assignRoleToUser(customer.id, role.id);
+    const signature = (await handymanCustomerConsentInput(bast.id, customer.id)).signatureDigest;
+    // Personal consent, not a provider's attested digest or empty file record.
     const acceptKey = `acc-${randomUUID()}`;
-    const accepted = await acceptHandymanBast(staff, {
+    const accepted = await acceptHandymanBast(customer.id, {
       bastId: bast.id,
       idempotencyKey: acceptKey,
-      signatureDigest: SIGNATURE,
-      evidenceRecordId: evidence.record.id,
+      signatureDigest: signature,
     });
     assert.equal(accepted.replayed, false);
     assert.equal(accepted.bast.status, 'ACCEPTED');
     assert.ok(accepted.bast.acceptedAt);
     assert.equal(accepted.event.eventType, 'ACCEPT');
-    assert.equal(accepted.event.actorUserId, staff);
+    assert.equal(accepted.event.actorUserId, customer.id);
     assert.ok(accepted.signOff);
     assert.equal(accepted.signOff.decision, 'ACCEPT');
-    assert.equal(accepted.signOff.signatureDigest, SIGNATURE);
-    assert.equal(accepted.signOff.evidenceRecordId, evidence.record.id);
+    assert.equal(accepted.signOff.signatureDigest, signature);
+    assert.equal(accepted.signOff.evidenceRecordId, null);
 
     // Per-key idempotent replay returns the SAME event + sign-off.
-    const replayed = await acceptHandymanBast(staff, {
+    const replayed = await acceptHandymanBast(customer.id, {
       bastId: bast.id,
       idempotencyKey: acceptKey,
-      signatureDigest: SIGNATURE,
+      signatureDigest: signature,
     });
     assert.equal(replayed.replayed, true);
     assert.equal(replayed.event.id, accepted.event.id);
@@ -546,12 +508,11 @@ describe('CR-HM-SEC-01 PART 05C-2 — BAST sign-off building-scope guard', () =>
     const signOffs = await signOffRows(bast.id);
     assert.equal(signOffs.length, 1);
     assert.equal(signOffs[0].decision, 'ACCEPT');
-    assert.equal(signOffs[0].signature_digest, SIGNATURE);
-    assert.equal(signOffs[0].evidence_record_id, evidence.record.id);
+    assert.equal(signOffs[0].signature_digest, signature);
+    assert.equal(signOffs[0].evidence_record_id, null);
   });
 
-  it('2: sibling-building staff — ACCEPT and REJECT both denied 403 with ZERO mutation', async (t) => {
-    if (!requireDatabase(t)) return;
+  it('2: sibling-building staff — ACCEPT and REJECT both denied 403 with ZERO mutation', async () => {
     const realm = await realmFixture();
     const { scope } = await scopeFixture(realm);
     const crew = await crewFixture(realm, realm.buildingA1.id);

@@ -11,6 +11,7 @@ import {
 import { readHandymanLedgerTransactionAt } from '../handyman-customer-ledger-read';
 import { assertCurrentGuardedHandymanQcPass } from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { handymanExecutionScopeRepository } from '../handyman-quotations';
+import { hasVerifiedHandymanBastCustomerAcceptance } from '../handyman-bast';
 import { recordOperationalEvent } from '../operational-events';
 
 type Executor = Pick<PoolClient, 'query'>;
@@ -757,10 +758,11 @@ async function evaluateFinalCloseGates(
       message:
         'BAST must be ACCEPTED by an authorized Tenant/PIC and bound to the latest Supervisor QC PASS run.',
     });
-  } else if (!activeBast.has_accept_signoff) {
+  } else if (!activeBast.has_accept_signoff ||
+      !(await hasVerifiedHandymanBastCustomerAcceptance(executor, activeBast.id))) {
     blockers.push({
       code: 'BAST_SIGN_OFF_MISSING',
-      message: 'Accepted BAST must have a valid customer ACCEPT sign-off record.',
+      message: 'Accepted BAST must have a verified authenticated customer-PIC consent receipt; legacy staff/digest-only sign-offs do not qualify.',
     });
   } else {
     bastAccepted = true;

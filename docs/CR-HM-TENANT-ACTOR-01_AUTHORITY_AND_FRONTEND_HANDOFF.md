@@ -13,7 +13,7 @@
 
 ## Authority contract
 
-A quotation or variation customer decision is allowed only when all of the following are true at decision time:
+A quotation, variation, BAST acceptance/rejection, free-rework authorization or chargeable-work customer decision is allowed only when all of the following are true at decision time:
 
 1. the authenticated session User passes the existing route permission and exact-Building guards;
 2. the decision target resolves server-side to one Handyman Request under the same Client, Tenant Company and Building;
@@ -109,6 +109,10 @@ Send the exact revised quotation version and current variation version returned 
 * Existing quotation replay conflict remains `HANDYMAN_QUOTATION_DECISION_CONFLICT` (409).
 * Existing variation optimistic-lock/replay/state errors remain unchanged.
 
-## BAST boundary
+## PART 04 — BAST and related customer decisions
 
-This CR does not authorize or implement Tenant BAST signing. Existing BAST sign-off remains blocked from being represented as genuine tenant consent until a separately approved signature identity, intent, evidence, anti-replay and verification contract is implemented.
+The separately approved PART 04 contract is **personal authenticated PIC electronic consent, not a certified digital signature**. Existing BAST `/accept`, `/reject` and `/sign-off` all reuse the current exact request-PIC/Company/Building/occupancy authority above. `/sign-off` is the customer decision alias, not provider signing. Backend derives and verifies the canonical SHA-256 of the authoritative issued v2 BAST, original approved quotation version, QC and optional finalized/byte-verified evidence. A digest alone never establishes identity; Operations/Care/Manager/Owner or generic manage cannot attest on behalf of the customer.
+
+Existing free-rework `/authorize` and chargeable-work `/accept`/`/reject` now enforce the same personal customer guard before replay/mutation. Their separate provider lifecycles/payment-trigger transactions remain. Unlike the pre-existing quotation/variation historical-result replay behavior described above, PART 04 BAST/rework/chargeable replay requires the **original actor**: a replacement PIC cannot adopt the old actor's receipt. Old immutable history remains the original actor's fact.
+
+See [the exact canonical protocol and Frontend rollout contract](handyman/CR-HM-BAST-CUSTOMER-CONSENT-01_CONTRACT.md). No new endpoint/migration/public payload field was added. Opaque old digests must be replaced by correct canonical confirmation in clients, never backend backfill. Legacy staff-only accepted rows are not retrospectively certified; qualified read/close/warranty gates fail closed. No delegation or certified signature verification is invented. Production/live identity and legacy reconciliation gates remain open.

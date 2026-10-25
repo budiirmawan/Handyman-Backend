@@ -5,6 +5,16 @@ import { isValidUuid } from '../clients';
 import { assertCurrentGuardedHandymanQcPass }
   from '../handyman-evidence-qc/handyman-qc-pass-gate';
 import { assertBuildingScopedResourceAccess } from '../context-access';
+import { assertHandymanCustomerScopeAuthority }
+  from '../handyman-tenant-decision-authority/handyman-customer-scope-authority';
+import {
+  HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD,
+  HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
+  computeHandymanBastCustomerConsentDigest,
+  readHandymanBastConsentEvidence,
+  verifiedHandymanBastCustomerConsent,
+  type HandymanBastCustomerConsentManifest,
+} from './handyman-bast-customer-consent';
 import { handymanExecutionScopeNotFoundError }
   from '../handyman-quotations';
 import { handymanScopeAssignmentRepository }
@@ -21,7 +31,7 @@ import {
   assertHandymanBastSignature,
   nextHandymanBastStatus,
 } from './handyman-bast.lifecycle';
-import { toHandymanBastAcceptanceReadContract } from './handyman-bast.read-contract';
+import { toHandymanBastAcceptanceReadContract, toHandymanBastArtifactReference } from './handyman-bast.read-contract';
 import type { HandymanBastAcceptanceReadContract } from './handyman-bast.read-contract';
 import { handymanBastRepository } from './handyman-bast.repository';
 import type {
@@ -33,8 +43,8 @@ import type {
 } from './handyman-bast.types';
 
 /**
- * CR-HM-11 PART 01 — PREPARE / ISSUE / VOID only.
- * No ACCEPT/REJECT, no signature, no HTTP.
+ * Existing BAST lifecycle. PART 04 separates provider preparation/issuance
+ * from authenticated personal-PIC customer consent; HTTP routes are unchanged.
  */
 
 export type HandymanBastPrepareInput = {
@@ -74,7 +84,7 @@ function ensureUuid(value: string, field: string): string {
   if (!isValidUuid(raw)) {
     throw handymanBastValidationError(field);
   }
-  return raw;
+  return raw.toLowerCase();
 }
 
 function ensureKey(value: string): string {
@@ -127,6 +137,17 @@ async function loadAuthorizedScope(
   return scope;
 }
 
+/** Scope → BAST throughout PREPARE/ISSUE/VOID/customer decisions and QC. */
+async function lockBastContext(tx: PoolClient, bastId: string) {
+  const parent = await handymanBastRepository.findBastById(tx, bastId);
+  if (!parent) throw handymanBastNotFoundError();
+  const scope = await handymanScopeAssignmentRepository.lockScopeById(tx, parent.executionScopeId);
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  const bast = await handymanBastRepository.findBastByIdForUpdate(tx, bastId);
+  if (!bast) throw handymanBastNotFoundError();
+  return { bast, scope };
+}
+
 async function requireCurrentQcPassForBast(
   tx: PoolClient,
   scope: { id: string; clientId: string; buildingId: string },
@@ -168,7 +189,7 @@ export async function prepareHandymanBast(
     await assertBuildingScopedResourceAccess(actor, {
       clientId: scope.clientId,
       buildingId: scope.buildingId,
-    });
+    }, client);
     const existing = await handymanBastRepository.findActiveBastByScopeId(
       client,
       executionScopeId,
@@ -229,32 +250,12 @@ async function applyPart01Transition(
   const voidReasonMetadata = ensureVoidReasonMetadata(action, voidReason);
 
   return withTransaction(async (client) => {
-    const bast = await handymanBastRepository.findBastByIdForUpdate(
-      client,
-      bastId,
-    );
-    if (!bast) {
-      throw handymanBastNotFoundError();
-    }
-    // CR-HM-SEC-01 PART 05B — local-staff BAST lifecycle write: the
-    // data-scope wall is the BE-02G building guard on the
-    // authoritative server-derived scope building (migration 0395).
-    // It runs BEFORE the replay path, so a same-Client sibling
-    // Building actor can neither replay nor mutate; the eligibility
-    // gate (`loadAuthorizedScope`) keeps its original position after
-    // the replay short-circuit, preserving idempotent-replay
-    // semantics exactly.
-    const scope = await handymanScopeAssignmentRepository.findScopeById(
-      client,
-      bast.executionScopeId,
-    );
-    if (!scope) {
-      throw handymanExecutionScopeNotFoundError();
-    }
+    const { bast, scope } = await lockBastContext(client, bastId);
+    // Exact Building still precedes replay; provider lifecycle is unchanged.
     await assertBuildingScopedResourceAccess(actor, {
       clientId: scope.clientId,
       buildingId: scope.buildingId,
-    });
+    }, client);
     const replay = await handymanBastRepository.findEventByIdempotency(
       client,
       bast.id,
@@ -342,115 +343,81 @@ async function applyCustomerSignOff(
   const actor = ensureUuid(actorUserId, 'actorUserId');
   const bastId = ensureUuid(input.bastId, 'bastId');
   const idempotencyKey = ensureKey(input.idempotencyKey);
-  const signatureDigest = assertHandymanBastSignature(
-    action,
-    input.signatureDigest,
-  );
-  let evidenceRecordId: string | null = null;
-  if (input.evidenceRecordId != null && input.evidenceRecordId !== '') {
-    evidenceRecordId = ensureUuid(input.evidenceRecordId, 'evidenceRecordId');
+  const suppliedDigest = assertHandymanBastSignature(action, input.signatureDigest).toLowerCase();
+  const evidenceRecordId = input.evidenceRecordId == null || input.evidenceRecordId === ''
+    ? null : ensureUuid(input.evidenceRecordId, 'evidenceRecordId');
+  if (input.rejectReason != null && typeof input.rejectReason !== 'string') {
+    throw handymanBastValidationError('rejectReason');
   }
-  const rejectReason = typeof input.rejectReason === 'string'
-    ? input.rejectReason.trim().slice(0, 2000)
-    : null;
+  const rejectReason = input.rejectReason?.trim() || null;
+  if ((rejectReason?.length ?? 0) > 2000 || (action === 'ACCEPT' && rejectReason !== null)) {
+    throw handymanBastValidationError('rejectReason');
+  }
 
   return withTransaction(async (client) => {
-    const bast = await handymanBastRepository.findBastByIdForUpdate(
-      client,
-      bastId,
+    const { bast } = await lockBastContext(client, bastId);
+    // Live RBAC + exact request/Company/PIC/Building, BEFORE replay or writes.
+    // PART 03 holds PIC/account SHARE locks until this transaction commits.
+    const { scope, tenantPicId } = await assertHandymanCustomerScopeAuthority(
+      client, bast.executionScopeId, actor,
     );
-    if (!bast) {
-      throw handymanBastNotFoundError();
-    }
-    // CR-HM-SEC-01 PART 05C-2 — customer sign-off (ACCEPT/REJECT) is
-    // driven by a LOCAL Customer Care staff actor (route
-    // `tenant_company.manage`; BM SSO principals have no session
-    // userId and no path here — the customer signature is attested
-    // data, the represented tenant stays server-resolved). The
-    // data-scope wall is therefore the BE-02G building guard on the
-    // authoritative server-derived scope building (migration 0395),
-    // NOT the client-level canAccessClient shortcut: a same-Client
-    // sibling Building assignment must not open the sign-off. The
-    // guard keeps the wall's original slot — after the BAST
-    // existence check, before the evidence binding, the idempotent
-    // replay short-circuit, and the state transition.
-    const scope = await handymanScopeAssignmentRepository.findScopeById(
-      client,
-      bast.executionScopeId,
-    );
-    if (!scope) {
-      throw handymanExecutionScopeNotFoundError();
-    }
-    await assertBuildingScopedResourceAccess(actor, {
-      clientId: scope.clientId,
-      buildingId: scope.buildingId,
-    });
-    if (evidenceRecordId) {
-      const ev = await client.query(
-        `SELECT execution_scope_id
-           FROM handyman_evidence_records
-          WHERE id = $1`,
-        [evidenceRecordId],
-      );
-      if (
-        !ev.rows[0]
-        || ev.rows[0].execution_scope_id !== bast.executionScopeId
-      ) {
-        throw handymanBastValidationError('evidenceRecordId');
-      }
-    }
+    if (scope.clientId !== bast.clientId) throw handymanBastValidationError('bastId', 'BAST scope identity mismatch.');
     const replay = await handymanBastRepository.findEventByIdempotency(
-      client,
-      bast.id,
-      action,
-      idempotencyKey,
+      client, bast.id, action, idempotencyKey,
     );
     if (replay) {
-      const current = await handymanBastRepository.findBastById(
-        client,
-        bast.id,
-      );
-      if (!current) throw handymanBastNotFoundError();
-      const existingSignOff =
-        await handymanBastRepository.findSignOffByEventId(
-          client,
-          replay.id,
-        );
-      return {
-        bast: current,
-        event: replay,
-        ...(existingSignOff ? { signOff: existingSignOff } : {}),
-        replayed: true,
-      };
+      const existing = await handymanBastRepository.findSignOffByEventId(client, replay.id);
+      if (!existing || replay.actorUserId !== actor || existing.decision !== action ||
+          existing.evidenceRecordId !== evidenceRecordId || existing.rejectReason !== rejectReason ||
+          (suppliedDigest !== '' && suppliedDigest !== existing.signatureDigest) ||
+          !verifiedHandymanBastCustomerConsent(bast, replay, existing)) {
+        throw handymanBastIllegalTransitionError(bast.status, 'IDEMPOTENCY_PAYLOAD_OR_ACTOR_CONFLICT');
+      }
+      // Return only the original immutable receipt. No new QC/evidence fact is
+      // asserted on replay, and a replacement PIC cannot adopt this receipt.
+      return { bast, event: replay, signOff: existing, replayed: true };
     }
     const next = nextHandymanBastStatus(bast.status, action);
-    if (action === 'ACCEPT') {
-      if (!bast.qcRunId) throw handymanBastQcNotReadyError();
-      await requireCurrentQcPassForBast(client, scope, bast.qcRunId);
+    if (scope.status !== 'AUTHORIZED') throw handymanBastScopeNotEligibleError();
+    if (!bast.issuedAt || !bast.qcRunId) {
+      throw handymanBastValidationError('bastId', 'An authoritative issued BAST/QC manifest is required.');
     }
-    const updated = await handymanBastRepository.updateBastStatus(
-      client,
-      bast.id,
-      next,
-      bast.status,
-    );
+    const issueEvents = (await handymanBastRepository.listEventsByBastId(client, bast.id))
+      .filter((event) => event.eventType === 'ISSUE');
+    if (issueEvents.length !== 1 || issueEvents[0]!.occurredAt.getTime() !== bast.issuedAt.getTime()) {
+      throw handymanBastValidationError('bastId', 'The immutable issued BAST manifest is unavailable.');
+    }
+    if (action === 'ACCEPT') await requireCurrentQcPassForBast(client, scope, bast.qcRunId);
+    const evidence = await readHandymanBastConsentEvidence(client, evidenceRecordId, bast);
+    const issuedArtifact = toHandymanBastArtifactReference(bast);
+    const manifest: HandymanBastCustomerConsentManifest = {
+      protocol: HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
+      bastId: bast.id, executionScopeId: scope.id, approvedQuotationVersionId: scope.approvedQuotationVersionId,
+      clientId: scope.clientId,
+      handymanRequestId: scope.handymanRequestId, tenantCompanyId: scope.tenantCompanyId,
+      tenantPicId, buildingId: scope.buildingId,
+      issuedArtifactRef: issuedArtifact.ref, issuedArtifactVersion: issuedArtifact.version,
+      issueEventId: issueEvents[0]!.id, issuedAt: bast.issuedAt.toISOString(),
+      qcRunId: bast.qcRunId, actorUserId: actor, decision: action, rejectReason, evidence,
+    };
+    const signatureDigest = computeHandymanBastCustomerConsentDigest(manifest);
+    // ACCEPT must confirm the exact manifest. REJECT may omit its digest, in
+    // which case the backend calculates it; a supplied value must still match.
+    if ((action === 'ACCEPT' || suppliedDigest !== '') && suppliedDigest !== signatureDigest) {
+      throw handymanBastValidationError('signatureDigest', 'Digest must match the canonical issued BAST customer-consent manifest.');
+    }
+    const updated = await handymanBastRepository.updateBastStatus(client, bast.id, next, bast.status);
     const event = await handymanBastRepository.insertEvent(client, {
-      clientId: bast.clientId,
-      bastId: bast.id,
-      executionScopeId: bast.executionScopeId,
-      eventType: action as HandymanBastEventType,
-      idempotencyKey,
-      actorUserId: actor,
+      clientId: bast.clientId, bastId: bast.id, executionScopeId: bast.executionScopeId,
+      eventType: action, idempotencyKey, actorUserId: actor,
+      metadata: { customerConsent: {
+        method: HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, manifest, sha256Digest: signatureDigest,
+      } },
     });
     const signOff = await handymanBastRepository.insertSignOff(client, {
-      clientId: bast.clientId,
-      bastId: bast.id,
-      eventId: event.id,
-      executionScopeId: bast.executionScopeId,
-      decision: action,
-      signatureDigest,
-      evidenceRecordId,
-      rejectReason: action === 'REJECT' ? rejectReason : null,
+      clientId: bast.clientId, bastId: bast.id, eventId: event.id,
+      executionScopeId: bast.executionScopeId, decision: action, signatureDigest,
+      evidenceRecordId, rejectReason,
     });
     return { bast: updated, event, signOff, replayed: false };
   });

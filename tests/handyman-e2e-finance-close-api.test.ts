@@ -46,6 +46,7 @@ import {
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
+import { handymanCustomerForScope, handymanCustomerConsentInput } from './helpers/handyman-customer-consent';
 
 /**
  * CR-HM-E2E-LIFECYCLE-01 — persona-handoff integration tests for the
@@ -400,22 +401,16 @@ async function acceptedBastFixture() {
     bastId: prepared.bast.id,
     idempotencyKey: key(),
   });
-  const evidence = await createHandymanEvidenceRecord(
-    { executionScopeId: f.scope.id, stage: 'AFTER', idempotencyKey: key() },
-    f.crew.leadUser.id,
-  );
-  const accepted = await post(
-    adminToken,
-    `${V1}/handyman/bast/${prepared.bast.id}/accept`,
-    {
-      idempotencyKey: key(),
-      signatureDigest: 'sha256:e2e-customer-signature',
-      evidenceRecordId: evidence.record.id,
-    },
-  );
+  const customer = await handymanCustomerForScope(f.scope.id);
+  await grant(customer.id, ['tenant_company.manage', 'tenant_company.read']);
+  const customerToken = await login(customer.id, customer.email);
+  const consent = await handymanCustomerConsentInput(prepared.bast.id, customer.id);
+  const accepted = await post(customerToken, `${V1}/handyman/bast/${prepared.bast.id}/accept`, {
+    idempotencyKey: key(), signatureDigest: consent.signatureDigest,
+  });
   assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
   assert.equal(accepted.body.data.bast.status, 'ACCEPTED');
-  return { ...f, bastId: prepared.bast.id };
+  return { ...f, bastId: prepared.bast.id, customerToken, customerUserId: customer.id };
 }
 
 describe('CR-HM-E2E-LIFECYCLE-01 finance close HTTP seams (J10–J12)', () => {
@@ -865,9 +860,9 @@ describe('CR-HM-E2E-LIFECYCLE-01 finance close HTTP seams (J10–J12)', () => {
     );
     assert.equal(officeStart.status, 403);
 
-    // Authorization stays on the existing customer-side command.
+    // Authorization is the personal PIC's customer decision, not the provider's.
     const authorized = await post(
-      adminToken,
+      f.customerToken,
       `${V1}/handyman/service-warranty-reworks/${reworkId}/authorize`,
       { idempotencyKey: key() },
     );

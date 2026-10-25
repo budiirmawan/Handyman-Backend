@@ -113,8 +113,9 @@ export type BuildingScopedResourceRef = {
 export async function canAccessBuildingScopedResource(
   userId: string,
   resource: BuildingScopedResourceRef,
+  executor?: PoolClient,
 ): Promise<boolean> {
-  const contexts = await resolveBuildingsForUser(userId);
+  const contexts = await resolveBuildingsForUser(userId, executor);
   return contexts.some(
     (context) =>
       context.building.id === resource.buildingId &&
@@ -133,8 +134,9 @@ export async function canAccessBuildingScopedResource(
 export async function assertBuildingScopedResourceAccess(
   userId: string,
   resource: BuildingScopedResourceRef,
+  executor?: PoolClient,
 ): Promise<void> {
-  if (!(await canAccessBuildingScopedResource(userId, resource))) {
+  if (!(await canAccessBuildingScopedResource(userId, resource, executor))) {
     throw buildingAccessDeniedError();
   }
 }

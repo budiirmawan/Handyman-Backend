@@ -11055,9 +11055,9 @@ paths:
       operationId: acceptHandymanBast
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SIGNATURE_REQUIRED, HANDYMAN_BAST_VALIDATION, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_QC_PASS_BLOCKED]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SIGNATURE_REQUIRED, HANDYMAN_BAST_VALIDATION, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_QC_PASS_BLOCKED, HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
       summary: Customer ACCEPT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
-      description: "Governed customer sign-off requires tenant_company.manage and exact Building access, and is legal only from ISSUED with signatureDigest and idempotencyKey. A current guarded QC PASS for the PREPARE-anchored qcRunId is rechecked; otherwise 409 HANDYMAN_BAST_QC_NOT_READY. Worker/provider PREPARE/ISSUE/VOID run on the separate worker transport (CR-HM-BAST-HTTP-01), never on this route. The acting identity recorded is the local staff user; the represented tenant stays server-resolved and the customer signature is attested data — this staff transport never impersonates the Tenant PIC. An optional evidenceRecordId must belong to the same execution scope when supplied."
+      description: "PART 04 personal authenticated current exact-request PIC only: live tenant_company.manage, exact Client/Building, active account/PIC/Company and current exact-space occupancy through the PART 03 authority guard, held through commit. Generic manage, Operations, Care, Manager, Owner/admin, reporter, digest or an unverified delegate is not customer authority. Legal only from ISSUED. Backend verifies signatureDigest against HM-BAST-CUSTOMER-CONSENT-SHA256-V1 reconstructed from the immutable issued v2 BAST/scope/approved quotation/QC/evidence manifest; a nonempty or arbitrary SHA-256 is insufficient. Current guarded bound Supervisor QC PASS is rechecked. Optional attachment must be same-scope, finalized, nonempty and verified against real managed bytes. Actor/time/manifest/digest are immutable; head/event/sign-off commit atomically. Same original actor/key/payload may replay; changed actor or intent conflicts. Electronic consent, NOT certified digital signature. No body signer/scope/metadata claims. See docs/handyman/CR-HM-BAST-CUSTOMER-CONSENT-01_CONTRACT.md."
       parameters:
         - $ref: '#/components/parameters/BastIdPath'
       requestBody:
@@ -11089,9 +11089,9 @@ paths:
       operationId: rejectHandymanBast
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SIGNATURE_REQUIRED, HANDYMAN_BAST_VALIDATION, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_QC_PASS_BLOCKED]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SIGNATURE_REQUIRED, HANDYMAN_BAST_VALIDATION, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_QC_PASS_BLOCKED, HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
       summary: Customer REJECT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
-      description: "CR-HM-17 GAP PART 04 — governed customer rejection sign-off over `rejectHandymanBast`. Route guard `tenant_company.manage`; the service additionally requires exact-Building access to the BAST scope's server-derived Building (BE-02G `assertBuildingScopedResourceAccess` — a same-Client sibling-Building assignment is NOT sufficient; this replaced the former client-level check, CR-HM-SEC-01 PART 05C-2). The acting identity recorded is the local staff user; the represented tenant stays server-resolved and the customer signature, when supplied, is attested data — this staff transport never impersonates the Tenant PIC. Legal only from `ISSUED`; requires `idempotencyKey` and optional `rejectReason` / `signatureDigest` / `evidenceRecordId` (same-scope when supplied)."
+      description: "PART 04 personal authenticated current exact-request PIC only: live tenant_company.manage, exact Client/Building, active account/PIC/Company and current exact-space occupancy through the PART 03 authority guard, held through commit. Generic manage, Operations, Care, Manager, Owner/admin, reporter, digest or an unverified delegate is not customer authority. Explicit personal REJECT only from ISSUED with trustworthy issued manifest. rejectReason is optional and trimmed (not the field reason). Backend calculates the canonical V1 digest when absent/empty; a supplied digest must match. Optional attachment has the same finalization/real-byte checks as ACCEPT. No new/current QC PASS is needed to reject. Immutable original actor/time/decision provenance and atomic actor/payload-bound replay rules apply. Electronic consent is NOT certified digital signature; no staff attestation or body identity claims."
       parameters:
         - $ref: '#/components/parameters/BastIdPath'
       requestBody:
@@ -11123,9 +11123,9 @@ paths:
       operationId: signOffHandymanBast
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SIGNATURE_REQUIRED, HANDYMAN_BAST_VALIDATION, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_QC_PASS_BLOCKED]
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SIGNATURE_REQUIRED, HANDYMAN_BAST_VALIDATION, HANDYMAN_EVIDENCE_UPLOAD_BYTES_REQUIRED, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, HANDYMAN_QC_PASS_BLOCKED, HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
       summary: Governed customer ACCEPT/REJECT sign-off on an ISSUED Handyman BAST (CR-HM-11 / CR-HM-17 GAP PART 04)
-      description: "CR-HM-17 GAP PART 04 — governed customer sign-off over `acceptHandymanBast` / `rejectHandymanBast` (`decision: ACCEPT | REJECT`). Route guard `tenant_company.manage`; the service additionally requires exact-Building access to the BAST scope's server-derived Building (BE-02G `assertBuildingScopedResourceAccess` — a same-Client sibling-Building assignment is NOT sufficient; this replaced the former client-level check). The acting identity recorded is the local staff user; the represented tenant stays server-resolved and the customer signature is attested data — this staff transport never impersonates the Tenant PIC. `signatureDigest` is conditionally required: the schema cannot express it, but the service refuses a missing/blank digest (or one over 512 characters) with 409 HANDYMAN_BAST_SIGNATURE_REQUIRED for ACCEPT, and an over-length digest likewise for REJECT; always send it on ACCEPT. Worker/provider commands (`PREPARE`, `ISSUE`, `VOID`) are rejected."
+      description: "PART 04 personal authenticated current exact-request PIC only: live tenant_company.manage, exact Client/Building, active account/PIC/Company and current exact-space occupancy through the PART 03 authority guard, held through commit. Generic manage, Operations, Care, Manager, Owner/admin, reporter, digest or an unverified delegate is not customer authority. This is the existing CUSTOMER ACCEPT/REJECT alias, NOT provider sign-off. It uses the identical personal authority, canonical V1 issued-manifest verification, attachment integrity, atomic receipt and actor/payload-bound replay rules. ACCEPT requires its canonical digest (missing/blank is 400 HANDYMAN_BAST_SIGNATURE_REQUIRED) and current bound Supervisor PASS. REJECT may omit the digest for backend calculation; any supplied value must match. PREPARE/ISSUE/VOID and body signer/scope/delegate/metadata claims are rejected. Electronic consent is NOT certified digital signature."
       parameters:
         - $ref: '#/components/parameters/BastIdPath'
       requestBody:
@@ -11947,9 +11947,9 @@ paths:
       operationId: authorizeHandymanServiceWarrantyRework
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [HANDYMAN_SERVICE_WARRANTY_REWORK_EVIDENCE_REQUIRED, HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_FOUND, HANDYMAN_SERVICE_WARRANTY_REWORK_VALIDATION]
+      x-error-codes: [HANDYMAN_SERVICE_WARRANTY_REWORK_EVIDENCE_REQUIRED, HANDYMAN_SERVICE_WARRANTY_REWORK_NOT_FOUND, HANDYMAN_SERVICE_WARRANTY_REWORK_VALIDATION, HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
       summary: Authorize a `REWORK_DRAFT` free warranty rework (`REWORK_AUTHORIZED`) (CR-HM-15 / CR-HM-17 GAP PART 06)
-      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + exact-Building access to the resource's server-derived scope Building (BE-02G — a same-Client sibling-Building assignment does NOT suffice) + `idempotencyKey`) over `authorizeHandymanServiceWarrantyRework`. This is the customer-side acceptance of the proposed free-rework scope, recorded under the acting staff user with the customer consent attested; the represented tenant stays server-resolved and the Tenant PIC is never impersonated."
+      description: "PART 04 personal authenticated current exact-request PIC only: live tenant_company.manage, exact Client/Building, active account/PIC/Company and current exact-space occupancy through the PART 03 authority guard, held through commit. Generic manage, Operations, Care, Manager, Owner/admin, reporter, digest or an unverified delegate is not customer authority. This personal customer decision authorizes the proposed free-rework scope using the existing lifecycle, idempotency and append-only event. Provider PROPOSE/START/COMPLETE/VERIFY retain their separate current Crew Lead guards. Authority is checked before replay; a replacement PIC cannot adopt the old actor's replay. No attested staff surrogate."
       parameters:
         - $ref: '#/components/parameters/ServiceWarrantyReworkIdPath'
       requestBody:
@@ -12008,9 +12008,9 @@ paths:
       operationId: acceptHandymanChargeableAdditionalWork
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_ILLEGAL_TRANSITION, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_FOUND, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_VALIDATION]
+      x-error-codes: [HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_ILLEGAL_TRANSITION, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_FOUND, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_VALIDATION, HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
       summary: Accept a `CHARGEABLE_PROPOSED` chargeable additional work (`CHARGEABLE_AUTHORIZED`) (CR-HM-15 / CR-HM-17 GAP PART 06)
-      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + exact-Building access to the resource's server-derived scope Building (BE-02G — a same-Client sibling-Building assignment does NOT suffice) + `idempotencyKey`) over `acceptHandymanChargeableAdditionalWork`. This records the customer-side commercial acceptance under the acting staff user (persisted as the decision actor); the represented tenant stays server-resolved and the Tenant PIC is never impersonated."
+      description: "PART 04 personal authenticated current exact-request PIC only: live tenant_company.manage, exact Client/Building, active account/PIC/Company and current exact-space occupancy through the PART 03 authority guard, held through commit. Generic manage, Operations, Care, Manager, Owner/admin, reporter, digest or an unverified delegate is not customer authority. Personal customer acceptance uses the existing locked chargeable-work/warranty transaction, immutable authenticated actor/event and atomic PAYMENT_TRIGGER fact. No free-rework/BAST/payment engine is duplicated. Authority is checked before replay; changed deciding actor conflicts instead of adopting a historical receipt."
       parameters:
         - $ref: '#/components/parameters/ChargeableAdditionalWorkIdPath'
       requestBody:
@@ -12042,9 +12042,9 @@ paths:
       operationId: rejectHandymanChargeableAdditionalWork
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_ILLEGAL_TRANSITION, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_FOUND, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_VALIDATION]
+      x-error-codes: [HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_ILLEGAL_TRANSITION, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_NOT_FOUND, HANDYMAN_CHARGEABLE_ADDITIONAL_WORK_VALIDATION, HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
       summary: Reject a `CHARGEABLE_PROPOSED` chargeable additional work (`CHARGEABLE_REJECTED`) (CR-HM-15 / CR-HM-17 GAP PART 06)
-      description: "CR-HM-17 GAP PART 06 — governed Customer Care command transport (`tenant_company.manage` + exact-Building access to the resource's server-derived scope Building (BE-02G — a same-Client sibling-Building assignment does NOT suffice) + `idempotencyKey`) over `rejectHandymanChargeableAdditionalWork`. This records the customer-side commercial rejection under the acting staff user (persisted as the decision actor); the represented tenant stays server-resolved and the Tenant PIC is never impersonated."
+      description: "PART 04 personal authenticated current exact-request PIC only: live tenant_company.manage, exact Client/Building, active account/PIC/Company and current exact-space occupancy through the PART 03 authority guard, held through commit. Generic manage, Operations, Care, Manager, Owner/admin, reporter, digest or an unverified delegate is not customer authority. Personal customer rejection uses the existing locked chargeable-work/warranty transaction and immutable authenticated actor/event; no PAYMENT_TRIGGER is emitted. Authority is checked before replay; changed deciding actor conflicts instead of adopting a historical receipt."
       parameters:
         - $ref: '#/components/parameters/ChargeableAdditionalWorkIdPath'
       requestBody:
@@ -93211,16 +93211,34 @@ components:
         - acceptedAt
         - rejectedAt
         - voidedAt
+        - artifactRef
+        - approvedSignOff
+        - signOffComplete
       properties:
         bastId: { type: string, format: uuid }
         executionScopeId: { type: string, format: uuid }
         status: { $ref: '#/components/schemas/HandymanBastStatus' }
-        customerAccepted: { type: boolean }
-        warrantyStartEligible: { type: boolean }
+        customerAccepted: { type: boolean, description: 'Requires ACCEPTED plus verified immutable personal-PIC consent; legacy staff/digest-only accepted history is false.' }
+        warrantyStartEligible: { type: boolean, description: 'Requires verified customer acceptance, not raw status or a nonempty digest.' }
         issuedAt: { type: string, format: date-time, nullable: true }
         acceptedAt: { type: string, format: date-time, nullable: true }
         rejectedAt: { type: string, format: date-time, nullable: true }
         voidedAt: { type: string, format: date-time, nullable: true }
+        artifactRef: { type: string, description: 'Existing Backend-owned artifact reference; use the ISSUED v2 reference for canonical consent, not terminal v3.' }
+        approvedSignOff:
+          type: object
+          nullable: true
+          description: 'Existing runtime binding, now qualified by immutable authenticated personal-PIC consent. Null for legacy staff/digest-only history. An attachment is optional, not signer identity.'
+          required: [signOffId, eventId, signatureDigest, evidenceRecordId, actorUserId, occurredAt, createdAt]
+          properties:
+            signOffId: { type: string, format: uuid }
+            eventId: { type: string, format: uuid }
+            signatureDigest: { type: string }
+            evidenceRecordId: { type: string, format: uuid, nullable: true }
+            actorUserId: { type: string, format: uuid }
+            occurredAt: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+        signOffComplete: { type: boolean, description: 'Existing runtime flag; true only for ACCEPTED with a verified immutable personal-consent binding.' }
     HandymanBastEvent:
       type: object
       required:
@@ -93304,26 +93322,29 @@ components:
             $ref: '#/components/schemas/HandymanBastSignOff'
     HandymanBastAcceptRequest:
       type: object
+      additionalProperties: false
       required: [idempotencyKey, signatureDigest]
       properties:
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
-        signatureDigest: { type: string, minLength: 1, maxLength: 512 }
+        signatureDigest: { type: string, minLength: 1, maxLength: 512, description: "Canonical issued-manifest SHA-256 (64 hex, no sha256: prefix), verified by Backend; not signer identity or certified signature." }
         evidenceRecordId: { type: string, format: uuid, nullable: true }
     HandymanBastRejectRequest:
       type: object
+      additionalProperties: false
       required: [idempotencyKey]
       properties:
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
-        signatureDigest: { type: string, maxLength: 512 }
+        signatureDigest: { type: string, maxLength: 512, description: "Canonical issued-manifest SHA-256 (64 hex, no sha256: prefix), verified by Backend; not signer identity or certified signature. Required for ACCEPT; for REJECT omit/empty to let Backend calculate, otherwise it must match." }
         evidenceRecordId: { type: string, format: uuid, nullable: true }
         rejectReason: { type: string, maxLength: 2000, nullable: true }
     HandymanBastSignOffRequest:
       type: object
+      additionalProperties: false
       required: [decision, idempotencyKey]
       properties:
         decision: { $ref: '#/components/schemas/HandymanBastDecision' }
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
-        signatureDigest: { type: string, maxLength: 512 }
+        signatureDigest: { type: string, maxLength: 512, description: "Canonical issued-manifest SHA-256 (64 hex, no sha256: prefix), verified by Backend; not signer identity or certified signature. Required for ACCEPT; for REJECT omit/empty to let Backend calculate, otherwise it must match." }
         evidenceRecordId: { type: string, format: uuid, nullable: true }
         rejectReason: { type: string, maxLength: 2000, nullable: true }
     HandymanBastSignOffCommandResult:

@@ -1,3 +1,4 @@
+import { hasVerifiedHandymanBastCustomerAcceptance } from '../handyman-bast';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
@@ -2692,7 +2693,8 @@ export async function confirmVariationFinalChargeEligibility(
       !bast ||
       bast.status !== 'ACCEPTED' ||
       !bast.accepted_at ||
-      !bast.has_valid_sign_off
+      !bast.has_valid_sign_off ||
+      !(await hasVerifiedHandymanBastCustomerAcceptance(tx, bast.id))
     ) {
       throw new AppError({
         statusCode: 409,

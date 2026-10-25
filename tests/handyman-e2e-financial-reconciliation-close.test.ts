@@ -55,6 +55,7 @@ import {
   realmFixture,
 } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
+import { handymanCustomerConsentInput } from './helpers/handyman-customer-consent';
 import {
   createChannelAttribution,
 } from '../src/modules/handyman-channel-attributions';
@@ -1098,7 +1099,7 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
       .post(`${V1}/handyman/bast/${bast1Issued.bast.id}/reject`)
       .set('Authorization', `Bearer ${f.tenantPicSession.token}`)
       .send({
-        reason: 'Ceiling panel edge needs wipe-down before final acceptance',
+        rejectReason: 'Ceiling panel edge needs wipe-down before final acceptance',
         idempotencyKey: key(),
       });
     assert.equal(rejectBast1Res.status, 200, JSON.stringify(rejectBast1Res.body));
@@ -1132,12 +1133,13 @@ describe('CR-HM-E2E-FINANCIAL-RECONCILIATION — Backend E2E Scenarios 1..12', (
     });
     assert.equal(bast2Issued.bast.status, 'ISSUED');
 
-    // Authorized Tenant PIC accepts BAST #2 and records sign-off
+    // Personal Tenant PIC confirms the exact immutable issued BAST manifest.
+    const bast2Consent = await handymanCustomerConsentInput(bast2Issued.bast.id, f.tenantPicSession.userId);
     const acceptBast2Res = await api()
       .post(`${V1}/handyman/bast/${bast2Issued.bast.id}/accept`)
       .set('Authorization', `Bearer ${f.tenantPicSession.token}`)
       .send({
-        signatureDigest: 'sha256:tenant-pic-sign-off-002',
+        signatureDigest: bast2Consent.signatureDigest,
         idempotencyKey: key(),
       });
     assert.equal(acceptBast2Res.status, 200, JSON.stringify(acceptBast2Res.body));
