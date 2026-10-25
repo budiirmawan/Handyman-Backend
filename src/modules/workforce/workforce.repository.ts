@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { getPool } from '../../database';
 import type {
@@ -82,8 +83,10 @@ async function createWorkforceProfile(
   return mapRow(result.rows[0]);
 }
 
-async function findById(id: string): Promise<WorkforceProfileRecord | null> {
-  const result = await getPool().query<WorkforceProfileRow>(
+async function findById(
+  id: string, executor: Pick<PoolClient, 'query'> = getPool(),
+): Promise<WorkforceProfileRecord | null> {
+  const result = await executor.query<WorkforceProfileRow>(
     `SELECT ${WORKFORCE_SELECT} FROM workforce_profiles WHERE id = $1`,
     [id],
   );

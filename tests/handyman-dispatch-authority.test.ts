@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
-import { closePool, initDatabase, migrateUp } from '../src/database';
+import { closePool, initDatabase, migrateUp, withTransaction } from '../src/database';
 import { areaService } from '../src/modules/areas';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
@@ -41,6 +41,8 @@ import {
   issueHandymanQuotationVersion,
 } from '../src/modules/handyman-quotations';
 import { checkInHandymanWorkSession } from '../src/modules/handyman-work-sessions';
+import { createHandymanPermitReadiness, createHandymanUnitAccessReadiness, handymanPermitReadinessRepository, handymanUnitAccessReadinessRepository } from '../src/modules/handyman-scheduling';
+import { parseReleaseBody } from '../src/modules/handyman-dispatch-api/handyman-dispatch-api.validation';
 import { organizationService } from '../src/modules/organizations';
 import { positionService } from '../src/modules/positions';
 import { propertyService } from '../src/modules/properties';
@@ -648,6 +650,18 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
     assert.equal(hist.rows[0].reason, 'Crew unavailable');
   });
 
+  async function authorizeClearances(requestId: string, startAt: Date, endAt: Date) {
+    const permit = await createHandymanPermitReadiness({
+      handymanRequestId: requestId, permitType: 'UNIT',
+      validFrom: startAt.toISOString(), validUntil: endAt.toISOString(), authorizationNote: 'Local permit authorization',
+    }, adminUserId);
+    const access = await createHandymanUnitAccessReadiness({
+      handymanRequestId: requestId, accessWindowStart: startAt.toISOString(),
+      accessWindowEnd: endAt.toISOString(), authorizationNote: 'Local unit access authorization',
+    }, adminUserId);
+    return { permit, access };
+  }
+
   it('P0-C: dispatch readiness evaluates correctly and release requires all gates', async (t) => {
     if (!requireDb(t)) return;
     const realm = await setupRealm();
@@ -715,6 +729,15 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
       [randomUUID(), apptId, crew.crew.id, startAt, endAt],
     );
 
+    const unknown = await handymanDispatchService.evaluateDispatchReadiness(scopeId, adminUserId);
+    assert.equal(unknown.checks.permitClearance, false);
+    assert.equal(unknown.checks.unitAccessClearance, false);
+    // Caller flags cannot convert missing authoritative facts into exemption.
+    assert.deepEqual(parseReleaseBody({ permitClearance: true, unitAccessClearance: true, permitRequired: false }), {});
+    await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: scopeId }, adminUserId),
+      (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+    assert.equal((await q('SELECT id FROM handyman_dispatch_releases WHERE execution_scope_id=$1', [scopeId])).rows.length, 0);
+    await authorizeClearances(requestId, startAt, endAt);
     const ready2 =
       await handymanDispatchService.evaluateDispatchReadiness(
         scopeId,
@@ -790,9 +813,9 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
   async function seedConfirmedCrewAppointment(
     scopeId: string,
     crew: { crew: { id: string } },
+    startAt = new Date(Date.now() - 60_000),
   ): Promise<string> {
     const apptId = randomUUID();
-    const startAt = new Date(Date.now() + 2 * 3600_000);
     const endAt = new Date(Date.now() + 4 * 3600_000);
     await q(
       `ALTER TABLE handyman_visit_appointments DISABLE TRIGGER ALL`);
@@ -820,6 +843,8 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
          FROM handyman_visit_appointments WHERE id = $2`,
       [randomUUID(), apptId, crew.crew.id, startAt, endAt],
     );
+    const requestId = (await q('SELECT handyman_request_id FROM handyman_execution_scopes WHERE id=$1', [scopeId])).rows[0].handyman_request_id;
+    await authorizeClearances(requestId, startAt, endAt);
     return apptId;
   }
 
@@ -977,4 +1002,95 @@ describe('CR-HM-OPS-DISPATCH-02 — Inspector / Crew / Dispatch authority', () =
         errorCode(err) === 'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_ACTIVE_SESSION_BLOCK',
     );
   });
+  async function clearanceFixture(future = false) {
+    const realm = await setupRealm();
+    const crew = await setupCrew(realm);
+    const { requestId, picUserId } = await setupRequest(realm);
+    const scopeId = await setupApprovedScope(realm, requestId, picUserId);
+    const assignment = await assignHandymanExecutionScopeCrew({
+      executionScopeId: scopeId, providerContextId: crew.providerContext.id, crewId: crew.crew.id,
+    }, adminUserId);
+    const appointmentId = await seedConfirmedCrewAppointment(scopeId, crew,
+      new Date(Date.now() + (future ? 3_600_000 : -60_000)));
+    return { realm, crew, requestId, scopeId, assignment, appointmentId };
+  }
+  async function mutationFacts() {
+    return Promise.all(['handyman_dispatch_releases', 'handyman_work_sessions',
+      'handyman_work_session_events', 'operational_events'].map(async (table) =>
+      (await q(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY id`)).rows));
+  }
+
+  for (const kind of ['permit', 'access'] as const) {
+    it(`PART05: ${kind} missing, expired, revoked, foreign and partial-window facts cannot release or mutate`, async (t) => {
+      const f = await clearanceFixture();
+      const repo = kind === 'permit' ? handymanPermitReadinessRepository : handymanUnitAccessReadinessRepository;
+      const original = await repo.findActiveByRequest(undefined, f.requestId);
+      assert.ok(original);
+      const cases = [null, { ...original, status: 'INACTIVE' },
+        { ...original, clientId: randomUUID() }, { ...original, buildingId: randomUUID() },
+        { ...original, handymanRequestId: randomUUID() }, { ...original, spaceId: randomUUID() },
+        kind === 'permit' ? { ...original, validUntil: new Date(0) } : { ...original, accessWindowEnd: new Date(0) },
+        kind === 'permit' ? { ...original, validFrom: new Date(Date.now() + 60_000) } : { ...original, accessWindowStart: new Date(Date.now() + 60_000) }];
+      for (const bad of cases) {
+        // Simulate missing/corrupt legacy authoritative records, not body claims;
+        // real DB/session/scope/assignment and write transaction remain in use.
+        const lookup = t.mock.method(repo, 'findActiveByRequest', async () => bad);
+        const locked = t.mock.method(repo, 'lockById', async () => bad);
+        try {
+          const before = await mutationFacts();
+          const readiness = await handymanDispatchService.evaluateDispatchReadiness(f.scopeId, adminUserId);
+          assert.equal(readiness.checks[kind === 'permit' ? 'permitClearance' : 'unitAccessClearance'], false);
+          await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId),
+            (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+          assert.deepEqual(await mutationFacts(), before);
+        } finally { lookup.mock.restore(); locked.mock.restore(); }
+      }
+      assert.equal((await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId)).status, 'RELEASED');
+    });
+  }
+
+  it('PART05: future visit may release, not execute; caller cannot substitute appointment or bypass Building', async () => {
+    const f = await clearanceFixture(true);
+    const before = await mutationFacts();
+    await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId, appointmentId: randomUUID() }, adminUserId),
+      (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+    const outsider = await userService.createUser({ email: `foreign-${suffix()}@example.com`, displayName: 'Foreign actor' });
+    await assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, outsider.id),
+      (err: Error) => errorCode(err) === 'BUILDING_ACCESS_DENIED');
+    assert.deepEqual(await mutationFacts(), before);
+    await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId, appointmentId: f.appointmentId }, adminUserId);
+    const released = await mutationFacts();
+    await assert.rejects(() => withTransaction(tx => handymanDispatchService.assertDispatchExecutionClearance(tx, f.scopeId, f.crew.leadUser.id, f.assignment.id)),
+      (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+    assert.deepEqual(await mutationFacts(), released);
+  });
+
+  it('PART05: readiness revocation racing release is rechecked under the existing row lock', async (t) => {
+    const f = await clearanceFixture();
+    const permit = await handymanPermitReadinessRepository.findActiveByRequest(undefined, f.requestId);
+    assert.ok(permit);
+    let reached!: () => void;
+    const entered = new Promise<void>(resolve => { reached = resolve; });
+    const original = handymanPermitReadinessRepository.lockById;
+    const hook = t.mock.method(handymanPermitReadinessRepository, 'lockById', async (...args: Parameters<typeof original>) => {
+      reached(); return original(...args);
+    });
+    const revoker = await pool!.connect();
+    let pending: Promise<unknown> | undefined;
+    try {
+      await revoker.query('BEGIN');
+      await revoker.query('SELECT id FROM handyman_permit_readiness WHERE id=$1 FOR UPDATE', [permit.id]);
+      // Attach rejection handling immediately while the release waits for us.
+      pending = assert.rejects(() => handymanDispatchService.releaseHandymanDispatch({ executionScopeId: f.scopeId }, adminUserId),
+        (err: Error) => errorCode(err) === 'HANDYMAN_DISPATCH_NOT_READY');
+      await entered;
+      await revoker.query("UPDATE handyman_permit_readiness SET status='INACTIVE', updated_at=NOW() WHERE id=$1", [permit.id]);
+      await revoker.query('COMMIT');
+      await pending;
+      assert.equal((await q('SELECT id FROM handyman_dispatch_releases WHERE execution_scope_id=$1', [f.scopeId])).rows.length, 0);
+    } finally {
+      await revoker.query('ROLLBACK'); revoker.release(); hook.mock.restore();
+    }
+  });
+
 });

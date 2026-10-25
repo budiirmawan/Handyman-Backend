@@ -5,6 +5,8 @@ import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanExecutionScopeNotFoundError } from '../handyman-quotations';
 import { handymanScopeAssignmentRepository } from '../handyman-scope-assignments';
+import { handymanPermitReadinessRepository } from '../handyman-scheduling/handyman-permit-readiness.repository';
+import { handymanUnitAccessReadinessRepository } from '../handyman-scheduling/handyman-unit-access.repository';
 import {
   handymanDispatchNotReadyError,
   handymanDispatchReleaseConflictError,
@@ -40,6 +42,91 @@ function toPublic(
   };
 }
 
+type DispatchScope = NonNullable<Awaited<ReturnType<typeof handymanScopeAssignmentRepository.findScopeById>>>;
+type Executor = Pick<PoolClient, 'query'>;
+
+/** PART05 consumer of existing readiness authorities, not a new readiness engine.
+ * Write callers hold scope → visit → permit → access locks through commit.
+ * Absence is UNKNOWN, not an exemption: current schemas have no trusted
+ * required/not-required decision. Never infer one from notes or caller flags.
+ */
+async function readExecutionClearance(
+  db: Executor, scope: DispatchScope, crewId: string,
+  appointmentId?: string | null, requireCurrentWindow = false,
+) {
+  const visits = await db.query<{ id: string; start_at: Date; end_at: Date }>(
+    `SELECT id, start_at, end_at FROM handyman_visit_appointments
+      WHERE execution_scope_id = $1 AND client_id = $2
+        AND handyman_request_id = $3 AND building_id = $4
+        AND kind = 'EXECUTION' AND resource_type = 'CREW' AND resource_id = $5
+        AND state IN ('CONFIRMED','IN_PROGRESS')
+        AND ($6::uuid IS NULL OR id = $6)
+      ORDER BY created_at DESC LIMIT 1 FOR SHARE`,
+    [scope.id, scope.clientId, scope.handymanRequestId, scope.buildingId, crewId, appointmentId ?? null],
+  );
+  const visit = visits.rows[0];
+  const location = (await db.query<{
+    space_id: string; room_id: string; area_id: string; floor_id: string;
+  }>(
+    `SELECT r.space_id, s.room_id, rm.area_id, a.floor_id
+       FROM handyman_service_requests r
+       JOIN spaces s ON s.id = r.space_id
+       JOIN rooms rm ON rm.id = s.room_id
+       JOIN areas a ON a.id = rm.area_id
+       JOIN floors f ON f.id = a.floor_id AND f.building_id = r.building_id
+      WHERE r.id = $1 AND r.client_id = $2 AND r.building_id = $3`,
+    [scope.handymanRequestId, scope.clientId, scope.buildingId],
+  )).rows[0];
+  // Re-read UNDER the repository's existing lock: a concurrent supersession
+  // either waits for this decision or leaves an INACTIVE row which fails.
+  const p = await handymanPermitReadinessRepository.findActiveByRequest(db, scope.handymanRequestId);
+  const permit = p ? await handymanPermitReadinessRepository.lockById(db, p.id) : null;
+  const a = await handymanUnitAccessReadinessRepository.findActiveByRequest(db, scope.handymanRequestId);
+  const access = a ? await handymanUnitAccessReadinessRepository.lockById(db, a.id) : null;
+  // Wall clock AFTER lock waits, not PostgreSQL transaction-start NOW().
+  const now = (await db.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0].now.getTime();
+  const scheduled = !!visit && visit.end_at.getTime() > now &&
+    (!requireCurrentWindow || visit.start_at.getTime() <= now);
+  const sameLocation = (row: NonNullable<typeof permit> | NonNullable<typeof access> | null) =>
+    !!row && !!location && row.status === 'ACTIVE' &&
+    row.clientId === scope.clientId && row.handymanRequestId === scope.handymanRequestId &&
+    row.buildingId === scope.buildingId && row.spaceId === location.space_id &&
+    row.roomId === location.room_id && row.areaId === location.area_id && row.floorId === location.floor_id;
+  return {
+    appointmentId: scheduled ? visit.id : null,
+    startAt: visit?.start_at ?? null, endAt: visit?.end_at ?? null,
+    permitClearance: scheduled && sameLocation(permit) && !!permit &&
+      permit.validFrom <= visit.start_at && permit.validUntil >= visit.end_at,
+    unitAccessClearance: scheduled && sameLocation(access) && !!access &&
+      access.accessWindowStart <= visit.start_at && access.accessWindowEnd >= visit.end_at,
+  };
+}
+
+/** Re-prove the RELEASED visit and current clearances before NEW execution.
+ * Historical idempotent acknowledgments do not call this or start new work.
+ */
+export async function assertDispatchExecutionClearance(
+  tx: PoolClient, executionScopeId: string, actorUserId: string, assignmentId: string,
+): Promise<void> {
+  const scope = await handymanScopeAssignmentRepository.lockScopeById(tx, executionScopeId);
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: scope.clientId, buildingId: scope.buildingId,
+  }, tx);
+  const assignment = await handymanScopeAssignmentRepository.findActiveAssignmentByScope(tx, scope.id);
+  const release = await handymanDispatchRepository.lockActiveByScope(tx, scope.id);
+  if (scope.status !== 'AUTHORIZED' || !assignment || assignment.id !== assignmentId ||
+      !release || release.assignmentId !== assignment.id || !release.appointmentId) {
+    throw handymanDispatchNotReadyError(['Current AUTHORIZED scope, assignment and dispatch release are required.']);
+  }
+  const clearance = await readExecutionClearance(tx, scope, assignment.handymanCrewId, release.appointmentId, true);
+  const failures = [];
+  if (!clearance.appointmentId) failures.push('Released execution visit is not current/confirmed for this crew and Building.');
+  if (!clearance.permitClearance) failures.push('No active, scope-matching permit covers the execution visit; absence is not an exemption.');
+  if (!clearance.unitAccessClearance) failures.push('No active, scope-matching unit access covers the execution visit; absence is not an exemption.');
+  if (failures.length) throw handymanDispatchNotReadyError(failures);
+}
+
 /**
  * P0-C: evaluate dispatch readiness for an execution scope. Each check is
  * resolved against the existing authorities (scope, assignment, appointment,
@@ -49,7 +136,7 @@ function toPublic(
 export async function evaluateDispatchReadiness(
   executionScopeId: string,
   actorUserId: string,
-  executor?: Pick<import('pg').PoolClient, 'query'>,
+  executor?: PoolClient,
 ): Promise<HandymanDispatchReadinessReport> {
   const scopeId = ensureUuid(executionScopeId, 'executionScopeId');
   ensureUuid(actorUserId, 'actorUserId');
@@ -63,7 +150,7 @@ export async function evaluateDispatchReadiness(
   await assertBuildingScopedResourceAccess(actorUserId, {
     clientId: scope.clientId,
     buildingId: scope.buildingId,
-  });
+  }, executor);
 
   // 1. Authorized scope
   const authorizedScope = scope.status === 'AUTHORIZED';
@@ -76,24 +163,12 @@ export async function evaluateDispatchReadiness(
     );
   const assignmentCurrent = assignment !== null;
 
-  // 3. Confirmed EXECUTION appointment for the ACTIVE assignment's crew
-  let confirmedAppointment = false;
-  let appointmentId: string | null = null;
-  if (assignment) {
-    const visitRes = await db.query(
-      `SELECT id FROM handyman_visit_appointments
-        WHERE execution_scope_id = $1 AND client_id = $2
-          AND kind = 'EXECUTION' AND resource_type = 'CREW'
-          AND resource_id = $3
-          AND state IN ('CONFIRMED', 'IN_PROGRESS')
-        ORDER BY created_at DESC LIMIT 1`,
-      [scopeId, scope.clientId, assignment.handymanCrewId],
-    );
-    if (visitRes.rows[0]) {
-      confirmedAppointment = true;
-      appointmentId = visitRes.rows[0].id;
-    }
-  }
+  // 3. Existing confirmed visit + authoritative scoped/windowed readiness.
+  const clearance = assignment
+    ? await readExecutionClearance(db, scope, assignment.handymanCrewId)
+    : null;
+  const appointmentId = clearance?.appointmentId ?? null;
+  const confirmedAppointment = appointmentId !== null;
 
   // 4. Eligible provider/crew/lead (re-use existing eligibility; checked via
   //    assignment insertion; verify snapshot still ACTIVE).
@@ -145,16 +220,8 @@ export async function evaluateDispatchReadiness(
   //    silently allocate the same crew to two overlapping windows, even
   //    before either session starts.
   let noConflictingCommitment = true;
-  let confirmedStartAt: Date | null = null;
-  let confirmedEndAt: Date | null = null;
-  if (appointmentId && confirmedAppointment) {
-    const window = await db.query<{ start_at: Date; end_at: Date }>(
-      `SELECT start_at, end_at FROM handyman_visit_appointments WHERE id = $1`,
-      [appointmentId],
-    );
-    confirmedStartAt = window.rows[0]?.start_at ?? null;
-    confirmedEndAt = window.rows[0]?.end_at ?? null;
-  }
+  const confirmedStartAt = clearance?.startAt ?? null;
+  const confirmedEndAt = clearance?.endAt ?? null;
   if (assignment) {
     const conflicts = await db.query(
       `SELECT 1 FROM handyman_execution_scope_assignments a
@@ -193,29 +260,10 @@ export async function evaluateDispatchReadiness(
     }
   }
 
-  // 6. Permit clearance (handyman_permit_readiness)
-  const permitRes = await db.query(
-    `SELECT id, status FROM handyman_permit_readiness
-       WHERE handyman_request_id = (SELECT handyman_request_id FROM handyman_execution_scopes WHERE id = $1)
-         AND client_id = $2 AND status='ACTIVE'
-       LIMIT 1`,
-    [scopeId, scope.clientId],
-  );
-  // Permit readiness is optional (permit may not apply); we require an ACTIVE
-  // permit readiness row ONLY when the request has permit requirements tracked.
-  // For simplicity we treat absence of permit record as "cleared" (policy
-  // decision recorded via permit-readiness when a permit is required).
-  const permitClearance = true;
-
-  // 7. Unit access clearance
-  const accessRes = await db.query(
-    `SELECT id, status FROM handyman_unit_access_readiness
-       WHERE handyman_request_id = (SELECT handyman_request_id FROM handyman_execution_scopes WHERE id = $1)
-         AND client_id = $2 AND status='ACTIVE'
-       LIMIT 1`,
-    [scopeId, scope.clientId],
-  );
-  const unitAccessClearance = true;
+  // 6/7. Missing/inactive/foreign/out-of-window facts fail closed. There is
+  // no authoritative exemption field in the existing readiness contract.
+  const permitClearance = clearance?.permitClearance ?? false;
+  const unitAccessClearance = clearance?.unitAccessClearance ?? false;
 
   // 8. Material readiness — any non-terminal material record blocks release.
   //    Status phases: APPROVAL, ISSUED, PURCHASED, USAGE, RETURN, RECONCILIATION.
@@ -254,8 +302,8 @@ export async function evaluateDispatchReadiness(
     failures.push('Crew Lead is not a valid active user.');
   }
   if (!noConflictingCommitment) failures.push('Crew has another active work session.');
-  if (!permitClearance) failures.push('Permit is not cleared.');
-  if (!unitAccessClearance) failures.push('Unit access is not cleared.');
+  if (!permitClearance) failures.push('No active matching permit covers the visit; missing readiness is not a trusted exemption.');
+  if (!unitAccessClearance) failures.push('No active matching unit access covers the visit; missing readiness is not a trusted exemption.');
   if (!materialReady) failures.push('Materials are not ready (open purchase).');
 
   return {
@@ -298,7 +346,11 @@ export async function releaseHandymanDispatch(
         'An ACTIVE dispatch release already exists for this scope.',
       );
     }
-    const appointmentId = input.appointmentId ?? readiness.appointmentId;
+    if (input.appointmentId != null &&
+        ensureUuid(input.appointmentId, 'appointmentId').toLowerCase() !== readiness.appointmentId) {
+      throw handymanDispatchNotReadyError(['appointmentId must match the current crew visit evaluated by Backend.']);
+    }
+    const appointmentId = readiness.appointmentId;
     if (!appointmentId) {
       throw handymanDispatchNotReadyError([
         'A CONFIRMED execution appointment is required for release.',
@@ -454,6 +506,7 @@ export async function cancelDispatchRelease(
 
 export const handymanDispatchService = {
   evaluateDispatchReadiness,
+  assertDispatchExecutionClearance,
   releaseHandymanDispatch,
   getActiveDispatchRelease,
   markDispatchInProgress,

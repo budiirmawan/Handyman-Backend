@@ -3,7 +3,7 @@ import { after, before, describe, it, type TestContext } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { DatabaseConfig } from '../src/config';
-import { closePool, initDatabase, migrateUp } from '../src/database';
+import { closePool, initDatabase, migrateUp, withTransaction } from '../src/database';
 import { createHandymanArrivalChallenge }
   from '../src/modules/handyman-arrival-challenges';
 import { createHandymanArrivalLocationIdentifier }
@@ -38,6 +38,8 @@ import {
   crewFixture,
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
+import { pauseHandymanWorkSession, resumeHandymanWorkSession } from '../src/modules/handyman-work-sessions';
+import { handymanPermitReadinessRepository, handymanUnitAccessReadinessRepository, supersedeHandymanPermitReadiness, supersedeHandymanUnitAccessReadiness } from '../src/modules/handyman-scheduling';
 import { releaseDispatchFixture } from './helpers/handyman-dispatch';
 import { ensureTestDatabase } from './helpers/postgres';
 
@@ -471,4 +473,73 @@ describe('CR-HM-08 PART 02 — check-in + start-work commands', () => {
       [checkin.session.id]);
     assert.equal(events.rows[0].n, 1);
   });
+  it('PART05: rechecks revoked/expired clearances at check-in/start/resume, but preserves replay and safe pause', async () => {
+    assert.ok(pool, 'Disposable test database required');
+    const f = await authorityFixture({ withHelper: false });
+    await arriveVerified(f);
+    const requestId = (await q('SELECT handyman_request_id FROM handyman_execution_scopes WHERE id=$1', [f.scope.id])).rows[0].handyman_request_id;
+    const permit = await handymanPermitReadinessRepository.findActiveByRequest(undefined, requestId);
+    const access = await handymanUnitAccessReadinessRepository.findActiveByRequest(undefined, requestId);
+    assert.ok(permit); assert.ok(access);
+    const facts = () => Promise.all(['handyman_dispatch_releases', 'handyman_work_sessions',
+      'handyman_work_session_events', 'handyman_work_session_helper_presence'].map(async (table) =>
+      (await q(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY id`)).rows));
+    const denied = async (action: () => Promise<unknown>) => {
+      const before = await facts();
+      await assert.rejects(action, (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+      assert.deepEqual(await facts(), before);
+    };
+    const expired = { validFrom: new Date(Date.now() - 7_200_000).toISOString(),
+      validUntil: new Date(Date.now() - 3_600_000).toISOString(), permitType: 'UNIT', authorizationNote: 'Expired test authorization' };
+    const invalidPermit = await supersedeHandymanPermitReadiness(permit.id, expired, adminUserId);
+    const input = { executionScopeId: f.scope.id, idempotencyKey: randomUUID() };
+    await denied(() => checkInHandymanWorkSession(input, f.leadUserId));
+    const restored = await supersedeHandymanPermitReadiness(invalidPermit.id, {
+      ...expired, validFrom: permit.validFrom.toISOString(), validUntil: permit.validUntil.toISOString(),
+    }, adminUserId);
+    await checkInHandymanWorkSession(input, f.leadUserId);
+    const invalidAccess = await supersedeHandymanUnitAccessReadiness(access.id, {
+      accessWindowStart: expired.validFrom, accessWindowEnd: expired.validUntil, authorizationNote: 'Expired test access',
+    }, adminUserId);
+    const startInput = { ...input, idempotencyKey: randomUUID() };
+    await denied(() => startWorkHandymanWorkSession(startInput, f.leadUserId));
+    await supersedeHandymanUnitAccessReadiness(invalidAccess.id, {
+      accessWindowStart: access.accessWindowStart.toISOString(), accessWindowEnd: access.accessWindowEnd.toISOString(),
+      authorizationNote: 'Restored test access',
+    }, adminUserId);
+    await startWorkHandymanWorkSession(startInput, f.leadUserId);
+    await supersedeHandymanPermitReadiness(restored.id, expired, adminUserId);
+    // A safety stop is still allowed, but starting new work is not.
+    await pauseHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId);
+    await denied(() => resumeHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId));
+    const before = await facts();
+    assert.equal((await startWorkHandymanWorkSession(startInput, f.leadUserId)).replayed, true);
+    assert.equal((await checkInHandymanWorkSession(input, f.leadUserId)).replayed, true);
+    assert.deepEqual(await facts(), before);
+  });
+
+  it('PART05: cancelling the released visit blocks START_WORK despite the stored ready snapshot', async () => {
+    assert.ok(pool, 'Disposable test database required');
+    const f = await authorityFixture({ withHelper: false });
+    await arriveVerified(f);
+    const input = { executionScopeId: f.scope.id, idempotencyKey: randomUUID() };
+    await checkInHandymanWorkSession(input, f.leadUserId);
+    // Preserve the existing deferred booking/reservation invariant atomically.
+    await withTransaction(async tx => {
+      await tx.query(`UPDATE handyman_visit_appointments SET state='CANCELLED',
+        cancelled_by_user_id=$1, cancelled_at=NOW(), version=version+1, updated_at=NOW()
+        WHERE id=(SELECT appointment_id FROM handyman_dispatch_releases WHERE execution_scope_id=$2 AND status='IN_PROGRESS')`,
+        [adminUserId, f.scope.id]);
+      await tx.query(`UPDATE handyman_visit_capacity_reservations SET active=FALSE, released_at=NOW()
+        WHERE appointment_id=(SELECT appointment_id FROM handyman_dispatch_releases WHERE execution_scope_id=$1 AND status='IN_PROGRESS')`,
+        [f.scope.id]);
+    });
+    const before = (await q('SELECT * FROM handyman_work_sessions WHERE execution_scope_id=$1', [f.scope.id])).rows;
+    const events = (await q('SELECT * FROM handyman_work_session_events WHERE execution_scope_id=$1 ORDER BY id', [f.scope.id])).rows;
+    await assert.rejects(() => startWorkHandymanWorkSession({ ...input, idempotencyKey: randomUUID() }, f.leadUserId),
+      (err: unknown) => (err as { code?: string }).code === 'HANDYMAN_DISPATCH_NOT_READY');
+    assert.deepEqual((await q('SELECT * FROM handyman_work_sessions WHERE execution_scope_id=$1', [f.scope.id])).rows, before);
+    assert.deepEqual((await q('SELECT * FROM handyman_work_session_events WHERE execution_scope_id=$1 ORDER BY id', [f.scope.id])).rows, events);
+  });
+
 });

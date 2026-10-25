@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { handymanDispatchService } from '../../src/modules/handyman-dispatch';
+import { createHandymanPermitReadiness, createHandymanUnitAccessReadiness } from '../../src/modules/handyman-scheduling';
+import { handymanScopeAssignmentRepository } from '../../src/modules/handyman-scope-assignments';
 
 /**
  * Seed the confirmed EXECUTION appointment required by dispatch readiness,
@@ -15,7 +17,7 @@ export async function releaseDispatchFixture(input: {
   query: (text: string, params?: unknown[]) => Promise<unknown>;
 }): Promise<void> {
   const appointmentId = randomUUID();
-  const startAt = new Date(Date.now() + 2 * 3_600_000);
+  const startAt = new Date(Date.now() - 60_000);
   const endAt = new Date(Date.now() + 4 * 3_600_000);
 
   await input.query(
@@ -66,6 +68,19 @@ export async function releaseDispatchFixture(input: {
       endAt,
     ],
   );
+
+  const scope = await handymanScopeAssignmentRepository.findScopeById(undefined, input.executionScopeId);
+  if (!scope) throw new Error('Fixture scope missing');
+  await createHandymanPermitReadiness({
+    handymanRequestId: scope.handymanRequestId, permitType: 'UNIT',
+    validFrom: startAt.toISOString(), validUntil: endAt.toISOString(),
+    authorizationNote: 'Explicit local test permit authorization',
+  }, input.actorUserId);
+  await createHandymanUnitAccessReadiness({
+    handymanRequestId: scope.handymanRequestId,
+    accessWindowStart: startAt.toISOString(), accessWindowEnd: endAt.toISOString(),
+    authorizationNote: 'Explicit local test unit access authorization',
+  }, input.actorUserId);
 
   await handymanDispatchService.releaseHandymanDispatch(
     {
