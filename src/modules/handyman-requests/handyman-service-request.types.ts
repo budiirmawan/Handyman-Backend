@@ -1,3 +1,4 @@
+import type { HandymanCareSchedulingPreference } from '../handyman-scheduling/handyman-scheduling.types';
 import type { HandymanCareActorType } from '../handyman-care-actors/handyman-care-actor.types';
 
 /**
@@ -81,6 +82,8 @@ export type PublicHandymanServiceRequest = Omit<
 > & {
   createdAt: string;
   updatedAt: string;
+  /** Present only when Care creation supplied an initial requested window. */
+  schedulingReadiness?: HandymanCareSchedulingPreference;
 };
 
 /**

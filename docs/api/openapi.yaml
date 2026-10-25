@@ -4764,7 +4764,7 @@ paths:
     post:
       operationId: createBuildingCareRequest
       x-required-permission: handyman.care.building
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CARE_AUTHORITY_DENIED, HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED, HANDYMAN_CHANNEL_ATTRIBUTION_CONTEXT_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_NOT_FOUND, HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_REFERENCE_CONFLICT, HANDYMAN_CHANNEL_ATTRIBUTION_REQUESTER_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_SPACE_MISMATCH, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_KEY_REQUIRED]
+      x-error-codes: [HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID, HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE, VALIDATION_ERROR, HANDYMAN_CARE_AUTHORITY_DENIED, HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED, HANDYMAN_CHANNEL_ATTRIBUTION_CONTEXT_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_NOT_FOUND, HANDYMAN_CHANNEL_ATTRIBUTION_ORIGIN_REFERENCE_CONFLICT, HANDYMAN_CHANNEL_ATTRIBUTION_REQUESTER_INVALID, HANDYMAN_CHANNEL_ATTRIBUTION_SPACE_MISMATCH, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_KEY_REQUIRED]
       summary: Create the canonical Handyman Request for an authorized Tenant
       description: >-
         CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted Tenant request
@@ -7340,7 +7340,7 @@ paths:
   /handyman/requests/care:
     post:
       operationId: createCareHandymanServiceRequest
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_HANDOFF_CONTEXT_INVALID, HANDYMAN_HANDOFF_EXCHANGE_INVALID, HANDYMAN_HANDOFF_REQUESTER_INVALID, HANDYMAN_HANDOFF_SPACE_MISMATCH, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND]
+      x-error-codes: [HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID, HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE, VALIDATION_ERROR, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_HANDOFF_CONTEXT_INVALID, HANDYMAN_HANDOFF_EXCHANGE_INVALID, HANDYMAN_HANDOFF_REQUESTER_INVALID, HANDYMAN_HANDOFF_SPACE_MISMATCH, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND]
       summary: Create a Customer Care Handyman request from a single-use BM exchange
       description: >
         CR-HM-CUSTOMER-CONTEXT-01 PART 04. Alternative to binding the same
@@ -92953,6 +92953,12 @@ components:
         Care-only intake from an attested, single-use BM handoff exchange.
         No channelAttributionId or caller-provided actor/customer/location.
       required: [exchangeToken, serviceCatalogId]
+      oneOf:
+        - required: [preferredWindowStart, preferredWindowEnd]
+        - not:
+            anyOf:
+              - required: [preferredWindowStart]
+              - required: [preferredWindowEnd]
       properties:
         exchangeToken:
           type: string
@@ -92963,6 +92969,14 @@ components:
         serviceVariantId: { $ref: "#/components/schemas/Uuid" }
         description: { type: string, minLength: 1, maxLength: 1000 }
 
+        preferredWindowStart:
+          type: string
+          format: date-time
+          description: Optional tenant preference, paired with preferredWindowEnd; explicit Z/offset, optional fractional seconds up to 3 digits, normalized to UTC. Not a confirmed visit.
+        preferredWindowEnd:
+          type: string
+          format: date-time
+          description: Must be later than preferredWindowStart; omit both to retain no-date intake behavior.
     HandymanServiceRequestStatus:
       type: string
       enum:
@@ -93161,9 +93175,21 @@ components:
         supersedesReadinessId:
           { $ref: "#/components/schemas/Uuid", nullable: true }
         changeReason: { type: string, nullable: true }
-        createdByUserId: { $ref: "#/components/schemas/Uuid" }
+        createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true, description: "Null only for original attested Care intake; creator provenance remains on the immutable parent request attribution and scheduling audit." }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    HandymanCareSchedulingPreference:
+      type: object
+      additionalProperties: false
+      description: Creation-only safe projection of the existing initial preference row. Present only for date-bearing Care intake; no Client/creator/customer identifiers, appointment, reservation, assignment or BM approval. Replay is the original creation snapshot, not a reschedule.
+      required: [id, timezone, preferredWindowStart, preferredWindowEnd, status, supersedesReadinessId]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        timezone: { type: string, description: "Derived from the authorized Building; never accepted in the request body." }
+        preferredWindowStart: { type: string, format: date-time }
+        preferredWindowEnd: { type: string, format: date-time }
+        status: { type: string, enum: [ACTIVE] }
+        supersedesReadinessId: { $ref: '#/components/schemas/Uuid', nullable: true, description: "Null for the initial preference." }
     HandymanSchedulingReadinessBundle:
       type: object
       description: "Bounded exact-read: current ACTIVE fact + preserved history."
@@ -96811,6 +96837,8 @@ components:
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
 
+        schedulingReadiness:
+          $ref: '#/components/schemas/HandymanCareSchedulingPreference'
     HandymanRequestAttributionProvenance:
       type: object
       description: >-
@@ -133289,16 +133317,18 @@ components:
         spaceId: { type: string, format: uuid, nullable: true }
         serviceCatalogId: { type: string, format: uuid }
         serviceVariantId: { type: string, format: uuid, nullable: true }
-        description: { type: string }
+        description: { type: string, nullable: true }
         status: { $ref: '#/components/schemas/HandymanServiceRequestStatus' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        schedulingReadiness:
+          $ref: '#/components/schemas/HandymanCareSchedulingPreference'
     HandymanCareRequestCreateBody:
       type: object
       description: >-
         CR-HM-CC-TENANT-REQUEST-GATEWAY-01 — staff-assisted create body.
         Only the authorized Tenant/Unit/service selection and the problem
-        description are accepted. Any other context key (clientId,
+        description plus the optional requested window are accepted. Any other context key (clientId,
         buildingId, originChannel, createdByUserId, status, ...) and any
         recording-identity spelling other than the represented `tenantPicId`
         selection (recordedByUserId, actorUserId, careActorId, tenantId,
@@ -133309,6 +133339,12 @@ components:
         acting identity.
       additionalProperties: false
       required: [tenantCompanyId, serviceCatalogId]
+      oneOf:
+        - required: [preferredWindowStart, preferredWindowEnd]
+        - not:
+            anyOf:
+              - required: [preferredWindowStart]
+              - required: [preferredWindowEnd]
       properties:
         tenantCompanyId:
           type: string
@@ -133337,6 +133373,22 @@ components:
           minLength: 1
           maxLength: 1000
           description: Problem description recorded verbatim (trimmed).
+        preferredWindowStart:
+          type: string
+          format: date-time
+          description: Optional tenant preference, paired with preferredWindowEnd; explicit Z/offset, optional fractional seconds up to 3 digits, normalized to UTC. Not a confirmed visit.
+        preferredWindowEnd:
+          type: string
+          format: date-time
+          description: Must be later than preferredWindowStart; omit both to retain no-date intake behavior.
+        approvalTenantCompanyId:
+          type: string
+          format: uuid
+          description: Existing optional approval-party selection; revalidated against the represented tenant/unit, never an actor.
+        costResponsibleTenantCompanyId:
+          type: string
+          format: uuid
+          description: Existing optional cost-responsibility party selection; not new authority or a date field.
     HandymanCareTenantPicSelection:
       type: object
       additionalProperties: false

@@ -1,3 +1,5 @@
+import { parseOptionalHandymanRequestedWindow } from '../handyman-scheduling/handyman-scheduling.service';
+import type { OptionalHandymanRequestedWindow } from '../handyman-scheduling/handyman-scheduling.types';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
@@ -146,7 +148,7 @@ export function parseHandymanMaterialProfileDescribeQuery(
   return { buildingId, currency, ...(asOf !== undefined ? { asOf } : {}) };
 }
 
-export type CreateCareHandymanServiceRequestInput = {
+export type CreateCareHandymanServiceRequestInput = OptionalHandymanRequestedWindow & {
   exchangeToken: string;
   serviceCatalogId: string;
   serviceVariantId?: string;
@@ -161,7 +163,7 @@ export function parseCreateCareHandymanServiceRequestBody(
   if (!isRecord(body)) {
     fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
   }
-  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description'];
+  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'preferredWindowStart', 'preferredWindowEnd'];
   const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
   if (unknown.length > 0) {
     fail([{ field: 'body', message: 'Unexpected care request context field.' }]);
@@ -185,7 +187,9 @@ export function parseCreateCareHandymanServiceRequestBody(
     }
   }
   if (!exchangeToken || !serviceCatalogId || details.length) fail(details);
+  const dates = parseOptionalHandymanRequestedWindow(body.preferredWindowStart, body.preferredWindowEnd);
   return {
+    ...dates,
     exchangeToken,
     serviceCatalogId,
     ...(serviceVariantId ? { serviceVariantId } : {}),
