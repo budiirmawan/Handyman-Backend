@@ -58,6 +58,8 @@ Every baseline requirement was audited against actual database migrations (`0391
   - Allocations (`handyman_payment_allocations`) are capped by both net unallocated confirmed payment (`payment.amount - reversed - refunded - applied`) and net unallocated charge line (`chargeLine.amount - adjusted - applied`). Over-allocation fails-closed with `409 HANDYMAN_PAYMENT_ALLOCATION_CAP_EXCEEDED`.
 
 ### 2.4 BAST & Re-QC Lifecycle
+
+PART 04 authority update: [personal customer consent protocol](../handyman/CR-HM-BAST-CUSTOMER-CONSENT-01_CONTRACT.md). Electronic consent is **not certified digital signature**; no Care/Operations/Manager proxy, arbitrary digest, email match or screenshot is customer authority.
 - **BAST Statuses:** `DRAFT -> ISSUED -> ACCEPTED | REJECTED` (or `DRAFT | ISSUED -> VOID`)
 - **Invariants:**
   - `prepareHandymanBast` requires a current guarded Supervisor QC PASS (`assertCurrentGuardedHandymanQcPass`) on the execution scope and binds `qc_run_id` onto `handyman_bast_documents`.
@@ -80,7 +82,7 @@ Every baseline requirement was audited against actual database migrations (`0391
   3. `materialsSettled`: 0 material execution lines outside `SETTLED | FINAL_CHARGE_READY` and 0 material purchase records outside `RECONCILED | REJECTED`.
   4. `variationsReconciled`: Every non-`REJECTED` scope variation is in `status = 'FINAL_CHARGE_ELIGIBILITY'`, `final_charge_eligible = TRUE`, and `invoiced = TRUE`.
   5. `supervisorQcPassed`: `assertCurrentGuardedHandymanQcPass` succeeds and 0 unverified defect records (`handyman_defect_records.status <> 'VERIFIED'`).
-  6. `bastAccepted`: Active BAST is `ACCEPTED`, bound to the latest Supervisor QC PASS `qc_run_id`, with a non-empty customer `ACCEPT` `signature_digest` in `handyman_bast_sign_offs`.
+  6. `bastAccepted`: Active BAST is `ACCEPTED`, bound to the latest Supervisor QC PASS `qc_run_id`, with the immutable **verified authenticated request-PIC consent receipt** and matching canonical issued-manifest SHA-256. A nonempty digest or legacy staff ACCEPT does not qualify; other close gates remain unchanged.
   7. `noPendingPayments`: `pendingPaymentAmount === '0.00'` (zero `PENDING` customer payments).
   8. `ledgerFullySettled`: Ledger transaction is open, `chargedNet > 0.00`, `remainingBalanceAfterDpAndPayments === '0.00'`, and `unallocatedConfirmedAmount === '0.00'`.
   9. `finalInvoicePaid`: A `FINALIZED` tenant invoice exists for the scope, all scope charge lines are linked via `tenant_invoice_lines` (`source_type = 'HANDYMAN_CHARGE'`), `invoice.grossTotal === ledgerSummary.chargedNet`, `invoice.remainingBalance === '0.00'`, and `invoice.paymentStatus === 'PAID'`.
@@ -94,9 +96,9 @@ Every baseline requirement was audited against actual database migrations (`0391
 |---|---|---|---|---|
 | **Customer Care** | `CUSTOMER_CARE` | `tenant_company.read`, `service_request.manage`, `handyman.care.building` | Record `PENDING` customer payment (`DP`, `TERMIN`, `PELUNASAN`) & upload payment proof via `/api/v1/handyman/care/buildings/:buildingId/requests/:requestId/payments` and `/payments/:paymentId/proof`; read customer ledger (`/customer-ledger`) and BAST views | Confirm/reject payment; compose charge lines; allocate payments; accept/reject BAST; execute Manager `FINAL CLOSE` |
 | **Operations / Dispatcher** | `OPERATIONS` | `tenant_company.read`, `tenant_company.manage`, `work_order.read`, `work_order.manage`, `vendor.manage` | Create/revise/issue quotation with DP terms; assign crew; review/authorize scope variations; read `/customer-ledger` | Confirm/reject payment (`handyman.finance.manage` required); open/finish QC (`handyman.qc.manage` required); execute Manager `FINAL CLOSE` (`finding.close` + `handyman.finance.read` required) |
-| **Freelance Lead Worker** | `MOBILE_STAFF` (+ active Crew Lead on scope) | `work_order.read`, `work_order.update_status`, `evidence.manage`, `handyman.bast.manage` | Record work sessions, material usage/settlement, field variations, field evidence; prepare/issue BAST via `/api/v1/handyman/worker/execution-scopes/:executionScopeId/bast/*` | Confirm/reject payment; accept/reject BAST; execute Manager `FINAL CLOSE` (blocked both by permission and by `assertNotFieldExecutionActorOnScope`) |
+| **Freelance Lead Worker** | `MOBILE_STAFF` (+ active Crew Lead on scope) | `work_order.read`, `work_order.update_status`, `evidence.manage`, `handyman.bast.manage` | Record work sessions, material usage/settlement, field variations, field evidence; prepare/issue BAST via `/api/v1/handyman/field/execution-scopes/:executionScopeId/bast/prepare and /api/v1/handyman/field/bast/:bastId/{issue,void}` | Confirm/reject payment; accept/reject BAST; execute Manager `FINAL CLOSE` (blocked both by permission and by `assertNotFieldExecutionActorOnScope`) |
 | **Supervisor** | Supervisor in workforce reporting line | `handyman.qc.manage`, `handyman.bast.manage`, `tenant_company.read`, `tenant_company.manage` | Open, record item outcomes, bind `QC_EVIDENCE`, finish QC run (`PASSED \| FAILED`); record variation QC outcome | Execute Manager `FINAL CLOSE` without `finding.close` + `handyman.finance.read` |
-| **Authorized Tenant PIC** | Tenant PIC bound to request | `tenant_company.manage` + active `tenant_pics` email match (`assertHandymanTenantDecisionActor`) | Approve/reject quotation version (`POST .../quotation-versions/:id/decision`); approve/reject variation (`POST .../variations/:id/tenant-decision`); accept/reject BAST (`POST /api/v1/handyman/bast/:bastId/accept` or `/reject`) | Confirm/reject payment; execute Manager `FINAL CLOSE` |
+| **Authorized Tenant PIC** | Tenant PIC bound to request | `tenant_company.manage` + exact Building + ACTIVE personal User linked by `tenant_pics.user_id` to the exact request PIC, active Company/current occupancy (`assertHandymanTenantDecisionActor`) | Approve/reject quotation version (`POST .../quotation-versions/:id/decision`); approve/reject variation (`POST .../variations/:id/tenant-decision`); accept/reject BAST (`POST /api/v1/handyman/bast/:bastId/accept` or `/reject`) | Confirm/reject payment; execute Manager `FINAL CLOSE` |
 | **Finance Verifier** | Finance Officer | `tenant_company.read`, `tenant_company.manage`, `handyman.finance.read`, `handyman.finance.manage`, `tenant_invoice.read`, `tenant_invoice.manage`, `evidence.read`, `evidence.manage` | Open ledger transaction; compose charge lines; upload/read payment proof; confirm/reject customer payments; allocate confirmed payments; record ledger adjustments/reversals/refunds; create/finalize tenant invoices; read `/financial-ledger` & `/invoice-reconciliation` | Execute Manager `FINAL CLOSE` (`finding.close` required) |
 | **Handyman Manager** | `MANAGER` | `finding.close` + `handyman.finance.read` (+ `work_order.read`, `tenant_company.read`, `sla.read`, etc.) | Read `/invoice-reconciliation` and `/final-close/readiness`; execute `POST /api/v1/handyman/execution-scopes/:executionScopeId/final-close` | Field Crew Leads / assigned Inspectors on the same scope are blocked even if granted permissions (`403 HANDYMAN_FINAL_CLOSE_NOT_AUTHORIZED`) |
 
@@ -336,11 +338,11 @@ Every baseline requirement was audited against actual database migrations (`0391
   - Permission: `handyman.bast.manage` + current active Crew Lead on scope
   - Body: `{ "idempotencyKey": "bast-issue-001", "expectedVersion": 1 }`
 - **Customer / Tenant PIC Reject BAST:** `POST /api/v1/handyman/bast/:bastId/reject`
-  - Permission: `tenant_company.manage` + exact-building access
+  - Authority: personal current exact-request PIC + `tenant_company.manage` + exact Building/active Company/current occupancy (not staff attestation)
   - Body: `{ "rejectReason": "Ceiling panel edge needs wipe-down", "idempotencyKey": "bast-reject-001" }`
 - **Customer / Tenant PIC Accept BAST:** `POST /api/v1/handyman/bast/:bastId/accept`
-  - Permission: `tenant_company.manage` + exact-building access
-  - Body: `{ "signatureDigest": "sha256:tenant-pic-sign-off-002", "evidenceRecordId": null, "idempotencyKey": "bast-accept-002" }`
+  - Authority: same personal PIC guard; canonical issued-manifest SHA-256 verified server-side; current bound Supervisor QC PASS
+  - Body: `{ "signatureDigest": "<canonical 64-hex SHA-256 from issued v2 manifest>", "evidenceRecordId": null, "idempotencyKey": "bast-accept-002" }`
 
 ---
 

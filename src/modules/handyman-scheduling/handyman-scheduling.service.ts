@@ -1,12 +1,11 @@
+import type { PoolClient } from 'pg';
 import { withTransaction } from '../../database';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
 import { buildingRepository } from '../buildings';
-import {
-  handymanServiceRequestNotFoundError,
-  handymanServiceRequestRepository,
-} from '../handyman-requests';
+import { handymanServiceRequestNotFoundError } from '../handyman-requests/handyman-service-request.errors';
+import { handymanServiceRequestRepository } from '../handyman-requests/handyman-service-request.repository';
 import { handymanSchedulingReadinessRepository } from './handyman-scheduling.repository';
 import {
   handymanSchedulingReadinessAlreadyExistsError,
@@ -21,6 +20,7 @@ import type {
   HandymanSchedulingReadinessRecord,
   PublicHandymanSchedulingReadiness,
   SupersedeHandymanSchedulingReadinessInput,
+  HandymanRequestedWindow,
 } from './handyman-scheduling.types';
 
 /**
@@ -109,6 +109,134 @@ function isActiveUniqueViolation(error: unknown): boolean {
   );
 }
 
+/** Same existing insert + journal + notification, always on the caller's transaction. */
+async function persistSchedulingReadiness(
+  tx: PoolClient,
+  input: CreateHandymanSchedulingReadinessInput,
+  request: { id: string; clientId: string; buildingId: string },
+  window: { start: Date; end: Date },
+  timezone: string,
+  actorUserId: string | null,
+  provenance: Record<string, unknown> = {},
+): Promise<PublicHandymanSchedulingReadiness> {
+  const { start, end } = window;
+  const journalBase = { clientId: request.clientId, actorUserId };
+  const existing = await handymanSchedulingReadinessRepository
+    .findActiveByRequest(tx, request.id);
+  if (existing) throw handymanSchedulingReadinessAlreadyExistsError();
+
+  const row = await handymanSchedulingReadinessRepository.insert(tx, {
+    clientId: request.clientId,
+    handymanRequestId: request.id,
+    timezone,
+    preferredWindowStart: start,
+    preferredWindowEnd: end,
+    supersedesReadinessId: null,
+    changeReason: ensureReason(input.changeReason),
+    createdByUserId: actorUserId,
+  });
+  await recordOperationalEvent(
+    {
+      ...journalBase,
+      eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+      entityType: 'HANDYMAN_SCHEDULING_READINESS',
+      entityId: row.id,
+      summary: 'Handyman scheduling readiness created (ACTIVE).',
+      metadata: {
+        ...provenance,
+        readinessId: row.id,
+        handymanRequestId: request.id,
+        buildingId: request.buildingId,
+        timezone: row.timezone,
+        preferredWindowStart: row.preferredWindowStart.toISOString(),
+        preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+      },
+    },
+    tx,
+  );
+  // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
+  // REACTION to the occurred scheduling readiness, on the SAME
+  // transaction. The notification entity is the readiness OCCURRENCE.
+  await emitHandymanDomainNotificationIntent(
+    {
+      eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
+      clientId: request.clientId,
+      entityId: row.id,
+      buildingId: request.buildingId,
+      variables: {
+        handymanRequestId: request.id,
+        readinessId: row.id,
+        timezone: row.timezone,
+        preferredWindowStart: row.preferredWindowStart.toISOString(),
+        preferredWindowEnd: row.preferredWindowEnd.toISOString(),
+        buildingId: request.buildingId,
+      },
+    },
+    { executor: tx },
+  );
+  return toPublic(row);
+}
+
+/** Intake-only pair validation: explicit instants, never browser/server-local guesses.
+ * Preference has no future-slot/booking/capacity semantics. */
+export function parseOptionalHandymanRequestedWindow(
+  startRaw: unknown, endRaw: unknown,
+): HandymanRequestedWindow | undefined {
+  if (startRaw === undefined && endRaw === undefined) return undefined;
+  const validStamp = (value: unknown): value is string => {
+    if (typeof value !== 'string') return false;
+    const text = value.trim();
+    if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(text) || text.startsWith('0000-')) return false;
+    // Date.parse alone silently normalizes impossible dates such as February 30.
+    const local = new Date(text.replace(/(?:Z|[+-]\d\d:\d\d)$/, 'Z'));
+    return Number.isFinite(local.getTime()) && local.toISOString().slice(0, 19) === text.slice(0, 19);
+  };
+  if (!validStamp(startRaw) || !validStamp(endRaw)) throw handymanSchedulingReadinessWindowInvalidError();
+  const { start, end } = parseWindow(startRaw, endRaw);
+  return { preferredWindowStart: start.toISOString(), preferredWindowEnd: end.toISOString() };
+}
+
+/** INTERNAL Care-intake seam, not an HTTP authorization shortcut. Its callers
+ * have already authorized creation and inserted the request on THIS transaction.
+ * All scope, timezone and actor provenance are re-read from that request; the
+ * actor is never taken from a body or substituted with a customer's User/PIC.
+ */
+export async function createInitialCareSchedulingReadiness(
+  tx: PoolClient, requestId: string, input: HandymanRequestedWindow,
+): Promise<PublicHandymanSchedulingReadiness> {
+  const dates = parseOptionalHandymanRequestedWindow(input.preferredWindowStart, input.preferredWindowEnd);
+  if (!dates) throw handymanSchedulingReadinessWindowInvalidError();
+  const scope = (await tx.query<{
+    id: string; clientId: string; buildingId: string; timezone: string | null;
+    actorUserId: string | null; channelAttributionId: string;
+    careActorId: string | null; actorReference: string | null;
+  }>(`SELECT r.id, r.client_id AS "clientId", r.building_id AS "buildingId", b.timezone,
+             r.created_by_user_id AS "actorUserId", a.id AS "channelAttributionId",
+             a.care_actor_id AS "careActorId", a.actor_reference AS "actorReference"
+        FROM handyman_service_requests r
+        JOIN handyman_channel_attributions a ON a.id=r.channel_attribution_id
+          AND a.client_id=r.client_id AND a.building_id=r.building_id
+          AND a.created_by_user_id IS NOT DISTINCT FROM r.created_by_user_id
+        JOIN buildings b ON b.id=r.building_id AND b.status='ACTIVE'
+        JOIN properties p ON p.id=b.property_id AND p.client_id=r.client_id AND p.status='ACTIVE'
+        JOIN clients c ON c.id=r.client_id AND c.status='ACTIVE'
+       WHERE r.id=$1 AND r.status='INTAKE'
+         AND ((r.origin_channel='CUSTOMER_CARE_BACKEND' AND r.created_by_user_id IS NOT NULL)
+           OR (r.origin_channel='BM_SUPER_APP' AND r.created_by_user_id IS NULL
+             AND a.actor_type='CUSTOMER_CARE' AND a.care_actor_id IS NOT NULL))
+       FOR SHARE OF r,a,b,p,c`, [requestId])).rows[0];
+  if (!scope) throw handymanServiceRequestNotFoundError();
+  const timezone = scope.timezone?.trim();
+  if (!timezone) throw handymanSchedulingReadinessTimezoneUnavailableError();
+  try { new Intl.DateTimeFormat('en', { timeZone: timezone }).format(); }
+  catch { throw handymanSchedulingReadinessTimezoneUnavailableError(); }
+  return persistSchedulingReadiness(tx, { handymanRequestId: scope.id, ...dates }, scope,
+    parseWindow(dates.preferredWindowStart, dates.preferredWindowEnd), timezone, scope.actorUserId, {
+      channelAttributionId: scope.channelAttributionId,
+      ...(scope.actorUserId === null ? { careActorId: scope.careActorId, actorReference: scope.actorReference } : {}),
+    });
+}
+
 /**
  * Create the ACTIVE readiness fact for a request (one per request).
  * Atomic: row + CREATED journal event in ONE transaction; a concurrent
@@ -141,62 +269,9 @@ export async function createHandymanSchedulingReadiness(
   });
   const timezone = await deriveTimezone(request.buildingId);
 
-  const journalBase = { clientId: request.clientId, actorUserId };
   try {
     return await withTransaction(async (tx) => {
-      const existing = await handymanSchedulingReadinessRepository
-        .findActiveByRequest(tx, request.id);
-      if (existing) throw handymanSchedulingReadinessAlreadyExistsError();
-
-      const row = await handymanSchedulingReadinessRepository.insert(tx, {
-        clientId: request.clientId,
-        handymanRequestId: request.id,
-        timezone,
-        preferredWindowStart: start,
-        preferredWindowEnd: end,
-        supersedesReadinessId: null,
-        changeReason: ensureReason(input.changeReason),
-        createdByUserId: actorUserId,
-      });
-      await recordOperationalEvent(
-        {
-          ...journalBase,
-          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
-          entityType: 'HANDYMAN_SCHEDULING_READINESS',
-          entityId: row.id,
-          summary: 'Handyman scheduling readiness created (ACTIVE).',
-          metadata: {
-            readinessId: row.id,
-            handymanRequestId: request.id,
-            buildingId: request.buildingId,
-            timezone: row.timezone,
-            preferredWindowStart: row.preferredWindowStart.toISOString(),
-            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
-          },
-        },
-        tx,
-      );
-      // CR-HM-MULTICLIENT-NOTIFICATION-01 PART 03 — the notification
-      // REACTION to the occurred scheduling readiness, on the SAME
-      // transaction. The notification entity is the readiness OCCURRENCE.
-      await emitHandymanDomainNotificationIntent(
-        {
-          eventType: 'HANDYMAN_SCHEDULING_READINESS_CREATED',
-          clientId: request.clientId,
-          entityId: row.id,
-          buildingId: request.buildingId,
-          variables: {
-            handymanRequestId: request.id,
-            readinessId: row.id,
-            timezone: row.timezone,
-            preferredWindowStart: row.preferredWindowStart.toISOString(),
-            preferredWindowEnd: row.preferredWindowEnd.toISOString(),
-            buildingId: request.buildingId,
-          },
-        },
-        { executor: tx },
-      );
-      return toPublic(row);
+      return persistSchedulingReadiness(tx, input, request, { start, end }, timezone, actorUserId);
     });
   } catch (error) {
     if (isActiveUniqueViolation(error)) {

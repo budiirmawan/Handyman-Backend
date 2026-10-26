@@ -246,6 +246,10 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-D: Genuine Binary Field Evidence Upload', 
         status text NOT NULL DEFAULT 'ACCEPTED', accepted_at timestamptz,
         created_at timestamptz NOT NULL DEFAULT now()
       );
+      CREATE TABLE handyman_dispatch_releases(
+        id uuid PRIMARY KEY, execution_scope_id uuid, assignment_id uuid,
+        appointment_id uuid, status text, released_at timestamptz
+      );
       CREATE TABLE handyman_visit_appointments(
         id uuid PRIMARY KEY, client_id uuid NOT NULL, building_id uuid NOT NULL,
         tenant_company_id uuid NOT NULL, handyman_request_id uuid NOT NULL,

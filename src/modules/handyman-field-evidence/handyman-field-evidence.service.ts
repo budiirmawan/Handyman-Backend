@@ -1,3 +1,4 @@
+import { handymanDispatchService } from '../handyman-dispatch';
 import { randomUUID } from 'crypto';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
@@ -253,6 +254,37 @@ async function resolveEvidenceTargetContext(
   );
 }
 
+/** Recheck write authority under the existing execution-scope lock before
+ * accepting evidence mutations. Evidence may precede dispatch or follow completion/QC, but a
+ * cancelled release/visit must not authorize NEW uploads by its field Lead.
+ */
+async function resolveEvidenceWriteActorRole(
+  tx: PoolClient, actor: string, target: EvidenceTargetContext,
+) {
+  if (target.executionScopeId) {
+    await tx.query('SELECT id FROM handyman_execution_scopes WHERE id=$1 FOR UPDATE', [target.executionScopeId]);
+  }
+  const role = await resolveEvidenceActorRole(actor, target, false, tx);
+  if (role === 'PIC_PEKERJAAN' && target.executionScopeId) {
+    const lead = await resolveHandymanAssignmentLead(target.executionScopeId, actor, tx);
+    if (!lead) throw new AppError({statusCode:403, code:ERROR_CODES.HANDYMAN_EVIDENCE_UPLOAD_FORBIDDEN,
+      message:'Current execution assignment is required for evidence writes.'});
+    const release = (await tx.query<{status:string; state:string | null}>(
+      `SELECT dr.status, v.state FROM handyman_dispatch_releases dr
+       LEFT JOIN handyman_visit_appointments v ON v.id=dr.appointment_id
+       WHERE dr.execution_scope_id=$1 AND dr.assignment_id=$2
+       ORDER BY dr.released_at DESC, dr.id DESC LIMIT 1`,
+      [target.executionScopeId, lead.assignmentId],
+    )).rows[0];
+    if (release && (['CANCELLED','SUPERSEDED'].includes(release.status) || release.state === 'CANCELLED')) {
+      // Reuse the execution guard for bounded denial; do not invent a new
+      // revocation status or treat helperPresence as assignment authority.
+      await handymanDispatchService.assertDispatchExecutionClearance(tx, target.executionScopeId, actor, lead.assignmentId);
+    }
+  }
+  return role;
+}
+
 async function resolveEvidenceActorRole(
   actorUserId: string,
   target: EvidenceTargetContext,
@@ -280,6 +312,7 @@ async function resolveEvidenceActorRole(
       const lead = await resolveHandymanAssignmentLead(
         target.executionScopeId,
         actorUserId,
+        tx,
       );
       if (lead && lead.leadUserId === actorUserId) {
         return 'PIC_PEKERJAAN';
@@ -801,7 +834,7 @@ export async function uploadFieldEvidenceBinary(
     executionScopeId: input.executionScopeId,
     handymanRequestId: input.handymanRequestId,
   });
-  const actorRole = await resolveEvidenceActorRole(actorUserId, target, false);
+  let actorRole = await resolveEvidenceActorRole(actorUserId, target, false);
 
   const purpose = assertPurpose(input.purpose);
   const rawMime = input.mimeType ?? input.file.mimetype;
@@ -841,6 +874,7 @@ export async function uploadFieldEvidenceBinary(
   const verifiedByteSize = bytes.byteLength;
 
   return withTransaction(async (tx) => {
+    actorRole = await resolveEvidenceWriteActorRole(tx, actorUserId, target);
     const existing =
       await handymanFieldEvidenceRepository.findByIdempotencyKey(
         tx,
@@ -989,7 +1023,7 @@ export async function createPresignedFieldEvidenceIntent(
     executionScopeId: input.executionScopeId,
     handymanRequestId: input.handymanRequestId,
   });
-  const actorRole = await resolveEvidenceActorRole(actorUserId, target, false);
+  let actorRole = await resolveEvidenceActorRole(actorUserId, target, false);
 
   const purpose = assertPurpose(input.purpose);
   const mimeType = assertMimeType(input.mimeType);
@@ -1031,6 +1065,7 @@ export async function createPresignedFieldEvidenceIntent(
       : null;
 
   return withTransaction(async (tx) => {
+    actorRole = await resolveEvidenceWriteActorRole(tx, actorUserId, target);
     const existing =
       await handymanFieldEvidenceRepository.findByIdempotencyKey(
         tx,
@@ -1133,7 +1168,8 @@ export async function putStagedFieldEvidenceBytes(
       });
     }
 
-    await resolveEvidenceActorRole(
+    await resolveEvidenceWriteActorRole(
+      tx,
       actorUserId,
       {
         clientId: record.clientId,
@@ -1142,8 +1178,6 @@ export async function putStagedFieldEvidenceBytes(
         handymanRequestId: record.handymanRequestId,
         executionScopeId: record.executionScopeId,
       },
-      false,
-      tx,
     );
 
     if (record.uploadedByUserId !== actorUserId) {
@@ -1220,12 +1254,7 @@ export async function confirmFieldEvidenceUpload(
       handymanRequestId: record.handymanRequestId,
       executionScopeId: record.executionScopeId,
     };
-    const actorRole = await resolveEvidenceActorRole(
-      actorUserId,
-      target,
-      false,
-      tx,
-    );
+    const actorRole = await resolveEvidenceWriteActorRole(tx, actorUserId, target);
     if (
       record.uploadedByUserId !== actorUserId &&
       actorRole !== 'OPERATIONS_MANAGER'

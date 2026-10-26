@@ -1,3 +1,4 @@
+import { assertConfiguredHandymanInvoiceTax } from '../handyman-customer-transactions/handyman-financial-tax.service';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool, withTransaction } from '../../database';
@@ -193,10 +194,11 @@ async function serviceReadinessForCharge(chargeId: string): Promise<boolean | nu
 }
 async function finalize(id: string, actor: string): Promise<TenantInvoiceRecord | null> {
   return withTransaction(async (client) => {
-    const locked = await client.query<{ status: string }>(
-      `SELECT status FROM tenant_invoices WHERE id = $1 FOR UPDATE`, [id],
+    const locked = await client.query<{ status: string; handyman_execution_scope_id: string | null }>(
+      `SELECT status, handyman_execution_scope_id FROM tenant_invoices WHERE id = $1 FOR UPDATE`, [id],
     );
     if (locked.rows[0]?.status !== 'DRAFT') return null;
+    if (locked.rows[0].handyman_execution_scope_id) await assertConfiguredHandymanInvoiceTax(client,locked.rows[0].handyman_execution_scope_id);
     await client.query(
       `UPDATE tenant_invoice_lines l SET
          amount_snapshot = CASE

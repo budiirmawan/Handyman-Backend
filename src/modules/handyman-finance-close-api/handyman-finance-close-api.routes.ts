@@ -1,3 +1,4 @@
+import { createHandymanFinancialReconciliationRouter } from './handyman-financial-reconciliation.routes';
 import { Router } from 'express';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { requirePermission } from '../auth/rbac.middleware';
@@ -70,6 +71,7 @@ import {
  */
 export function createHandymanFinanceCloseApiRouter(): Router {
   const router = Router();
+  router.use(createHandymanFinancialReconciliationRouter());
   const auth = authenticationMiddleware;
   // CR-HM-FIN-AUTH-01 — explicit domain authorities. Generic
   // `tenant_company.manage` alone authorizes none of these commands;

@@ -1,3 +1,5 @@
+import { parseOptionalHandymanRequestedWindow } from '../handyman-scheduling/handyman-scheduling.service';
+import type { OptionalHandymanRequestedWindow } from '../handyman-scheduling/handyman-scheduling.types';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
@@ -30,6 +32,8 @@ const ALLOWED_BODY_KEYS = [
   'serviceCatalogId',
   'serviceVariantId',
   'description',
+  'preferredWindowStart',
+  'preferredWindowEnd',
   // CR-HM-MASTER-IND-01 — approval / cost-responsibility parties. Both are
   // PARTY selections (individual or legal entity from the party master),
   // never actor identities: they are re-validated server-side against the
@@ -38,7 +42,7 @@ const ALLOWED_BODY_KEYS = [
   'costResponsibleTenantCompanyId',
 ] as const;
 
-export type CreateBuildingCareRequestBody = {
+export type CreateBuildingCareRequestBody = OptionalHandymanRequestedWindow & {
   tenantCompanyId: string;
   tenantPicId?: string;
   spaceId?: string;
@@ -119,7 +123,7 @@ export function parseCreateBuildingCareRequestBody(
     fail([
       {
         field: unknown[0],
-        message: 'Unexpected request field; only tenant/unit/service selection and description are accepted.',
+        message: 'Unexpected request field; only tenant/unit/service selection, description and the optional requested window are accepted.',
       },
     ]);
   }
@@ -178,7 +182,9 @@ export function parseCreateBuildingCareRequestBody(
   if (!tenantCompanyId || !serviceCatalogId || details.length) {
     fail(details);
   }
+  const dates = parseOptionalHandymanRequestedWindow(body.preferredWindowStart, body.preferredWindowEnd);
   return {
+    ...dates,
     tenantCompanyId,
     ...(tenantPicId === undefined ? {} : { tenantPicId }),
     ...(spaceId === undefined ? {} : { spaceId }),

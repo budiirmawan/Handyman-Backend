@@ -1,3 +1,4 @@
+import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
 import { AppError } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
@@ -208,6 +209,7 @@ export async function issueHandymanQuotationVersion(
     if (version.status !== 'DRAFT') {
       throw handymanQuotationInvalidTransitionError();
     }
+    await assertHandymanQuotationInspectionReady(tx, quotation.handymanRequestId);
     const lines = await handymanQuotationLineRepository.listLines(
       tx,
       version.id,

@@ -95,10 +95,12 @@ export function handymanBastActiveConflictError(
   });
 }
 
-export function handymanBastValidationError(field: string): AppError {
+export function handymanBastValidationError(
+  field: string, message = 'Invalid Handyman BAST input.',
+): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_BAST_VALIDATION,
-    message: 'Invalid Handyman BAST input.',
+    message,
     statusCode: 400,
     details: [`field=${field}`],
   });

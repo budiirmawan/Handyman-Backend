@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import type {
   BuildingRecord,
@@ -88,8 +89,8 @@ async function createBuilding(input: NewBuilding): Promise<BuildingRecord> {
   return mapBuildingRow(result.rows[0]);
 }
 
-async function findById(id: string): Promise<BuildingRecord | null> {
-  const result = await getPool().query<BuildingRow>(
+async function findById(id: string, client?: PoolClient): Promise<BuildingRecord | null> {
+  const result = await (client ?? getPool()).query<BuildingRow>(
     `SELECT ${BUILDING_SELECT} FROM buildings WHERE id = $1`,
     [id],
   );

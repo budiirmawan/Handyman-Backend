@@ -1,3 +1,4 @@
+import {notificationSubscriptionRepository} from '../src/modules/notification-subscriptions';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {mkdtemp, rm} from 'node:fs/promises';
@@ -43,6 +44,9 @@ const proposal = {kind:'INSPECTION',resourceId:id.inspector,
 const result = {result:'INSPECTED',notes:'Observed by authorized Operations actor.'};
 
 before(async () => {
+  // Isolated authority fixture has no delivery subscriptions; keep the real
+  // domain command/audit/response guards, not unrelated notification tables.
+  mock.method(notificationSubscriptionRepository, 'findMatching', async () => []);
   directory = await mkdtemp(join(tmpdir(),'hm-inspector-authority-'));
   postgres = new EmbeddedPostgres({databaseDir:directory,port:55520,user:'postgres',password:'',
     persistent:false,authMethod:'trust',onLog:()=>{},onError:()=>{}});
@@ -89,6 +93,10 @@ before(async () => {
       resource_id uuid, start_at timestamptz, end_at timestamptz,
       active boolean DEFAULT TRUE, released_at timestamptz,
       created_at timestamptz DEFAULT NOW());
+    -- Existing inspection response guard (not a new production table).
+    CREATE TEMP TABLE handyman_assignment_responses(
+      id uuid, assignment_id uuid, assignment_target_type text,
+      client_id uuid, building_id uuid, response_status text);
     CREATE TEMP TABLE handyman_inspector_assignments(
       id uuid, client_id uuid, handyman_request_id uuid,
       visit_appointment_id uuid, inspector_user_id uuid, status text,
@@ -100,6 +108,10 @@ before(async () => {
        consults the pending tenant choice; without these TEMP tables the
        two happy-path proposal tests 500 on a missing relation (the
        documented NOT TESTED margin in the E2E matrix §4/§16). */
+    CREATE TEMP TABLE handyman_scheduling_readiness(id uuid, client_id uuid, handyman_request_id uuid,
+      timezone text, preferred_window_start timestamptz, preferred_window_end timestamptz, status text,
+      supersedes_readiness_id uuid, change_reason text, created_by_user_id uuid,
+      created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW());
     CREATE TEMP TABLE handyman_visit_tenant_slot_consents(
       id uuid, handyman_request_id uuid, kind text,
       selected_start_at timestamptz, selected_end_at timestamptz,
@@ -176,7 +188,7 @@ beforeEach(async () => {
     organizations,vendors,handyman_provider_contexts,handyman_worker_contexts,workforce_profiles,
     vendor_workforce_bindings,workforce_building_assignments,handyman_visit_capacity_reservations,
     handyman_inspector_assignments,handyman_visit_tenant_slot_consents,
-    handyman_visit_tenant_slot_bindings,handyman_handoff_integrations`);
+    handyman_visit_tenant_slot_bindings,handyman_handoff_integrations,handyman_assignment_responses`);
   await db.query('INSERT INTO clients VALUES ($1),($2)',[id.client,id.otherClient]);
   await db.query('INSERT INTO properties VALUES ($1,$2)',[id.property,id.client]);
   await db.query("INSERT INTO buildings VALUES ($1,$3,'ACTIVE','Asia/Jakarta'),($2,$3,'ACTIVE','Asia/Jakarta')",[id.building,id.sibling,id.property]);

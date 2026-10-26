@@ -472,8 +472,27 @@ describe('CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — grant revocation', () => {
     assert.equal(xStripsItself.status, 403);
     assert.equal(xStripsItself.body.error.code, 'PRIVILEGED_ROLE_ASSIGNMENT_DENIED');
 
-    // The X holder can restore the owner's grant, then the owner removes the
-    // now-redundant X grant — ending on the seeded posture.
+    // Grant hardening closes the old recovery bypass: a delegated X holder
+    // cannot restore authority to the protected Owner role, even helpfully.
+    const deniedRestore = await api()
+      .post(`/api/v1/roles/${ownerRole.id}/permissions`)
+      .set({ Authorization: `Bearer ${xUser.token}` })
+      .send({ permissionId: permissionManageId });
+    assert.equal(deniedRestore.status, 403);
+    assert.equal(deniedRestore.body.error.code, 'PRIVILEGED_ROLE_ASSIGNMENT_DENIED');
+    assert.equal(
+      await permissionRepository.findActiveAssignment(ownerRole.id, permissionManageId),
+      null,
+    );
+
+    // The existing Owner still holds role.manage: explicitly authorize a
+    // second Owner for recovery, rather than accepting delegated escalation.
+    const authorizeRecovery = await api()
+      .post(`/api/v1/users/${xUser.userId}/roles`)
+      .set(ownerHeaders())
+      .send({ roleId: ownerRole.id });
+    assert.equal(authorizeRecovery.status, 201);
+
     const restore = await api()
       .post(`/api/v1/roles/${ownerRole.id}/permissions`)
       .set({ Authorization: `Bearer ${xUser.token}` })
@@ -484,6 +503,10 @@ describe('CR-HM-BE-IAM-PERMISSION-REVOCATION-01 — grant revocation', () => {
       .delete(`/api/v1/roles/${roleX.id}/permissions/${permissionManageId}`)
       .set(ownerHeaders());
     assert.equal(cleanupX.status, 200);
+    const cleanupRecoveryOwner = await api()
+      .delete(`/api/v1/users/${xUser.userId}/roles/${ownerRole.id}`)
+      .set(ownerHeaders());
+    assert.equal(cleanupRecoveryOwner.status, 200);
 
     assert.ok(
       await permissionRepository.findActiveAssignment(ownerRole.id, permissionManageId),

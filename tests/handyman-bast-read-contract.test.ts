@@ -50,7 +50,7 @@ describe('CR-HM-11 PART 03 BAST acceptance read contract', () => {
     }
   });
 
-  it('only ACCEPTED is customerAccepted and warrantyStartEligible', () => {
+  it('status predicates require ACCEPTED but are not sufficient customer proof', () => {
     assert.equal(isHandymanCustomerBastAccepted('ACCEPTED'), true);
     assert.equal(isHandymanWarrantyStartEligible('ACCEPTED'), true);
     for (const status of ['DRAFT', 'ISSUED', 'REJECTED', 'VOID'] as const) {
@@ -74,8 +74,8 @@ describe('CR-HM-11 PART 03 BAST acceptance read contract', () => {
       issuedAt: new Date('2026-09-29T01:00:00.000Z'),
       acceptedAt: new Date('2026-09-29T02:00:00.000Z'),
     }));
-    assert.equal(accepted.customerAccepted, true);
-    assert.equal(accepted.warrantyStartEligible, true);
+    assert.equal(accepted.customerAccepted, false, 'legacy status alone is not personal customer consent');
+    assert.equal(accepted.warrantyStartEligible, false);
     assert.ok(accepted.acceptedAt);
 
     const rejected = toHandymanBastAcceptanceReadContract(bast({

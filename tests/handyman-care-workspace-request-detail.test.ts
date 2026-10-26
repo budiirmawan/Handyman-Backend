@@ -1,3 +1,4 @@
+import { createHandymanSchedulingReadiness, supersedeHandymanSchedulingReadiness } from '../src/modules/handyman-scheduling';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
@@ -29,6 +30,9 @@ import { admitCareWorkspace, revokeCareWorkspaceSession, signCareWorkspaceAssert
 import { issueCareCreateExchange } from '../src/modules/handyman-care-workspace/care-create-exchange.service';
 import { getCareWorkspaceRequestDetail } from '../src/modules/handyman-care-workspace/care-workspace-request-detail.service';
 import { getCareWorkspaceOperationalProjection } from '../src/modules/handyman-care-workspace/care-workspace-operational.service';
+import { permissionRepository, permissionService } from '../src/modules/permissions';
+import { handymanServiceRequestTriageService } from '../src/modules/handyman-requests';
+import { agreeInspectionFee } from '../src/modules/handyman-customer-transactions/handyman-inspection-fee.service';
 import { api } from './helpers/http';
 import { ensureTestDatabase } from './helpers/postgres';
 import { createAdminUser } from './helpers/access';
@@ -113,6 +117,8 @@ before(async () => {
   const role = await roleRepository.findByCode('PLATFORM_ADMIN') ??
     await roleService.createRole({ code: 'PLATFORM_ADMIN', name: 'Platform Administrator' });
   await roleService.assignRoleToUser(adminId, role.id);
+  const finance = await permissionRepository.findByCode('handyman.finance.manage'); assert.ok(finance);
+  await permissionService.assignPermissionToRole(role.id, finance.id);
   for (let i = 0; i < 2; i++) clients.push((await clientService.createClient({ code: `C_${suffix()}`, name: 'Client' })).id);
   for (let i = 0; i < 3; i++) {
     const clientId = clients[i === 2 ? 1 : 0];
@@ -188,6 +194,7 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.equal(data.request.spaceId, chains[0].spaceId);
     assert.equal(data.inspection, null);
     assert.equal(data.quotation, null);
+    assert.deepEqual(data.financialTerms,{unconfiguredTaxIsExempt:false,inspectionAgreement:null,inspectionOffers:[],quotationTaxes:[]});
     assert.deepEqual(data.scheduling.readiness, []);
     assert.deepEqual(data.scheduling.appointments, []);
     assert.deepEqual(data.quality.evidence, []);
@@ -209,6 +216,33 @@ describe('PART 06B — care workspace represented request detail', () => {
       .then(() => false, () => true)), true);
   });
 
+  it('PART04 correction: Care projection reuses original/revised scheduling records and parent IDs without treating preferences as bookings', async () => {
+    const requestId = await request(tenantId, buildings[0], chains[0].spaceId, services[0], true);
+    await pool.query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1", [buildings[0]]);
+    const start = new Date(Date.now() + 2 * 86_400_000);
+    const end = new Date(start.getTime() + 3_600_000);
+    const original = await createHandymanSchedulingReadiness({ handymanRequestId: requestId,
+      preferredWindowStart: start.toISOString(), preferredWindowEnd: end.toISOString() }, adminId);
+    const revised = await supersedeHandymanSchedulingReadiness(original.id, {
+      preferredWindowStart: new Date(start.getTime() + 86_400_000).toISOString(),
+      preferredWindowEnd: new Date(end.getTime() + 86_400_000).toISOString(),
+      changeReason: 'Tenant-coordinated revised preference',
+    }, adminId);
+    const response = await getProjection(requestId);
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    const rows = response.body.data.scheduling.readiness;
+    const head = rows.find((r: any) => r.id === revised.id);
+    const first = rows.find((r: any) => r.id === original.id);
+    assert.equal(head.supersedesReadinessId, original.id);
+    assert.equal(first.supersedesReadinessId, null);
+    assert.equal(Date.parse(first.preferredWindowStart), start.getTime());
+    assert.equal(Date.parse(head.preferredWindowStart), start.getTime() + 86_400_000);
+    assert.equal(first.status, 'INACTIVE');
+    assert.equal(head.status, 'ACTIVE');
+    assert.deepEqual(response.body.data.scheduling.appointments, []);
+    notFound(await getProjection(requestId, { ...unit(), tenantCompanyId: newTenant }));
+  });
+
   it('supports building-only requests without requiring a space relationship, but rejects a mismatched space selector', async () => {
     const response = await get(buildingOnlyRequest, { ...selection(), tenantCompanyId: buildingOnlyTenant, buildingId: buildings[1] });
     assert.equal(response.status, 200); assert.equal(response.body.data.spaceId, null);
@@ -228,6 +262,18 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.equal((await get(otherPropertyRequest, { ...selection(), propertyId: properties[1], buildingId: buildings[2] })).status, 200);
     assert.equal((await get(foreignRequest, { propertyId: properties[2], buildingId: buildings[3], tenantCompanyId: foreignTenant })).status, 200);
     notFound(await get(unitRequests[0], selection(), otherToken));
+  });
+
+  it('shows previsit financial terms through the same accountless Care scope, without customer consent or Finance authority', async () => {
+    const requestId=await request(tenantId,buildings[0],chains[0].spaceId,services[0],true);
+    await handymanServiceRequestTriageService.recordHandymanRequestTriage({handymanRequestId:requestId,triageDisposition:'INSPECTION_REQUIRED',triageNote:'Inspection genuinely required'},adminId);
+    await agreeInspectionFee(requestId,{treatment:'FREE',idempotencyKey:randomUUID()},adminId);
+    const response=await getProjection(requestId);assert.equal(response.status,200,JSON.stringify(response.body));
+    assert.deepEqual(response.body.data.financialTerms.inspectionAgreement,{treatment:'FREE',feeExecutionScopeId:null,agreedAmount:'0.00',currency:'IDR',noProceedTreatment:'NOT_APPLICABLE'});
+    assert.equal(response.body.data.financialTerms.unconfiguredTaxIsExempt,false);
+    notFound(await getProjection(requestId,{...unit(),tenantCompanyId:newTenant}));
+    const decide=await api().post(`/api/v1/handyman/requests/${requestId}/inspection-fee`).set('Authorization',`Bearer ${token}`).send({treatment:'FREE',idempotencyKey:randomUUID()});
+    assert.equal(decide.status,401,'A workspace read credential must not become a local Finance credential');
   });
 
   it('denies prior-tenant history on unit turnover with and without a space selector; authorship never bypasses occupancy', async () => {

@@ -29,3 +29,11 @@ test('strict UUID and cancel version',()=>{
  for(const candidate of [{version:0},{version:1,actorUserId:a},{version:1.5},null])
   assert.throws(()=>parseCancelBody(candidate));
 });
+
+test('execution reuses persisted request dates without a second date entry; inspection and partial pairs stay explicit', () => {
+ assert.deepEqual(parseHandymanVisitProposal({kind:'EXECUTION',resourceId:a,executionScopeId:b}),
+  {kind:'EXECUTION',resourceId:a,executionScopeId:b});
+ assert.throws(()=>parseHandymanVisitProposal({kind:'INSPECTION',resourceId:a}));
+ assert.throws(()=>parseHandymanVisitProposal({kind:'EXECUTION',resourceId:a,executionScopeId:b,startAt}));
+ assert.throws(()=>parseHandymanVisitProposal({kind:'EXECUTION',resourceId:a,executionScopeId:b,endAt}));
+});

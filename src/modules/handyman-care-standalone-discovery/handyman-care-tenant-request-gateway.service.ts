@@ -1,3 +1,5 @@
+import { parseOptionalHandymanRequestedWindow } from '../handyman-scheduling/handyman-scheduling.service';
+import type { HandymanCareSchedulingPreference } from '../handyman-scheduling/handyman-scheduling.types';
 import { AppError } from '../../shared/errors';
 import { isValidUuid } from '../clients';
 import {
@@ -91,6 +93,7 @@ type ProjectableRequest = {
   status: string;
   createdAt: Date | string;
   updatedAt: Date | string;
+  schedulingReadiness?: HandymanCareSchedulingPreference;
 };
 
 /** Same allow-list as the PR #37 discovery projection — never the
@@ -108,6 +111,7 @@ function projectCreatedRequest(request: ProjectableRequest) {
     status: request.status,
     createdAt: iso(request.createdAt),
     updatedAt: iso(request.updatedAt),
+    ...(request.schedulingReadiness ? { schedulingReadiness: request.schedulingReadiness } : {}),
   };
 }
 
@@ -278,7 +282,10 @@ export async function createBuildingCareRequest(input: {
       }),
   });
 
+  const dates = parseOptionalHandymanRequestedWindow(input.body.preferredWindowStart, input.body.preferredWindowEnd);
   const normalized = {
+    // Omit absent dates to retain fingerprints of legacy no-date submissions.
+    ...dates,
     buildingId: authority.scope.buildingId,
     tenantCompanyId: input.body.tenantCompanyId,
     tenantPicId: input.body.tenantPicId ?? null,
@@ -321,6 +328,7 @@ export async function createBuildingCareRequest(input: {
       const request = await createHandymanServiceRequestForAttribution(
         {
           channelAttributionId: attribution.id,
+          ...dates,
           serviceCatalogId: normalized.serviceCatalogId,
           ...(normalized.serviceVariantId === null
             ? {}

@@ -1,3 +1,6 @@
+import { bmBindingTestFixture, bmClearanceTestFact } from './helpers/handyman-bm-clearance';
+import { assessHandymanBmClearance, handymanBmClearanceVerifier, readBmWorkBinding } from '../src/modules/handyman-dispatch/handyman-bm-clearance';
+import type { TestContext } from 'node:test';
 /**
  * CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / REDUCE)
  * Focused Lifecycle, Role Separation, Impersonation & Concurrency Test Suite.
@@ -15,7 +18,7 @@ import type { Pool } from 'pg';
 import EmbeddedPostgres from 'embedded-postgres';
 
 import { createApp } from '../src/app';
-import { closePool, getPool, initDatabase } from '../src/database';
+import { closePool, getPool, initDatabase, withTransaction } from '../src/database';
 import { sessionService } from '../src/modules/auth/session.service';
 import { buildingAssignmentRepository } from '../src/modules/building-assignments/building-assignment.repository';
 import { buildingRepository } from '../src/modules/buildings/building.repository';
@@ -24,6 +27,10 @@ import { clientRepository } from '../src/modules/clients/client.repository';
 import { userRepository } from '../src/modules/users/user.repository';
 import { permissionService } from '../src/modules/permissions';
 import { createEvidenceStorage } from '../src/modules/evidence/storage';
+import {
+  HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
+  computeHandymanBastCustomerConsentDigest, type HandymanBastCustomerConsentManifest,
+} from '../src/modules/handyman-bast';
 import { migration0435CreateHandymanScopeVariations } from '../src/database/migrations/0435_create_handyman_scope_variations';
 import { migration0443SeparateHandymanVariationQcAuthority }
   from '../src/database/migrations/0443_separate_handyman_variation_qc_authority';
@@ -121,6 +128,27 @@ async function verifiedEvidenceRef(
     [id, CLIENT_A, TENANT_A, BUILDING_A1, REQ_A1, SCOPE_A1, purpose, `evidence/${id}`, bytes.byteLength, sha, `hm-ev://${id}`, LEAD_USER_A, `seed-${id}`],
   );
   return `hm-ev://${id}`;
+}
+
+/** Real approved ADD/REDUCE lifecycle, test-only independent BM boundary.
+ * The surrounding binding shell is a unit fixture, NOT live BM coverage.
+ */
+async function assertBmWorkReassessment(t: TestContext,
+  before: Awaited<ReturnType<typeof readBmWorkBinding>>,
+  after: Awaited<ReturnType<typeof readBmWorkBinding>>,
+) {
+  assert.notDeepEqual(after, before, 'Approved work revision must change BM coverage input');
+  const shell = bmBindingTestFixture();
+  const oldBinding = { ...shell, ...before };
+  const newBinding = { ...shell, ...after };
+  const stale = t.mock.method(handymanBmClearanceVerifier, 'verify', async () => bmClearanceTestFact(oldBinding));
+  try {
+    assert.equal((await assessHandymanBmClearance(getPool(), newBinding)).state, 'BINDING_MISMATCH');
+  } finally { stale.mock.restore(); }
+  const renewed = t.mock.method(handymanBmClearanceVerifier, 'verify', async binding => bmClearanceTestFact(binding));
+  try {
+    assert.equal((await assessHandymanBmClearance(getPool(), newBinding)).state, 'VERIFIED');
+  } finally { renewed.mock.restore(); }
 }
 
 before(async () => {
@@ -315,6 +343,7 @@ before(async () => {
       approved_tax_amount numeric(18,2) NOT NULL,
       approved_total_amount numeric(18,2) NOT NULL,
       authorized_by_user_id uuid NOT NULL, created_by_user_id uuid NOT NULL,
+      created_by_care_actor_id uuid, -- additive Commercial Bridge provenance (NULL in this direct-PIC fixture)
       authorized_at timestamptz NOT NULL DEFAULT now(),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
@@ -385,12 +414,21 @@ before(async () => {
     );
     CREATE TABLE handyman_bast_documents(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, execution_scope_id uuid NOT NULL,
+      qc_run_id uuid, rejected_at timestamptz,
       status text NOT NULL DEFAULT 'ISSUED', issued_at timestamptz, accepted_at timestamptz,
       voided_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE handyman_bast_events(
+      id uuid PRIMARY KEY, client_id uuid NOT NULL, bast_id uuid NOT NULL REFERENCES handyman_bast_documents(id),
+      execution_scope_id uuid NOT NULL, event_type text NOT NULL, idempotency_key text NOT NULL,
+      actor_user_id uuid NOT NULL, actor_care_actor_id uuid, commercial_consent_id uuid,
+      occurred_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now(), metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
     CREATE TABLE handyman_bast_sign_offs(
       id uuid PRIMARY KEY, client_id uuid NOT NULL, bast_id uuid NOT NULL REFERENCES handyman_bast_documents(id),
+      event_id uuid NOT NULL REFERENCES handyman_bast_events(id), evidence_record_id uuid, reject_reason text,
       execution_scope_id uuid NOT NULL, decision text NOT NULL,
       signature_digest text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
     );
@@ -785,7 +823,7 @@ async function apiGet(path: string, userId: string) {
 }
 
 describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / REDUCE)', () => {
-  it('1: governs full 9-stage ADD lifecycle (FIELD_FINDING -> PROPOSAL -> OPERATIONS_REVIEW -> REVISED_QUOTATION -> TENANT_DECISION -> AUTHORIZED_SCOPE -> EXECUTION -> QC -> FINAL_CHARGE_ELIGIBILITY) without mutating original scope or auto-invoicing', async () => {
+  it('1: governs full 9-stage ADD lifecycle (FIELD_FINDING -> PROPOSAL -> OPERATIONS_REVIEW -> REVISED_QUOTATION -> TENANT_DECISION -> AUTHORIZED_SCOPE -> EXECUTION -> QC -> FINAL_CHARGE_ELIGIBILITY) without mutating original scope or auto-invoicing', async (t) => {
     // Stage 1: Inspector submits technical finding (FIELD_FINDING)
     const s1 = await apiPost(
       `/handyman/field/execution-scopes/${SCOPE_A1}/variations/findings`,
@@ -1010,6 +1048,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       'HANDYMAN_VARIATION_ILLEGAL_TRANSITION',
     );
 
+    const bmBeforeAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
     // Stage 5: Authorized Tenant PIC user approves variation bound to QVER_A2_ADD (TENANT_DECISION)
     const s5 = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`,
@@ -1027,6 +1066,12 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s5.body.data.variation.status, 'TENANT_DECISION');
     assert.equal(s5.body.data.variation.tenantDecisionOutcome, 'APPROVED');
     assert.equal(s5.body.data.variation.tenantDecidedByUserId, TENANT_USER_A);
+    const bmApprovedAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
+    await assertBmWorkReassessment(t, bmBeforeAdd, bmApprovedAdd);
+    const addCoverage = bmApprovedAdd.approvedVariations.find(v => v.id === varId)!;
+    assert.equal(addCoverage.variationType, 'ADD');
+    assert.equal(addCoverage.revisedQuotationVersionId, QVER_A2_ADD);
+    assert.equal(addCoverage.authorized, false);
 
     // Stage 6: Operations/Manager authorizes scope (AUTHORIZED_SCOPE)
     const s6 = await apiPost(
@@ -1041,6 +1086,9 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     );
     assert.equal(s6.status, 200, JSON.stringify(s6.body));
     assert.equal(s6.body.data.variation.status, 'AUTHORIZED_SCOPE');
+    const bmAuthorizedAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
+    await assertBmWorkReassessment(t, bmApprovedAdd, bmAuthorizedAdd);
+    assert.equal(bmAuthorizedAdd.approvedVariations.find(v => v.id === varId)!.authorized, true);
     assert.equal(
       s6.body.data.reconciledAuthorizedScope.authorizedAddedItems.length,
       1,
@@ -1210,16 +1258,39 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     );
     assert.equal(fceUnacceptedBast.status, 409);
 
-    // Record customer BAST acceptance + sign-off
-    await getPool().query(
-      `UPDATE handyman_bast_documents SET status = 'ACCEPTED', accepted_at = now() WHERE id = $1`,
-      [BAST_A1],
-    );
-    await getPool().query(
-      `INSERT INTO handyman_bast_sign_offs (id, client_id, bast_id, execution_scope_id, decision, signature_digest)
-       VALUES ($1, $2, $3, $4, 'ACCEPT', 'sha256:tenant-bast-signature-001')`,
-      [randomUUID(), CLIENT_A, BAST_A1, SCOPE_A1],
-    );
+    // BAST-consumer PRESTATE for this narrow variation/schema/auth-mocked
+    // suite, not an execution of personal consent. PART04's full-migration
+    // HTTP suite separately proves that only the real personal PIC can create
+    // this backend attestation. Do not substitute an arbitrary digest for it.
+    await withTransaction(async (tx) => {
+      const head = (await tx.query(`UPDATE handyman_bast_documents
+        SET status = 'ACCEPTED', accepted_at = NOW(), qc_run_id = $2 WHERE id = $1 RETURNING *`,
+      [BAST_A1, QCRUN_PASSED_A1])).rows[0];
+      const issueId = randomUUID();
+      const eventId = randomUUID();
+      const manifest: HandymanBastCustomerConsentManifest = {
+        protocol: HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL, bastId: BAST_A1,
+        executionScopeId: SCOPE_A1, approvedQuotationVersionId: QVER_A1, clientId: CLIENT_A,
+        handymanRequestId: REQ_A1, tenantCompanyId: TENANT_A, tenantPicId: TENANT_PIC_A,
+        buildingId: BUILDING_A1, issuedArtifactRef: `BAST/${BAST_A1}/v2`, issuedArtifactVersion: 2,
+        issueEventId: issueId, issuedAt: head.issued_at.toISOString(), qcRunId: QCRUN_PASSED_A1,
+        actorUserId: TENANT_USER_A, decision: 'ACCEPT', rejectReason: null, evidence: null,
+      };
+      const digest = computeHandymanBastCustomerConsentDigest(manifest);
+      await tx.query(`INSERT INTO handyman_bast_events
+        (id, client_id, bast_id, execution_scope_id, event_type, idempotency_key, actor_user_id, occurred_at)
+        VALUES ($1,$2,$3,$4,'ISSUE','prestate-issue',$5,$6)`,
+      [issueId, CLIENT_A, BAST_A1, SCOPE_A1, LEAD_USER_A, head.issued_at]);
+      await tx.query(`INSERT INTO handyman_bast_events
+        (id, client_id, bast_id, execution_scope_id, event_type, idempotency_key, actor_user_id, metadata)
+        VALUES ($1,$2,$3,$4,'ACCEPT','prestate-consent',$5,$6::jsonb)`,
+      [eventId, CLIENT_A, BAST_A1, SCOPE_A1, TENANT_USER_A, JSON.stringify({ customerConsent: {
+        method: HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, manifest, sha256Digest: digest,
+      } })]);
+      await tx.query(`INSERT INTO handyman_bast_sign_offs
+        (id, client_id, bast_id, event_id, execution_scope_id, decision, signature_digest)
+        VALUES ($1,$2,$3,$4,$5,'ACCEPT',$6)`, [randomUUID(), CLIENT_A, BAST_A1, eventId, SCOPE_A1, digest]);
+    });
 
     // CHECK 2 Guard F: FINAL_CHARGE_ELIGIBILITY blocked when a FINALIZED invoice already exists for the scope (duplicate invoice protection, 409)
     const fceFinalizedInvoice = await apiPost(
@@ -1260,6 +1331,8 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s9.body.data.variation.qcRunId, QCRUN_PASSED_A1);
     assert.equal(s9.body.data.variation.bastId, BAST_A1);
     assert.equal(s9.body.data.events.length, 9);
+    assert.deepEqual(await readBmWorkBinding(getPool(), SCOPE_A1), bmAuthorizedAdd,
+      'Execution/QC/BAST/finance progress must not invent a changed work scope');
 
     // Verify original approved scope row & quotation lines are 100% untouched
     const origScopeRes = await getPool().query(
@@ -1269,7 +1342,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(origScopeRes.rows[0].approved_total_amount, '832500.00');
   });
 
-  it('2: governs REDUCE (Pekerjaan Kurang) lifecycle, reconciles remaining authorized quantity, and blocks over-reduction', async () => {
+  it('2: governs REDUCE (Pekerjaan Kurang) lifecycle, reconciles remaining authorized quantity, and blocks over-reduction', async (t) => {
     // PIC Pekerjaan proposes REDUCE of 4.000 pcs on original material line (10.000 pcs)
     const prop = await apiPost(
       `/handyman/field/execution-scopes/${SCOPE_A1}/variations/proposals`,
@@ -1326,7 +1399,18 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(quo.status, 200);
     assert.equal(quo.body.data.variation.quotedTotalDelta, '-100000.00');
     assert.equal(quo.body.data.variation.revisedQuotationVersionId, QVER_A3_REDUCE);
+    // Existing commercial reconciliation consumes the signed REDUCE delta;
+    // original and revised quotation versions remain separate authority rows.
+    const commercialEvent = quo.body.data.events.find((e: { eventType: string }) => e.eventType === 'REVISED_QUOTATION');
+    assert.equal(commercialEvent.metadata.quotedTotalDelta, '-100000.00');
+    const totals = await getPool().query(`SELECT quotation_version_id, SUM(line_total)::numeric(18,2)::text total
+      FROM handyman_quotation_lines WHERE quotation_version_id=ANY($1::uuid[]) GROUP BY quotation_version_id`,
+      [[QVER_A1, QVER_A3_REDUCE]]);
+    assert.equal(commercialEvent.metadata.originalQuotedTotal, totals.rows.find(r=>r.quotation_version_id===QVER_A1).total);
+    assert.equal(commercialEvent.metadata.revisedQuotedTotal, totals.rows.find(r=>r.quotation_version_id===QVER_A3_REDUCE).total);
 
+
+    const bmBeforeReduce = await readBmWorkBinding(getPool(), SCOPE_A1);
     const ten = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${reduceVarId}/tenant-decision`,
       TENANT_USER_A,
@@ -1338,6 +1422,12 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       },
     );
     assert.equal(ten.status, 200);
+    const bmApprovedReduce = await readBmWorkBinding(getPool(), SCOPE_A1);
+    await assertBmWorkReassessment(t, bmBeforeReduce, bmApprovedReduce);
+    const reduceCoverage = bmApprovedReduce.approvedVariations.find(v => v.id === reduceVarId)!;
+    assert.equal(reduceCoverage.variationType, 'REDUCE');
+    assert.equal(reduceCoverage.targetQuotationLineId, QLINE_MAT_A1);
+    assert.equal(reduceCoverage.revisedQuotationVersionId, QVER_A3_REDUCE);
 
     const auth = await apiPost(
       `/handyman/execution-scopes/${SCOPE_A1}/variations/${reduceVarId}/authorize-scope`,
@@ -1345,6 +1435,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       { idempotencyKey: 'idem-red-auth-1' },
     );
     assert.equal(auth.status, 200);
+    await assertBmWorkReassessment(t, bmApprovedReduce, await readBmWorkBinding(getPool(), SCOPE_A1));
     const matLineAfter =
       auth.body.data.reconciledAuthorizedScope.reconciledOriginalLines.find(
         (l: { quotationLineId: string }) => l.quotationLineId === QLINE_MAT_A1,

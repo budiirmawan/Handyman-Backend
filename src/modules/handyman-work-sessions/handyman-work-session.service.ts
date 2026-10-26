@@ -175,10 +175,10 @@ async function listCurrentHelperRows(
 async function commandAuthorityPreamble(
   scopeUuid: string,
   actorUserId: string,
-  options?: { allowDeclinedRead?: boolean },
+  options?: { allowDeclinedRead?: boolean; executor?: PoolClient },
 ) {
   const scope = await handymanScopeAssignmentRepository.findScopeById(
-    undefined,
+    options?.executor,
     scopeUuid,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
@@ -188,10 +188,11 @@ async function commandAuthorityPreamble(
   await assertBuildingScopedResourceAccess(actorUserId, {
     clientId: scope.clientId,
     buildingId: scope.buildingId,
-  });
+  }, options?.executor);
   const resolution = await resolveHandymanAssignmentLead(
     scopeUuid,
     actorUserId,
+    options?.executor,
   );
   if (!resolution || resolution.leadUserId !== actorUserId) {
     throw handymanWorkSessionNotAuthorizedError();
@@ -199,6 +200,7 @@ async function commandAuthorityPreamble(
   if (!options?.allowDeclinedRead) {
     const response = await assignmentResponseRepository.findByAssignmentId(
       resolution.assignmentId,
+      options?.executor,
     );
     if (response?.responseStatus === 'TIDAK_BISA') {
       throw handymanAssignmentDeclinedError();
@@ -225,31 +227,33 @@ export async function checkInHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  const { scope, resolution } = await commandAuthorityPreamble(
-    scopeUuid,
-    actorUuid,
-  );
-  if (scope.status !== 'AUTHORIZED') {
-    throw handymanWorkSessionScopeNotEligibleError();
-  }
-  // CR-HM-OPS-DISPATCH-02 PART C: check-in requires an ACTIVE dispatch
-  // release (RELEASED or IN_PROGRESS). An assigned-but-not-released scope
-  // must not allow a work session to start.
-  const { handymanDispatchRepository } = await import(
-    '../handyman-dispatch/handyman-dispatch.repository'
-  );
-  const release = await handymanDispatchRepository.findActiveByScope(
-    undefined,
-    scopeUuid,
-  );
-  if (!release) {
-    throw handymanWorkSessionDispatchNotReleasedError(scopeUuid);
-  }
-  if (!(await findVerifiedArrivalResultId(undefined, scopeUuid))) {
-    throw handymanWorkSessionArrivalRequiredError(scopeUuid);
-  }
-
   return withTransaction(async (tx) => {
+    await handymanScopeAssignmentRepository.lockScopeById(tx, scopeUuid);
+    const { scope, resolution } = await commandAuthorityPreamble(
+      scopeUuid,
+      actorUuid,
+      { executor: tx },
+    );
+    if (scope.status !== 'AUTHORIZED') {
+      throw handymanWorkSessionScopeNotEligibleError();
+    }
+    // CR-HM-OPS-DISPATCH-02 PART C: check-in requires an ACTIVE dispatch
+    // release (RELEASED or IN_PROGRESS). An assigned-but-not-released scope
+    // must not allow a work session to start.
+    const { handymanDispatchRepository } = await import(
+      '../handyman-dispatch/handyman-dispatch.repository'
+    );
+    const release = await handymanDispatchRepository.findActiveByScope(
+      tx,
+      scopeUuid,
+    );
+    if (!release) {
+      throw handymanWorkSessionDispatchNotReleasedError(scopeUuid);
+    }
+    if (!(await findVerifiedArrivalResultId(tx, scopeUuid))) {
+      throw handymanWorkSessionArrivalRequiredError(scopeUuid);
+    }
+
     const existing = await handymanWorkSessionRepository
       .findActiveWorkSessionByExecutionScope(tx, scopeUuid);
     if (existing) {
@@ -266,6 +270,8 @@ export async function checkInHandymanWorkSession(
       }
       throw handymanWorkSessionActiveConflictError(scopeUuid);
     }
+
+    await handymanDispatchService.assertDispatchExecutionClearance(tx, scopeUuid, actorUuid, resolution.assignmentId);
 
     const session = await handymanWorkSessionRepository
       .createWorkSession(tx, {
@@ -332,9 +338,9 @@ export async function startWorkHandymanWorkSession(
   const actorUuid = ensureUuid(actorUserId, 'actorUserId');
   const key = ensureKey(input.idempotencyKey);
 
-  await commandAuthorityPreamble(scopeUuid, actorUuid);
-
   return withTransaction(async (tx) => {
+    await handymanScopeAssignmentRepository.lockScopeById(tx, scopeUuid);
+    const { resolution } = await commandAuthorityPreamble(scopeUuid, actorUuid, { executor: tx });
     // Row lock first: transitions are single-threaded per session.
     const locked = await tx.query(
       `SELECT id FROM handyman_work_sessions
@@ -356,6 +362,8 @@ export async function startWorkHandymanWorkSession(
     if (replayEvent) {
       return { session: current, event: replayEvent, replayed: true };
     }
+
+    await handymanDispatchService.assertDispatchExecutionClearance(tx, scopeUuid, actorUuid, resolution.assignmentId);
 
     const transitioned = await tx.query(
       `UPDATE handyman_work_sessions
@@ -426,9 +434,9 @@ async function workClockTransition(
   const key = ensureKey(input.idempotencyKey);
   const rule = WORK_CLOCK_RULES[action];
 
-  await commandAuthorityPreamble(scopeUuid, actorUuid);
-
   return withTransaction(async (tx) => {
+    await handymanScopeAssignmentRepository.lockScopeById(tx, scopeUuid);
+    const { resolution } = await commandAuthorityPreamble(scopeUuid, actorUuid, { executor: tx });
     const locked = await tx.query(
       `SELECT id FROM handyman_work_sessions
         WHERE execution_scope_id = $1 AND status <> 'CHECKED_OUT'
@@ -447,6 +455,9 @@ async function workClockTransition(
       return { session: current, event: replayEvent, replayed: true };
     }
 
+    if (action === 'RESUME') {
+      await handymanDispatchService.assertDispatchExecutionClearance(tx, scopeUuid, actorUuid, resolution.assignmentId);
+    }
     const transitioned = await tx.query(
       `UPDATE handyman_work_sessions
           SET status = $2, updated_at = NOW()

@@ -157,6 +157,16 @@ No token or token hash is returned. A pending row past its expiry is projected a
 - The last usable active account with `PLATFORM_ADMIN` cannot lose that assignment (`409 LAST_OWNER_ROLE_REQUIRED`). Owner-role mutation is transactionally serialized; an actor other than an existing Owner cannot revoke privileged authority.
 - **Errors:** `400 VALIDATION_ERROR`; `401 AUTHENTICATION_REQUIRED`; `403 PERMISSION_DENIED`, `PRIVILEGED_ROLE_ASSIGNMENT_DENIED`; `404 USER_NOT_FOUND`, `ROLE_NOT_FOUND`, `ROLE_ASSIGNMENT_NOT_FOUND`; `409 LAST_OWNER_ROLE_REQUIRED`.
 
+### `POST /roles/{roleId}/permissions` — governed grant (IAM E2E audit PART 02)
+
+- **Permission:** live `permission.manage`; **request:** `{ "permissionId": "uuid-from-GET-permissions" }`; **201 `data`:** the existing `PublicPermission` shape.
+- `role.manage`, `permission.manage`, `user.manage`, and `building.manage`, the `PLATFORM_ADMIN` target, and any target role already granting one of those codes require an ACTIVE `PLATFORM_ADMIN` actor (`403 PRIVILEGED_ROLE_ASSIGNMENT_DENIED`), matching the existing revoke policy. Owners retain explicit administration of protected roles.
+- Other delegates may grant only an ACTIVE permission in their current effective multi-role union, to an ordinary role they do **not** hold. Beyond-authority grants and held-role self-consolidation return `403 PERMISSION_DENIED`. This is not a blanket Owner-only endpoint.
+- The actor comes from the authenticated session, not request-body identity/role/permission/scope claims. Authority checks and insertion run in one serialized transaction; denied grants change no assignment/history row and emit no successful `PERMISSION_GRANTED` event. Successful grants preserve the existing audit context/metadata.
+- Existing active/inactive/not-found/validation and authorized-duplicate (`409 PERMISSION_ALREADY_ASSIGNED`) contracts remain. Always honor the Backend's 403, even when a previously rendered control was enabled; permissions can be revoked while a request is pending.
+- Roles are **installation-wide metadata**, not Client-owned records. A permission grant does not assign Buildings or expand Client/Building data reach. Do not delegate `permission.manage` expecting tenant-local role administration. Default role sets, including the System Admin's lack of `permission.manage`, are unchanged.
+- `DELETE /roles/{roleId}/permissions/{permissionId}` remains unchanged: bounded ordinary revocation, Owner-only privileged revocation, `409 LAST_ADMIN_PERMISSION_REQUIRED`, soft-revoked history, live session permission refresh, and `PERMISSION_REVOKED` audit. A delegate cannot use POST to restore privileged authority; recovery requires a currently authorized Owner.
+
 ## 3. Building scope
 
 A role grants **what** a user can do; a Building assignment grants **where**. No user receives all Buildings automatically.
