@@ -4,8 +4,10 @@ import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { emitHandymanDomainNotificationIntent } from '../handyman-notifications/handyman-domain-notification.producer';
 import { recordOperationalEvent } from '../operational-events';
-import { assertQuotationThreadBuildingAccess }
-  from './handyman-quotation-access';
+import {
+  assertHandymanQuotationPricingAuthority,
+  assertQuotationThreadBuildingAccess,
+} from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import {
@@ -169,6 +171,17 @@ async function requireAccessibleQuotation(
   // request's building_id (BE-02G; no same-Client shortcut). This helper
   // guards issue / expire / supersede.
   await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+  // PART 03E: issuance (and any later presentation change) is an Operations
+  // commercial act, so the thread's customer side is refused here too — the
+  // customer's own commercial act is the decision, which stays PIC-personal.
+  await assertHandymanQuotationPricingAuthority(
+    {
+      clientId: quotation.clientId,
+      handymanRequestId: quotation.handymanRequestId,
+      actorUserId,
+    },
+    tx,
+  );
   return quotation;
 }
 

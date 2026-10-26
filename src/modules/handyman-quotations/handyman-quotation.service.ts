@@ -9,8 +9,10 @@ import {
   handymanServiceRequestNotFoundError,
   handymanServiceRequestRepository,
 } from '../handyman-requests';
-import { assertQuotationThreadBuildingAccess }
-  from './handyman-quotation-access';
+import {
+  assertHandymanQuotationPricingAuthority,
+  assertQuotationThreadBuildingAccess,
+} from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import {
@@ -174,6 +176,19 @@ export async function createHandymanQuotation(
       clientId: request.clientId,
       buildingId: request.buildingId,
     });
+
+    // 2b) PART 03E: commercial authoring is Operations-only. Checked after the
+    //     realm guard so an out-of-scope actor keeps the existing Building
+    //     denial (no new existence signal), and before any row is written.
+    await assertHandymanQuotationPricingAuthority(
+      {
+        clientId: request.clientId,
+        handymanRequestId: request.id,
+        actorUserId,
+        tenantCompanyId: request.tenantCompanyId,
+      },
+      tx,
+    );
 
     // 3) CR-HM-03 sufficiency gate: an authoritative diagnosis/scope
     //    record must exist and be quotable (server-derived snapshot).
@@ -344,6 +359,16 @@ export async function createHandymanQuotationRevision(
     // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
     // request's building_id (BE-02G; no same-Client shortcut).
     await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+    // PART 03E: a revision re-prices the thread, so it is an Operations act —
+    // a customer "revising" their own quotation is refused even on a DRAFT.
+    await assertHandymanQuotationPricingAuthority(
+      {
+        clientId: quotation.clientId,
+        handymanRequestId: quotation.handymanRequestId,
+        actorUserId,
+      },
+      tx,
+    );
 
     const previous = await handymanQuotationRepository.findLatestVersion(
       tx,

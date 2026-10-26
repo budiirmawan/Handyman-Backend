@@ -7,6 +7,7 @@ import {
   handymanServiceRequestRepository,
 } from '../handyman-requests';
 import {
+  assertHandymanQuotationPricingAuthority,
   assertQuotationThreadBuildingAccess,
   assertQuotationVersionCustomerVisibility,
 } from './handyman-quotation-access';
@@ -173,6 +174,16 @@ export async function addHandymanQuotationLine(
     //    traced to the parent request's building_id (BE-02G; no
     //    same-Client shortcut).
     await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+    // PART 03E: only an authorized Handyman Operations actor may price a
+    // quotation; the thread's customer side is refused even on a DRAFT.
+    await assertHandymanQuotationPricingAuthority(
+      {
+        clientId: quotation.clientId,
+        handymanRequestId: quotation.handymanRequestId,
+        actorUserId,
+      },
+      tx,
+    );
 
     // 4) Client-scoped master checks (no cross-client master references).
     if (
