@@ -83,10 +83,11 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   //                                                  the post-inspection
   //                                                  revision lane)
   // Deployed baseline 4529 adds 17 documented/runtime operations after the
-  // previous 301-operation freeze. The equality assertion below guards parity;
+  // previous 301-operation freeze, and CR-HM-CARE-INTERNAL-NOTES-01 adds 6
+  // Internal Notes operations. The equality assertion below guards parity;
   // this constant pins the reviewed surface size at the release baseline.
-  it('keeps the 318-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 318);
+  it('keeps the 324-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 324);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -199,8 +200,9 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
     //   190 + 6 = 196.
     //   CR-HM-SERVICE-CATALOG-01 PART 01 +7 route-guarded operations
     //   (`tenant_company.read` / `tenant_company.manage`).
-    //   196 + 7 = 203 (previous freeze), +13 route-guarded baseline ops = 216.
-    assert.equal(annotated, 216);
+    //   196 + 7 = 203 (previous freeze), +13 route-guarded baseline ops = 216,
+    //   +2 Building Care internal-notes route-guarded ops = 218.
+    assert.equal(annotated, 218);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

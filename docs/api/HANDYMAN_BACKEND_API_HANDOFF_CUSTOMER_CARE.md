@@ -1,5 +1,7 @@
 # Handyman Backend — API Handoff: Customer Care (Frontend / Customer Care web)
 
+> **2026-10-26 Internal Notes (CR-HM-CARE-INTERNAL-NOTES-01):** dedicated internal operational notes for Customer Care and Handyman Operations are available at `POST/GET /handyman/care/buildings/{buildingId}/requests/{requestId}/internal-notes`, `POST/GET /handyman/care/requests/{requestId}/internal-notes`, and `POST/GET /handyman/requests/{handymanRequestId}/internal-notes`. See [Internal Notes contract](../handyman/CR-HM-CARE-INTERNAL-NOTES-01_PART-01.md).
+
 > **2026-10-25 Care request date integration:** both existing Care create endpoints now accept paired `preferredWindowStart`/`preferredWindowEnd` and atomically create the initial preference in existing Scheduling Readiness. No-date clients retain their behavior. Exact authentication, bodies, safe responses, idempotency and migration prerequisite: [Care date contract](CR-HM-CARE-REQUEST-DATE-INTEGRATION_HANDOFF.md). Preference is not a confirmed appointment or assignment.
 
 > **2026-10-25 PART01 addendum:** quotation/BAST recording may use the existing BM workspace credential, without a tenant login, only with independently verified exact-target customer consent. This is a separate, default-BLOCKED receiver; the local-session recipes below do not grant Care customer authority. See [commercial bridge contract](../handyman/CR-HM-COMMERCIAL-DECISION-BRIDGE-01_PART-01.md).
