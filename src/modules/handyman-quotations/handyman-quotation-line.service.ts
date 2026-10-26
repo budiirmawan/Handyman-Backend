@@ -19,8 +19,10 @@ import {
 } from './handyman-quotation.errors';
 import {
   HANDYMAN_QUOTATION_CURRENCIES,
+  HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS,
   HANDYMAN_QUOTATION_LINE_TYPES,
   type AddHandymanQuotationLineInput,
+  type HandymanQuotationLineOriginKind,
   type HandymanQuotationLineRecord,
   type HandymanQuotationLineServiceView,
   type PublicHandymanQuotationTotals,
@@ -65,6 +67,7 @@ function toServiceLineView(
     lineTotal: row.lineTotal,
     currency: row.currency,
     sourceItemId: row.sourceItemId,
+    originKind: row.originKind,
     createdByUserId: row.createdByUserId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -118,6 +121,16 @@ function validateInput(
         'sourceItemId is only valid for MATERIAL lines.',
       );
     }
+  }
+  if (
+    input.originKind !== undefined &&
+    !(HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS as readonly string[]).includes(
+      input.originKind,
+    )
+  ) {
+    throw handymanQuotationLineInvalidError(
+      'originKind must be CATALOG or MANUAL_ONE_TIME when declared.',
+    );
   }
   return { description };
 }
@@ -194,6 +207,41 @@ export async function addHandymanQuotationLine(
       throw handymanQuotationCurrencyMismatchError();
     }
 
+    /*
+     * 5b) Origin provenance (CR-HM-MANUAL-QUOTATION-01 PART 03A, 0489). It is
+     *     DERIVED from the parent request's lane, never taken from the caller's
+     *     word alone: a manual-origin (unlisted-intake) request has no Service
+     *     Catalog anchor, so every line on it is MANUAL_ONE_TIME and an
+     *     attempted CATALOG claim is refused rather than silently accepted. On
+     *     the catalog lane an explicit MANUAL_ONE_TIME claim is honored only
+     *     when the governed pricing authority already recorded a MANUAL_REVIEW
+     *     resolution for the request — no resolution, quote rule or catalog
+     *     reference is invented here.
+     */
+    const originContext =
+      await handymanQuotationLineRepository.findRequestOriginContext(
+        tx,
+        quotation.handymanRequestId,
+        quotation.clientId,
+      );
+    if (!originContext) throw handymanQuotationNotFoundError();
+    let originKind: HandymanQuotationLineOriginKind = 'CATALOG';
+    if (originContext.intakeSource === 'UNLISTED_TRIAGE') {
+      if (input.originKind === 'CATALOG') {
+        throw handymanQuotationLineInvalidError(
+          'A manual-origin service request has no Service Catalog anchor, so its lines cannot be recorded as CATALOG origin.',
+        );
+      }
+      originKind = 'MANUAL_ONE_TIME';
+    } else if (input.originKind === 'MANUAL_ONE_TIME') {
+      if (!originContext.hasManualReviewResolution) {
+        throw handymanQuotationLineInvalidError(
+          'A MANUAL_ONE_TIME line requires a governed MANUAL_REVIEW quote resolution on this request.',
+        );
+      }
+      originKind = 'MANUAL_ONE_TIME';
+    }
+
     // 6) Governed reference-price snapshot for MATERIAL provenance:
     //    looked up against the request's authoritative building scope;
     //    fail-closed NULL whenever no authority resolves. The looked-up
@@ -237,6 +285,7 @@ export async function addHandymanQuotationLine(
       finalQuotedUnitAmount: input.finalQuotedUnitAmount,
       currency: input.currency,
       sourceItemId: input.sourceItemId ?? null,
+      originKind,
       createdByUserId: actorUserId,
     });
     await recordOperationalEvent(
@@ -252,6 +301,7 @@ export async function addHandymanQuotationLine(
           quotationVersionId: version.id,
           quotationLineId: line.id,
           lineType: line.lineType,
+          originKind: line.originKind,
           handymanRequestId: quotation.handymanRequestId,
         },
       },

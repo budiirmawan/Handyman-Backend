@@ -8977,7 +8977,7 @@ paths:
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_QUOTATION_ALREADY_EXISTS, HANDYMAN_QUOTATION_DIAGNOSIS_REQUIRED, HANDYMAN_QUOTATION_SCOPE_INSUFFICIENT, HANDYMAN_SERVICE_REQUEST_NOT_FOUND]
       summary: Create a Handyman quotation thread (initial DRAFT version 1) for a diagnosed request
-      description: "Quotation creation is request-bound: client, customer and location lineage are derived server-side from the CR-HM-02 request and its CR-HM-03 diagnosis/scope authority; the caller supplies IDs only through the URL. DRAFT is not customer-presented."
+      description: "Quotation creation is request-bound: client, customer and location lineage are derived server-side from the CR-HM-02 request and its CR-HM-03 diagnosis/scope authority; the caller supplies IDs only through the URL. DRAFT is not customer-presented. Inspection readiness is decided from the request itself, never from a nullable catalog id: an INSPECTION_FIRST catalog service requires its INSPECTED record, and a manual-origin (unlisted-intake, 0488) request requires BOTH verified triage provenance (case status TRIAGED_MANUAL_QUOTATION_READY anchored to the ONE_TIME_MANUAL_QUOTATION_REQUIRED decision for this exact request) and an INSPECTED record. Missing or re-pointed provenance is refused (VALIDATION_ERROR); the gate never bypasses inspection. Exactly one quotation thread per request is kept (one line is not one request)."
       parameters:
         - $ref: '#/components/parameters/HandymanRequestIdPath'
       responses:
@@ -9080,7 +9080,7 @@ paths:
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_QUOTATION_CURRENCY_MISMATCH, HANDYMAN_QUOTATION_LINE_INVALID, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_VERSION_NOT_DRAFT, HANDYMAN_QUOTATION_VERSION_NOT_FOUND]
       summary: Add an immutable commercial snapshot line (LABOR or MATERIAL) to a DRAFT version
-      description: "Lines are immutable snapshots of bounded commercial facts: the operator supplies description/quantity/UOM/currency and the final quoted unit amount; lineTotal is server-calculated only (quantity x final quoted unit amount) and a governed reference price (when available) is snapshotted for material provenance. Reference price is never the final quoted charge and is not returned in customer-facing HTTP projections. The response also omits sourceItemId and createdByUserId. Only DRAFT versions accept lines; one currency per version; no TAX/DISCOUNT quotation line types exist. PART03 fee/tax companion and forward-only ledger corrections are separate; amounts are not silently rewritten."
+      description: "Lines are immutable snapshots of bounded commercial facts: the operator supplies description/quantity/UOM/currency and the final quoted unit amount; lineTotal is server-calculated only (quantity x final quoted unit amount) and a governed reference price (when available) is snapshotted for material provenance. Reference price is never the final quoted charge and is not returned in customer-facing HTTP projections. The response also omits sourceItemId and createdByUserId. Only DRAFT versions accept lines; one currency per version; no TAX/DISCOUNT quotation line types exist. PART03 fee/tax companion and forward-only ledger corrections are separate; amounts are not silently rewritten. Origin provenance (0489) is server-derived from the parent request lane: CATALOG on the catalog lane, MANUAL_ONE_TIME on a manual-origin (unlisted-intake) request, where it is mandatory and a CATALOG claim is refused because no catalog anchor can exist. Multiple manual lines are allowed on the same DRAFT version; a MANUAL_ONE_TIME claim on the catalog lane is accepted only when a governed MANUAL_REVIEW quote resolution already exists for that request, and no quote resolution or catalog reference is ever invented. originKind is internal management/audit provenance and is not part of the customer-facing projection."
       parameters:
         - name: quotationVersionId
           in: path
@@ -98089,6 +98089,10 @@ components:
           type: string
           format: uuid
           description: Optional MATERIAL provenance input for authorized quotation management; it is stored for internal lineage and never returned in customer-facing quotation-line responses.
+        originKind:
+          type: string
+          enum: [CATALOG, MANUAL_ONE_TIME]
+          description: "Optional origin DECLARATION only. The authoritative origin is derived from the parent request lane (0489) - forced to MANUAL_ONE_TIME for a manual-origin (unlisted-intake) request, where a CATALOG claim is refused; on the catalog lane MANUAL_ONE_TIME requires an existing governed MANUAL_REVIEW quote resolution. Never a pricing input and never returned in customer-facing quotation-line responses."
     HandymanQuotationLineCustomerProjection:
       type: object
       additionalProperties: false

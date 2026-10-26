@@ -53,6 +53,7 @@ export type {
 } from './handyman-quotation-line.types';
 export {
   HANDYMAN_QUOTATION_LINE_TYPES,
+  HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS,
   HANDYMAN_QUOTATION_CURRENCIES,
 } from './handyman-quotation-line.types';
 export {

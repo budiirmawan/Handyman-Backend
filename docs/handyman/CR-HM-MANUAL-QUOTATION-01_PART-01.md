@@ -177,3 +177,39 @@ STILL OPEN for PART 03 (unchanged gates, so nothing is bypassed):
    untouched: manual scope stays on quotation lines only.
 4. Assignment/execution gates unchanged (`handyman_execution_scopes` still
    requires an APPROVED quotation version, UNIQUE per version).
+
+## 8. PART 03A status (migration 0489 — manual quotation lines + inspection guard)
+
+CLOSED by PART 03A, with no parallel quotation engine:
+
+* §7.1 — `assertHandymanQuotationInspectionReady` no longer decides readiness
+  from `service_catalog_id`/a commercial profile. A request whose
+  `intake_source = 'UNLISTED_TRIAGE'` (a) must still be provably the converted
+  request of a `TRIAGED_MANUAL_QUOTATION_READY` case anchored to its own
+  `ONE_TIME_MANUAL_QUOTATION_REQUIRED` decision (same Client/Building), and (b)
+  must carry exactly one `INSPECTED` inspection record in that same scope. No
+  authoritative exemption ⇒ refused with `VALIDATION_ERROR` — the gate fails
+  closed, it never silently bypasses. Because create, issue and the customer
+  APPROVE all call this one function, all three money points are covered. The
+  catalog lane (profile `pricing_mode`) is byte-for-byte unchanged.
+* §7.2 — `handyman_quotation_lines.origin_kind` (`CATALOG` default |
+  `MANUAL_ONE_TIME`) + CHECK + a BEFORE INSERT law (0489): a manual-origin
+  version can ONLY hold `MANUAL_ONE_TIME` lines (a `CATALOG` claim asserts a
+  catalog anchor that cannot exist), and `MANUAL_ONE_TIME` on the catalog lane
+  requires an ALREADY-RECORDED governed `MANUAL_REVIEW` resolution. Part 03A
+  therefore reuses `MANUAL_REVIEW` provenance and never writes a resolution or
+  an amount of its own. The origin is derived server-side from the request lane
+  (a caller-declared `originKind` is only a declaration); it is exposed in the
+  management view, the `HANDYMAN_QUOTATION_LINE_ADDED` metadata and the DB, but
+  deliberately NOT in `HandymanQuotationLineCustomerProjection`.
+* Many manual lines per version are supported (LABOR + MATERIAL, mixed with
+  catalog lines where the contract permits). The one-quotation-thread cap needed
+  no new rule: `handyman_quotations.handyman_request_id` is already UNIQUE
+  (0391), so the lane keeps one thread per request, not one line per request.
+* DRAFT-only edits, server-derived `line_total`, one currency per version,
+  issued-line immutability, Client/Building + assignment gates and the customer
+  decision flow are unchanged. 0489 `down()` is refused while any
+  `MANUAL_ONE_TIME` row exists (audited commercial fact).
+
+STILL OPEN for PART 03B: revision DP recomputation for manual versions, and the
+Scope Variation (ADD/REMOVE) companion over a manual-origin quotation.

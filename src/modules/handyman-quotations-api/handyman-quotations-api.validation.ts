@@ -3,6 +3,7 @@ import { isValidUuid } from '../clients';
 import {
   HANDYMAN_QUOTATION_CURRENCIES,
   HANDYMAN_QUOTATION_DECISIONS,
+  HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS,
   HANDYMAN_QUOTATION_LINE_TYPES,
   type AddHandymanQuotationLineInput,
   type DecideHandymanQuotationInput,
@@ -165,6 +166,31 @@ export function parseQuotationLineBody(
   if (src.sourceItemId !== undefined && src.sourceItemId !== null) {
     sourceItemId = uuid(src.sourceItemId, 'sourceItemId');
   }
+  /*
+   * CR-HM-MANUAL-QUOTATION-01 PART 03A: the optional origin DECLARATION is
+   * whitelisted here, but it is never self-granting — the service re-derives
+   * the authoritative origin from the parent request's lane (a CATALOG claim on
+   * the manual/unlisted-intake lane and an ungrounded MANUAL_ONE_TIME claim on
+   * the catalog lane are both refused) and the database law (0489) backstops
+   * it. Unknown keys are still dropped by this explicit whitelist.
+   */
+  let originKind: AddHandymanQuotationLineInput['originKind'];
+  if (src.originKind !== undefined && src.originKind !== null) {
+    if (
+      typeof src.originKind !== 'string' ||
+      !(HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS as readonly string[]).includes(
+        src.originKind,
+      )
+    ) {
+      fail('Request validation failed.', [
+        {
+          field: 'originKind',
+          message: 'originKind must be CATALOG or MANUAL_ONE_TIME.',
+        },
+      ]);
+    }
+    originKind = src.originKind as AddHandymanQuotationLineInput['originKind'];
+  }
   return {
     lineType: lineType as AddHandymanQuotationLineInput['lineType'],
     description,
@@ -173,6 +199,7 @@ export function parseQuotationLineBody(
     currency: currency as AddHandymanQuotationLineInput['currency'],
     finalQuotedUnitAmount,
     ...(sourceItemId ? { sourceItemId } : {}),
+    ...(originKind ? { originKind } : {}),
   };
 }
 
