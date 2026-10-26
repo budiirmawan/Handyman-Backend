@@ -85064,6 +85064,7 @@ paths:
   /handyman/care/requests/{requestId}/communications:
     post:
       operationId: recordWorkspaceCareCommunication
+      x-error-codes: [BAD_REQUEST, HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED, HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND, HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED, VALIDATION_ERROR]
       tags: [Handyman Customer Care]
       summary: Record neutral communication as the actual BM Care actor
       description: >-
@@ -85097,6 +85098,7 @@ paths:
   /handyman/care/requests/{requestId}/commercial-targets/{targetType}/{targetId}:
     get:
       operationId: getCareCommercialConsentTarget
+      x-error-codes: [HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND, HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED, VALIDATION_ERROR]
       tags: [Handyman Customer Care]
       summary: Read the exact server-owned commercial consent target
       description: >-
@@ -85126,6 +85128,7 @@ paths:
   /handyman/care/requests/{requestId}/quotation-versions/{targetId}/decision:
     post:
       operationId: recordVerifiedCareQuotationDecision
+      x-error-codes: [HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND, HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED, HANDYMAN_COMMERCIAL_CONSENT_CONFLICT, HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED, HANDYMAN_COMMERCIAL_CONSENT_INVALID, HANDYMAN_EXECUTION_SCOPE_CONFLICT, HANDYMAN_EXECUTION_SCOPE_LOCATION_INCONSISTENT, HANDYMAN_QUOTATION_DECISION_CONFLICT, HANDYMAN_QUOTATION_INVALID_TRANSITION, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_VERSION_NOT_FOUND, HANDYMAN_SERVICE_REQUEST_NOT_FOUND, VALIDATION_ERROR]
       tags: [Handyman Customer Care]
       summary: Record independently verified customer quotation ACCEPT or REJECT
       description: >-
@@ -85164,6 +85167,7 @@ paths:
   /handyman/care/requests/{requestId}/bast/{targetId}/decision:
     post:
       operationId: recordVerifiedCareBastDecision
+      x-error-codes: [HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SCOPE_NOT_ELIGIBLE, HANDYMAN_BAST_VALIDATION, HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND, HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED, HANDYMAN_COMMERCIAL_CONSENT_CONFLICT, HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED, HANDYMAN_COMMERCIAL_CONSENT_INVALID, HANDYMAN_EXECUTION_SCOPE_NOT_FOUND, VALIDATION_ERROR]
       tags: [Handyman Customer Care]
       summary: Record independently verified customer BAST ACCEPT or REJECT
       description: >-
