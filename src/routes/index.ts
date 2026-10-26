@@ -51,6 +51,7 @@ import { createHandymanArrivalConfigurationRouter }
   from '../modules/handyman-arrival-configuration';
 import { createHandymanDocumentIssuerProfileRouter } from '../modules/handyman-documents';
 import { createHandymanDocumentBankAccountRouter } from '../modules/handyman-documents';
+import { createHandymanDocumentSettingsRouter } from '../modules/handyman-documents';
 import { createHandymanWorkSessionsApiRouter }
   from '../modules/handyman-work-sessions-api';
 import { createHandymanMaterialExecutionApiRouter }
@@ -902,6 +903,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanArrivalConfigurationRouter()); // CR-HM-FIELD-OPERATIONS-01 PART 04 — approved G-2 QR registry + G-3 Building geofence configuration (building_configuration.* + BE-02G)
   router.use(createHandymanDocumentIssuerProfileRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01A — Handyman document issuer company profile (handyman.commercial.manage + provider-Client scope)
   router.use(createHandymanDocumentBankAccountRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01B — issuer company receiving bank accounts (handyman.commercial.manage + provider-Client scope; verification act gates a payment destination)
+  router.use(createHandymanDocumentSettingsRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01C — per-kind/per-language document wording, prefix namespace and signatory identity (handyman.commercial.manage + provider-Client scope)
   router.use(createHandymanArrivalChallengeApiRouter()); // CR-HM-FIELD-OPS-ACK-01 PART 02 — server-issued arrival challenge (the missing issuer command)
   router.use(createHandymanArrivalVerificationApiRouter()); // CR-HM-07 PART 04C — terminal arrival verification
   router.use(createHandymanWorkSessionsApiRouter()); // CR-HM-08 PART 05 — work session field-execution surface

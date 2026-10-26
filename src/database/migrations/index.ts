@@ -9,6 +9,7 @@ import { migration0488HandymanUnlistedIntakeFormalRequestConversion } from './04
 import { migration0489HandymanQuotationLineManualOrigin } from './0489_handyman_quotation_line_manual_origin';
 import { migration0490CreateHandymanDocumentIssuerProfiles } from './0490_create_handyman_document_issuer_profiles';
 import { migration0491CreateHandymanDocumentIssuerBankAccounts } from './0491_create_handyman_document_issuer_bank_accounts';
+import { migration0492CreateHandymanDocumentIssuerSettings } from './0492_create_handyman_document_issuer_settings';
 import { migration0446HandymanBastWorkerTransport } from './0446_handyman_bast_worker_transport';
 import { migration0447NetHandymanAllocationCaps } from './0447_net_handyman_allocation_caps';
 import { migration0448HandymanFinanceAuthorityPermissions } from './0448_handyman_finance_authority_permissions';
@@ -1030,4 +1031,5 @@ export const migrations: readonly Migration[] = [
   migration0489HandymanQuotationLineManualOrigin,
   migration0490CreateHandymanDocumentIssuerProfiles,
   migration0491CreateHandymanDocumentIssuerBankAccounts,
+  migration0492CreateHandymanDocumentIssuerSettings,
 ];
