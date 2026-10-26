@@ -28,6 +28,42 @@ export {
   createHandymanDocumentIssuerProfileRouter,
 } from './handyman-document-issuer.routes';
 export {
+  createHandymanDocumentBankAccountRouter,
+} from './handyman-document-bank.routes';
+export {
+  activateHandymanDocumentBankAccount,
+  createHandymanDocumentBankAccount,
+  deactivateHandymanDocumentBankAccount,
+  getHandymanDocumentBankAccount,
+  listHandymanDocumentBankAccounts,
+  listHandymanDocumentBankAccountHistory,
+  resolveHandymanDocumentBankAccountSnapshot,
+  toPublicHandymanDocumentBankAccount,
+  updateHandymanDocumentBankAccount,
+} from './handyman-document-bank.service';
+export { maskHandymanDocumentAccountNumber } from './handyman-document-bank.types';
+export { handymanDocumentBankAccountNotFoundError } from './handyman-document-bank.errors';
+export type {
+  ActivateHandymanDocumentBankAccountInput,
+  CreateHandymanDocumentBankAccountInput,
+  DeactivateHandymanDocumentBankAccountInput,
+  HandymanDocumentBankAccountContent,
+  HandymanDocumentBankAccountContentField,
+  HandymanDocumentBankAccountRecord,
+  HandymanDocumentBankAccountSnapshot,
+  HandymanDocumentBankAccountStatus,
+  HandymanDocumentBankAccountUpdateResult,
+  PublicHandymanDocumentBankAccount,
+  UpdateHandymanDocumentBankAccountInput,
+} from './handyman-document-bank.types';
+export {
+  HANDYMAN_DOCUMENT_BANK_ACCOUNT_CONTENT_FIELDS,
+  HANDYMAN_DOCUMENT_BANK_ACCOUNT_ENTITY_TYPE,
+  HANDYMAN_DOCUMENT_BANK_ACCOUNT_EVENT_TYPES,
+  HANDYMAN_DOCUMENT_BANK_ACCOUNT_STATUSES,
+  isHandymanDocumentBankAccountStatus,
+} from './handyman-document-bank.types';
+export {
   getHandymanDocumentIssuerProfile,
   listHandymanDocumentIssuerProfileHistory,
   resolveHandymanDocumentIssuerSnapshot,
