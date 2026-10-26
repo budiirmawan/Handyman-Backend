@@ -14,18 +14,142 @@ import {
 /**
  * CR-HM-BACKEND-CONTRACT-FREEZE-03 — OpenAPI reconciliation guards.
  *
- * Freeze-03 changed documentation/metadata/schema shape only (no runtime
- * semantics). These guards pin the reconciled contract to its runtime
- * sources so the drift freeze-03 removed cannot silently return:
- * the CANCELLED lifecycle exit in the status vocabulary, complete
- * permission/error/security annotation of the 269 Handyman operations,
- * PIC-personal tenant-decision documentation, the BE-02G exact-Building
- * access wording, and typed finance/warranty + Care projection payloads.
+ * Freeze-03 itself changed documentation/metadata/schema shape only (no
+ * runtime semantics). These guards pin that historical reconciliation to its
+ * runtime sources and record the additive capabilities shipped afterwards:
+ * the CANCELLED lifecycle exit, complete permission/error/security annotations,
+ * PIC-personal tenant-decision documentation, exact-Building wording, typed
+ * finance/warranty + Care projections, and the post-freeze route/permission
+ * inventory (301/203 -> 318/216).
  */
 const spec = loadSpec() as any;
 const specText = readFileSync(SPEC_PATH, 'utf8');
 
 type Op = { operationId: string; method: string; path: string; op: any };
+type ExpectedPostFreezeOperation = {
+  operationId: string;
+  method: string;
+  path: string;
+  permission: string | null;
+};
+
+/**
+ * Exact additive delta from the 301-operation / 203-permission post-PR-#59
+ * freeze pin to this baseline. Four Care routes use the separate, scoped
+ * `careWorkspaceSession` authority (not a local-user RBAC permission); the
+ * quotation/BAST decision writes also stay fail-closed until an independent
+ * customer-consent verifier is enrolled. The other 13 additions have the
+ * route-level permission shown here and retain their existing service scope
+ * checks.
+ */
+const POST_FREEZE_ADDITIONS: readonly ExpectedPostFreezeOperation[] = [
+  {
+    method: 'GET',
+    path: '/handyman/care/requests/{requestId}/commercial-targets/{targetType}/{targetId}',
+    operationId: 'getCareCommercialConsentTarget',
+    permission: null,
+  },
+  {
+    method: 'GET',
+    path: '/handyman/execution-scopes/{executionScopeId}/tax-reconciliation',
+    operationId: 'getHandymanTaxReconciliation',
+    permission: 'handyman.finance.read',
+  },
+  {
+    method: 'GET',
+    path: '/handyman/quotation-versions/{quotationVersionId}/financial-terms',
+    operationId: 'getHandymanQuotationFinancialTerms',
+    permission: 'tenant_company.read',
+  },
+  {
+    method: 'GET',
+    path: '/handyman/requests/{handymanRequestId}/inspection-fee',
+    operationId: 'getHandymanInspectionFee',
+    permission: 'tenant_company.read',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/care/requests/{requestId}/bast/{targetId}/decision',
+    operationId: 'recordVerifiedCareBastDecision',
+    permission: null,
+  },
+  {
+    method: 'POST',
+    path: '/handyman/care/requests/{requestId}/communications',
+    operationId: 'recordWorkspaceCareCommunication',
+    permission: null,
+  },
+  {
+    method: 'POST',
+    path: '/handyman/care/requests/{requestId}/quotation-versions/{targetId}/decision',
+    operationId: 'recordVerifiedCareQuotationDecision',
+    permission: null,
+  },
+  {
+    method: 'POST',
+    path: '/handyman/commercial-agreement-versions/{agreementVersionId}/tax-profile',
+    operationId: 'prepareHandymanAgreementTaxProfile',
+    permission: 'handyman.commercial.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/execution-scopes/{executionScopeId}/bm-fiscal-document',
+    operationId: 'recordHandymanBmFiscalDocument',
+    permission: 'handyman.settlement.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/execution-scopes/{executionScopeId}/customer-payments/{paymentId}/reconciliation',
+    operationId: 'reconcileHandymanCustomerPaymentBank',
+    permission: 'handyman.finance.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/execution-scopes/{executionScopeId}/fiscal-documents',
+    operationId: 'recordHandymanFiscalDocument',
+    permission: 'handyman.finance.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/execution-scopes/{executionScopeId}/fiscal-documents/{documentId}/withholding-credit',
+    operationId: 'applyHandymanCertifiedWithholdingCredit',
+    permission: 'handyman.finance.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/execution-scopes/{executionScopeId}/inspection-credit',
+    operationId: 'creditHandymanPaidInspection',
+    permission: 'handyman.finance.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/field/requests/{handymanRequestId}/inspection',
+    operationId: 'recordAssignedHandymanInspection',
+    permission: 'tenant_company.read',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/quotation-versions/{quotationVersionId}/inspection-fee-offer',
+    operationId: 'prepareHandymanInspectionFeeOffer',
+    permission: 'handyman.finance.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/quotation-versions/{quotationVersionId}/tax-profile',
+    operationId: 'prepareHandymanQuotationTaxProfile',
+    permission: 'handyman.finance.manage',
+  },
+  {
+    method: 'POST',
+    path: '/handyman/requests/{handymanRequestId}/inspection-fee',
+    operationId: 'agreeHandymanInspectionFee',
+    permission: 'handyman.finance.manage',
+  },
+];
+const POST_FREEZE_ADDITION_IDS = new Set(
+  POST_FREEZE_ADDITIONS.map(({ operationId }) => operationId),
+);
+
 const handymanOps: Op[] = [];
 const allIds = new Map<string, number>();
 for (const [p, item] of Object.entries<any>(spec.paths)) {
@@ -83,13 +207,36 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   //                                                  the post-inspection
   //                                                  revision lane)
   //   294 + 7 = 301.
-  // MERGED RECONCILIATION (post PR #59): both additive lines are now on `main`,
-  // so the pin is the sum of the two disjoint deltas, measured on the merged
-  // tree — 294 (PR #59) + 7 (this CR) = 301.
-  // The runtime-parity assertion below is what actually guards the contract;
-  // the constant only pins the size of the surface a reviewer should expect.
-  it('keeps the 301-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 301);
+  // The historical merged pin after PR #59 was 294 + 7 = 301 operations / 203
+  // permission annotations. This baseline adds 4 Care workspace operations,
+  // 12 financial-reconciliation operations and 1 assigned-Inspector outcome:
+  //   301 + 4 + 12 + 1 = 318 operations.
+  // The financial routes add 12 explicit RBAC annotations; the Inspector
+  // outcome adds one; the four Care routes use the separate scoped workspace
+  // credential rather than user RBAC:
+  //   203 + 12 + 1 = 216 annotations.
+  // This is an evidence-based inventory, not a count-only repin: each added
+  // method/path/operationId/permission is pinned below and the full route set
+  // must still match the registered runtime exactly.
+  it('keeps the 318-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(POST_FREEZE_ADDITIONS.length, 17);
+    assert.equal(handymanOps.length, 301 + POST_FREEZE_ADDITIONS.length);
+    assert.equal(handymanOps.length, 318);
+
+    const expectedAdditions = POST_FREEZE_ADDITIONS
+      .map((entry) => ({ ...entry }))
+      .sort((a, b) => a.operationId.localeCompare(b.operationId));
+    const actualAdditions = handymanOps
+      .filter(({ operationId }) => POST_FREEZE_ADDITION_IDS.has(operationId))
+      .map(({ operationId, method, path, op: operation }) => ({
+        method: method.toUpperCase(),
+        path,
+        operationId,
+        permission: operation['x-required-permission'] ?? null,
+      }))
+      .sort((a, b) => a.operationId.localeCompare(b.operationId));
+    assert.deepEqual(actualAdditions, expectedAdditions);
+
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -188,22 +335,82 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
         `${operationId} names unseeded permission ${permission}`,
       );
     }
-    // 173 route guards + 1 dual-guard op (first guard named) + 11
-    // unconditional service-enforced permissions; the remaining 91 ops
-    // are composite-authority (Crew Lead / workspace session / HMAC)
-    // and must stay unannotated rather than name a misleading permission.
-    // Route-guarded operations, same additive arithmetic as the surface pin:
-    //   PART 03A  +2 (`tenant_company.read`)
-    //   PART 03B1 +1 (`tenant_company.read` on `.../competency/history`)
-    //   assignment-response / field-expense / helper-attendance +8
-    //   179 + 3 + 8 = 190.
-    //   CR-HM-FIELD-OPERATIONS-01 PART 04 +6 (3 `building_configuration.manage`
-    //   writes + 3 `building_configuration.read` reads)
-    //   190 + 6 = 196.
-    //   CR-HM-SERVICE-CATALOG-01 PART 01 +7 route-guarded operations
-    //   (`tenant_company.read` / `tenant_company.manage`).
-    //   196 + 7 = 203 (measured on the merged tree after PR #59).
-    assert.equal(annotated, 203);
+    // 203 is the historical post-PR-#59 count. The exact 13 post-freeze
+    // permission additions are pinned separately below: 12 Finance route
+    // guards plus tenant_company.read on the current assigned-Inspector
+    // outcome route. The four Care workspace routes remain unannotated here
+    // because their scoped Care session is not a local-user RBAC grant.
+    assert.equal(annotated, 216);
+  });
+
+  it('pins the 13 additive permissions to their runtime route guards', () => {
+    const additions = POST_FREEZE_ADDITIONS.filter(
+      (entry) => entry.permission !== null,
+    );
+    assert.equal(additions.length, 13);
+    for (const { operationId, permission } of additions) {
+      assert.equal(op(operationId)['x-required-permission'], permission, operationId);
+    }
+    const careOperations = POST_FREEZE_ADDITIONS.filter(
+      (entry) => entry.permission === null,
+    );
+    assert.equal(careOperations.length, 4);
+    for (const { operationId } of careOperations) {
+      assert.equal(op(operationId)['x-required-permission'], undefined, operationId);
+    }
+  });
+
+  it('pins the Care workspace error annotations to implemented failure paths', () => {
+    const expected: Record<string, string[]> = {
+      recordWorkspaceCareCommunication: [
+        'BAD_REQUEST',
+        'HANDYMAN_CARE_IDENTITY_NOT_ACCEPTED',
+        'HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND',
+        'HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED',
+        'VALIDATION_ERROR',
+      ],
+      getCareCommercialConsentTarget: [
+        'HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND',
+        'HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED',
+        'VALIDATION_ERROR',
+      ],
+      recordVerifiedCareQuotationDecision: [
+        'HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND',
+        'HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED',
+        'HANDYMAN_COMMERCIAL_CONSENT_CONFLICT',
+        'HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED',
+        'HANDYMAN_COMMERCIAL_CONSENT_INVALID',
+        'HANDYMAN_EXECUTION_SCOPE_CONFLICT',
+        'HANDYMAN_EXECUTION_SCOPE_LOCATION_INCONSISTENT',
+        'HANDYMAN_QUOTATION_DECISION_CONFLICT',
+        'HANDYMAN_QUOTATION_INVALID_TRANSITION',
+        'HANDYMAN_QUOTATION_NOT_FOUND',
+        'HANDYMAN_QUOTATION_VERSION_NOT_FOUND',
+        'HANDYMAN_SERVICE_REQUEST_NOT_FOUND',
+        'VALIDATION_ERROR',
+      ],
+      recordVerifiedCareBastDecision: [
+        'HANDYMAN_BAST_ILLEGAL_TRANSITION',
+        'HANDYMAN_BAST_NOT_FOUND',
+        'HANDYMAN_BAST_QC_NOT_READY',
+        'HANDYMAN_BAST_SCOPE_NOT_ELIGIBLE',
+        'HANDYMAN_BAST_VALIDATION',
+        'HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND',
+        'HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED',
+        'HANDYMAN_COMMERCIAL_CONSENT_CONFLICT',
+        'HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED',
+        'HANDYMAN_COMMERCIAL_CONSENT_INVALID',
+        'HANDYMAN_EXECUTION_SCOPE_NOT_FOUND',
+        'VALIDATION_ERROR',
+      ],
+    };
+    for (const [operationId, errors] of Object.entries(expected)) {
+      assert.deepEqual(
+        [...op(operationId)['x-error-codes']].sort(),
+        [...errors].sort(),
+        operationId,
+      );
+    }
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {
