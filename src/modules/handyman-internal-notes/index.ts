@@ -21,6 +21,7 @@ export {
   handymanInternalNoteIdempotencyConflictError,
   handymanInternalNoteImmutableError,
   handymanServiceRequestNotFoundForInternalNoteError,
+  handymanUnlistedIntakeCaseNotFoundForInternalNoteError,
 } from './handyman-internal-notes.errors';
 
 export {
@@ -32,14 +33,22 @@ export {
 export { handymanInternalNotesRepository } from './handyman-internal-notes.repository';
 
 export {
+  assertNotCustomerFacingActor,
   computeInternalNotePayloadHash,
   createBuildingCareInternalNote,
+  createBuildingCareUnlistedIntakeInternalNote,
   createCareWorkspaceInternalNote,
+  createCareWorkspaceUnlistedIntakeInternalNote,
   createServiceRequestInternalNote,
+  createUnlistedIntakeInternalNote,
   handymanInternalNotesService,
   listBuildingCareInternalNotes,
+  listBuildingCareUnlistedIntakeInternalNotes,
   listCareWorkspaceInternalNotes,
+  listCareWorkspaceUnlistedIntakeInternalNotes,
   listServiceRequestInternalNotes,
+  listUnlistedIntakeInternalNotes,
+  recordAuthorizedUnlistedIntakeInternalNoteInTransaction,
   toPublicHandymanInternalNote,
 } from './handyman-internal-notes.service';
 

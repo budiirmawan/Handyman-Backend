@@ -37,3 +37,11 @@ export function handymanServiceRequestNotFoundForInternalNoteError(): AppError {
     statusCode: 404,
   });
 }
+
+export function handymanUnlistedIntakeCaseNotFoundForInternalNoteError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND,
+    message: 'Handyman unlisted service intake case not found.',
+    statusCode: 404,
+  });
+}

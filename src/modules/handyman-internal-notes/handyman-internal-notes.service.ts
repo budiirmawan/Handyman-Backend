@@ -23,6 +23,7 @@ import {
   handymanInternalNoteForbiddenError,
   handymanInternalNoteIdempotencyConflictError,
   handymanServiceRequestNotFoundForInternalNoteError,
+  handymanUnlistedIntakeCaseNotFoundForInternalNoteError,
 } from './handyman-internal-notes.errors';
 import { handymanInternalNotesRepository } from './handyman-internal-notes.repository';
 import type {
@@ -90,7 +91,7 @@ export function computeInternalNotePayloadHash(input: {
     .digest('hex');
 }
 
-async function assertNotCustomerFacingActor(userId: string): Promise<void> {
+export async function assertNotCustomerFacingActor(userId: string): Promise<void> {
   if (!userId) {
     throw authenticationRequiredError();
   }
@@ -221,6 +222,7 @@ async function recordAuthorizedInternalNoteInTransaction(
   if (existing) {
     if (
       existing.payloadHash !== payloadHash ||
+      existing.subjectType !== 'SERVICE_REQUEST' ||
       existing.handymanRequestId !== parent.id ||
       existing.clientId !== parent.clientId ||
       existing.buildingId !== parent.buildingId
@@ -274,6 +276,582 @@ async function recordAuthorizedInternalNoteInTransaction(
   };
 }
 
+export async function recordAuthorizedUnlistedIntakeInternalNoteInTransaction(
+  tx: PoolClient,
+  intakeScope: {
+    id: string;
+    clientId: string;
+    tenantCompanyId: string;
+    buildingId: string;
+    spaceId: string | null;
+  },
+  actor: {
+    userId?: string;
+    careActorId?: string;
+    authorRole: HandymanInternalNoteAuthorRole;
+  },
+  parsed: CreateHandymanInternalNoteBody,
+): Promise<PublicHandymanInternalNoteMutationResult> {
+  const actorKey = actor.userId
+    ? `user:${actor.userId}`
+    : `care:${actor.careActorId ?? ''}`;
+
+  await tx.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+    'handyman_internal_note',
+    `${actorKey}:${parsed.idempotencyKey}`,
+  ]);
+
+  const lockedParent = await tx.query<{
+    id: string;
+    clientId: string;
+    tenantCompanyId: string;
+    buildingId: string;
+    spaceId: string | null;
+  }>(
+    `SELECT id,
+            client_id AS "clientId",
+            tenant_company_id AS "tenantCompanyId",
+            building_id AS "buildingId",
+            space_id AS "spaceId"
+       FROM handyman_unlisted_service_intake_cases
+      WHERE id = $1
+      FOR KEY SHARE`,
+    [intakeScope.id],
+  );
+  const parent = lockedParent.rows[0];
+  if (
+    !parent ||
+    parent.clientId !== intakeScope.clientId ||
+    parent.tenantCompanyId !== intakeScope.tenantCompanyId ||
+    parent.buildingId !== intakeScope.buildingId ||
+    parent.spaceId !== intakeScope.spaceId
+  ) {
+    throw handymanUnlistedIntakeCaseNotFoundForInternalNoteError();
+  }
+
+  const payloadHash = computeInternalNotePayloadHash({
+    subjectType: 'UNLISTED_SERVICE_INTAKE_CASE',
+    handymanRequestId: null,
+    unlistedIntakeCaseId: parent.id,
+    clientId: parent.clientId,
+    buildingId: parent.buildingId,
+    content: parsed.content,
+  });
+
+  const existing =
+    await handymanInternalNotesRepository.findByActorAndIdempotencyKey(
+      tx,
+      actor,
+      parsed.idempotencyKey,
+    );
+  if (existing) {
+    if (
+      existing.payloadHash !== payloadHash ||
+      existing.subjectType !== 'UNLISTED_SERVICE_INTAKE_CASE' ||
+      existing.unlistedIntakeCaseId !== parent.id ||
+      existing.clientId !== parent.clientId ||
+      existing.buildingId !== parent.buildingId
+    ) {
+      throw handymanInternalNoteIdempotencyConflictError();
+    }
+    return {
+      ...toPublicHandymanInternalNote(existing),
+      replayed: true,
+    };
+  }
+
+  const created = await handymanInternalNotesRepository.insertInternalNote(tx, {
+    clientId: parent.clientId,
+    tenantCompanyId: parent.tenantCompanyId,
+    buildingId: parent.buildingId,
+    spaceId: parent.spaceId,
+    subjectType: 'UNLISTED_SERVICE_INTAKE_CASE',
+    handymanRequestId: null,
+    unlistedIntakeCaseId: parent.id,
+    authorRole: actor.authorRole,
+    createdByUserId: actor.userId ?? null,
+    createdByCareActorId: actor.careActorId ?? null,
+    content: parsed.content,
+    idempotencyKey: parsed.idempotencyKey,
+    payloadHash,
+  });
+
+  await recordOperationalEvent(
+    {
+      clientId: parent.clientId,
+      eventType: 'HANDYMAN_INTERNAL_NOTE_RECORDED',
+      entityType: 'HANDYMAN_UNLISTED_SERVICE_INTAKE_CASE',
+      entityId: parent.id,
+      actorUserId: actor.userId ?? null,
+      buildingId: parent.buildingId,
+      summary: `Internal operational note recorded on Handyman unlisted service intake case (${actor.authorRole}).`,
+      metadata: {
+        internalNoteId: created.id,
+        authorRole: created.authorRole,
+        subjectType: 'UNLISTED_SERVICE_INTAKE_CASE',
+        visibilityClassification: 'INTERNAL_ONLY',
+        ...(actor.careActorId ? { careActorId: actor.careActorId } : {}),
+      },
+    },
+    tx,
+  );
+
+  return {
+    ...toPublicHandymanInternalNote(created),
+    replayed: false,
+  };
+}
+
+/**
+ * Standalone Building Care surface for Unlisted Service Intake Cases:
+ *   POST /api/v1/handyman/care/buildings/:buildingId/unlisted-intake-cases/:intakeCaseId/internal-notes
+ */
+export async function createBuildingCareUnlistedIntakeInternalNote(input: {
+  actorUserId: string;
+  buildingId: string;
+  intakeCaseId: string;
+  body: unknown;
+  headerIdempotencyKey?: string;
+}): Promise<PublicHandymanInternalNoteMutationResult> {
+  const buildingId = parseInternalNoteUuidParam(input.buildingId, 'buildingId');
+  const intakeCaseId = parseInternalNoteUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+  await assertNotCustomerFacingActor(input.actorUserId);
+  const authority = await resolveBuildingCareAuthority({
+    actorUserId: input.actorUserId,
+    buildingId,
+  });
+  const parsed = parseCreateHandymanInternalNoteBody(
+    input.body,
+    input.headerIdempotencyKey,
+  );
+
+  const intakeCase =
+    await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+      undefined,
+      intakeCaseId,
+    );
+  if (!intakeCase) {
+    throw handymanUnlistedIntakeCaseNotFoundForInternalNoteError();
+  }
+  if (
+    intakeCase.clientId !== authority.scope.clientId ||
+    intakeCase.buildingId !== authority.scope.buildingId
+  ) {
+    throw careAuthorityDeniedError();
+  }
+
+  return withTransaction((tx) =>
+    recordAuthorizedUnlistedIntakeInternalNoteInTransaction(
+      tx,
+      {
+        id: intakeCase.id,
+        clientId: intakeCase.clientId,
+        tenantCompanyId: intakeCase.tenantCompanyId,
+        buildingId: intakeCase.buildingId,
+        spaceId: intakeCase.spaceId,
+      },
+      {
+        userId: input.actorUserId,
+        authorRole: 'CUSTOMER_CARE',
+      },
+      parsed,
+    ),
+  );
+}
+
+/**
+ * Standalone Building Care surface for Unlisted Service Intake Cases:
+ *   GET /api/v1/handyman/care/buildings/:buildingId/unlisted-intake-cases/:intakeCaseId/internal-notes
+ */
+export async function listBuildingCareUnlistedIntakeInternalNotes(input: {
+  actorUserId: string;
+  buildingId: string;
+  intakeCaseId: string;
+}): Promise<PublicHandymanInternalNote[]> {
+  const buildingId = parseInternalNoteUuidParam(input.buildingId, 'buildingId');
+  const intakeCaseId = parseInternalNoteUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+  await assertNotCustomerFacingActor(input.actorUserId);
+  const authority = await resolveBuildingCareAuthority({
+    actorUserId: input.actorUserId,
+    buildingId,
+  });
+
+  const intakeCase =
+    await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+      undefined,
+      intakeCaseId,
+    );
+  if (!intakeCase) {
+    throw handymanUnlistedIntakeCaseNotFoundForInternalNoteError();
+  }
+  if (
+    intakeCase.clientId !== authority.scope.clientId ||
+    intakeCase.buildingId !== authority.scope.buildingId
+  ) {
+    throw careAuthorityDeniedError();
+  }
+
+  const rows =
+    await handymanInternalNotesRepository.listByUnlistedIntakeCaseScoped(
+      undefined,
+      {
+        clientId: intakeCase.clientId,
+        buildingId: intakeCase.buildingId,
+        unlistedIntakeCaseId: intakeCase.id,
+      },
+    );
+  return rows.map(toPublicHandymanInternalNote);
+}
+
+/**
+ * Care Workspace / Care Unlisted Intake surface:
+ *   POST /api/v1/handyman/care/unlisted-intake-cases/:intakeCaseId/internal-notes
+ */
+export async function createCareWorkspaceUnlistedIntakeInternalNote(input: {
+  bearerToken: string;
+  intakeCaseId: string;
+  body: unknown;
+  headerIdempotencyKey?: string;
+}): Promise<PublicHandymanInternalNoteMutationResult> {
+  if (!input.bearerToken) {
+    throw workspaceUnauthorized();
+  }
+  const intakeCaseId = parseInternalNoteUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+  const parsed = parseCreateHandymanInternalNoteBody(
+    input.body,
+    input.headerIdempotencyKey,
+  );
+
+  if (input.bearerToken.startsWith('hcw_')) {
+    const principal = await resolveCareWorkspacePrincipal(input.bearerToken);
+    return withTransaction(async (tx) => {
+      const intakeCase =
+        await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+          tx,
+          intakeCaseId,
+        );
+      if (!intakeCase) {
+        throw careCreateContextNotFound();
+      }
+      await authorizeCareCommercialRequest(tx, principal, {
+        id: intakeCase.id,
+        clientId: intakeCase.clientId,
+        tenantCompanyId: intakeCase.tenantCompanyId,
+        tenantPicId: intakeCase.tenantPicId,
+        buildingId: intakeCase.buildingId,
+        spaceId: intakeCase.spaceId,
+      });
+      return recordAuthorizedUnlistedIntakeInternalNoteInTransaction(
+        tx,
+        {
+          id: intakeCase.id,
+          clientId: intakeCase.clientId,
+          tenantCompanyId: intakeCase.tenantCompanyId,
+          buildingId: intakeCase.buildingId,
+          spaceId: intakeCase.spaceId,
+        },
+        {
+          careActorId: principal.careActorId,
+          authorRole: 'CUSTOMER_CARE',
+        },
+        parsed,
+      );
+    });
+  }
+
+  const session = await sessionService.resolveSessionContext(input.bearerToken);
+  await assertNotCustomerFacingActor(session.userId);
+  const intakeCase =
+    await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+      undefined,
+      intakeCaseId,
+    );
+  if (!intakeCase) {
+    throw handymanUnlistedIntakeCaseNotFoundForInternalNoteError();
+  }
+  await resolveBuildingCareAuthority({
+    actorUserId: session.userId,
+    buildingId: intakeCase.buildingId,
+    assertedClientId: intakeCase.clientId,
+  });
+
+  return withTransaction((tx) =>
+    recordAuthorizedUnlistedIntakeInternalNoteInTransaction(
+      tx,
+      {
+        id: intakeCase.id,
+        clientId: intakeCase.clientId,
+        tenantCompanyId: intakeCase.tenantCompanyId,
+        buildingId: intakeCase.buildingId,
+        spaceId: intakeCase.spaceId,
+      },
+      {
+        userId: session.userId,
+        authorRole: 'CUSTOMER_CARE',
+      },
+      parsed,
+    ),
+  );
+}
+
+/**
+ * Care Workspace / Care Unlisted Intake surface:
+ *   GET /api/v1/handyman/care/unlisted-intake-cases/:intakeCaseId/internal-notes
+ */
+export async function listCareWorkspaceUnlistedIntakeInternalNotes(input: {
+  bearerToken: string;
+  intakeCaseId: string;
+  query?: unknown;
+}): Promise<PublicHandymanInternalNote[]> {
+  if (!input.bearerToken) {
+    throw workspaceUnauthorized();
+  }
+  const intakeCaseId = parseInternalNoteUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+  const scopeFilter = parseOptionalCareWorkspaceScopeQuery(input.query);
+
+  if (input.bearerToken.startsWith('hcw_')) {
+    const principal = await resolveCareWorkspacePrincipal(input.bearerToken);
+    return withTransaction(async (tx) => {
+      const intakeCase =
+        await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+          tx,
+          intakeCaseId,
+        );
+      if (!intakeCase) {
+        throw careCreateContextNotFound();
+      }
+      if (
+        (scopeFilter.tenantCompanyId !== undefined &&
+          scopeFilter.tenantCompanyId !== intakeCase.tenantCompanyId) ||
+        (scopeFilter.buildingId !== undefined &&
+          scopeFilter.buildingId !== intakeCase.buildingId) ||
+        (scopeFilter.spaceId !== undefined &&
+          scopeFilter.spaceId !== intakeCase.spaceId)
+      ) {
+        throw careCreateContextNotFound();
+      }
+      if (scopeFilter.propertyId !== undefined) {
+        const buildingRow = await tx.query<{ property_id: string }>(
+          'SELECT property_id FROM buildings WHERE id = $1',
+          [intakeCase.buildingId],
+        );
+        if (buildingRow.rows[0]?.property_id !== scopeFilter.propertyId) {
+          throw careCreateContextNotFound();
+        }
+      }
+      await authorizeCareCommercialRequest(tx, principal, {
+        id: intakeCase.id,
+        clientId: intakeCase.clientId,
+        tenantCompanyId: intakeCase.tenantCompanyId,
+        tenantPicId: intakeCase.tenantPicId,
+        buildingId: intakeCase.buildingId,
+        spaceId: intakeCase.spaceId,
+      });
+      const rows =
+        await handymanInternalNotesRepository.listByUnlistedIntakeCaseScoped(
+          tx,
+          {
+            clientId: intakeCase.clientId,
+            buildingId: intakeCase.buildingId,
+            unlistedIntakeCaseId: intakeCase.id,
+          },
+        );
+      return rows.map(toPublicHandymanInternalNote);
+    });
+  }
+
+  const session = await sessionService.resolveSessionContext(input.bearerToken);
+  await assertNotCustomerFacingActor(session.userId);
+  const intakeCase =
+    await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+      undefined,
+      intakeCaseId,
+    );
+  if (!intakeCase) {
+    throw handymanUnlistedIntakeCaseNotFoundForInternalNoteError();
+  }
+  if (
+    (scopeFilter.tenantCompanyId !== undefined &&
+      scopeFilter.tenantCompanyId !== intakeCase.tenantCompanyId) ||
+    (scopeFilter.buildingId !== undefined &&
+      scopeFilter.buildingId !== intakeCase.buildingId) ||
+    (scopeFilter.spaceId !== undefined &&
+      scopeFilter.spaceId !== intakeCase.spaceId)
+  ) {
+    throw careAuthorityDeniedError();
+  }
+  if (scopeFilter.propertyId !== undefined) {
+    const buildingRow = await getPool().query<{ property_id: string }>(
+      'SELECT property_id FROM buildings WHERE id = $1',
+      [intakeCase.buildingId],
+    );
+    if (buildingRow.rows[0]?.property_id !== scopeFilter.propertyId) {
+      throw careAuthorityDeniedError();
+    }
+  }
+  await resolveBuildingCareAuthority({
+    actorUserId: session.userId,
+    buildingId: intakeCase.buildingId,
+    assertedClientId: intakeCase.clientId,
+  });
+
+  const rows =
+    await handymanInternalNotesRepository.listByUnlistedIntakeCaseScoped(
+      undefined,
+      {
+        clientId: intakeCase.clientId,
+        buildingId: intakeCase.buildingId,
+        unlistedIntakeCaseId: intakeCase.id,
+      },
+    );
+  return rows.map(toPublicHandymanInternalNote);
+}
+
+/**
+ * Shared Unlisted Service Intake Internal Notes surface:
+ *   POST /api/v1/handyman/unlisted-intake-cases/:intakeCaseId/internal-notes
+ */
+export async function createUnlistedIntakeInternalNote(input: {
+  bearerToken?: string;
+  actorUserId?: string;
+  intakeCaseId: string;
+  body: unknown;
+  headerIdempotencyKey?: string;
+}): Promise<PublicHandymanInternalNoteMutationResult> {
+  const intakeCaseId = parseInternalNoteUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+
+  if (input.bearerToken?.startsWith('hcw_')) {
+    return createCareWorkspaceUnlistedIntakeInternalNote({
+      bearerToken: input.bearerToken,
+      intakeCaseId,
+      body: input.body,
+      headerIdempotencyKey: input.headerIdempotencyKey,
+    });
+  }
+
+  const actorUserId =
+    input.actorUserId ??
+    (input.bearerToken
+      ? (await sessionService.resolveSessionContext(input.bearerToken)).userId
+      : '');
+  if (!actorUserId) {
+    throw authenticationRequiredError();
+  }
+
+  const authorRole = await resolveSessionWriteAuthorRole(actorUserId);
+  const parsed = parseCreateHandymanInternalNoteBody(
+    input.body,
+    input.headerIdempotencyKey,
+  );
+
+  const intakeCase =
+    await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+      undefined,
+      intakeCaseId,
+    );
+  if (!intakeCase) {
+    throw handymanUnlistedIntakeCaseNotFoundForInternalNoteError();
+  }
+
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: intakeCase.clientId,
+    buildingId: intakeCase.buildingId,
+  });
+
+  return withTransaction((tx) =>
+    recordAuthorizedUnlistedIntakeInternalNoteInTransaction(
+      tx,
+      {
+        id: intakeCase.id,
+        clientId: intakeCase.clientId,
+        tenantCompanyId: intakeCase.tenantCompanyId,
+        buildingId: intakeCase.buildingId,
+        spaceId: intakeCase.spaceId,
+      },
+      {
+        userId: actorUserId,
+        authorRole,
+      },
+      parsed,
+    ),
+  );
+}
+
+/**
+ * Shared Unlisted Service Intake Internal Notes readback surface:
+ *   GET /api/v1/handyman/unlisted-intake-cases/:intakeCaseId/internal-notes
+ */
+export async function listUnlistedIntakeInternalNotes(input: {
+  bearerToken?: string;
+  actorUserId?: string;
+  intakeCaseId: string;
+  query?: unknown;
+}): Promise<PublicHandymanInternalNote[]> {
+  const intakeCaseId = parseInternalNoteUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+
+  if (input.bearerToken?.startsWith('hcw_')) {
+    return listCareWorkspaceUnlistedIntakeInternalNotes({
+      bearerToken: input.bearerToken,
+      intakeCaseId,
+      query: input.query,
+    });
+  }
+
+  const actorUserId =
+    input.actorUserId ??
+    (input.bearerToken
+      ? (await sessionService.resolveSessionContext(input.bearerToken)).userId
+      : '');
+  if (!actorUserId) {
+    throw authenticationRequiredError();
+  }
+
+  await assertSessionReadAuthority(actorUserId);
+
+  const intakeCase =
+    await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+      undefined,
+      intakeCaseId,
+    );
+  if (!intakeCase) {
+    throw handymanUnlistedIntakeCaseNotFoundForInternalNoteError();
+  }
+
+  await assertBuildingScopedResourceAccess(actorUserId, {
+    clientId: intakeCase.clientId,
+    buildingId: intakeCase.buildingId,
+  });
+
+  const rows =
+    await handymanInternalNotesRepository.listByUnlistedIntakeCaseScoped(
+      undefined,
+      {
+        clientId: intakeCase.clientId,
+        buildingId: intakeCase.buildingId,
+        unlistedIntakeCaseId: intakeCase.id,
+      },
+    );
+  return rows.map(toPublicHandymanInternalNote);
+}
+
 /**
  * Standalone Building Care surface:
  *   POST /api/v1/handyman/care/buildings/:buildingId/requests/:requestId/internal-notes
@@ -302,6 +880,20 @@ export async function createBuildingCareInternalNote(input: {
     requestId,
   );
   if (!request) {
+    const unlisted =
+      await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+        undefined,
+        requestId,
+      );
+    if (unlisted) {
+      return createBuildingCareUnlistedIntakeInternalNote({
+        actorUserId: input.actorUserId,
+        buildingId,
+        intakeCaseId: requestId,
+        body: input.body,
+        headerIdempotencyKey: input.headerIdempotencyKey,
+      });
+    }
     throw handymanServiceRequestNotFoundForInternalNoteError();
   }
   if (
@@ -352,6 +944,18 @@ export async function listBuildingCareInternalNotes(input: {
     requestId,
   );
   if (!request) {
+    const unlisted =
+      await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+        undefined,
+        requestId,
+      );
+    if (unlisted) {
+      return listBuildingCareUnlistedIntakeInternalNotes({
+        actorUserId: input.actorUserId,
+        buildingId,
+        intakeCaseId: requestId,
+      });
+    }
     throw handymanServiceRequestNotFoundForInternalNoteError();
   }
   if (
@@ -402,6 +1006,36 @@ export async function createCareWorkspaceInternalNote(input: {
         requestId,
       );
       if (!request) {
+        const unlisted =
+          await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+            tx,
+            requestId,
+          );
+        if (unlisted) {
+          await authorizeCareCommercialRequest(tx, principal, {
+            id: unlisted.id,
+            clientId: unlisted.clientId,
+            tenantCompanyId: unlisted.tenantCompanyId,
+            tenantPicId: unlisted.tenantPicId,
+            buildingId: unlisted.buildingId,
+            spaceId: unlisted.spaceId,
+          });
+          return recordAuthorizedUnlistedIntakeInternalNoteInTransaction(
+            tx,
+            {
+              id: unlisted.id,
+              clientId: unlisted.clientId,
+              tenantCompanyId: unlisted.tenantCompanyId,
+              buildingId: unlisted.buildingId,
+              spaceId: unlisted.spaceId,
+            },
+            {
+              careActorId: principal.careActorId,
+              authorRole: 'CUSTOMER_CARE',
+            },
+            parsed,
+          );
+        }
         throw careCreateContextNotFound();
       }
       await authorizeCareCommercialRequest(tx, principal, {
@@ -437,6 +1071,19 @@ export async function createCareWorkspaceInternalNote(input: {
     requestId,
   );
   if (!request) {
+    const unlisted =
+      await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+        undefined,
+        requestId,
+      );
+    if (unlisted) {
+      return createCareWorkspaceUnlistedIntakeInternalNote({
+        bearerToken: input.bearerToken,
+        intakeCaseId: requestId,
+        body: input.body,
+        headerIdempotencyKey: input.headerIdempotencyKey,
+      });
+    }
     throw handymanServiceRequestNotFoundForInternalNoteError();
   }
   await resolveBuildingCareAuthority({
@@ -487,6 +1134,50 @@ export async function listCareWorkspaceInternalNotes(input: {
         requestId,
       );
       if (!request) {
+        const unlisted =
+          await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+            tx,
+            requestId,
+          );
+        if (unlisted) {
+          if (
+            (scopeFilter.tenantCompanyId !== undefined &&
+              scopeFilter.tenantCompanyId !== unlisted.tenantCompanyId) ||
+            (scopeFilter.buildingId !== undefined &&
+              scopeFilter.buildingId !== unlisted.buildingId) ||
+            (scopeFilter.spaceId !== undefined &&
+              scopeFilter.spaceId !== unlisted.spaceId)
+          ) {
+            throw careCreateContextNotFound();
+          }
+          if (scopeFilter.propertyId !== undefined) {
+            const buildingRow = await tx.query<{ property_id: string }>(
+              'SELECT property_id FROM buildings WHERE id = $1',
+              [unlisted.buildingId],
+            );
+            if (buildingRow.rows[0]?.property_id !== scopeFilter.propertyId) {
+              throw careCreateContextNotFound();
+            }
+          }
+          await authorizeCareCommercialRequest(tx, principal, {
+            id: unlisted.id,
+            clientId: unlisted.clientId,
+            tenantCompanyId: unlisted.tenantCompanyId,
+            tenantPicId: unlisted.tenantPicId,
+            buildingId: unlisted.buildingId,
+            spaceId: unlisted.spaceId,
+          });
+          const rows =
+            await handymanInternalNotesRepository.listByUnlistedIntakeCaseScoped(
+              tx,
+              {
+                clientId: unlisted.clientId,
+                buildingId: unlisted.buildingId,
+                unlistedIntakeCaseId: unlisted.id,
+              },
+            );
+          return rows.map(toPublicHandymanInternalNote);
+        }
         throw careCreateContextNotFound();
       }
       if (
@@ -533,6 +1224,18 @@ export async function listCareWorkspaceInternalNotes(input: {
     requestId,
   );
   if (!request) {
+    const unlisted =
+      await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+        undefined,
+        requestId,
+      );
+    if (unlisted) {
+      return listCareWorkspaceUnlistedIntakeInternalNotes({
+        bearerToken: input.bearerToken,
+        intakeCaseId: requestId,
+        query: input.query,
+      });
+    }
     throw handymanServiceRequestNotFoundForInternalNoteError();
   }
   if (
@@ -620,6 +1323,20 @@ export async function createServiceRequestInternalNote(input: {
     handymanRequestId,
   );
   if (!request) {
+    const unlisted =
+      await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+        undefined,
+        handymanRequestId,
+      );
+    if (unlisted) {
+      return createUnlistedIntakeInternalNote({
+        bearerToken: input.bearerToken,
+        actorUserId,
+        intakeCaseId: handymanRequestId,
+        body: input.body,
+        headerIdempotencyKey: input.headerIdempotencyKey,
+      });
+    }
     throw handymanServiceRequestNotFoundForInternalNoteError();
   }
 
@@ -691,6 +1408,19 @@ export async function listServiceRequestInternalNotes(input: {
     handymanRequestId,
   );
   if (!request) {
+    const unlisted =
+      await handymanInternalNotesRepository.findUnlistedIntakeCaseScopeById(
+        undefined,
+        handymanRequestId,
+      );
+    if (unlisted) {
+      return listUnlistedIntakeInternalNotes({
+        bearerToken: input.bearerToken,
+        actorUserId,
+        intakeCaseId: handymanRequestId,
+        query: input.query,
+      });
+    }
     throw handymanServiceRequestNotFoundForInternalNoteError();
   }
 
@@ -717,6 +1447,13 @@ export const handymanInternalNotesService = {
   listCareWorkspaceInternalNotes,
   createServiceRequestInternalNote,
   listServiceRequestInternalNotes,
+  createBuildingCareUnlistedIntakeInternalNote,
+  listBuildingCareUnlistedIntakeInternalNotes,
+  createCareWorkspaceUnlistedIntakeInternalNote,
+  listCareWorkspaceUnlistedIntakeInternalNotes,
+  createUnlistedIntakeInternalNote,
+  listUnlistedIntakeInternalNotes,
+  recordAuthorizedUnlistedIntakeInternalNoteInTransaction,
   computeInternalNotePayloadHash,
   toPublicHandymanInternalNote,
 };

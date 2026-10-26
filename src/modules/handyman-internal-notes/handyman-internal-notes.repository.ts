@@ -156,6 +156,55 @@ async function listByServiceRequestScoped(
   return result.rows;
 }
 
+export type UnlistedIntakeCaseScopeRow = {
+  id: string;
+  clientId: string;
+  tenantCompanyId: string;
+  tenantPicId: string | null;
+  buildingId: string;
+  spaceId: string | null;
+};
+
+async function findUnlistedIntakeCaseScopeById(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  intakeCaseId: string,
+): Promise<UnlistedIntakeCaseScopeRow | null> {
+  const result = await executor.query<UnlistedIntakeCaseScopeRow>(
+    `SELECT id,
+            client_id AS "clientId",
+            tenant_company_id AS "tenantCompanyId",
+            tenant_pic_id AS "tenantPicId",
+            building_id AS "buildingId",
+            space_id AS "spaceId"
+       FROM handyman_unlisted_service_intake_cases
+      WHERE id = $1
+      LIMIT 1`,
+    [intakeCaseId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function listByUnlistedIntakeCaseScoped(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  scope: {
+    clientId: string;
+    buildingId: string;
+    unlistedIntakeCaseId: string;
+  },
+): Promise<HandymanInternalNoteRecord[]> {
+  const result = await executor.query<HandymanInternalNoteRecord>(
+    `${INTERNAL_NOTE_SELECT}
+      WHERE n.unlisted_intake_case_id = $1
+        AND n.client_id = $2
+        AND n.building_id = $3
+        AND n.subject_type = 'UNLISTED_SERVICE_INTAKE_CASE'
+        AND n.visibility_classification = 'INTERNAL_ONLY'
+      ORDER BY n.created_at ASC, n.id ASC`,
+    [scope.unlistedIntakeCaseId, scope.clientId, scope.buildingId],
+  );
+  return result.rows;
+}
+
 async function isCustomerFacingTenantPicUser(
   executor: Pick<PoolClient, 'query'> = getPool(),
   userId: string,
@@ -176,5 +225,7 @@ export const handymanInternalNotesRepository = {
   findByActorAndIdempotencyKey,
   insertInternalNote,
   listByServiceRequestScoped,
+  findUnlistedIntakeCaseScopeById,
+  listByUnlistedIntakeCaseScoped,
   isCustomerFacingTenantPicUser,
 };

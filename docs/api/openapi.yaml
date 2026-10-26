@@ -86093,6 +86093,969 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/HandymanBmFiscalDocumentRequest"
+  /handyman/care/buildings/{buildingId}/unlisted-intake-cases:
+    post:
+      tags:
+        - Handyman Care
+      operationId: createBuildingCareUnlistedIntakeCase
+      summary: Create an unlisted-service intake case for an authorized Building
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Customer Care registers a customer
+        request for a service not present in the global or Client-specific
+        Service Catalog without requiring a fake serviceCatalogId. Enforces
+        exact-Building Care authority (BE-02G / Authority A) and idempotent
+        creation.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.care.building
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_IDEMPOTENCY_CONFLICT
+        - HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID
+        - HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE
+      parameters:
+        - name: buildingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBuildingCareUnlistedIntakeRequest"
+      responses:
+        "201":
+          description: Unlisted service intake case created in PENDING_TRIAGE; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeMutationResult"
+        "200":
+          description: Idempotent replay of an existing unlisted service intake case; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeMutationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags:
+        - Handyman Care
+      operationId: listBuildingCareUnlistedIntakeCases
+      summary: List unlisted-service intake cases for an authorized Building
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Lists unlisted-service intake cases
+        scoped to the authorized Building for Customer Care.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.care.building
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+      parameters:
+        - name: buildingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: spaceId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/HandymanUnlistedIntakeStatus"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+      responses:
+        "200":
+          description: Paginated list of unlisted-service intake cases; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeListPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /handyman/care/buildings/{buildingId}/unlisted-intake-cases/{intakeCaseId}:
+    get:
+      tags:
+        - Handyman Care
+      operationId: getBuildingCareUnlistedIntakeCase
+      summary: Read an authorized unlisted-service intake case in a Building
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Reads an unlisted-service intake
+        case and its chronological internal notes for an authorized Building.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.care.building
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+      parameters:
+        - name: buildingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Unlisted-service intake case detail; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /handyman/care/buildings/{buildingId}/unlisted-intake-cases/{intakeCaseId}/internal-notes:
+    post:
+      tags:
+        - Handyman Care
+      operationId: createBuildingCareUnlistedIntakeInternalNote
+      summary: Create an internal note on an unlisted-service intake case in a Building
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Records an append-only internal note
+        with subjectType UNLISTED_SERVICE_INTAKE_CASE against an authorized
+        unlisted-service intake case.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.care.building
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_INTERNAL_NOTE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+        - HANDYMAN_INTERNAL_NOTE_IDEMPOTENCY_CONFLICT
+      parameters:
+        - name: buildingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanInternalNoteRequest"
+      responses:
+        "201":
+          description: Internal note created against unlisted intake case; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+        "200":
+          description: Idempotent replay of an existing internal note; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags:
+        - Handyman Care
+      operationId: listBuildingCareUnlistedIntakeInternalNotes
+      summary: List internal notes for an unlisted-service intake case in a Building
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Returns internal notes for an
+        authorized unlisted-service intake case in chronological order.
+      security:
+        - bearerAuth: []
+      x-required-permission: handyman.care.building
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_INTERNAL_NOTE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+      parameters:
+        - name: buildingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Chronological list of internal notes; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanInternalNote"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /handyman/care/unlisted-intake-cases:
+    post:
+      tags:
+        - Handyman Care
+      operationId: createCareWorkspaceUnlistedIntakeCase
+      summary: Create an unlisted-service intake case from Care Workspace or Care session
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Registers an unlisted-service intake
+        case in PENDING_TRIAGE without requiring a serviceCatalogId. Accepts
+        Care Workspace tokens (hcw_), single-use Care exchange tokens, or
+        exact-Building Care sessions.
+      security:
+        - careWorkspaceSession: []
+        - bearerAuth: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED
+        - HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_IDEMPOTENCY_CONFLICT
+        - HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID
+        - HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCareWorkspaceUnlistedIntakeRequest"
+      responses:
+        "201":
+          description: Unlisted service intake case created in PENDING_TRIAGE; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeMutationResult"
+        "200":
+          description: Idempotent replay of an existing unlisted service intake case; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeMutationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags:
+        - Handyman Care
+      operationId: listCareWorkspaceUnlistedIntakeCases
+      summary: List authorized unlisted-service intake cases for Care Workspace or Care session
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Lists unlisted-service intake cases
+        within the authorized Care actor's granted Property/Building scope.
+      security:
+        - careWorkspaceSession: []
+        - bearerAuth: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+      parameters:
+        - name: propertyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: buildingId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: spaceId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/HandymanUnlistedIntakeStatus"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+      responses:
+        "200":
+          description: Paginated list of unlisted-service intake cases; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeListPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /handyman/care/unlisted-intake-cases/{intakeCaseId}:
+    get:
+      tags:
+        - Handyman Care
+      operationId: getCareWorkspaceUnlistedIntakeCase
+      summary: Read an authorized unlisted-service intake case for Care Workspace or Care session
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Reads an unlisted-service intake
+        case and its chronological internal notes within the Care actor's
+        authorized scope.
+      security:
+        - careWorkspaceSession: []
+        - bearerAuth: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED
+        - HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: propertyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: buildingId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: spaceId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Unlisted-service intake case detail; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /handyman/care/unlisted-intake-cases/{intakeCaseId}/internal-notes:
+    post:
+      tags:
+        - Handyman Care
+      operationId: createCareWorkspaceUnlistedIntakeInternalNote
+      summary: Create an internal note on an unlisted-service intake case from Care Workspace
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Records an append-only internal note
+        with subjectType UNLISTED_SERVICE_INTAKE_CASE against an authorized
+        unlisted-service intake case.
+      security:
+        - careWorkspaceSession: []
+        - bearerAuth: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED
+        - HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_INTERNAL_NOTE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+        - HANDYMAN_INTERNAL_NOTE_IDEMPOTENCY_CONFLICT
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanInternalNoteRequest"
+      responses:
+        "201":
+          description: Internal note created against unlisted intake case; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+        "200":
+          description: Idempotent replay of an existing internal note; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags:
+        - Handyman Care
+      operationId: listCareWorkspaceUnlistedIntakeInternalNotes
+      summary: List internal notes for an unlisted-service intake case from Care Workspace
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Returns internal notes for an
+        authorized unlisted-service intake case in chronological order.
+      security:
+        - careWorkspaceSession: []
+        - bearerAuth: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED
+        - HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND
+        - HANDYMAN_CARE_AUTHORITY_DENIED
+        - HANDYMAN_INTERNAL_NOTE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: propertyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: buildingId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: spaceId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Chronological list of internal notes; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanInternalNote"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /handyman/operations/unlisted-intake-cases:
+    get:
+      tags:
+        - Handyman Operations
+      operationId: listOperationsUnlistedIntakeCases
+      summary: List pending unlisted-service intake cases for Handyman Operations triage
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Lists pending (PENDING_TRIAGE)
+        unlisted-service intake cases and their internal notes for authorized
+        Handyman Operations personnel within their exact Client and Building
+        assignments (BE-02G). Customer-facing Tenant PICs are strictly denied.
+      security:
+        - bearerAuth: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+      parameters:
+        - name: clientId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: buildingId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: tenantCompanyId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: spaceId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/HandymanUnlistedIntakeStatus"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+      responses:
+        "200":
+          description: Paginated list of pending unlisted-service intake cases; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeListPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /handyman/unlisted-intake-cases/{intakeCaseId}:
+    get:
+      tags:
+        - Handyman Requests
+      operationId: getUnlistedIntakeCase
+      summary: Read an authorized unlisted-service intake case for Operations or Customer Care
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Reads an unlisted-service intake
+        case and its chronological internal notes for authorized Handyman
+        Operations or Customer Care personnel within exact Client/Building scope
+        (BE-02G). Customer-facing Tenant PICs are strictly denied.
+      security:
+        - bearerAuth: []
+        - careWorkspaceSession: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Unlisted-service intake case detail; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /handyman/unlisted-intake-cases/{intakeCaseId}/internal-notes:
+    post:
+      tags:
+        - Handyman Requests
+      operationId: createUnlistedIntakeInternalNote
+      summary: Create an internal note on an unlisted-service intake case (Care or Operations)
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Records an append-only internal note
+        with subjectType UNLISTED_SERVICE_INTAKE_CASE against an authorized
+        unlisted-service intake case.
+      security:
+        - bearerAuth: []
+        - careWorkspaceSession: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_INTERNAL_NOTE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+        - HANDYMAN_INTERNAL_NOTE_IDEMPOTENCY_CONFLICT
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanInternalNoteRequest"
+      responses:
+        "201":
+          description: Internal note created against unlisted intake case; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+        "200":
+          description: Idempotent replay of an existing internal note; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags:
+        - Handyman Requests
+      operationId: listUnlistedIntakeInternalNotes
+      summary: List internal notes for an unlisted-service intake case (Care or Operations)
+      description: >-
+        CR-HM-CARE-UNLISTED-INTAKE PART 01. Returns internal notes for an
+        authorized unlisted-service intake case in chronological order during
+        triage.
+      security:
+        - bearerAuth: []
+        - careWorkspaceSession: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_INTERNAL_NOTE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Chronological list of internal notes; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanInternalNote"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     commercialConsentSignature:
@@ -139425,3 +140388,355 @@ components:
           properties:
             replayed:
               type: boolean
+    HandymanUnlistedIntakeStatus:
+      type: string
+      enum:
+        - PENDING_TRIAGE
+    CreateBuildingCareUnlistedIntakeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - tenantCompanyId
+        - requestedServiceName
+        - description
+      properties:
+        buildingId:
+          type: string
+          format: uuid
+        tenantCompanyId:
+          type: string
+          format: uuid
+        tenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+        unitId:
+          type: string
+          format: uuid
+          nullable: true
+        approvalTenantCompanyId:
+          type: string
+          format: uuid
+        costResponsibleTenantCompanyId:
+          type: string
+          format: uuid
+        requestedServiceName:
+          type: string
+          minLength: 1
+          maxLength: 250
+        serviceName:
+          type: string
+          minLength: 1
+          maxLength: 250
+        unlistedServiceName:
+          type: string
+          minLength: 1
+          maxLength: 250
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        complaint:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        customerComplaint:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        preferredWindowStart:
+          type: string
+          format: date-time
+        preferredWindowEnd:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+        internalNote:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 4000
+            - $ref: "#/components/schemas/CreateHandymanInternalNoteRequest"
+    CreateCareWorkspaceUnlistedIntakeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - requestedServiceName
+        - description
+      properties:
+        exchangeToken:
+          type: string
+          minLength: 1
+          maxLength: 512
+        propertyId:
+          type: string
+          format: uuid
+        buildingId:
+          type: string
+          format: uuid
+        tenantCompanyId:
+          type: string
+          format: uuid
+        tenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+        unitId:
+          type: string
+          format: uuid
+          nullable: true
+        approvalTenantCompanyId:
+          type: string
+          format: uuid
+        costResponsibleTenantCompanyId:
+          type: string
+          format: uuid
+        requestedServiceName:
+          type: string
+          minLength: 1
+          maxLength: 250
+        serviceName:
+          type: string
+          minLength: 1
+          maxLength: 250
+        unlistedServiceName:
+          type: string
+          minLength: 1
+          maxLength: 250
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        complaint:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        customerComplaint:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        preferredWindowStart:
+          type: string
+          format: date-time
+        preferredWindowEnd:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+        internalNote:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 4000
+            - $ref: "#/components/schemas/CreateHandymanInternalNoteRequest"
+    HandymanUnlistedIntakePreferredWindow:
+      type: object
+      additionalProperties: false
+      required:
+        - preferredWindowStart
+        - preferredWindowEnd
+        - timezone
+      properties:
+        preferredWindowStart:
+          type: string
+          format: date-time
+        preferredWindowEnd:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+    HandymanUnlistedIntakeActor:
+      type: object
+      additionalProperties: false
+      required:
+        - actorType
+        - userId
+        - careActorId
+        - displayName
+      properties:
+        actorType:
+          type: string
+          enum:
+            - USER
+            - CARE_ACTOR
+        userId:
+          type: string
+          format: uuid
+          nullable: true
+        careActorId:
+          type: string
+          format: uuid
+          nullable: true
+        displayName:
+          type: string
+    HandymanUnlistedIntakeCase:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - clientId
+        - buildingId
+        - spaceId
+        - tenantCompanyId
+        - tenantPicId
+        - approvalTenantCompanyId
+        - costResponsibleTenantCompanyId
+        - channelAttributionId
+        - originChannel
+        - originReference
+        - requestedServiceName
+        - description
+        - preferredWindowStart
+        - preferredWindowEnd
+        - preferredWindowTimezone
+        - preferredWindow
+        - status
+        - createdByUserId
+        - createdByCareActorId
+        - createdByDisplayName
+        - createdBy
+        - idempotencyKey
+        - createdAt
+        - updatedAt
+        - internalNotes
+      properties:
+        id:
+          type: string
+          format: uuid
+        clientId:
+          type: string
+          format: uuid
+        buildingId:
+          type: string
+          format: uuid
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+        tenantCompanyId:
+          type: string
+          format: uuid
+        tenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        approvalTenantCompanyId:
+          type: string
+          format: uuid
+        costResponsibleTenantCompanyId:
+          type: string
+          format: uuid
+        channelAttributionId:
+          type: string
+          format: uuid
+          nullable: true
+        originChannel:
+          type: string
+          enum:
+            - CUSTOMER_CARE_BACKEND
+            - BM_SUPER_APP
+        originReference:
+          type: string
+          nullable: true
+        requestedServiceName:
+          type: string
+          minLength: 1
+          maxLength: 250
+        description:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        preferredWindowStart:
+          type: string
+          format: date-time
+          nullable: true
+        preferredWindowEnd:
+          type: string
+          format: date-time
+          nullable: true
+        preferredWindowTimezone:
+          type: string
+          nullable: true
+        preferredWindow:
+          allOf:
+            - $ref: "#/components/schemas/HandymanUnlistedIntakePreferredWindow"
+          nullable: true
+        status:
+          $ref: "#/components/schemas/HandymanUnlistedIntakeStatus"
+        createdByUserId:
+          type: string
+          format: uuid
+          nullable: true
+        createdByCareActorId:
+          type: string
+          format: uuid
+          nullable: true
+        createdByDisplayName:
+          type: string
+        createdBy:
+          $ref: "#/components/schemas/HandymanUnlistedIntakeActor"
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        internalNotes:
+          type: array
+          items:
+            $ref: "#/components/schemas/HandymanInternalNote"
+    HandymanUnlistedIntakeMutationResult:
+      allOf:
+        - $ref: "#/components/schemas/HandymanUnlistedIntakeCase"
+        - type: object
+          additionalProperties: false
+          required:
+            - replayed
+          properties:
+            replayed:
+              type: boolean
+            internalNote:
+              $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+    HandymanUnlistedIntakeListPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - pagination
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/HandymanUnlistedIntakeCase"
+        pagination:
+          type: object
+          additionalProperties: false
+          required:
+            - limit
+            - offset
+            - nextOffset
+          properties:
+            limit:
+              type: integer
+            offset:
+              type: integer
+            nextOffset:
+              type: integer
+              nullable: true

@@ -409,6 +409,7 @@ import { createHandymanScopeVariationRouter } from '../modules/handyman-scope-va
 import { createHandymanCareAuthorityRouter } from '../modules/handyman-care-authority/handyman-care-authority.routes';
 import { createHandymanCareCommunicationsRouter } from '../modules/handyman-care-communications/handyman-care-communications.routes';
 import { createHandymanInternalNotesRouter } from '../modules/handyman-internal-notes/handyman-internal-notes.routes';
+import { createHandymanUnlistedIntakeRouter } from '../modules/handyman-unlisted-intake/handyman-unlisted-intake.routes';
 import { createHandymanCareStandaloneDiscoveryRouter } from '../modules/handyman-care-standalone-discovery/handyman-care-standalone-discovery.routes';
 import { createHandymanMaterialPurchasingRouter } from '../modules/handyman-material-purchasing/handyman-material-purchasing.routes';
 import { createHandymanFieldEvidenceRouter } from '../modules/handyman-field-evidence/handyman-field-evidence.routes';
@@ -918,6 +919,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanCareStandaloneDiscoveryRouter()); // CR-HM-BM-CARE-DISCOVERY-01 — Backend-session-only read discovery + safe progress
   router.use(createHandymanCareCommunicationsRouter()); // CR-HM-BM-CARE-EVIDENCE-01 — request-scoped non-executable communication intake
   router.use(createHandymanInternalNotesRouter()); // CR-HM-CARE-INTERNAL-NOTES-01 — dedicated internal operational notes for Care & Operations
+  router.use(createHandymanUnlistedIntakeRouter()); // CR-HM-CARE-UNLISTED-INTAKE — PART 01: unlisted service intake cases & Operations triage queue
   // CR-BE-FX-01 PART 02 — FX Rate lifecycle + Client FX Policy governance.
   router.use(createFxRateRouter());
   return router;

@@ -3,6 +3,7 @@ import { migration0482HandymanFinancialReconciliation } from './0482_handyman_fi
 import { migration0483HandymanCareInitialSchedulingPreference } from './0483_handyman_care_initial_scheduling_preference';
 import { migration0484HandymanCareStructuredRequestItems } from './0484_handyman_care_structured_request_items';
 import { migration0485HandymanInternalNotes } from './0485_handyman_internal_notes';
+import { migration0486HandymanUnlistedServiceIntakeCases } from './0486_handyman_unlisted_service_intake_cases';
 import { migration0446HandymanBastWorkerTransport } from './0446_handyman_bast_worker_transport';
 import { migration0447NetHandymanAllocationCaps } from './0447_net_handyman_allocation_caps';
 import { migration0448HandymanFinanceAuthorityPermissions } from './0448_handyman_finance_authority_permissions';
@@ -1018,4 +1019,5 @@ export const migrations: readonly Migration[] = [
   migration0483HandymanCareInitialSchedulingPreference,
   migration0484HandymanCareStructuredRequestItems,
   migration0485HandymanInternalNotes,
+  migration0486HandymanUnlistedServiceIntakeCases,
 ];
