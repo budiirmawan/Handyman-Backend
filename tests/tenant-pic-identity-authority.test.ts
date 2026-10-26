@@ -567,10 +567,29 @@ describe('PART 03 — PIC identity and customer approval authority', () => {
         assert.equal(changed.status, 200, JSON.stringify(changed.body));
         const oldActor = kind === 'quotation' ? decided.body.data.decidedByUserId : decided.body.data.variation.tenantDecidedByUserId;
         assert.equal(oldActor, f.customer.userId);
+        if (kind === 'quotation') {
+          const formerReplay = await quoteDecision(f.customer, f.version.id, key);
+          assert.equal(formerReplay.status, 403, JSON.stringify(formerReplay.body));
+          assert.equal(formerReplay.body.error.code, 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN');
+          const newIntent = await quoteDecision(f.replacement, f.version.id, randomUUID());
+          assert.equal(newIntent.status, 409, JSON.stringify(newIntent.body));
+          assert.equal(newIntent.body.error.code, 'HANDYMAN_QUOTATION_DECISION_CONFLICT');
+        }
         const replay = kind === 'quotation' ? await quoteDecision(f.replacement, f.version.id, key)
           : await variationDecision(f.replacement, f as VariationFixture, key);
         assert.equal(replay.status, kind === 'quotation' ? 201 : 200, JSON.stringify(replay.body));
         assert.equal(kind === 'quotation' ? replay.body.data.decidedByUserId : replay.body.data.variation.tenantDecidedByUserId, f.customer.userId);
+        if (kind === 'quotation') {
+          assert.equal(replay.body.data.id, decided.body.data.id);
+          assert.equal(replay.body.data.executionScope.id, decided.body.data.executionScope.id);
+          const decisions = await pool.query<{ id: string; decided_by_user_id: string }>(
+            `SELECT id, decided_by_user_id FROM handyman_quotation_decisions WHERE quotation_version_id = $1`,
+            [f.version.id],
+          );
+          assert.equal(decisions.rows.length, 1);
+          assert.equal(decisions.rows[0]!.id, decided.body.data.id);
+          assert.equal(decisions.rows[0]!.decided_by_user_id, f.customer.userId);
+        }
       } finally {
         release.resolve();
         await Promise.allSettled([approval, relink].filter(Boolean));

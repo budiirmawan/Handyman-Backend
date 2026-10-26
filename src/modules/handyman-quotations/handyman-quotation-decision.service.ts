@@ -176,10 +176,10 @@ export async function decideHandymanQuotation(
     // request's building_id (BE-02G; no same-Client shortcut).
     if (actorUserId !== null) await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
 
-    // Bind authority inside the same version-lock transaction and before
-    // replay handling. Revocation therefore takes effect even for a retry;
-    // an unrelated actor cannot use a known idempotency key to retrieve the
-    // original decision.
+    // Bind live authority inside the same version-lock transaction and before
+    // replay handling. A former PIC loses retry authority after relink; an
+    // authorized replacement PIC can only recover an identical existing
+    // personal result. No replay creates fresh consent.
     const request = await handymanServiceRequestRepository.findById(
       tx,
       quotation.handymanRequestId,
@@ -199,13 +199,23 @@ export async function decideHandymanQuotation(
     const existing = await handymanQuotationDecisionRepository
       .lockDecisionByVersion(tx, version.id);
     if (existing) {
+      // A personal decision is keyed to the canonical request and guarded by
+      // the current exact-PIC authority above, not the session identity that
+      // first submitted it. Keep Care-backed decisions bound to the exact
+      // consent actor and receipt. In both cases the stored provenance remains
+      // the original fact and is never rewritten by replay.
+      const sameDecisionChannel = actorUserId !== null
+        ? existing.decidedByUserId !== null &&
+          (existing.decidedByCareActorId ?? null) === null &&
+          (existing.commercialConsentId ?? null) === null
+        : consent !== null && existing.decidedByUserId === null &&
+          (existing.decidedByCareActorId ?? null) === consent.careActorId &&
+          (existing.commercialConsentId ?? null) === consent.id;
       if (
         existing.idempotencyKey === idempotencyKey &&
         existing.requestFingerprint === fingerprint &&
         existing.decision === input.decision &&
-        existing.decidedByUserId === actorUserId &&
-        (existing.decidedByCareActorId ?? null) === (consent?.careActorId ?? null) &&
-        (existing.commercialConsentId ?? null) === (consent?.id ?? null)
+        sameDecisionChannel
       ) {
         // Replay-safe: the ORIGINAL authoritative facts, nothing new.
         const priorScope = await handymanExecutionScopeRepository
