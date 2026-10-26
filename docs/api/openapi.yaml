@@ -9054,13 +9054,32 @@ paths:
       operationId: createHandymanQuotationRevision
       x-required-permission: tenant_company.manage
       security: [{ bearerAuth: [] }]
-      x-error-codes: [VALIDATION_ERROR, HANDYMAN_QUOTATION_NOT_FOUND]
-      summary: Create a new immutable DRAFT revision (version number monotonic; lines are never copied)
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_INVALID_TRANSITION]
+      summary: Create a new immutable DRAFT revision (version number monotonic; prior versions are never rewritten)
+      description: "CR-HM-MANUAL-QUOTATION-01 PART 03B. A revision appends a new immutable DRAFT version; it never mutates a previous version (0391 trigger) and never supersedes or re-approves one. On a MANUAL-origin (unlisted-intake) thread ordinary revisioning is closed once a version is APPROVED - a consented quotation may not be forked here and post-approval scope change stays the authorized Scope Variation lane (HANDYMAN_QUOTATION_INVALID_TRANSITION); a CATALOG thread keeps its documented post-approval re-quote lane (lines re-derived from its request items and reconciled through variations), which this PART leaves untouched. DP terms: omitting every dp key INHERITS the predecessor version policy instead of silently resetting it - a percentage policy is carried as a percentage so its amount re-derives against the REVISED total at issue time with the existing rounding rules, while a non-derived dpAmount is treated as a deliberate fixed policy and carried verbatim; declaring any dp key replaces the policy. Lines: a manual-origin (unlisted-intake) thread carries its predecessor immutable lines into the new DRAFT (LABOR/MATERIAL, quantity, UOM, currency, final quoted amount, governed reference snapshot, MATERIAL source item and 0489 origin all copied verbatim by the database; line_total re-derived by the same server expression). carryForwardLineIds selects exactly which predecessor lines survive, which is the only authorized removal mechanism (no line is ever deleted - the new snapshot omits it); an omitted selection entry, a repeated id, a foreign id or use on a catalog thread is refused with VALIDATION_ERROR. Additions after the revision keep using the existing DRAFT line API. Catalog threads continue to re-derive lines from their request items, so nothing is lost or double-counted on either lane."
       parameters:
         - name: quotationId
           in: path
           required: true
           schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                dpRequired: { type: boolean }
+                dpPercentage: { type: number, exclusiveMinimum: 0, maximum: 100, nullable: true }
+                dpAmount: { type: number, exclusiveMinimum: 0, nullable: true }
+                dpTermsNotes: { type: string, maxLength: 500, nullable: true }
+                carryForwardLineIds:
+                  type: array
+                  maxItems: 200
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+                  description: "Manual-origin lane only. Exact subset of the immediately previous version line ids to carry into the new DRAFT; lines not listed are omitted from the revised snapshot (never deleted). An empty array starts the revision with no lines. Omit the key entirely to carry every predecessor line."
       responses:
         '201':
           description: New DRAFT version

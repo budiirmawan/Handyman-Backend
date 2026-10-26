@@ -263,6 +263,38 @@ async function listVersions(
   return result.rows.map(mapVersion);
 }
 
+/**
+ * The thread's highest-numbered version: the reference point a revision
+ * inherits DP terms from and carries its immutable line snapshot forward from.
+ */
+async function findLatestVersion(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  quotationId: string,
+): Promise<HandymanQuotationVersionRecord | null> {
+  const result = await executor.query<VersionRow>(
+    `${VERSION_SELECT} WHERE quotation_id = $1
+     ORDER BY version_number DESC LIMIT 1`,
+    [quotationId],
+  );
+  return result.rows[0] ? mapVersion(result.rows[0]) : null;
+}
+
+/** Does the thread already contain a version in one of these states? */
+async function existsVersionWithStatus(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  quotationId: string,
+  statuses: string[],
+): Promise<boolean> {
+  const result = await executor.query<{ found: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM handyman_quotation_versions
+        WHERE quotation_id = $1 AND status = ANY($2::text[])
+     ) AS found`,
+    [quotationId, statuses],
+  );
+  return result.rows[0].found === true;
+}
+
 /** Highest allocated version number under the caller's root lock. */
 async function maxVersionNumber(
   executor: Pick<PoolClient, 'query'>,
@@ -278,6 +310,8 @@ async function maxVersionNumber(
 }
 
 export const handymanQuotationRepository = {
+  findLatestVersion,
+  existsVersionWithStatus,
   insertQuotation,
   insertVersion,
   findVersionById,

@@ -87,6 +87,24 @@ export function handymanQuotationInvalidTransitionError(): AppError {
   });
 }
 
+/**
+ * On a MANUAL-origin thread an ordinary revision may never fork an APPROVED
+ * quotation: once the customer approved a version, that commercial thread is
+ * consented, and a hand-made revision would clone the consented snapshot.
+ * Post-approval scope change stays the existing authorized Scope Variation lane
+ * (which prepares its own revised version). The catalog lane is NOT covered by
+ * this law: its documented post-approval re-quote (revision + item-driven
+ * lines, reconciled through variations) is unchanged.
+ */
+export function handymanQuotationRevisionAfterApprovalError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_QUOTATION_INVALID_TRANSITION,
+    message:
+      'This quotation already has an APPROVED version; an ordinary revision can not fork or amend a consented quotation. Record a Scope Variation instead.',
+    statusCode: 400,
+  });
+}
+
 export function handymanQuotationNoLinesError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_QUOTATION_NO_LINES,

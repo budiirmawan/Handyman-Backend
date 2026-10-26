@@ -28,6 +28,7 @@ import {
   parseQuotationApiUuidParam,
   parseQuotationDecisionBody,
   parseQuotationDpTermsBody,
+  parseQuotationRevisionBody,
   parseQuotationIssueBody,
   parseQuotationLineBody,
 } from './handyman-quotations-api.validation';
@@ -297,6 +298,9 @@ export async function postHandymanQuotationRevisionHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
+    const { carryForwardLineIds, ...dpTerms } = parseQuotationRevisionBody(
+      req.body,
+    );
     sendSuccess(
       res,
       await createHandymanQuotationRevision(
@@ -305,7 +309,8 @@ export async function postHandymanQuotationRevisionHandler(
           'quotationId',
         ),
         actor(req),
-        parseQuotationDpTermsBody(req.body),
+        dpTerms,
+        carryForwardLineIds === undefined ? {} : { carryForwardLineIds },
       ),
       201,
     );

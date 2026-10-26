@@ -100,6 +100,52 @@ export function parseQuotationDpTermsBody(body: unknown): {
   return out;
 }
 
+/**
+ * POST /quotations/:id/versions — a DRAFT revision. Optional DP terms (a
+ * declared policy replaces the predecessor's; omitting every DP key INHERITS
+ * the predecessor's policy instead of silently resetting it) and the
+ * manual-origin carry-forward SELECTION, which is the only authorized way to
+ * remove a line from a manual quotation (nothing is deleted: the new immutable
+ * snapshot simply omits the line). IDs are validated as UUIDs and bounded; they
+ * must belong to the immediately previous version, which the service verifies.
+ */
+export function parseQuotationRevisionBody(body: unknown): {
+  dpRequired?: boolean;
+  dpPercentage?: number | null;
+  dpAmount?: number | null;
+  dpTermsNotes?: string | null;
+  carryForwardLineIds?: string[];
+} {
+  const src = (body ?? {}) as Record<string, unknown>;
+  const dpTerms = parseQuotationDpTermsBody(src);
+  if (
+    src.carryForwardLineIds === undefined ||
+    src.carryForwardLineIds === null
+  ) {
+    return dpTerms;
+  }
+  if (!Array.isArray(src.carryForwardLineIds)) {
+    return fail('Request validation failed.', [
+      {
+        field: 'carryForwardLineIds',
+        message: 'carryForwardLineIds must be an array of line UUIDs.',
+      },
+    ]);
+  }
+  if (src.carryForwardLineIds.length > 200) {
+    return fail('Request validation failed.', [
+      {
+        field: 'carryForwardLineIds',
+        message: 'carryForwardLineIds may carry at most 200 lines.',
+      },
+    ]);
+  }
+  const carryForwardLineIds = src.carryForwardLineIds.map((value) =>
+    uuid(value, 'carryForwardLineIds'),
+  );
+  return { ...dpTerms, carryForwardLineIds };
+}
+
 /** POST /requests/:id/quotation — request identity comes from the URL; optional DP terms may be supplied. */
 export function parseQuotationCreate(body?: unknown): {
   dpRequired?: boolean;

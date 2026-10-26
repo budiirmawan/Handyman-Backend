@@ -12,10 +12,12 @@ import {
 import { assertQuotationThreadBuildingAccess }
   from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
+import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import {
   handymanQuotationAlreadyExistsError,
   handymanQuotationDiagnosisRequiredError,
   handymanQuotationNotFoundError,
+  handymanQuotationRevisionAfterApprovalError,
   handymanQuotationScopeInsufficientError,
 } from './handyman-quotation.errors';
 import type {
@@ -231,11 +233,83 @@ export async function createHandymanQuotation(
   });
 }
 
+/** DP keys a caller may declare on a revision (presence = explicit policy). */
+const DP_TERM_KEYS = [
+  'dpRequired',
+  'dpPercentage',
+  'dpAmount',
+  'dpTermsNotes',
+] as const;
+
+function declaresDpTerms(
+  input: Record<string, unknown> | undefined,
+): boolean {
+  return input !== undefined && DP_TERM_KEYS.some((key) => key in input);
+}
+
+/**
+ * CR-HM-MANUAL-QUOTATION-01 PART 03B — DP inheritance.
+ *
+ * A revision must not silently drop the customer's money terms, so the
+ * previous version's DP policy is carried forward unless the caller states its
+ * own. A PERCENTAGE policy is carried as a percentage and its amount is left
+ * to be re-derived against the REVISED total (the existing issue-time
+ * authority `resolveIssueDpTerms` performs that derivation and rounding); an
+ * amount that is NOT that derived value is a deliberate fixed-DP policy and is
+ * carried verbatim. Notes travel because they are contract text.
+ */
+async function inheritDpTermsFrom(
+  tx: Parameters<Parameters<typeof withTransaction>[0]>[0],
+  previous: HandymanQuotationVersionRecord,
+): Promise<{
+  dpRequired: boolean;
+  dpPercentage: number | null;
+  dpAmount: number | null;
+  dpTermsNotes: string | null;
+} | undefined> {
+  if (!previous.dpRequired) return undefined;
+  const sums = await handymanQuotationLineRepository.sumLines(tx, previous.id);
+  const previousTotal = sums.labor + sums.material;
+  const percentage = previous.dpPercentage;
+  const amount = previous.dpAmount;
+  const derivedAmount =
+    percentage === null || previousTotal <= 0
+      ? null
+      : Number(((previousTotal * percentage) / 100).toFixed(2));
+  // Exactly ONE component travels, so the other re-derives on the REVISED
+  // total under the existing issue-time rules: a percentage when the stored
+  // amount is simply that percentage of the old total (i.e. derived), and the
+  // fixed amount when the policy was an explicit money figure.
+  const carryPercentage =
+    amount === null ||
+    (percentage !== null && amount === derivedAmount);
+  return {
+    dpRequired: true,
+    dpPercentage: carryPercentage ? percentage : null,
+    dpAmount: carryPercentage ? null : amount,
+    dpTermsNotes: previous.dpTermsNotes,
+  };
+}
+
 /**
  * Bounded later-DRAFT revision (F2): appends the next immutable DRAFT
  * version under the quotation root row lock. Prior versions are NEVER
  * rewritten (0391 trigger is the DB backstop); NO SUPERSEDED projection
  * happens here — that is PART 03 lifecycle.
+ *
+ * PART 03B adds exactly two bounded behaviors:
+ *   1. on a manual-origin thread an ordinary revision may never fork or amend
+ *      an APPROVED quotation (post-approval change stays the existing Scope
+ *      Variation lane); the catalog lane's documented post-approval re-quote
+ *      behavior is untouched;
+ *   2. a manual-origin (unlisted-intake) thread carries its predecessor's
+ *      immutable lines into the new DRAFT — ALL of them by default, or exactly
+ *      the `carryForwardLineIds` subset the operator selects. That selection is
+ *      how a line is REMOVED (nothing is deleted; the new snapshot omits it)
+ *      while additions keep using the existing DRAFT line API. The catalog lane
+ *      keeps re-deriving its lines from its request items, so it can neither
+ *      lose nor double-count anything, and a carry-forward declaration there is
+ *      refused. DP terms are inherited unless the caller declares them.
  */
 export async function createHandymanQuotationRevision(
   quotationId: string,
@@ -246,10 +320,20 @@ export async function createHandymanQuotationRevision(
     dpAmount?: number | null;
     dpTermsNotes?: string | null;
   },
+  options: { carryForwardLineIds?: string[] } = {},
 ): Promise<PublicHandymanQuotationVersion> {
   assertUuid(quotationId, 'quotationId');
   assertUuid(actorUserId, 'actorUserId');
-  const dpTerms = normalizeDraftDpTerms(dpTermsInput);
+  const explicitSelection = options.carryForwardLineIds !== undefined;
+  if (explicitSelection && !Array.isArray(options.carryForwardLineIds)) {
+    throw AppError.validation('Quotation revision validation failed.', [
+      {
+        field: 'carryForwardLineIds',
+        message:
+          'carryForwardLineIds must be an array of predecessor line ids.',
+      },
+    ]);
+  }
 
   return withTransaction(async (tx) => {
     const quotation = await handymanQuotationRepository.lockQuotationById(
@@ -260,6 +344,55 @@ export async function createHandymanQuotationRevision(
     // CR-HM-SEC-01 PART 02: building-scope authority traced to the parent
     // request's building_id (BE-02G; no same-Client shortcut).
     await assertQuotationThreadBuildingAccess(tx as never, quotation, actorUserId);
+
+    const previous = await handymanQuotationRepository.findLatestVersion(
+      tx,
+      quotation.id,
+    );
+    const lane = await handymanQuotationLineRepository.findRequestOriginContext(
+      tx,
+      quotation.handymanRequestId,
+      quotation.clientId,
+    );
+    if (!lane) throw handymanQuotationNotFoundError();
+    const isManualOrigin = lane.intakeSource === 'UNLISTED_TRIAGE';
+
+    // (1) Consent law, scoped to the lane this PART opens: on a manual-origin
+    //     thread an ordinary revision IS the whole re-pricing mechanism, so
+    //     once the customer approved a version the thread is closed for
+    //     hand-made revisions — carrying a consented snapshot forward would fork
+    //     the approval instead of going through the authorized post-approval
+    //     pathway. A catalog thread keeps its documented post-approval re-quote
+    //     lane (its lines are re-derived from request items and reconciled with
+    //     the variation ledger), which this PART must not change.
+    if (
+      isManualOrigin &&
+      (await handymanQuotationRepository.existsVersionWithStatus(
+        tx,
+        quotation.id,
+        ['APPROVED'],
+      ))
+    ) {
+      throw handymanQuotationRevisionAfterApprovalError();
+    }
+
+    if (explicitSelection && !isManualOrigin) {
+      throw AppError.validation('Quotation revision validation failed.', [
+        {
+          field: 'carryForwardLineIds',
+          message:
+            'carryForwardLineIds is only valid on a manual-origin (unlisted-intake) quotation thread; a catalog thread re-derives its lines from its request items.',
+        },
+      ]);
+    }
+
+    // (2) DP terms: a declared policy wins; otherwise inherit the
+    //     predecessor's policy (a percentage re-derives on the new total).
+    const dpTerms = declaresDpTerms(dpTermsInput)
+      ? normalizeDraftDpTerms(dpTermsInput)
+      : previous
+        ? normalizeDraftDpTerms(await inheritDpTermsFrom(tx, previous))
+        : normalizeDraftDpTerms(dpTermsInput);
 
     const nextNumber =
       (await handymanQuotationRepository.maxVersionNumber(tx, quotation.id))
@@ -272,6 +405,80 @@ export async function createHandymanQuotationRevision(
       ...dpTerms,
       createdByUserId: actorUserId,
     });
+
+    // (3) Carry the immutable manual-line snapshot forward: the database
+    //     copies every commercial fact, so a carried line cannot drift, be
+    //     re-authored, or be silently lost.
+    let carriedLineIds: string[] = [];
+    let omittedLineCount = 0;
+    if (isManualOrigin && previous) {
+      const predecessorIds = await handymanQuotationLineRepository.listLineIds(
+        tx,
+        previous.id,
+      );
+      let selected = predecessorIds;
+      if (explicitSelection) {
+        const wanted = (options.carryForwardLineIds ?? []).map((value) =>
+          typeof value === 'string' ? value.trim().toLowerCase() : '',
+        );
+        const seen = new Set<string>();
+        for (const id of wanted) {
+          if (!isValidUuid(id)) {
+            throw AppError.validation('Quotation revision validation failed.', [
+              {
+                field: 'carryForwardLineIds',
+                message: 'every carryForwardLineIds entry must be a UUID.',
+              },
+            ]);
+          }
+          if (seen.has(id)) {
+            throw AppError.validation('Quotation revision validation failed.', [
+              {
+                field: 'carryForwardLineIds',
+                message:
+                  'carryForwardLineIds must not repeat a line: a repeated id would duplicate the carried snapshot line.',
+              },
+            ]);
+          }
+          seen.add(id);
+          if (!predecessorIds.includes(id)) {
+            throw AppError.validation('Quotation revision validation failed.', [
+              {
+                field: 'carryForwardLineIds',
+                message:
+                  'carryForwardLineIds may only reference lines of the immediately previous version of this quotation thread.',
+              },
+            ]);
+          }
+        }
+        const wantedSet = new Set(wanted);
+        selected = predecessorIds.filter((id) => wantedSet.has(id));
+        omittedLineCount = predecessorIds.length - selected.length;
+      }
+      if (selected.length > 0) {
+        const copy = await handymanQuotationLineRepository.copyLinesIntoVersion(
+          tx,
+          {
+            sourceVersionId: previous.id,
+            targetVersionId: version.id,
+            lineIds: selected,
+            actorUserId,
+          },
+        );
+        // A short copy means a selected line vanished mid-transaction.
+        if (copy.copiedCount !== selected.length) {
+          throw AppError.validation('Quotation revision failed.', [
+            {
+              field: 'carryForwardLineIds',
+              message:
+                'Every selected predecessor line must be carried; the revision was rolled back.',
+            },
+          ]);
+        }
+        carriedLineIds = copy.copied.map((line) => line.id);
+      }
+    }
+
     await recordOperationalEvent(
       {
         clientId: quotation.clientId,
@@ -285,6 +492,12 @@ export async function createHandymanQuotationRevision(
           quotationVersionId: version.id,
           versionNumber: version.versionNumber,
           handymanRequestId: quotation.handymanRequestId,
+          sourceVersionId: previous?.id ?? null,
+          sourceVersionNumber: previous?.versionNumber ?? null,
+          carriedForwardLineIds: carriedLineIds,
+          omittedCarryForwardLineCount: omittedLineCount,
+          dpTermsInherited:
+            !declaresDpTerms(dpTermsInput) && (previous?.dpRequired ?? false),
         },
       },
       tx,
