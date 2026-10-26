@@ -87,9 +87,10 @@ function binding(f: Awaited<ReturnType<typeof fixture>>, buildingId: string,
 
 describe('CR-HM-BM-COMMISSION-01 PART 01B beneficiary and Building binding', () => {
   it('keeps 0490–0492 and legacy beneficiary rows unchanged; identity must be explicitly verified', async () => {
-    assert.deepEqual(migrations.slice(-4).map(m => m.id), [
+    assert.deepEqual(migrations.slice(-5).map(m => m.id), [
       '0490_create_handyman_document_issuer_profiles', '0491_create_handyman_document_issuer_bank_accounts',
       '0492_create_handyman_document_issuer_settings', '0493_handyman_bm_beneficiary_building_coverage',
+      '0494_handyman_distinct_bm_entitlements',
     ]);
     const f = await fixture();
     const input = { clientId: f.clientId, legalName: 'PT Pending', registrationNumber: id(),
@@ -253,7 +254,9 @@ describe('CR-HM-BM-COMMISSION-01 PART 01B beneficiary and Building binding', () 
   });
 
   it('refuses a destructive downgrade when legal identity or coverage history exists', async () => {
+    assert.equal(await migrateDown(pool), '0494_handyman_distinct_bm_entitlements');
     await assert.rejects(migrateDown(pool), /Refusing to remove populated BM legal identity\/coverage history/);
     assert.equal((await q("SELECT count(*)::int AS n FROM schema_migrations WHERE id='0493_handyman_bm_beneficiary_building_coverage'")).rows[0].n, 1);
+    assert.deepEqual(await migrateUp(pool), ['0494_handyman_distinct_bm_entitlements']);
   });
 });

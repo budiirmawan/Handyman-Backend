@@ -24,7 +24,7 @@ export async function bindVerifiedTestBm(input: {
   const { actor, clientId, buildingId, versionId, query, distinct = false } = input;
   const prepared = input.prepared ?? await prepareVerifiedTestBm(actor, clientId, distinct);
   const existing = await query('SELECT id FROM handyman_bm_fee_beneficiary_definitions WHERE agreement_version_id=$1', [versionId]);
-  assert.ok(existing.rows[0]);
+  if (!distinct) assert.ok(existing.rows[0]);
   const bound = await bindHandymanBmBuildingCoverage(actor, {
     clientId, buildingId, agreementVersionId: versionId, counterpartyId: prepared.counterparty.id,
     beneficiaryKind: distinct ? 'BM_LEGAL_COUNTERPARTY' : 'CLIENT_ORGANIZATION',

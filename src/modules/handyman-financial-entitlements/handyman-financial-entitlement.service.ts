@@ -9,7 +9,7 @@ import {
 } from '../handyman-customer-ledger-read';
 import { readHandymanBmFeeConfigurationAt }
   from '../handyman-pricing-contract';
-import { resolveHandymanBmBuildingCoverageAt }
+import { resolveHandymanBmBuildingCoverageAt, type ResolvedBmBuildingCoverage }
   from '../handyman-bm-binding';
 import {
   getHandymanExecutionScopeAssignment,
@@ -40,6 +40,8 @@ const attribution = () => failure('HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED',
   'MULTI_PROVIDER_ATTRIBUTION_UNRESOLVED or no active provider assignment.');
 const bmBlocked = () => failure('HANDYMAN_ENTITLEMENT_BM_NOT_AUTHORITATIVE',
   'Exact-version DEFAULT BM fee term and beneficiary are required.');
+const bmFiscalBlocked = () => failure('HANDYMAN_ENTITLEMENT_BM_NOT_AUTHORITATIVE',
+  'Distinct BM earnings require a future beneficiary-bound fiscal contract.');
 
 function cents(text: string): bigint {
   if (!/^(0|[1-9]\d{0,15})\.\d{2}$/.test(text)) throw invalid();
@@ -96,7 +98,14 @@ function same(row: FactRow, x: FactInput): boolean {
     row.bm_term_id === (x.termId ?? null) &&
     row.bm_term_rate_percent === (x.ratePercent ?? null) &&
     row.bm_beneficiary_id === (x.beneficiaryId ?? null) &&
-    row.bm_beneficiary_reference_id === (x.beneficiaryReferenceId ?? null);
+    row.bm_beneficiary_reference_id === (x.beneficiaryReferenceId ?? null) &&
+    row.bm_beneficiary_kind === (x.beneficiaryKind ?? null) &&
+    row.bm_counterparty_id === (x.counterpartyId ?? null) &&
+    row.bm_building_id === (x.buildingId ?? null) &&
+    row.bm_coverage_id === (x.coverageId ?? null) &&
+    row.bm_verification_id === (x.verificationId ?? null) &&
+    eqDate(row.bm_coverage_effective_from, x.coverageEffectiveFrom) &&
+    eqDate(row.bm_coverage_effective_to, x.coverageEffectiveTo);
 }
 
 export type DerivedFinancialEntitlements = {
@@ -160,54 +169,75 @@ export async function deriveHandymanFinancialEntitlements(
         throw err;
       });
     const { binding, rule, term, beneficiary } = configuration;
-    if (!configuration.authoritativeForEntitlement ||
-        configuration.unconfiguredSlots.length || !term || !beneficiary ||
-        rule.mode !== 'DEFAULT' || !rule.authoritativeForEntitlement ||
-        rule.basis !== 'LABOR_ONLY' ||
-        term.termKind !== 'PERCENTAGE_OF_BASIS' ||
-        beneficiary.beneficiaryKind !== 'CLIENT_ORGANIZATION' ||
-        beneficiary.beneficiaryReferenceId !== ledger.transaction.clientId ||
+    if (!term || rule.mode !== 'DEFAULT' || !rule.authoritativeForEntitlement ||
+        rule.basis !== 'LABOR_ONLY' || term.termKind !== 'PERCENTAGE_OF_BASIS' ||
         binding.clientId !== ledger.transaction.clientId ||
         binding.requestedAsOfUtc !== ledger.transaction.createdAt ||
         !binding.effectiveFromUtc ||
-        [rule.agreementVersionId, term.agreementVersionId,
-          beneficiary.agreementVersionId].some(id => id !== binding.agreementVersionId)) {
-      throw bmBlocked();
-    }
+        [rule.agreementVersionId, term.agreementVersionId]
+          .some(id => id !== binding.agreementVersionId)) throw bmBlocked();
 
-    // Existing earned facts retain their original CLIENT_ORGANIZATION anchors
-    // for replay/correction. New facts, however, may not infer Building
-    // coverage from a Client-wide agreement or mislabel a distinct legal BM
-    // as that Client. This is an authority guard only; no amounts change.
+    // Existing facts keep their original beneficiary and snapshots. Only a
+    // new fact resolves Building coverage; a later prospective closure must
+    // never substitute the beneficiary on replay or correction.
     const previous = await Promise.all([findFact(tx, transactionId, 'PROVIDER'),
       findFact(tx, transactionId, 'BM_FEE')]);
     if (Boolean(previous[0]) !== Boolean(previous[1])) throw conflict();
+    const previousBm = previous[1];
+    let distinct = previousBm?.bm_beneficiary_kind === 'BM_LEGAL_COUNTERPARTY';
+    let coverage: ResolvedBmBuildingCoverage | null = null;
     if (!previous[0]) {
       const scope = await tx.query<{ client_id: string; building_id: string }>(
         'SELECT client_id, building_id FROM handyman_execution_scopes WHERE id = $1',
         [executionScopeId],
       );
       if (!scope.rows[0] || scope.rows[0].client_id !== ledger.transaction.clientId) throw bmBlocked();
-      const coverage = await resolveHandymanBmBuildingCoverageAt(
+      coverage = await resolveHandymanBmBuildingCoverageAt(
         ledger.transaction.clientId, scope.rows[0].building_id, ledger.transaction.createdAt, tx,
       ).catch((err: unknown) => {
         if (err instanceof AppError && err.code === ERROR_CODES.HANDYMAN_BM_BINDING_NOT_EFFECTIVE) throw bmBlocked();
         throw err;
       });
-      if (coverage.beneficiaryKind !== 'CLIENT_ORGANIZATION' ||
-          coverage.representedClientId !== ledger.transaction.clientId ||
-          coverage.agreementId !== binding.agreementId ||
+      if (coverage.agreementId !== binding.agreementId ||
           coverage.agreementVersionId !== binding.agreementVersionId ||
-          coverage.ruleId !== rule.ruleRowId || coverage.termId !== term.termRowId ||
-          coverage.beneficiaryDefinitionId !== beneficiary.beneficiaryRowId) throw bmBlocked();
+          coverage.agreementVersionNumber !== binding.versionNumber ||
+          coverage.agreementEffectiveFrom.toISOString() !== binding.effectiveFromUtc ||
+          (coverage.agreementEffectiveTo?.toISOString() ?? null) !== binding.effectiveToUtc ||
+          coverage.ruleId !== rule.ruleRowId || coverage.termId !== term.termRowId) throw bmBlocked();
+      distinct = coverage.beneficiaryKind === 'BM_LEGAL_COUNTERPARTY';
+      if (distinct && (coverage.representedClientId !== null ||
+          coverage.beneficiaryDefinitionId !== null)) throw bmBlocked();
+      if (!distinct && (coverage.representedClientId !== ledger.transaction.clientId ||
+          !beneficiary || coverage.beneficiaryDefinitionId !== beneficiary.beneficiaryRowId)) throw bmBlocked();
     }
+    if (!distinct && (!configuration.authoritativeForEntitlement ||
+        configuration.unconfiguredSlots.length || !beneficiary ||
+        beneficiary.beneficiaryKind !== 'CLIENT_ORGANIZATION' ||
+        beneficiary.beneficiaryReferenceId !== ledger.transaction.clientId ||
+        beneficiary.agreementVersionId !== binding.agreementVersionId)) throw bmBlocked();
+    // The old bundled pricing read cannot certify a distinct beneficiary. It
+    // may lack only its legacy BENEFICIARY slot; the separately verified 0493
+    // binding above supplies the new variant's beneficiary authority.
+    if (distinct && configuration.unconfiguredSlots.some(slot => slot !== 'BENEFICIARY')) throw bmBlocked();
 
     const charged = cents(ledger.totals.chargedNet);
     const labor = cents(ledger.totals.laborNet);
     const material = cents(ledger.totals.materialNet);
     cents(ledger.totals.adjustedTransactionScope);
     if (charged < 0n || labor < 0n || material < 0n) throw conflict();
-    const fiscalBasis = await handymanBmFeeFiscalBasis(tx, executionScopeId, binding.agreementVersionId, ledger.totals.laborNet);
+    // The existing fiscal adapter identifies a BM tax profile only by
+    // agreement version. It cannot establish that profile belongs to this
+    // distinct legal party, so refuse tax-configured ledgers rather than
+    // borrow that profile or invent fiscal calculations.
+    if (distinct) {
+      const fiscal = await tx.query(`SELECT 1 FROM handyman_execution_scopes s
+        JOIN handyman_financial_tax_profiles p ON p.quotation_version_id = s.approved_quotation_version_id
+        WHERE s.id = $1`, [executionScopeId]);
+      if (fiscal.rowCount) throw bmFiscalBlocked();
+    }
+    const fiscalBasis = distinct
+      ? { laborBasis: ledger.totals.laborNet, tenantProfileId: null, bmProfileId: null }
+      : await handymanBmFeeFiscalBasis(tx, executionScopeId, binding.agreementVersionId, ledger.totals.laborNet);
     const fee = feeCents(cents(fiscalBasis.laborBasis), term.ratePercent);
     if (fee > labor || fee > charged) throw conflict();
     const common = {
@@ -229,17 +259,44 @@ export async function deriveHandymanFinancialEntitlements(
       leadWorkerId: lead.leadWorkerContextId, leadUserId: lead.leadUserId,
       idempotencyKey: `${idempotencyKey}:PROVIDER`,
     };
+    let beneficiaryAnchors: Partial<FactInput>;
+    if (distinct && previousBm) {
+      if (!previousBm.bm_counterparty_id || !previousBm.bm_building_id ||
+          !previousBm.bm_coverage_id || !previousBm.bm_verification_id ||
+          !previousBm.bm_coverage_effective_from) throw conflict();
+      beneficiaryAnchors = {
+        beneficiaryKind: 'BM_LEGAL_COUNTERPARTY',
+        counterpartyId: previousBm.bm_counterparty_id, buildingId: previousBm.bm_building_id,
+        coverageId: previousBm.bm_coverage_id, verificationId: previousBm.bm_verification_id,
+        coverageEffectiveFrom: previousBm.bm_coverage_effective_from.toISOString(),
+        coverageEffectiveTo: previousBm.bm_coverage_effective_to?.toISOString() ?? null,
+      };
+    } else if (distinct && coverage) {
+      beneficiaryAnchors = {
+        beneficiaryKind: 'BM_LEGAL_COUNTERPARTY',
+        counterpartyId: coverage.counterpartyId, buildingId: coverage.buildingId,
+        coverageId: coverage.id, verificationId: coverage.verificationId,
+        coverageEffectiveFrom: coverage.effectiveFrom.toISOString(),
+        coverageEffectiveTo: coverage.effectiveTo?.toISOString() ?? null,
+      };
+    } else if (!distinct && beneficiary) {
+      beneficiaryAnchors = {
+        beneficiaryId: beneficiary.beneficiaryRowId,
+        beneficiaryReferenceId: beneficiary.beneficiaryReferenceId,
+      };
+    } else throw bmBlocked();
     const bm: FactInput = {
       ...common, kind: 'BM_FEE', amount: decimal(fee),
       agreementId: binding.agreementId,
       agreementVersionId: binding.agreementVersionId,
       versionNumber: binding.versionNumber,
-      effectiveFrom: binding.effectiveFromUtc,
-      effectiveTo: binding.effectiveToUtc,
+      effectiveFrom: distinct && previousBm
+        ? previousBm.agreement_effective_from?.toISOString() : binding.effectiveFromUtc,
+      effectiveTo: distinct && previousBm
+        ? previousBm.agreement_effective_to?.toISOString() ?? null : binding.effectiveToUtc,
       ruleId: rule.ruleRowId, termId: term.termRowId,
       ratePercent: term.ratePercent,
-      beneficiaryId: beneficiary.beneficiaryRowId,
-      beneficiaryReferenceId: beneficiary.beneficiaryReferenceId,
+      ...beneficiaryAnchors,
       idempotencyKey: `${idempotencyKey}:BM_FEE`,
     };
     const facts: Array<{ row: FactRow; replayed: boolean }> = [];

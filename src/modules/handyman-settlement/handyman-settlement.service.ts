@@ -136,6 +136,10 @@ async function earned(tx: PoolClient, ledger: HandymanLedgerTransactionRead,
         row.ledger_contract_version !== HANDYMAN_LEDGER_READ_CONTRACT_VERSION) {
       throw conflict();
     }
+    if (row.bm_beneficiary_kind === 'BM_LEGAL_COUNTERPARTY') {
+      throw error('HANDYMAN_SETTLEMENT_NOT_AUTHORITATIVE',
+        'Distinct BM settlement requires future fiscal and beneficiary settlement rules.');
+    }
     let amount = cents(row.amount);
     for (const change of await listCorrections(tx, row.id)) {
       if (!knownCauses.has(change.ledger_correction_id)) throw conflict();

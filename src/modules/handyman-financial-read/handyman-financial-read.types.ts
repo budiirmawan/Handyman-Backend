@@ -21,6 +21,17 @@ export type HandymanFinancialEntitlementCorrection = {
   factKind: 'ADJUSTED_INCREASE' | 'ADJUSTED_DECREASE' | 'REVERSED';
   amount: string; actorUserId: string; occurredAt: string;
 };
+export type HandymanFinancialBmFee = {
+  agreementId: string; agreementVersionId: string;
+  versionNumber: number; effectiveFrom: string; effectiveTo: string | null;
+  ruleId: string; termId: string; ratePercent: string;
+} & (
+  // Preserve the published legacy shape exactly: these IDs identify a Client.
+  | { beneficiaryId: string; beneficiaryReferenceId: string; beneficiaryKind?: never }
+  | { beneficiaryKind: 'BM_LEGAL_COUNTERPARTY'; beneficiaryId: null; beneficiaryReferenceId: null;
+      counterpartyId: string; buildingId: string; coverageId: string; verificationId: string;
+      coverageEffectiveFrom: string; coverageEffectiveTo: string | null }
+);
 export type HandymanFinancialEntitlementFact = {
   id: string; clientId: string; transactionId: string;
   executionScopeId: string; currency: string;
@@ -33,12 +44,7 @@ export type HandymanFinancialEntitlementFact = {
     assignmentId: string; providerContextId: string; crewId: string;
     leadWorkerId: string; leadUserId: string;
   } | null;
-  bmFee: {
-    agreementId: string; agreementVersionId: string;
-    versionNumber: number; effectiveFrom: string; effectiveTo: string | null;
-    ruleId: string; termId: string; ratePercent: string;
-    beneficiaryId: string; beneficiaryReferenceId: string;
-  } | null;
+  bmFee: HandymanFinancialBmFee | null;
   derivedByUserId: string; derivedAt: string;
   /** Posted deltas are distinct facts; amount above is the immutable
    * originally earned amount, NOT silently re-netted or replaced. */

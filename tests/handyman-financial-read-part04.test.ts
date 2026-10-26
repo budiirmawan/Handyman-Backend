@@ -168,6 +168,7 @@ describe('CR-HM-14 PART 04 financial read contract / firewall',()=>{
     assert.equal(bm.bmFee?.agreementVersionId!==null,true);
     assert.equal(bm.bmFee?.ratePercent,'2.5000');
     assert.equal(bm.bmFee?.beneficiaryReferenceId,f.realm.client.id);
+    assert.equal('beneficiaryKind' in bm.bmFee!,false,'legacy publication keeps its original shape');
     assert.equal(bm.basisKind,'LABOR_ONLY');
     assert.equal(bm.amount,'2.50');
     assert.equal('idempotencyKey' in bm,false);

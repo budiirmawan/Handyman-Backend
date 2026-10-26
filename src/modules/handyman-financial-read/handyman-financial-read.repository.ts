@@ -42,6 +42,9 @@ export async function readFinancialFactSets(
                    e.agreement_effective_to, e.bm_rule_id, e.bm_term_id,
                    e.bm_term_rate_percent::text AS bm_term_rate_percent,
                    e.bm_beneficiary_id, e.bm_beneficiary_reference_id,
+                   e.bm_beneficiary_kind, e.bm_counterparty_id, e.bm_building_id,
+                   e.bm_coverage_id, e.bm_verification_id,
+                   e.bm_coverage_effective_from, e.bm_coverage_effective_to,
                    e.derived_by_user_id, e.derived_at
               FROM handyman_entitlement_facts e
              WHERE e.transaction_id = wanted.transaction_id
