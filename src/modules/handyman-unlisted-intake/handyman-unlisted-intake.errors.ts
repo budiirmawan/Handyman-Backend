@@ -34,3 +34,43 @@ export function handymanUnlistedIntakeImmutableError(): AppError {
     statusCode: 409,
   });
 }
+
+export function handymanUnlistedIntakeTriageAlreadyRecordedError(
+  status: string,
+  message?: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_TRIAGE_ALREADY_RECORDED,
+    message:
+      message ??
+      'This unlisted service intake case has already been triaged by Operations; a second triage decision is not permitted.',
+    statusCode: 409,
+    details: [{ status }],
+  });
+}
+
+export function handymanUnlistedIntakeTriageIdempotencyConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_TRIAGE_IDEMPOTENCY_CONFLICT,
+    message:
+      'Idempotency key has already been used with a different triage decision payload.',
+    statusCode: 409,
+  });
+}
+
+export function handymanUnlistedIntakeTriageCatalogServiceInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_TRIAGE_CATALOG_SERVICE_INVALID,
+    message:
+      'catalogServiceId must reference an existing ACTIVE service_catalog entry of this case Client; no catalog entry is created by triage.',
+    statusCode: 400,
+  });
+}
+
+export function handymanUnlistedIntakeTriageUomInvalidError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_TRIAGE_UOM_INVALID,
+    message: 'manualQuoteUomId must reference an existing ACTIVE unit of measure.',
+    statusCode: 400,
+  });
+}

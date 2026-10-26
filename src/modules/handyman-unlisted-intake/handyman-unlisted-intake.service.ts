@@ -49,18 +49,34 @@ import {
   handymanUnlistedIntakeCaseNotFoundError,
   handymanUnlistedIntakeForbiddenError,
   handymanUnlistedIntakeIdempotencyConflictError,
+  handymanUnlistedIntakeTriageAlreadyRecordedError,
+  handymanUnlistedIntakeTriageCatalogServiceInvalidError,
+  handymanUnlistedIntakeTriageIdempotencyConflictError,
+  handymanUnlistedIntakeTriageUomInvalidError,
 } from './handyman-unlisted-intake.errors';
-import { handymanUnlistedIntakeRepository } from './handyman-unlisted-intake.repository';
+import {
+  handymanUnlistedIntakeRepository,
+  type NewHandymanUnlistedIntakeTriageDecisionInput,
+} from './handyman-unlisted-intake.repository';
 import type {
   HandymanUnlistedIntakeCaseRecord,
   HandymanUnlistedIntakeListPage,
+  HandymanUnlistedIntakeStatus,
+  HandymanUnlistedIntakeTriageDecisionRecord,
   PublicHandymanUnlistedIntakeCase,
   PublicHandymanUnlistedIntakeMutationResult,
+  PublicHandymanUnlistedIntakeTriageDecision,
+  PublicHandymanUnlistedIntakeTriageMutationResult,
+} from './handyman-unlisted-intake.types';
+import {
+  HANDYMAN_UNLISTED_INTAKE_TRIAGE_ELIGIBLE_STATUSES,
+  HANDYMAN_UNLISTED_INTAKE_TRIAGE_PROJECTION,
 } from './handyman-unlisted-intake.types';
 import {
   parseCreateBuildingCareUnlistedIntakeBody,
   parseCreateCareWorkspaceUnlistedIntakeBody,
   parseUnlistedIntakeListQuery,
+  parseUnlistedIntakeTriageBody,
   parseUnlistedIntakeUuidParam,
 } from './handyman-unlisted-intake.validation';
 
@@ -91,9 +107,50 @@ async function resolveBuildingTimezoneForPreferredWindow(
   return tz.trim();
 }
 
+/**
+ * Append-only Operations triage decision fact, projected for internal
+ * (Operations / Customer Care) surfaces. The payload deliberately carries NO
+ * price: the manual branch stores a requirement (summary / quantity / UOM)
+ * that PART 02 turns into real quotation lines under the existing quotation
+ * and customer-approval authorities.
+ */
+export function toPublicHandymanUnlistedIntakeTriageDecision(
+  record: HandymanUnlistedIntakeTriageDecisionRecord,
+): PublicHandymanUnlistedIntakeTriageDecision {
+  return {
+    id: record.id,
+    intakeCaseId: record.intakeCaseId,
+    clientId: record.clientId,
+    buildingId: record.buildingId,
+    tenantCompanyId: record.tenantCompanyId,
+    decision: record.decision,
+    statusAfter: record.statusAfter,
+    justification: record.justification,
+    clarificationRequest: record.clarificationRequest,
+    catalogServiceId: record.catalogServiceId,
+    customServiceName: record.customServiceName,
+    customServiceNotes: record.customServiceNotes,
+    manualQuoteSummary: record.manualQuoteSummary,
+    manualQuoteQuantity: record.manualQuoteQuantity,
+    manualQuoteUomId: record.manualQuoteUomId,
+    manualQuotationRequired:
+      record.decision === 'ONE_TIME_MANUAL_QUOTATION_REQUIRED',
+    triagedByUserId: record.triagedByUserId,
+    triagedByDisplayName: record.triagedByDisplayName,
+    triagedAt: record.triagedAt.toISOString(),
+    idempotencyKey: record.idempotencyKey,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
 export function toPublicHandymanUnlistedIntakeCase(
   record: HandymanUnlistedIntakeCaseRecord,
   internalNotes: PublicHandymanInternalNote[] = [],
+  triage: {
+    triage: HandymanUnlistedIntakeTriageDecisionRecord | null;
+    triageHistory: HandymanUnlistedIntakeTriageDecisionRecord[];
+  } = { triage: null, triageHistory: [] },
 ): PublicHandymanUnlistedIntakeCase {
   const preferredWindowStart = record.preferredWindowStart
     ? record.preferredWindowStart.toISOString()
@@ -129,6 +186,12 @@ export function toPublicHandymanUnlistedIntakeCase(
           }
         : null,
     status: record.status,
+    triageDecisionId: record.triageDecisionId,
+    triagedAt: record.triagedAt ? record.triagedAt.toISOString() : null,
+    triage: triage.triage ? toPublicHandymanUnlistedIntakeTriageDecision(triage.triage) : null,
+    triageHistory: triage.triageHistory.map(
+      toPublicHandymanUnlistedIntakeTriageDecision,
+    ),
     createdByUserId: record.createdByUserId,
     createdByCareActorId: record.createdByCareActorId,
     createdByDisplayName: record.createdByDisplayName,
@@ -311,6 +374,36 @@ async function resolveBuildingCareUnlistedCreateScope(input: {
   };
 }
 
+/**
+ * Shared read projection for one intake case: its append-only internal notes
+ * AND its Operations triage decision(s). Both are scoped by the authoritative
+ * case row (Client + exact Building), never by a caller-supplied scope.
+ */
+async function loadCaseProjection(
+  executor: Pick<PoolClient, 'query'>,
+  record: HandymanUnlistedIntakeCaseRecord,
+): Promise<{
+  internalNotes: PublicHandymanInternalNote[];
+  triage: HandymanUnlistedIntakeTriageDecisionRecord | null;
+  triageHistory: HandymanUnlistedIntakeTriageDecisionRecord[];
+}> {
+  const [internalNotes, triageHistory] = await Promise.all([
+    loadInternalNotesForCase(executor, record),
+    handymanUnlistedIntakeRepository.listTriageDecisionsByCase(executor, {
+      clientId: record.clientId,
+      buildingId: record.buildingId,
+      intakeCaseId: record.id,
+    }),
+  ]);
+  return {
+    internalNotes,
+    triage:
+      triageHistory.find((row) => row.id === record.triageDecisionId) ??
+      null,
+    triageHistory,
+  };
+}
+
 async function loadInternalNotesForCase(
   executor: Pick<PoolClient, 'query'>,
   record: HandymanUnlistedIntakeCaseRecord,
@@ -439,9 +532,9 @@ export async function createBuildingCareUnlistedIntakeCase(input: {
       if (existing.payloadHash !== payloadHash) {
         throw handymanUnlistedIntakeIdempotencyConflictError();
       }
-      const notes = await loadInternalNotesForCase(tx, existing);
+      const projection = await loadCaseProjection(tx, existing);
       return {
-        intakeCase: toPublicHandymanUnlistedIntakeCase(existing, notes),
+        intakeCase: toPublicHandymanUnlistedIntakeCase(existing, projection.internalNotes, projection),
         replayed: true,
       };
     }
@@ -591,8 +684,8 @@ export async function getBuildingCareUnlistedIntakeCase(input: {
     throw careAuthorityDeniedError();
   }
 
-  const notes = await loadInternalNotesForCase(getPool(), record);
-  return toPublicHandymanUnlistedIntakeCase(record, notes);
+  const projection = await loadCaseProjection(getPool(), record);
+  return toPublicHandymanUnlistedIntakeCase(record, projection.internalNotes, projection);
 }
 
 /**
@@ -637,8 +730,8 @@ export async function listBuildingCareUnlistedIntakeCases(input: {
   const sliced = rows.slice(0, q.limit);
   const items: PublicHandymanUnlistedIntakeCase[] = [];
   for (const row of sliced) {
-    const notes = await loadInternalNotesForCase(getPool(), row);
-    items.push(toPublicHandymanUnlistedIntakeCase(row, notes));
+    const projection = await loadCaseProjection(getPool(), row);
+    items.push(toPublicHandymanUnlistedIntakeCase(row, projection.internalNotes, projection));
   }
 
   return {
@@ -711,9 +804,9 @@ export async function createCareWorkspaceUnlistedIntakeCase(input: {
         if (prior.payloadHash !== payloadHash) {
           throw handymanUnlistedIntakeIdempotencyConflictError();
         }
-        const notes = await loadInternalNotesForCase(tx, prior);
+        const projection = await loadCaseProjection(tx, prior);
         return {
-          intakeCase: toPublicHandymanUnlistedIntakeCase(prior, notes),
+          intakeCase: toPublicHandymanUnlistedIntakeCase(prior, projection.internalNotes, projection),
           replayed: true,
           careActorId: existingExchange.careActorId!,
         };
@@ -920,9 +1013,9 @@ export async function createCareWorkspaceUnlistedIntakeCase(input: {
       if (prior.payloadHash !== payloadHash) {
         throw handymanUnlistedIntakeIdempotencyConflictError();
       }
-      const notes = await loadInternalNotesForCase(tx, prior);
+      const projection = await loadCaseProjection(tx, prior);
       return {
-        intakeCase: toPublicHandymanUnlistedIntakeCase(prior, notes),
+        intakeCase: toPublicHandymanUnlistedIntakeCase(prior, projection.internalNotes, projection),
         replayed: true,
       };
     }
@@ -1097,8 +1190,8 @@ export async function getCareWorkspaceUnlistedIntakeCase(input: {
         buildingId: record.buildingId,
         spaceId: record.spaceId,
       });
-      const notes = await loadInternalNotesForCase(tx, record);
-      return toPublicHandymanUnlistedIntakeCase(record, notes);
+      const projection = await loadCaseProjection(tx, record);
+      return toPublicHandymanUnlistedIntakeCase(record, projection.internalNotes, projection);
     });
   }
 
@@ -1116,8 +1209,8 @@ export async function getCareWorkspaceUnlistedIntakeCase(input: {
     buildingId: record.buildingId,
     assertedClientId: record.clientId,
   });
-  const notes = await loadInternalNotesForCase(getPool(), record);
-  return toPublicHandymanUnlistedIntakeCase(record, notes);
+  const projection = await loadCaseProjection(getPool(), record);
+  return toPublicHandymanUnlistedIntakeCase(record, projection.internalNotes, projection);
 }
 
 /**
@@ -1153,8 +1246,8 @@ export async function listCareWorkspaceUnlistedIntakeCases(input: {
     const sliced = rows.slice(0, q.limit);
     const items: PublicHandymanUnlistedIntakeCase[] = [];
     for (const row of sliced) {
-      const notes = await loadInternalNotesForCase(getPool(), row);
-      items.push(toPublicHandymanUnlistedIntakeCase(row, notes));
+      const projection = await loadCaseProjection(getPool(), row);
+      items.push(toPublicHandymanUnlistedIntakeCase(row, projection.internalNotes, projection));
     }
     return {
       items,
@@ -1244,8 +1337,8 @@ export async function listOperationsUnlistedIntakeCases(input: {
   const sliced = rows.slice(0, q.limit);
   const items: PublicHandymanUnlistedIntakeCase[] = [];
   for (const row of sliced) {
-    const notes = await loadInternalNotesForCase(getPool(), row);
-    items.push(toPublicHandymanUnlistedIntakeCase(row, notes));
+    const projection = await loadCaseProjection(getPool(), row);
+    items.push(toPublicHandymanUnlistedIntakeCase(row, projection.internalNotes, projection));
   }
 
   return {
@@ -1305,8 +1398,8 @@ export async function getUnlistedIntakeCase(input: {
     buildingId: record.buildingId,
   });
 
-  const notes = await loadInternalNotesForCase(getPool(), record);
-  return toPublicHandymanUnlistedIntakeCase(record, notes);
+  const projection = await loadCaseProjection(getPool(), record);
+  return toPublicHandymanUnlistedIntakeCase(record, projection.internalNotes, projection);
 }
 
 export const handymanUnlistedIntakeService = {
@@ -1320,4 +1413,310 @@ export const handymanUnlistedIntakeService = {
   getUnlistedIntakeCase,
   computeUnlistedIntakePayloadHash,
   toPublicHandymanUnlistedIntakeCase,
+  computeUnlistedIntakeTriagePayloadHash,
+  recordUnlistedIntakeTriageDecision,
+  listUnlistedIntakeTriageDecisions,
+  toPublicHandymanUnlistedIntakeTriageDecision,
 };
+
+// ==========================================================================
+// CR-HM-MANUAL-QUOTATION-01 PART 01 — authorized Operations triage.
+//
+// One append-only decision per case, projected into exactly one governed
+// status. Nothing here creates a `service_catalog` row, a quotation, an
+// execution scope, an assignment or a customer approval: `MATCH_EXISTING_
+// CATALOG_SERVICE` only anchors an ALREADY-EXISTING ACTIVE entry of THIS
+// Client, and `ONE_TIME_MANUAL_QUOTATION_REQUIRED` only records the
+// requirement PART 02 quotes against. Triage is therefore a classification
+// fact, never a commercial commitment.
+// ==========================================================================
+
+export function computeUnlistedIntakeTriagePayloadHash(input: {
+  intakeCaseId: string;
+  decision: string;
+  statusAfter: HandymanUnlistedIntakeStatus;
+  justification: string;
+  clarificationRequest: string | null;
+  catalogServiceId: string | null;
+  customServiceName: string | null;
+  customServiceNotes: string | null;
+  manualQuoteSummary: string | null;
+  manualQuoteQuantity: string | null;
+  manualQuoteUomId: string | null;
+}): string {
+  return createHash('sha256')
+    .update(stableJson(input))
+    .digest('hex');
+}
+
+async function assertOperationsTriageAuthority(actorUserId: string): Promise<void> {
+  await assertNotCustomerFacingIntakeActor(actorUserId);
+  const user = await userRepository.findById(actorUserId);
+  if (!user || user.status !== 'ACTIVE') {
+    throw handymanUnlistedIntakeForbiddenError();
+  }
+  const permissions =
+    await permissionService.resolvePermissionsForUser(actorUserId);
+  // Triage is a management write on Handyman commercial intake: the SAME
+  // governed vocabulary as every other Handyman quotation write. Care
+  // mediation authority (`handyman.care.building`) is deliberately NOT
+  // sufficient — the Care actor never classifies its own intake.
+  if (!permissions.includes('tenant_company.manage')) {
+    throw handymanUnlistedIntakeForbiddenError(
+      'Only authorized Handyman Operations personnel may record an unlisted intake triage decision.',
+    );
+  }
+}
+
+/**
+ * POST /api/v1/handyman/operations/unlisted-intake-cases/:intakeCaseId/triage-decisions
+ */
+export async function recordUnlistedIntakeTriageDecision(input: {
+  actorUserId: string;
+  intakeCaseId: string;
+  body: unknown;
+  headerIdempotencyKey?: string;
+}): Promise<PublicHandymanUnlistedIntakeTriageMutationResult> {
+  const intakeCaseId = parseUnlistedIntakeUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+  const parsed = parseUnlistedIntakeTriageBody(
+    input.body,
+    input.headerIdempotencyKey,
+  );
+  await assertOperationsTriageAuthority(input.actorUserId);
+
+  const statusAfter: HandymanUnlistedIntakeStatus =
+    HANDYMAN_UNLISTED_INTAKE_TRIAGE_PROJECTION[parsed.decision];
+
+  const payloadHash = computeUnlistedIntakeTriagePayloadHash({
+    intakeCaseId,
+    decision: parsed.decision,
+    statusAfter,
+    justification: parsed.justification,
+    clarificationRequest: parsed.clarificationRequest,
+    catalogServiceId: parsed.catalogServiceId,
+    customServiceName: parsed.customServiceName,
+    customServiceNotes: parsed.customServiceNotes,
+    manualQuoteSummary: parsed.manualQuoteSummary,
+    manualQuoteQuantity: parsed.manualQuoteQuantity,
+    manualQuoteUomId: parsed.manualQuoteUomId,
+  });
+
+  return withTransaction(async (tx) => {
+    // Per-case serialization: a concurrent second decision on the same case
+    // waits here, then observes the committed projection and is refused.
+    await tx.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+      ['handyman_unlisted_intake_triage', intakeCaseId],
+    );
+
+    const caseRow =
+      await handymanUnlistedIntakeRepository.findCaseForTriageLock(
+        tx,
+        intakeCaseId,
+      );
+    if (!caseRow) {
+      throw handymanUnlistedIntakeCaseNotFoundError();
+    }
+    await assertBuildingScopedResourceAccess(input.actorUserId, {
+      clientId: caseRow.clientId,
+      buildingId: caseRow.buildingId,
+    });
+
+    const replayed =
+      await handymanUnlistedIntakeRepository.findTriageDecisionByCaseAndIdempotencyKey(
+        tx,
+        intakeCaseId,
+        parsed.idempotencyKey,
+      );
+    if (replayed) {
+      if (replayed.payloadHash !== payloadHash) {
+        throw handymanUnlistedIntakeTriageIdempotencyConflictError();
+      }
+      const refreshed = await handymanUnlistedIntakeRepository.findById(
+        tx,
+        intakeCaseId,
+      );
+      if (!refreshed) throw handymanUnlistedIntakeCaseNotFoundError();
+      const projection = await loadCaseProjection(tx, refreshed);
+      return {
+        replayed: true,
+        decision: toPublicHandymanUnlistedIntakeTriageDecision(replayed),
+        intakeCase: toPublicHandymanUnlistedIntakeCase(
+          refreshed,
+          projection.internalNotes,
+          projection,
+        ),
+      };
+    }
+
+    const history =
+      await handymanUnlistedIntakeRepository.listTriageDecisionsByCase(tx, {
+        clientId: caseRow.clientId,
+        buildingId: caseRow.buildingId,
+        intakeCaseId,
+      });
+    const hasEffectiveDecision =
+      caseRow.hasEffectiveDecision ||
+      history.some(
+        (row) => row.decision !== 'REQUEST_MORE_INFORMATION_OR_INSPECTION',
+      );
+    if (
+      !(
+        HANDYMAN_UNLISTED_INTAKE_TRIAGE_ELIGIBLE_STATUSES as readonly string[]
+      ).includes(caseRow.status) ||
+      hasEffectiveDecision
+    ) {
+      throw handymanUnlistedIntakeTriageAlreadyRecordedError(caseRow.status);
+    }
+    // Exactly one clarification round is permitted: it keeps
+    // REQUEST_MORE_INFORMATION_OR_INSPECTION a real lane (the case returns to
+    // the Operations queue after Care/tenant answers) without letting an
+    // unlisted case live in an open question forever.
+    if (
+      parsed.decision === 'REQUEST_MORE_INFORMATION_OR_INSPECTION' &&
+      history.length > 0
+    ) {
+      throw handymanUnlistedIntakeTriageAlreadyRecordedError(
+        caseRow.status,
+        'An unlisted service intake case may request more information or an inspection only once before it is classified.',
+      );
+    }
+
+    if (parsed.catalogServiceId !== null) {
+      const anchored =
+        await handymanUnlistedIntakeRepository.findCatalogServiceForTriage(
+          tx,
+          caseRow.clientId,
+          parsed.catalogServiceId,
+        );
+      if (!anchored) {
+        throw handymanUnlistedIntakeTriageCatalogServiceInvalidError();
+      }
+    }
+    if (parsed.manualQuoteUomId !== null) {
+      const uom = await handymanUnlistedIntakeRepository.findActiveUomForTriage(
+        tx,
+        parsed.manualQuoteUomId,
+      );
+      if (!uom) {
+        throw handymanUnlistedIntakeTriageUomInvalidError();
+      }
+    }
+
+    const decisionInput: NewHandymanUnlistedIntakeTriageDecisionInput = {
+      clientId: caseRow.clientId,
+      buildingId: caseRow.buildingId,
+      tenantCompanyId: caseRow.tenantCompanyId,
+      intakeCaseId,
+      decision: parsed.decision,
+      statusAfter,
+      justification: parsed.justification,
+      clarificationRequest: parsed.clarificationRequest,
+      catalogServiceId: parsed.catalogServiceId,
+      customServiceName: parsed.customServiceName,
+      customServiceNotes: parsed.customServiceNotes,
+      manualQuoteSummary: parsed.manualQuoteSummary,
+      manualQuoteQuantity: parsed.manualQuoteQuantity,
+      manualQuoteUomId: parsed.manualQuoteUomId,
+      triagedByUserId: input.actorUserId,
+      idempotencyKey: parsed.idempotencyKey,
+      payloadHash,
+    };
+
+    const decision =
+      await handymanUnlistedIntakeRepository.insertTriageDecision(
+        tx,
+        decisionInput,
+      );
+    await handymanUnlistedIntakeRepository.projectCaseTriageState(tx, {
+      intakeCaseId,
+      // A clarification round records the immutable question without becoming
+      // the case's effective decision.
+      decisionId:
+        parsed.decision === 'REQUEST_MORE_INFORMATION_OR_INSPECTION'
+          ? null
+          : decision.id,
+      status: statusAfter,
+    });
+
+    await recordOperationalEvent(
+      {
+        clientId: caseRow.clientId,
+        buildingId: caseRow.buildingId,
+        actorUserId: input.actorUserId,
+        eventType: 'HANDYMAN_UNLISTED_SERVICE_INTAKE_TRIAGED',
+        entityType: 'HANDYMAN_UNLISTED_SERVICE_INTAKE_CASE',
+        entityId: intakeCaseId,
+        summary: `Unlisted service intake case triaged by Operations (${parsed.decision} -> ${statusAfter}).`,
+        metadata: {
+          intakeCaseId,
+          triageDecisionId: decision.id,
+          decision: parsed.decision,
+          statusAfter,
+          manualQuotationRequired:
+            parsed.decision === 'ONE_TIME_MANUAL_QUOTATION_REQUIRED',
+          catalogServiceId: parsed.catalogServiceId,
+        },
+      },
+      tx,
+    );
+
+    const updated = await handymanUnlistedIntakeRepository.findById(
+      tx,
+      intakeCaseId,
+    );
+    if (!updated) throw handymanUnlistedIntakeCaseNotFoundError();
+    const projection = await loadCaseProjection(tx, updated);
+
+    return {
+      replayed: false,
+      decision: toPublicHandymanUnlistedIntakeTriageDecision(decision),
+      intakeCase: toPublicHandymanUnlistedIntakeCase(
+        updated,
+        projection.internalNotes,
+        projection,
+      ),
+    };
+  });
+}
+
+/**
+ * GET /api/v1/handyman/operations/unlisted-intake-cases/:intakeCaseId/triage-decisions
+ * — the full append-only triage history (clarification rounds included).
+ */
+export async function listUnlistedIntakeTriageDecisions(input: {
+  actorUserId: string;
+  intakeCaseId: string;
+}): Promise<PublicHandymanUnlistedIntakeTriageDecision[]> {
+  const intakeCaseId = parseUnlistedIntakeUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+  await assertOperationsOrCareReadSessionAuthority(input.actorUserId);
+
+  const record = await handymanUnlistedIntakeRepository.findById(
+    undefined,
+    intakeCaseId,
+  );
+  if (!record) {
+    throw handymanUnlistedIntakeCaseNotFoundError();
+  }
+  await assertBuildingScopedResourceAccess(input.actorUserId, {
+    clientId: record.clientId,
+    buildingId: record.buildingId,
+  });
+
+  const rows =
+    await handymanUnlistedIntakeRepository.listTriageDecisionsByCase(
+      undefined,
+      {
+        clientId: record.clientId,
+        buildingId: record.buildingId,
+        intakeCaseId,
+      },
+    );
+  return rows.map(toPublicHandymanUnlistedIntakeTriageDecision);
+}

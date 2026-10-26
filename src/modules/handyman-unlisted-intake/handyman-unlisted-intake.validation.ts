@@ -6,8 +6,13 @@ import {
   HANDYMAN_UNLISTED_INTAKE_MAX_DESCRIPTION_LENGTH,
   HANDYMAN_UNLISTED_INTAKE_MAX_IDEMPOTENCY_KEY_LENGTH,
   HANDYMAN_UNLISTED_INTAKE_MAX_SERVICE_NAME_LENGTH,
+  HANDYMAN_UNLISTED_INTAKE_MAX_TRIAGE_DETAIL_LENGTH,
+  HANDYMAN_UNLISTED_INTAKE_MAX_TRIAGE_JUSTIFICATION_LENGTH,
+  HANDYMAN_UNLISTED_INTAKE_MIN_TRIAGE_JUSTIFICATION_LENGTH,
   HANDYMAN_UNLISTED_INTAKE_STATUSES,
+  HANDYMAN_UNLISTED_INTAKE_TRIAGE_DECISIONS,
   type HandymanUnlistedIntakeStatus,
+  type HandymanUnlistedIntakeTriageDecision,
 } from './handyman-unlisted-intake.types';
 
 const ALLOWED_CREATE_BODY_KEYS = new Set([
@@ -625,5 +630,340 @@ export function parseUnlistedIntakeListQuery(
     ...(status ? { status } : {}),
     limit,
     offset,
+  };
+}
+
+
+// ==========================================================================
+// CR-HM-MANUAL-QUOTATION-01 PART 01 — Operations triage decision body.
+//
+// Whitelist parser only: the caller names the DECISION and the branch facts.
+// The resulting status projection, the Client/Building/Tenant scope, the
+// actor, the timestamps and the payload hash are ALWAYS server-derived, and
+// every attempt to smuggle one in (or to attach a quotation/price fact) is a
+// hard 400 — never silently ignored, because a silently dropped field would
+// read back as a different decision than the one Operations intended.
+// ==========================================================================
+
+const ALLOWED_TRIAGE_BODY_KEYS = new Set([
+  'decision',
+  'justification',
+  'clarificationRequest',
+  'catalogServiceId',
+  'customServiceName',
+  'customServiceNotes',
+  'manualQuoteSummary',
+  'manualQuoteQuantity',
+  'manualQuoteUomId',
+  'idempotencyKey',
+]);
+
+const FORBIDDEN_TRIAGE_KEYS = new Set([
+  'clientId',
+  'buildingId',
+  'spaceId',
+  'tenantCompanyId',
+  'tenantPicId',
+  'intakeCaseId',
+  'status',
+  'statusAfter',
+  'triagedAt',
+  'triagedByUserId',
+  'createdByUserId',
+  'actorUserId',
+  'careActorId',
+  'payloadHash',
+  'createdAt',
+  'updatedAt',
+  'quotationId',
+  'quotationVersionId',
+  'quotationLineId',
+  'executionScopeId',
+  'workOrderId',
+  'amount',
+  'unitAmount',
+  'price',
+  'currency',
+  'items',
+  'serviceCatalogId',
+  'serviceVariantId',
+]);
+
+export type ParsedHandymanUnlistedIntakeTriageBody = {
+  decision: HandymanUnlistedIntakeTriageDecision;
+  justification: string;
+  clarificationRequest: string | null;
+  catalogServiceId: string | null;
+  customServiceName: string | null;
+  customServiceNotes: string | null;
+  manualQuoteSummary: string | null;
+  manualQuoteQuantity: string | null;
+  manualQuoteUomId: string | null;
+  idempotencyKey: string;
+};
+
+function triageFail(
+  field: string,
+  message: string,
+): never {
+  throw AppError.validation('Unlisted intake triage validation failed.', [
+    { field, message },
+  ]);
+}
+
+function readTriageText(
+  record: Record<string, unknown>,
+  field: string,
+  options: { required: boolean; maxLength: number },
+): string | null {
+  const raw = record[field];
+  if (raw === undefined || raw === null) {
+    if (options.required) {
+      triageFail(field, `${field} is required for this triage decision.`);
+    }
+    return null;
+  }
+  if (typeof raw !== 'string') {
+    triageFail(field, `${field} must be a string.`);
+  }
+  const value = normalizeText(raw);
+  if (value.length === 0) {
+    if (options.required) {
+      triageFail(field, `${field} must be a non-empty string.`);
+    }
+    return null;
+  }
+  if (value.length > options.maxLength) {
+    triageFail(
+      field,
+      `${field} must be at most ${options.maxLength} characters.`,
+    );
+  }
+  if (value.includes('\u0000')) {
+    triageFail(field, `${field} must not contain NUL characters.`);
+  }
+  return value;
+}
+
+function readTriageUuid(
+  record: Record<string, unknown>,
+  field: string,
+  required: boolean,
+): string | null {
+  const raw = record[field];
+  if (raw === undefined || raw === null) {
+    if (required) triageFail(field, `${field} is required for this triage decision.`);
+    return null;
+  }
+  if (typeof raw !== 'string' || !isValidUuid(raw)) {
+    triageFail(field, `${field} must be a valid UUID.`);
+  }
+  return raw.trim().toLowerCase();
+}
+
+function readTriageQuantity(value: unknown): string {
+  const numeric =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim() !== ''
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    triageFail(
+      'manualQuoteQuantity',
+      'manualQuoteQuantity must be a positive number.',
+    );
+  }
+  const scaled = Math.round(numeric * 10_000) / 10_000;
+  if (scaled <= 0 || scaled > 999_999_999_999) {
+    triageFail('manualQuoteQuantity', 'manualQuoteQuantity is out of range.');
+  }
+  return scaled.toFixed(4);
+}
+
+export function parseUnlistedIntakeTriageBody(
+  body: unknown,
+  headerIdempotencyKey?: string,
+): ParsedHandymanUnlistedIntakeTriageBody {
+  if (body === undefined || body === null) {
+    triageFail('body', 'Request body must be a JSON object.');
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    triageFail('body', 'Request body must be a JSON object.');
+  }
+  const record = body as Record<string, unknown>;
+
+  for (const key of Object.keys(record)) {
+    if (FORBIDDEN_TRIAGE_KEYS.has(key)) {
+      triageFail(
+        key,
+        key === 'serviceCatalogId'
+          ? 'serviceCatalogId is not a triage field; use catalogServiceId to anchor an existing catalog service.'
+          : `${key} is server-derived and must not be supplied.`,
+      );
+    }
+    if (!ALLOWED_TRIAGE_BODY_KEYS.has(key)) {
+      triageFail(
+        key,
+        `Unexpected request field "${key}"; see the documented triage body contract.`,
+      );
+    }
+  }
+
+  const rawDecision =
+    typeof record.decision === 'string'
+      ? record.decision.trim().toUpperCase()
+      : '';
+  if (
+    !(HANDYMAN_UNLISTED_INTAKE_TRIAGE_DECISIONS as readonly string[]).includes(
+      rawDecision,
+    )
+  ) {
+    triageFail(
+      'decision',
+      `decision must be one of: ${HANDYMAN_UNLISTED_INTAKE_TRIAGE_DECISIONS.join(', ')}.`,
+    );
+  }
+  const decision = rawDecision as HandymanUnlistedIntakeTriageDecision;
+
+  const justification = readTriageText(record, 'justification', {
+    required: true,
+    maxLength: HANDYMAN_UNLISTED_INTAKE_MAX_TRIAGE_JUSTIFICATION_LENGTH,
+  }) as string;
+  if (
+    justification.length <
+    HANDYMAN_UNLISTED_INTAKE_MIN_TRIAGE_JUSTIFICATION_LENGTH
+  ) {
+    triageFail(
+      'justification',
+      `justification must be at least ${HANDYMAN_UNLISTED_INTAKE_MIN_TRIAGE_JUSTIFICATION_LENGTH} characters.`,
+    );
+  }
+
+  const clarificationRequest = readTriageText(
+    record,
+    'clarificationRequest',
+    {
+      required: decision === 'REQUEST_MORE_INFORMATION_OR_INSPECTION',
+      maxLength: HANDYMAN_UNLISTED_INTAKE_MAX_TRIAGE_DETAIL_LENGTH,
+    },
+  );
+  const catalogServiceId = readTriageUuid(
+    record,
+    'catalogServiceId',
+    decision === 'MATCH_EXISTING_CATALOG_SERVICE',
+  );
+  const customServiceName = readTriageText(record, 'customServiceName', {
+    required: decision === 'CREATE_CLIENT_CUSTOM_SERVICE',
+    maxLength: HANDYMAN_UNLISTED_INTAKE_MAX_SERVICE_NAME_LENGTH,
+  });
+  const customServiceNotes = readTriageText(record, 'customServiceNotes', {
+    required: false,
+    maxLength: HANDYMAN_UNLISTED_INTAKE_MAX_TRIAGE_DETAIL_LENGTH,
+  });
+  const manualQuoteSummary = readTriageText(record, 'manualQuoteSummary', {
+    required: decision === 'ONE_TIME_MANUAL_QUOTATION_REQUIRED',
+    maxLength: HANDYMAN_UNLISTED_INTAKE_MAX_TRIAGE_DETAIL_LENGTH,
+  });
+  const manualQuoteUomId = readTriageUuid(
+    record,
+    'manualQuoteUomId',
+    decision === 'ONE_TIME_MANUAL_QUOTATION_REQUIRED',
+  );
+
+  if (
+    record.manualQuoteUomId !== undefined &&
+    decision !== 'ONE_TIME_MANUAL_QUOTATION_REQUIRED'
+  ) {
+    triageFail(
+      'manualQuoteUomId',
+      'manualQuoteUomId is only accepted for ONE_TIME_MANUAL_QUOTATION_REQUIRED.',
+    );
+  }
+
+  let manualQuoteQuantity: string | null = null;
+  if (record.manualQuoteQuantity !== undefined) {
+    if (decision !== 'ONE_TIME_MANUAL_QUOTATION_REQUIRED') {
+      triageFail(
+        'manualQuoteQuantity',
+        'manualQuoteQuantity is only accepted for ONE_TIME_MANUAL_QUOTATION_REQUIRED.',
+      );
+    }
+    manualQuoteQuantity = readTriageQuantity(record.manualQuoteQuantity);
+  } else if (decision === 'ONE_TIME_MANUAL_QUOTATION_REQUIRED') {
+    triageFail(
+      'manualQuoteQuantity',
+      'manualQuoteQuantity is required for ONE_TIME_MANUAL_QUOTATION_REQUIRED.',
+    );
+  }
+
+  // Branch exclusivity, mirrored from the DB shape check so the caller gets
+  // a 400 with the offending field instead of a database rejection.
+  const branchFacts: Array<[string, unknown]> = [
+    ['catalogServiceId', catalogServiceId],
+    ['customServiceName', customServiceName],
+    ['manualQuoteSummary', manualQuoteSummary],
+    ['clarificationRequest', clarificationRequest],
+  ];
+  const foreignByBranch: Record<HandymanUnlistedIntakeTriageDecision, string[]> = {
+    MATCH_EXISTING_CATALOG_SERVICE: [
+      'customServiceName',
+      'manualQuoteSummary',
+      'clarificationRequest',
+    ],
+    CREATE_CLIENT_CUSTOM_SERVICE: [
+      'catalogServiceId',
+      'manualQuoteSummary',
+      'clarificationRequest',
+    ],
+    ONE_TIME_MANUAL_QUOTATION_REQUIRED: [
+      'catalogServiceId',
+      'customServiceName',
+      'clarificationRequest',
+    ],
+    REQUEST_MORE_INFORMATION_OR_INSPECTION: [
+      'catalogServiceId',
+      'customServiceName',
+      'manualQuoteSummary',
+    ],
+    REJECT_UNSUPPORTED: [
+      'catalogServiceId',
+      'customServiceName',
+      'manualQuoteSummary',
+      'clarificationRequest',
+    ],
+  };
+  for (const [name, value] of branchFacts) {
+    const isForeign = foreignByBranch[decision].includes(name);
+    if (isForeign && value !== null) {
+      triageFail(
+        name,
+        `${name} must not be supplied for ${decision}.`,
+      );
+    }
+  }
+  if (
+    decision !== 'CREATE_CLIENT_CUSTOM_SERVICE' &&
+    customServiceNotes !== null
+  ) {
+    triageFail(
+      'customServiceNotes',
+      'customServiceNotes is only accepted for CREATE_CLIENT_CUSTOM_SERVICE.',
+    );
+  }
+  const idempotencyKey = parseIdempotencyKey(record, headerIdempotencyKey);
+
+  return {
+    decision,
+    justification,
+    clarificationRequest,
+    catalogServiceId,
+    customServiceName,
+    customServiceNotes:
+      decision === 'CREATE_CLIENT_CUSTOM_SERVICE' ? customServiceNotes : null,
+    manualQuoteSummary,
+    manualQuoteQuantity,
+    manualQuoteUomId,
+    idempotencyKey,
   };
 }

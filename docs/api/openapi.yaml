@@ -86886,6 +86886,150 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /handyman/operations/unlisted-intake-cases/{intakeCaseId}/triage-decisions:
+    post:
+      tags:
+        - Handyman Operations
+      operationId: recordUnlistedIntakeTriageDecision
+      summary: Record an authorized Operations triage decision on an unlisted-service intake case
+      description: >-
+        CR-HM-MANUAL-QUOTATION-01 PART 01. Records the ONE append-only
+        Operations triage decision on a PENDING_TRIAGE (or
+        AWAITING_INFORMATION) unlisted-service intake case and projects the
+        case into the single governed status that decision authorizes. A
+        clarification round (REQUEST_MORE_INFORMATION_OR_INSPECTION) is allowed
+        exactly once, is never the case's effective decision, and the effective
+        decision is afterwards anchored one-to-one on the case by migration
+        0487; a second clarification or any second classification returns 409:
+        MATCH_EXISTING_CATALOG_SERVICE (anchors an EXISTING ACTIVE
+        service_catalog entry of this Client), CREATE_CLIENT_CUSTOM_SERVICE,
+        ONE_TIME_MANUAL_QUOTATION_REQUIRED (TRIAGED_MANUAL_QUOTATION_READY),
+        REQUEST_MORE_INFORMATION_OR_INSPECTION (AWAITING_INFORMATION) or
+        REJECT_UNSUPPORTED (REJECTED_UNSUPPORTED). The registered customer
+        complaint, the visit preference and the internal notes are never
+        rewritten. No service_catalog entry is created, no price is stored,
+        and no quotation, execution scope, assignment or customer approval is
+        implied or bypassed. Requires tenant_company.manage PLUS active
+        exact-Client/Building Operations access (BE-02G); Customer Care
+        mediation authority alone and customer-facing Tenant PIC accounts are
+        refused. Replays on the same idempotency key and identical payload
+        return 200; a triaged case or a mismatched payload returns 409.
+      security:
+        - bearerAuth: []
+      x-required-permission: tenant_company.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_TRIAGE_ALREADY_RECORDED
+        - HANDYMAN_UNLISTED_INTAKE_TRIAGE_IDEMPOTENCY_CONFLICT
+        - HANDYMAN_UNLISTED_INTAKE_TRIAGE_CATALOG_SERVICE_INVALID
+        - HANDYMAN_UNLISTED_INTAKE_TRIAGE_UOM_INVALID
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanUnlistedIntakeTriageRequest"
+      responses:
+        "201":
+          description: Operations triage decision recorded and case projected; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeTriageMutationResult"
+        "200":
+          description: Idempotent replay of the recorded triage decision; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeTriageMutationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags:
+        - Handyman Operations
+      operationId: listUnlistedIntakeTriageDecisions
+      summary: Read the append-only Operations triage history of an unlisted-service intake case
+      description: >-
+        CR-HM-MANUAL-QUOTATION-01 PART 01. Lists every immutable Operations
+        triage decision recorded on an authorized unlisted-service intake case
+        in chronological order, clarification rounds included. Requires the
+        composite Operations/Care read authority and exact Client/Building
+        scope (BE-02G); customer-facing Tenant PIC accounts are denied.
+      security:
+        - bearerAuth: []
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Chronological triage decision history; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HandymanUnlistedIntakeTriageDecision"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /handyman/unlisted-intake-cases/{intakeCaseId}:
     get:
       tags:
@@ -140392,6 +140536,11 @@ components:
       type: string
       enum:
         - PENDING_TRIAGE
+        - AWAITING_INFORMATION
+        - TRIAGED_CATALOG_MATCHED
+        - TRIAGED_CLIENT_CUSTOM_SERVICE
+        - TRIAGED_MANUAL_QUOTATION_READY
+        - REJECTED_UNSUPPORTED
     CreateBuildingCareUnlistedIntakeRequest:
       type: object
       additionalProperties: false
@@ -140604,6 +140753,10 @@ components:
         - preferredWindowTimezone
         - preferredWindow
         - status
+        - triageDecisionId
+        - triagedAt
+        - triage
+        - triageHistory
         - createdByUserId
         - createdByCareActorId
         - createdByDisplayName
@@ -140676,6 +140829,26 @@ components:
           nullable: true
         status:
           $ref: "#/components/schemas/HandymanUnlistedIntakeStatus"
+        triageDecisionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            The ONE effective append-only Operations triage decision anchored
+            on this case (migration 0487 `handyman_unlisted_intake_triage_state`);
+            null while the case is untriaged or awaiting a clarification answer.
+        triagedAt:
+          type: string
+          format: date-time
+          nullable: true
+        triage:
+          allOf:
+            - $ref: "#/components/schemas/HandymanUnlistedIntakeTriageDecision"
+          nullable: true
+        triageHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/HandymanUnlistedIntakeTriageDecision"
         createdByUserId:
           type: string
           format: uuid
@@ -140714,6 +140887,168 @@ components:
               type: boolean
             internalNote:
               $ref: "#/components/schemas/HandymanInternalNoteMutationResult"
+    HandymanUnlistedIntakeTriageDecision:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - intakeCaseId
+        - clientId
+        - buildingId
+        - tenantCompanyId
+        - decision
+        - statusAfter
+        - justification
+        - clarificationRequest
+        - catalogServiceId
+        - customServiceName
+        - customServiceNotes
+        - manualQuoteSummary
+        - manualQuoteQuantity
+        - manualQuoteUomId
+        - manualQuotationRequired
+        - triagedByUserId
+        - triagedByDisplayName
+        - triagedAt
+        - idempotencyKey
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        intakeCaseId:
+          type: string
+          format: uuid
+        clientId:
+          type: string
+          format: uuid
+        buildingId:
+          type: string
+          format: uuid
+        tenantCompanyId:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum:
+            - MATCH_EXISTING_CATALOG_SERVICE
+            - CREATE_CLIENT_CUSTOM_SERVICE
+            - ONE_TIME_MANUAL_QUOTATION_REQUIRED
+            - REQUEST_MORE_INFORMATION_OR_INSPECTION
+            - REJECT_UNSUPPORTED
+        statusAfter:
+          $ref: "#/components/schemas/HandymanUnlistedIntakeStatus"
+        justification:
+          type: string
+          minLength: 10
+          maxLength: 2000
+        clarificationRequest:
+          type: string
+          nullable: true
+          maxLength: 1000
+        catalogServiceId:
+          type: string
+          format: uuid
+          nullable: true
+        customServiceName:
+          type: string
+          nullable: true
+          maxLength: 250
+        customServiceNotes:
+          type: string
+          nullable: true
+          maxLength: 1000
+        manualQuoteSummary:
+          type: string
+          nullable: true
+          maxLength: 1000
+        manualQuoteQuantity:
+          type: string
+          nullable: true
+          description: Decimal quantity as text (never a price).
+        manualQuoteUomId:
+          type: string
+          format: uuid
+          nullable: true
+        manualQuotationRequired:
+          type: boolean
+        triagedByUserId:
+          type: string
+          format: uuid
+        triagedByDisplayName:
+          type: string
+        triagedAt:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateHandymanUnlistedIntakeTriageRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - decision
+        - justification
+      properties:
+        decision:
+          type: string
+          enum:
+            - MATCH_EXISTING_CATALOG_SERVICE
+            - CREATE_CLIENT_CUSTOM_SERVICE
+            - ONE_TIME_MANUAL_QUOTATION_REQUIRED
+            - REQUEST_MORE_INFORMATION_OR_INSPECTION
+            - REJECT_UNSUPPORTED
+        justification:
+          type: string
+          minLength: 10
+          maxLength: 2000
+        clarificationRequest:
+          type: string
+          maxLength: 1000
+        catalogServiceId:
+          type: string
+          format: uuid
+        customServiceName:
+          type: string
+          maxLength: 250
+        customServiceNotes:
+          type: string
+          maxLength: 1000
+        manualQuoteSummary:
+          type: string
+          maxLength: 1000
+        manualQuoteQuantity:
+          type: number
+          exclusiveMinimum: 0
+        manualQuoteUomId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+    HandymanUnlistedIntakeTriageMutationResult:
+      type: object
+      additionalProperties: false
+      required:
+        - replayed
+        - decision
+        - intakeCase
+      properties:
+        replayed:
+          type: boolean
+        decision:
+          $ref: "#/components/schemas/HandymanUnlistedIntakeTriageDecision"
+        intakeCase:
+          $ref: "#/components/schemas/HandymanUnlistedIntakeCase"
     HandymanUnlistedIntakeListPage:
       type: object
       additionalProperties: false

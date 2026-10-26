@@ -18,6 +18,8 @@ import {
   listBuildingCareUnlistedIntakeCases,
   listCareWorkspaceUnlistedIntakeCases,
   listOperationsUnlistedIntakeCases,
+  listUnlistedIntakeTriageDecisions,
+  recordUnlistedIntakeTriageDecision,
 } from './handyman-unlisted-intake.service';
 
 function param(value: string | string[] | undefined): string {
@@ -181,6 +183,57 @@ export function createHandymanUnlistedIntakeRouter(): Router {
           query: req.query,
         });
         sendSuccess(res, item);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  // ==========================================================================
+  // CR-HM-MANUAL-QUOTATION-01 PART 01 — Operations triage authority.
+  //
+  // The WRITE is Operations-only: an explicit `tenant_company.manage` route
+  // guard (the vocabulary every other Handyman quotation write uses) PLUS the
+  // service-side active-user / not-customer-facing / exact-Building checks.
+  // Customer Care mediation authority (`handyman.care.building`) can create
+  // and annotate an intake case but NEVER classify it, and a customer-facing
+  // Tenant PIC is refused in both layers and again in the database trigger.
+  // The READ stays on the composite Operations/Care read authority already
+  // used by the triage queue.
+  // ==========================================================================
+  router.post(
+    '/handyman/operations/unlisted-intake-cases/:intakeCaseId/triage-decisions',
+    authenticationMiddleware,
+    requirePermission('tenant_company.manage'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try {
+        if (!req.auth?.userId) throw authenticationRequiredError();
+        const result = await recordUnlistedIntakeTriageDecision({
+          actorUserId: req.auth.userId,
+          intakeCaseId: param(req.params.intakeCaseId),
+          body: req.body,
+          headerIdempotencyKey: readIdempotencyHeader(req),
+        });
+        sendSuccess(res, result, result.replayed ? 200 : 201);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/handyman/operations/unlisted-intake-cases/:intakeCaseId/triage-decisions',
+    authenticationMiddleware,
+    async (req: Request, res: Response, next: NextFunction) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try {
+        if (!req.auth?.userId) throw authenticationRequiredError();
+        const items = await listUnlistedIntakeTriageDecisions({
+          actorUserId: req.auth.userId,
+          intakeCaseId: param(req.params.intakeCaseId),
+        });
+        sendSuccess(res, items);
       } catch (error) {
         next(error);
       }

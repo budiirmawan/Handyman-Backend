@@ -5,6 +5,7 @@ import type {
   HandymanUnlistedIntakeCaseRecord,
   HandymanUnlistedIntakeOriginChannel,
   HandymanUnlistedIntakeStatus,
+  HandymanUnlistedIntakeTriageDecisionRecord,
 } from './handyman-unlisted-intake.types';
 
 const UNLISTED_INTAKE_SELECT = `
@@ -26,6 +27,8 @@ const UNLISTED_INTAKE_SELECT = `
     c.preferred_window_end AS "preferredWindowEnd",
     c.preferred_window_timezone AS "preferredWindowTimezone",
     c.status,
+    st.triage_decision_id AS "triageDecisionId",
+    st.triaged_at AS "triagedAt",
     c.created_by_user_id AS "createdByUserId",
     c.created_by_care_actor_id AS "createdByCareActorId",
     COALESCE(u.display_name, ca.display_name, 'Customer Care') AS "createdByDisplayName",
@@ -34,6 +37,8 @@ const UNLISTED_INTAKE_SELECT = `
     c.created_at AS "createdAt",
     c.updated_at AS "updatedAt"
   FROM handyman_unlisted_service_intake_cases c
+  LEFT JOIN handyman_unlisted_intake_triage_state st
+    ON st.intake_case_id = c.id
   LEFT JOIN users u ON u.id = c.created_by_user_id
   LEFT JOIN handyman_handoff_care_actors ca ON ca.id = c.created_by_care_actor_id
 `;
@@ -354,6 +359,278 @@ async function listForOperationsTriageScoped(
   return result.rows;
 }
 
+const TRIAGE_DECISION_SELECT = `
+  SELECT
+    d.id,
+    d.client_id AS "clientId",
+    d.building_id AS "buildingId",
+    d.tenant_company_id AS "tenantCompanyId",
+    d.intake_case_id AS "intakeCaseId",
+    d.decision,
+    d.status_after AS "statusAfter",
+    d.justification,
+    d.clarification_request AS "clarificationRequest",
+    d.catalog_service_id AS "catalogServiceId",
+    d.custom_service_name AS "customServiceName",
+    d.custom_service_notes AS "customServiceNotes",
+    d.manual_quote_summary AS "manualQuoteSummary",
+    d.manual_quote_quantity::numeric(18, 4)::text AS "manualQuoteQuantity",
+    d.manual_quote_uom_id AS "manualQuoteUomId",
+    d.triaged_by_user_id AS "triagedByUserId",
+    u.display_name AS "triagedByDisplayName",
+    d.triaged_at AS "triagedAt",
+    d.idempotency_key AS "idempotencyKey",
+    d.payload_hash AS "payloadHash",
+    d.created_at AS "createdAt",
+    d.updated_at AS "updatedAt"
+  FROM handyman_unlisted_intake_triage_decisions d
+  LEFT JOIN users u ON u.id = d.triaged_by_user_id
+`;
+
+/**
+ * The authoritative intake row for a triage write, locked FOR UPDATE so two
+ * concurrent Operations decisions on one case serialize (the second one then
+ * observes the committed projection and is refused).
+ */
+async function findCaseForTriageLock(
+  executor: Pick<PoolClient, 'query'>,
+  id: string,
+): Promise<{
+  id: string;
+  clientId: string;
+  buildingId: string;
+  tenantCompanyId: string;
+  status: HandymanUnlistedIntakeStatus;
+  hasEffectiveDecision: boolean;
+} | null> {
+  const result = await executor.query<{
+    id: string;
+    client_id: string;
+    building_id: string;
+    tenant_company_id: string;
+    status: HandymanUnlistedIntakeStatus;
+    has_effective_decision: boolean;
+  }>(
+    `SELECT c.id, c.client_id, c.building_id, c.tenant_company_id, c.status,
+            EXISTS (
+              SELECT 1
+                FROM handyman_unlisted_intake_triage_state st
+               WHERE st.intake_case_id = c.id
+            ) AS has_effective_decision
+       FROM handyman_unlisted_service_intake_cases c
+      WHERE c.id = $1
+      FOR UPDATE`,
+    [id],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    buildingId: row.building_id,
+    tenantCompanyId: row.tenant_company_id,
+    status: row.status,
+    hasEffectiveDecision: row.has_effective_decision,
+  };
+}
+
+export type NewHandymanUnlistedIntakeTriageDecisionInput = {
+  id?: string;
+  clientId: string;
+  buildingId: string;
+  tenantCompanyId: string;
+  intakeCaseId: string;
+  decision: HandymanUnlistedIntakeTriageDecisionRecord['decision'];
+  statusAfter: HandymanUnlistedIntakeStatus;
+  justification: string;
+  clarificationRequest: string | null;
+  catalogServiceId: string | null;
+  customServiceName: string | null;
+  customServiceNotes: string | null;
+  manualQuoteSummary: string | null;
+  manualQuoteQuantity: string | null;
+  manualQuoteUomId: string | null;
+  triagedByUserId: string;
+  idempotencyKey: string;
+  payloadHash: string;
+};
+
+async function insertTriageDecision(
+  executor: Pick<PoolClient, 'query'>,
+  input: NewHandymanUnlistedIntakeTriageDecisionInput,
+): Promise<HandymanUnlistedIntakeTriageDecisionRecord> {
+  const id = input.id ?? randomUUID();
+  await executor.query(
+    `INSERT INTO handyman_unlisted_intake_triage_decisions (
+       id,
+       client_id,
+       building_id,
+       tenant_company_id,
+       intake_case_id,
+       decision,
+       status_after,
+       justification,
+       clarification_request,
+       catalog_service_id,
+       custom_service_name,
+       custom_service_notes,
+       manual_quote_summary,
+       manual_quote_quantity,
+       manual_quote_uom_id,
+       triaged_by_user_id,
+       idempotency_key,
+       payload_hash
+     )
+     VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+       $11, $12, $13, $14::numeric, $15, $16, $17, $18
+     )`,
+    [
+      id,
+      input.clientId,
+      input.buildingId,
+      input.tenantCompanyId,
+      input.intakeCaseId,
+      input.decision,
+      input.statusAfter,
+      input.justification,
+      input.clarificationRequest,
+      input.catalogServiceId,
+      input.customServiceName,
+      input.customServiceNotes,
+      input.manualQuoteSummary,
+      input.manualQuoteQuantity,
+      input.manualQuoteUomId,
+      input.triagedByUserId,
+      input.idempotencyKey,
+      input.payloadHash,
+    ],
+  );
+  const created = await findTriageDecisionById(executor, id);
+  if (!created) {
+    throw new Error(
+      'Failed to load newly inserted unlisted intake triage decision.',
+    );
+  }
+  return created;
+}
+
+async function findTriageDecisionById(
+  executor: Pick<PoolClient, 'query'>,
+  id: string,
+): Promise<HandymanUnlistedIntakeTriageDecisionRecord | null> {
+  const result = await executor.query<HandymanUnlistedIntakeTriageDecisionRecord>(
+    `${TRIAGE_DECISION_SELECT}
+      WHERE d.id = $1
+      LIMIT 1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findTriageDecisionByCaseAndIdempotencyKey(
+  executor: Pick<PoolClient, 'query'>,
+  intakeCaseId: string,
+  idempotencyKey: string,
+): Promise<HandymanUnlistedIntakeTriageDecisionRecord | null> {
+  const result = await executor.query<HandymanUnlistedIntakeTriageDecisionRecord>(
+    `${TRIAGE_DECISION_SELECT}
+      WHERE d.intake_case_id = $1
+        AND d.idempotency_key = $2
+      LIMIT 1`,
+    [intakeCaseId, idempotencyKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function listTriageDecisionsByCase(
+  executor: Pick<PoolClient, 'query'> = getPool(),
+  filters: {
+    clientId: string;
+    buildingId: string;
+    intakeCaseId: string;
+  },
+): Promise<HandymanUnlistedIntakeTriageDecisionRecord[]> {
+  const result = await executor.query<HandymanUnlistedIntakeTriageDecisionRecord>(
+    `${TRIAGE_DECISION_SELECT}
+      WHERE d.intake_case_id = $3
+        AND d.client_id = $1
+        AND d.building_id = $2
+      ORDER BY d.triaged_at ASC, d.id ASC`,
+    [filters.clientId, filters.buildingId, filters.intakeCaseId],
+  );
+  return result.rows;
+}
+
+/**
+ * The only permitted projection: the case's ONE effective decision is anchored
+ * in the 1:1 state row (skipped for a clarification round) and the case status
+ * is advanced to exactly the status that decision authorizes. The 0487 DB
+ * guards refuse anything else, including the ordering these two writes must
+ * follow (decision -> state -> status).
+ */
+async function projectCaseTriageState(
+  executor: Pick<PoolClient, 'query'>,
+  input: {
+    intakeCaseId: string;
+    /** null for a clarification round — it is never the effective decision. */
+    decisionId: string | null;
+    status: HandymanUnlistedIntakeStatus;
+  },
+): Promise<void> {
+  if (input.decisionId !== null) {
+    await executor.query(
+      `INSERT INTO handyman_unlisted_intake_triage_state (
+         intake_case_id, triage_decision_id, triaged_at, created_at, updated_at
+       )
+       VALUES ($1, $2, NOW(), NOW(), NOW())`,
+      [input.intakeCaseId, input.decisionId],
+    );
+  }
+  await executor.query(
+    `UPDATE handyman_unlisted_service_intake_cases
+        SET status = $2, updated_at = NOW()
+      WHERE id = $1`,
+    [input.intakeCaseId, input.status],
+  );
+}
+
+async function findCatalogServiceForTriage(
+  executor: Pick<PoolClient, 'query'>,
+  clientId: string,
+  catalogServiceId: string,
+): Promise<{ id: string; code: string; name: string } | null> {
+  const result = await executor.query<{
+    id: string;
+    code: string;
+    name: string;
+  }>(
+    `SELECT sc.id, sc.code, sc.name
+       FROM service_catalog sc
+      WHERE sc.id = $2
+        AND sc.client_id = $1
+        AND sc.status = 'ACTIVE'
+      LIMIT 1`,
+    [clientId, catalogServiceId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findActiveUomForTriage(
+  executor: Pick<PoolClient, 'query'>,
+  uomId: string,
+): Promise<{ id: string; code: string; name: string } | null> {
+  const result = await executor.query<{ id: string; code: string; name: string }>(
+    `SELECT u.id, u.code, u.name
+       FROM units_of_measure u
+      WHERE u.id = $1
+        AND u.status = 'ACTIVE'
+      LIMIT 1`,
+    [uomId],
+  );
+  return result.rows[0] ?? null;
+}
+
 export const handymanUnlistedIntakeRepository = {
   findById,
   findByActorAndIdempotencyKey,
@@ -361,4 +638,12 @@ export const handymanUnlistedIntakeRepository = {
   listByBuildingScoped,
   listForCareWorkspaceScoped,
   listForOperationsTriageScoped,
+  findCaseForTriageLock,
+  insertTriageDecision,
+  findTriageDecisionById,
+  findTriageDecisionByCaseAndIdempotencyKey,
+  listTriageDecisionsByCase,
+  projectCaseTriageState,
+  findCatalogServiceForTriage,
+  findActiveUomForTriage,
 };

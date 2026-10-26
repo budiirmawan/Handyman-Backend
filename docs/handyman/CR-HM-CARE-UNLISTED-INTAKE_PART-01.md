@@ -39,7 +39,7 @@ Table: `handyman_unlisted_service_intake_cases`
 | `preferred_window_start` | `TIMESTAMPTZ NULL` | Optional preferred visit window start (preference only) |
 | `preferred_window_end` | `TIMESTAMPTZ NULL` | Optional preferred visit window end (preference only) |
 | `preferred_window_timezone` | `TEXT NULL` | Server-derived Building IANA timezone when preferred window is provided |
-| `status` | `TEXT NOT NULL DEFAULT 'PENDING_TRIAGE'` | `CHECK (status IN ('PENDING_TRIAGE'))` |
+| `status` | `TEXT NOT NULL DEFAULT 'PENDING_TRIAGE'` | `CHECK (status IN ('PENDING_TRIAGE'))` — creation state only; widened by 0487 (CR-HM-MANUAL-QUOTATION-01 PART 01) with the five Operations triage outcomes |
 | `created_by_user_id` | `UUID NULL REFERENCES users(id)` | Authenticated Customer Care staff user (`num_nonnulls(created_by_user_id, created_by_care_actor_id) = 1`) |
 | `created_by_care_actor_id` | `UUID NULL REFERENCES handyman_handoff_care_actors(id)` | Attested BM Care Workspace actor |
 | `idempotency_key` | `TEXT NOT NULL` | Trimmed `1..200` chars; unique per `(created_by_user_id, idempotency_key)` and `(created_by_care_actor_id, idempotency_key)` |
@@ -115,7 +115,21 @@ All endpoints are mounted under `/api/v1` and return `Cache-Control: no-store`.
 New unlisted-service intake cases are immediately visible to authorized Handyman Operations personnel via `GET /api/v1/handyman/operations/unlisted-intake-cases` (default filter `status = 'PENDING_TRIAGE'`) and `GET /api/v1/handyman/unlisted-intake-cases/{intakeCaseId}`, including all chronological `internalNotes`.
 
 ### Documented Future Triage Decisions (`HANDYMAN_UNLISTED_INTAKE_FUTURE_TRIAGE_DECISIONS`)
-In the subsequent Operations Triage PART (out of scope for PART 01), authorized Operations personnel will adjudicate a `PENDING_TRIAGE` unlisted intake case using one of four governed decisions:
+
+> **Status (CR-HM-MANUAL-QUOTATION-01 PART 01).** This section is the PART 01
+> forecast, kept verbatim for history, and is now IMPLEMENTED with one
+> correction: triage never creates a `service_catalog` row (item 2 below) — it
+> records the Client-custom requirement as an immutable decision, and the
+> governed catalog administration stays where it always was. The implemented
+> decision set is the four forecasts plus
+> `ONE_TIME_MANUAL_QUOTATION_REQUIRED`, each projecting exactly one case
+> status; `REQUEST_MORE_INFORMATION_OR_INSPECTION` is allowed exactly once per
+> case and never becomes the case's effective decision. Conversion into a formal
+> `handyman_service_requests` record (items 1–2) is NOT implemented here — see
+> `docs/handyman/CR-HM-MANUAL-QUOTATION-01_PART-01.md` §5 for the exact PART 02
+> contract.
+
+Authorized Operations personnel adjudicate a `PENDING_TRIAGE` unlisted intake case using one of four governed decisions:
 
 1. **`MATCH_EXISTING_CATALOG_SERVICE` (Match existing catalog service):**
    - Operations maps the unlisted request to an existing active `service_catalog` entry (and optional `handyman_service_variants` row) for the Client, creating/linking the formal `handyman_service_requests` record while preserving the originating `unlisted_intake_case_id` and its historical internal notes without copying or rewriting them.
