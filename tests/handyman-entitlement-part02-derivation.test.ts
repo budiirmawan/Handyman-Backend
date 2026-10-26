@@ -6,6 +6,7 @@ import EmbeddedPostgres from 'embedded-postgres';
 import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
 import { createAdminUser } from './helpers/access';
+import { bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { baseFixture, crewFixture, initHandymanFixtures }
   from './helpers/handyman-fixtures';
@@ -58,7 +59,8 @@ after(async () => {
 });
 
 type Options = { mode?: 'DEFAULT' | 'REFERENCE';
-  term?: boolean; beneficiary?: boolean; charge?: boolean; rate?: string };
+  term?: boolean; beneficiary?: boolean; charge?: boolean; rate?: string;
+  coverage?: boolean; distinctBeneficiary?: boolean };
 async function fixture(options: Options = {}) {
   const { realm, scope } = await baseFixture();
   const crew = await crewFixture(realm);
@@ -87,6 +89,11 @@ async function fixture(options: Options = {}) {
     versionId, effectiveFrom: new Date(Date.now() - 60_000).toISOString(),
     idempotencyKey: id(),
   });
+  const bmCoverage = options.coverage !== false && options.mode !== 'REFERENCE' &&
+    options.term !== false && options.beneficiary !== false
+    ? await bindVerifiedTestBm({ actor, clientId: realm.client.id, buildingId: realm.building.id,
+        versionId, query: q, distinct: options.distinctBeneficiary })
+    : null;
   const opened = await openHandymanCustomerTransaction({
     executionScopeId: scope.id, idempotencyKey: id(),
   }, actor);
@@ -101,7 +108,7 @@ async function fixture(options: Options = {}) {
     }, actor);
     chargeId = charge.chargeLine.id;
   }
-  return { realm, scope, crew, assignment, opened, chargeId };
+  return { realm, scope, crew, assignment, opened, chargeId, bmCoverage };
 }
 const derive = (scopeId: string, key: string = id()) =>
   deriveHandymanFinancialEntitlements(scopeId, actor, key);
@@ -114,6 +121,33 @@ const hasCode = (code: string) => (e: { code?: string; statusCode?: number }) =>
 };
 
 describe('CR-HM-14 PART 02 governed entitlement derivation', () => {
+  it('blocks new Client-wide or distinct-BM claims, including raw SQL, without changing existing facts', async () => {
+    for (const options of [{ coverage: false }, { distinctBeneficiary: true }]) {
+      const f = await fixture(options);
+      await assert.rejects(derive(f.scope.id), hasCode('HANDYMAN_ENTITLEMENT_BM_NOT_AUTHORITATIVE'));
+      assert.equal(await count(f.scope.id), 0);
+      // A direct SQL writer cannot bypass the same Building/payee guard.
+      await assert.rejects(q(`INSERT INTO handyman_entitlement_facts
+        (id,client_id,transaction_id,execution_scope_id,currency,ledger_posted_at,
+         ledger_contract_version,entitlement_kind,fact_state,basis_kind,charged_net,labor_net,
+         material_net,adjusted_transaction_scope,amount,agreement_id,agreement_version_id,
+         agreement_version_number,agreement_effective_from,agreement_effective_to,bm_rule_id,
+         bm_term_id,bm_term_rate_percent,bm_beneficiary_id,bm_beneficiary_reference_id,
+         idempotency_key,derived_by_user_id)
+        SELECT $1,t.client_id,t.id,t.execution_scope_id,t.currency,date_trunc('milliseconds',t.created_at),
+          'CR-HM-13-PART-06','BM_FEE','EARNED','LABOR_ONLY',100,100,0,0,2.5,
+          a.id,v.id,v.version_number,v.effective_from,v.effective_to,r.id,x.id,x.rate_percent,
+          b.id,t.client_id,$2,$3
+        FROM handyman_customer_transactions t
+        JOIN handyman_commercial_agreements a ON a.client_id=t.client_id
+        JOIN handyman_commercial_agreement_versions v ON v.agreement_id=a.id AND v.status='ACTIVE'
+        JOIN handyman_bm_fee_rule_definitions r ON r.agreement_version_id=v.id
+        JOIN handyman_bm_fee_term_definitions x ON x.agreement_version_id=v.id
+        JOIN handyman_bm_fee_beneficiary_definitions b ON b.agreement_version_id=v.id
+        WHERE t.execution_scope_id=$4`, [id(), id(), actor, f.scope.id]), /Exact verified Client-beneficiary Building coverage/);
+      assert.equal(await count(f.scope.id), 0);
+    }
+  });
   it('posts both immutable facts atomically, exact version/assignment and same-key replay', async () => {
     const f = await fixture();
     const key = id();

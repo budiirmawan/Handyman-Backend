@@ -46,6 +46,7 @@ import {
   initHandymanFixtures,
 } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
+import { bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
 import { handymanCustomerForScope, handymanCustomerConsentInput } from './helpers/handyman-customer-consent';
 
 /**
@@ -417,6 +418,8 @@ describe('CR-HM-E2E-LIFECYCLE-01 finance close HTTP seams (J10–J12)', () => {
   it('J12→J10→J12: commercial authoring, ledger open/charge, payment allocation, entitlement derivation and settlement ladder complete over HTTP with persisted state', async () => {
     const f = await scopedFixture();
     const versionId = await configureCommercialViaHttp(f.realm.client.id);
+    await bindVerifiedTestBm({ actor: adminId, clientId: f.realm.client.id,
+      buildingId: f.realm.building.id, versionId, query: q });
 
     const pricing = await get(
       adminToken,

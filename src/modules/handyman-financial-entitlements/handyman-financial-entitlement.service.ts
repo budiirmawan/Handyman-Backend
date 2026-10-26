@@ -9,6 +9,8 @@ import {
 } from '../handyman-customer-ledger-read';
 import { readHandymanBmFeeConfigurationAt }
   from '../handyman-pricing-contract';
+import { resolveHandymanBmBuildingCoverageAt }
+  from '../handyman-bm-binding';
 import {
   getHandymanExecutionScopeAssignment,
   resolveHandymanAssignmentLead,
@@ -173,6 +175,33 @@ export async function deriveHandymanFinancialEntitlements(
       throw bmBlocked();
     }
 
+    // Existing earned facts retain their original CLIENT_ORGANIZATION anchors
+    // for replay/correction. New facts, however, may not infer Building
+    // coverage from a Client-wide agreement or mislabel a distinct legal BM
+    // as that Client. This is an authority guard only; no amounts change.
+    const previous = await Promise.all([findFact(tx, transactionId, 'PROVIDER'),
+      findFact(tx, transactionId, 'BM_FEE')]);
+    if (Boolean(previous[0]) !== Boolean(previous[1])) throw conflict();
+    if (!previous[0]) {
+      const scope = await tx.query<{ client_id: string; building_id: string }>(
+        'SELECT client_id, building_id FROM handyman_execution_scopes WHERE id = $1',
+        [executionScopeId],
+      );
+      if (!scope.rows[0] || scope.rows[0].client_id !== ledger.transaction.clientId) throw bmBlocked();
+      const coverage = await resolveHandymanBmBuildingCoverageAt(
+        ledger.transaction.clientId, scope.rows[0].building_id, ledger.transaction.createdAt, tx,
+      ).catch((err: unknown) => {
+        if (err instanceof AppError && err.code === ERROR_CODES.HANDYMAN_BM_BINDING_NOT_EFFECTIVE) throw bmBlocked();
+        throw err;
+      });
+      if (coverage.beneficiaryKind !== 'CLIENT_ORGANIZATION' ||
+          coverage.representedClientId !== ledger.transaction.clientId ||
+          coverage.agreementId !== binding.agreementId ||
+          coverage.agreementVersionId !== binding.agreementVersionId ||
+          coverage.ruleId !== rule.ruleRowId || coverage.termId !== term.termRowId ||
+          coverage.beneficiaryDefinitionId !== beneficiary.beneficiaryRowId) throw bmBlocked();
+    }
+
     const charged = cents(ledger.totals.chargedNet);
     const labor = cents(ledger.totals.laborNet);
     const material = cents(ledger.totals.materialNet);
@@ -214,12 +243,9 @@ export async function deriveHandymanFinancialEntitlements(
       idempotencyKey: `${idempotencyKey}:BM_FEE`,
     };
     const facts: Array<{ row: FactRow; replayed: boolean }> = [];
-    const previous = await Promise.all([findFact(tx, transactionId, 'PROVIDER'),
-      findFact(tx, transactionId, 'BM_FEE')]);
     // An already-earned claim is never rewritten. One new governed
     // correction cause can produce one forward delta per kind; a
     // multi-cause gap is undecidable without inventing a proration.
-    if (Boolean(previous[0]) !== Boolean(previous[1])) throw conflict();
     const changed = previous.some((row, i) => row &&
       row.amount !== [provider, bm][i].amount);
     for (const input of [provider, bm]) {

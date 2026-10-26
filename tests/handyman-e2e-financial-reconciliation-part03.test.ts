@@ -7,6 +7,7 @@ import { closePool, initDatabase, migrateUp } from '../src/database';
 import { resetAppConfigCache } from '../src/config';
 import { startEmbeddedTestDatabase } from './helpers/embedded-test-db';
 import { createAdminUser } from './helpers/access';
+import { prepareVerifiedTestBm, bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
 import { api } from './helpers/http';
 import {
   initHandymanFixtures,
@@ -1062,8 +1063,10 @@ describe('PART03 — real PostgreSQL financial integration (existing engines)', 
     }
   });
   it('BM percentage uses contract rate and correction-netted labor EX VAT; BM VAT/PPh and payable settlement stay separate', async () => {
-    const c = await context(),
-      job = await c.quote((await c.request()).id, 1110, facts),
+    const c = await context();
+    // Verify the beneficiary before quote() opens the customer transaction.
+    const preparedBm = await prepareVerifiedTestBm(admin, c.realm.client.id);
+    const job = await c.quote((await c.request()).id, 1110, facts),
       line = await charge(job),
       crew = await crewFixture(c.realm);
     await assignHandymanExecutionScopeCrew(
@@ -1107,6 +1110,8 @@ describe('PART03 — real PostgreSQL financial integration (existing engines)', 
       effectiveFrom: new Date(Date.now() - 60000).toISOString(),
       idempotencyKey: id(),
     });
+    await bindVerifiedTestBm({ actor: admin, clientId: c.realm.client.id,
+      buildingId: c.realm.building.id, versionId: v, query: q, prepared: preparedBm });
     const p = await pay(job.scope.id, '1090.00'),
       received = new Date(Date.now() - 1000).toISOString();
     await reconcileHandymanPayment(

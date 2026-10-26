@@ -1,3 +1,4 @@
+import { migration0493HandymanBmBeneficiaryBuildingCoverage } from './0493_handyman_bm_beneficiary_building_coverage';
 import { migration0481HandymanCommercialConsentBridge } from './0481_handyman_commercial_consent_bridge';
 import { migration0482HandymanFinancialReconciliation } from './0482_handyman_financial_reconciliation';
 import { migration0483HandymanCareInitialSchedulingPreference } from './0483_handyman_care_initial_scheduling_preference';
@@ -1032,4 +1033,5 @@ export const migrations: readonly Migration[] = [
   migration0490CreateHandymanDocumentIssuerProfiles,
   migration0491CreateHandymanDocumentIssuerBankAccounts,
   migration0492CreateHandymanDocumentIssuerSettings,
+  migration0493HandymanBmBeneficiaryBuildingCoverage,
 ];
