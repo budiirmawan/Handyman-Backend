@@ -47,6 +47,10 @@ import { tenantVerificationRequiredError } from '../tenant-companies/tenant-comp
 import { userRepository } from '../users';
 import {
   handymanUnlistedIntakeCaseNotFoundError,
+  handymanUnlistedIntakeConversionAttributionConflictError,
+  handymanUnlistedIntakeConversionIdempotencyConflictError,
+  handymanUnlistedIntakeConversionNotEligibleError,
+  handymanUnlistedIntakeConversionScopeUnverifiedError,
   handymanUnlistedIntakeForbiddenError,
   handymanUnlistedIntakeIdempotencyConflictError,
   handymanUnlistedIntakeTriageAlreadyRecordedError,
@@ -56,6 +60,7 @@ import {
 } from './handyman-unlisted-intake.errors';
 import {
   handymanUnlistedIntakeRepository,
+  type HandymanUnlistedIntakeServiceRequestRow,
   type NewHandymanUnlistedIntakeTriageDecisionInput,
 } from './handyman-unlisted-intake.repository';
 import type {
@@ -65,16 +70,20 @@ import type {
   HandymanUnlistedIntakeTriageDecisionRecord,
   PublicHandymanUnlistedIntakeCase,
   PublicHandymanUnlistedIntakeMutationResult,
+  PublicHandymanUnlistedIntakeConversionMutationResult,
+  PublicHandymanUnlistedIntakeRequestConversion,
   PublicHandymanUnlistedIntakeTriageDecision,
   PublicHandymanUnlistedIntakeTriageMutationResult,
 } from './handyman-unlisted-intake.types';
 import {
+  HANDYMAN_UNLISTED_INTAKE_REQUEST_INTAKE_SOURCE,
   HANDYMAN_UNLISTED_INTAKE_TRIAGE_ELIGIBLE_STATUSES,
   HANDYMAN_UNLISTED_INTAKE_TRIAGE_PROJECTION,
 } from './handyman-unlisted-intake.types';
 import {
   parseCreateBuildingCareUnlistedIntakeBody,
   parseCreateCareWorkspaceUnlistedIntakeBody,
+  parseUnlistedIntakeConversionBody,
   parseUnlistedIntakeListQuery,
   parseUnlistedIntakeTriageBody,
   parseUnlistedIntakeUuidParam,
@@ -188,6 +197,8 @@ export function toPublicHandymanUnlistedIntakeCase(
     status: record.status,
     triageDecisionId: record.triageDecisionId,
     triagedAt: record.triagedAt ? record.triagedAt.toISOString() : null,
+    convertedRequestId: record.convertedRequestId,
+    convertedAt: record.convertedAt ? record.convertedAt.toISOString() : null,
     triage: triage.triage ? toPublicHandymanUnlistedIntakeTriageDecision(triage.triage) : null,
     triageHistory: triage.triageHistory.map(
       toPublicHandymanUnlistedIntakeTriageDecision,
@@ -1416,6 +1427,8 @@ export const handymanUnlistedIntakeService = {
   computeUnlistedIntakeTriagePayloadHash,
   recordUnlistedIntakeTriageDecision,
   listUnlistedIntakeTriageDecisions,
+  computeUnlistedIntakeConversionPayloadHash,
+  convertUnlistedIntakeCaseToServiceRequest,
   toPublicHandymanUnlistedIntakeTriageDecision,
 };
 
@@ -1449,7 +1462,10 @@ export function computeUnlistedIntakeTriagePayloadHash(input: {
     .digest('hex');
 }
 
-async function assertOperationsTriageAuthority(actorUserId: string): Promise<void> {
+async function assertOperationsTriageAuthority(
+  actorUserId: string,
+  actionLabel = 'record an unlisted intake triage decision',
+): Promise<void> {
   await assertNotCustomerFacingIntakeActor(actorUserId);
   const user = await userRepository.findById(actorUserId);
   if (!user || user.status !== 'ACTIVE') {
@@ -1463,7 +1479,7 @@ async function assertOperationsTriageAuthority(actorUserId: string): Promise<voi
   // sufficient — the Care actor never classifies its own intake.
   if (!permissions.includes('tenant_company.manage')) {
     throw handymanUnlistedIntakeForbiddenError(
-      'Only authorized Handyman Operations personnel may record an unlisted intake triage decision.',
+      `Only authorized Handyman Operations personnel may ${actionLabel}.`,
     );
   }
 }
@@ -1719,4 +1735,340 @@ export async function listUnlistedIntakeTriageDecisions(input: {
       },
     );
   return rows.map(toPublicHandymanUnlistedIntakeTriageDecision);
+}
+
+
+// ==========================================================================
+// CR-HM-MANUAL-QUOTATION-01 PART 02 — one triaged case -> one formal request.
+//
+// Only a case whose effective triage decision is
+// ONE_TIME_MANUAL_QUOTATION_READY (status TRIAGED_MANUAL_QUOTATION_READY) may
+// be converted, and it may be converted exactly ONCE: the binding is written
+// onto the same 0487 state row that anchors the decision, so the request and
+// the case name each other and neither can be re-pointed. The created request
+// is a REAL handyman_service_requests row with `service_catalog_id`/
+// `service_variant_id` structurally NULL (0488 refuses any value there), which
+// is precisely what keeps this from fabricating a catalog entry. Quotation
+// pricing and customer approval are untouched: the request is born in
+// 'INTAKE' and must still earn an approved quotation version before any
+// execution scope or assignment can exist.
+// ==========================================================================
+
+export function computeUnlistedIntakeConversionPayloadHash(input: {
+  intakeCaseId: string;
+  clientId: string;
+  buildingId: string;
+  spaceId: string | null;
+  tenantCompanyId: string;
+  tenantPicId: string | null;
+  channelAttributionId: string | null;
+  originChannel: string;
+  originReference: string | null;
+  description: string;
+  triageDecisionId: string;
+}): string {
+  return createHash('sha256').update(stableJson(input)).digest('hex');
+}
+
+/**
+ * Re-proves, inside the conversion transaction, the exact identity/scope law
+ * the intake case had to satisfy when it was created (0486 + Care authority).
+ * A conversion never relaxes it: if the verified Customer, the effective
+ * Building context or the Client lineage has gone, the request is refused.
+ */
+async function assertUnlistedIntakeConversionScopeVerified(
+  tx: Pick<PoolClient, 'query'>,
+  caseRow: NonNullable<
+    Awaited<
+      ReturnType<
+        typeof handymanUnlistedIntakeRepository.findCaseForConversionLock
+      >
+    >
+  >,
+): Promise<void> {
+  const buildingClientId =
+    await handymanUnlistedIntakeRepository.findBuildingClientId(
+      tx,
+      caseRow.buildingId,
+    );
+  if (!buildingClientId || buildingClientId !== caseRow.clientId) {
+    throw handymanUnlistedIntakeConversionScopeUnverifiedError(
+      'BUILDING_CLIENT_LINEAGE',
+    );
+  }
+
+  const company = await tenantCompanyRepository.findById(caseRow.tenantCompanyId);
+  const context = company
+    ? await tenantBuildingContextRepository.findActive(
+        company.id,
+        caseRow.buildingId,
+      )
+    : null;
+  if (
+    !company ||
+    company.status !== 'ACTIVE' ||
+    company.clientId !== caseRow.clientId ||
+    !context ||
+    !isEffectiveNow(context)
+  ) {
+    throw handymanUnlistedIntakeConversionScopeUnverifiedError(
+      'TENANT_BUILDING_CONTEXT',
+    );
+  }
+
+  for (const partyId of new Set([
+    caseRow.approvalTenantCompanyId,
+    caseRow.costResponsibleTenantCompanyId,
+  ])) {
+    const party = await tenantCompanyRepository.findById(partyId);
+    if (!party) {
+      throw handymanUnlistedIntakeConversionScopeUnverifiedError(
+        'COMMERCIAL_PARTY_MISSING',
+      );
+    }
+    if (party.verificationStatus !== 'VERIFIED') {
+      throw tenantVerificationRequiredError();
+    }
+    if (partyId === caseRow.tenantCompanyId) continue;
+    if (party.status !== 'ACTIVE' || party.clientId !== caseRow.clientId) {
+      throw handymanUnlistedIntakeConversionScopeUnverifiedError(
+        'COMMERCIAL_PARTY_SCOPE',
+      );
+    }
+  }
+
+  if (caseRow.tenantPicId !== null) {
+    // The preserved complaint identity must still be a PIC OF THIS Tenant; a
+    // silently re-pointed PIC would put another Customer's request on file.
+    const picScope = await tx.query<{ tenant_company_id: string }>(
+      `SELECT tenant_company_id FROM tenant_pics WHERE id = $1`,
+      [caseRow.tenantPicId],
+    );
+    if (picScope.rows[0]?.tenant_company_id !== caseRow.tenantCompanyId) {
+      throw handymanUnlistedIntakeConversionScopeUnverifiedError(
+        'TENANT_PIC_SCOPE',
+      );
+    }
+  }
+}
+
+function toPublicHandymanUnlistedIntakeRequestConversion(
+  row: HandymanUnlistedIntakeServiceRequestRow,
+  convertedAt: Date,
+): PublicHandymanUnlistedIntakeRequestConversion {
+  return {
+    requestId: row.id,
+    intakeCaseId: row.unlistedIntakeCaseId,
+    clientId: row.clientId,
+    buildingId: row.buildingId,
+    spaceId: row.spaceId,
+    tenantCompanyId: row.tenantCompanyId,
+    tenantPicId: row.tenantPicId,
+    intakeSource: HANDYMAN_UNLISTED_INTAKE_REQUEST_INTAKE_SOURCE,
+    serviceCatalogId: null,
+    serviceVariantId: null,
+    channelAttributionId: row.channelAttributionId,
+    originChannel: row.originChannel,
+    originReference: row.originReference,
+    description: row.description,
+    status: row.status,
+    convertedAt: convertedAt.toISOString(),
+  };
+}
+
+/**
+ * POST /api/v1/handyman/operations/unlisted-intake-cases/:intakeCaseId/service-request
+ */
+export async function convertUnlistedIntakeCaseToServiceRequest(input: {
+  actorUserId: string;
+  intakeCaseId: string;
+  body: unknown;
+  headerIdempotencyKey?: string;
+}): Promise<PublicHandymanUnlistedIntakeConversionMutationResult> {
+  const intakeCaseId = parseUnlistedIntakeUuidParam(
+    input.intakeCaseId,
+    'intakeCaseId',
+  );
+  const parsed = parseUnlistedIntakeConversionBody(
+    input.body,
+    input.headerIdempotencyKey,
+  );
+  await assertOperationsTriageAuthority(
+    input.actorUserId,
+    'convert an unlisted intake case into a formal service request',
+  );
+
+  return withTransaction(async (tx) => {
+    // A separate lock namespace from triage: the conversion command mutates the
+    // state row the triage command produced, never the decision facts.
+    await tx.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))',
+      ['handyman_unlisted_intake_conversion', intakeCaseId],
+    );
+
+    const caseRow =
+      await handymanUnlistedIntakeRepository.findCaseForConversionLock(
+        tx,
+        intakeCaseId,
+      );
+    if (!caseRow) {
+      throw handymanUnlistedIntakeCaseNotFoundError();
+    }
+    await assertBuildingScopedResourceAccess(input.actorUserId, {
+      clientId: caseRow.clientId,
+      buildingId: caseRow.buildingId,
+    });
+
+    const state =
+      await handymanUnlistedIntakeRepository.lockTriageStateForConversion(
+        tx,
+        intakeCaseId,
+      );
+
+    const payloadHash = computeUnlistedIntakeConversionPayloadHash({
+      intakeCaseId,
+      clientId: caseRow.clientId,
+      buildingId: caseRow.buildingId,
+      spaceId: caseRow.spaceId,
+      tenantCompanyId: caseRow.tenantCompanyId,
+      tenantPicId: caseRow.tenantPicId,
+      channelAttributionId: caseRow.channelAttributionId,
+      originChannel: caseRow.originChannel,
+      originReference: caseRow.originReference,
+      description: caseRow.description,
+      triageDecisionId: state?.triageDecisionId ?? '',
+    });
+
+    if (state?.convertedRequestId) {
+      // Exactly-once conversion: only the command that owns the recorded key
+      // and the identical derived payload replays. Anything else on an already
+      // converted case is a refusal, never a second request.
+      if (
+        state.conversionIdempotencyKey !== parsed.idempotencyKey ||
+        state.conversionPayloadHash !== payloadHash
+      ) {
+        throw handymanUnlistedIntakeConversionIdempotencyConflictError();
+      }
+      const existing =
+        await handymanUnlistedIntakeRepository.findManualOriginRequestById(
+          tx,
+          state.convertedRequestId,
+        );
+      const refreshed = await handymanUnlistedIntakeRepository.findById(
+        tx,
+        intakeCaseId,
+      );
+      if (!existing || !refreshed) {
+        throw handymanUnlistedIntakeCaseNotFoundError();
+      }
+      const projection = await loadCaseProjection(tx, refreshed);
+      return {
+        replayed: true,
+        conversion: toPublicHandymanUnlistedIntakeRequestConversion(
+          existing,
+          refreshed.convertedAt ?? new Date(),
+        ),
+        intakeCase: toPublicHandymanUnlistedIntakeCase(
+          refreshed,
+          projection.internalNotes,
+          projection,
+        ),
+      };
+    }
+
+    // Only the manual-quotation-ready branch converts, and only through its own
+    // anchored decision — never because a caller asked nicely.
+    if (
+      caseRow.status !== 'TRIAGED_MANUAL_QUOTATION_READY' ||
+      !state ||
+      caseRow.anchorDecision !== 'ONE_TIME_MANUAL_QUOTATION_REQUIRED'
+    ) {
+      throw handymanUnlistedIntakeConversionNotEligibleError(
+        caseRow.existingRequestCount > 0
+          ? 'ALREADY_CONVERTED'
+          : 'MANUAL_QUOTATION_READINESS_REQUIRED',
+      );
+    }
+
+    await assertUnlistedIntakeConversionScopeVerified(tx, caseRow);
+
+    if (caseRow.channelAttributionId !== null) {
+      const used =
+        await handymanUnlistedIntakeRepository.countRequestsUsingAttribution(
+          tx,
+          caseRow.channelAttributionId,
+        );
+      if (used > 0) {
+        throw handymanUnlistedIntakeConversionAttributionConflictError();
+      }
+    }
+
+    const requestId = randomUUID();
+    const request =
+      await handymanUnlistedIntakeRepository.insertManualOriginServiceRequest(
+        tx,
+        {
+          id: requestId,
+          clientId: caseRow.clientId,
+          buildingId: caseRow.buildingId,
+          spaceId: caseRow.spaceId,
+          tenantCompanyId: caseRow.tenantCompanyId,
+          tenantPicId: caseRow.tenantPicId,
+          channelAttributionId: caseRow.channelAttributionId,
+          originChannel: caseRow.originChannel,
+          originReference: caseRow.originReference,
+          description: caseRow.description,
+          intakeCaseId,
+          createdByUserId: input.actorUserId,
+        },
+      );
+    await handymanUnlistedIntakeRepository.projectCaseConversion(tx, {
+      intakeCaseId,
+      requestId,
+      idempotencyKey: parsed.idempotencyKey,
+      payloadHash,
+    });
+
+    await recordOperationalEvent(
+      {
+        clientId: caseRow.clientId,
+        buildingId: caseRow.buildingId,
+        actorUserId: input.actorUserId,
+        eventType: 'HANDYMAN_UNLISTED_SERVICE_INTAKE_CONVERTED',
+        entityType: 'HANDYMAN_UNLISTED_SERVICE_INTAKE_CASE',
+        entityId: intakeCaseId,
+        summary:
+          'Unlisted service intake case converted by Operations into one manual-origin service request.',
+        metadata: {
+          intakeCaseId,
+          handymanRequestId: requestId,
+          triageDecisionId: state.triageDecisionId,
+          intakeSource: HANDYMAN_UNLISTED_INTAKE_REQUEST_INTAKE_SOURCE,
+          serviceCatalogId: null,
+          channelAttributionId: caseRow.channelAttributionId,
+        },
+      },
+      tx,
+    );
+
+    const updated = await handymanUnlistedIntakeRepository.findById(
+      tx,
+      intakeCaseId,
+    );
+    if (!updated) throw handymanUnlistedIntakeCaseNotFoundError();
+    const projection = await loadCaseProjection(tx, updated);
+
+    return {
+      replayed: false,
+      conversion: toPublicHandymanUnlistedIntakeRequestConversion(
+        request,
+        updated.convertedAt ?? new Date(),
+      ),
+      intakeCase: toPublicHandymanUnlistedIntakeCase(
+        updated,
+        projection.internalNotes,
+        projection,
+      ),
+    };
+  });
 }

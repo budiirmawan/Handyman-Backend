@@ -967,3 +967,42 @@ export function parseUnlistedIntakeTriageBody(
     idempotencyKey,
   };
 }
+
+/**
+ * CR-HM-MANUAL-QUOTATION-01 PART 02 — conversion command parser.
+ *
+ * A conversion accepts NOTHING but its idempotency key: the formal request is
+ * derived entirely from the triaged intake case (scope, verified parties,
+ * complaint, visit preference, provenance). Any other field — including a
+ * catalog anchor, an attribution or an amount — is a refusal, never an ignore,
+ * so a caller can neither smuggle a fake Service Catalog entry nor re-scope a
+ * conversion onto another Customer/Building.
+ */
+export function parseUnlistedIntakeConversionBody(
+  body: unknown,
+  headerIdempotencyKey?: string,
+): { idempotencyKey: string } {
+  if (body === undefined || body === null) {
+    return { idempotencyKey: parseIdempotencyKey({}, headerIdempotencyKey) };
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    triageFail('body', 'Request body must be a JSON object or omitted.');
+  }
+  const record = body as Record<string, unknown>;
+
+  for (const key of Object.keys(record)) {
+    if (key === 'idempotencyKey') continue;
+    triageFail(
+      key,
+      key === 'serviceCatalogId' ||
+        key === 'catalogServiceId' ||
+        key === 'channelAttributionId' ||
+        key === 'amount' ||
+        key === 'price'
+        ? `${key} is never accepted: a manual-origin request is created WITHOUT a catalog anchor, and the verified provenance recorded on the intake case is preserved unchanged.`
+        : 'A conversion accepts no field other than idempotencyKey; every request value is derived from the triaged intake case.',
+    );
+  }
+
+  return { idempotencyKey: parseIdempotencyKey(record, headerIdempotencyKey) };
+}

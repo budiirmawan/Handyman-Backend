@@ -74,3 +74,45 @@ export function handymanUnlistedIntakeTriageUomInvalidError(): AppError {
     statusCode: 400,
   });
 }
+
+export function handymanUnlistedIntakeConversionNotEligibleError(
+  reason: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_CONVERSION_NOT_ELIGIBLE,
+    message:
+      'This unlisted service intake case cannot be converted into a formal service request yet.',
+    statusCode: 409,
+    details: [{ reason }],
+  });
+}
+
+export function handymanUnlistedIntakeConversionIdempotencyConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_CONVERSION_IDEMPOTENCY_CONFLICT,
+    message:
+      'Idempotency key has already been used with a different unlisted intake conversion payload.',
+    statusCode: 409,
+  });
+}
+
+export function handymanUnlistedIntakeConversionScopeUnverifiedError(
+  reason: string,
+): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_CONVERSION_SCOPE_UNVERIFIED,
+    message:
+      'The verified customer identity or Client/Building scope of this intake case is no longer sufficient to open a formal service request.',
+    statusCode: 409,
+    details: [{ reason }],
+  });
+}
+
+export function handymanUnlistedIntakeConversionAttributionConflictError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_UNLISTED_INTAKE_CONVERSION_ATTRIBUTION_CONFLICT,
+    message:
+      'The channel attribution already recorded on this intake case is bound to another service request; a conversion never reuses or fabricates an attribution.',
+    statusCode: 409,
+  });
+}

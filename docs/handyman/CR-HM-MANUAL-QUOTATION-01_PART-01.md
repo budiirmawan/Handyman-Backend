@@ -128,3 +128,52 @@ Regressions: `tests/handyman-unlisted-intake.test.ts`,
 `tests/handyman-internal-notes.test.ts`,
 `tests/handyman-contract-freeze-03-openapi.test.ts` (surface pin 338 → 340,
 annotated-permission pin 223 → 224), and `npm run typecheck`.
+
+---
+
+## 7. PART 02 status (migration 0488 — what §5 promised, and what is left)
+
+IMPLEMENTED in 0488 (`0488_handyman_unlisted_intake_formal_request_conversion`)
+plus `POST /api/v1/handyman/operations/unlisted-intake-cases/:intakeCaseId/service-request`:
+
+* `handyman_service_requests.intake_source IN ('CATALOG','UNLISTED_TRIAGE')`;
+  `service_catalog_id`/`service_variant_id` are nullable ONLY on the
+  `UNLISTED_TRIAGE` lane (the CHECK refuses any value there — no fake catalog),
+  `channel_attribution_id` is nullable ONLY on that lane and is preserved
+  verbatim when the case carries a verified, still-unused attribution
+  (consumed attribution → 409, never reused).
+* `handyman_service_requests.unlisted_intake_case_id` UNIQUE +
+  `handyman_unlisted_intake_triage_state.converted_request_id` UNIQUE: exactly
+  one formal request per case, written once, immutable (manual-origin scope and
+  provenance UPDATEs are refused; the status machine stays open).
+* Complaint length stays 1..1000 for `CATALOG` rows and 1..2000 for the
+  manual lane, so the customer statement is preserved without truncation and no
+  catalog rule is relaxed. No column was added to the 0486 table, which keeps
+  0486's reversible `down()`/`up()` valid; `0488.down()` fails closed while any
+  conversion fact exists.
+* Conversion is only from `TRIAGED_MANUAL_QUOTATION_READY` whose anchor decision
+  is `ONE_TIME_MANUAL_QUOTATION_REQUIRED`, under the same Operations authority as
+  triage (`tenant_company.manage` + active user + not-customer-facing +
+  BE-02G exact Building), with advisory lock + case/state row locks +
+  Idempotency-Key/payload hash (201, replay 200, 409 on any second conversion).
+  Verified identity/scope is re-proved in the same transaction and a lapse fails
+  closed (`..._CONVERSION_SCOPE_UNVERIFIED`, `TENANT_VERIFICATION_REQUIRED`).
+* Readback: `convertedRequestId` / `convertedAt` on every authorized case read.
+
+STILL OPEN for PART 03 (unchanged gates, so nothing is bypassed):
+
+1. Quotation pricing for the manual lane: `POST /handyman/requests/:id/quotation`
+   works because `handyman_quotations` only needs a request, but the
+   `INSPECTION_FIRST` posture in `assertHandymanQuotationInspectionReady` is
+   resolved from `service_catalog_id` and therefore cannot see a manual-origin
+   request — PART 03 must resolve the inspection requirement from the triage
+   decision instead, so a manual quotation cannot skip inspection.
+2. One-time manual line semantics: `handyman_quotation_lines` has no catalog FK
+   (nothing to fake) but also no `MANUAL`/one-time origin; `line_total` is
+   already server-computed. PART 03 adds the origin marker + the one-quotation
+   cap, plus an optional `MANUAL_REVIEW` row in
+   `handyman_service_quote_resolutions` for price-provenance uniformity.
+3. `handyman_service_request_items.service_catalog_id NOT NULL` (0477) is
+   untouched: manual scope stays on quotation lines only.
+4. Assignment/execution gates unchanged (`handyman_execution_scopes` still
+   requires an APPROVED quotation version, UNIQUE per version).

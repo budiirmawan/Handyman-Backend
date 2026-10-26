@@ -108,6 +108,9 @@ export type HandymanUnlistedIntakeCaseRecord = {
   status: HandymanUnlistedIntakeStatus;
   triageDecisionId: string | null;
   triagedAt: Date | null;
+  /** Exactly-once PART 02 conversion binding (0487 state row + 0488). */
+  convertedRequestId: string | null;
+  convertedAt: Date | null;
   createdByUserId: string | null;
   createdByCareActorId: string | null;
   createdByDisplayName: string;
@@ -174,6 +177,45 @@ export type PublicHandymanUnlistedIntakeTriageDecision = {
   updatedAt: string;
 };
 
+/** The 0488 lane marker for a request created from a triaged intake case. */
+export const HANDYMAN_UNLISTED_INTAKE_REQUEST_INTAKE_SOURCE =
+  'UNLISTED_TRIAGE' as const;
+
+export type HandymanUnlistedIntakeRequestIntakeSource =
+  | 'CATALOG'
+  | typeof HANDYMAN_UNLISTED_INTAKE_REQUEST_INTAKE_SOURCE;
+
+/**
+ * The formal manual-origin Service Request created by PART 02 conversion.
+ * `serviceCatalogId`/`serviceVariantId` are structurally null: the request is
+ * permitted to exist WITHOUT a catalog anchor, and no anchor is invented.
+ */
+export type PublicHandymanUnlistedIntakeRequestConversion = {
+  requestId: string;
+  intakeCaseId: string;
+  clientId: string;
+  buildingId: string;
+  spaceId: string | null;
+  tenantCompanyId: string;
+  tenantPicId: string | null;
+  intakeSource: HandymanUnlistedIntakeRequestIntakeSource;
+  serviceCatalogId: null;
+  serviceVariantId: null;
+  channelAttributionId: string | null;
+  originChannel: HandymanUnlistedIntakeOriginChannel;
+  originReference: string | null;
+  description: string;
+  status: string;
+  convertedAt: string;
+};
+
+/** Conversion command result: the created request + the refreshed case view. */
+export type PublicHandymanUnlistedIntakeConversionMutationResult = {
+  replayed: boolean;
+  conversion: PublicHandymanUnlistedIntakeRequestConversion;
+  intakeCase: PublicHandymanUnlistedIntakeCase;
+};
+
 export type PublicHandymanUnlistedIntakePreferredWindow = {
   preferredWindowStart: string;
   preferredWindowEnd: string;
@@ -208,6 +250,9 @@ export type PublicHandymanUnlistedIntakeCase = {
   status: HandymanUnlistedIntakeStatus;
   triageDecisionId: string | null;
   triagedAt: string | null;
+  /** Formal manual-origin request created from this case (null = not yet). */
+  convertedRequestId: string | null;
+  convertedAt: string | null;
   /** The ONE effective triage decision (null while untriaged). */
   triage: PublicHandymanUnlistedIntakeTriageDecision | null;
   /** Chronological append-only triage history (clarification rounds included). */

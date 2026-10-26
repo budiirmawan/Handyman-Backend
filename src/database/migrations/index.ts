@@ -5,6 +5,7 @@ import { migration0484HandymanCareStructuredRequestItems } from './0484_handyman
 import { migration0485HandymanInternalNotes } from './0485_handyman_internal_notes';
 import { migration0486HandymanUnlistedServiceIntakeCases } from './0486_handyman_unlisted_service_intake_cases';
 import { migration0487HandymanUnlistedIntakeOperationsTriage } from './0487_handyman_unlisted_intake_operations_triage';
+import { migration0488HandymanUnlistedIntakeFormalRequestConversion } from './0488_handyman_unlisted_intake_formal_request_conversion';
 import { migration0446HandymanBastWorkerTransport } from './0446_handyman_bast_worker_transport';
 import { migration0447NetHandymanAllocationCaps } from './0447_net_handyman_allocation_caps';
 import { migration0448HandymanFinanceAuthorityPermissions } from './0448_handyman_finance_authority_permissions';
@@ -1022,4 +1023,5 @@ export const migrations: readonly Migration[] = [
   migration0485HandymanInternalNotes,
   migration0486HandymanUnlistedServiceIntakeCases,
   migration0487HandymanUnlistedIntakeOperationsTriage,
+  migration0488HandymanUnlistedIntakeFormalRequestConversion,
 ];

@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
+import { handymanUnlistedIntakeConversionNotEligibleError } from './handyman-unlisted-intake.errors';
 import type {
   HandymanUnlistedIntakeCaseRecord,
   HandymanUnlistedIntakeOriginChannel,
   HandymanUnlistedIntakeStatus,
+  HandymanUnlistedIntakeTriageDecision,
   HandymanUnlistedIntakeTriageDecisionRecord,
 } from './handyman-unlisted-intake.types';
 
@@ -29,6 +31,8 @@ const UNLISTED_INTAKE_SELECT = `
     c.status,
     st.triage_decision_id AS "triageDecisionId",
     st.triaged_at AS "triagedAt",
+    st.converted_request_id AS "convertedRequestId",
+    st.converted_at AS "convertedAt",
     c.created_by_user_id AS "createdByUserId",
     c.created_by_care_actor_id AS "createdByCareActorId",
     COALESCE(u.display_name, ca.display_name, 'Customer Care') AS "createdByDisplayName",
@@ -631,6 +635,296 @@ async function findActiveUomForTriage(
   return result.rows[0] ?? null;
 }
 
+/* --------------------------------------------------------------------------
+ * CR-HM-MANUAL-QUOTATION-01 PART 02 — unlisted case -> formal service request.
+ * ------------------------------------------------------------------------ */
+
+export type HandymanUnlistedIntakeConversionLock = {
+  id: string;
+  clientId: string;
+  buildingId: string;
+  spaceId: string | null;
+  tenantCompanyId: string;
+  tenantPicId: string | null;
+  approvalTenantCompanyId: string;
+  costResponsibleTenantCompanyId: string;
+  channelAttributionId: string | null;
+  originChannel: HandymanUnlistedIntakeOriginChannel;
+  originReference: string | null;
+  description: string;
+  status: HandymanUnlistedIntakeStatus;
+  anchorDecision: HandymanUnlistedIntakeTriageDecision | null;
+  existingRequestCount: number;
+};
+
+/**
+ * Locks the authoritative intake case row for a conversion. Deliberately a
+ * plain (non-FOR-SHARE) join: the state row is locked separately so the
+ * exactly-once binding is serialized on the row that carries it.
+ */
+async function findCaseForConversionLock(
+  executor: Pick<PoolClient, 'query'>,
+  id: string,
+): Promise<HandymanUnlistedIntakeConversionLock | null> {
+  const result = await executor.query<{
+    id: string;
+    client_id: string;
+    building_id: string;
+    space_id: string | null;
+    tenant_company_id: string;
+    tenant_pic_id: string | null;
+    approval_tenant_company_id: string;
+    cost_responsible_tenant_company_id: string;
+    channel_attribution_id: string | null;
+    origin_channel: HandymanUnlistedIntakeOriginChannel;
+    origin_reference: string | null;
+    description: string;
+    status: HandymanUnlistedIntakeStatus;
+    anchor_decision: HandymanUnlistedIntakeTriageDecision | null;
+    existing_request_count: number;
+  }>(
+    `SELECT c.id, c.client_id, c.building_id, c.space_id, c.tenant_company_id,
+            c.tenant_pic_id, c.approval_tenant_company_id,
+            c.cost_responsible_tenant_company_id, c.channel_attribution_id,
+            c.origin_channel, c.origin_reference, c.description, c.status,
+            d.decision AS anchor_decision,
+            (
+              SELECT count(*)::int
+                FROM handyman_service_requests r
+               WHERE r.unlisted_intake_case_id = c.id
+            ) AS existing_request_count
+       FROM handyman_unlisted_service_intake_cases c
+       LEFT JOIN handyman_unlisted_intake_triage_state st
+         ON st.intake_case_id = c.id
+       LEFT JOIN handyman_unlisted_intake_triage_decisions d
+         ON d.id = st.triage_decision_id
+      WHERE c.id = $1
+      FOR UPDATE OF c`,
+    [id],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    buildingId: row.building_id,
+    spaceId: row.space_id,
+    tenantCompanyId: row.tenant_company_id,
+    tenantPicId: row.tenant_pic_id,
+    approvalTenantCompanyId: row.approval_tenant_company_id,
+    costResponsibleTenantCompanyId: row.cost_responsible_tenant_company_id,
+    channelAttributionId: row.channel_attribution_id,
+    originChannel: row.origin_channel,
+    originReference: row.origin_reference,
+    description: row.description,
+    status: row.status,
+    anchorDecision: row.anchor_decision,
+    existingRequestCount: row.existing_request_count,
+  };
+}
+
+export type HandymanUnlistedIntakeConversionState = {
+  triageDecisionId: string;
+  convertedRequestId: string | null;
+  conversionIdempotencyKey: string | null;
+  conversionPayloadHash: string | null;
+};
+
+/** Serialize the exactly-once conversion binding on the state row itself. */
+async function lockTriageStateForConversion(
+  executor: Pick<PoolClient, 'query'>,
+  intakeCaseId: string,
+): Promise<HandymanUnlistedIntakeConversionState | null> {
+  const result = await executor.query<{
+    triage_decision_id: string;
+    converted_request_id: string | null;
+    conversion_idempotency_key: string | null;
+    conversion_payload_hash: string | null;
+  }>(
+    `SELECT triage_decision_id, converted_request_id, conversion_idempotency_key,
+            conversion_payload_hash
+       FROM handyman_unlisted_intake_triage_state
+      WHERE intake_case_id = $1
+      FOR UPDATE`,
+    [intakeCaseId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    triageDecisionId: row.triage_decision_id,
+    convertedRequestId: row.converted_request_id,
+    conversionIdempotencyKey: row.conversion_idempotency_key,
+    conversionPayloadHash: row.conversion_payload_hash,
+  };
+}
+
+export type NewHandymanUnlistedIntakeServiceRequestInput = {
+  id: string;
+  clientId: string;
+  buildingId: string;
+  spaceId: string | null;
+  tenantCompanyId: string;
+  tenantPicId: string | null;
+  channelAttributionId: string | null;
+  originChannel: HandymanUnlistedIntakeOriginChannel;
+  originReference: string | null;
+  description: string;
+  intakeCaseId: string;
+  createdByUserId: string;
+};
+
+export type HandymanUnlistedIntakeServiceRequestRow = {
+  id: string;
+  clientId: string;
+  buildingId: string;
+  spaceId: string | null;
+  tenantCompanyId: string;
+  tenantPicId: string | null;
+  intakeSource: string;
+  serviceCatalogId: string | null;
+  serviceVariantId: string | null;
+  channelAttributionId: string | null;
+  originChannel: HandymanUnlistedIntakeOriginChannel;
+  originReference: string | null;
+  description: string;
+  status: string;
+  unlistedIntakeCaseId: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+const MANUAL_ORIGIN_REQUEST_SELECT = `
+  id,
+  client_id AS "clientId",
+  building_id AS "buildingId",
+  space_id AS "spaceId",
+  tenant_company_id AS "tenantCompanyId",
+  tenant_pic_id AS "tenantPicId",
+  intake_source AS "intakeSource",
+  service_catalog_id AS "serviceCatalogId",
+  service_variant_id AS "serviceVariantId",
+  channel_attribution_id AS "channelAttributionId",
+  origin_channel AS "originChannel",
+  origin_reference AS "originReference",
+  description,
+  status,
+  unlisted_intake_case_id AS "unlistedIntakeCaseId",
+  created_at AS "createdAt",
+  updated_at AS "updatedAt"`;
+
+/**
+ * The ONLY write this PART performs on `handyman_service_requests`: one
+ * manual-origin row whose catalog/variant anchors are structurally null (the
+ * 0488 CHECKs refuse any value there) and whose scope is copied verbatim from
+ * the triaged intake case.
+ */
+async function insertManualOriginServiceRequest(
+  executor: Pick<PoolClient, 'query'>,
+  input: NewHandymanUnlistedIntakeServiceRequestInput,
+): Promise<HandymanUnlistedIntakeServiceRequestRow> {
+  const result = await executor.query<HandymanUnlistedIntakeServiceRequestRow>(
+    `INSERT INTO handyman_service_requests
+       (id, client_id, channel_attribution_id, tenant_company_id, tenant_pic_id,
+        building_id, space_id, service_catalog_id, service_variant_id,
+        origin_channel, origin_reference, description, status,
+        created_by_user_id, intake_source, unlisted_intake_case_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8, $9, $10, 'INTAKE', $11,
+             'UNLISTED_TRIAGE', $12)
+     RETURNING ${MANUAL_ORIGIN_REQUEST_SELECT}`,
+    [
+      input.id,
+      input.clientId,
+      input.channelAttributionId,
+      input.tenantCompanyId,
+      input.tenantPicId,
+      input.buildingId,
+      input.spaceId,
+      input.originChannel,
+      input.originReference,
+      input.description,
+      input.createdByUserId,
+      input.intakeCaseId,
+    ],
+  );
+  return result.rows[0];
+}
+
+async function findManualOriginRequestById(
+  executor: Pick<PoolClient, 'query'>,
+  requestId: string,
+): Promise<HandymanUnlistedIntakeServiceRequestRow | null> {
+  const result = await executor.query<HandymanUnlistedIntakeServiceRequestRow>(
+    `SELECT ${MANUAL_ORIGIN_REQUEST_SELECT}
+       FROM handyman_service_requests
+      WHERE id = $1
+        AND intake_source = 'UNLISTED_TRIAGE'`,
+    [requestId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** Writes the exactly-once conversion binding onto the 0487 state anchor. */
+async function projectCaseConversion(
+  executor: Pick<PoolClient, 'query'>,
+  input: {
+    intakeCaseId: string;
+    requestId: string;
+    idempotencyKey: string;
+    payloadHash: string;
+  },
+): Promise<void> {
+  const result = await executor.query(
+    `UPDATE handyman_unlisted_intake_triage_state
+        SET converted_request_id = $2,
+            converted_at = NOW(),
+            conversion_idempotency_key = $3,
+            conversion_payload_hash = $4,
+            updated_at = NOW()
+      WHERE intake_case_id = $1
+        AND converted_request_id IS NULL`,
+    [
+      input.intakeCaseId,
+      input.requestId,
+      input.idempotencyKey,
+      input.payloadHash,
+    ],
+  );
+  if (result.rowCount !== 1) {
+    // The anchor vanished or was bound concurrently: refuse rather than leave a
+    // request that no case owns.
+    throw handymanUnlistedIntakeConversionNotEligibleError('BINDING_CONFLICT');
+  }
+}
+
+/** A verified attribution may be preserved only while it is still unused. */
+async function countRequestsUsingAttribution(
+  executor: Pick<PoolClient, 'query'>,
+  channelAttributionId: string,
+): Promise<number> {
+  const result = await executor.query<{ n: number }>(
+    `SELECT count(*)::int AS n
+       FROM handyman_service_requests
+      WHERE channel_attribution_id = $1`,
+    [channelAttributionId],
+  );
+  return result.rows[0].n;
+}
+
+/** Building -> property -> Client lineage re-proved at conversion time. */
+async function findBuildingClientId(
+  executor: Pick<PoolClient, 'query'>,
+  buildingId: string,
+): Promise<string | null> {
+  const result = await executor.query<{ client_id: string }>(
+    `SELECT p.client_id
+       FROM buildings b
+       JOIN properties p ON p.id = b.property_id
+      WHERE b.id = $1`,
+    [buildingId],
+  );
+  return result.rows[0]?.client_id ?? null;
+}
+
 export const handymanUnlistedIntakeRepository = {
   findById,
   findByActorAndIdempotencyKey,
@@ -639,6 +933,13 @@ export const handymanUnlistedIntakeRepository = {
   listForCareWorkspaceScoped,
   listForOperationsTriageScoped,
   findCaseForTriageLock,
+  findCaseForConversionLock,
+  lockTriageStateForConversion,
+  insertManualOriginServiceRequest,
+  findManualOriginRequestById,
+  projectCaseConversion,
+  countRequestsUsingAttribution,
+  findBuildingClientId,
   insertTriageDecision,
   findTriageDecisionById,
   findTriageDecisionByCaseAndIdempotencyKey,

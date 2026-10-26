@@ -18,6 +18,7 @@ import {
   listBuildingCareUnlistedIntakeCases,
   listCareWorkspaceUnlistedIntakeCases,
   listOperationsUnlistedIntakeCases,
+  convertUnlistedIntakeCaseToServiceRequest,
   listUnlistedIntakeTriageDecisions,
   recordUnlistedIntakeTriageDecision,
 } from './handyman-unlisted-intake.service';
@@ -234,6 +235,36 @@ export function createHandymanUnlistedIntakeRouter(): Router {
           intakeCaseId: param(req.params.intakeCaseId),
         });
         sendSuccess(res, items);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  // ==========================================================================
+  // CR-HM-MANUAL-QUOTATION-01 PART 02 — one triaged case -> one formal
+  // manual-origin Service Request. Same Operations authority as triage (the
+  // conversion is a management write on commercial intake), and the ONLY
+  // accepted field is the idempotency key: scope, verified parties, complaint
+  // and provenance are read from the case, never supplied. No catalog anchor,
+  // quotation price or approval is implied — the request is born in 'INTAKE'
+  // and every downstream quotation/assignment gate stays exactly as it was.
+  // ==========================================================================
+  router.post(
+    '/handyman/operations/unlisted-intake-cases/:intakeCaseId/service-request',
+    authenticationMiddleware,
+    requirePermission('tenant_company.manage'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try {
+        if (!req.auth?.userId) throw authenticationRequiredError();
+        const result = await convertUnlistedIntakeCaseToServiceRequest({
+          actorUserId: req.auth.userId,
+          intakeCaseId: param(req.params.intakeCaseId),
+          body: req.body,
+          headerIdempotencyKey: readIdempotencyHeader(req),
+        });
+        sendSuccess(res, result, result.replayed ? 200 : 201);
       } catch (error) {
         next(error);
       }

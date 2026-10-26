@@ -85,13 +85,13 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
   // Deployed baseline 4529 adds 17 documented/runtime operations after the
   // previous 301-operation freeze, CR-HM-CARE-INTERNAL-NOTES-01 adds 6
   // Internal Notes operations, and CR-HM-CARE-UNLISTED-INTAKE PART 01 adds 14
-  // Unlisted Service Intake + Internal Notes operations, and
+  // Unlisted Service Intake + Internal Notes operations,
   // CR-HM-MANUAL-QUOTATION-01 PART 01 adds 2 Operations Unlisted-Intake
-  // Triage operations (record + history read). The equality assertion
-  // below guards parity; this constant pins the reviewed surface size at the
-  // release baseline.
-  it('keeps the 340-operation Handyman surface at exact runtime parity', () => {
-    assert.equal(handymanOps.length, 340);
+  // Triage operations (record + history read) and PART 02 adds 1 Operations
+  // conversion operation. The equality assertion below guards parity; this
+  // constant pins the reviewed surface size at the release baseline.
+  it('keeps the 341-operation Handyman surface at exact runtime parity', () => {
+    assert.equal(handymanOps.length, 341);
     const runtime = extractAllRuntimeRoutes()
       .filter((r) => r.path.includes('/handyman'))
       .map((r) => `${r.method} ${r.canon}`);
@@ -209,8 +209,9 @@ describe('CR-HM-BACKEND-CONTRACT-FREEZE-03 OpenAPI reconciliation', () => {
     //   +5 Building Care unlisted-intake route-guarded ops = 223,
     //   CR-HM-MANUAL-QUOTATION-01 PART 01 +1 Operations triage-decision
     //   write (`tenant_company.manage`; the history read stays on the
-    //   composite Operations/Care read authority and remains unannotated).
-    assert.equal(annotated, 224);
+    //   composite Operations/Care read authority and remains unannotated),
+    //   PART 02 +1 Operations conversion write (`tenant_company.manage`).
+    assert.equal(annotated, 225);
   });
 
   it('pins the 11 service-enforced permissions freeze-03 documented', () => {

@@ -87030,6 +87030,104 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /handyman/operations/unlisted-intake-cases/{intakeCaseId}/service-request:
+    post:
+      tags:
+        - Handyman Operations
+      operationId: convertHandymanUnlistedIntakeCaseToServiceRequest
+      summary: Convert one triaged unlisted-service intake case into one manual-origin service request
+      description: >-
+        CR-HM-MANUAL-QUOTATION-01 PART 02. Converts exactly ONE unlisted
+        service intake case whose effective Operations triage decision is
+        ONE_TIME_MANUAL_QUOTATION_READY (status TRIAGED_MANUAL_QUOTATION_READY)
+        into a real `handyman_service_requests` row in `INTAKE`, carrying the
+        case's verified Tenant/PIC identity, Client/Building/Space scope,
+        customer complaint and origin provenance verbatim.
+        `service_catalog_id`/`service_variant_id` are structurally NULL (the
+        0488 CHECKs refuse any value on this lane — no catalog entry is faked),
+        and a verified channel attribution is preserved when the case carries
+        one and it is still unused, never invented and never reused. The
+        conversion binding is written ONCE onto the case's 0487 triage state
+        anchor (UNIQUE both ways), so a case can never produce a second request
+        and a request can never claim a second case. The request accepts no
+        field other than the idempotency key; any supplied scope, catalog anchor
+        or amount is a 400, not an ignore. Quotation pricing, customer approval,
+        execution scope and assignment gates are unchanged: the new request
+        must still earn an approved quotation version exactly like a catalog
+        request. Requires `tenant_company.manage` PLUS active
+        exact-Client/Building Operations access (BE-02G); customer-facing Tenant
+        PIC accounts are refused. Replays on the same key and identical derived
+        payload return 200; a different payload returns 409, as does a case that
+        is not convertible or whose verified identity/scope has lapsed.
+      security:
+        - bearerAuth: []
+      x-required-permission: tenant_company.manage
+      x-building-scoped: true
+      x-error-codes:
+        - VALIDATION_ERROR
+        - AUTHENTICATION_REQUIRED
+        - PERMISSION_DENIED
+        - BUILDING_ACCESS_DENIED
+        - HANDYMAN_UNLISTED_INTAKE_CASE_NOT_FOUND
+        - HANDYMAN_UNLISTED_INTAKE_FORBIDDEN
+        - HANDYMAN_UNLISTED_INTAKE_CONVERSION_NOT_ELIGIBLE
+        - HANDYMAN_UNLISTED_INTAKE_CONVERSION_IDEMPOTENCY_CONFLICT
+        - HANDYMAN_UNLISTED_INTAKE_CONVERSION_SCOPE_UNVERIFIED
+        - HANDYMAN_UNLISTED_INTAKE_CONVERSION_ATTRIBUTION_CONFLICT
+        - TENANT_VERIFICATION_REQUIRED
+      parameters:
+        - name: intakeCaseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandymanUnlistedIntakeConversionRequest"
+      responses:
+        "201":
+          description: Manual-origin service request created and bound to the case; no-store
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeConversionMutationResult"
+        "200":
+          description: Idempotent replay of the same conversion; the existing request is returned
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/HandymanUnlistedIntakeConversionMutationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /handyman/unlisted-intake-cases/{intakeCaseId}:
     get:
       tags:
@@ -140755,6 +140853,8 @@ components:
         - status
         - triageDecisionId
         - triagedAt
+        - convertedRequestId
+        - convertedAt
         - triage
         - triageHistory
         - createdByUserId
@@ -140838,6 +140938,18 @@ components:
             on this case (migration 0487 `handyman_unlisted_intake_triage_state`);
             null while the case is untriaged or awaiting a clarification answer.
         triagedAt:
+          type: string
+          format: date-time
+          nullable: true
+        convertedRequestId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            The ONE formal manual-origin service request created from this case
+            (CR-HM-MANUAL-QUOTATION-01 PART 02); null until Operations converts
+            it, and it can never point at a second request.
+        convertedAt:
           type: string
           format: date-time
           nullable: true
@@ -140991,6 +141103,117 @@ components:
         updatedAt:
           type: string
           format: date-time
+    CreateHandymanUnlistedIntakeConversionRequest:
+      type: object
+      description: >-
+        A conversion supplies NOTHING but its idempotency key: every request
+        value is derived from the triaged intake case, and a request body that
+        tries to name a catalog service, attribution, amount or scope is a 400.
+      additionalProperties: false
+      properties:
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 200
+    HandymanUnlistedIntakeRequestConversion:
+      type: object
+      description: >-
+        The manual-origin service request created from a triaged unlisted
+        intake case. `serviceCatalogId` and `serviceVariantId` are always null
+        on this lane by DB law (migration 0488) — the request exists WITHOUT a
+        catalog anchor instead of a fabricated one.
+      required:
+        - requestId
+        - intakeCaseId
+        - clientId
+        - buildingId
+        - tenantCompanyId
+        - intakeSource
+        - serviceCatalogId
+        - serviceVariantId
+        - originChannel
+        - description
+        - status
+        - convertedAt
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        intakeCaseId:
+          type: string
+          format: uuid
+        clientId:
+          type: string
+          format: uuid
+        buildingId:
+          type: string
+          format: uuid
+        spaceId:
+          type: string
+          format: uuid
+          nullable: true
+        tenantCompanyId:
+          type: string
+          format: uuid
+        tenantPicId:
+          type: string
+          format: uuid
+          nullable: true
+        intakeSource:
+          type: string
+          enum:
+            - UNLISTED_TRIAGE
+        serviceCatalogId:
+          type: string
+          format: uuid
+          nullable: true
+          enum:
+            - null
+        serviceVariantId:
+          type: string
+          format: uuid
+          nullable: true
+          enum:
+            - null
+        channelAttributionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >-
+            Preserved only when the intake case already carried a verified
+            attribution that no other request consumes; never invented.
+        originChannel:
+          type: string
+          enum:
+            - CUSTOMER_CARE_BACKEND
+            - BM_SUPER_APP
+        originReference:
+          type: string
+          nullable: true
+        description:
+          type: string
+          maxLength: 2000
+        status:
+          type: string
+          description: >-
+            The request's own lifecycle status, created as INTAKE and advanced
+            only by the existing governed request/quotation surfaces.
+        convertedAt:
+          type: string
+          format: date-time
+    HandymanUnlistedIntakeConversionMutationResult:
+      type: object
+      required:
+        - replayed
+        - conversion
+        - intakeCase
+      properties:
+        replayed:
+          type: boolean
+        conversion:
+          $ref: "#/components/schemas/HandymanUnlistedIntakeRequestConversion"
+        intakeCase:
+          $ref: "#/components/schemas/HandymanUnlistedIntakeCase"
     CreateHandymanUnlistedIntakeTriageRequest:
       type: object
       additionalProperties: false

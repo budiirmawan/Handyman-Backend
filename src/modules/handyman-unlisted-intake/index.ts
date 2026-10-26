@@ -7,6 +7,7 @@ export {
   HANDYMAN_UNLISTED_INTAKE_MAX_TRIAGE_JUSTIFICATION_LENGTH,
   HANDYMAN_UNLISTED_INTAKE_MIN_TRIAGE_JUSTIFICATION_LENGTH,
   HANDYMAN_UNLISTED_INTAKE_ORIGIN_CHANNELS,
+  HANDYMAN_UNLISTED_INTAKE_REQUEST_INTAKE_SOURCE,
   HANDYMAN_UNLISTED_INTAKE_STATUSES,
   HANDYMAN_UNLISTED_INTAKE_TRIAGE_DECISIONS,
   HANDYMAN_UNLISTED_INTAKE_TRIAGE_ELIGIBLE_STATUSES,
@@ -19,11 +20,14 @@ export type {
   HandymanUnlistedIntakeOriginChannel,
   HandymanUnlistedIntakeStatus,
   HandymanUnlistedIntakeTriageDecision,
+  HandymanUnlistedIntakeRequestIntakeSource,
   HandymanUnlistedIntakeTriageDecisionRecord,
   PublicHandymanUnlistedIntakeActor,
   PublicHandymanUnlistedIntakeCase,
   PublicHandymanUnlistedIntakeMutationResult,
   PublicHandymanUnlistedIntakePreferredWindow,
+  PublicHandymanUnlistedIntakeConversionMutationResult,
+  PublicHandymanUnlistedIntakeRequestConversion,
   PublicHandymanUnlistedIntakeTriageDecision,
   PublicHandymanUnlistedIntakeTriageMutationResult,
 } from './handyman-unlisted-intake.types';
@@ -32,6 +36,10 @@ export {
   handymanUnlistedIntakeCaseNotFoundError,
   handymanUnlistedIntakeForbiddenError,
   handymanUnlistedIntakeIdempotencyConflictError,
+  handymanUnlistedIntakeConversionAttributionConflictError,
+  handymanUnlistedIntakeConversionIdempotencyConflictError,
+  handymanUnlistedIntakeConversionNotEligibleError,
+  handymanUnlistedIntakeConversionScopeUnverifiedError,
   handymanUnlistedIntakeImmutableError,
   handymanUnlistedIntakeTriageAlreadyRecordedError,
   handymanUnlistedIntakeTriageCatalogServiceInvalidError,
@@ -42,6 +50,7 @@ export {
 export {
   parseCreateBuildingCareUnlistedIntakeBody,
   parseCreateCareWorkspaceUnlistedIntakeBody,
+  parseUnlistedIntakeConversionBody,
   parseUnlistedIntakeListQuery,
   parseUnlistedIntakeTriageBody,
   parseUnlistedIntakeUuidParam,
@@ -51,8 +60,10 @@ export { handymanUnlistedIntakeRepository } from './handyman-unlisted-intake.rep
 
 export {
   computeUnlistedIntakePayloadHash,
+  computeUnlistedIntakeConversionPayloadHash,
   computeUnlistedIntakeTriagePayloadHash,
   createBuildingCareUnlistedIntakeCase,
+  convertUnlistedIntakeCaseToServiceRequest,
   createCareWorkspaceUnlistedIntakeCase,
   getBuildingCareUnlistedIntakeCase,
   getCareWorkspaceUnlistedIntakeCase,
@@ -67,6 +78,10 @@ export {
   toPublicHandymanUnlistedIntakeTriageDecision,
 } from './handyman-unlisted-intake.service';
 export type {
+  HandymanUnlistedIntakeConversionLock,
+  HandymanUnlistedIntakeConversionState,
+  HandymanUnlistedIntakeServiceRequestRow,
+  NewHandymanUnlistedIntakeServiceRequestInput,
   NewHandymanUnlistedIntakeTriageDecisionInput,
 } from './handyman-unlisted-intake.repository';
 
