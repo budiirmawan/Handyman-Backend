@@ -25,5 +25,5 @@ export async function getCareWorkspaceRequestDetail(token: string, requestInput:
   if (!result.authenticated) throw workspaceUnauthorized();
   if (!result.item) throw new AppError({ code: ERROR_CODES.HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND,
     message: 'Care workspace resource not found.', statusCode: 404 });
-  return toCustomerCarePublic(result.item);
+  return { ...toCustomerCarePublic(result.item), items: result.item.items ?? [] };
 }

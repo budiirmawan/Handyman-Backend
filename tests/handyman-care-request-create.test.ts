@@ -20,6 +20,7 @@ import {
   handymanCareActorService, grantCareActorProperty, revokeCareActorProperty,
 } from '../src/modules/handyman-care-actors';
 import { handymanServiceVariantService } from '../src/modules/handyman-catalog';
+import { createHandymanServiceAttribute, addHandymanServiceVariantAttribute } from '../src/modules/handyman-parameterized-catalog';
 import {
   acceptHandoffAssertion, bindHandoffExchangeToChannelAttribution,
   handoffIntegrationSecretEnvName, handoffRuntimeRepository, signHandoffAssertion,
@@ -208,6 +209,166 @@ describe('PART 04 — Customer Care request creation authority', () => {
     assert.equal(localRetry.status, 409);
   });
 
+  it('creates and preserves two separately configured AC items in one Care request and Operations reads the same rows', async (t) => {
+    if (!ready(t)) return;
+    const f = await fixture();
+    await db().query("UPDATE buildings SET timezone='Asia/Jakarta' WHERE id=$1", [f.building.id]);
+    const i = await integration();
+    await grant(f, i);
+    const split = await handymanServiceVariantService.createHandymanServiceVariant({
+      serviceCatalogId: f.service.id, code: `V_${suffix()}`, name: 'Split',
+    }, adminId);
+    const cassette = await handymanServiceVariantService.createHandymanServiceVariant({
+      serviceCatalogId: f.service.id, code: `V_${suffix()}`, name: 'Cassette',
+    }, adminId);
+    const acType = await createHandymanServiceAttribute(f.service.id, {
+      code: `AC_TYPE_${suffix()}`, name: 'AC type', dataType: 'ENUM', required: true,
+      allowedValues: [{ code: 'Split', label: 'Split' }, { code: 'Cassette', label: 'Cassette' }],
+    }, adminId);
+    const capacity = await createHandymanServiceAttribute(f.service.id, {
+      code: `CAPACITY_${suffix()}`, name: 'Capacity', dataType: 'NUMBER', unit: 'PK', required: true,
+    }, adminId);
+    const inverter = await createHandymanServiceAttribute(f.service.id, {
+      code: `INVERTER_${suffix()}`, name: 'Inverter', dataType: 'ENUM', required: true,
+      allowedValues: [{ code: 'Inverter', label: 'Inverter' }, { code: 'Non-Inverter', label: 'Non-Inverter' }],
+    }, adminId);
+    await addHandymanServiceVariantAttribute(f.service.id, split.id, { attributeId: acType.id, valueText: 'Split' }, adminId);
+    await addHandymanServiceVariantAttribute(f.service.id, split.id, { attributeId: capacity.id, valueNumber: 1 }, adminId);
+    await addHandymanServiceVariantAttribute(f.service.id, split.id, { attributeId: inverter.id, valueText: 'Inverter' }, adminId);
+    await addHandymanServiceVariantAttribute(f.service.id, cassette.id, { attributeId: acType.id, valueText: 'Cassette' }, adminId);
+    await addHandymanServiceVariantAttribute(f.service.id, cassette.id, { attributeId: capacity.id, valueNumber: 2 }, adminId);
+    await addHandymanServiceVariantAttribute(f.service.id, cassette.id, { attributeId: inverter.id, valueText: 'Non-Inverter' }, adminId);
+    const uomId = randomUUID();
+    await db().query(`INSERT INTO units_of_measure (id, client_id, code, name, symbol, category)
+      VALUES ($1,$2,$3,'Unit','unit','COUNT')`, [uomId, f.client.id, `U_${suffix()}`]);
+    const exchange = await accept(assertion(f, i));
+    const response = await api().post('/api/v1/handyman/requests/care').send({
+      exchangeToken: exchange.exchangeToken,
+      preferredWindowStart: '2027-02-01T09:00:00+07:00',
+      preferredWindowEnd: '2027-02-01T12:00:00+07:00',
+      items: [
+        { serviceCatalogId: f.service.id, serviceVariantId: split.id, quantity: 2, uomId, attributeValues: {}, accessCondition: 'HIGH_FLOOR', description: 'Two split AC units' },
+        { serviceCatalogId: f.service.id, serviceVariantId: cassette.id, quantity: 1, uomId, attributeValues: {}, accessCondition: 'RESTRICTED', description: 'One cassette AC unit' },
+      ],
+    });
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const request = response.body.data;
+    assert.equal(request.serviceCatalogId, f.service.id);
+    assert.equal(request.serviceVariantId, split.id);
+    assert.equal(request.items.length, 2);
+    assert.equal(request.schedulingReadiness.preferredWindowStart, '2027-02-01T02:00:00.000Z');
+    assert.equal(request.schedulingReadiness.preferredWindowEnd, '2027-02-01T05:00:00.000Z');
+    assert.equal(request.schedulingReadiness.status, 'ACTIVE');
+    const expectedItems = [
+      [split.id, 2, uomId, { [acType.code]: 'Split', [capacity.code]: '1', [inverter.code]: 'Inverter' }, 'Two split AC units'],
+      [cassette.id, 1, uomId, { [acType.code]: 'Cassette', [capacity.code]: '2', [inverter.code]: 'Non-Inverter' }, 'One cassette AC unit'],
+    ].sort((a, b) => a[0].localeCompare(b[0]));
+    const itemOrder = (a: any, b: any) => a[0].localeCompare(b[0]);
+    assert.deepEqual(request.items.map((item: any) => [item.serviceVariantId, item.quantity, item.uomId, item.attributeValues, item.itemDescription]).sort(itemOrder), expectedItems);
+    assert.ok(request.items.every((item: any) => item.createdByUserId === null));
+    assert.deepEqual(request.items.map((item: any) => [item.serviceVariantId, item.accessCondition]).sort((a: any, b: any) => a[0].localeCompare(b[0])), [
+      [split.id, 'HIGH_FLOOR'], [cassette.id, 'RESTRICTED'],
+    ].sort((a, b) => a[0].localeCompare(b[0])));
+    const persistedPreference = await db().query(`SELECT preferred_window_start, preferred_window_end,
+        timezone, created_by_user_id FROM handyman_scheduling_readiness
+      WHERE handyman_request_id=$1 AND status='ACTIVE'`, [request.id]);
+    assert.equal(persistedPreference.rows.length, 1);
+    assert.equal(persistedPreference.rows[0].preferred_window_start.toISOString(), request.schedulingReadiness.preferredWindowStart);
+    assert.equal(persistedPreference.rows[0].preferred_window_end.toISOString(), request.schedulingReadiness.preferredWindowEnd);
+    assert.equal(persistedPreference.rows[0].created_by_user_id, null);
+    const migrationColumns = await db().query(`SELECT table_name, column_name, data_type, is_nullable,
+        numeric_precision, numeric_scale FROM information_schema.columns
+      WHERE (table_name = 'handyman_scheduling_readiness' AND column_name IN
+          ('preferred_window_start', 'preferred_window_end', 'created_by_user_id'))
+         OR (table_name = 'handyman_service_request_items' AND column_name IN
+          ('quantity', 'uom_id', 'item_description', 'created_by_user_id'))`);
+    const column = (table: string, name: string) => migrationColumns.rows.find((row: any) => row.table_name === table && row.column_name === name);
+    assert.equal(column('handyman_scheduling_readiness', 'preferred_window_start').data_type, 'timestamp with time zone');
+    assert.equal(column('handyman_scheduling_readiness', 'preferred_window_end').data_type, 'timestamp with time zone');
+    assert.equal(column('handyman_scheduling_readiness', 'created_by_user_id').is_nullable, 'YES');
+    assert.equal(column('handyman_service_request_items', 'quantity').numeric_precision, 18);
+    assert.equal(column('handyman_service_request_items', 'quantity').numeric_scale, 4);
+    assert.equal(column('handyman_service_request_items', 'uom_id').data_type, 'uuid');
+    assert.equal(column('handyman_service_request_items', 'item_description').is_nullable, 'YES');
+    assert.equal(column('handyman_service_request_items', 'created_by_user_id').is_nullable, 'YES');
+    const migrationConstraints = await db().query(`SELECT conname FROM pg_constraint
+      WHERE conname IN ('handyman_sched_readiness_window_check',
+        'handyman_service_request_items_description_check')`);
+    assert.deepEqual(migrationConstraints.rows.map((row: any) => row.conname).sort(), [
+      'handyman_sched_readiness_window_check', 'handyman_service_request_items_description_check',
+    ]);
+    const appliedMigrations = await db().query(`SELECT id FROM schema_migrations
+      WHERE id IN ('0481_handyman_commercial_consent_bridge',
+        '0482_handyman_financial_reconciliation',
+        '0483_handyman_care_initial_scheduling_preference',
+        '0484_handyman_care_structured_request_items') ORDER BY id`);
+    assert.deepEqual(appliedMigrations.rows.map((row: any) => row.id), [
+      '0481_handyman_commercial_consent_bridge', '0482_handyman_financial_reconciliation',
+      '0483_handyman_care_initial_scheduling_preference', '0484_handyman_care_structured_request_items',
+    ]);
+    const persisted = await db().query(`SELECT service_variant_id, quantity::text, uom_id,
+        attribute_values, item_description, created_by_user_id
+      FROM handyman_service_request_items WHERE handyman_request_id=$1
+      ORDER BY created_at, id`, [request.id]);
+    assert.equal(persisted.rows.length, 2);
+    assert.equal(persisted.rows[0].created_by_user_id, null);
+    assert.deepEqual(persisted.rows.map((row: any) => [row.service_variant_id, Number(row.quantity), row.uom_id, row.attribute_values, row.item_description]).sort(itemOrder), expectedItems);
+    const operationsRead = await api().get(`/api/v1/handyman/requests/${request.id}/items`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    assert.equal(operationsRead.status, 200, JSON.stringify(operationsRead.body));
+    const expectedOperationsItems = expectedItems.map(([variantId, quantity, unit, attrs]) => [variantId, quantity, unit, attrs]);
+    assert.deepEqual(operationsRead.body.data.map((item: any) => [item.serviceVariantId, item.quantity, item.uomId, item.attributeValues]).sort(itemOrder), expectedOperationsItems);
+    const retry = await api().post('/api/v1/handyman/requests/care').send({ exchangeToken: exchange.exchangeToken, items: [
+      { serviceCatalogId: f.service.id, serviceVariantId: split.id, quantity: 2 },
+      { serviceCatalogId: f.service.id, serviceVariantId: cassette.id, quantity: 1 },
+    ] });
+    assert.equal(retry.status, 401);
+    assert.equal((await db().query('SELECT count(*)::int AS n FROM handyman_service_request_items WHERE handyman_request_id=$1', [request.id])).rows[0].n, 2);
+  });
+
+  it('rejects invalid quantity, UOM, configured attribute values and service-variant associations without consuming the Care exchange', async (t) => {
+    if (!ready(t)) return;
+    const f = await fixture();
+    const otherService = await serviceCatalogService.createServiceCatalogEntry({
+      clientId: f.client.id, code: `HM_${suffix()}`, name: 'Other service', category: 'HANDYMAN',
+    }, adminId);
+    const otherVariant = await handymanServiceVariantService.createHandymanServiceVariant({
+      serviceCatalogId: otherService.id, code: `V_${suffix()}`, name: 'Wrong service variant',
+    }, adminId);
+    const kind = await createHandymanServiceAttribute(f.service.id, {
+      code: `KIND_${suffix()}`, name: 'Configured kind', dataType: 'ENUM', required: true,
+      allowedValues: [{ code: 'VALID', label: 'Valid' }],
+    }, adminId);
+    const i = await integration(); await grant(f, i);
+    const exchange = await accept(assertion(f, i));
+    const baseline = await db().query(`SELECT (SELECT count(*)::int FROM handyman_service_requests) AS requests, (SELECT count(*)::int FROM handyman_service_request_items) AS items`);
+    const submit = (item: Record<string, unknown>) => api().post('/api/v1/handyman/requests/care').send({
+      exchangeToken: exchange.exchangeToken, items: [{ serviceCatalogId: f.service.id, quantity: 1, ...item }],
+    });
+    for (const item of [
+      { quantity: 0 },
+      { quantity: 1, uomId: randomUUID() },
+      { quantity: 1, attributeValues: { [kind.code]: 'NOT_ALLOWED' } },
+      { quantity: 1, serviceVariantId: otherVariant.id },
+      { quantity: 1.12345 },
+    ]) {
+      const invalid = await submit(item);
+      assert.equal(invalid.status, 400, JSON.stringify(invalid.body));
+      assert.equal((await db().query('SELECT status FROM handyman_handoff_exchanges WHERE id=$1', [exchange.exchangeId])).rows[0].status, 'ACTIVE');
+      const afterInvalid = await db().query(`SELECT (SELECT count(*)::int FROM handyman_service_requests) AS requests, (SELECT count(*)::int FROM handyman_service_request_items) AS items`);
+      assert.deepEqual(afterInvalid.rows[0], baseline.rows[0]);
+    }
+    const uomId = randomUUID();
+    await db().query(`INSERT INTO units_of_measure (id, client_id, code, name, symbol, category)
+      VALUES ($1,$2,$3,'Unit','unit','COUNT')`, [uomId, f.client.id, `U_${suffix()}`]);
+    const valid = await submit({ quantity: 1, uomId, attributeValues: { [kind.code]: 'VALID' } });
+    assert.equal(valid.status, 201, JSON.stringify(valid.body));
+    assert.equal(valid.body.data.items.length, 1);
+    const afterValid = await db().query(`SELECT (SELECT count(*)::int FROM handyman_service_requests) AS requests, (SELECT count(*)::int FROM handyman_service_request_items) AS items`);
+    assert.equal(afterValid.rows[0].requests, baseline.rows[0].requests + 1);
+    assert.equal(afterValid.rows[0].items, baseline.rows[0].items + 1);
+  });
+
   it('matches the strict care DTO: no caller actor, customer, property, unit, occupancy or channel overrides', async (t) => {
     if (!ready(t)) return;
     const f = await fixture();
@@ -373,7 +534,7 @@ describe('PART 04 — Customer Care request creation authority', () => {
       components: { schemas: Record<string, {
         required: string[];
         additionalProperties?: boolean;
-        properties: Record<string, { $ref?: string; nullable?: boolean; minLength?: number; maxLength?: number }>;
+        properties: Record<string, { $ref?: string; nullable?: boolean; minLength?: number; maxLength?: number; type?: string; maxItems?: number }>;
       }> };
     };
     const operation = spec.paths['/handyman/requests/care'].post;
@@ -382,9 +543,16 @@ describe('PART 04 — Customer Care request creation authority', () => {
     assert.equal(operation.requestBody.content['application/json'].schema.$ref, '#/components/schemas/CreateCareHandymanServiceRequest');
     assert.equal(operation.responses['201'].content['application/json'].schema.allOf[1].properties?.data.$ref, '#/components/schemas/HandymanServiceRequest');
     const dto = spec.components.schemas.CreateCareHandymanServiceRequest;
-    assert.deepEqual(dto.required, ['exchangeToken', 'serviceCatalogId']);
+    assert.deepEqual(dto.required, ['exchangeToken']);
+    assert.deepEqual(dto.anyOf, [{ required: ['serviceCatalogId'] }, { required: ['items'] }]);
     assert.equal(dto.additionalProperties, false);
-    assert.deepEqual(Object.keys(dto.properties), ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'preferredWindowStart', 'preferredWindowEnd']);
+    assert.deepEqual(Object.keys(dto.properties), ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'preferredWindowStart', 'preferredWindowEnd', 'items']);
+    assert.deepEqual(dto.oneOf, [
+      { required: ['preferredWindowStart', 'preferredWindowEnd'] },
+      { not: { anyOf: [{ required: ['preferredWindowStart'] }, { required: ['preferredWindowEnd'] }] } },
+    ]);
+    assert.equal(dto.properties.items.type, 'array');
+    assert.equal(dto.properties.items.maxItems, 50);
     assert.equal(dto.properties.exchangeToken.minLength, 1);
     assert.equal(dto.properties.exchangeToken.maxLength, 512);
     assert.equal(dto.properties.serviceCatalogId.$ref, '#/components/schemas/Uuid');
@@ -394,6 +562,9 @@ describe('PART 04 — Customer Care request creation authority', () => {
     assert.ok(response.required.includes('createdByUserId'));
     assert.equal(response.properties.createdByUserId.nullable, true);
     assert.equal(response.properties.spaceId.nullable, true);
+    assert.equal(response.properties.schedulingReadiness.$ref, '#/components/schemas/HandymanCareSchedulingPreference');
+    assert.equal(response.required.includes('preferredWindowStart'), false);
+    assert.equal(response.properties.items.type, 'array');
     const local = spec.paths['/handyman/requests'].post;
     assert.deepEqual(local.security, [{ bearerAuth: [] }]);
     assert.equal(local.requestBody.content['application/json'].schema.$ref, '#/components/schemas/CreateHandymanServiceRequest');

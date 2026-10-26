@@ -170,8 +170,8 @@ describe('PART 06B — care workspace represented request detail', () => {
       const response = await get(id);
       assert.equal(response.status, 200, JSON.stringify(response.body));
       assert.equal(response.headers['cache-control'], 'no-store');
-      assert.deepEqual(response.body.data, await getHandymanServiceRequestDetail(id, adminId));
-      assert.equal('items' in response.body.data, false);
+      assert.deepEqual(response.body.data, { ...(await getHandymanServiceRequestDetail(id, adminId)), items: [] });
+      assert.deepEqual(response.body.data.items, []);
       assert.equal('cursorCreatedAt' in response.body.data, false);
       assert.equal('attributionCreatedAt' in response.body.data, false);
       assert.ok(!JSON.stringify(response.body).includes('private@example.com'));
@@ -192,6 +192,8 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.equal(data.request.id, unitRequests[0]);
     assert.equal(data.request.tenantCompanyId, tenantId);
     assert.equal(data.request.spaceId, chains[0].spaceId);
+    assert.deepEqual(data.documentAvailability, { quotation: 'NOT_CREATED', bast: 'NOT_CREATED', warranty: 'NOT_ACTIVATED' });
+    assert.deepEqual(data.request.items, []);
     assert.equal(data.inspection, null);
     assert.equal(data.quotation, null);
     assert.deepEqual(data.financialTerms,{unconfiguredTaxIsExempt:false,inspectionAgreement:null,inspectionOffers:[],quotationTaxes:[]});
@@ -430,7 +432,7 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.equal(spec.components.schemas.CareHandymanPaymentProofUploadRequest.properties.file.format, 'binary');
   });
 
-  it('keeps request detail read-only with explicit context and the existing safe projection; adds no mutation or nested reads', async () => {
+  it('keeps request detail read-only and projects structured items in the authorized statement', async () => {
     for (const verb of ['post', 'patch', 'delete'] as const) {
       assert.equal((await api()[verb](`${path}/${unitRequests[0]}`).set('Authorization', `Bearer ${token}`).send(selection())).status, 404);
     }
@@ -444,6 +446,6 @@ describe('PART 06B — care workspace represented request detail', () => {
     assert.deepEqual(route.get.parameters.filter((p: any) => p.required).map((p: any) => p.name),
       ['requestId', 'propertyId', 'tenantCompanyId', 'buildingId']);
     assert.equal(route.get.responses['200'].content['application/json'].schema.allOf[1].properties.data.$ref,
-      '#/components/schemas/HandymanCustomerCareServiceRequest');
+      '#/components/schemas/CareWorkspaceRequestDetail');
   });
 });

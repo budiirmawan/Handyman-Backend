@@ -148,52 +148,117 @@ export function parseHandymanMaterialProfileDescribeQuery(
   return { buildingId, currency, ...(asOf !== undefined ? { asOf } : {}) };
 }
 
-export type CreateCareHandymanServiceRequestInput = OptionalHandymanRequestedWindow & {
-  exchangeToken: string;
+export type CareStructuredServiceRequestItemInput = {
   serviceCatalogId: string;
   serviceVariantId?: string;
+  quantity: number;
+  uomId?: string;
+  attributeValues?: Record<string, string>;
+  accessCondition?: 'STANDARD' | 'DIFFICULT' | 'HIGH_FLOOR' | 'RESTRICTED' | 'SPECIAL_EQUIPMENT';
   description?: string;
 };
 
+export type CreateCareHandymanServiceRequestInput = OptionalHandymanRequestedWindow & {
+  exchangeToken: string;
+  /** Normalized from the legacy field or the first structured item. */
+  serviceCatalogId: string;
+  serviceVariantId?: string;
+  description?: string;
+  items?: CareStructuredServiceRequestItemInput[];
+};
+
 /** Care-only intake uses an opaque single-use exchange credential, never an
- * attribution ID, caller-declared actor, tenant, property or unit. */
+ * attribution ID, caller-declared actor, tenant, property or unit. The
+ * original single-service DTO remains valid; `items` is the structured
+ * multi-item extension and is capped to keep one intake bounded. */
 export function parseCreateCareHandymanServiceRequestBody(
   body: unknown,
 ): CreateCareHandymanServiceRequestInput {
-  if (!isRecord(body)) {
-    fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
-  }
-  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'preferredWindowStart', 'preferredWindowEnd'];
-  const unknown = Object.keys(body).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) {
-    fail([{ field: 'body', message: 'Unexpected care request context field.' }]);
-  }
+  if (!isRecord(body)) fail([{ field: 'body', message: 'Request body must be a JSON object.' }]);
+  const allowed = ['exchangeToken', 'serviceCatalogId', 'serviceVariantId', 'description', 'items', 'preferredWindowStart', 'preferredWindowEnd'];
+  const unknown = Object.keys(body).filter(key => !allowed.includes(key));
+  if (unknown.length) fail([{ field: 'body', message: 'Unexpected care request context field.' }]);
   const details: Detail[] = [];
-  const serviceCatalogId = readId(body.serviceCatalogId, 'serviceCatalogId', true, details);
-  const serviceVariantId = readId(body.serviceVariantId, 'serviceVariantId', false, details);
-  const exchangeToken = typeof body.exchangeToken === 'string' &&
-    body.exchangeToken.length > 0 && body.exchangeToken.length <= 512
+  const exchangeToken = typeof body.exchangeToken === 'string' && body.exchangeToken.length > 0 && body.exchangeToken.length <= 512
     ? body.exchangeToken : undefined;
-  if (!exchangeToken) {
-    details.push({ field: 'exchangeToken', message: 'A single-use exchange token is required.' });
-  }
+  if (!exchangeToken) details.push({ field: 'exchangeToken', message: 'A single-use exchange token is required.' });
   let description: string | undefined;
   if (body.description !== undefined) {
-    if (typeof body.description !== 'string' ||
-        body.description.trim().length < 1 || body.description.trim().length > 1000) {
+    if (typeof body.description !== 'string' || body.description.trim().length < 1 || body.description.trim().length > 1000) {
       details.push({ field: 'description', message: 'description must be 1-1000 characters.' });
+    } else description = body.description.trim();
+  }
+  let items: CareStructuredServiceRequestItemInput[] | undefined;
+  if (body.items !== undefined) {
+    if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 50) {
+      details.push({ field: 'items', message: 'items must contain between 1 and 50 service items.' });
     } else {
-      description = body.description.trim();
+      items = body.items.map((raw, index) => {
+        const field = `items[${index}]`;
+        if (!isRecord(raw)) {
+          details.push({ field, message: 'Each item must be an object.' });
+          return { serviceCatalogId: '', quantity: 0 };
+        }
+        const itemAllowed = ['serviceCatalogId', 'serviceVariantId', 'quantity', 'uomId', 'attributeValues', 'accessCondition', 'description', 'complaint'];
+        if (Object.keys(raw).some(key => !itemAllowed.includes(key))) details.push({ field, message: 'Unexpected item field.' });
+        const serviceCatalogId = readId(raw.serviceCatalogId, `${field}.serviceCatalogId`, true, details) ?? '';
+        const serviceVariantId = readId(raw.serviceVariantId, `${field}.serviceVariantId`, false, details);
+        const uomId = readId(raw.uomId, `${field}.uomId`, false, details);
+        const quantity = raw.quantity;
+        if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity <= 0) {
+          details.push({ field: `${field}.quantity`, message: 'quantity must be a positive number.' });
+        }
+        let attributeValues: Record<string, string> | undefined;
+        if (raw.attributeValues !== undefined) {
+          if (!isRecord(raw.attributeValues) || Object.keys(raw.attributeValues).length > 20 ||
+              Object.values(raw.attributeValues).some(value => typeof value !== 'string' || value.length > 200)) {
+            details.push({ field: `${field}.attributeValues`, message: 'attributeValues must be an object of at most 20 bounded string values.' });
+          } else attributeValues = raw.attributeValues as Record<string, string>;
+        }
+        const accessCondition = raw.accessCondition;
+        const accessConditions = ['STANDARD', 'DIFFICULT', 'HIGH_FLOOR', 'RESTRICTED', 'SPECIAL_EQUIPMENT'];
+        if (accessCondition !== undefined && !accessConditions.includes(String(accessCondition))) {
+          details.push({ field: `${field}.accessCondition`, message: 'accessCondition is not supported.' });
+        }
+        const rawDescription = raw.description ?? raw.complaint;
+        let itemDescription: string | undefined;
+        if (rawDescription !== undefined) {
+          if (typeof rawDescription !== 'string' || rawDescription.trim().length < 1 || rawDescription.trim().length > 1000) {
+            details.push({ field: `${field}.description`, message: 'description must be 1-1000 characters.' });
+          } else itemDescription = rawDescription.trim();
+        }
+        return {
+          serviceCatalogId,
+          ...(serviceVariantId ? { serviceVariantId } : {}),
+          quantity: typeof quantity === 'number' ? quantity : 0,
+          ...(uomId ? { uomId } : {}),
+          ...(attributeValues ? { attributeValues } : {}),
+          ...(typeof accessCondition === 'string' && accessConditions.includes(accessCondition)
+            ? { accessCondition: accessCondition as CareStructuredServiceRequestItemInput['accessCondition'] }
+            : {}),
+          ...(itemDescription ? { description: itemDescription } : {}),
+        };
+      });
     }
   }
+  const legacyServiceCatalogId = readId(body.serviceCatalogId, 'serviceCatalogId', items === undefined, details);
+  const legacyVariantId = readId(body.serviceVariantId, 'serviceVariantId', false, details);
+  if (items && legacyServiceCatalogId && legacyServiceCatalogId !== items[0].serviceCatalogId) {
+    details.push({ field: 'serviceCatalogId', message: 'When items are supplied, the legacy serviceCatalogId must match the first item.' });
+  }
+  if (items && legacyVariantId && legacyVariantId !== items[0].serviceVariantId) {
+    details.push({ field: 'serviceVariantId', message: 'When items are supplied, the legacy serviceVariantId must match the first item.' });
+  }
+  const serviceCatalogId = items?.[0]?.serviceCatalogId || legacyServiceCatalogId;
   if (!exchangeToken || !serviceCatalogId || details.length) fail(details);
   const dates = parseOptionalHandymanRequestedWindow(body.preferredWindowStart, body.preferredWindowEnd);
   return {
     ...dates,
     exchangeToken,
     serviceCatalogId,
-    ...(serviceVariantId ? { serviceVariantId } : {}),
+    ...(items === undefined && legacyVariantId ? { serviceVariantId: legacyVariantId } : {}),
     ...(description ? { description } : {}),
+    ...(items ? { items } : {}),
   };
 }
 

@@ -309,7 +309,7 @@ export type WorkspaceRequestSelection = {
 
 type WorkspaceRequestRow = HandymanCustomerCareServiceRequestRecord & { cursorCreatedAt: string };
 type JsonWorkspaceRequestRow = Omit<WorkspaceRequestRow, 'createdAt' | 'updatedAt' | 'attributionCreatedAt'> & {
-  createdAt: string; updatedAt: string; attributionCreatedAt: string;
+  createdAt: string; updatedAt: string; attributionCreatedAt: string; items?: unknown[];
 };
 
 /** Workspace read adapter, NOT the local User/PIC/admin read wall. Reuse the
@@ -370,7 +370,21 @@ async function findWorkspaceProjectionById(principal: CareWorkspacePrincipal, re
       ) LIMIT $6
     )
     SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,
-      (SELECT to_jsonb(matched) FROM matched) AS item`,
+      (SELECT to_jsonb(matched) || jsonb_build_object('items', COALESCE((
+        SELECT jsonb_agg(to_jsonb(ri) ORDER BY ri."createdAt", ri.id)
+          FROM (
+            SELECT id, client_id AS "clientId", handyman_request_id AS "handymanRequestId",
+              service_catalog_id AS "serviceCatalogId", service_variant_id AS "serviceVariantId",
+              quantity::float8 AS quantity, attribute_values AS "attributeValues",
+              inherited_attribute_values AS "inheritedAttributeValues",
+              access_condition AS "accessCondition", uom_id AS "uomId",
+              item_description AS "itemDescription", status,
+              created_by_user_id AS "createdByUserId", created_at AS "createdAt",
+              updated_at AS "updatedAt"
+              FROM handyman_service_request_items
+             WHERE handyman_request_id = matched.id AND client_id = matched."clientId"
+               AND status = 'ACTIVE'
+          ) ri), '[]'::jsonb)) FROM matched) AS item`,
     [principal.sessionId, principal.careActorId, principal.integrationId, selection.propertyId,
       requestId, 1, selection.tenantCompanyId, selection.buildingId, selection.spaceId]);
   const { authenticated, item } = result.rows[0];

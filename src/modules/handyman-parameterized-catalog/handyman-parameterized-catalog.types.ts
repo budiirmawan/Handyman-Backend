@@ -302,8 +302,10 @@ export type HandymanServiceRequestItemRecord = {
   attributeValues: Record<string, string>;
   inheritedAttributeValues: Record<string, string>;
   accessCondition: HandymanServiceAccessCondition;
+  uomId: string | null;
+  itemDescription: string | null;
   status: 'ACTIVE' | 'REMOVED';
-  createdByUserId: string;
+  createdByUserId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };

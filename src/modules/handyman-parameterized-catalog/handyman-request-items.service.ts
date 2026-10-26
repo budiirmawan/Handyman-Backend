@@ -1,5 +1,6 @@
+import type { PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
-import { withTransaction } from '../../database';
+import { getPool, withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
@@ -117,9 +118,10 @@ function normalizeAttributeValues(
 
 function normalizeQuantity(raw: unknown): number {
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= 100_000_000_000_000 ||
+      Math.round(parsed * 10_000) !== parsed * 10_000) {
     throw handymanServiceRequestItemInvalidError(
-      'quantity must be a positive number.',
+      'quantity must be positive and fit the Backend NUMERIC(18,4) quantity precision.',
     );
   }
   return parsed;
@@ -171,6 +173,8 @@ export type AddHandymanServiceRequestItemInput = {
   quantity: number;
   attributeValues?: Record<string, string>;
   accessCondition?: HandymanServiceAccessCondition;
+  uomId?: string | null;
+  itemDescription?: string | null;
 };
 
 export async function addHandymanServiceRequestItem(
@@ -225,6 +229,28 @@ export async function addHandymanServiceRequestItem(
     throw handymanServiceRequestItemInvalidError(
       'The referenced catalogue service is not ACTIVE.',
     );
+  }
+
+  let uomId: string | null = null;
+  if (input.uomId !== undefined && input.uomId !== null) {
+    if (!isValidUuid(input.uomId)) {
+      throw handymanServiceRequestItemInvalidError('uomId must be a valid UUID.');
+    }
+    const uom = await getPool().query<{ id: string }>(
+      `SELECT id FROM units_of_measure WHERE id = $1 AND client_id = $2 AND status = 'ACTIVE'`,
+      [input.uomId, request.clientId],
+    );
+    if (!uom.rows[0]) {
+      throw handymanServiceRequestItemInvalidError('uomId must reference an ACTIVE unit of measure for this client.');
+    }
+    uomId = uom.rows[0].id;
+  }
+  let itemDescription: string | null = null;
+  if (input.itemDescription !== undefined && input.itemDescription !== null) {
+    if (typeof input.itemDescription !== 'string' || input.itemDescription.trim().length < 1 || input.itemDescription.trim().length > 1000) {
+      throw handymanServiceRequestItemInvalidError('itemDescription must be 1-1000 characters when provided.');
+    }
+    itemDescription = input.itemDescription.trim();
   }
 
   let serviceVariantId: string | null = null;
@@ -287,6 +313,8 @@ export async function addHandymanServiceRequestItem(
         attributeValues: effective.attributeValues,
         inheritedAttributeValues: effective.inheritedAttributeValues,
         accessCondition,
+        uomId,
+        itemDescription,
         status: 'ACTIVE',
         createdByUserId: actorUserId,
       },
@@ -315,6 +343,114 @@ export async function addHandymanServiceRequestItem(
     );
     return toPublic(record);
   });
+}
+
+/** Care-only insert seam used inside the parent request-create transaction.
+ * The workspace/exchange authorization is performed by the caller; actor
+ * provenance remains on the immutable request attribution and audit event.
+ */
+export async function addCareHandymanServiceRequestItemInTransaction(
+  executor: Pick<PoolClient, 'query'>,
+  request: { id: string; clientId: string; buildingId: string; status: string },
+  input: AddHandymanServiceRequestItemInput,
+  careActorId: string,
+): Promise<PublicHandymanServiceRequestItem> {
+  if (!ITEM_AUTHORABLE_STATUSES.has(request.status)) {
+    throw handymanServiceRequestItemInvalidError(`Items cannot be authored in request state ${request.status}.`);
+  }
+  if (!isValidUuid(input.serviceCatalogId)) {
+    throw handymanServiceRequestItemInvalidError('serviceCatalogId must be a valid UUID.');
+  }
+  const quantity = normalizeQuantity(input.quantity);
+  const ownValues = normalizeAttributeValues(input.attributeValues);
+  if (Object.keys(ownValues).some(key => key.toUpperCase() === HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY)) {
+    throw handymanServiceRequestItemInvalidError(`${HANDYMAN_SERVICE_ACCESS_CONDITION_SELECTOR_KEY} is reserved; use accessCondition.`);
+  }
+  const accessCondition = input.accessCondition ?? 'STANDARD';
+  if (!isHandymanServiceAccessCondition(accessCondition)) {
+    throw handymanServiceRequestItemInvalidError('accessCondition is not supported.');
+  }
+  const service = await serviceCatalogRepository.findById(executor, input.serviceCatalogId);
+  if (!service || service.clientId !== request.clientId || service.status !== 'ACTIVE') {
+    throw handymanServiceRequestItemInvalidError('serviceCatalogId must reference an ACTIVE service in this client.');
+  }
+  let uomId: string | null = null;
+  if (input.uomId !== undefined && input.uomId !== null) {
+    if (!isValidUuid(input.uomId)) throw handymanServiceRequestItemInvalidError('uomId must be a valid UUID.');
+    const uom = await executor.query<{ id: string }>(
+      `SELECT id FROM units_of_measure WHERE id = $1 AND client_id = $2 AND status = 'ACTIVE'`,
+      [input.uomId, request.clientId],
+    );
+    if (!uom.rows[0]) throw handymanServiceRequestItemInvalidError('uomId must reference an ACTIVE unit of measure for this client.');
+    uomId = uom.rows[0].id;
+  }
+  let itemDescription: string | null = null;
+  if (input.itemDescription !== undefined && input.itemDescription !== null) {
+    if (typeof input.itemDescription !== 'string' || input.itemDescription.trim().length < 1 || input.itemDescription.trim().length > 1000) {
+      throw handymanServiceRequestItemInvalidError('itemDescription must be 1-1000 characters when provided.');
+    }
+    itemDescription = input.itemDescription.trim();
+  }
+  let variantId: string | null = null;
+  let variantLabel: string | null = null;
+  let variantValues: Record<string, string> = {};
+  if (input.serviceVariantId !== undefined && input.serviceVariantId !== null) {
+    if (!isValidUuid(input.serviceVariantId)) throw handymanServiceRequestItemInvalidError('serviceVariantId must be a valid UUID.');
+    const variant = await handymanParameterizedCatalogRepository.findVariantById(executor, input.serviceVariantId);
+    if (!variant || variant.clientId !== request.clientId || variant.serviceCatalogId !== service.id) {
+      throw handymanServiceRequestItemInvalidError('serviceVariantId must reference a variant of the selected service.');
+    }
+    if (variant.status !== 'ACTIVE') throw handymanServiceRequestItemInvalidError('The selected service variant is not ACTIVE.');
+    variantId = variant.id;
+    variantLabel = variant.code;
+    variantValues = await loadVariantAttributeValues(request.clientId, variant.id);
+  }
+  const effective = composeEffectiveItemAttributes({ variantValues, ownValues, variantLabel });
+  const attributeDefinitions = await handymanParameterizedCatalogRepository.listAttributes(
+    executor, request.clientId, service.id, 'ACTIVE');
+  const definitionsByCode = new Map(attributeDefinitions.map(attribute => [attribute.code, attribute]));
+  for (const [code, rawValue] of Object.entries(effective.attributeValues)) {
+    const attribute = definitionsByCode.get(code);
+    // Existing item intake deliberately preserves unknown facts for the
+    // inspection/manual-review lane; configured facts, however, must match
+    // their authoritative data type and allowed-value definition.
+    if (!attribute) continue;
+    const value = rawValue.trim();
+    if (!value || value.length > 200 ||
+        (attribute.dataType === 'NUMBER' && (!Number.isFinite(Number(value)) || Number(value) <= 0)) ||
+        (attribute.dataType === 'BOOLEAN' && value !== 'true' && value !== 'false') ||
+        (attribute.allowedValues.length > 0 && !attribute.allowFreeValue &&
+          !attribute.allowedValues.some(allowed => allowed.code === value))) {
+      throw handymanServiceRequestItemInvalidError(`Configured attribute ${code} has an invalid type or value.`);
+    }
+  }
+  const record = await handymanParameterizedCatalogRepository.insertRequestItem(executor, {
+    clientId: request.clientId,
+    handymanRequestId: request.id,
+    serviceCatalogId: service.id,
+    serviceVariantId: variantId,
+    quantity,
+    attributeValues: effective.attributeValues,
+    inheritedAttributeValues: effective.inheritedAttributeValues,
+    accessCondition,
+    uomId,
+    itemDescription,
+    status: 'ACTIVE',
+    createdByUserId: null,
+  });
+  await recordOperationalEvent({
+    clientId: request.clientId,
+    eventType: 'HANDYMAN_SERVICE_REQUEST_ITEM_ADDED',
+    entityType: 'HANDYMAN_SERVICE_REQUEST',
+    entityId: request.id,
+    actorUserId: null,
+    buildingId: request.buildingId,
+    summary: `Care-authored Handyman request item added for ${service.code}.`,
+    metadata: { requestItemId: record.id, serviceCatalogId: service.id,
+      serviceVariantId: variantId, inheritedAttributeCodes: effective.inheritedCodes,
+      quantity, uomId, careActorId },
+  }, executor);
+  return toPublic(record);
 }
 
 export async function listHandymanServiceRequestItems(

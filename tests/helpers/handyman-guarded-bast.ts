@@ -437,6 +437,7 @@ export async function arrangeGuardedBast(input: {
   adminUserId: string;
   q: GuardedQcQuery;
   until?: GuardedBastStage;
+  includeStructuredRequestItem?: boolean;
 }): Promise<GuardedBastFixture> {
   ensureEvidenceStorageDir();
   const until = input.until ?? 'ACCEPTED';
@@ -444,7 +445,9 @@ export async function arrangeGuardedBast(input: {
   const idem = () => `gb-${randomUUID()}`;
   await grant(adminId, ['handyman.qc.configure'], 'GB');
 
-  const { realm, scope } = await baseFixture();
+  const { realm, scope } = await baseFixture({
+    includeStructuredRequestItem: input.includeStructuredRequestItem,
+  });
   const customer = await handymanCustomerForScope(scope.id);
   await grant(customer.id, ['tenant_company.manage', 'tenant_company.read'], 'GB_CUSTOMER');
   // NOTE: the shared crewFixture already performs the 0439-required

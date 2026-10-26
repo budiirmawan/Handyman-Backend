@@ -17,6 +17,7 @@ import {
   handymanServiceRequestService,
   handymanServiceRequestTriageService,
 } from '../../src/modules/handyman-requests';
+import { addHandymanServiceRequestItem } from '../../src/modules/handyman-parameterized-catalog';
 import {
   addHandymanQuotationLine,
   createHandymanQuotation,
@@ -257,6 +258,7 @@ export async function transferCrewLeadFixture(
 export async function scopeFixture(
   realm: Awaited<ReturnType<typeof realmFixture>>,
   chain: Awaited<ReturnType<typeof locationChain>>,
+  options: { includeStructuredRequestItem?: boolean } = {},
 ) {
   const company = await tenantCompanyService.createTenantCompany({
     clientId: realm.client.id,
@@ -308,6 +310,13 @@ export async function scopeFixture(
       },
       adminUserId,
     );
+  if (options.includeStructuredRequestItem) {
+    await addHandymanServiceRequestItem(request.id, {
+      serviceCatalogId: service.id, quantity: 1,
+      attributeValues: { FIXTURE_SCOPE: 'populated-care-projection' },
+      itemDescription: 'Existing persisted structured request item',
+    }, adminUserId);
+  }
   await handymanServiceRequestTriageService.recordHandymanRequestTriage(
     {
       handymanRequestId: request.id,
@@ -347,9 +356,9 @@ export async function scopeFixture(
   return { scope: decision.executionScope };
 }
 
-export async function baseFixture() {
+export async function baseFixture(options: { includeStructuredRequestItem?: boolean } = {}) {
   const realm = await realmFixture();
   const chain = await locationChain(realm);
-  const f = await scopeFixture(realm, chain);
+  const f = await scopeFixture(realm, chain, options);
   return { realm, chain, scope: f.scope };
 }

@@ -30,7 +30,8 @@ async function readOperationalProjection(
              r.tenant_company_id AS "tenantCompanyId",
              r.building_id AS "buildingId", r.space_id AS "spaceId",
              r.status AS "requestStatus", r.created_at AS "createdAt",
-             r.updated_at AS "updatedAt", es.id AS "executionScopeId"
+             r.updated_at AS "updatedAt",
+             es.id AS "executionScopeId"
         FROM handyman_service_requests r
         LEFT JOIN handyman_execution_scopes es
           ON es.handyman_request_id = r.id AND es.client_id = r.client_id
@@ -57,7 +58,36 @@ async function readOperationalProjection(
           'tenantCompanyId', s."tenantCompanyId", 'buildingId', s."buildingId",
           'spaceId', s."spaceId", 'status', s."requestStatus",
           'executionScopeId', s."executionScopeId",
-          'createdAt', s."createdAt", 'updatedAt', s."updatedAt"),
+          'createdAt', s."createdAt", 'updatedAt', s."updatedAt",
+          'items', COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', ri.id, 'serviceCatalogId', ri.service_catalog_id,
+              'serviceCode', sc.code, 'serviceName', sc.name,
+              'serviceVariantId', ri.service_variant_id,
+              'variantCode', sv.code, 'variantName', sv.name,
+              'quantity', ri.quantity::text, 'uomId', ri.uom_id,
+              'uomCode', u.code, 'uomName', u.name, 'uomSymbol', u.symbol,
+              'attributeValues', ri.attribute_values,
+              'inheritedAttributeValues', ri.inherited_attribute_values,
+              'itemDescription', ri.item_description,
+              'accessCondition', ri.access_condition, 'status', ri.status,
+              'createdAt', ri.created_at, 'updatedAt', ri.updated_at)
+              ORDER BY ri.created_at, ri.id)
+              FROM (SELECT * FROM handyman_service_request_items
+                     WHERE handyman_request_id = s."requestId"
+                       AND client_id = s."clientId" AND status = 'ACTIVE'
+                     ORDER BY created_at, id LIMIT 50) ri
+              JOIN service_catalog sc ON sc.id = ri.service_catalog_id
+                AND sc.client_id = ri.client_id
+              LEFT JOIN handyman_service_variants sv ON sv.id = ri.service_variant_id
+                AND sv.client_id = ri.client_id
+              LEFT JOIN units_of_measure u ON u.id = ri.uom_id
+                AND u.client_id = ri.client_id
+          ), '[]'::jsonb)),
+        'documentAvailability', jsonb_build_object(
+          'quotation', CASE WHEN EXISTS (SELECT 1 FROM handyman_quotations q WHERE q.handyman_request_id = s."requestId" AND q.client_id = s."clientId") THEN 'PRESENT' ELSE 'NOT_CREATED' END,
+          'bast', CASE WHEN EXISTS (SELECT 1 FROM handyman_bast_documents b WHERE b.execution_scope_id = s."executionScopeId" AND b.client_id = s."clientId") THEN 'PRESENT' ELSE 'NOT_CREATED' END,
+          'warranty', CASE WHEN EXISTS (SELECT 1 FROM handyman_service_warranties w WHERE w.execution_scope_id = s."executionScopeId" AND w.client_id = s."clientId") THEN 'PRESENT' ELSE 'NOT_ACTIVATED' END),
         'inspection', (
           SELECT jsonb_build_object(
             'id', x.id, 'result', x.inspection_result,
@@ -96,7 +126,10 @@ async function readOperationalProjection(
             ) t), '[]'::jsonb)),
         'quotation', (
           SELECT jsonb_build_object(
-            'id', q.id, 'createdAt', q.created_at,
+            'id', q.id, 'createdAt', q.created_at, 'createdByUserId', q.created_by_user_id,
+            'serviceRequestId', s."requestId", 'tenantCompanyId', s."tenantCompanyId",
+            'buildingId', s."buildingId", 'spaceId', s."spaceId",
+            'executionScopeId', s."executionScopeId",
             'versions', COALESCE((
               SELECT jsonb_agg(v.item ORDER BY v.version_number DESC)
                 FROM (
@@ -104,8 +137,18 @@ async function readOperationalProjection(
                     jsonb_build_object(
                       'id', v.id, 'versionNumber', v.version_number,
                       'status', v.status, 'validUntil', v.valid_until,
-                      'createdAt', v.created_at,
-                      'decision', d.decision, 'decidedAt', d.decided_at,
+                      'createdAt', v.created_at, 'createdByUserId', v.created_by_user_id,
+                      'decision', d.decision, 'decisionId', d.id,
+                      'decidedAt', d.decided_at, 'decidedByUserId', d.decided_by_user_id,
+                      'decisionTenantCompanyId', d.tenant_company_id,
+                      'decisionTenantPicId', d.tenant_pic_id,
+                      'dpRequired', v.dp_required, 'dpPercentage', v.dp_percentage,
+                      'dpAmount', v.dp_amount::numeric(18,2)::text,
+                      'dpTermsNotes', v.dp_terms_notes,
+                      'lineTotalSum', (SELECT SUM(ql.line_total)::numeric(18,2)::text
+                        FROM handyman_quotation_lines ql WHERE ql.quotation_version_id = v.id),
+                      'currency', (SELECT CASE WHEN COUNT(DISTINCT ql.currency) = 1 THEN MIN(ql.currency) END
+                        FROM handyman_quotation_lines ql WHERE ql.quotation_version_id = v.id),
                       'lines', COALESCE((
                         SELECT jsonb_agg(l.item ORDER BY l.created_at, l.id)
                           FROM (
@@ -215,7 +258,42 @@ async function readOperationalProjection(
           ), '[]'::jsonb)),
         'bast', COALESCE((
           SELECT jsonb_agg(jsonb_build_object(
-            'id', b.id, 'status', b.status, 'issuedAt', b.issued_at,
+            'id', b.id, 'serviceRequestId', s."requestId",
+            'executionScopeId', b.execution_scope_id,
+            'status', b.status, 'issuedAt', b.issued_at,
+            'issuerUserId', (SELECT be.actor_user_id FROM handyman_bast_events be
+              WHERE be.bast_id = b.id AND be.event_type = 'ISSUE'
+              ORDER BY be.occurred_at DESC, be.id DESC LIMIT 1),
+            'qcRunId', b.qc_run_id,
+            'workSessions', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'id', ws.id, 'status', ws.status, 'checkedInAt', ws.checked_in_at,
+                'startedWorkAt', ws.started_work_at, 'completedAt', ws.completed_at,
+                'checkedOutAt', ws.checked_out_at, 'leadWorkerId', ws.lead_worker_id)
+                ORDER BY ws.created_at, ws.id)
+                FROM (SELECT * FROM handyman_work_sessions
+                       WHERE execution_scope_id = b.execution_scope_id
+                         AND client_id = s."clientId"
+                       ORDER BY created_at, id LIMIT 50) ws), '[]'::jsonb),
+            'materialUsage', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'id', ml.id, 'quotationLineId', ml.quotation_line_id,
+                'sourceItemId', ml.source_item_id, 'itemCode', ii.code,
+                'itemName', ii.name, 'uomId', ql.uom_id, 'uomCode', u.code,
+                'status', ml.status, 'estimatedQuantity', ml.estimated_qty::text,
+                'approvedQuantity', ml.approved_qty::text,
+                'issuedQuantity', ml.issued_qty::text,
+                'purchasedQuantity', ml.purchased_qty::text,
+                'usedQuantity', ml.used_qty::text,
+                'returnedQuantity', ml.returned_qty::text)
+                ORDER BY ml.created_at, ml.id)
+                FROM (SELECT * FROM handyman_material_execution_lines
+                       WHERE execution_scope_id = b.execution_scope_id
+                         AND client_id = s."clientId"
+                       ORDER BY created_at, id LIMIT 100) ml
+                JOIN handyman_quotation_lines ql ON ql.id = ml.quotation_line_id
+                LEFT JOIN inventory_items ii ON ii.id = ml.source_item_id
+                LEFT JOIN units_of_measure u ON u.id = ql.uom_id), '[]'::jsonb),
             'acceptedAt', b.accepted_at, 'rejectedAt', b.rejected_at,
             'voidedAt', b.voided_at, 'createdAt', b.created_at,
             'events', COALESCE((
@@ -228,11 +306,14 @@ async function readOperationalProjection(
             'signOffs', COALESCE((
               SELECT jsonb_agg(jsonb_build_object(
                 'decision', so.decision, 'rejectReason', so.reject_reason,
+                'eventId', so.event_id, 'signerUserId', be.actor_user_id,
                 'createdAt', so.created_at)
                 ORDER BY so.created_at, so.id)
                 FROM (SELECT * FROM handyman_bast_sign_offs
                        WHERE bast_id = b.id AND client_id = s."clientId"
-                       ORDER BY created_at, id LIMIT 10) so), '[]'::jsonb))
+                       ORDER BY created_at, id LIMIT 10) so
+                JOIN handyman_bast_events be ON be.id = so.event_id
+                  AND be.client_id = so.client_id), '[]'::jsonb))
             ORDER BY b.created_at DESC, b.id DESC)
             FROM (SELECT * FROM handyman_bast_documents
                    WHERE execution_scope_id = s."executionScopeId"
@@ -341,7 +422,20 @@ async function readOperationalProjection(
         'warranty', (
           SELECT jsonb_build_object(
             'id', w.id, 'status', w.status, 'startsAt', w.starts_at,
-            'expiredAt', w.expired_at, 'bastAcceptedAt', w.bast_accepted_at,
+            'expiredAt', w.expired_at, 'bastId', w.bast_id,
+            'serviceRequestId', s."requestId", 'executionScopeId', s."executionScopeId",
+            'bastAcceptedAt', w.bast_accepted_at,
+            'coveredRequestItems', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'requestItemId', ri.id, 'serviceCatalogId', ri.service_catalog_id,
+                'serviceVariantId', ri.service_variant_id, 'quantity', ri.quantity::text,
+                'uomId', ri.uom_id, 'attributeValues', ri.attribute_values)
+                ORDER BY ri.created_at, ri.id)
+                FROM (SELECT * FROM handyman_service_request_items
+                       WHERE handyman_request_id = s."requestId"
+                         AND client_id = s."clientId" AND status = 'ACTIVE'
+                       ORDER BY created_at, id LIMIT 50) ri
+            ), '[]'::jsonb),
             'coverages', COALESCE((
               SELECT jsonb_agg(jsonb_build_object('type', c.coverage_type)
                 ORDER BY c.coverage_type)
@@ -367,7 +461,17 @@ async function readOperationalProjection(
                 ORDER BY rw.created_at DESC, rw.id DESC)
                 FROM (SELECT * FROM handyman_service_warranty_reworks
                        WHERE warranty_id = w.id AND client_id = s."clientId"
-                       ORDER BY created_at DESC, id DESC LIMIT 50) rw), '[]'::jsonb))
+                       ORDER BY created_at DESC, id DESC LIMIT 50) rw), '[]'::jsonb),
+            'chargeableAdditionalWorks', COALESCE((
+              SELECT jsonb_agg(jsonb_build_object(
+                'id', aw.id, 'claimId', aw.claim_id, 'status', aw.status,
+                'scopeNote', aw.scope_note, 'proposedAt', aw.proposed_at,
+                'decidedAt', aw.decided_at, 'decidedByUserId', aw.decided_by_user_id,
+                'paymentTriggerEmittedAt', aw.payment_trigger_emitted_at)
+                ORDER BY aw.created_at DESC, aw.id DESC)
+                FROM (SELECT * FROM handyman_chargeable_additional_works
+                       WHERE warranty_id = w.id AND client_id = s."clientId"
+                       ORDER BY created_at DESC, id DESC LIMIT 50) aw), '[]'::jsonb))
             FROM handyman_service_warranties w
            WHERE w.execution_scope_id = s."executionScopeId"
              AND w.client_id = s."clientId"

@@ -5406,8 +5406,13 @@ paths:
         No administrative actor IDs, audit timestamps or credential data are
         returned. No catalogue mutation, request-read/create, payment, invoice,
         tax or financial behavior is exposed. Cache-Control is no-store.
-        Page items are services with their ACTIVE child variants ordered by ID.
-        Services with no active variants remain selectable without a variant.
+        Page items are ACTIVE service definitions with descriptions, ACTIVE
+        variants and their configured variant values, service technical attribute
+        definitions (types, required rules and allowed values), active Client UOMs,
+        pricing-mode posture and active quantity selector bands. Category counts
+        are computed over ACTIVE authorized services. Services with no active
+        variants remain selectable without a variant. Unknown/incomplete technical
+        facts follow the existing inspection/manual-review policy.
         q is a trimmed literal case-insensitive service code/name substring,
         1-100 characters when supplied; no regex/SQL wildcard interpretation.
         Optional buildingId must be ACTIVE inside this granted property and
@@ -5946,12 +5951,15 @@ paths:
         active physical ancestry even when spaceId is omitted. Building-only
         requests require no artificial space relationship. Request ID, care
         authorship and attribution provenance grant no historical exception.
+        The same authorized statement returns ACTIVE structured request-item
+        snapshots (service/variant IDs, quantity, UOM, attributes and item
+        description); an empty list is truthful when no structured items exist.
         Missing request, revoked property grant, turnover, inaccessible scope
         and represented-context mismatch return uniform 404 without revealing
         another tenant or unit request. Invalid/expired/revoked workspace
         credentials return 401. Rejects list filters and unknown query/body
-        fields. No PIC contacts, evidence, financial data, new downstream access
-        or mutations; executionScopeId is an informational pointer only.
+        fields. No PIC contacts, lifecycle mutations or downstream authority;
+        executionScopeId is an informational pointer only.
         Cache-Control is no-store. Existing list and local User/admin reads
         remain unchanged.
       security:
@@ -5989,7 +5997,7 @@ paths:
                   - $ref: '#/components/schemas/SuccessEnvelope'
                   - type: object
                     properties:
-                      data: { $ref: '#/components/schemas/HandymanCustomerCareServiceRequest' }
+                      data: { $ref: '#/components/schemas/CareWorkspaceRequestDetail' }
         '400':
           description: Invalid/missing UUID selectors, unknown query/body fields or unsupported list filters.
           content:
@@ -6294,7 +6302,9 @@ paths:
         exchange TTL and remaining workspace lifetime. The token is create-only
         for the existing POST /handyman/requests/care; it cannot be consumed by
         generic exchange consumption, standalone attribution binding or bearer
-        routes. That POST and its payload remain unchanged. Consumption checks
+        routes. That POST remains the only consumer; it retains the legacy
+        single-service payload and additionally accepts atomic structured items.
+        Consumption checks
         current grant, the same occupancy identities, original property, live
         workspace and active hierarchy; failure rolls back consumption. Server
         derives CUSTOMER_CARE provenance and BM_SUPER_APP channel; no local
@@ -7343,15 +7353,29 @@ paths:
       x-error-codes: [HANDYMAN_SCHEDULING_READINESS_WINDOW_INVALID, HANDYMAN_SCHEDULING_READINESS_TIMEZONE_UNAVAILABLE, VALIDATION_ERROR, HANDYMAN_ENTITLEMENT_ATTRIBUTION_UNRESOLVED, HANDYMAN_HANDOFF_CONTEXT_INVALID, HANDYMAN_HANDOFF_EXCHANGE_INVALID, HANDYMAN_HANDOFF_REQUESTER_INVALID, HANDYMAN_HANDOFF_SPACE_MISMATCH, HANDYMAN_SERVICE_REQUEST_ALREADY_EXISTS, HANDYMAN_SERVICE_REQUEST_SCOPE_MISMATCH, HANDYMAN_SERVICE_VARIANT_NOT_ACTIVE, HANDYMAN_SERVICE_VARIANT_NOT_FOUND]
       summary: Create a Customer Care Handyman request from a single-use BM exchange
       description: >
-        CR-HM-CUSTOMER-CONTEXT-01 PART 04. Alternative to binding the same
-        exchange through /handoff/channel-attributions: atomically consume a
-        signed-handoff-issued, single-use care exchange, bind its immutable
-        channel attribution, and create one INTAKE request. The exchange is
-        the acting credential; a bare channelAttributionId, represented PIC,
-        local User, asserted property or customer identifier is never care
-        authority. An ACTIVE care-actor property grant and the original
-        effective tenant-building/unit relationship identities must still
-        hold at creation. The existing bearer-User POST /handyman/requests
+        CR-HM-CUSTOMER-CONTEXT-01 PART 04 and CR-HM-CARE-CATALOG-DOCUMENT-01.
+        Alternative to binding the same exchange through
+        /handoff/channel-attributions: atomically consume a signed-handoff-issued,
+        single-use care exchange, bind its immutable channel attribution, and
+        create one INTAKE request. Preserve the legacy serviceCatalogId /
+        serviceVariantId intake; alternatively accept 1-50 structured items
+        with separate service, variant, positive NUMERIC(18,4) quantity, optional
+        same-Client active UOM, configured attribute values and item description.
+        All item rows, request, attribution and exchange consumption commit or
+        roll back together. Configured attribute type/allowed-values,
+        access-condition vocabulary and active same-service variant/UOM scope
+        are validated. An optional paired preferredWindowStart/
+        preferredWindowEnd is preserved as the customer's scheduling
+        preference through the initial readiness record only; it does not
+        confirm an appointment or execution booking. Missing inspection facts
+        are not fabricated; existing price
+        resolution may route them to inspection/manual review. Replay cannot
+        create duplicate requests. The
+        exchange is the acting credential; a bare channelAttributionId,
+        represented PIC, local User, asserted property or customer identifier
+        is never care authority. An ACTIVE care-actor property grant and the
+        original effective tenant-building/unit relationship identities must
+        still hold at creation. The existing bearer-User POST /handyman/requests
         remains separate and unchanged. Neither path issues a BM User session.
       tags: [Handyman Requests]
       security: []
@@ -85064,6 +85088,7 @@ paths:
   /handyman/care/requests/{requestId}/communications:
     post:
       operationId: recordWorkspaceCareCommunication
+      x-error-codes: [BAD_REQUEST, NOT_FOUND, AUTHENTICATION_REQUIRED, PERMISSION_DENIED, BUILDING_ACCESS_DENIED]
       tags: [Handyman Customer Care]
       summary: Record neutral communication as the actual BM Care actor
       description: >-
@@ -85097,6 +85122,7 @@ paths:
   /handyman/care/requests/{requestId}/commercial-targets/{targetType}/{targetId}:
     get:
       operationId: getCareCommercialConsentTarget
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED, HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND]
       tags: [Handyman Customer Care]
       summary: Read the exact server-owned commercial consent target
       description: >-
@@ -85126,6 +85152,7 @@ paths:
   /handyman/care/requests/{requestId}/quotation-versions/{targetId}/decision:
     post:
       operationId: recordVerifiedCareQuotationDecision
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED, HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND, HANDYMAN_COMMERCIAL_CONSENT_INVALID, HANDYMAN_COMMERCIAL_CONSENT_CONFLICT, HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED, HANDYMAN_QUOTATION_DECISION_CONFLICT, HANDYMAN_QUOTATION_INVALID_TRANSITION, HANDYMAN_QUOTATION_VERSION_NOT_FOUND, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_EXECUTION_SCOPE_CONFLICT]
       tags: [Handyman Customer Care]
       summary: Record independently verified customer quotation ACCEPT or REJECT
       description: >-
@@ -85164,6 +85191,7 @@ paths:
   /handyman/care/requests/{requestId}/bast/{targetId}/decision:
     post:
       operationId: recordVerifiedCareBastDecision
+      x-error-codes: [VALIDATION_ERROR, HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED, HANDYMAN_CARE_WORKSPACE_RESOURCE_NOT_FOUND, HANDYMAN_COMMERCIAL_CONSENT_INVALID, HANDYMAN_COMMERCIAL_CONSENT_CONFLICT, HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED, HANDYMAN_BAST_NOT_FOUND, HANDYMAN_BAST_ILLEGAL_TRANSITION, HANDYMAN_BAST_QC_NOT_READY, HANDYMAN_BAST_SIGNATURE_REQUIRED, HANDYMAN_BAST_VERSION_CONFLICT, HANDYMAN_BAST_SCOPE_NOT_ELIGIBLE]
       tags: [Handyman Customer Care]
       summary: Record independently verified customer BAST ACCEPT or REJECT
       description: >-
@@ -88399,19 +88427,73 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   schemas:
-    CareCatalogueVariant:
+    CareCatalogueAttribute:
       type: object
       additionalProperties: false
-      required: [id, code, name, description]
+      required: [id, code, name, description, dataType, unit, required, allowFreeValue, allowedValues]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
         name: { type: string }
         description: { type: string, nullable: true }
+        dataType: { type: string, enum: [NUMBER, TEXT, ENUM, BOOLEAN] }
+        unit: { type: string, nullable: true }
+        required: { type: boolean }
+        allowFreeValue: { type: boolean }
+        allowedValues:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [code, label]
+            properties:
+              code: { type: string }
+              label: { type: string }
+    CareCatalogueVariantAttribute:
+      type: object
+      additionalProperties: false
+      required: [attributeId, code, name, dataType, value, unit]
+      properties:
+        attributeId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        dataType: { type: string, enum: [NUMBER, TEXT, ENUM, BOOLEAN] }
+        value: { type: string }
+        unit: { type: string, nullable: true }
+    CareCatalogueVariant:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, description, attributes]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        attributes:
+          type: array
+          items: { $ref: '#/components/schemas/CareCatalogueVariantAttribute' }
+    CareCatalogueQuantityRule:
+      type: object
+      additionalProperties: false
+      required: [minimum, maximum, serviceVariantId]
+      properties:
+        minimum: { type: number, nullable: true }
+        maximum: { type: number, nullable: true }
+        serviceVariantId: { type: string, format: uuid, nullable: true }
+    CareCatalogueUnitOfMeasure:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, symbol, category]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        symbol: { type: string }
+        category: { type: string }
     CareCatalogueService:
       type: object
       additionalProperties: false
-      required: [id, code, name, description, category, variants]
+      required: [id, code, name, description, category, variants, attributes, quantityRules, unitsOfMeasure, pricingMode, unknownValuePolicy]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
@@ -88421,6 +88503,26 @@ components:
         variants:
           type: array
           items: { $ref: '#/components/schemas/CareCatalogueVariant' }
+        attributes:
+          type: array
+          items: { $ref: '#/components/schemas/CareCatalogueAttribute' }
+        quantityRules:
+          type: array
+          description: Active Backend pricing-rule quantity selectors; they are not Care-authored limits.
+          items: { $ref: '#/components/schemas/CareCatalogueQuantityRule' }
+        unitsOfMeasure:
+          type: array
+          description: ACTIVE units configured for the authorized Client.
+          items: { $ref: '#/components/schemas/CareCatalogueUnitOfMeasure' }
+        pricingMode: { type: string, enum: [FIXED, ESTIMATED, INSPECTION_FIRST], nullable: true }
+        unknownValuePolicy: { type: string }
+    CareCatalogueCategory:
+      type: object
+      additionalProperties: false
+      required: [category, serviceCount]
+      properties:
+        category: { type: string }
+        serviceCount: { type: integer, minimum: 0 }
     CareCatalogueProfile:
       type: object
       additionalProperties: false
@@ -88475,8 +88577,11 @@ components:
     CareCatalogueServicePage:
       type: object
       additionalProperties: false
-      required: [items, nextCursor, evaluatedAt]
+      required: [categories, items, nextCursor, evaluatedAt]
       properties:
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/CareCatalogueCategory' }
         items:
           type: array
           maxItems: 100
@@ -88494,12 +88599,17 @@ components:
           items: { $ref: '#/components/schemas/CareCatalogueProfile' }
         nextCursor: { type: string, nullable: true }
         evaluatedAt: { type: string, format: date-time }
+    CareHandymanStringMap:
+      type: object
+      description: Dynamic technical-attribute codes mapped to their persisted string values.
+      additionalProperties: { type: string }
     CareHandymanOperationalProjection:
       type: object
       additionalProperties: false
       required:
         - readOnly
         - request
+        - documentAvailability
         - inspection
         - financialTerms
         - quotation
@@ -88518,9 +88628,14 @@ components:
         sign-offs 10, evidence files 25, payment proofs 1). Money and quantity
         values are decimal strings (SQL ::numeric(18,2)::text / ::text casts);
         invoiceDate/dueDate are DATE strings. No decision command or caller-derived
-        payment amount is present. Nested shapes reconciled field-for-field with
-        care-workspace-operational.repository.ts by
-        CR-HM-BACKEND-CONTRACT-FREEZE-03.
+        payment amount is present. Document-availability values reflect
+        persisted quotation/BAST/warranty rows; they never synthesize a document
+        or status. Evidence and payment proofs expose bounded metadata/hash
+        references only, never file bytes, signed URLs or private content. BAST
+        includes actual execution-session and material-usage quantities;
+        warranty free rework remains separate from chargeable additional-work
+        proposals. Nested shapes are reconciled with
+        care-workspace-operational.repository.ts.
       properties:
         financialTerms:
           $ref: "#/components/schemas/CareHandymanFinancialTerms"
@@ -88540,6 +88655,7 @@ components:
             - executionScopeId
             - createdAt
             - updatedAt
+            - items
           properties:
             id: &a1
               type: string
@@ -88558,6 +88674,41 @@ components:
               type: string
               format: date-time
             updatedAt: *a3
+            items:
+              type: array
+              maxItems: 50
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, serviceCatalogId, serviceCode, serviceName, serviceVariantId, variantCode, variantName, quantity, uomId, uomCode, uomName, uomSymbol, attributeValues, inheritedAttributeValues, itemDescription, accessCondition, status, createdAt, updatedAt]
+                properties:
+                  id: *a1
+                  serviceCatalogId: *a1
+                  serviceCode: { type: string }
+                  serviceName: { type: string }
+                  serviceVariantId: *a2
+                  variantCode: { type: string, nullable: true }
+                  variantName: { type: string, nullable: true }
+                  quantity: { type: string }
+                  uomId: *a2
+                  uomCode: { type: string, nullable: true }
+                  uomName: { type: string, nullable: true }
+                  uomSymbol: { type: string, nullable: true }
+                  attributeValues: { $ref: '#/components/schemas/CareHandymanStringMap' }
+                  inheritedAttributeValues: { $ref: '#/components/schemas/CareHandymanStringMap' }
+                  itemDescription: { type: string, nullable: true }
+                  accessCondition: { type: string }
+                  status: { type: string, enum: [ACTIVE, REMOVED] }
+                  createdAt: *a3
+                  updatedAt: *a3
+        documentAvailability:
+          type: object
+          additionalProperties: false
+          required: [quotation, bast, warranty]
+          properties:
+            quotation: { type: string, enum: [PRESENT, NOT_CREATED] }
+            bast: { type: string, enum: [PRESENT, NOT_CREATED] }
+            warranty: { type: string, enum: [PRESENT, NOT_ACTIVATED] }
         inspection:
           type: object
           nullable: true
@@ -88584,10 +88735,22 @@ components:
           required:
             - id
             - createdAt
+            - createdByUserId
+            - serviceRequestId
+            - tenantCompanyId
+            - buildingId
+            - spaceId
+            - executionScopeId
             - versions
           properties:
             id: *a1
             createdAt: *a3
+            createdByUserId: *a1
+            serviceRequestId: *a1
+            tenantCompanyId: *a1
+            buildingId: *a1
+            spaceId: *a2
+            executionScopeId: *a2
             versions:
               type: array
               maxItems: 20
@@ -88600,6 +88763,7 @@ components:
                   - status
                   - validUntil
                   - createdAt
+                  - createdByUserId
                   - decision
                   - decidedAt
                   - lines
@@ -88621,13 +88785,24 @@ components:
                     format: date-time
                     nullable: true
                   createdAt: *a3
+                  createdByUserId: *a1
                   decision:
                     type: string
                     nullable: true
                     enum:
                       - APPROVE
                       - REJECT
+                  decisionId: *a2
                   decidedAt: *a4
+                  decidedByUserId: *a2
+                  decisionTenantCompanyId: *a2
+                  decisionTenantPicId: *a2
+                  dpRequired: { type: boolean }
+                  dpPercentage: { type: number, nullable: true }
+                  dpAmount: { type: string, nullable: true }
+                  dpTermsNotes: { type: string, nullable: true }
+                  lineTotalSum: { type: string, nullable: true }
+                  currency: { type: string, nullable: true }
                   lines:
                     type: array
                     maxItems: 100
@@ -88889,16 +89064,24 @@ components:
             additionalProperties: false
             required:
               - id
+              - serviceRequestId
+              - executionScopeId
               - status
               - issuedAt
+              - issuerUserId
+              - qcRunId
               - acceptedAt
               - rejectedAt
               - voidedAt
               - createdAt
               - events
               - signOffs
+              - workSessions
+              - materialUsage
             properties:
               id: *a1
+              serviceRequestId: *a1
+              executionScopeId: *a1
               status:
                 type: string
                 enum:
@@ -88908,6 +89091,8 @@ components:
                   - REJECTED
                   - VOID
               issuedAt: *a4
+              issuerUserId: *a2
+              qcRunId: *a2
               acceptedAt: *a4
               rejectedAt: *a4
               voidedAt: *a4
@@ -88940,6 +89125,8 @@ components:
                   required:
                     - decision
                     - rejectReason
+                    - eventId
+                    - signerUserId
                     - createdAt
                   properties:
                     decision:
@@ -88948,7 +89135,46 @@ components:
                         - ACCEPT
                         - REJECT
                     rejectReason: *a7
+                    eventId: *a1
+                    signerUserId: *a1
                     createdAt: *a3
+              workSessions:
+                type: array
+                maxItems: 50
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [id, status, checkedInAt, startedWorkAt, completedAt, checkedOutAt, leadWorkerId]
+                  properties:
+                    id: *a1
+                    status: { type: string, enum: [CHECKED_IN, IN_PROGRESS, PAUSED, MATERIAL_RUN, COMPLETED, CHECKED_OUT] }
+                    checkedInAt: *a3
+                    startedWorkAt: *a4
+                    completedAt: *a4
+                    checkedOutAt: *a4
+                    leadWorkerId: *a1
+              materialUsage:
+                type: array
+                maxItems: 100
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [id, quotationLineId, sourceItemId, itemCode, itemName, uomId, uomCode, status, estimatedQuantity, approvedQuantity, issuedQuantity, purchasedQuantity, usedQuantity, returnedQuantity]
+                  properties:
+                    id: *a1
+                    quotationLineId: *a1
+                    sourceItemId: *a2
+                    itemCode: { type: string, nullable: true }
+                    itemName: { type: string, nullable: true }
+                    uomId: *a1
+                    uomCode: { type: string, nullable: true }
+                    status: { type: string, enum: [ESTIMATED, APPROVED, ISSUED, PURCHASED, USED, FINAL_CHARGE_READY] }
+                    estimatedQuantity: *a5
+                    approvedQuantity: *a5
+                    issuedQuantity: *a5
+                    purchasedQuantity: *a5
+                    usedQuantity: *a5
+                    returnedQuantity: *a5
         invoicePayment:
           type: object
           additionalProperties: false
@@ -89123,10 +89349,15 @@ components:
             - status
             - startsAt
             - expiredAt
+            - bastId
+            - serviceRequestId
+            - executionScopeId
             - bastAcceptedAt
+            - coveredRequestItems
             - coverages
             - claims
             - reworks
+            - chargeableAdditionalWorks
           properties:
             id: *a1
             status:
@@ -89142,7 +89373,24 @@ components:
                 - EXPIRED
             startsAt: *a3
             expiredAt: *a4
+            bastId: *a1
+            serviceRequestId: *a1
+            executionScopeId: *a1
             bastAcceptedAt: *a3
+            coveredRequestItems:
+              type: array
+              maxItems: 50
+              items:
+                type: object
+                additionalProperties: false
+                required: [requestItemId, serviceCatalogId, serviceVariantId, quantity, uomId, attributeValues]
+                properties:
+                  requestItemId: *a1
+                  serviceCatalogId: *a1
+                  serviceVariantId: *a2
+                  quantity: *a5
+                  uomId: *a2
+                  attributeValues: { $ref: '#/components/schemas/CareHandymanStringMap' }
             coverages:
               type: array
               maxItems: 10
@@ -89221,6 +89469,22 @@ components:
                   completedAt: *a4
                   completionNote: *a7
                   verifiedAt: *a4
+            chargeableAdditionalWorks:
+              type: array
+              maxItems: 50
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, claimId, status, scopeNote, proposedAt, decidedAt, decidedByUserId, paymentTriggerEmittedAt]
+                properties:
+                  id: *a1
+                  claimId: *a1
+                  status: { type: string, enum: [CHARGEABLE_PROPOSED, CHARGEABLE_AUTHORIZED, CHARGEABLE_REJECTED] }
+                  scopeNote: *a5
+                  proposedAt: *a3
+                  decidedAt: *a4
+                  decidedByUserId: *a2
+                  paymentTriggerEmittedAt: *a4
           nullable: true
         activityTimeline:
           type: array
@@ -89278,6 +89542,16 @@ components:
             createdAt: { type: string, format: date-time }
             contentSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         replayed: { type: boolean }
+    CareWorkspaceRequestDetail:
+      allOf:
+        - $ref: '#/components/schemas/HandymanCustomerCareServiceRequest'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              maxItems: 50
+              items: { $ref: '#/components/schemas/HandymanServiceRequestItem' }
     CareWorkspaceRequestPage:
       type: object
       additionalProperties: false
@@ -92952,7 +93226,10 @@ components:
       description: >-
         Care-only intake from an attested, single-use BM handoff exchange.
         No channelAttributionId or caller-provided actor/customer/location.
-      required: [exchangeToken, serviceCatalogId]
+      required: [exchangeToken]
+      anyOf:
+        - required: [serviceCatalogId]
+        - required: [items]
       oneOf:
         - required: [preferredWindowStart, preferredWindowEnd]
         - not:
@@ -92968,15 +93245,39 @@ components:
         serviceCatalogId: { $ref: "#/components/schemas/Uuid" }
         serviceVariantId: { $ref: "#/components/schemas/Uuid" }
         description: { type: string, minLength: 1, maxLength: 1000 }
-
         preferredWindowStart:
           type: string
           format: date-time
-          description: Optional tenant preference, paired with preferredWindowEnd; explicit Z/offset, optional fractional seconds up to 3 digits, normalized to UTC. Not a confirmed visit.
+          description: Customer preference only; persisted as initial scheduling readiness, never as a confirmed appointment.
         preferredWindowEnd:
           type: string
           format: date-time
-          description: Must be later than preferredWindowStart; omit both to retain no-date intake behavior.
+          description: Must accompany preferredWindowStart and be later than it; neither field confirms an appointment.
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: '#/components/schemas/CareStructuredServiceRequestItem' }
+
+    CareStructuredServiceRequestItem:
+      type: object
+      additionalProperties: false
+      required: [serviceCatalogId, quantity]
+      properties:
+        serviceCatalogId: { $ref: '#/components/schemas/Uuid' }
+        serviceVariantId: { $ref: '#/components/schemas/Uuid' }
+        quantity: { type: number, exclusiveMinimum: 0 }
+        uomId: { $ref: '#/components/schemas/Uuid' }
+        attributeValues:
+          type: object
+          maxProperties: 20
+          additionalProperties: { type: string, maxLength: 200 }
+        accessCondition:
+          type: string
+          enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
+          description: Existing Operations access-condition selector; defaults to STANDARD.
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        complaint: { type: string, minLength: 1, maxLength: 1000, deprecated: true }
     HandymanServiceRequestStatus:
       type: string
       enum:
@@ -96836,6 +97137,10 @@ components:
         createdByUserId: { $ref: "#/components/schemas/Uuid", nullable: true }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        items:
+          type: array
+          description: Present for structured Care intake; omitted for legacy single-service requests.
+          items: { $ref: "#/components/schemas/HandymanServiceRequestItem" }
 
         schedulingReadiness:
           $ref: '#/components/schemas/HandymanCareSchedulingPreference'
@@ -96874,8 +97179,8 @@ components:
       required:
         [id, clientId, channelAttributionId, tenantCompanyId, tenantPicId,
          buildingId, spaceId, serviceCatalogId, serviceVariantId,
-         originChannel, originReference, description, status,
-         createdByUserId, createdAt, updatedAt, actorType, careActorId,
+         originChannel, originReference, description, preferredWindowStart,
+         preferredWindowEnd, status, createdByUserId, createdAt, updatedAt, actorType, careActorId,
          actorReference, attribution, executionScopeId]
       properties:
         id: { $ref: "#/components/schemas/Uuid" }
@@ -96907,6 +97212,10 @@ components:
         executionScopeId:
           $ref: "#/components/schemas/Uuid"
           nullable: true
+        items:
+          type: array
+          description: Persisted ACTIVE structured request items, returned only on authorized detail/create reads.
+          items: { $ref: "#/components/schemas/HandymanServiceRequestItem" }
 
     HandymanIntakeEvidenceKind:
       type: string
@@ -133881,6 +134190,9 @@ components:
         accessCondition:
           type: string
           enum: [STANDARD, DIFFICULT, HIGH_FLOOR, RESTRICTED, SPECIAL_EQUIPMENT]
+        uomId: { type: [string, 'null'], format: uuid }
+        itemDescription: { type: [string, 'null'] }
+        createdByUserId: { type: [string, 'null'], format: uuid }
         status: { type: string, enum: [ACTIVE, REMOVED] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

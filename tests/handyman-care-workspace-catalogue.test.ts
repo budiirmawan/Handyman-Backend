@@ -16,6 +16,7 @@ import { readCareWorkspaceCatalogue } from '../src/modules/handyman-care-workspa
 import { handymanCareCatalogueRepository } from '../src/modules/handyman-catalog/handyman-care-catalogue.repository';
 import { serviceCatalogService } from '../src/modules/service-catalog';
 import { handymanServiceVariantService, handymanCommonMaterialProfileService } from '../src/modules/handyman-catalog';
+import { createHandymanServiceAttribute, addHandymanServiceVariantAttribute } from '../src/modules/handyman-parameterized-catalog';
 import { inventoryItemService } from '../src/modules/inventory-items';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
 import { priceCatalogEntryService, priceCatalogLookupService } from '../src/modules/price-catalog-entries';
@@ -122,6 +123,12 @@ before(async () => {
   for (let i = 0; i < 3; i++) {
     variants.push((await handymanServiceVariantService.createHandymanServiceVariant({ serviceCatalogId: services[0], code: `V_${suffix()}`, name: `Variant ${i}` }, adminId)).id);
   }
+  const acType = await createHandymanServiceAttribute(services[0], {
+    code: 'AC_TYPE', name: 'AC type', dataType: 'ENUM', required: true,
+    allowedValues: [{ code: 'SPLIT', label: 'Split' }, { code: 'CASSETTE', label: 'Cassette' }],
+  }, adminId);
+  await addHandymanServiceVariantAttribute(services[0], variants[0], { attributeId: acType.id, valueText: 'SPLIT' }, adminId);
+  await addHandymanServiceVariantAttribute(services[0], variants[1], { attributeId: acType.id, valueText: 'CASSETTE' }, adminId);
   foreignService = (await serviceCatalogService.createServiceCatalogEntry({ clientId: otherClientId, code: `S_${suffix()}`, name: 'Foreign', category: 'CARE' }, adminId)).id;
   uomId = randomUUID();
   await pool.query(`INSERT INTO units_of_measure (id, client_id, code, name, symbol, category) VALUES ($1,$2,$3,'Meter','m','LENGTH')`, [uomId, clientId, `U_${suffix()}`]);
@@ -167,9 +174,16 @@ describe('Care property catalogue reads', () => {
     assert.deepEqual((await get(servicesPath() + '/')).body.data.items, response.body.data.items);
     assert.deepEqual(response.body.data.items.map((s: any) => s.id), services.slice(0, 2).sort());
     const first = response.body.data.items.find((s: any) => s.id === services[0]);
-    assert.deepEqual(Object.keys(first).sort(), ['category', 'code', 'description', 'id', 'name', 'variants']);
+    assert.deepEqual(Object.keys(first).sort(), ['attributes', 'category', 'code', 'description', 'id', 'name', 'pricingMode', 'quantityRules', 'unitsOfMeasure', 'unknownValuePolicy', 'variants']);
     assert.deepEqual(first.variants.map((v: any) => v.id), variants.slice(0, 2).sort());
-    for (const variant of first.variants) assert.deepEqual(Object.keys(variant).sort(), ['code', 'description', 'id', 'name']);
+    assert.deepEqual(first.attributes.map((a: any) => ({ code: a.code, dataType: a.dataType, required: a.required, allowedValues: a.allowedValues })),
+      [{ code: 'AC_TYPE', dataType: 'ENUM', required: true, allowedValues: [{ code: 'SPLIT', label: 'Split' }, { code: 'CASSETTE', label: 'Cassette' }] }]);
+    const split = first.variants.find((v: any) => v.id === variants[0]);
+    assert.equal(split.attributes[0].code, 'AC_TYPE');
+    assert.equal(split.attributes[0].value, 'SPLIT');
+    assert.ok(first.unitsOfMeasure.some((u: any) => u.id === uomId));
+    assert.deepEqual(response.body.data.categories, [{ category: 'CARE', serviceCount: 2 }]);
+    for (const variant of first.variants) assert.deepEqual(Object.keys(variant).sort(), ['attributes', 'code', 'description', 'id', 'name']);
     assert.deepEqual(response.body.data.items.find((s: any) => s.id === services[1]).variants, []);
     assert.ok(!JSON.stringify(response.body).includes(adminId));
     const sibling = await get(servicesPath(props[1]));

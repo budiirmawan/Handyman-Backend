@@ -19,6 +19,7 @@ import { isCurrentCareRepresentation } from '../handyman-handoff/care-representa
 import { handoffExchangeInvalidError } from '../handyman-handoff/handoff-runtime.errors';
 import { handymanServiceVariantNotActiveError } from '../handyman-catalog';
 import { handymanServiceVariantNotFoundError } from '../handyman-catalog';
+import { addCareHandymanServiceRequestItemInTransaction, type AddHandymanServiceRequestItemInput } from '../handyman-parameterized-catalog/handyman-request-items.service';
 import { handymanServiceVariantRepository } from '../handyman-catalog';
 import {
   serviceCatalogNotActiveError,
@@ -329,8 +330,11 @@ async function attachInitialCarePreference(
  * again before request insertion; any failure rolls back all three writes.
  */
 export async function createCareHandymanServiceRequest(
-  input: { exchangeToken: string } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'> & OptionalHandymanRequestedWindow,
-): Promise<PublicHandymanServiceRequest> {
+  input: {
+    exchangeToken: string;
+    items?: Array<AddHandymanServiceRequestItemInput & { description?: string }>;
+  } & Omit<CreateHandymanServiceRequestInput, 'channelAttributionId'> & OptionalHandymanRequestedWindow,
+): Promise<PublicHandymanServiceRequest & { items?: unknown[] }> {
   if (typeof input?.exchangeToken !== 'string' || input.exchangeToken.length === 0) {
     throw handoffExchangeInvalidError();
   }
@@ -344,8 +348,41 @@ export async function createCareHandymanServiceRequest(
         !(await isCurrentCareRepresentation(exchange, client))) {
       throw handoffExchangeInvalidError();
     }
-    const request = await createFromAuthorizedAttribution(input, attribution, client);
-    return attachInitialCarePreference(client, request, input);
+
+    const structuredItems = input.items;
+    const primary = structuredItems?.[0];
+    const created = await createFromAuthorizedAttribution({
+      ...input,
+      serviceCatalogId: primary?.serviceCatalogId ?? input.serviceCatalogId,
+      ...(primary
+        ? { serviceVariantId: primary.serviceVariantId ?? undefined }
+        : {}),
+    }, attribution, client);
+
+    if (!structuredItems) {
+      return attachInitialCarePreference(client, created, input);
+    }
+
+    const savedItems = [];
+    for (const item of structuredItems) {
+      savedItems.push(await addCareHandymanServiceRequestItemInTransaction(client, {
+        id: created.id,
+        clientId: created.clientId,
+        buildingId: created.buildingId,
+        status: created.status,
+      }, {
+        serviceCatalogId: item.serviceCatalogId,
+        serviceVariantId: item.serviceVariantId,
+        quantity: item.quantity,
+        uomId: item.uomId,
+        attributeValues: item.attributeValues,
+        accessCondition: item.accessCondition,
+        itemDescription: item.description,
+      }, attribution.careActorId));
+    }
+    const withItems = { ...created, items: savedItems };
+    const withPreference = await attachInitialCarePreference(client, withItems, input);
+    return withPreference as PublicHandymanServiceRequest & { items?: unknown[] };
   });
 }
 

@@ -87,5 +87,6 @@ export async function readCareWorkspaceCatalogue(token: string, propertyInput: u
     const payload = Buffer.from(JSON.stringify({ binding, afterId: items[items.length - 1].id })).toString('base64url');
     nextCursor = payload + '.' + sign(payload, secret);
   }
-  return { items, nextCursor, evaluatedAt: result.evaluatedAt.toISOString() };
+  return { ...(kind === 'services' ? { categories: result.categories ?? [] } : {}),
+    items, nextCursor, evaluatedAt: result.evaluatedAt.toISOString() };
 }
