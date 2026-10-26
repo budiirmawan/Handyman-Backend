@@ -9134,7 +9134,7 @@ paths:
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_VERSION_NOT_FOUND]
       summary: Exact bounded read of one version's customer-facing immutable lines
-      description: "Tenant-authorized response is an explicit allow-list: line identity, type/description, quantity/UOM, final quoted amount, server-calculated line total, currency, and timestamps. It never includes referenceUnitAmount, sourceItemId, or createdByUserId; Backend storage and internal quotation calculations retain their snapshots."
+      description: "Tenant-authorized response is an explicit allow-list: line identity, type/description, quantity/UOM, final quoted amount, server-calculated line total, currency, and timestamps. It never includes referenceUnitAmount, sourceItemId, or createdByUserId; Backend storage and internal quotation calculations retain their snapshots. PART 03D visibility law: an un-issued DRAFT is not yet the customer's quotation, so this thread's customer side (an active User linked to an active Tenant PIC of the quotation's tenant company) can not read a DRAFT version's lines even by direct version id - the version answers 404 HANDYMAN_QUOTATION_VERSION_NOT_FOUND exactly like an unknown id - while Operations/Care authors keep reading the DRAFT they are pricing and every version that was presented (ISSUED, SUPERSEDED, APPROVED, REJECTED, EXPIRED) stays readable for the customer."
       parameters:
         - name: quotationVersionId
           in: path
@@ -9166,7 +9166,7 @@ paths:
       security: [{ bearerAuth: [] }]
       x-error-codes: [VALIDATION_ERROR, HANDYMAN_QUOTATION_NOT_FOUND, HANDYMAN_QUOTATION_VERSION_NOT_FOUND]
       summary: Derived totals (labor/material subtotals, total, currency) computed from immutable lines
-      description: "Totals are derived from immutable lines on every read and are never persisted; no tax or discount exists anywhere in this quotation lifecycle."
+      description: "Totals are derived from immutable lines on every read and are never persisted; no tax or discount exists anywhere in this quotation lifecycle. Derived prices follow the same PART 03D law as the lines: an un-issued DRAFT version's totals are invisible to this thread's customer side (404 HANDYMAN_QUOTATION_VERSION_NOT_FOUND, no status oracle), issued and historical versions stay readable, and Operations access is unchanged."
       parameters:
         - name: quotationVersionId
           in: path

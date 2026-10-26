@@ -6,8 +6,10 @@ import { priceCatalogLookupService } from '../price-catalog-entries';
 import {
   handymanServiceRequestRepository,
 } from '../handyman-requests';
-import { assertQuotationThreadBuildingAccess }
-  from './handyman-quotation-access';
+import {
+  assertQuotationThreadBuildingAccess,
+  assertQuotationVersionCustomerVisibility,
+} from './handyman-quotation-access';
 import { handymanQuotationRepository } from './handyman-quotation.repository';
 import { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
 import { handymanQuotationNotFoundError } from './handyman-quotation.errors';
@@ -335,6 +337,12 @@ export async function listHandymanQuotationVersionLines(
     quotation,
     actorUserId,
   );
+  // PART 03D: this thread's customer never sees an un-issued DRAFT's lines.
+  await assertQuotationVersionCustomerVisibility(undefined as never, {
+    quotation,
+    versionStatus: version.status,
+    actorUserId,
+  });
   const lines = await handymanQuotationLineRepository.listLines(
     undefined,
     version.id,
@@ -366,6 +374,12 @@ export async function getHandymanQuotationVersionTotals(
     quotation,
     actorUserId,
   );
+  // PART 03D: derived prices are gated exactly like the lines above.
+  await assertQuotationVersionCustomerVisibility(undefined as never, {
+    quotation,
+    versionStatus: version.status,
+    actorUserId,
+  });
   const sums = await handymanQuotationLineRepository.sumLines(
     undefined,
     version.id,
