@@ -10,7 +10,7 @@ import { permissionRepository } from '../permissions';
 import { renderReportingPdf, type PdfRenderSnapshot } from '../reporting-export/pdf-renderer';
 import type { ReportingExportRow, ReportingExportTable } from '../reporting-export/reporting-export.types';
 
-/** A live, read-only preview. No issuance, statement number or artifact storage exists. */
+/** A live, read-only commission statement source and preview. */
 export type BmStatementInput = Readonly<{
   clientId: string;
   buildingId: string;
@@ -45,7 +45,7 @@ function date(value: unknown, field: string): string {
   }
   return value;
 }
-function normalize(input: BmStatementInput): BmStatementInput {
+export function normalizeBmStatementInput(input: BmStatementInput): BmStatementInput {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(key => !['clientId', 'buildingId', 'counterpartyId', 'agreementVersionId', 'dateFrom', 'dateTo'].includes(key))) {
     throw AppError.validation('Unexpected BM statement request fields.');
@@ -84,10 +84,10 @@ function signedMoney(value: bigint): string {
 const iso = (value: Date) => value.toISOString();
 
 /** All reads, including permission and Building scope, use one repeatable-read DB snapshot. */
-async function readSnapshot(actor: string, n: BmStatementInput) {
-  return withTransaction(async tx => {
-    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const asOf = await access(tx, actor, n);
+async function readSnapshot(actor: string, n: BmStatementInput, existingTx?: PoolClient, snapshotAsOf?: string) {
+  const read = async (tx: PoolClient) => {
+    const currentAsOf = await access(tx, actor, n);
+    const asOf = snapshotAsOf ?? currentAsOf;
     const master = (await tx.query(`SELECT b.name AS building_name,b.code AS building_code,
       p.legal_name,p.registration_number,v.id AS verification_id,
       a.id AS agreement_id,av.id AS agreement_version_id,av.version_number,av.effective_from,av.effective_to
@@ -241,8 +241,26 @@ async function readSnapshot(actor: string, n: BmStatementInput) {
       assertions: { withholding: 'NOT_ASSERTED' as const, taxRemittance: 'NOT_ASSERTED' as const },
       entries: statementEntries, settlements: includedSettlements,
     };
+  };
+  if (existingTx) return read(existingTx);
+  return withTransaction(async tx => {
+    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    return read(tx);
   });
 }
+
+/** Issuance shares the same complete source reader inside its own repeatable-read transaction. */
+export async function readBmStatementSource(tx: PoolClient, actorInput: string, input: BmStatementInput, snapshotAsOf: string) {
+  return readSnapshot(uuid(actorInput, 'actorUserId'), normalizeBmStatementInput(input), tx, snapshotAsOf);
+}
+
+type StatementSource = Awaited<ReturnType<typeof readSnapshot>>;
+export type BmIssuance = { id: string; issuedAt: string; issuedBy: string };
+export type BmStatementCoveragePin = { id: string; verificationId: string; effectiveFrom: string; effectiveTo: string | null };
+export function issuedBmStatementSource(s: StatementSource, issuance: BmIssuance, coverage: BmStatementCoveragePin[]) {
+  return { ...s, schema: 'HANDYMAN_BM_COMMISSION_STATEMENT_ISSUED_V1' as const, status: 'ISSUED' as const, issuance, coverage };
+}
+type IssuedStatementSource = ReturnType<typeof issuedBmStatementSource>;
 
 /** Preserve otherwise unsupported characters and exact spaces instead of silently changing legal names or references. */
 function exactPdfText(value: string): string {
@@ -268,14 +286,24 @@ function add(rows: ReportingExportRow[], label: string, value: string | number |
     rows.push({ field: chunks.length === 1 ? label : `${label} (${i+1}/${chunks.length})`, value: chunk });
   });
 }
-function table(key: string, label: string, rows: ReportingExportRow[]): ReportingExportTable {
-  return { key, label: `DRAFT/PREVIEW - ${label}`, columns: [
+function table(key: string, label: string, rows: ReportingExportRow[], issued: boolean): ReportingExportTable {
+  return { key, label: `${issued ? 'ISSUED' : 'DRAFT/PREVIEW'} - ${label}`, columns: [
     { key: 'field', label: 'Field', type: 'STRING' }, { key: 'value', label: 'Value', type: 'STRING' },
   ], rows, rowCount: rows.length };
 }
-function renderInput(s: Awaited<ReturnType<typeof readSnapshot>>, checksum: string): PdfRenderSnapshot {
+function renderInput(s: StatementSource | IssuedStatementSource, checksum: string): PdfRenderSnapshot {
   const identity: ReportingExportRow[] = [], totals: ReportingExportRow[] = [], rows: ReportingExportRow[] = [], payments: ReportingExportRow[] = [];
-  add(identity, 'Status', 'DRAFT/PREVIEW - not issued; no statement number or stored artifact');
+  const issued = s.status === 'ISSUED';
+  add(identity, 'Status', issued ? 'ISSUED - immutable stored document' : 'DRAFT/PREVIEW - this preview is not issued or stored');
+  if (s.status === 'ISSUED') {
+    add(identity, 'Issuance ID', s.issuance.id); add(identity, 'Issued at UTC', s.issuance.issuedAt);
+    s.coverage.forEach((c, i) => {
+      add(identity, `BM coverage ${i+1} ID`, c.id); add(identity, `BM coverage ${i+1} verification ID`, c.verificationId);
+      add(identity, `BM coverage ${i+1} from UTC`, c.effectiveFrom);
+      add(identity, `BM coverage ${i+1} to exclusive UTC`, c.effectiveTo ?? 'Open-ended');
+    });
+  }
+  add(identity, 'Source snapshot as of UTC', s.asOf);
   add(identity, 'Issuer legal name (current profile)', s.issuer.legalName);
   add(identity, 'Issuer registered address', s.issuer.registeredAddress);
   add(identity, 'Issuer city / province', `${s.issuer.city}, ${s.issuer.province} ${s.issuer.postalCode}`);
@@ -289,7 +317,7 @@ function renderInput(s: Awaited<ReturnType<typeof readSnapshot>>, checksum: stri
   add(identity, 'BM verification ID', s.beneficiary.verificationId); add(identity, 'Agreement ID', s.agreement.id);
   add(identity, 'Agreement version ID', s.agreement.versionId); add(identity, 'Agreement version number', s.agreement.versionNumber);
   add(identity, 'Agreement effective from UTC', s.agreement.effectiveFrom); add(identity, 'Agreement effective to UTC', s.agreement.effectiveTo);
-  add(identity, 'Period basis', 'Ledger posting dates in UTC, inclusive; current status as of preview');
+  add(identity, 'Period basis', 'Ledger posting dates in UTC, inclusive; settlement status as of source snapshot');
   add(identity, 'Text encoding', 'Non-ASCII and repeated or edge spaces use \\u{HEX}; backslashes doubled.');
   add(identity, 'Snapshot SHA-256', checksum);
   add(totals, 'CALCULATED gross', `IDR ${s.calculated.gross}`); add(totals, 'CALCULATED PPN', `IDR ${s.calculated.ppn}`);
@@ -352,18 +380,24 @@ function renderInput(s: Awaited<ReturnType<typeof readSnapshot>>, checksum: stri
       add(payments, `${n} verified UTC`, v.verifiedAt); add(payments, `${n} review reference`, v.verificationReference);
     }
   });
-  return { metadata: { dataset: 'BM_COMMISSION_STATEMENT_PREVIEW', datasetLabel: 'DRAFT/PREVIEW - BM Commission Statement',
+  return { metadata: { dataset: issued ? 'BM_COMMISSION_STATEMENT_ISSUED' : 'BM_COMMISSION_STATEMENT_PREVIEW',
+      datasetLabel: `${issued ? 'ISSUED' : 'DRAFT/PREVIEW'} - BM Commission Statement`,
       buildingId: s.building.id, buildingScope: [s.building.id], period: { dateFrom: s.period.dateFrom, dateTo: s.period.dateTo },
       filters: {}, asOf: s.asOf }, generatedAt: s.asOf, kpis: [], tables: [
-      table('identity', 'Identity and source', identity), table('totals', 'Calculated totals', totals),
-      table('entries', 'Transactions and corrections', rows), table('settlements', 'Settlement and payment', payments),
+      table('identity', 'Identity and source', identity, issued), table('totals', 'Calculated totals', totals, issued),
+      table('entries', 'Transactions and corrections', rows, issued), table('settlements', 'Settlement and payment', payments, issued),
     ] };
 }
 
 /** Authorized, non-persisted PDF plus canonical source and byte checksums. */
 export async function downloadHandymanBmStatement(actorInput: string, input: BmStatementInput) {
-  const actor = uuid(actorInput, 'actorUserId'), n = normalize(input);
+  const actor = uuid(actorInput, 'actorUserId'), n = normalizeBmStatementInput(input);
   const snapshot = await readSnapshot(actor, n), sourceChecksum = hash(snapshot);
   const pdf = await renderReportingPdf(renderInput(snapshot, sourceChecksum), { filename: 'bm-commission-statement-preview.pdf' });
   return { ...pdf, sourceChecksum, snapshot };
+}
+
+/** Render an issued snapshot using the same statement renderer, without preview labels. */
+export async function renderIssuedBmStatement(s: IssuedStatementSource, checksum: string) {
+  return renderReportingPdf(renderInput(s, checksum), { filename: `bm-commission-statement-${s.issuance.id}.pdf` });
 }

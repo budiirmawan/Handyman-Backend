@@ -4,6 +4,8 @@ import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream } from 'pdf-lib
 import { api } from './helpers/http';
 import { credentialService } from '../src/modules/auth';
 import { downloadHandymanBmStatement } from '../src/modules/handyman-bm-statement/handyman-bm-statement.service';
+import { downloadHandymanMonthlyServiceReport } from '../src/modules/handyman-bm-report/handyman-bm-report.service';
+import { issueBmCommissionStatement, issueBmMonthlyServiceReport, downloadIssuedBmDocument, listIssuedBmDocuments } from '../src/modules/handyman-bm-documents/handyman-bm-documents.service';
 import { mkdir, rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import EmbeddedPostgres from 'embedded-postgres';
@@ -173,7 +175,7 @@ async function counts(){
 
 describe('PART 02C-A independently verified BM commission tax case',()=>{
   it('registers an unassigned checker and verifies separate PPN/PPh pins with no financial writes',async()=>{
-    assert.equal(migrations.at(-1)!.id,'0505_handyman_bm_settlement_payment_evidence');
+    assert.equal(migrations.at(-1)!.id,'0506_handyman_bm_document_issuance');
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_tax_case.approve'));
     const grants=async()=>(await q(`SELECT count(*)::int n FROM role_permission_assignments r JOIN permissions p ON p.id=r.permission_id
       WHERE p.code='handyman.bm_tax_case.approve' AND r.status='ACTIVE'`)).rows[0].n;
@@ -384,6 +386,7 @@ describe('PART 02C-A independently verified BM commission tax case',()=>{
     assert.equal(c.snapshot.intentDigest,hash({schema:'HANDYMAN_BM_TAX_CASE_INTENT_V1',actor:admin,...f.input}));
     const persisted=(await q('SELECT snapshot,digest FROM handyman_bm_tax_cases WHERE id=$1',[c.snapshot.id])).rows[0];
     try{
+      assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
       assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
       assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
       assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
@@ -753,6 +756,7 @@ describe('PART 02C-C independently reviewed NOT_APPLICABLE treatment',()=>{
         /BM tax case source, evidence, scope, version or independent tax rules are invalid/);
     }
     // A rollback must wait for concurrent case activity before checking whether V2 history exists.
+    assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
@@ -878,6 +882,7 @@ describe('PART 02D-B1 correction tax approval bridge',()=>{
     assert.deepEqual((await q('SELECT * FROM handyman_bm_tax_case_decisions WHERE id=$1',[old.d.id])).rows[0],oldDecision);
     await assert.rejects(q('UPDATE handyman_bm_correction_tax_cases SET digest=$2 WHERE id=$1',[c.snapshot.id,'0'.repeat(64)]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_correction_tax_decisions WHERE id=$1',[d.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
@@ -947,6 +952,7 @@ describe('BM-COMMISSION-02 PART 01 gross-to-net ledger',()=>{
     await assert.rejects(postHandymanBmCommissionLedger(wrong,request),code('BUILDING_ACCESS_DENIED'));
     await assert.rejects(q('UPDATE handyman_bm_commission_ledger SET net_payable=0 WHERE id=$1',[s.id]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_commission_ledger WHERE id=$1',[s.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     try { await assert.rejects(migrateDown(pool),/Refusing to remove populated BM commission ledger history/); }
@@ -1054,7 +1060,8 @@ describe('BM-SETTLEMENT-03 PART 02 manual settlement and evidence',()=>{
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_settlement.verify_payment'));
     const n=(await q(`SELECT count(*)::int AS n FROM role_permission_assignments a JOIN permissions p ON p.id=a.permission_id
       WHERE a.status='ACTIVE' AND p.code IN ('handyman.bm_settlement.approve','handyman.bm_settlement.verify_payment')`)).rows[0].n;
-    assert.equal(n,0);assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');await migrateUp(pool);
+    assert.equal(n,0);assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
+    assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');await migrateUp(pool);
   });
   it('requires independent approval and protected, explicitly reviewed actual-payment evidence',async()=>{
     const x=await settlementFixture(),input=prepareInput(x),before=await counts();
@@ -1112,7 +1119,9 @@ describe('BM-SETTLEMENT-03 PART 02 manual settlement and evidence',()=>{
     await assert.rejects(q('UPDATE handyman_bm_settlements SET net_payable=1 WHERE id=$1',[scope.settlementId]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_settlement_verifications WHERE settlement_id=$1',[scope.settlementId]),/immutable/);
     await assert.rejects(prepareHandymanBmSettlement(x.maker,{...input,idempotencyKey:id()}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
-    await assert.rejects(migrateDown(pool),/Refusing to remove populated BM settlement payment history/);
+    assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
+    try { await assert.rejects(migrateDown(pool),/Refusing to remove populated BM settlement payment history/); }
+    finally { await migrateUp(pool); }
   });
   it('pins every original and approved correction ledger entry and settles only their net total',async()=>{
     const x=await settlementFixture(),{f}=x;await wait(25);
@@ -1346,5 +1355,183 @@ describe('BM-COMMISSION-04 PART 01 scoped statement preview',()=>{
     const manager=await statementManager(realm.building.id);
     await assert.rejects(downloadHandymanBmStatement(manager,{clientId:realm.client.id,buildingId:realm.building.id,counterpartyId:bm.counterparty.id,
       agreementVersionId:versionId,dateFrom:utcDay(),dateTo:utcDay()}),code('HANDYMAN_DOCUMENT_ISSUER_PROFILE_NOT_FOUND'));
+  });
+});
+
+
+/** BM DOCUMENT-06: real financial provenance and a simulated closed historical reporting period. */
+describe('BM DOCUMENT-06 official immutable issuance',()=>{
+  let x:Awaited<ReturnType<typeof settlementFixture>>,manager:string,monthlyOnly:string,financeOnly:string,outsider:string;
+  let month:string,from:string,to:string,startedAt:string,sessionId:string,scopeId:string,siblingId:string,foreignClientId:string;
+  let statement:Awaited<ReturnType<typeof issueBmCommissionStatement>>,report:Awaited<ReturnType<typeof issueBmMonthlyServiceReport>>;
+  let statementKey:string,reportKey:string;
+  const si=()=>({clientId:x.f.realm.client.id,buildingId:x.f.realm.building.id,counterpartyId:x.f.bm.counterparty.id,
+    agreementVersionId:x.f.versionId,dateFrom:from,dateTo:to,idempotencyKey:statementKey});
+  const ri=()=>({clientId:x.f.realm.client.id,buildingId:x.f.realm.building.id,month,idempotencyKey:reportKey});
+  const doc=(documentId:string)=>({clientId:x.f.realm.client.id,buildingId:x.f.realm.building.id,documentId});
+  before(async()=>{
+    x=await settlementFixture();
+    const paymentRef=`document-payment/${id()}`,payment=await recordStatementPayment(x,paymentRef);
+    await verifyStatementPayment(x,payment,paymentRef);
+    manager=await scopedUser(x.f.realm.building.id,['handyman.commercial.manage','handyman.finance.read','tenant_company.read']);
+    monthlyOnly=await scopedUser(x.f.realm.building.id,['handyman.commercial.manage','tenant_company.read']);
+    financeOnly=await scopedUser(x.f.realm.building.id,['handyman.commercial.manage','handyman.finance.read']);
+    const sibling=await buildingService.createBuilding({propertyId:x.f.realm.property.id,code:`SIB_${id().slice(0,8)}`,name:'Sibling'});
+    siblingId=sibling.id;outsider=await scopedUser(sibling.id,['handyman.commercial.manage','handyman.finance.read','tenant_company.read']);
+    foreignClientId=(await baseFixture()).realm.client.id;
+    const now=new Date(),first=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-1,1));
+    const last=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),0));
+    month=first.toISOString().slice(0,7);from=first.toISOString().slice(0,10);to=last.toISOString().slice(0,10);
+    const coverageStart=new Date(first.getTime()+7*86400000).toISOString(),verificationAt=new Date(first.getTime()+6*86400000).toISOString();
+    startedAt=new Date(first.getTime()+12*86400000).toISOString();scopeId=x.f.scope.id;
+    // Test-only time travel: the production histories are immutable. Seed realistic past rows without weakening production triggers.
+    const client=await pool.connect();try{
+      await client.query('BEGIN');await client.query("SET LOCAL session_replication_role='replica'");
+      await client.query('UPDATE handyman_commercial_agreement_versions SET effective_from=$2 WHERE id=$1',[x.f.versionId,verificationAt]);
+      await client.query('UPDATE handyman_bm_counterparty_verifications SET verified_at=$2 WHERE id=$1',[x.f.bm.verification.id,verificationAt]);
+      await client.query('UPDATE handyman_bm_building_coverages SET effective_from=$2 WHERE id=$1',[x.f.bm.coverage.id,coverageStart]);
+      await client.query('UPDATE handyman_service_requests SET created_at=$2 WHERE id=$1',[x.f.scope.handymanRequestId,startedAt]);
+      await client.query('UPDATE handyman_bm_commission_ledger SET created_at=$2 WHERE id=$1',[x.entry.snapshot.id,startedAt]);
+      await client.query('COMMIT');
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+    const lead=(await q(`SELECT a.id AS assignment_id,m.handyman_worker_context_id AS worker_id,w.user_id
+      FROM handyman_execution_scope_assignments a JOIN handyman_crew_leads l ON l.handyman_crew_id=a.handyman_crew_id
+      JOIN handyman_crew_memberships m ON m.id=l.handyman_crew_membership_id
+      JOIN handyman_worker_contexts c ON c.id=m.handyman_worker_context_id JOIN workforce_profiles w ON w.id=c.workforce_profile_id
+      WHERE a.execution_scope_id=$1 AND a.status='ACTIVE' ORDER BY l.lead_seq DESC LIMIT 1`,[scopeId])).rows[0];assert.ok(lead);
+    sessionId=id();
+    await q(`INSERT INTO handyman_work_sessions(id,client_id,execution_scope_id,assignment_id,lead_worker_id,lead_user_id,status,
+      checked_in_at,started_work_at,completed_at,checked_out_at) VALUES($1,$2,$3,$4,$5,$6,'CHECKED_OUT',$7,$7,$7,$7)`,
+      [sessionId,x.f.realm.client.id,scopeId,lead.assignment_id,lead.worker_id,lead.user_id,startedAt]);
+    for(const action of ['START_WORK','COMPLETE']) await q(`INSERT INTO handyman_work_session_events
+      (id,client_id,session_id,execution_scope_id,event_type,idempotency_key,actor_user_id,occurred_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[id(),x.f.realm.client.id,sessionId,scopeId,action,id(),lead.user_id,startedAt]);
+    statementKey=id();reportKey=id();
+  });
+
+  it('BM DOCUMENT-06 atomically issues both complete PDFs once under concurrent retries',async()=>{
+    const st=await Promise.all(Array.from({length:4},()=>issueBmCommissionStatement(manager,si())));
+    const mr=await Promise.all(Array.from({length:4},()=>issueBmMonthlyServiceReport(manager,ri())));
+    assert.equal(new Set(st.map(v=>v.id)).size,1);assert.equal(st.filter(v=>!v.replayed).length,1);
+    assert.equal(new Set(mr.map(v=>v.id)).size,1);assert.equal(mr.filter(v=>!v.replayed).length,1);
+    statement=st[0];report=mr[0];assert.equal(statement.status,'ISSUED');assert.equal(report.status,'ISSUED');
+    assert.equal((await q('SELECT count(*)::int AS n FROM handyman_bm_issued_documents WHERE client_id=$1',[x.f.realm.client.id])).rows[0].n,2);
+    for(const item of [statement,report]) {
+      const stored=(await q('SELECT * FROM handyman_bm_issued_documents WHERE id=$1',[item.id])).rows[0];
+      assert.equal(stored.source_snapshot.status,'ISSUED');assert.equal(stored.source_snapshot.issuance.id,item.id);
+      assert.equal(stored.source_snapshot.issuer.profileId,stored.issuer_profile_id);
+      assert.equal(stored.source_snapshot.building.id,x.f.realm.building.id);assert.equal(stored.source_snapshot.clientId,x.f.realm.client.id);
+      assert.equal(hash(stored.source_snapshot),item.sourceChecksum);assert.equal(createHash('sha256').update(stored.pdf_bytes).digest('hex'),item.pdfChecksum);
+      assert.equal(stored.pdf_bytes.subarray(0,5).toString(),'%PDF-');
+      const downloaded=await downloadIssuedBmDocument(manager,doc(item.id));assert.deepEqual(downloaded.bytes,stored.pdf_bytes);
+      const text=await pdfTextContent(downloaded.bytes);assert.ok(text.includes('ISSUED'));assert.ok(!text.includes('DRAFT/PREVIEW'));
+      assert.ok(text.includes(item.id));assertPdfChunkedField(text,item.id===statement.id?'Snapshot SHA-256':'Source snapshot SHA-256',item.sourceChecksum);
+    }
+    const source=(await q('SELECT source_snapshot FROM handyman_bm_issued_documents WHERE id=$1',[statement.id])).rows[0].source_snapshot;
+    assert.equal(source.beneficiary.id,x.f.bm.counterparty.id);assert.equal(source.agreement.versionId,x.f.versionId);
+    assert.equal(source.entries.length,1);assert.equal(source.entries[0].id,x.entry.snapshot.id);
+    assert.equal(source.entries[0].settlement.status,'PAID');assert.equal(source.assertions.withholding,'NOT_ASSERTED');
+    assert.equal(source.assertions.taxRemittance,'NOT_ASSERTED');assert.ok(!JSON.stringify(source).includes(x.bankNumber));
+    const text=await pdfTextContent((await downloadIssuedBmDocument(manager,doc(statement.id))).bytes);
+    for(const part of ['CALCULATED PPh projection','NOT ASSERTED','Tax remittance','PAID - Finance manual document review'])assert.ok(text.includes(part),part);
+    const monthly=(await q('SELECT source_snapshot FROM handyman_bm_issued_documents WHERE id=$1',[report.id])).rows[0].source_snapshot;
+    assert.deepEqual(monthly.totals,{requests:1,cancelled:0});assert.equal(monthly.coverage[0].counterpartyId,x.f.bm.counterparty.id);
+    assert.ok(monthly.coverage[0].effectiveFrom.startsWith(month));assert.equal(monthly.requests[0].id,x.f.scope.handymanRequestId);
+    assert.equal(monthly.requests[0].bucket,undefined);assert.equal(monthly.activity.work.startedScopes,1);
+    assert.equal(monthly.activity.work.completedSessionScopes,1);
+    const reportText=await pdfTextContent((await downloadIssuedBmDocument(manager,doc(report.id))).bytes);
+    assert.ok(reportText.includes('Lifecycle gap'));assert.ok(reportText.includes('Work Order gap'));
+    assert.ok(!reportText.includes('Ongoing work proxy'));assert.ok(!reportText.includes('All scopes customer-accepted proxy'));
+    const tenant=(await q('SELECT tenant_company_id,tenant_pic_id,space_id FROM handyman_service_requests WHERE id=$1',[x.f.scope.handymanRequestId])).rows[0];
+    for(const secret of [tenant.tenant_company_id,tenant.tenant_pic_id,tenant.space_id,'requester@tenant.example.com'])
+      assert.ok(!reportText.includes(secret)&&!JSON.stringify(monthly).includes(secret));
+  });
+
+  it('BM DOCUMENT-06 persists across database restart, forbids mutation and retains original bytes after source changes',async()=>{
+    const beforeStatement=await downloadIssuedBmDocument(manager,doc(statement.id)),beforeReport=await downloadIssuedBmDocument(manager,doc(report.id));
+    await assert.rejects(q('UPDATE handyman_bm_issued_documents SET pdf_filename=$2 WHERE id=$1',[statement.id,'changed.pdf']),/immutable/);
+    await assert.rejects(q('DELETE FROM handyman_bm_issued_documents WHERE id=$1',[statement.id]),/immutable/);
+    await assert.rejects(q('TRUNCATE handyman_bm_issued_documents'),/immutable/);
+    await assert.rejects(migrateDown(pool),/Refusing to remove issued BM documents/);
+    await closePool(pool);await pg.stop();await pg.start();
+    const {ensureTestDatabase}=await import('./helpers/postgres');const config=await ensureTestDatabase();assert.ok(config);pool=await initDatabase(config);
+    assert.deepEqual((await downloadIssuedBmDocument(manager,doc(statement.id))).bytes,beforeStatement.bytes);
+    assert.deepEqual((await downloadIssuedBmDocument(manager,doc(report.id))).bytes,beforeReport.bytes);
+    const old=(await q('SELECT source_snapshot FROM handyman_bm_issued_documents WHERE id=$1',[statement.id])).rows[0].source_snapshot.issuer;
+    await updateHandymanDocumentIssuerProfile({...issuerContent(x.f.realm.client.id,'PT New Issuer Version'),expectedVersion:old.version},admin);
+    const replay=await issueBmCommissionStatement(manager,si());assert.equal(replay.replayed,true);assert.equal(replay.id,statement.id);
+    assert.deepEqual((await downloadIssuedBmDocument(manager,doc(statement.id))).bytes,beforeStatement.bytes);
+    const next=await issueBmCommissionStatement(manager,{...si(),idempotencyKey:id()});assert.notEqual(next.id,statement.id);
+    assert.notEqual(next.sourceChecksum,statement.sourceChecksum);
+    const page1=await listIssuedBmDocuments(manager,{clientId:si().clientId,buildingId:si().buildingId,documentType:'COMMISSION_STATEMENT',limit:1});
+    assert.equal(page1.items.length,1);assert.ok(page1.nextAfter);
+    const page2=await listIssuedBmDocuments(manager,{clientId:si().clientId,buildingId:si().buildingId,documentType:'COMMISSION_STATEMENT',limit:1,after:page1.nextAfter!});
+    assert.equal(page2.items.length,1);assert.notEqual(page2.items[0].id,page1.items[0].id);assert.equal(page2.nextAfter,null);
+  });
+
+  it('BM DOCUMENT-06 enforces permissions, exact Building and Client scope and preserves preview routes',async()=>{
+    await assert.rejects(issueBmCommissionStatement(monthlyOnly,{...si(),idempotencyKey:id()}),code('PERMISSION_DENIED'));
+    await assert.rejects(issueBmMonthlyServiceReport(financeOnly,{...ri(),idempotencyKey:id()}),code('PERMISSION_DENIED'));
+    await assert.rejects(issueBmMonthlyServiceReport(outsider,{...ri(),idempotencyKey:id()}),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(downloadIssuedBmDocument(outsider,doc(report.id)),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(downloadIssuedBmDocument(manager,{...doc(report.id),buildingId:siblingId}),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(downloadIssuedBmDocument(manager,{...doc(report.id),clientId:foreignClientId}),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(downloadIssuedBmDocument(monthlyOnly,doc(statement.id)),code('PERMISSION_DENIED'));
+    await assert.rejects(downloadIssuedBmDocument(financeOnly,doc(report.id)),code('PERMISSION_DENIED'));
+    await assert.rejects(listIssuedBmDocuments(monthlyOnly,{clientId:ri().clientId,buildingId:ri().buildingId,documentType:'COMMISSION_STATEMENT'}),code('PERMISSION_DENIED'));
+    const base=`/api/v1/handyman/clients/${ri().clientId}/buildings/${ri().buildingId}/bm-documents`;
+    assert.equal((await api().get(`${base}/${report.id}.pdf`)).status,401);
+    const token=await statementToken(manager),outsideToken=await statementToken(outsider),monthToken=await statementToken(monthlyOnly);
+    assert.equal((await api().get(`${base}/${report.id}.pdf`).set('Authorization',`Bearer ${outsideToken}`)).status,403);
+    assert.equal((await api().post(`${base}/commission-statements`).set('Authorization',`Bearer ${monthToken}`).send(si())).status,403);
+    assert.equal((await api().post(`${base}/monthly-service-reports`).set('Authorization',`Bearer ${token}`)
+      .send({month,idempotencyKey:id(),tenantId:id()})).status,400);
+    const response=await api().get(`${base}/${report.id}.pdf`).set('Authorization',`Bearer ${token}`);
+    assert.equal(response.status,200);assert.match(response.headers['content-type'],/^application\/pdf/);
+    assert.match(response.headers['content-disposition'],/^attachment;/);assert.match(response.headers['cache-control'],/no-store/);
+    assert.equal(response.headers['x-content-sha256'],createHash('sha256').update(response.body as Buffer).digest('hex'));
+    assert.equal(response.headers['x-document-source-sha256'],report.sourceChecksum);
+    const history=await api().get(base).query({documentType:'MONTHLY_SERVICE_REPORT',limit:'1'}).set('Authorization',`Bearer ${token}`);
+    assert.equal(history.status,200);assert.equal(history.body.data.items[0].id,report.id);
+    const replay=await api().post(`${base}/monthly-service-reports`).set('Authorization',`Bearer ${token}`).send({month,idempotencyKey:reportKey});
+    assert.equal(replay.status,200);assert.equal(replay.body.data.id,report.id);assert.match(replay.headers.location,/\.pdf$/);
+    const preview=await downloadHandymanMonthlyServiceReport(manager,{clientId:ri().clientId,buildingId:ri().buildingId,month});
+    assert.equal(preview.snapshot.status,'DRAFT_PREVIEW');assert.ok((await pdfTextContent(preview.bytes)).includes('DRAFT/PREVIEW'));
+    const statementPreview=await downloadHandymanBmStatement(manager,{clientId:si().clientId,buildingId:si().buildingId,
+      counterpartyId:si().counterpartyId,agreementVersionId:si().agreementVersionId,dateFrom:from,dateTo:to});
+    assert.equal(statementPreview.snapshot.status,'DRAFT_PREVIEW');assert.ok((await pdfTextContent(statementPreview.bytes)).includes('DRAFT/PREVIEW'));
+  });
+
+  it('BM DOCUMENT-06 rejects unfinished periods, missing coverage and changed idempotent intent',async()=>{
+    await assert.rejects(issueBmMonthlyServiceReport(manager,{...ri(),month:new Date().toISOString().slice(0,7),idempotencyKey:id()}),code('HANDYMAN_BM_DOCUMENT_CONFLICT'));
+    await assert.rejects(issueBmCommissionStatement(manager,{...si(),dateTo:utcDay(),idempotencyKey:id()}),code('HANDYMAN_BM_DOCUMENT_CONFLICT'));
+    await assert.rejects(issueBmMonthlyServiceReport(manager,{...ri(),month:'2020-02',idempotencyKey:id()}),code('HANDYMAN_BM_DOCUMENT_CONFLICT'));
+    await assert.rejects(issueBmMonthlyServiceReport(manager,{...ri(),idempotencyKey:statementKey}),code('HANDYMAN_BM_DOCUMENT_CONFLICT'));
+    await assert.rejects(issueBmCommissionStatement(manager,{...si(),dateFrom:to}),code('HANDYMAN_BM_DOCUMENT_CONFLICT'));
+    const list=await listIssuedBmDocuments(manager,{clientId:ri().clientId,buildingId:ri().buildingId,documentType:'MONTHLY_SERVICE_REPORT'});
+    assert.equal(list.items.length,1);
+  });
+
+  it('BM DOCUMENT-06 rejects incomplete join coverage instead of certifying partial sources',async()=>{
+    const corrupt=id(),client=await pool.connect();
+    try{
+      await client.query('BEGIN');await client.query("SET LOCAL session_replication_role='replica'");
+      await client.query(`INSERT INTO handyman_work_session_events(id,client_id,session_id,execution_scope_id,event_type,idempotency_key,actor_user_id,occurred_at)
+        VALUES($1,$2,$3,$4,'START_WORK',$5,$6,$7)`,[corrupt,foreignClientId,sessionId,scopeId,id(),admin,startedAt]);
+      await client.query('COMMIT');
+      await assert.rejects(issueBmMonthlyServiceReport(manager,{...ri(),idempotencyKey:id()}),code('HANDYMAN_BM_DOCUMENT_INTEGRITY_ERROR'));
+    }finally{
+      await client.query('BEGIN');await client.query("SET LOCAL session_replication_role='replica'");
+      await client.query('DELETE FROM handyman_work_session_events WHERE id=$1',[corrupt]);await client.query('COMMIT');client.release();
+    }
+  });
+
+  it('BM DOCUMENT-06 rejects more than 500 source rows and creates no partial official report',async()=>{
+    const before=(await q('SELECT count(*)::int AS n FROM handyman_bm_issued_documents WHERE client_id=$1',[ri().clientId])).rows[0].n;
+    await q(`INSERT INTO handyman_work_session_events(id,client_id,session_id,execution_scope_id,event_type,idempotency_key,actor_user_id,occurred_at)
+      SELECT gen_random_uuid(),$1,$2,$3,'START_WORK','overflow-'||n,$4,$5 FROM generate_series(1,501) n`,
+      [ri().clientId,sessionId,scopeId,admin,startedAt]);
+    await assert.rejects(issueBmMonthlyServiceReport(manager,{...ri(),idempotencyKey:id()}),code('VALIDATION_ERROR'));
+    assert.equal((await q('SELECT count(*)::int AS n FROM handyman_bm_issued_documents WHERE client_id=$1',[ri().clientId])).rows[0].n,before);
   });
 });

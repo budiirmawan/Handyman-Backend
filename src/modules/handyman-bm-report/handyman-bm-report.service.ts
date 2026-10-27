@@ -29,7 +29,7 @@ function uuid(value: unknown, field: string): string {
   return value.toLowerCase();
 }
 
-function normalize(input: MonthlyServiceReportInput) {
+export function normalizeMonthlyServiceReportInput(input: MonthlyServiceReportInput) {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(key => !['clientId', 'buildingId', 'month'].includes(key))) {
     throw AppError.validation('Unexpected monthly service report request fields.');
@@ -77,9 +77,8 @@ const EVENT_SOURCES: ReadonlyArray<{
     parentKey: 'rework_id', filter: 'TRUE', outcome: 'NULL::text' },
 ];
 
-async function readSnapshot(actor: string, n: ReturnType<typeof normalize>) {
-  return withTransaction(async tx => {
-    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+async function readSnapshot(actor: string, n: ReturnType<typeof normalizeMonthlyServiceReportInput>, existingTx?: PoolClient, snapshotAsOf?: string) {
+  const read = async (tx: PoolClient) => {
     // First MVCC read establishes the snapshot, with a clock not earlier than it.
     const user = (await tx.query<{ status: string; as_of: Date }>(
       'SELECT status,clock_timestamp() AS as_of FROM users WHERE id=$1', [actor])).rows[0];
@@ -90,7 +89,7 @@ async function readSnapshot(actor: string, n: ReturnType<typeof normalize>) {
         message: 'Manager commercial authority and tenant company read permission are required.' });
     }
     await assertBuildingScopedResourceAccess(actor, { clientId: n.clientId, buildingId: n.buildingId }, tx);
-    const asOf = iso(user.as_of);
+    const asOf = snapshotAsOf ?? iso(user.as_of);
     const building = (await tx.query<{ name: string; code: string }>(`SELECT b.name,b.code FROM buildings b
       JOIN properties p ON p.id=b.property_id AND p.client_id=$1 WHERE b.id=$2`, [n.clientId, n.buildingId])).rows[0];
     if (!building) throw AppError.notFound('Building not found in this Client.');
@@ -207,8 +206,27 @@ async function readSnapshot(actor: string, n: ReturnType<typeof normalize>) {
       verifiedMonthlyBastIds: bastIds.filter(id => verified.get(id) && events.some(e => e.family === 'BAST' && e.type === 'ACCEPT' && e.parentId === id)),
       events,
     };
+  };
+  if (existingTx) return read(existingTx);
+  return withTransaction(async tx => {
+    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    return read(tx);
   });
 }
+
+export async function readMonthlyServiceReportSource(tx: PoolClient, actorInput: string, input: MonthlyServiceReportInput, snapshotAsOf: string) {
+  return readSnapshot(uuid(actorInput, 'actorUserId'), normalizeMonthlyServiceReportInput(input), tx, snapshotAsOf);
+}
+
+type MonthlySource = Awaited<ReturnType<typeof readSnapshot>>;
+type Issuance = { id: string; issuedAt: string; issuedBy: string };
+/** Official reports exclude unsupported request-lifecycle proxy metrics. */
+export function issuedMonthlyServiceReportSource(s: MonthlySource, issuance: Issuance) {
+  return { ...s, schema: 'HANDYMAN_BM_MONTHLY_SERVICE_REPORT_ISSUED_V1' as const, status: 'ISSUED' as const, issuance,
+    totals: { requests: s.totals.requests, cancelled: s.totals.cancelled },
+    requests: s.requests.map(({ bucket: _bucket, ...request }) => request) };
+}
+type IssuedMonthlySource = ReturnType<typeof issuedMonthlyServiceReportSource>;
 
 /** Match BM-04's lossless encoding/chunking around the shared renderer's cell limits. */
 function exactPdfText(value: string): string {
@@ -231,15 +249,17 @@ function add(rows: ReportingExportRow[], label: string, value: string | number |
     rows.push({ field: chunks.length === 1 ? label : `${label} (${i+1}/${chunks.length})`, value: chunk });
   });
 }
-function table(key: string, label: string, rows: ReportingExportRow[]): ReportingExportTable {
-  return { key, label: `DRAFT/PREVIEW - ${label}`, columns: [
+function table(key: string, label: string, rows: ReportingExportRow[], issued: boolean): ReportingExportTable {
+  return { key, label: `${issued ? 'ISSUED' : 'DRAFT/PREVIEW'} - ${label}`, columns: [
     { key: 'field', label: 'Field', type: 'STRING' }, { key: 'value', label: 'Value', type: 'STRING' },
   ], rows, rowCount: rows.length };
 }
-function renderInput(s: Awaited<ReturnType<typeof readSnapshot>>, checksum: string): PdfRenderSnapshot {
+function renderInput(s: MonthlySource | IssuedMonthlySource, checksum: string): PdfRenderSnapshot {
   const identity: ReportingExportRow[] = [], summary: ReportingExportRow[] = [], activity: ReportingExportRow[] = [],
     categories: ReportingExportRow[] = [], references: ReportingExportRow[] = [];
-  add(identity, 'Status', 'DRAFT/PREVIEW - not issued, numbered or stored');
+  const issued = s.status === 'ISSUED';
+  add(identity, 'Status', issued ? 'ISSUED - immutable stored document' : 'DRAFT/PREVIEW - this preview is not issued or stored');
+  if (s.status === 'ISSUED') { add(identity, 'Issuance ID', s.issuance.id); add(identity, 'Issued at UTC', s.issuance.issuedAt); }
   add(identity, 'Reporting month UTC', s.period.month);
   add(identity, 'Period start inclusive UTC', s.period.from); add(identity, 'Period end exclusive UTC', s.period.toExclusive);
   add(identity, 'Generated as of UTC', s.asOf);
@@ -263,14 +283,17 @@ function renderInput(s: Awaited<ReturnType<typeof readSnapshot>>, checksum: stri
   });
   add(summary, 'Scope', 'All totals are Building-wide, not attributed to a BM. Coverage may cover only part of the month.');
   add(summary, 'Cohort', 'Requests created in this UTC month; status and categories are current at generation, not historical month-end.');
-  add(summary, 'Requests total', s.totals.requests); add(summary, 'Cancelled requests', s.totals.cancelled);
-  add(summary, 'Ongoing work proxy', s.totals.ongoingProxy);
-  add(summary, 'All scopes customer-accepted proxy', s.totals.acceptedAllScopesProxy);
-  add(summary, 'Unclassified requests', s.totals.unclassified);
-  add(summary, 'Lifecycle gap', 'No authoritative request completed or ongoing status exists; proxies are not request completion.');
-  add(summary, 'Proxy precedence', 'Cancelled; else active, paused or material-run session; else all current scopes have verified customer-accepted BAST; else unclassified.');
+  add(summary, 'Requests total', s.totals.requests); add(summary, 'Cancelled requests as of generation', s.totals.cancelled);
+  if (s.status === 'DRAFT_PREVIEW') {
+    add(summary, 'Ongoing work proxy', s.totals.ongoingProxy);
+    add(summary, 'All scopes customer-accepted proxy', s.totals.acceptedAllScopesProxy);
+    add(summary, 'Unclassified requests', s.totals.unclassified);
+    add(summary, 'Proxy precedence', 'Cancelled; else active, paused or material-run session; else all current scopes have verified customer-accepted BAST; else unclassified.');
+  }
+  add(summary, 'Lifecycle gap', issued ? 'Authoritative request completed and ongoing statuses are unavailable and omitted.' :
+    'No authoritative request completed or ongoing status exists; proxies are not request completion.');
   add(summary, 'Work Order gap', 'No authoritative Handyman request to FM Work Order link; Work Order progress and completion omitted.');
-  add(summary, 'Issuance gap', 'Immutable report issuance and artifact storage do not exist; this is a live preview.');
+  if (!issued) add(summary, 'Issuance', 'This live preview is not an issued or stored report.');
   add(activity, 'Activity basis', 'UTC event occurrence in this month, including requests created outside the month.');
   add(activity, 'Counting rule', 'Distinct scopes for work, QC runs for QC, and parent documents or claims or reworks per milestone; milestones are not additive.');
   add(activity, 'Work started scopes', s.activity.work.startedScopes);
@@ -288,8 +311,12 @@ function renderInput(s: Awaited<ReturnType<typeof readSnapshot>>, checksum: stri
   if (!s.categories.length) add(categories, 'Categories', 'No requests created in this month.');
   s.categories.forEach((c, i) => add(categories, `Category ${i+1} requests`, `${c.category}: ${c.count}`));
   add(references, 'Privacy', 'Only neutral source IDs are included; tenant identity, unit, notes, contact and evidence are excluded.');
-  s.requests.forEach((r, i) => {
+  if (s.status === 'DRAFT_PREVIEW') s.requests.forEach((r, i) => {
     const p = `R${i+1}`; add(references, `${p} request ID`, r.id); add(references, `${p} current status / bucket`, `${r.status} / ${r.bucket}`);
+    add(references, `${p} service catalog ID`, r.serviceCatalogId);
+  });
+  else s.requests.forEach((r, i) => {
+    const p = `R${i+1}`; add(references, `${p} request ID`, r.id); add(references, `${p} current status`, r.status);
     add(references, `${p} service catalog ID`, r.serviceCatalogId);
   });
   s.scopes.forEach((x, i) => add(references, `S${i+1} scope / request ID`, `${x.id} / ${x.requestId}`));
@@ -300,18 +327,54 @@ function renderInput(s: Awaited<ReturnType<typeof readSnapshot>>, checksum: stri
     add(references, `${p} event ID`, e.id); add(references, `${p} parent ID`, e.parentId);
     add(references, `${p} scope ID`, e.scopeId); add(references, `${p} occurred UTC`, e.occurredAt);
   });
-  return { metadata: { dataset: 'HANDYMAN_MONTHLY_SERVICE_REPORT_PREVIEW', datasetLabel: 'DRAFT/PREVIEW - Monthly Building Service Report',
+  return { metadata: { dataset: issued ? 'HANDYMAN_MONTHLY_SERVICE_REPORT_ISSUED' : 'HANDYMAN_MONTHLY_SERVICE_REPORT_PREVIEW',
+    datasetLabel: `${issued ? 'ISSUED' : 'DRAFT/PREVIEW'} - Monthly Building Service Report`,
     buildingId: s.building.id, buildingScope: [s.building.id], period: { dateFrom: s.period.from.slice(0, 10), dateTo: s.period.lastDay },
     filters: {}, asOf: s.asOf }, generatedAt: s.asOf, kpis: [], tables: [
-    table('identity', 'Issuer, Building, BM and period', identity), table('summary', 'Operational summary', summary),
-    table('activity', 'Monthly activity', activity), table('categories', 'Service categories', categories),
-    table('references', 'Source references', references),
+    table('identity', 'Issuer, Building, BM and period', identity, issued), table('summary', 'Operational summary', summary, issued),
+    table('activity', 'Monthly activity', activity, issued), table('categories', 'Service categories', categories, issued),
+    table('references', 'Source references', references, issued),
   ] };
 }
 
 export async function downloadHandymanMonthlyServiceReport(actorInput: string, input: MonthlyServiceReportInput) {
-  const actor = uuid(actorInput, 'actorUserId'), n = normalize(input);
+  const actor = uuid(actorInput, 'actorUserId'), n = normalizeMonthlyServiceReportInput(input);
   const snapshot = await readSnapshot(actor, n), sourceChecksum = hash(snapshot);
   const pdf = await renderReportingPdf(renderInput(snapshot, sourceChecksum), { filename: `monthly-service-report-${n.month}-preview.pdf` });
   return { ...pdf, sourceChecksum, snapshot };
+}
+
+/** Render an issued snapshot using the same report renderer, without preview-only proxies. */
+export async function renderIssuedMonthlyServiceReport(s: IssuedMonthlySource, checksum: string) {
+  return renderReportingPdf(renderInput(s, checksum), { filename: `monthly-service-report-${s.period.month}-${s.issuance.id}.pdf` });
+}
+
+/** Independently count raw scoped parents/events: an inner-join omission is not a complete source. */
+export async function assertMonthlyServiceReportComplete(tx: PoolClient, input: MonthlyServiceReportInput, s: MonthlySource) {
+  const n = normalizeMonthlyServiceReportInput(input), params = [n.clientId, n.buildingId, n.from, n.toExclusive];
+  const expectCount = async (sql: string, expected: number) => {
+    const result = await tx.query<{ count: number }>(sql, params);
+    if (result.rows[0]?.count !== expected) throw new AppError({ code: ERROR_CODES.HANDYMAN_BM_DOCUMENT_INTEGRITY_ERROR,
+      statusCode: 409, message: 'Monthly report source coverage could not be proven complete.' });
+  };
+  await expectCount(`SELECT count(*)::int AS count FROM handyman_bm_building_coverages c
+    WHERE c.client_id=$1 AND c.building_id=$2 AND c.cancelled_at IS NULL AND c.effective_from < $4::timestamptz
+      AND (c.effective_to IS NULL OR c.effective_to > $3::timestamptz)`, s.coverage.length);
+  await expectCount(`SELECT count(*)::int AS count FROM handyman_service_requests r
+    WHERE r.client_id=$1 AND r.building_id=$2 AND r.created_at >= $3::timestamptz AND r.created_at < $4::timestamptz`, s.requests.length);
+  const cohort = `JOIN handyman_service_requests r ON r.id=s.handyman_request_id
+    WHERE s.client_id=$1 AND s.building_id=$2 AND r.created_at >= $3::timestamptz AND r.created_at < $4::timestamptz`;
+  await expectCount(`SELECT count(*)::int AS count FROM handyman_execution_scopes s ${cohort}`, s.scopes.length);
+  await expectCount(`SELECT count(*)::int AS count FROM handyman_work_sessions w
+    JOIN handyman_execution_scopes s ON s.id=w.execution_scope_id ${cohort}
+    AND w.status IN ('IN_PROGRESS','PAUSED','MATERIAL_RUN')`, s.activeSessions.length);
+  await expectCount(`SELECT count(*)::int AS count FROM handyman_bast_documents b
+    JOIN handyman_execution_scopes s ON s.id=b.execution_scope_id ${cohort} AND b.status='ACCEPTED'`, s.basts.length);
+  for (const source of EVENT_SOURCES) {
+    await expectCount(`SELECT count(*)::int AS count FROM ${source.events} e
+      JOIN ${source.parents} p ON p.id=e.${source.parentKey}
+      JOIN handyman_execution_scopes s ON s.id=p.execution_scope_id
+      WHERE s.client_id=$1 AND s.building_id=$2 AND e.occurred_at >= $3::timestamptz AND e.occurred_at < $4::timestamptz
+        AND ${source.filter}`, s.events.filter(e => e.family === source.family).length);
+  }
 }
