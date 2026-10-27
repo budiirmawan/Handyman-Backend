@@ -175,7 +175,7 @@ async function counts(){
 
 describe('PART 02C-A independently verified BM commission tax case',()=>{
   it('registers an unassigned checker and verifies separate PPN/PPh pins with no financial writes',async()=>{
-    assert.equal(migrations.at(-1)!.id,'0506_handyman_bm_document_issuance');
+    assert.equal(migrations.at(-1)!.id,'0507_handyman_tenant_payment_receipts');
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_tax_case.approve'));
     const grants=async()=>(await q(`SELECT count(*)::int n FROM role_permission_assignments r JOIN permissions p ON p.id=r.permission_id
       WHERE p.code='handyman.bm_tax_case.approve' AND r.status='ACTIVE'`)).rows[0].n;
@@ -386,6 +386,7 @@ describe('PART 02C-A independently verified BM commission tax case',()=>{
     assert.equal(c.snapshot.intentDigest,hash({schema:'HANDYMAN_BM_TAX_CASE_INTENT_V1',actor:admin,...f.input}));
     const persisted=(await q('SELECT snapshot,digest FROM handyman_bm_tax_cases WHERE id=$1',[c.snapshot.id])).rows[0];
     try{
+      assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
       assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
       assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
       assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
@@ -756,6 +757,7 @@ describe('PART 02C-C independently reviewed NOT_APPLICABLE treatment',()=>{
         /BM tax case source, evidence, scope, version or independent tax rules are invalid/);
     }
     // A rollback must wait for concurrent case activity before checking whether V2 history exists.
+    assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
     assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
@@ -882,6 +884,7 @@ describe('PART 02D-B1 correction tax approval bridge',()=>{
     assert.deepEqual((await q('SELECT * FROM handyman_bm_tax_case_decisions WHERE id=$1',[old.d.id])).rows[0],oldDecision);
     await assert.rejects(q('UPDATE handyman_bm_correction_tax_cases SET digest=$2 WHERE id=$1',[c.snapshot.id,'0'.repeat(64)]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_correction_tax_decisions WHERE id=$1',[d.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
     assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
@@ -952,6 +955,7 @@ describe('BM-COMMISSION-02 PART 01 gross-to-net ledger',()=>{
     await assert.rejects(postHandymanBmCommissionLedger(wrong,request),code('BUILDING_ACCESS_DENIED'));
     await assert.rejects(q('UPDATE handyman_bm_commission_ledger SET net_payable=0 WHERE id=$1',[s.id]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_commission_ledger WHERE id=$1',[s.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
     assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
@@ -1060,7 +1064,8 @@ describe('BM-SETTLEMENT-03 PART 02 manual settlement and evidence',()=>{
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_settlement.verify_payment'));
     const n=(await q(`SELECT count(*)::int AS n FROM role_permission_assignments a JOIN permissions p ON p.id=a.permission_id
       WHERE a.status='ACTIVE' AND p.code IN ('handyman.bm_settlement.approve','handyman.bm_settlement.verify_payment')`)).rows[0].n;
-    assert.equal(n,0);assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
+    assert.equal(n,0);assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
+    assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');await migrateUp(pool);
   });
   it('requires independent approval and protected, explicitly reviewed actual-payment evidence',async()=>{
@@ -1119,6 +1124,7 @@ describe('BM-SETTLEMENT-03 PART 02 manual settlement and evidence',()=>{
     await assert.rejects(q('UPDATE handyman_bm_settlements SET net_payable=1 WHERE id=$1',[scope.settlementId]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_settlement_verifications WHERE settlement_id=$1',[scope.settlementId]),/immutable/);
     await assert.rejects(prepareHandymanBmSettlement(x.maker,{...input,idempotencyKey:id()}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
     assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     try { await assert.rejects(migrateDown(pool),/Refusing to remove populated BM settlement payment history/); }
     finally { await migrateUp(pool); }
@@ -1452,7 +1458,9 @@ describe('BM DOCUMENT-06 official immutable issuance',()=>{
     await assert.rejects(q('UPDATE handyman_bm_issued_documents SET pdf_filename=$2 WHERE id=$1',[statement.id,'changed.pdf']),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_issued_documents WHERE id=$1',[statement.id]),/immutable/);
     await assert.rejects(q('TRUNCATE handyman_bm_issued_documents'),/immutable/);
-    await assert.rejects(migrateDown(pool),/Refusing to remove issued BM documents/);
+    assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
+    try { await assert.rejects(migrateDown(pool),/Refusing to remove issued BM documents/); }
+    finally { await migrateUp(pool); }
     await closePool(pool);await pg.stop();await pg.start();
     const {ensureTestDatabase}=await import('./helpers/postgres');const config=await ensureTestDatabase();assert.ok(config);pool=await initDatabase(config);
     assert.deepEqual((await downloadIssuedBmDocument(manager,doc(statement.id))).bytes,beforeStatement.bytes);

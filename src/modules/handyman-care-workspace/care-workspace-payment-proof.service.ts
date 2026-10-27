@@ -228,6 +228,27 @@ async function assertCareWriteAuthority(
   if (occupancy.rowCount !== 1) throw notFound();
 }
 
+/** Shared exact-occupancy read wall for a payment, independent of proof status. */
+export async function assertCareHandymanPaymentReadContext(input: {
+  principal: CareWorkspacePrincipal;
+  selection: HandymanPaymentProofSelection;
+  requestId: unknown;
+  invoiceId?: unknown;
+  paymentId: unknown;
+}, executor: Pick<PoolClient, 'query'> | ReturnType<typeof getPool> = getPool()) {
+  const requestId = uuid(input.requestId, 'requestId');
+  const invoiceId = optionalUuid(input.invoiceId, 'invoiceId');
+  const paymentId = uuid(input.paymentId, 'paymentId');
+  const binding = await findBoundPayment(executor, input.principal,
+    input.selection, requestId, invoiceId, paymentId, false);
+  if (!binding.authenticated) throw new AppError({
+    code: ERROR_CODES.HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED,
+    message: 'Care workspace authentication failed.', statusCode: 401,
+  });
+  if (!binding.selectedPropertyAvailable || !binding.item) throw notFound();
+  return binding.item;
+}
+
 export async function assertCareHandymanPaymentProofContext(input: {
   principal: CareWorkspacePrincipal;
   selection: HandymanPaymentProofSelection;
@@ -235,20 +256,11 @@ export async function assertCareHandymanPaymentProofContext(input: {
   invoiceId?: unknown;
   paymentId: unknown;
 }) {
-  const requestId = uuid(input.requestId, 'requestId');
-  const invoiceId = optionalUuid(input.invoiceId, 'invoiceId');
-  const paymentId = uuid(input.paymentId, 'paymentId');
-  const binding = await findBoundPayment(getPool(), input.principal,
-    input.selection, requestId, invoiceId, paymentId, false);
-  if (!binding.authenticated) throw new AppError({
-    code: ERROR_CODES.HANDYMAN_CARE_WORKSPACE_UNAUTHORIZED,
-    message: 'Care workspace authentication failed.', statusCode: 401,
-  });
-  if (!binding.selectedPropertyAvailable || !binding.item) throw notFound();
-  if (binding.item.paymentStatus !== 'PENDING') {
+  const item = await assertCareHandymanPaymentReadContext(input);
+  if (item.paymentStatus !== 'PENDING') {
     throw handymanCustomerPaymentConflictError('payment-proof-requires-pending-claim');
   }
-  return binding.item;
+  return item;
 }
 
 export async function uploadCareHandymanPaymentProof(input: {

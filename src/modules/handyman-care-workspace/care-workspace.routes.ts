@@ -1,3 +1,5 @@
+import { downloadTenantPaymentReceiptForCare } from '../handyman-tenant-receipts/handyman-tenant-receipt.service';
+import { sendPaymentReceiptPdf } from '../handyman-tenant-receipts/handyman-tenant-receipt.routes';
 import { getCareWorkspaceRequestDetail } from './care-workspace-request-detail.service';
 import { getCareWorkspaceOperationalProjection } from './care-workspace-operational.service';
 import multer from 'multer';
@@ -135,6 +137,20 @@ export function createCareWorkspaceRouter(): Router {
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await getCareWorkspaceOperationalProjection(
         match[1], req.params.requestId, req.query, req.body));
+    } catch (error) { next(error); }
+  });
+  router.get([
+    '/handyman/care/requests/:requestId/payments/:paymentId/receipt.pdf',
+    '/handyman/care/requests/:requestId/invoices/:invoiceId/payments/:paymentId/receipt.pdf',
+  ], async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      const invoiceId = 'invoiceId' in req.params ? req.params.invoiceId : undefined;
+      const receipt = await downloadTenantPaymentReceiptForCare(match[1], req.params.requestId,
+        req.params.paymentId, req.query, invoiceId);
+      sendPaymentReceiptPdf(res, receipt);
     } catch (error) { next(error); }
   });
   router.post([

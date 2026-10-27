@@ -1,3 +1,4 @@
+import { migration0507HandymanTenantPaymentReceipts } from './0507_handyman_tenant_payment_receipts';
 import { migration0506HandymanBmDocumentIssuance } from './0506_handyman_bm_document_issuance';
 import { migration0505HandymanBmSettlementPaymentEvidence } from './0505_handyman_bm_settlement_payment_evidence';
 import { migration0504HandymanBmBeneficiaryBankAccounts } from './0504_handyman_bm_beneficiary_bank_accounts';
@@ -1060,4 +1061,5 @@ export const migrations: readonly Migration[] = [
   migration0504HandymanBmBeneficiaryBankAccounts,
   migration0505HandymanBmSettlementPaymentEvidence,
   migration0506HandymanBmDocumentIssuance,
+  migration0507HandymanTenantPaymentReceipts,
 ];
