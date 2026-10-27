@@ -9,10 +9,16 @@ import { buyerInstant, requireVerifiedBuyerBindingInSnapshot } from '../handyman
 import type { BuyerBindingPin, VerifiedBuyerBinding } from '../handyman-buyer-binding';
 import { resolveHandymanTaxRuleInSnapshot } from '../handyman-tax-rules/handyman-tax-rules.service';
 import type { TaxRuleResolution } from '../handyman-tax-rules';
+import { requireApprovedIdentityAtInSnapshot } from '../handyman-tax-identity/handyman-tax-identity.service';
+import type { ApprovedHandymanTaxIdentity } from '../handyman-tax-identity';
+import { calculateInclusivePpnAmounts, normalizePpnIdentityPin, validateApprovedPpnIdentityPin,
+  validateApprovedPpnRule } from '../handyman-ppn-calculation/handyman-ppn-core';
+import { readInclusiveCommercialSource } from './handyman-inclusive-source';
 import { permissionRepository } from '../permissions';
 import { customerTaxPolicy } from './handyman-customer-tax.policy';
 import type { CustomerTaxClassificationPin, CustomerTaxDecision, CustomerTaxRulePin, CustomerTaxSnapshot, CustomerTaxView,
-  DecideCustomerTaxClassification, ProposeCustomerTaxClassification, VerifiedCustomerTaxClassification } from './handyman-customer-tax.types';
+  DecideCustomerTaxClassification, InclusiveInvoiceClassification, InclusiveInvoiceProposal, InclusiveLineTreatment,
+  ProposeCustomerTaxClassification, VerifiedCustomerTaxClassification } from './handyman-customer-tax.types';
 
 type Code = 'HANDYMAN_CUSTOMER_TAX_INVALID' | 'HANDYMAN_CUSTOMER_TAX_MISSING' | 'HANDYMAN_CUSTOMER_TAX_CONFLICT' |
   'HANDYMAN_CUSTOMER_TAX_STALE' | 'HANDYMAN_CUSTOMER_TAX_UNVERIFIED' | 'HANDYMAN_CUSTOMER_TAX_INTEGRITY_ERROR';
@@ -66,6 +72,20 @@ function classificationPin(value: CustomerTaxClassificationPin): CustomerTaxClas
     digest: digest(value.digest,'classification.digest'), decisionId: uuid(value.decisionId,'classification.decisionId'),
     decisionDigest: digest(value.decisionDigest,'classification.decisionDigest') };
 }
+function invoiceProposal(value: InclusiveInvoiceProposal | InclusiveInvoiceClassification, stored = false): InclusiveInvoiceProposal {
+  keys(value, stored ? ['executionScopeId','supplier','lines','source'] : ['executionScopeId','supplier','lines'], 'invoice');
+  const executionScopeId=uuid(value.executionScopeId,'invoice.executionScopeId');
+  const supplier=normalizePpnIdentityPin(value.supplier,'invoice.supplier');
+  if (!Array.isArray(value.lines) || value.lines.length<1 || value.lines.length>1000) throw invalid('invoice.lines');
+  const lines:InclusiveLineTreatment[]=value.lines.map(item=>{
+    keys(item,['chargeLineId','taxpayerClassification','rule','evidenceReferenceId'],'invoice.line');
+    customerTaxPolicy(item.taxpayerClassification);
+    return {chargeLineId:uuid(item.chargeLineId,'invoice.line.chargeLineId'),taxpayerClassification:item.taxpayerClassification,
+      rule:rulePin(item.rule),evidenceReferenceId:uuid(item.evidenceReferenceId,'invoice.line.evidenceReferenceId')};
+  }).sort((a,b)=>a.chargeLineId.localeCompare(b.chargeLineId));
+  if (new Set(lines.map(x=>x.chargeLineId)).size!==lines.length) throw invalid('duplicate invoice lines');
+  return {executionScopeId,supplier,lines};
+}
 function databaseError(error: unknown): never {
   if (error instanceof AppError) throw error;
   if (['23503','23505','23514','40001','40P01'].includes((error as { code?: string })?.code ?? '')) throw conflict();
@@ -106,9 +126,12 @@ const SNAPSHOT_KEYS = new Set(['schema','id','version','previousClassificationId
   'identifierKind','identifierReferenceId','retailSellerEligible','retailDirect','retailFinalConsumption','retailForResale','retailEvidenceReferenceId',
   'transactionEvidenceReferenceId','distinctFromSupplier','createdByUserId']);
 function view(row: { snapshot: CustomerTaxSnapshot; digest: string; created_at: Date }): CustomerTaxView {
-  const s=row.snapshot;
-  if (!s || Object.keys(s).length!==SNAPSHOT_KEYS.size || Object.keys(s).some(k=>!SNAPSHOT_KEYS.has(k)) ||
-      s.schema!=='HANDYMAN_CUSTOMER_TAX_V1' || hash(s)!==row.digest || !(row.created_at instanceof Date) || !Number.isFinite(row.created_at.getTime())) throw integrity();
+  const s=row.snapshot, v2=s?.schema==='HANDYMAN_CUSTOMER_TAX_V2';
+  if (!s || Object.keys(s).length!==SNAPSHOT_KEYS.size+(v2?1:0) ||
+      Object.keys(s).some(k=>!SNAPSHOT_KEYS.has(k) && !(v2 && k==='invoice')) ||
+      !(s.schema==='HANDYMAN_CUSTOMER_TAX_V1' && s.amountBasis==='PPN_EXCLUSIVE' ||
+        v2 && s.amountBasis==='PPN_INCLUSIVE' && s.invoice) ||
+      hash(s)!==row.digest || !(row.created_at instanceof Date) || !Number.isFinite(row.created_at.getTime())) throw integrity();
   return Object.freeze({snapshot:Object.freeze({...s}),digest:row.digest,digestAlgorithm:'SHA-256',createdAt:row.created_at.toISOString()});
 }
 function decision(row: Record<string, any>): CustomerTaxDecision {
@@ -125,14 +148,59 @@ function storedPins(s: CustomerTaxSnapshot): {buyer:BuyerBindingPin;rule:Custome
       rule:rulePin({ruleId:s.ruleId,ruleVersion:s.ruleVersion,ruleDigest:s.ruleDigest,approvalDecisionId:s.ruleDecisionId}) };
   } catch { throw integrity(); }
 }
-async function validateSources(tx: PoolClient, actor: string, s: CustomerTaxSnapshot): Promise<{buyer:VerifiedBuyerBinding;rule:ApprovedRule}> {
+type InclusiveResolved = {
+  supplier: ApprovedHandymanTaxIdentity;
+  lineRules: Array<{ treatment: InclusiveLineTreatment; rule: ApprovedRule;
+    amounts: { consideration: string; dpp: string; ppn: string } }>;
+};
+async function validateInclusiveSources(tx:PoolClient, actor:string, s:CustomerTaxSnapshot):Promise<InclusiveResolved> {
+  const invoice=s.invoice;
+  if (!invoice || !invoice.source || typeof invoice.source!=='object' || Array.isArray(invoice.source)) throw integrity();
+  const normalized=invoiceProposal(invoice,true);
+  if (hash({...normalized,source:invoice.source})!==hash(invoice) || normalized.supplier.owner.kind!=='HANDYMAN_ISSUER' ||
+      normalized.supplier.owner.clientId!==s.clientId) throw integrity();
+  const source=await readInclusiveCommercialSource(tx,s.clientId,s.requestId,normalized.executionScopeId,s.taxDate);
+  if (hash(source)!==hash(invoice.source) || source.grossAmount!==s.sourceAmount || source.buildingId!==s.buildingId ||
+      source.tenantCompanyId!==s.buyerTenantCompanyId) throw stale();
+  if (source.lines.length!==normalized.lines.length ||
+      source.lines.some(line=>!normalized.lines.some(t=>t.chargeLineId===line.chargeLineId))) throw integrity();
+  const supplier=await requireApprovedIdentityAtInSnapshot(tx,actor,normalized.supplier.owner,s.taxPointAt);
+  const readAt=((await tx.query("SELECT date_trunc('milliseconds',transaction_timestamp()) AS now")).rows[0].now as Date).toISOString();
+  validateApprovedPpnIdentityPin(normalized.supplier,supplier,s.taxPointAt,readAt);
+  const sp=supplier.snapshot, kind=sp.taxpayerKind==='LEGAL_ENTITY' && sp.individualResidency===null ? 'E' :
+    sp.taxpayerKind==='INDIVIDUAL' && sp.individualResidency==='RESIDENT' ? 'IR' :
+      sp.taxpayerKind==='INDIVIDUAL' && sp.individualResidency==='NON_RESIDENT' ? 'IN' : null;
+  if (!kind || source.profiles.some(p=>p.providerStatus!==sp.pkpStatus)) throw integrity();
+  const lineRules:InclusiveResolved['lineRules']=[];
+  let primary=false;
+  for (const treatment of normalized.lines) {
+    const policy=customerTaxPolicy(treatment.taxpayerClassification);
+    if (policy.buyerKind!==s.buyerKind || policy.documentClass!==s.documentClass || policy.identifierKind!==s.identifierKind ||
+        policy.supplierKind!==kind || policy.supplierPkp!==sp.pkpStatus) throw integrity();
+    const rule=await approvedRule(tx,actor,{clientId:s.clientId,taxDate:s.taxDate,taxPointAt:s.taxPointAt,
+      taxpayerClassification:treatment.taxpayerClassification,rule:treatment.rule});
+    validateApprovedPpnRule({clientId:s.clientId,transactionContext:'CUSTOMER_SERVICE_BILLING',taxDate:s.taxDate,
+      taxpayerClassification:treatment.taxpayerClassification,rule:treatment.rule},rule,
+      Math.min(Date.parse(s.taxPointAt),Date.parse(readAt)),policy.description);
+    const line=source.lines.find(x=>x.chargeLineId===treatment.chargeLineId)!;
+    const amounts=calculateInclusivePpnAmounts(line.grossAmount,policy.applicability,rule.rule.snapshot);
+    if (treatment.taxpayerClassification===s.taxpayerClassification && treatment.rule.ruleId===s.ruleId &&
+        treatment.rule.ruleVersion===s.ruleVersion && treatment.rule.ruleDigest===s.ruleDigest &&
+        treatment.rule.approvalDecisionId===s.ruleDecisionId) primary=true;
+    lineRules.push({treatment,rule,amounts});
+  }
+  if (!primary) throw integrity();
+  return {supplier,lineRules};
+}
+async function validateSources(tx: PoolClient, actor: string, s: CustomerTaxSnapshot): Promise<{buyer:VerifiedBuyerBinding;rule:ApprovedRule;invoiceResolved?:InclusiveResolved}> {
   let policy;
   try {
     uuid(s.id,'id'); version(s.version,'version'); uuid(s.clientId,'clientId'); uuid(s.requestId,'requestId'); uuid(s.buildingId,'buildingId');
     uuid(s.buyerTenantCompanyId,'buyerTenantCompanyId'); uuid(s.createdByUserId,'createdByUserId');
     if (s.previousClassificationId!==null) uuid(s.previousClassificationId,'previousClassificationId');
     point(s.taxDate,s.taxPointAt); amount(s.sourceAmount); uuid(s.transactionEvidenceReferenceId,'transactionEvidenceReferenceId');
-    if (s.currency!=='IDR' || s.amountBasis!=='PPN_EXCLUSIVE') throw integrity();
+    if (s.currency!=='IDR' || !((s.schema==='HANDYMAN_CUSTOMER_TAX_V1' && s.amountBasis==='PPN_EXCLUSIVE' && !s.invoice) ||
+        (s.schema==='HANDYMAN_CUSTOMER_TAX_V2' && s.amountBasis==='PPN_INCLUSIVE' && s.invoice))) throw integrity();
     policy=customerTaxPolicy(s.taxpayerClassification);
     if (s.distinctFromSupplier!==true || s.buyerTenantCompanyId===s.clientId || s.buyerKind!==policy.buyerKind ||
         s.applicability!==policy.applicability || s.documentClass!==policy.documentClass || s.identifierKind!==policy.identifierKind) throw integrity();
@@ -148,6 +216,7 @@ async function validateSources(tx: PoolClient, actor: string, s: CustomerTaxSnap
       buyer.binding.snapshot.buildingId!==s.buildingId) throw stale();
   const rule=await approvedRule(tx,actor,{clientId:s.clientId,taxDate:s.taxDate,taxPointAt:s.taxPointAt,
     taxpayerClassification:s.taxpayerClassification,rule:pins.rule});
+  if (s.schema==='HANDYMAN_CUSTOMER_TAX_V2') return {buyer,rule,invoiceResolved:await validateInclusiveSources(tx,actor,s)};
   return {buyer,rule};
 }
 async function writeTransaction<T>(work: (tx:PoolClient)=>Promise<T>): Promise<T> {
@@ -159,11 +228,13 @@ async function writeTransaction<T>(work: (tx:PoolClient)=>Promise<T>): Promise<T
 /** The maker selects an explicit Finance-approved policy and opaque, externally reviewed evidence references. */
 export async function proposeCustomerTaxClassification(actorInput: string, input: ProposeCustomerTaxClassification): Promise<CustomerTaxView> {
   keys(input,['clientId','requestId','buyer','rule','taxpayerClassification','applicability','taxDate','taxPointAt','currency','amountBasis','sourceAmount',
-    'identifierKind','identifierReferenceId','retail','transactionEvidenceReferenceId','distinctFromSupplier','expectedVersion'],'input');
+    'identifierKind','identifierReferenceId','retail','transactionEvidenceReferenceId','distinctFromSupplier','expectedVersion','invoice'],'input');
   const actor=uuid(actorInput,'actor'),clientId=uuid(input.clientId,'clientId'),requestId=uuid(input.requestId,'requestId');
   const buyer=buyerPin(input.buyer),rule=rulePin(input.rule), dates=point(input.taxDate,input.taxPointAt),sourceAmount=amount(input.sourceAmount);
   const policy=customerTaxPolicy(input.taxpayerClassification);
-  if (input.currency!=='IDR' || input.amountBasis!=='PPN_EXCLUSIVE') throw invalid('currency/amountBasis');
+  if (input.currency!=='IDR' || !['PPN_EXCLUSIVE','PPN_INCLUSIVE'].includes(input.amountBasis)) throw invalid('currency/amountBasis');
+  const invoice=input.amountBasis==='PPN_INCLUSIVE' ? invoiceProposal(input.invoice!) : undefined;
+  if (input.amountBasis==='PPN_EXCLUSIVE' && input.invoice!==undefined) throw invalid('invoice');
   if (input.applicability!==policy.applicability || input.identifierKind!==policy.identifierKind || input.distinctFromSupplier!==true) throw conflict();
   const identifierReferenceId=input.identifierKind==='NONE' ? (input.identifierReferenceId===null ? null : (()=>{throw invalid('identifierReferenceId');})()) :
     uuid(input.identifierReferenceId,'identifierReferenceId');
@@ -186,15 +257,18 @@ export async function proposeCustomerTaxClassification(actorInput: string, input
     const verified=await requireVerifiedBuyerBindingInSnapshot(tx,actor,{clientId,requestId,pin:buyer,at:dates.taxPointAt});
     if (verified.binding.snapshot.buyerKind!==policy.buyerKind || verified.binding.snapshot.buyerTenantCompanyId===clientId) throw conflict();
     await approvedRule(tx,actor,{clientId,...dates,taxpayerClassification:input.taxpayerClassification,rule});
+    const invoiceSnapshot = invoice ? {...invoice,source:await readInclusiveCommercialSource(tx,clientId,requestId,invoice.executionScopeId,dates.taxDate)} : undefined;
+    if (invoiceSnapshot && invoiceSnapshot.source.grossAmount!==sourceAmount) throw conflict();
     const id=randomUUID();
-    const snapshot:CustomerTaxSnapshot={schema:'HANDYMAN_CUSTOMER_TAX_V1',id,version:head.version+1,previousClassificationId:head.classification_id,
+    const snapshot:CustomerTaxSnapshot={schema:invoiceSnapshot?'HANDYMAN_CUSTOMER_TAX_V2':'HANDYMAN_CUSTOMER_TAX_V1',id,version:head.version+1,previousClassificationId:head.classification_id,
       clientId,buildingId,requestId,buyerTenantCompanyId:verified.binding.snapshot.buyerTenantCompanyId,buyerKind:verified.binding.snapshot.buyerKind,
       buyerBindingId:buyer.bindingId,buyerBindingVersion:buyer.bindingVersion,buyerBindingDigest:buyer.bindingDigest,
       buyerDecisionId:buyer.decisionId,buyerDecisionDigest:buyer.decisionDigest,ruleId:rule.ruleId,ruleVersion:rule.ruleVersion,
       ruleDigest:rule.ruleDigest,ruleDecisionId:rule.approvalDecisionId,taxpayerClassification:input.taxpayerClassification,
-      applicability:input.applicability,...dates,currency:'IDR',amountBasis:'PPN_EXCLUSIVE',sourceAmount,documentClass:policy.documentClass,identifierKind:policy.identifierKind,
+      applicability:input.applicability,...dates,currency:'IDR',amountBasis:input.amountBasis,sourceAmount,documentClass:policy.documentClass,identifierKind:policy.identifierKind,
       identifierReferenceId,retailSellerEligible,retailDirect,retailFinalConsumption,retailForResale,retailEvidenceReferenceId,transactionEvidenceReferenceId,
-      distinctFromSupplier:true,createdByUserId:actor};
+      distinctFromSupplier:true,createdByUserId:actor,...(invoiceSnapshot?{invoice:invoiceSnapshot}:{})};
+    if (invoiceSnapshot) await validateSources(tx,actor,snapshot);
     const result=await tx.query(`INSERT INTO handyman_customer_tax_classifications(id,request_id,client_id,building_id,version,previous_classification_id,
       buyer_binding_id,buyer_decision_id,rule_id,rule_decision_id,snapshot,digest,created_by_user_id)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING snapshot,digest,created_at`,
@@ -232,7 +306,7 @@ export async function decideCustomerTaxClassification(actorInput: string, input:
   });
 }
 
-type ResolvedCustomerTax = VerifiedCustomerTaxClassification & { buyer: VerifiedBuyerBinding; rule: ApprovedRule };
+type ResolvedCustomerTax = VerifiedCustomerTaxClassification & { buyer: VerifiedBuyerBinding; rule: ApprovedRule; invoiceResolved?: InclusiveResolved };
 /** Trusted caller must hold one repeatable-read snapshot. */
 export async function requireVerifiedCustomerTaxInSnapshot(tx: PoolClient, actorInput:string,
   input:{clientId:string;requestId:string;pin:CustomerTaxClassificationPin}):Promise<ResolvedCustomerTax> {

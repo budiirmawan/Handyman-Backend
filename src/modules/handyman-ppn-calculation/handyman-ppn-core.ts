@@ -375,3 +375,41 @@ export function calculateCustomerPpnFromResolved(input: NormalizedCustomerPpnInp
 // Internal helpers retain the same validation and safe, identifier-free provenance for V2 cases.
 export { pin as normalizePpnIdentityPin, money as parsePpnWholeRupiah,
   identifierClash as ppnIdentityIdentifierClash, identityReference as ppnIdentityReference };
+
+/** Whole-rupiah, explicitly approved inclusive methods only. The approved
+ * description defines every rounding stage; the final equality is mandatory,
+ * not repaired by silently changing the agreed gross or adding PPN to it. */
+export function calculateInclusivePpnAmounts(sourceAmount: string, applicability: PpnApplicability,
+  p: HandymanTaxRuleSnapshot): { consideration: string; dpp: string; ppn: string } {
+  const gross=money(sourceAmount), r=rate(p.ratePercent);
+  if (!['HALF_UP','HALF_EVEN','DOWN','UP','NO_ROUNDING'].includes(p.roundingMode) ||
+      (p.roundingMode==='NO_ROUNDING' ? p.roundingScale!==null : p.roundingScale!==0)) throw unsupported('IDR rounding policy');
+  let consideration:bigint, dpp:bigint, ppn:bigint;
+  if (p.basisMethodCode==='PPN01B_INCLUSIVE_FULL_V1') {
+    const desc='P01B_V1|SOURCE=INCLUSIVE|NET=ROUND(SOURCE/(1+RATE/100))|DPP=NET|PPN=ROUND(DPP*RATE/100)|TOTAL=NET+PPN|VERIFY=SOURCE';
+    if (applicability!=='TAXABLE' || p.basisDescription!==desc) throw unsupported('inclusive DPP method/description');
+    consideration=round(gross*r.denominator,r.denominator+r.numerator,p.roundingMode);
+    dpp=consideration; ppn=round(dpp*r.numerator,r.denominator,p.roundingMode);
+  } else {
+    const ratio=/^PPN01B_INCLUSIVE_RATIO_([1-9]\d{0,6})_([1-9]\d{0,6})_V1$/.exec(p.basisMethodCode);
+    if (ratio) {
+      const n=BigInt(ratio[1]),d=BigInt(ratio[2]);
+      const desc=`P01B_V1|SOURCE=INCLUSIVE|NET=ROUND(SOURCE/(1+${n}/${d}*RATE/100))|DPP=ROUND(NET*${n}/${d})|PPN=ROUND(DPP*RATE/100)|TOTAL=NET+PPN|VERIFY=SOURCE`;
+      if (n>1_000_000n || d>1_000_000n || applicability!=='TAXABLE' || p.basisDescription!==desc)
+        throw unsupported('inclusive DPP ratio/description');
+      consideration=round(gross*d*r.denominator,d*r.denominator+n*r.numerator,p.roundingMode);
+      dpp=round(consideration*n,d,p.roundingMode); ppn=round(dpp*r.numerator,r.denominator,p.roundingMode);
+    } else if (p.basisMethodCode==='PPN01B_INCLUSIVE_EXEMPT_FULL_V1') {
+      if (applicability!=='EXEMPT' || r.numerator!==0n ||
+          p.basisDescription!=='P01B_V1|APPLICABILITY=EXEMPT|SOURCE=INCLUSIVE|NET=SOURCE|DPP=SOURCE|PPN=0|TOTAL=SOURCE') throw unsupported('inclusive exemption');
+      consideration=gross; dpp=gross; ppn=0n;
+    } else if (p.basisMethodCode==='PPN01B_INCLUSIVE_NON_TAXABLE_V1') {
+      if (applicability!=='NON_TAXABLE' || r.numerator!==0n ||
+          p.basisDescription!=='P01B_V1|APPLICABILITY=NON_TAXABLE|SOURCE=INCLUSIVE|NET=SOURCE|DPP=0|PPN=0|TOTAL=SOURCE') throw unsupported('inclusive non-taxable treatment');
+      consideration=gross; dpp=0n; ppn=0n;
+    } else throw unsupported('inclusive DPP method');
+  }
+  if (consideration+ppn!==gross) throw unsupported('inconsistent inclusive amount and approved rounding');
+  return {consideration:decimal(consideration),dpp:decimal(dpp),ppn:decimal(ppn)};
+}
+export { validateRule as validateApprovedPpnRule };
