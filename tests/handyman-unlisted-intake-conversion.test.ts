@@ -28,6 +28,7 @@ import { areaService } from '../src/modules/areas';
 import { credentialService } from '../src/modules/auth';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
+import { proposeHandymanBuyerBinding, decideHandymanBuyerBinding, requireVerifiedHandymanBuyerBinding } from '../src/modules/handyman-buyer-binding';
 import { clientService } from '../src/modules/clients';
 import { floorService } from '../src/modules/floors';
 import { HANDYMAN_CARE_BUILDING_PERMISSION } from '../src/modules/handyman-care-authority';
@@ -588,6 +589,34 @@ describe('CR-HM-MANUAL-QUOTATION-01 — PART 02 Unlisted Intake → Formal Reque
     assert.equal(convertedEvent.building_id, f.building.id);
     assert.equal(convertedEvent.metadata.serviceCatalogId, null);
     assert.equal(convertedEvent.metadata.handymanRequestId, conversion.requestId);
+  });
+
+  it('02A-B binds a reviewed buyer to a real Care unlisted conversion without changing it', async () => {
+    const f = await createRealmFixture();
+    await db().query('UPDATE tenant_companies SET legal_name=$2 WHERE id=$1', [f.company.id, 'PT Manual Buyer']);
+    const { caseId } = await readyCase(f, 'buyer');
+    const converted = await convert(f, caseId, { idempotencyKey: `buyer-${f.tag}` });
+    assert.equal(converted.status, 201, JSON.stringify(converted.body));
+    const requestId = converted.body.data.conversion.requestId as string;
+    const before = await requestRow(requestId);
+    const maker = await createUserWithPermissionsAndBuildings({ displayName: 'Finance maker',
+      permissionCodes: ['handyman.finance.manage', 'handyman.finance.read'], buildingIds: [f.building.id] });
+    const checker = await createUserWithPermissionsAndBuildings({ displayName: 'Finance checker',
+      permissionCodes: ['handyman.finance.read', 'handyman.tax_identity.approve'], buildingIds: [f.building.id] });
+    const binding = await proposeHandymanBuyerBinding(maker.userId, { clientId: f.client.id, requestId,
+      buyerTenantCompanyId: f.company.id, expectedVersion: null, evidenceSource: 'CARE_CASE', evidenceReference: caseId });
+    const decision = await decideHandymanBuyerBinding(checker.userId, { clientId: f.client.id, requestId,
+      bindingId: binding.snapshot.id, bindingVersion: binding.snapshot.version, bindingDigest: binding.digest,
+      decision: 'VERIFY', evidenceSource: 'FINANCE_REVIEW', evidenceReference: caseId });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const verified = await requireVerifiedHandymanBuyerBinding(maker.userId, { clientId: f.client.id, requestId,
+      pin: { bindingId: binding.snapshot.id, bindingVersion: binding.snapshot.version, bindingDigest: binding.digest,
+        decisionId: decision.id, decisionDigest: decision.decisionDigest }, at: new Date().toISOString() });
+    assert.equal(verified.binding.snapshot.buyerTenantCompanyId, f.company.id);
+    assert.equal(verified.binding.snapshot.unlistedIntakeCaseId, caseId);
+    assert.equal(verified.binding.snapshot.tenantPicId, f.pic.id);
+    assert.equal(verified.binding.snapshot.requestCreatedByUserId, f.opsWriter.userId);
+    assert.deepEqual(await requestRow(requestId), before);
   });
 
   it('(2) replays the identical command and refuses any second conversion of the same case', async () => {

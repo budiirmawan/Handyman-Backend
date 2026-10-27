@@ -123,7 +123,7 @@ async function waitForBlock(waiter: number, blocker: number) {
 
 describe('CR-HM-TAX-INDONESIA-01 PART 01C Finance rule governance', () => {
   it('adds an unassigned checker capability and safely migrates an empty registry down and up', async () => {
-    assert.deepEqual(migrations.slice(-2).map(m => m.id), ['0496_handyman_tax_identity_approval','0497_handyman_tax_rule_governance']);
+    assert.deepEqual(migrations.slice(-3).map(m => m.id), ['0496_handyman_tax_identity_approval','0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings']);
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.tax_rule.approve'));
     const grants = async () => (await q(`SELECT count(*)::int AS n FROM role_permission_assignments rpa
       JOIN permissions p ON p.id=rpa.permission_id WHERE p.code='handyman.tax_rule.approve' AND rpa.status='ACTIVE'`)).rows[0].n;
@@ -132,8 +132,9 @@ describe('CR-HM-TAX-INDONESIA-01 PART 01C Finance rule governance', () => {
     try { await tx.query('BEGIN'); await seedFoundationAccess(tx); await tx.query('COMMIT'); }
     finally { tx.release(); }
     assert.equal(await grants(),0);
+    assert.equal(await migrateDown(pool),'0498_handyman_request_buyer_bindings');
     assert.equal(await migrateDown(pool),'0497_handyman_tax_rule_governance');
-    assert.deepEqual(await migrateUp(pool),['0497_handyman_tax_rule_governance']);
+    assert.deepEqual(await migrateUp(pool),['0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings']);
     assert.ok(await permissionRepository.findByCode('handyman.tax_rule.approve'));
   });
 
@@ -384,6 +385,7 @@ describe('CR-HM-TAX-INDONESIA-01 PART 01C Finance rule governance', () => {
   });
 
   it('refuses destructive rollback of populated rule or approval history', async () => {
+    assert.equal(await migrateDown(pool),'0498_handyman_request_buyer_bindings');
     await assert.rejects(migrateDown(pool),/Refusing to remove populated tax rule history/);
     assert.equal((await q("SELECT count(*)::int AS n FROM schema_migrations WHERE id='0497_handyman_tax_rule_governance'")).rows[0].n,1);
   });

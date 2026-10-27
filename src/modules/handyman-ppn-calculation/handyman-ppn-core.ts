@@ -4,7 +4,7 @@ import { stableJson } from '../../shared/stable-json';
 import { isValidUuid } from '../clients';
 import type { ApprovedHandymanTaxIdentity, HandymanTaxIdentityOwner } from '../handyman-tax-identity';
 import type { TaxRuleResolution } from '../handyman-tax-rules';
-import type { ApprovedPpnBreakdown, CalculateApprovedPpnInput, PpnApplicability, PpnIdentityPin, PpnIdentityReference } from './handyman-ppn.types';
+import type { ApprovedPpnBreakdown, CalculateApprovedPpnInput, CalculateCustomerPpnInput, PpnApplicability, PpnIdentityPin, PpnIdentityReference } from './handyman-ppn.types';
 
 type PpnCode = 'HANDYMAN_PPN_INVALID' | 'HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE' | 'HANDYMAN_PPN_MISSING_RULE' | 'HANDYMAN_PPN_AMBIGUOUS_RULE' |
   'HANDYMAN_PPN_NOT_APPROVED' | 'HANDYMAN_PPN_INTEGRITY_ERROR' | 'HANDYMAN_PPN_UNSUPPORTED' | 'HANDYMAN_PPN_IDENTITY_MISMATCH';
@@ -84,7 +84,7 @@ export function normalizePpnInput(input: CalculateApprovedPpnInput): NormalizedP
     'applicability','taxpayerClassification','supplier','recipient','rule'],'input');
   const clientId = uuid(input.clientId,'clientId');
   if (input.transactionContext !== 'CUSTOMER_SERVICE_BILLING' && input.transactionContext !== 'BM_COMMISSION') throw invalid('transactionContext');
-  // 0495 has no approved customer owner or verified customer/transaction link. Never substitute a BM.
+  // Legacy recipient pins cannot represent a customer; the request-bound path still needs approved buyer tax facts.
   if (input.transactionContext === 'CUSTOMER_SERVICE_BILLING') throw customerUnavailable();
   const taxDate = date(input.taxDate,'taxDate'), taxPointAt = instant(input.taxPointAt,'taxPointAt');
   if (new Date(new Date(taxPointAt).getTime() + 7 * 3_600_000).toISOString().slice(0,10) !== taxDate) throw invalid('taxDate/taxPointAt');
@@ -101,6 +101,26 @@ export function normalizePpnInput(input: CalculateApprovedPpnInput): NormalizedP
   if (supplier.owner.kind !== 'BM_BENEFICIARY' || recipient.owner.kind !== 'HANDYMAN_ISSUER') throw mismatch();
   if (supplier.profileId === recipient.profileId) throw mismatch();
   return { ...input,clientId,taxDate,taxPointAt,supplier,recipient,rule,sourceRupiah:money(input.sourceAmount) };
+}
+/** Validate the prospective customer boundary without inventing a customer tax profile. */
+export function normalizeCustomerPpnInput(input: CalculateCustomerPpnInput): CalculateCustomerPpnInput {
+  keys(input,['clientId','transactionContext','taxDate','taxPointAt','currency','amountBasis','sourceAmount',
+    'applicability','taxpayerClassification','supplier','requestId','buyer','rule'],'input');
+  const clientId=uuid(input.clientId,'clientId'), requestId=uuid(input.requestId,'requestId');
+  if(input.transactionContext!=='CUSTOMER_SERVICE_BILLING')throw invalid('transactionContext');
+  const taxDate=date(input.taxDate,'taxDate'),taxPointAt=instant(input.taxPointAt,'taxPointAt');
+  if(new Date(new Date(taxPointAt).getTime()+7*3_600_000).toISOString().slice(0,10)!==taxDate)throw invalid('taxDate/taxPointAt');
+  if(input.currency!=='IDR')throw invalid('currency');
+  if(input.amountBasis!=='PPN_EXCLUSIVE')throw unsupported('amount basis');
+  if(!['TAXABLE','EXEMPT','NON_TAXABLE'].includes(input.applicability))throw invalid('applicability');
+  if(typeof input.taxpayerClassification!=='string' || !/^[A-Z][A-Z0-9_]{1,63}$/.test(input.taxpayerClassification))throw invalid('taxpayerClassification');
+  money(input.sourceAmount);
+  const supplier=pin(input.supplier,'supplier');
+  if(supplier.owner.kind!=='HANDYMAN_ISSUER' || supplier.owner.clientId!==clientId)throw mismatch();
+  keys(input.rule,['ruleId','ruleVersion','ruleDigest','approvalDecisionId'],'rule');
+  const rule={ruleId:uuid(input.rule.ruleId,'rule.ruleId'),ruleVersion:version(input.rule.ruleVersion,'rule.ruleVersion'),
+    ruleDigest:digest(input.rule.ruleDigest,'rule.ruleDigest'),approvalDecisionId:uuid(input.rule.approvalDecisionId,'rule.approvalDecisionId')};
+  return {...input,clientId,requestId,taxDate,taxPointAt,supplier,rule};
 }
 function ms(value: unknown): number {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value)) throw integrity();
@@ -143,6 +163,10 @@ function validateIdentity(pinned: PpnIdentityPin, id: ApprovedHandymanTaxIdentit
       (p.taxpayerKind === 'INDIVIDUAL' && !['RESIDENT','NON_RESIDENT'].includes(p.individualResidency ?? ''))) throw mismatch();
   if (ms(d.occurredAt) > cutoff || ms(d.approvedFrom) > at) throw notApproved();
   if (ms(p.effectiveFrom) > at || (w.to !== null && at >= ms(w.to)) || (d.approvedTo !== null && at >= ms(d.approvedTo))) throw notApproved();
+}
+export function validateApprovedPpnIdentityPin(pinned: PpnIdentityPin, identity: ApprovedHandymanTaxIdentity,
+  taxPointAt: string, readAt: string): void {
+  const at=ms(taxPointAt);validateIdentity(pinned,identity,at,Math.min(at,ms(readAt)));
 }
 function identifierClash(a: ApprovedHandymanTaxIdentity, b: ApprovedHandymanTaxIdentity): boolean {
   const x = a.snapshot.identifierValue!, y = b.snapshot.identifierValue!;

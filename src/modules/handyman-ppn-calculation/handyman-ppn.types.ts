@@ -1,3 +1,4 @@
+import type { BuyerBindingPin } from '../handyman-buyer-binding';
 import type { HandymanTaxIdentityOwner, TaxIdentityApprovalEvent } from '../handyman-tax-identity';
 import type { HandymanTaxRoundingMode, HandymanTaxTransactionContext, TaxRuleApprovalEvent } from '../handyman-tax-rules';
 
@@ -17,7 +18,7 @@ export type PpnRulePin = Readonly<{
 }>;
 export type CalculateApprovedPpnInput = Readonly<{
   clientId: string;
-  /** CUSTOMER_SERVICE_BILLING fails closed until approved customer identity and transaction binding exist. */
+  /** Legacy customer requests remain blocked; use CalculateCustomerPpnInput for the verified-buyer boundary. */
   transactionContext: HandymanTaxTransactionContext;
   /** Explicit Indonesian calendar tax date and its actual zoned tax-point instant. */
   taxDate: string;
@@ -32,6 +33,11 @@ export type CalculateApprovedPpnInput = Readonly<{
   supplier: PpnIdentityPin;
   recipient: PpnIdentityPin;
   rule: PpnRulePin;
+}>;
+/** Customer context can now name a verified request buyer without impersonating a BM.
+ * Calculation remains blocked until a separately governed buyer tax identity exists. */
+export type CalculateCustomerPpnInput = Omit<CalculateApprovedPpnInput, 'transactionContext' | 'recipient'> & Readonly<{
+  transactionContext: 'CUSTOMER_SERVICE_BILLING'; requestId: string; buyer: BuyerBindingPin;
 }>;
 export type PpnIdentityReference = Readonly<{
   ownerKind: HandymanTaxIdentityOwner['kind']; ownerId: string; clientId: string;

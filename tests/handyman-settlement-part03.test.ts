@@ -164,6 +164,7 @@ describe('CR-HM-14 PART 03 settlement and internal reconciliation', () => {
       try { await q(`DELETE FROM ${table} WHERE id=$1`, [row]); }
       finally { await q(`ALTER TABLE ${table} ENABLE TRIGGER ${trigger}`); }
     }
+    assert.equal(await migrateDown(pool), '0498_handyman_request_buyer_bindings');
     assert.equal(await migrateDown(pool), '0497_handyman_tax_rule_governance');
     assert.equal(await migrateDown(pool), '0496_handyman_tax_identity_approval');
     assert.equal(await migrateDown(pool), '0495_handyman_tax_identity_profiles');
@@ -172,7 +173,7 @@ describe('CR-HM-14 PART 03 settlement and internal reconciliation', () => {
     const legacyBefore = (await q('SELECT * FROM handyman_bm_fee_beneficiary_definitions WHERE agreement_version_id=(SELECT agreement_version_id FROM handyman_entitlement_facts WHERE id=$1)', [f.derived.bmFee.id])).rows;
     assert.deepEqual(await migrateUp(pool), ['0493_handyman_bm_beneficiary_building_coverage',
       '0494_handyman_distinct_bm_entitlements', '0495_handyman_tax_identity_profiles',
-      '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance']);
+      '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings']);
     assert.equal((await q(`SELECT count(*)::int AS n FROM handyman_bm_entitlement_guards
       WHERE transaction_id=(SELECT transaction_id FROM handyman_entitlement_facts WHERE id=$1)`, [f.derived.bmFee.id])).rows[0].n, 0,
     'upgrade never backfills legacy settlement history');

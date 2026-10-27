@@ -29,9 +29,9 @@ verify those relationships, eligibility and legal facts before any financial use
 not a dedicated tenant/customer tax identity. `CUSTOMER_SERVICE_BILLING` is
 therefore **blocked** with `HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE`, even
 if a customer-context rule and BM identity have been approved: a BM is never
-substituted for a customer. Enabling it requires
-an approved customer identity and verified customer/transaction-party
-relationship in a future governed part. For the standalone BM calculation,
+substituted for a customer. PART 02A-B adds a separately verified request-buyer
+binding, but an approved buyer tax identity and taxpayer classification remain
+missing; see `CR-HM-TAX-INDONESIA-02-PART-02A-B.md`. For the standalone BM calculation,
 the BM is the supplier and issuer is the recipient; both require their own
 approved 0495 identity under the same Client. This does not bind them to an
 actual commission, Building or entitlement. Self supply and obvious
