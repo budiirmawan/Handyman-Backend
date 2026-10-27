@@ -1,3 +1,4 @@
+import { createOfficialBastDocument } from './handyman-bast-document.service';
 import { requireVerifiedCompletionForIssue } from '../handyman-completion-manifest/handyman-completion-manifest.service';
 import { resolveCareWorkspacePrincipal } from '../handyman-care-workspace/care-workspace.service';
 import { handymanExecutionScopeRepository } from '../handyman-quotations/handyman-execution-scope.repository';
@@ -302,6 +303,9 @@ async function applyPart01Transition(
       actorUserId: actor,
       metadata: completion ? { ...voidReasonMetadata, completion } : voidReasonMetadata,
     });
+    if (action === 'ISSUE' && completion) {
+      await createOfficialBastDocument(client, updated, event, completion);
+    }
     return { bast: updated, event, replayed: false };
   });
 }

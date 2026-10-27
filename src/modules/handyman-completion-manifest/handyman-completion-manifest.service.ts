@@ -24,13 +24,13 @@ type ApprovedLine = {
   sourceItemId: string | null; approvedQty: string; originalApprovedQty: string;
   approvedVariationVersion: number | null;
 };
-type Proof = {
+export type Proof = {
   source: 'CREW_DECLARATION' | 'ADD_LABOR_EXECUTION'; id: string;
   sessionId: string; assignmentId: string; leadWorkerId: string; leadUserId: string;
   actualQty: string; evidenceId: string; evidenceReference: string; evidenceSha256: string;
 };
-type ManifestItem = ApprovedLine & { actualQty: string; status: 'COMPLETED' | 'PARTIAL' | 'NOT_PERFORMED'; execution: Proof[] };
-type ManifestSnapshot = { protocol: string; executionScopeId: string; requestId: string; clientId: string;
+export type ManifestItem = ApprovedLine & { actualQty: string; status: 'COMPLETED' | 'PARTIAL' | 'NOT_PERFORMED'; execution: Proof[] };
+export type ManifestSnapshot = { protocol: string; executionScopeId: string; requestId: string; clientId: string;
   buildingId: string; approvedQuotationVersionId: string; approvedVariations: object[];
   sessions: { id: string; completedAt: string; completionEventId: string }[]; items: ManifestItem[] };
 

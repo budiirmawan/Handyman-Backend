@@ -1,3 +1,4 @@
+import { createOfficialBastDocumentRouter } from '../modules/handyman-bast/handyman-bast-document.routes';
 import { createHandymanCompletionManifestRouter } from '../modules/handyman-completion-manifest/handyman-completion-manifest.routes';
 import { createHandymanInspectionWorkLinkRouter } from '../modules/handyman-requests/handyman-inspection-work-link.routes';
 import { createHandymanTenantReceiptRouter } from '../modules/handyman-tenant-receipts/handyman-tenant-receipt.routes';
@@ -925,6 +926,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanMaterialExecutionApiRouter()); // CR-HM-09 PART 06 — material execution surface
   router.use(createHandymanCompletionManifestRouter());
   router.use(createHandymanEvidenceQcApiRouter()); // CR-HM-10 PART 06 — evidence/QC/defect surface
+  router.use(createOfficialBastDocumentRouter());
   router.use(createHandymanBastApiRouter()); // CR-HM-17 GAP PART 04 — CR-HM-11 BAST read & sign-off surface
   router.use(createHandymanBastWorkerApiRouter()); // CR-HM-BAST-HTTP-01 — authorized worker BAST PREPARE/ISSUE/VOID transport
   router.use(createHandymanCustomerLedgerApiRouter()); // CR-HM-17 GAP PART 05 — CR-HM-13 customer ledger & payment surface

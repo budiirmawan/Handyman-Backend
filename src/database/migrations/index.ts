@@ -1,3 +1,4 @@
+import { migration0516HandymanBastOfficialDocuments } from './0516_handyman_bast_official_documents';
 import { migration0515HandymanCompletionManifest } from './0515_handyman_completion_manifest';
 import { migration0514HandymanVariationDeliveryEvents } from './0514_handyman_variation_delivery_events';
 import { migration0513HandymanVariationOfferDocuments } from './0513_handyman_variation_offer_documents';
@@ -1078,4 +1079,5 @@ export const migrations: readonly Migration[] = [
   migration0513HandymanVariationOfferDocuments,
   migration0514HandymanVariationDeliveryEvents,
   migration0515HandymanCompletionManifest,
+  migration0516HandymanBastOfficialDocuments,
 ];

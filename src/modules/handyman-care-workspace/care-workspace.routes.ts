@@ -1,3 +1,4 @@
+import { downloadOfficialBastDocumentForCare } from '../handyman-bast/handyman-bast-document.service';
 import { downloadQuotationDocumentForCare } from '../handyman-quotations/handyman-quotation-document.service';
 import { downloadVariationOfferDocumentForCare } from '../handyman-scope-variations/handyman-variation-offer-document.service';
 import { recordWorkspaceCareDownload } from '../handyman-quotations/handyman-quotation-delivery.service';
@@ -141,6 +142,20 @@ export function createCareWorkspaceRouter(): Router {
       if (!match) throw workspaceUnauthorized();
       sendSuccess(res, await getCareWorkspaceOperationalProjection(
         match[1], req.params.requestId, req.query, req.body));
+    } catch (error) { next(error); }
+  });
+  router.get('/handyman/care/requests/:requestId/basts/:bastId/document.pdf', async (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const match = /^Bearer\s+(\S+)$/i.exec(req.header('authorization') ?? '');
+      if (!match) throw workspaceUnauthorized();
+      if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length)) {
+        throw AppError.validation('BAST document download does not accept a body.');
+      }
+      const document = await downloadOfficialBastDocumentForCare(match[1], req.params.requestId, req.params.bastId, req.query);
+      res.setHeader('X-BAST-Document-Id', document.id);
+      res.setHeader('X-BAST-Document-Number', document.number);
+      sendQuotationDocumentPdf(res, document);
     } catch (error) { next(error); }
   });
   router.get('/handyman/care/requests/:requestId/variations/:variationId/offer.pdf', async (req, res, next) => {

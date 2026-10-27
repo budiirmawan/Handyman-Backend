@@ -292,6 +292,15 @@ async function readOperationalProjection(
             'id', b.id, 'serviceRequestId', s."requestId",
             'executionScopeId', b.execution_scope_id,
             'status', b.status, 'issuedAt', b.issued_at,
+            'officialDocument', (SELECT jsonb_build_object(
+              'id', d.id, 'number', d.document_number, 'issuedAt', d.issued_at,
+              'pdfSha256', d.pdf_sha256,
+              'downloadPath', '/api/v1/handyman/care/requests/' || s."requestId"::text ||
+                '/basts/' || b.id::text || '/document.pdf')
+              FROM handyman_bast_official_documents d WHERE d.bast_id=b.id
+                AND d.execution_scope_id=b.execution_scope_id AND d.client_id=s."clientId"
+                AND d.request_id=s."requestId" AND d.building_id=s."buildingId"
+                AND d.tenant_company_id=s."tenantCompanyId"),
             'issuerUserId', (SELECT be.actor_user_id FROM handyman_bast_events be
               WHERE be.bast_id = b.id AND be.event_type = 'ISSUE'
               ORDER BY be.occurred_at DESC, be.id DESC LIMIT 1),
