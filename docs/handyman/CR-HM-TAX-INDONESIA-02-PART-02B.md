@@ -2,46 +2,26 @@
 
 ## Boundary and authority
 
-`readHandymanBmCommissionSource(actor, { clientId, entitlementId })` reads and
-pins one existing, immutable `BM_FEE` / `EARNED` fact. It does not create an
-entitlement. `calculateApprovedHandymanBmWithholding(actor, input)` requires
-that source checksum and gross, `IDR`, the explicit
-`EARNED_BM_COMMISSION` basis, a Jakarta calendar tax date, a zoned tax-point
-instant, an explicit treatment and classification, and the exact 0495/0496
-BM identity and 0497 rule IDs, versions, digests and approval-decision IDs.
-Authenticated active Finance read permission **and access to the source's
-exact Building** are required. No HTTP route is added.
+PART 02C-A replaces the original caller-asserted BM adapter. The current
+`calculateApprovedHandymanBmWithholding` accepts only Client/entitlement and a
+current independently approved BM tax case pin; it does not accept a caller's
+treatment, classification, amount or rule as calculation overrides. The
+verified source, separate PPN/PPh approvals and exact case decision are
+re-resolved in one read-only repeatable-read snapshot. See
+`CR-HM-TAX-INDONESIA-02-PART-02C-A.md` for permissions, evidence, provenance,
+versioning and the precise input contract.
 
-The calculator uses one read-only repeatable-read database snapshot. It
-re-resolves the verified 0493 counterparty, verification and coverage at the
-ledger posting instant, the source's exact commercial agreement/version,
-DEFAULT LABOR_ONLY rule and term, the approved identity of **that same**
-counterparty, and the Client's `BM_COMMISSION` / `PPH_WITHHOLDING` rule for
-the supplied classification and tax date. Both approvals must be independent,
-intact and effective, and their checker decisions must be no later than both
-the tax point and the database read. The tax point cannot precede ledger
-posting. Jakarta's calendar date must match that instant. A future tax point is
-only a forecast: it does not establish that the event actually occurred.
+`readHandymanBmCommissionSource(actor, { clientId, entitlementId })` still
+reads and pins an existing immutable `BM_FEE` / `EARNED` fact; it does not
+create one. The 02B pure core validates supplied snapshots and math but is
+not a trusted authority adapter. Its `CALLER_ASSERTED_NOT_INDEPENDENTLY_VERIFIED`
+label applies only to that pure projection; the public BM boundary now
+returns `INDEPENDENTLY_FINANCE_APPROVED` only after case verification.
 
-Output contains gross commission, taxable withholding basis, configured
-classification/rate, withheld PPh, projected net, rounding and immutable
-provenance. `authority` is `READ_ONLY_PROJECTION`, never an instruction to
-pay, settle, issue an invoice or make a fiscal record. The pure core only
-checks supplied snapshots; only the database adapter establishes their
-provenance. No rows are written, no statutory rates are seeded, no existing
-financial facts are modified, and the 0494 distinct-BM fiscal/settlement guards
-remain in force.
-
-**Applicability limitation:** an approved 0497 rule approves its defined case,
-not the selection of that case for each particular commission. The caller must
-obtain a separate qualified Finance determination that this exact case applies
-to this exact beneficiary and transaction. This adapter checks the identity
-category, treatment, pinned rule and approved descriptions; it cannot verify
-that transaction-specific legal determination and returns
-`caseApplicability: CALLER_ASSERTED_NOT_INDEPENDENTLY_VERIFIED`. It does not
-infer PPh 23, any universal rate, exemption, residency, PKP consequence, tax
-liability, treaty eligibility or document obligation. Further governed binding
-is necessary before operational use.
+Output is a read-only projection, never a payment or fiscal authorization.
+No rate, residency, treatment, legal obligation or case is inferred. A qualified
+Finance maker and separate checker must independently review each transaction
+and each tax; opaque evidence references do not prove the evidence exists.
 
 ## Immutable source and replay
 

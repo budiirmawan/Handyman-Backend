@@ -288,9 +288,10 @@ describe('PART 02A-B verified request buyer binding',()=>{
     await q(`INSERT INTO handyman_request_parties(id,client_id,request_id,party_role,tenant_company_id,created_by_user_id)
       VALUES($1,$2,$3,'COST_RESPONSIBILITY',$4,$5)`,[id(),f.clientId,f.requestId,f.tenantId,admin]);
     await assert.rejects(resolve(f,next,approved),code('HANDYMAN_BUYER_STALE'));
+    assert.equal(await migrateDown(pool), '0500_handyman_bm_commission_tax_cases');
     assert.equal(await migrateDown(pool),'0499_handyman_customer_tax_classifications');
     await assert.rejects(migrateDown(pool),/Refusing to remove populated buyer binding history/);
-    assert.deepEqual(await migrateUp(pool),['0499_handyman_customer_tax_classifications']);
+    assert.deepEqual(await migrateUp(pool),['0499_handyman_customer_tax_classifications', '0500_handyman_bm_commission_tax_cases']);
   });
   it('connects a verified buyer and separately approved supplier to the PPN boundary without issuing an invoice',async()=>{
     const f=await fixture('LEGAL_ENTITY',true),b=await proposeHandymanBuyerBinding(f.maker,proposal(f)),d=await verify(f,b),supplier=await supplierPin(f);

@@ -1,0 +1,366 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm } from 'node:fs/promises';
+import { after, before, describe, it } from 'node:test';
+import EmbeddedPostgres from 'embedded-postgres';
+import type { Pool } from 'pg';
+import { closePool, initDatabase, migrateDown, migrateUp } from '../src/database';
+import { migrations } from '../src/database/migrations';
+import { seedFoundationAccess, UNASSIGNED_BY_DEFAULT_PERMISSION_CODES } from '../src/database/seeds/foundation-access.seed';
+import { createAdminUser } from './helpers/access';
+import { bindVerifiedTestBm } from './helpers/handyman-bm-coverage';
+import { baseFixture, crewFixture, initHandymanFixtures } from './helpers/handyman-fixtures';
+import { buildingService } from '../src/modules/buildings';
+import { buildingAssignmentService } from '../src/modules/building-assignments';
+import { permissionRepository, permissionService } from '../src/modules/permissions';
+import { roleService } from '../src/modules/roles';
+import { userService } from '../src/modules/users';
+import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
+import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
+import { prepareHandymanCommercialAgreement, activateHandymanCommercialAgreementVersion } from '../src/modules/handyman-commercial-agreements';
+import { openHandymanCustomerTransaction, composeHandymanChargeLine } from '../src/modules/handyman-customer-transactions';
+import { adjustHandymanCustomerLedger } from '../src/modules/handyman-customer-ledger-corrections';
+import { deriveHandymanFinancialEntitlements } from '../src/modules/handyman-financial-entitlements';
+import { updateHandymanDocumentIssuerProfile } from '../src/modules/handyman-documents/handyman-document-issuer.service';
+import { captureHandymanTaxIdentity, closeHandymanTaxIdentity, decideHandymanTaxIdentityApproval, submitHandymanTaxIdentityForApproval,
+  type HandymanTaxIdentityOwner, type HandymanTaxIdentityView } from '../src/modules/handyman-tax-identity';
+import { closeHandymanTaxRule, createHandymanTaxRule, decideHandymanTaxRule, submitHandymanTaxRule, type CreateHandymanTaxRule } from '../src/modules/handyman-tax-rules';
+import { readHandymanBmCommissionSource, calculateApprovedHandymanBmWithholding } from '../src/modules/handyman-pph-calculation';
+import { calculateApprovedHandymanPpn } from '../src/modules/handyman-ppn-calculation';
+import { decideHandymanBmTaxCase, proposeHandymanBmTaxCase, requireApprovedHandymanBmTaxCase,
+  type BmTaxCaseDecision, type BmTaxCaseView, type ProposeBmTaxCaseInput } from '../src/modules/handyman-bm-tax-case';
+import { requireApprovedBmTaxCaseInSnapshot } from '../src/modules/handyman-bm-tax-case/handyman-bm-tax-case.service';
+import { hash } from '../src/modules/handyman-pph-calculation/handyman-pph-core';
+
+const DIR='/tmp/hm-bm-tax-02ca-pg',PORT=55541;
+Object.assign(process.env,{NODE_ENV:'test',LOG_LEVEL:'error',DB_HOST:'127.0.0.1',DB_PORT:String(PORT),DB_USER:'postgres',
+  DB_PASSWORD:'postgres',DB_NAME:'asentra_test',DB_SSL:'false'});
+let pool:Pool,pg:EmbeddedPostgres,admin:string;
+const id=()=>randomUUID(),q=(sql:string,params:unknown[]=[])=>pool.query(sql,params);
+const code=(expected:string)=>(err:{code?:string})=>{assert.equal(err.code,expected);return true;};
+const iso=(ms:number)=>new Date(ms).toISOString(),wait=(ms=12)=>new Promise(resolve=>setTimeout(resolve,ms));
+const jakarta=(ms:number)=>new Date(ms+7*3600000).toISOString().slice(0,10);
+const day=(offset:number)=>{const x=new Date(Date.now()+7*3600000);return new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth(),x.getUTCDate()+offset)).toISOString().slice(0,10);};
+
+before(async()=>{
+  await rm(DIR,{recursive:true,force:true});await mkdir(DIR,{recursive:true});
+  pg=new EmbeddedPostgres({databaseDir:DIR,port:PORT,user:'postgres',password:'',persistent:true,authMethod:'trust'});
+  await pg.initialise();await pg.start();const system=pg.getPgClient('postgres','127.0.0.1');
+  await system.connect();await system.query('CREATE DATABASE asentra_test');await system.end();
+  const {ensureTestDatabase}=await import('./helpers/postgres');const config=await ensureTestDatabase();assert.ok(config);
+  pool=await initDatabase(config);await migrateUp(pool);admin=(await createAdminUser()).userId;
+  const discipline=await handymanDisciplineRepository.findDisciplineByCode(undefined,'GENERAL_HANDYMAN');assert.ok(discipline);
+  initHandymanFixtures({adminUserId:admin,disciplineId:discipline.id,query:q});
+});
+after(async()=>{try{if(pool)await closePool(pool);if(pg)await pg.stop();}finally{await rm(DIR,{recursive:true,force:true});}});
+
+async function scopedUser(buildingId:string,permissions:string[]){
+  const user=await userService.createUser({email:`${id()}@bm-tax.test`,displayName:'Scoped Finance'});
+  const role=await roleService.createRole({code:`TAX_CASE_${id()}`,name:'Explicit test capability'});
+  for(const name of permissions){const p=await permissionRepository.findByCode(name);assert.ok(p);await permissionService.assignPermissionToRole(role.id,p.id);}
+  await roleService.assignRoleToUser(user.id,role.id);await buildingAssignmentService.createAssignment(user.id,{buildingId});return user.id;
+}
+const issuerContent=(clientId:string,legalName:string)=>({clientId,expectedVersion:null,legalName,displayName:'Handyman',
+  registeredAddress:'Jl. Merdeka 1',businessAddress:null,city:'Jakarta',province:'Jakarta',postalCode:'10110',email:'issuer@example.test',
+  phone:'+62 21 5000 1111',whatsapp:'+62 811 2000 3000',website:null,taxId:null,businessRegistrationId:null,logoReference:null});
+type Options={fractional?:boolean;ppn?:'TAXABLE'|'EXEMPT';pph?:'WITHHOLD'|'NON_WITHHOLD';distinct?:boolean;approvePpn?:boolean};
+async function fixture(options:Options={}){
+  const distinct=options.distinct!==false,{realm,scope}=await baseFixture(),crew=await crewFixture(realm);
+  await assignHandymanExecutionScopeCrew({executionScopeId:scope.id,providerContextId:crew.providerContext.id,crewId:crew.crew.id},admin);
+  const draft=await prepareHandymanCommercialAgreement(admin,{clientId:realm.client.id,idempotencyKey:id()}),versionId=draft.version.id;
+  await q(`INSERT INTO handyman_bm_fee_rule_definitions(id,agreement_version_id,basis,mode,idempotency_key,created_by_user_id)
+    VALUES($1,$2,'LABOR_ONLY','DEFAULT',$3,$4)`,[id(),versionId,id(),admin]);
+  await q(`INSERT INTO handyman_bm_fee_term_definitions(id,agreement_version_id,term_kind,rate_percent,idempotency_key,created_by_user_id)
+    VALUES($1,$2,'PERCENTAGE_OF_BASIS',$3,$4,$5)`,[id(),versionId,options.fractional?'2.5000':'10.0000',id(),admin]);
+  if(!distinct)await q(`INSERT INTO handyman_bm_fee_beneficiary_definitions(id,agreement_version_id,beneficiary_kind,beneficiary_reference_id,idempotency_key,created_by_user_id)
+    VALUES($1,$2,'CLIENT_ORGANIZATION',$3,$4,$5)`,[id(),versionId,realm.client.id,id(),admin]);
+  await activateHandymanCommercialAgreementVersion(admin,{versionId,effectiveFrom:iso(Date.now()-60000),idempotencyKey:id()});
+  const bm=await bindVerifiedTestBm({actor:admin,clientId:realm.client.id,buildingId:realm.building.id,versionId,query:q,distinct});
+  await openHandymanCustomerTransaction({executionScopeId:scope.id,idempotencyKey:id()},admin);
+  const labor=(await q("SELECT id FROM handyman_quotation_lines WHERE quotation_version_id=$1 AND line_type='LABOR'",[scope.approvedQuotationVersionId])).rows[0];
+  const charge=await composeHandymanChargeLine({executionScopeId:scope.id,quotationLineId:labor.id,idempotencyKey:id()},admin);
+  const earned=await deriveHandymanFinancialEntitlements(scope.id,admin,id());
+  const checker=await scopedUser(realm.building.id,['handyman.finance.read','handyman.tax_identity.approve','handyman.tax_rule.approve','handyman.bm_tax_case.approve']);
+  const owner={kind:'BM_BENEFICIARY' as const,clientId:realm.client.id,counterpartyId:bm.counterparty.id};
+  const identity=(await captureHandymanTaxIdentity(admin,{owner,legalName:bm.counterparty.legalName,taxpayerKind:'LEGAL_ENTITY',
+    individualResidency:null,identifier:{kind:'NPWP_15',value:'012345678901002'},pkpStatus:'PKP',effectiveFrom:bm.verification.verifiedAt.toISOString(),
+    effectiveTo:null,evidenceSource:'TEST',evidenceReference:`identity/${id()}`,expectedVersion:null,idempotencyKey:id()})).identity;
+  const issuer=await updateHandymanDocumentIssuerProfile(issuerContent(realm.client.id,`PT Issuer ${id().slice(0,8)}`),admin);
+  const issuerOwner={kind:'HANDYMAN_ISSUER' as const,clientId:realm.client.id};
+  const issuerIdentity=(await captureHandymanTaxIdentity(admin,{owner:issuerOwner,issuerProfileId:issuer.id,legalName:issuer.legalName,
+    taxpayerKind:'LEGAL_ENTITY',individualResidency:null,identifier:{kind:'NPWP_15',value:'012345678901001'},pkpStatus:'PKP',
+    effectiveFrom:iso(new Date(issuer.effectiveFrom).getTime()+1),effectiveTo:null,evidenceSource:'TEST',evidenceReference:`issuer/${id()}`,
+    expectedVersion:null,idempotencyKey:id()})).identity;
+  async function approveIdentity(target:HandymanTaxIdentityOwner,view:HandymanTaxIdentityView){
+    const pin={owner:target,profileId:view.snapshot.id,profileVersion:view.snapshot.version,profileDigest:view.digest,evidenceSource:'TEST_MAKER',evidenceReference:`submit/${id()}`};
+    const submission=await submitHandymanTaxIdentityForApproval(admin,pin);await wait();
+    return decideHandymanTaxIdentityApproval(checker,{...pin,submissionId:submission.id,decision:'APPROVE',evidenceSource:'TEST_CHECKER',evidenceReference:`decision/${id()}`});
+  }
+  const identityDecision=await approveIdentity(owner,identity),issuerDecision=await approveIdentity(issuerOwner,issuerIdentity);
+  const common={clientId:realm.client.id,transactionContext:'BM_COMMISSION' as const,effectiveFrom:day(-1),effectiveTo:day(3),
+    roundingMode:'HALF_UP' as const,legalReference:'TEST ONLY',legalSource:'TEST ONLY',evidenceSource:'TEST',evidenceReference:`rule/${id()}`,expectedVersion:null};
+  const ppn=options.ppn??'TAXABLE',pph=options.pph??'WITHHOLD';
+  const ppnInput:CreateHandymanTaxRule={...common,taxCode:'PPN',taxpayerClassification:`P02A_${ppn==='TAXABLE'?'TAX':'EXEMPT'}_E_P_E_P_TEST_CASE`,
+    classificationDescription:`P02A_V1|APPLICABILITY=${ppn}|SUPPLIER=ENTITY,PKP|RECIPIENT=ENTITY,PKP|CASE=TEST_CASE`,
+    basisMethodCode:ppn==='TAXABLE'?'PPN02A_EXCLUSIVE_FULL_V1':'PPN02A_EXEMPT_FULL_V1',
+    basisDescription:ppn==='TAXABLE'?'P02A_V1|SOURCE=EXCLUSIVE|DPP=SOURCE|PPN=ROUND(DPP*RATE/100)|TOTAL=SOURCE+PPN':
+      'P02A_V1|APPLICABILITY=EXEMPT|SOURCE=EXCLUSIVE|DPP=SOURCE|PPN=0|TOTAL=SOURCE',
+    ratePercent:ppn==='TAXABLE'?'7.500000':'0',roundingScale:0};
+  const pphInput:CreateHandymanTaxRule={...common,taxCode:'PPH_WITHHOLDING',taxpayerClassification:`P02B_${pph==='WITHHOLD'?'TAX':'NON_WITHHOLD'}_E_TEST_CASE`,
+    classificationDescription:`P02B_V1|TREATMENT=${pph}|BENEFICIARY=ENTITY|CASE=TEST_CASE`,
+    basisMethodCode:pph==='WITHHOLD'?'PPH02B_GROSS_V1':'PPH02B_NON_WITHHOLD_V1',
+    basisDescription:pph==='WITHHOLD'?'P02B_V1|BASIS=GROSS|PPH=ROUND(BASIS*RATE/100)|NET=GROSS-PPH':
+      'P02B_V1|TREATMENT=NON_WITHHOLD|BASIS=0|PPH=0|NET=GROSS',ratePercent:pph==='WITHHOLD'?'7.500000':'0',roundingScale:2};
+  async function approveRule(input:CreateHandymanTaxRule,approve=true){
+    const rule=await createHandymanTaxRule(admin,input),pin={clientId:realm.client.id,ruleId:rule.snapshot.id,ruleVersion:rule.snapshot.version,
+      ruleDigest:rule.digest,evidenceSource:'TEST_MAKER',evidenceReference:`submit/${id()}`};
+    if(!approve)return {rule,decision:null};
+    const submission=await submitHandymanTaxRule(admin,pin);await wait();
+    const decision=await decideHandymanTaxRule(checker,{...pin,submissionId:submission.id,decision:'APPROVE',sourceValidation:'FINANCE_VALIDATED',
+      evidenceSource:'TEST_CHECKER',evidenceReference:`decision/${id()}`});return {rule,decision};
+  }
+  const ppnRule=await approveRule(ppnInput,options.approvePpn!==false),pphRule=await approveRule(pphInput);await wait();
+  const source=await readHandymanBmCommissionSource(admin,{clientId:realm.client.id,entitlementId:earned.bmFee.id});
+  const base=Date.now()+30000,ppnAt=iso(base),pphAt=iso(base+1000);
+  const bmPin={owner,profileId:identity.snapshot.id,profileVersion:identity.snapshot.version,profileDigest:identity.digest,approvalDecisionId:identityDecision.id};
+  const issuerPin={owner:issuerOwner,profileId:issuerIdentity.snapshot.id,profileVersion:issuerIdentity.snapshot.version,profileDigest:issuerIdentity.digest,approvalDecisionId:issuerDecision.id};
+  const input:ProposeBmTaxCaseInput={clientId:realm.client.id,entitlementId:source.entitlementId,sourceChecksum:source.checksum,
+    transactionClassification:'AGREEMENT_COMMISSION',serviceClassification:'BUILDING_SERVICES',transactionEvidenceReferenceId:id(),
+    ppn:{taxDate:jakarta(base),taxPointAt:ppnAt,amountBasis:'PPN_EXCLUSIVE',applicability:ppn,taxpayerClassification:ppnInput.taxpayerClassification,
+      supplier:bmPin,recipient:issuerPin,rule:{ruleId:ppnRule.rule.snapshot.id,ruleVersion:ppnRule.rule.snapshot.version,
+        ruleDigest:ppnRule.rule.digest,approvalDecisionId:ppnRule.decision?.id??id()},evidenceReferenceId:id()},
+    pph:{taxDate:jakarta(base+1000),taxPointAt:pphAt,treatment:pph,taxpayerClassification:pphInput.taxpayerClassification,beneficiary:bmPin,
+      rule:{ruleId:pphRule.rule.snapshot.id,ruleVersion:pphRule.rule.snapshot.version,ruleDigest:pphRule.rule.digest,
+        approvalDecisionId:pphRule.decision!.id},evidenceReferenceId:id()},expectedVersion:null,idempotencyKey:id()};
+  return {realm,scope,versionId,bm,charge,earned,checker,owner,identity,issuerOwner,issuerIdentity,ppnRule,pphRule,source,input};
+}
+function review(f:Awaited<ReturnType<typeof fixture>>,c:BmTaxCaseView,decision:'APPROVE'|'REJECT'='APPROVE'){
+  return {clientId:f.input.clientId,entitlementId:f.input.entitlementId,caseId:c.snapshot.id,version:c.snapshot.version,digest:c.digest,
+    decision,ppnReviewEvidenceReferenceId:id(),pphReviewEvidenceReferenceId:id()};
+}
+function command(f:Awaited<ReturnType<typeof fixture>>,c:BmTaxCaseView,d:BmTaxCaseDecision){
+  return {clientId:f.input.clientId,entitlementId:f.input.entitlementId,determination:{caseId:c.snapshot.id,version:c.snapshot.version,
+    digest:c.digest,decisionId:d.id,decisionDigest:d.decisionDigest}};
+}
+async function approved(f:Awaited<ReturnType<typeof fixture>>){
+  const c=await proposeHandymanBmTaxCase(admin,f.input),d=await decideHandymanBmTaxCase(f.checker,review(f,c));await wait();return {c,d,cmd:command(f,c,d)};
+}
+async function counts(){
+  const names=['handyman_entitlement_facts','handyman_entitlement_corrections','handyman_bm_entitlement_guards','handyman_bm_fee_fiscal_bases',
+    'handyman_fiscal_documents','handyman_settlement_events','tenant_invoices','handyman_customer_transactions'];
+  const out:Record<string,number>={};for(const name of names)out[name]=(await q(`SELECT count(*)::int n FROM ${name}`)).rows[0].n;return out;
+}
+
+describe('PART 02C-A independently verified BM commission tax case',()=>{
+  it('registers an unassigned checker and verifies separate PPN/PPh pins with no financial writes',async()=>{
+    assert.equal(migrations.at(-1)!.id,'0500_handyman_bm_commission_tax_cases');
+    assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_tax_case.approve'));
+    const grants=async()=>(await q(`SELECT count(*)::int n FROM role_permission_assignments r JOIN permissions p ON p.id=r.permission_id
+      WHERE p.code='handyman.bm_tax_case.approve' AND r.status='ACTIVE'`)).rows[0].n;
+    assert.equal(await grants(),0);const seed=await pool.connect();
+    try{await seed.query('BEGIN');await seedFoundationAccess(seed);await seed.query('COMMIT');}finally{seed.release();}
+    assert.equal(await grants(),0);
+    const f=await fixture(),before=await counts(),{c,d,cmd}=await approved(f);
+    assert.equal(c.snapshot.ppnTaxPointAt,f.input.ppn.taxPointAt);assert.equal(c.snapshot.pphTaxPointAt,f.input.pph.taxPointAt);
+    assert.notEqual(c.snapshot.ppnRuleId,c.snapshot.pphRuleId);assert.equal(c.snapshot.counterpartyId,f.bm.counterparty.id);
+    assert.equal(c.snapshot.coverageId,f.bm.coverage.id);assert.equal(c.snapshot.agreementVersionId,f.versionId);
+    assert.equal(c.digest,hash(c.snapshot));assert.equal(d.actorUserId,f.checker);assert.notEqual(d.actorUserId,c.snapshot.createdByUserId);
+    const {decisionDigest,replayed,...decisionBody}=d;assert.equal(decisionDigest,hash(decisionBody));assert.equal(replayed,false);
+    const [ppn,pph,again]=await Promise.all([calculateApprovedHandymanPpn(admin,cmd),calculateApprovedHandymanBmWithholding(admin,cmd),
+      calculateApprovedHandymanBmWithholding(admin,cmd)]);
+    assert.deepEqual(pph,again);assert.equal(ppn.sourceAmount,'10.00');assert.equal(ppn.ppnAmount,'1.00');
+    assert.equal(pph.commissionGross,'10.00');assert.equal(pph.pphWithheld,'0.75');assert.equal(pph.projectedNetCommission,'9.25');
+    assert.equal(ppn.determination.decisionDigest,d.decisionDigest);assert.deepEqual(pph.determination,ppn.determination);
+    assert.equal(ppn.transactionPartyBinding,'VERIFIED_BM_COMMISSION_FINANCE_APPROVED');assert.equal(pph.caseApplicability,'INDEPENDENTLY_FINANCE_APPROVED');
+    for(const result of [ppn,pph]){const {checksum,checksumAlgorithm,...body}=result;assert.equal(checksumAlgorithm,'SHA-256');assert.equal(checksum,hash(body));}
+    assert.equal(JSON.stringify([ppn,pph]).includes('012345678901002'),false);assert.deepEqual(await counts(),before);
+  });
+  it('keeps exempt PPN independent from withholding PPh, and taxable PPN independent from non-withholding PPh',async()=>{
+    const exempt=await fixture({ppn:'EXEMPT',pph:'WITHHOLD'}),a=await approved(exempt);
+    const pa=await calculateApprovedHandymanPpn(admin,a.cmd),ha=await calculateApprovedHandymanBmWithholding(admin,a.cmd);
+    assert.equal(pa.applicability,'EXEMPT');assert.equal(pa.ppnAmount,'0.00');assert.equal(ha.treatment,'WITHHOLD');assert.equal(ha.pphWithheld,'0.75');
+    const nonwithhold=await fixture({ppn:'TAXABLE',pph:'NON_WITHHOLD'}),b=await approved(nonwithhold);
+    const pb=await calculateApprovedHandymanPpn(admin,b.cmd),hb=await calculateApprovedHandymanBmWithholding(admin,b.cmd);
+    assert.equal(pb.applicability,'TAXABLE');assert.equal(pb.ppnAmount,'1.00');assert.equal(hb.treatment,'NON_WITHHOLD');assert.equal(hb.pphWithheld,'0.00');
+  });
+
+  it('allows a later independent case review when both underlying approvals already existed at their separate tax points',async()=>{
+    const f=await fixture(),at=Date.now(),input={...f.input,
+      ppn:{...f.input.ppn,taxDate:jakarta(at),taxPointAt:iso(at)},
+      pph:{...f.input.pph,taxDate:jakarta(at+1),taxPointAt:iso(at+1)}};
+    await wait(20);const c=await proposeHandymanBmTaxCase(admin,input),d=await decideHandymanBmTaxCase(f.checker,review(f,c));await wait();
+    assert.ok(Date.parse(d.occurredAt)>Date.parse(input.pph.taxPointAt));
+    const cmd=command(f,c,d);assert.equal((await calculateApprovedHandymanPpn(admin,cmd)).determination.decisionId,d.id);
+    assert.equal((await calculateApprovedHandymanBmWithholding(admin,cmd)).determination.decisionId,d.id);
+  });
+  it('independently revalidates both approved tax rule windows, even when only the other tax is calculated',async()=>{
+    for(const family of ['ppn','pph'] as const){
+      const f=await fixture(),target=day(2),at=new Date(`${target}T08:00:00+07:00`).toISOString();
+      const input={...f.input,[family]:{...f.input[family],taxDate:target,taxPointAt:at}};
+      const c=await proposeHandymanBmTaxCase(admin,input),d=await decideHandymanBmTaxCase(f.checker,review(f,c));await wait();
+      const cmd=command(f,c,d);await closeHandymanTaxRule(admin,{clientId:f.input.clientId,ruleId:f.input[family].rule.ruleId,
+        effectiveTo:day(1),reason:'TEST prospective window closure'});
+      await assert.rejects(calculateApprovedHandymanPpn(admin,cmd),code('HANDYMAN_BM_TAX_CASE_STALE'));
+      await assert.rejects(calculateApprovedHandymanBmWithholding(admin,cmd),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    }
+  });
+  it('approves fractional commissions without rounding; PPh works while PPN fails its whole-rupiah constraint',async()=>{
+    const f=await fixture({fractional:true}),{c,cmd}=await approved(f);
+    assert.equal(c.snapshot.commissionGross,'2.50');
+    const pph=await calculateApprovedHandymanBmWithholding(admin,cmd);assert.equal(pph.pphWithheld,'0.19');
+    await assert.rejects(calculateApprovedHandymanPpn(admin,cmd),code('HANDYMAN_PPN_INVALID'));
+  });
+  it('rejects missing evidence, wrong sources or parties, unapproved PPN rules and any calculator overrides',async()=>{
+    const f=await fixture(),input=f.input;
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...input,transactionEvidenceReferenceId:''}),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...input,ppn:{...input.ppn,evidenceReferenceId:'00000000-0000-0000-0000-000000000000'}}),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...input,sourceChecksum:'0'.repeat(64)}),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...input,pph:{...input.pph,beneficiary:{...input.pph.beneficiary,
+      owner:{kind:'BM_BENEFICIARY',clientId:input.clientId,counterpartyId:id()}}}}),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...input,pph:{...input.pph,rule:{...input.pph.rule,approvalDecisionId:id()}}}),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    const pending=await fixture({approvePpn:false});
+    await assert.rejects(proposeHandymanBmTaxCase(admin,pending.input),code('HANDYMAN_BM_TAX_CASE_UNAPPROVED'));
+    const {cmd}=await approved(f),other=await fixture(),otherApproved=await approved(other);
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...cmd,determination:otherApproved.cmd.determination}),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    await assert.rejects(calculateApprovedHandymanPpn(admin,{...cmd,applicability:'EXEMPT'} as never),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...cmd,treatment:'EXEMPT'} as never),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...cmd,determination:{...cmd.determination,digest:'a'.repeat(64)}}),code('HANDYMAN_BM_TAX_CASE_INTEGRITY_ERROR'));
+    // The former caller-asserted production adapters cannot be used without a case.
+    await assert.rejects(calculateApprovedHandymanPpn(admin,{clientId:input.clientId,transactionContext:'BM_COMMISSION',...input.ppn} as never),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{clientId:input.clientId,entitlementId:input.entitlementId,...input.pph} as never),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+  });
+  it('requires scoped maker and independent scoped checker, including the exact Building and Client',async()=>{
+    const f=await fixture(),sibling=await buildingService.createBuilding({propertyId:f.realm.property.id,code:`SIB_${id().slice(0,8)}`,name:'Sibling'});
+    const wrongBuilding=await scopedUser(sibling.id,['handyman.finance.read','handyman.finance.manage','handyman.bm_tax_case.approve']);
+    const noChecker=await scopedUser(f.realm.building.id,['handyman.finance.read','handyman.finance.manage']);
+    const makerChecker=await scopedUser(f.realm.building.id,['handyman.finance.read','handyman.finance.manage','handyman.bm_tax_case.approve']);
+    await assert.rejects(proposeHandymanBmTaxCase(wrongBuilding,f.input),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...f.input,clientId:id()}),code('HANDYMAN_PPN_IDENTITY_MISMATCH'));
+    const c=await proposeHandymanBmTaxCase(makerChecker,f.input),r=review(f,c);
+    await assert.rejects(decideHandymanBmTaxCase(makerChecker,r),code('PERMISSION_DENIED'));
+    await assert.rejects(decideHandymanBmTaxCase(noChecker,r),code('PERMISSION_DENIED'));
+    await assert.rejects(decideHandymanBmTaxCase(wrongBuilding,r),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(decideHandymanBmTaxCase(f.checker,{...r,pphReviewEvidenceReferenceId:''}),code('HANDYMAN_BM_TAX_CASE_INVALID'));
+    const d=await decideHandymanBmTaxCase(f.checker,r);await wait();const cmd=command(f,c,d);
+    await assert.rejects(calculateApprovedHandymanPpn(wrongBuilding,cmd),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...cmd,clientId:id()}),code('HANDYMAN_BM_TAX_CASE_MISSING'));
+    assert.equal((await requireApprovedHandymanBmTaxCase(admin,cmd)).decision.id,d.id);
+  });
+  it('keeps immutable rejected/superseded versions and idempotent replays without authorizing history',async()=>{
+    const f=await fixture(),first=await proposeHandymanBmTaxCase(admin,f.input),reject=review(f,first,'REJECT');
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...f.input,idempotencyKey:id(),expectedVersion:1}),code('HANDYMAN_BM_TAX_CASE_CONFLICT'));
+    const d1=await decideHandymanBmTaxCase(f.checker,reject);await wait();const old=command(f,first,d1);
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,old),code('HANDYMAN_BM_TAX_CASE_UNAPPROVED'));
+    const next={...f.input,expectedVersion:1,idempotencyKey:id()},second=await proposeHandymanBmTaxCase(admin,next);
+    assert.equal(second.snapshot.version,2);assert.equal(second.snapshot.previousCaseId,first.snapshot.id);
+    assert.equal((await proposeHandymanBmTaxCase(admin,f.input)).replayed,true);
+    assert.equal((await decideHandymanBmTaxCase(f.checker,reject)).replayed,true);
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,old),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    await assert.rejects(proposeHandymanBmTaxCase(admin,{...f.input,serviceClassification:'OTHER_SERVICES'}),code('HANDYMAN_BM_TAX_CASE_CONFLICT'));
+    const d2=await decideHandymanBmTaxCase(f.checker,review(f,second));await wait();
+    assert.equal((await calculateApprovedHandymanBmWithholding(admin,command(f,second,d2))).determination.version,2);
+    await assert.rejects(q("UPDATE handyman_bm_tax_cases SET digest=repeat('0',64) WHERE id=$1",[first.snapshot.id]),/immutable/i);
+    await assert.rejects(q('DELETE FROM handyman_bm_tax_case_decisions WHERE id=$1',[d1.id]),/immutable/i);
+    await assert.rejects(q('UPDATE handyman_bm_tax_case_heads SET version=1,case_id=$2,decision_id=$3 WHERE entitlement_id=$1',
+      [f.input.entitlementId,first.snapshot.id,d1.id]),/Invalid BM tax case head transition/);
+  });
+  it('serializes identical proposals/decisions and rejects competing decisions and keys',async()=>{
+    const f=await fixture();const proposals=await Promise.all(Array.from({length:4},()=>proposeHandymanBmTaxCase(admin,f.input)));
+    assert.equal(new Set(proposals.map(x=>x.snapshot.id)).size,1);assert.equal(proposals.filter(x=>!x.replayed).length,1);
+    const r=review(f,proposals[0]);const decisions=await Promise.all(Array.from({length:4},()=>decideHandymanBmTaxCase(f.checker,r)));
+    assert.equal(new Set(decisions.map(x=>x.id)).size,1);assert.equal(decisions.filter(x=>!x.replayed).length,1);
+    await assert.rejects(decideHandymanBmTaxCase(f.checker,{...r,decision:'REJECT'}),code('HANDYMAN_BM_TAX_CASE_CONFLICT'));
+    const v2={...f.input,expectedVersion:1,idempotencyKey:id()},v2other={...v2,idempotencyKey:id()};
+    const attempts=await Promise.allSettled([proposeHandymanBmTaxCase(admin,v2),proposeHandymanBmTaxCase(admin,v2other)]);
+    assert.equal(attempts.filter(x=>x.status==='fulfilled').length,1);assert.equal(attempts.filter(x=>x.status==='rejected').length,1);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_bm_tax_cases WHERE entitlement_id=$1',[f.input.entitlementId])).rows[0].n,2);
+  });
+  it('fails closed after ledger changes and corrections instead of authorizing an old or replayed case',async()=>{
+    const f=await fixture(),{cmd}=await approved(f);
+    await adjustHandymanCustomerLedger({executionScopeId:f.scope.id,chargeLineId:f.charge.chargeLine.id,amount:'20.00',reason:'TEST adjustment',idempotencyKey:id()},admin);
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,cmd),code('HANDYMAN_PPH_SOURCE_STALE'));
+    await assert.rejects(calculateApprovedHandymanPpn(admin,cmd),code('HANDYMAN_PPH_SOURCE_STALE'));
+    await deriveHandymanFinancialEntitlements(f.scope.id,admin,id());
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,cmd),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+    assert.equal((await proposeHandymanBmTaxCase(admin,f.input)).replayed,true);
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,cmd),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+  });
+  it('serializes a direct SQL correction against approval before source revalidation',async()=>{
+    const f=await fixture(),c=await proposeHandymanBmTaxCase(admin,f.input),tx=await pool.connect();
+    try{
+      await tx.query('BEGIN');await tx.query(`INSERT INTO handyman_entitlement_corrections
+        (id,entitlement_id,ledger_correction_id,fact_kind,amount,idempotency_key,actor_user_id)
+        VALUES($1,$2,$3,'ADJUSTED_DECREASE','0.01',$4,$5)`,[id(),f.input.entitlementId,id(),id(),admin]);
+      let finished=false;const task=decideHandymanBmTaxCase(f.checker,review(f,c)).then(x=>{finished=true;return x;},e=>{finished=true;throw e;});
+      await wait(50);assert.equal(finished,false,'approval must wait for the correction ledger lock');
+      await tx.query('COMMIT');await assert.rejects(task,code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+      assert.equal((await q('SELECT count(*)::int n FROM handyman_bm_tax_case_decisions WHERE case_id=$1',[c.snapshot.id])).rows[0].n,0);
+    }finally{await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
+  });
+
+  it('database enforces checker separation, head advancement, and READ COMMITTED for direct writes',async()=>{
+    const f=await fixture(),maker=await scopedUser(f.realm.building.id,['handyman.finance.read','handyman.finance.manage','handyman.bm_tax_case.approve']);
+    const c=await proposeHandymanBmTaxCase(maker,f.input),r=review(f,c),insert=`INSERT INTO handyman_bm_tax_case_decisions
+      (id,case_id,entitlement_id,client_id,building_id,version,case_digest,decision,ppn_evidence_id,pph_evidence_id,actor_user_id,decision_digest)
+      VALUES($1,$2,$3,$4,$5,$6,$7,'APPROVE',$8,$9,$10,$11)`;
+    const args=(actor:string)=>[id(),c.snapshot.id,f.input.entitlementId,f.input.clientId,c.snapshot.buildingId,1,c.digest,
+      r.ppnReviewEvidenceReferenceId,r.pphReviewEvidenceReferenceId,actor,'0'.repeat(64)];
+    await assert.rejects(q(insert,args(maker)),/independent scoped checker/);
+    const tx=await pool.connect();try{
+      await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+      await assert.rejects(tx.query(insert,args(f.checker)),/require READ COMMITTED/);await tx.query('ROLLBACK');
+      await tx.query('BEGIN');await tx.query(insert,args(f.checker));
+      await assert.rejects(tx.query('COMMIT'),/must advance its head/);
+    }finally{await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_bm_tax_case_decisions WHERE case_id=$1',[c.snapshot.id])).rows[0].n,0);
+    assert.equal((await decideHandymanBmTaxCase(f.checker,r)).decision,'APPROVE');
+    const extra={...c.snapshot,id:id(),version:2,previousCaseId:c.snapshot.id,idempotencyKey:id(),unexpectedSensitiveField:'not allowed'};
+    await assert.rejects(q(`INSERT INTO handyman_bm_tax_cases(id,entitlement_id,client_id,building_id,version,previous_case_id,idempotency_key,
+      snapshot,digest,created_by_user_id) VALUES($1,$2,$3,$4,2,$5,$6,$7,$8,$9)`,
+      [extra.id,extra.entitlementId,extra.clientId,extra.buildingId,c.snapshot.id,extra.idempotencyKey,JSON.stringify(extra),hash(extra),maker]),
+      /BM tax case source, evidence, scope, version or independent tax rules are invalid/);
+  });
+  it('waits for a concurrent tax identity window closure before approving',async()=>{
+    const f=await fixture(),c=await proposeHandymanBmTaxCase(admin,f.input),tx=await pool.connect();
+    try{
+      await tx.query('BEGIN');await tx.query(`INSERT INTO handyman_tax_identity_closures(id,profile_id,effective_to,reason,created_by_user_id)
+        VALUES($1,$2,$3,'TEST concurrent closure',$4)`,[id(),f.identity.snapshot.id,iso(Date.now()+5000),admin]);
+      let finished=false;const task=decideHandymanBmTaxCase(f.checker,review(f,c)).then(x=>{finished=true;return x;},e=>{finished=true;throw e;});
+      await wait(50);assert.equal(finished,false,'approval must wait for the identity window');
+      await tx.query('COMMIT');await assert.rejects(task,code('HANDYMAN_TAX_IDENTITY_NOT_EFFECTIVE'));
+      assert.equal((await q('SELECT count(*)::int n FROM handyman_bm_tax_case_decisions WHERE case_id=$1',[c.snapshot.id])).rows[0].n,0);
+    }finally{await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
+  });
+
+  it('waits for issuer supersession before approving its pinned PPN identity',async()=>{
+    const f=await fixture(),c=await proposeHandymanBmTaxCase(admin,f.input),tx=await pool.connect();
+    try{
+      await tx.query('BEGIN');await tx.query(`UPDATE handyman_document_issuer_profiles SET status='SUPERSEDED',superseded_at=clock_timestamp()
+        WHERE id=$1`,[f.issuerIdentity.snapshot.issuerProfileId]);
+      let finished=false;const task=decideHandymanBmTaxCase(f.checker,review(f,c)).then(x=>{finished=true;return x;},e=>{finished=true;throw e;});
+      await wait(50);assert.equal(finished,false,'approval must wait for the issuer lifecycle row');
+      await tx.query('COMMIT');await assert.rejects(task,code('HANDYMAN_TAX_IDENTITY_NOT_EFFECTIVE'));
+      assert.equal((await q('SELECT count(*)::int n FROM handyman_bm_tax_case_decisions WHERE case_id=$1',[c.snapshot.id])).rows[0].n,0);
+    }finally{await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
+  });
+  it('revalidates effective identities in a single snapshot and rejects a newly closed identity',async()=>{
+    const f=await fixture(),{cmd}=await approved(f),tx=await pool.connect();
+    try{
+      await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');await tx.query('SELECT count(*) FROM handyman_bm_tax_cases');
+      await closeHandymanTaxIdentity(admin,{owner:f.owner,profileId:f.identity.snapshot.id,effectiveTo:iso(Date.now()+5000),reason:'Prospective identity closure'});
+      assert.equal((await requireApprovedBmTaxCaseInSnapshot(tx,admin,cmd)).reference.caseId,cmd.determination.caseId);
+      await assert.rejects(calculateApprovedHandymanBmWithholding(admin,cmd),code('HANDYMAN_TAX_IDENTITY_NOT_EFFECTIVE'));
+      await tx.query('COMMIT');
+    }finally{await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
+  });
+  it('preserves an explicitly verified legacy Client beneficiary without reassigning it',async()=>{
+    const f=await fixture({distinct:false}),{cmd}=await approved(f);
+    const pph=await calculateApprovedHandymanBmWithholding(admin,cmd);
+    assert.equal(pph.source.beneficiary.kind,'CLIENT_ORGANIZATION');assert.equal(pph.source.beneficiary.representedClientId,f.realm.client.id);
+  });
+  it('refuses a destructive rollback after case history exists',async()=>{
+    await assert.rejects(migrateDown(pool),/Refusing to remove populated BM tax case history/);
+    assert.equal((await q("SELECT count(*)::int n FROM schema_migrations WHERE id='0500_handyman_bm_commission_tax_cases'")).rows[0].n,1);
+  });
+
+});

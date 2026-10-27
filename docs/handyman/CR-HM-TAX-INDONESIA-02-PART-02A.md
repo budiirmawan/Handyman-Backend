@@ -3,40 +3,27 @@
 ## Authority and boundaries
 
 `calculateApprovedHandymanPpn` is a read-only internal adapter around a pure,
-integer-arithmetic calculator. For standalone `BM_COMMISSION` it requires a
-trusted authenticated actor with Finance read and Client reach. The adapter
-resolves both exact 0495/0496 identity approvals and the 0497 PPN rule in **one
-read-only repeatable-read snapshot**, then verifies the caller's IDs, versions,
-SHA-256 digests and approval-decision IDs. A missing, ambiguous, unapproved,
-stale, mismatched or unsupported input fails closed. The PPN rule must have been
-approved by the actual tax-point instant and by the database read time; the two
-identities must also have been approved and effective at that instant. Tax date
-is an explicit Indonesian calendar date and must match the supplied zoned
-tax-point instant in Asia/Jakarta. No rule is selected from PKP status alone.
+integer-arithmetic calculator. As of PART 02C-A, BM commission PPN requires a
+current independently approved, transaction-bound BM tax case. The adapter
+re-resolves the exact entitlement, Building, beneficiary, both independently
+approved tax rules and the required identities in one read-only repeatable-read
+snapshot. The case maker, not the calculation caller, declares the PPN
+classification and applicability. See `CR-HM-TAX-INDONESIA-02-PART-02C-A.md`
+for the full authority, evidence and input contract. Unbound BM calls fail
+closed.
 
-The output is a deterministic immutable breakdown and checksum, with source,
-DPP, rate, PPN, total and approved-rule provenance. Standalone BM output pins
-both identity approvals; customer output pins the buyer binding and reviewed
-classification instead. Its SHA-256 checksum is over UTF-8 `stableJson` of the breakdown body excluding the
-`checksumAlgorithm` and `checksum` fields. It is not an
-invoice, fiscal authorization, legal opinion, earned entitlement or settlement,
-and performs no writes. It does not alter legacy calculations or invoice
-monetary constraints. Standalone BM parties and case are **not** bound here to
-an actual invoice, tenant, Building, contract or charge; BM output explicitly
-says `CALLER_SUPPLIED_NOT_VERIFIED`. Customer output verifies its request-buyer
-binding and reviewed assertion but not an invoice, ledger charge or payment.
-Downstream use must independently verify the remaining relationships and facts.
+The distinct customer path still requires the verified request-buyer binding
+and reviewed customer classification described in PART 02A-B and 02A-C. It
+does not assert that an invoice, ledger charge or payment exists. A missing
+classification retains the customer-identity blocker. A BM is never
+substituted for a customer.
 
-0495 supports only a provider issuer and a verified BM beneficiary, not a
-customer tax-identity owner; a BM is never substituted for a customer.
-PART 02A-B adds a verified request-buyer binding, and PART 02A-C adds a
-separately reviewed, rule-pinned customer document classification. A customer
-calculation lacking that classification remains blocked; see
-`CR-HM-TAX-INDONESIA-02-PART-02A-C.md`. For the standalone BM calculation,
-the BM is the supplier and issuer is the recipient; both require their own
-approved 0495 identity under the same Client. This does not bind them to an
-actual commission, Building or entitlement. Self supply and obvious
-equal/legacy-equivalent tax identifiers are rejected.
+Output is a deterministic immutable breakdown with approved-rule provenance
+and a SHA-256 checksum over UTF-8 `stableJson` of its body, excluding checksum
+fields. It is not an invoice, fiscal authorization, legal opinion, earned
+entitlement or settlement, and performs no writes. Self supply and obvious
+equal/legacy-equivalent taxpayer identifiers remain rejected. No rule is
+selected from PKP status alone.
 
 ## Explicit rule vocabulary
 
@@ -56,8 +43,8 @@ with a letter and containing uppercase letters, digits or single underscores;
 `ANY`, `ALL`, `DEFAULT`, `UNKNOWN`, `UNSPECIFIED` and `NONE` are not allowed as
 underscore-separated components. The approved `classificationDescription`
 must exactly read `P02A_V1|APPLICABILITY=<TAXABLE|EXEMPT|NON_TAXABLE>|SUPPLIER=<ENTITY|INDIVIDUAL_RESIDENT|INDIVIDUAL_NON_RESIDENT>,<PKP|NON_PKP>|RECIPIENT=<same kind>,<PKP|NON_PKP>|CASE=<CASE>`.
-The caller explicitly supplies the classification and applicability; both
-identity snapshots must match. This narrow implementation conservatively
+The case maker explicitly declares the classification and applicability; both
+identity snapshots must match and an independent checker must approve the BM case. This narrow implementation conservatively
 requires a PKP supplier for `TAXABLE`; it does not conclude that NON_PKP implies
 exemption or that PKP alone implies taxable treatment. Other scenarios need a
 separately governed contract.

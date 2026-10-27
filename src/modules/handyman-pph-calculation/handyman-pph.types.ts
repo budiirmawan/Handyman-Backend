@@ -1,4 +1,5 @@
 import type { PpnIdentityPin, PpnIdentityReference, PpnRulePin } from '../handyman-ppn-calculation';
+import type { BmTaxCaseReference } from '../handyman-bm-tax-case';
 import type { HandymanTaxRoundingMode, TaxRuleApprovalEvent } from '../handyman-tax-rules';
 
 export type BmWithholdingTreatment = 'WITHHOLD' | 'EXEMPT' | 'NON_WITHHOLD';
@@ -53,4 +54,11 @@ export type ApprovedBmWithholdingBreakdown = Readonly<{
   /** This is a projection, never a payable, fiscal document or payout authorization. */
   authority: 'READ_ONLY_PROJECTION';
   checksumAlgorithm: 'SHA-256'; checksum: string;
+}>;
+
+/** Trusted boundary result: the Finance decision and source are covered by the result checksum. */
+export type VerifiedBmWithholdingBreakdown = Omit<ApprovedBmWithholdingBreakdown, 'schema' | 'caseApplicability'> & Readonly<{
+  schema: 'HANDYMAN_VERIFIED_BM_PPH_WITHHOLDING_V1';
+  caseApplicability: 'INDEPENDENTLY_FINANCE_APPROVED';
+  determination: BmTaxCaseReference;
 }>;

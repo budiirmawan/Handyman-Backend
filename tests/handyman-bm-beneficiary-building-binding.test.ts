@@ -87,11 +87,11 @@ function binding(f: Awaited<ReturnType<typeof fixture>>, buildingId: string,
 
 describe('CR-HM-BM-COMMISSION-01 PART 01B beneficiary and Building binding', () => {
   it('keeps 0490–0492 and legacy beneficiary rows unchanged; identity must be explicitly verified', async () => {
-    assert.deepEqual(migrations.slice(-10).map(m => m.id), [
+    assert.deepEqual(migrations.slice(-11).map(m => m.id), [
       '0490_create_handyman_document_issuer_profiles', '0491_create_handyman_document_issuer_bank_accounts',
       '0492_create_handyman_document_issuer_settings', '0493_handyman_bm_beneficiary_building_coverage',
       '0494_handyman_distinct_bm_entitlements', '0495_handyman_tax_identity_profiles',
-      '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications',
+      '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications', '0500_handyman_bm_commission_tax_cases',
     ]);
     const f = await fixture();
     const input = { clientId: f.clientId, legalName: 'PT Pending', registrationNumber: id(),
@@ -255,6 +255,7 @@ describe('CR-HM-BM-COMMISSION-01 PART 01B beneficiary and Building binding', () 
   });
 
   it('refuses a destructive downgrade when legal identity or coverage history exists', async () => {
+    assert.equal(await migrateDown(pool), '0500_handyman_bm_commission_tax_cases');
     assert.equal(await migrateDown(pool),'0499_handyman_customer_tax_classifications');
     assert.equal(await migrateDown(pool), '0498_handyman_request_buyer_bindings');
     assert.equal(await migrateDown(pool), '0497_handyman_tax_rule_governance');
@@ -264,6 +265,6 @@ describe('CR-HM-BM-COMMISSION-01 PART 01B beneficiary and Building binding', () 
     await assert.rejects(migrateDown(pool), /Refusing to remove populated BM legal identity\/coverage history/);
     assert.equal((await q("SELECT count(*)::int AS n FROM schema_migrations WHERE id='0493_handyman_bm_beneficiary_building_coverage'")).rows[0].n, 1);
     assert.deepEqual(await migrateUp(pool), ['0494_handyman_distinct_bm_entitlements',
-      '0495_handyman_tax_identity_profiles', '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications']);
+      '0495_handyman_tax_identity_profiles', '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications', '0500_handyman_bm_commission_tax_cases']);
   });
 });

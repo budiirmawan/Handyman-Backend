@@ -1,5 +1,8 @@
 # PART 02A-C — Customer tax-document classification
 
+> PART 02C-A subsequently replaces the unbound BM calculation boundary; see
+> `CR-HM-TAX-INDONESIA-02-PART-02C-A.md`. This customer contract is unchanged.
+
 ## Boundary and authority
 
 Migration 0499 adds immutable, versioned classification assertions and

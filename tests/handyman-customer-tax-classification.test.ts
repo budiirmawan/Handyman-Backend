@@ -270,7 +270,9 @@ describe('PART 02A-C reviewed customer tax classifications',()=>{
       await assert.rejects(requireVerifiedCustomerTaxClassification(f.maker,{clientId:f.clientId,requestId:f.requestId,pin:classPin(next,d)}),code('HANDYMAN_CUSTOMER_TAX_INTEGRITY_ERROR'));
       await q('UPDATE handyman_customer_tax_decisions SET evidence_reference_id=$2 WHERE id=$1',[d.id,d.evidenceReferenceId]);
     }finally{await q('ALTER TABLE handyman_customer_tax_decisions ENABLE TRIGGER hm_customer_tax_decision_immutable');}
+    assert.equal(await migrateDown(pool),'0500_handyman_bm_commission_tax_cases');
     await assert.rejects(migrateDown(pool),/Refusing to remove populated customer tax classification history/);
+    assert.deepEqual(await migrateUp(pool),['0500_handyman_bm_commission_tax_cases']);
   });
   it('invalidates a reviewed classification when its buyer or approved rule ceases to apply',async()=>{
     const f=await fixture(),r=await rule(f,'P02AC_TAX_E_P_I_ORD_NP16_CLOSURE_CASE');

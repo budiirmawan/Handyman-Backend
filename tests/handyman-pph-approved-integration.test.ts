@@ -24,7 +24,8 @@ import { adjustHandymanCustomerLedger } from '../src/modules/handyman-customer-l
 import { deriveHandymanFinancialEntitlements } from '../src/modules/handyman-financial-entitlements';
 import { captureHandymanTaxIdentity, closeHandymanTaxIdentity, decideHandymanTaxIdentityApproval, submitHandymanTaxIdentityForApproval } from '../src/modules/handyman-tax-identity';
 import { createHandymanTaxRule, decideHandymanTaxRule, submitHandymanTaxRule, type CreateHandymanTaxRule } from '../src/modules/handyman-tax-rules';
-import { calculateApprovedHandymanBmWithholding, readHandymanBmCommissionSource, type CalculateApprovedBmWithholdingInput } from '../src/modules/handyman-pph-calculation';
+import { readHandymanBmCommissionSource, type CalculateApprovedBmWithholdingInput } from '../src/modules/handyman-pph-calculation';
+import { calculateUnverifiedBmWithholding } from './helpers/legacy-unverified-bm-pph';
 
 const DIR='/tmp/hm-pph-02b-pg',PORT=55538;
 Object.assign(process.env,{NODE_ENV:'test',LOG_LEVEL:'error',DB_HOST:'127.0.0.1',DB_PORT:String(PORT),DB_USER:'postgres',
@@ -120,10 +121,10 @@ async function counts(){
   const out:Record<string,number>={};for(const name of names)out[name]=(await q(`SELECT count(*)::int n FROM ${name}`)).rows[0].n;return out;
 }
 
-describe('PART 02B real approved BM entitlement and withholding integration',()=>{
+describe('PART 02B legacy unverified withholding-core regression (test-only)',()=>{
   it('reads exact distinct-BM provenance, rounds the synthetic rule and is read-only on replay',async()=>{
     const f=await fixture(),input=await command(f),before=await counts();
-    const [a,b]=await Promise.all([calculateApprovedHandymanBmWithholding(admin,input),calculateApprovedHandymanBmWithholding(admin,input)]);
+    const [a,b]=await Promise.all([calculateUnverifiedBmWithholding(admin,input),calculateUnverifiedBmWithholding(admin,input)]);
     assert.deepEqual(a,b);assert.equal(a.commissionGross,'2.50');assert.equal(a.taxableWithholdingBasis,'2.50');
     assert.equal(a.ratePercent,'7.500000');assert.equal(a.pphWithheld,'0.19');assert.equal(a.projectedNetCommission,'2.31');
     assert.equal(a.source.entitlementId,f.earned!.bmFee.id);assert.equal(a.source.buildingId,f.realm.building.id);
@@ -138,14 +139,14 @@ describe('PART 02B real approved BM entitlement and withholding integration',()=
   });
   it('preserves an explicitly verified legacy Client beneficiary rather than relabeling it',async()=>{
     const f=await fixture({distinct:false}),input=await command(f),before=(await q('SELECT * FROM handyman_entitlement_facts WHERE id=$1',[input.entitlementId])).rows[0];
-    const result=await calculateApprovedHandymanBmWithholding(admin,input);
+    const result=await calculateUnverifiedBmWithholding(admin,input);
     assert.equal(result.source.beneficiary.kind,'CLIENT_ORGANIZATION');
     assert.equal(result.source.beneficiary.representedClientId,f.realm.client.id);
     assert.equal(result.source.beneficiary.beneficiaryDefinitionId,before.bm_beneficiary_id);
     assert.equal(before.bm_beneficiary_kind,null);assert.deepEqual((await q('SELECT * FROM handyman_entitlement_facts WHERE id=$1',[input.entitlementId])).rows[0],before);
   });
   it('replays the original BM after prospective closure, new beneficiary and agreement supersession',async()=>{
-    const f=await fixture(),input=await command(f),before=await calculateApprovedHandymanBmWithholding(admin,input);
+    const f=await fixture(),input=await command(f),before=await calculateUnverifiedBmWithholding(admin,input);
     const replacementParty=await prepareVerifiedTestBm(admin,f.realm.client.id,true);
     const replacement=await prepareHandymanCommercialAgreement(admin,{clientId:f.realm.client.id,idempotencyKey:id()});
     await q(`INSERT INTO handyman_bm_fee_rule_definitions(id,agreement_version_id,basis,mode,idempotency_key,created_by_user_id)
@@ -158,34 +159,34 @@ describe('PART 02B real approved BM entitlement and withholding integration',()=
     await bindHandymanBmBuildingCoverage(admin,{clientId:f.realm.client.id,buildingId:f.realm.building.id,agreementVersionId:replacement.version.id,
       counterpartyId:replacementParty.counterparty.id,beneficiaryKind:'BM_LEGAL_COUNTERPARTY',effectiveFrom:boundary,idempotencyKey:id()});
     assert.equal((await resolveHandymanBmBuildingCoverageAt(f.realm.client.id,f.realm.building.id,boundary)).counterpartyId,replacementParty.counterparty.id);
-    const after=await calculateApprovedHandymanBmWithholding(admin,input);
+    const after=await calculateUnverifiedBmWithholding(admin,input);
     assert.deepEqual(after,before);assert.equal(after.source.coverage.effectiveToAtEarning,null);
   });
   it('fails closed on unapplied ledger changes and separately recorded entitlement corrections',async()=>{
     const f=await fixture(),input=await command(f);
     await adjustHandymanCustomerLedger({executionScopeId:f.scope.id,chargeLineId:f.charge.chargeLine.id,amount:'20.00',reason:'TEST adjustment',idempotencyKey:id()},admin);
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,input),code('HANDYMAN_PPH_SOURCE_STALE'));
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,input),code('HANDYMAN_PPH_SOURCE_STALE'));
     await deriveHandymanFinancialEntitlements(f.scope.id,admin,id());
     await assert.rejects(readHandymanBmCommissionSource(admin,{clientId:input.clientId,entitlementId:input.entitlementId}),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,input),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,input),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
   });
   it('rejects missing/unapproved rules, wrong beneficiary and stale approval pins without falling back to zero',async()=>{
     const f=await fixture(),input=await command(f);
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...input,taxpayerClassification:'P02B_TAX_E_ANOTHER_CASE'}),code('HANDYMAN_PPH_MISSING_RULE'));
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...input,beneficiary:{...input.beneficiary,
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,{...input,taxpayerClassification:'P02B_TAX_E_ANOTHER_CASE'}),code('HANDYMAN_PPH_MISSING_RULE'));
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,{...input,beneficiary:{...input.beneficiary,
       owner:{kind:'BM_BENEFICIARY',clientId:input.clientId,counterpartyId:id()}}}),code('HANDYMAN_PPH_IDENTITY_MISMATCH'));
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...input,rule:{...input.rule,approvalDecisionId:id()}}),code('HANDYMAN_PPH_INTEGRITY_ERROR'));
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,{...input,rule:{...input.rule,approvalDecisionId:id()}}),code('HANDYMAN_PPH_INTEGRITY_ERROR'));
     const unapproved=await fixture({approveRule:false}),u=await command(unapproved);
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,u),code('HANDYMAN_PPH_NOT_APPROVED'));
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,u),code('HANDYMAN_PPH_NOT_APPROVED'));
     const noIdentity=await fixture({approveIdentity:false}),n=await command(noIdentity);
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,n),code('HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED'));
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,n),code('HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED'));
   });
   it('applies half-open Indonesian tax-date windows and exact identity closure instant',async()=>{
     const f=await fixture(),input=await command(f),end=day(1),at=new Date(`${end}T00:00:00+07:00`).toISOString();
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...input,taxDate:end,taxPointAt:at}),code('HANDYMAN_PPH_MISSING_RULE'));
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,{...input,taxDate:end,taxPointAt:at}),code('HANDYMAN_PPH_MISSING_RULE'));
     const identityEnd=iso(Date.now()+60000);
     await closeHandymanTaxIdentity(admin,{owner:f.owner,profileId:f.identity.snapshot.id,effectiveTo:identityEnd,reason:'TEST identity close'});
-    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,{...input,taxDate:jakarta(Date.parse(identityEnd)),taxPointAt:identityEnd}),
+    await assert.rejects(calculateUnverifiedBmWithholding(admin,{...input,taxDate:jakarta(Date.parse(identityEnd)),taxPointAt:identityEnd}),
       code('HANDYMAN_TAX_IDENTITY_NOT_EFFECTIVE'));
   });
   it('enforces Finance and exact Building scope, including a sibling Building of the same Client',async()=>{
@@ -193,7 +194,7 @@ describe('PART 02B real approved BM entitlement and withholding integration',()=
     const sibling=await buildingService.createBuilding({propertyId:f.realm.property.id,code:`SIB_${id().slice(0,8)}`,name:'Sibling'});
     const reader=await scopedUser(sibling.id,['handyman.finance.read']);
     await assert.rejects(readHandymanBmCommissionSource(reader,{clientId:input.clientId,entitlementId:input.entitlementId}),code('BUILDING_ACCESS_DENIED'));
-    await assert.rejects(calculateApprovedHandymanBmWithholding(reader,input),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(calculateUnverifiedBmWithholding(reader,input),code('BUILDING_ACCESS_DENIED'));
     const noFinance=await scopedUser(f.realm.building.id,[]);
     await assert.rejects(readHandymanBmCommissionSource(noFinance,{clientId:input.clientId,entitlementId:input.entitlementId}),code('PERMISSION_DENIED'));
     await assert.rejects(readHandymanBmCommissionSource(admin,{clientId:id(),entitlementId:input.entitlementId}),code('HANDYMAN_PPH_SOURCE_NOT_FOUND'));
@@ -210,7 +211,7 @@ describe('PART 02B real approved BM entitlement and withholding integration',()=
       const submission=await submitHandymanTaxRule(admin,pin);await wait();
       const decision=await decideHandymanTaxRule(f.checker,{...pin,submissionId:submission.id,decision:'APPROVE',
         sourceValidation:'FINANCE_VALIDATED',evidenceSource:'TEST_CHECKER',evidenceReference:`zero-review/${id()}`});
-      const result=await calculateApprovedHandymanBmWithholding(admin,{...input,treatment,taxpayerClassification:r.snapshot.taxpayerClassification,
+      const result=await calculateUnverifiedBmWithholding(admin,{...input,treatment,taxpayerClassification:r.snapshot.taxpayerClassification,
         rule:{ruleId:r.snapshot.id,ruleVersion:r.snapshot.version,ruleDigest:r.digest,approvalDecisionId:decision.id}});
       assert.equal(result.treatment,treatment);assert.equal(result.pphWithheld,'0.00');assert.equal(result.projectedNetCommission,'2.50');
     }
@@ -222,16 +223,16 @@ describe('PART 02B real approved BM entitlement and withholding integration',()=
     await q('ALTER TABLE handyman_bm_building_coverages DISABLE TRIGGER hm_bm_coverage_no_rewrite');
     try{
       await q('UPDATE handyman_bm_building_coverages SET effective_from=$2 WHERE id=$1',[f.bm.coverage.id,iso(Date.now()+60000)]);
-      await assert.rejects(calculateApprovedHandymanBmWithholding(admin,input),code('HANDYMAN_BM_BINDING_NOT_EFFECTIVE'));
+      await assert.rejects(calculateUnverifiedBmWithholding(admin,input),code('HANDYMAN_BM_BINDING_NOT_EFFECTIVE'));
       await q('UPDATE handyman_bm_building_coverages SET effective_from=$2,created_at=$3 WHERE id=$1',
         [f.bm.coverage.id,original.effective_from,iso(Date.now()+60000)]);
-      await assert.rejects(calculateApprovedHandymanBmWithholding(admin,input),code('HANDYMAN_PPH_INTEGRITY_ERROR'));
+      await assert.rejects(calculateUnverifiedBmWithholding(admin,input),code('HANDYMAN_PPH_INTEGRITY_ERROR'));
     }finally{
       await q('UPDATE handyman_bm_building_coverages SET effective_from=$2,created_at=$3 WHERE id=$1',
         [f.bm.coverage.id,original.effective_from,original.created_at]);
       await q('ALTER TABLE handyman_bm_building_coverages ENABLE TRIGGER hm_bm_coverage_no_rewrite');
     }
-    assert.equal((await calculateApprovedHandymanBmWithholding(admin,input)).source.beneficiary.kind,'CLIENT_ORGANIZATION');
+    assert.equal((await calculateUnverifiedBmWithholding(admin,input)).source.beneficiary.kind,'CLIENT_ORGANIZATION');
   });
   it('rejects an ambiguous rule projection rather than arbitrarily choosing an approved rule',async()=>{
     const f=await fixture(),input=await command(f);
@@ -241,14 +242,14 @@ describe('PART 02B real approved BM entitlement and withholding integration',()=
     await q('ALTER TABLE handyman_tax_rule_windows DISABLE TRIGGER hm_tax_rule_window_guard');
     try{
       await q('UPDATE handyman_tax_rule_windows SET effective_from=$2 WHERE rule_id=$1',[next.snapshot.id,day(-1)]);
-      await assert.rejects(calculateApprovedHandymanBmWithholding(admin,input),code('HANDYMAN_PPH_AMBIGUOUS_RULE'));
+      await assert.rejects(calculateUnverifiedBmWithholding(admin,input),code('HANDYMAN_PPH_AMBIGUOUS_RULE'));
       await q('UPDATE handyman_tax_rule_windows SET effective_from=$2 WHERE rule_id=$1',[next.snapshot.id,day(1)]);
     }finally{
       await q('ALTER TABLE handyman_tax_rule_windows ENABLE TRIGGER hm_tax_rule_window_guard');
       await q(`ALTER TABLE handyman_tax_rule_windows ADD CONSTRAINT hm_tax_rule_window_no_overlap EXCLUDE USING gist
         (client_id WITH =,transaction_context WITH =,tax_code WITH =,taxpayer_classification WITH =,daterange(effective_from,effective_to,'[)') WITH &&)`);
     }
-    assert.equal((await calculateApprovedHandymanBmWithholding(admin,input)).pphWithheld,'0.19');
+    assert.equal((await calculateUnverifiedBmWithholding(admin,input)).pphWithheld,'0.19');
   });
   it('rejects an inconsistent immutable raw commission even when its anchors are valid',async()=>{
     const f=await fixture({derive:false});

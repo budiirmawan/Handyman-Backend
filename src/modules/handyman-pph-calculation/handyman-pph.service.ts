@@ -4,10 +4,9 @@ import { AppError, ERROR_CODES } from '../../shared/errors';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { permissionRepository } from '../permissions';
 import { resolveHandymanBmBuildingCoverageInSnapshot } from '../handyman-bm-binding/handyman-bm-binding.service';
-import { requireApprovedIdentityAtInSnapshot } from '../handyman-tax-identity/handyman-tax-identity.service';
-import { resolveHandymanTaxRuleInSnapshot } from '../handyman-tax-rules/handyman-tax-rules.service';
-import { calculateBmWithholdingFromResolved, cents, decimal, hash, normalizePphInput, pphError, pphIntegrity, uuid } from './handyman-pph-core';
-import type { ApprovedBmWithholdingBreakdown, BmCommissionSource, CalculateApprovedBmWithholdingInput } from './handyman-pph.types';
+import { calculateBmWithholdingFromResolved, cents, decimal, hash, pphError, pphIntegrity, uuid } from './handyman-pph-core';
+import type { BmCommissionSource, VerifiedBmWithholdingBreakdown } from './handyman-pph.types';
+import type { BmVerifiedCalculationInput } from '../handyman-bm-tax-case';
 
 const iso = (d: Date): string => d.toISOString();
 const maybeIso = (d: Date | null): string | null => d ? iso(d) : null;
@@ -57,7 +56,7 @@ async function ledgerBasis(tx: PoolClient, transactionId: string, currency: stri
 }
 
 /** Snapshot establishes the exact original entitlement, verified Building and commercial authority. */
-async function sourceInSnapshot(tx: PoolClient, actor: string, clientId: string, entitlementId: string): Promise<BmCommissionSource> {
+export async function readHandymanBmCommissionSourceInSnapshot(tx: PoolClient, actor: string, clientId: string, entitlementId: string): Promise<BmCommissionSource> {
   await financeRead(tx,actor);
   const rows = await tx.query(`SELECT f.*, s.client_id AS scope_client_id, s.building_id AS scope_building_id,
       t.client_id AS transaction_client_id, t.execution_scope_id AS transaction_scope_id,
@@ -150,34 +149,26 @@ export async function readHandymanBmCommissionSource(actorInput: string, input: 
   const tx = await getPool().connect();
   try {
     await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const source=await sourceInSnapshot(tx,actor,clientId,entitlementId);
+    const source=await readHandymanBmCommissionSourceInSnapshot(tx,actor,clientId,entitlementId);
     await tx.query('COMMIT'); return source;
   } catch (err) { await tx.query('ROLLBACK').catch(()=>undefined); throw err; }
   finally { tx.release(); }
 }
 
-/** Shared immutable snapshot of source, Building authority, approved identity and exact approved rule. */
-export async function calculateApprovedHandymanBmWithholding(actorInput: string,
-  input: CalculateApprovedBmWithholdingInput): Promise<ApprovedBmWithholdingBreakdown> {
-  const actor=uuid(actorInput,'actorUserId'), n=normalizePphInput(input), tx=await getPool().connect();
+/** Only an independently approved, current case can reach this read-only projection. */
+export async function calculateApprovedHandymanBmWithholding(actorInput: string, input: BmVerifiedCalculationInput): Promise<VerifiedBmWithholdingBreakdown> {
+  const actor = uuid(actorInput,'actor');
+  const {normalizeBmVerifiedCalculationInput,requireApprovedBmTaxCaseInSnapshot}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
+  const n=normalizeBmVerifiedCalculationInput(input), tx=await getPool().connect();
   try {
     await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const readAt=iso((await tx.query("SELECT date_trunc('milliseconds',transaction_timestamp()) AS read_at")).rows[0].read_at);
-    const source=await sourceInSnapshot(tx,actor,n.clientId,n.entitlementId);
-    if (source.checksum !== n.sourceChecksum || source.commissionGross !== n.commissionGross) throw stale();
-    if (n.beneficiary.owner.kind !== 'BM_BENEFICIARY' || n.beneficiary.owner.counterpartyId !== source.beneficiary.counterpartyId)
-      throw pphError('HANDYMAN_PPH_IDENTITY_MISMATCH','The pinned identity is not the exact verified BM beneficiary.');
-    const identity=await requireApprovedIdentityAtInSnapshot(tx,actor,n.beneficiary.owner,n.taxPointAt);
-    const cutoff=new Date(Math.min(Date.parse(readAt),Date.parse(n.taxPointAt))).toISOString();
-    const rule=await resolveHandymanTaxRuleInSnapshot(tx,actor,{ clientId:n.clientId,transactionContext:'BM_COMMISSION',
-      taxCode:'PPH_WITHHOLDING',taxpayerClassification:n.taxpayerClassification,taxDate:n.taxDate,knownAt:cutoff });
-    if (rule.status === 'MISSING') throw pphError('HANDYMAN_PPH_MISSING_RULE','No exact withholding rule exists for this classification and date.');
-    if (rule.status === 'AMBIGUOUS') throw pphError('HANDYMAN_PPH_AMBIGUOUS_RULE','More than one withholding rule matches this classification and date.');
-    if (rule.status === 'NOT_APPROVED') throw pphError('HANDYMAN_PPH_NOT_APPROVED','The withholding rule was not approved by the required instant.');
-    if (rule.status === 'INTEGRITY_ERROR') throw pphIntegrity();
-    if (rule.status !== 'APPROVED') throw pphError('HANDYMAN_PPH_NOT_APPROVED','The withholding rule is not approved.');
-    const result=calculateBmWithholdingFromResolved(n,source,identity,rule,readAt);
-    await tx.query('COMMIT'); return result;
-  } catch (err) { await tx.query('ROLLBACK').catch(()=>undefined); throw err; }
+    const verified=await requireApprovedBmTaxCaseInSnapshot(tx,actor,n);
+    const pure=calculateBmWithholdingFromResolved(verified.pphInput,verified.source,verified.pphBeneficiary,verified.pphRule,verified.readAt);
+    const {schema:_schema,caseApplicability:_unverified,checksumAlgorithm:_algorithm,checksum:_checksum,...rest}=pure;
+    const body=Object.freeze({...rest,schema:'HANDYMAN_VERIFIED_BM_PPH_WITHHOLDING_V1' as const,
+      caseApplicability:'INDEPENDENTLY_FINANCE_APPROVED' as const,determination:verified.reference});
+    const result=Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
+    await tx.query('COMMIT');return result;
+  } catch (err) { await tx.query('ROLLBACK').catch(()=>undefined);throw err; }
   finally { tx.release(); }
 }

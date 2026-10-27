@@ -75,3 +75,11 @@ export type ApprovedCustomerPpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' |
   }>;
   transactionPartyBinding: 'VERIFIED_BUYER_FINANCE_REVIEWED_TRANSACTION_ASSERTION';
 }>;
+
+/** Read-only BM PPN over the exact source and independently approved Finance case. */
+export type VerifiedBmPpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' | 'transactionPartyBinding'> & Readonly<{
+  schema: 'HANDYMAN_VERIFIED_BM_PPN_CALCULATION_V1';
+  transactionPartyBinding: 'VERIFIED_BM_COMMISSION_FINANCE_APPROVED';
+  source: import('../handyman-pph-calculation').BmCommissionSource;
+  determination: import('../handyman-bm-tax-case').BmTaxCaseReference;
+}>;

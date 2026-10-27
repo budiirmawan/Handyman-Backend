@@ -21,7 +21,8 @@ import {
   type CreateHandymanTaxRule, type HandymanTaxRuleView, type TaxRuleApprovalEvent,
 } from '../src/modules/handyman-tax-rules';
 import { resolveHandymanTaxRuleInSnapshot } from '../src/modules/handyman-tax-rules/handyman-tax-rules.service';
-import { calculateApprovedHandymanPpn, type CalculateApprovedPpnInput } from '../src/modules/handyman-ppn-calculation';
+import { type CalculateApprovedPpnInput } from '../src/modules/handyman-ppn-calculation';
+import { calculateUnverifiedPpn } from './helpers/legacy-unverified-bm-ppn';
 import { createAdminUser } from './helpers/access';
 
 const DIR='/tmp/hm-ppn-02a-pg', PORT=55534;
@@ -134,7 +135,7 @@ async function historicInvoice(f:Fixture){
   return invoice;
 }
 
-describe('PART 02A approved resolver integration (read-only)',()=>{
+describe('PART 02A legacy unverified PPN-core regression (test-only)',()=>{
   it('calculates pinned BM facts read-only and blocks customer billing without an approved customer identity',async()=>{
     const f=await fixture(), customerInput=ruleInput(f,'CUSTOMER_SERVICE_BILLING'), bmInput=ruleInput(f,'BM_COMMISSION');
     const customer=await rule(f,customerInput), bm=await rule(f,bmInput);assert.ok(customer.decision);assert.ok(bm.decision);
@@ -144,8 +145,8 @@ describe('PART 02A approved resolver integration (read-only)',()=>{
     const constraint=(await q("SELECT convalidated,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname='tenant_invoices_amount_check'")).rows[0];
     assert.equal(constraint.convalidated,true);assert.match(constraint.definition,/total_amount = subtotal/);
     const before=await financialCounts();
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,one),errCode('HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE'));
-    const first=await calculateApprovedHandymanPpn(f.maker,two), again=await calculateApprovedHandymanPpn(f.maker,two);
+    await assert.rejects(calculateUnverifiedPpn(f.maker,one),errCode('HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE'));
+    const first=await calculateUnverifiedPpn(f.maker,two), again=await calculateUnverifiedPpn(f.maker,two);
     assert.deepEqual((await q('SELECT * FROM tenant_invoices WHERE id=$1',[invoice])).rows[0],historicBefore);
     assert.deepEqual(first,again);assert.equal(first.ppnAmount,'75.00');assert.equal(first.totalIncludingPpn,'1075.00');
     assert.equal(first.supplier.profileId,f.bm.snapshot.id);assert.equal(first.recipient.profileId,f.supplier.snapshot.id);
@@ -159,7 +160,7 @@ describe('PART 02A approved resolver integration (read-only)',()=>{
       basisMethodCode:'PPN02A_EXCLUSIVE_RATIO_5_8_V1',
       basisDescription:'P02A_V1|SOURCE=EXCLUSIVE|DPP=ROUND(SOURCE*5/8)|PPN=ROUND(DPP*RATE/100)|TOTAL=SOURCE+PPN'});
     const ratio=await rule(f,ratioInput);assert.ok(ratio.decision);
-    const calculated=await calculateApprovedHandymanPpn(f.maker,command(f,ratioInput,ratio.view,ratio.decision));
+    const calculated=await calculateUnverifiedPpn(f.maker,command(f,ratioInput,ratio.view,ratio.decision));
     assert.equal(calculated.dppAmount,'625.00');assert.equal(calculated.ppnAmount,'47.00');assert.equal(calculated.totalIncludingPpn,'1047.00');
     for(const [app,code,method,description] of [
       ['EXEMPT','EXEMPT','PPN02A_EXEMPT_FULL_V1','P02A_V1|APPLICABILITY=EXEMPT|SOURCE=EXCLUSIVE|DPP=SOURCE|PPN=0|TOTAL=SOURCE'],
@@ -169,7 +170,7 @@ describe('PART 02A approved resolver integration (read-only)',()=>{
         classificationDescription:`P02A_V1|APPLICABILITY=${app}|SUPPLIER=ENTITY,PKP|RECIPIENT=ENTITY,PKP|CASE=TEST_CASE`,
         basisMethodCode:method,basisDescription:description,ratePercent:'0'});
       const approved=await rule(f,input);assert.ok(approved.decision);
-      const result=await calculateApprovedHandymanPpn(f.maker,{...command(f,input,approved.view,approved.decision),applicability:app});
+      const result=await calculateUnverifiedPpn(f.maker,{...command(f,input,approved.view,approved.decision),applicability:app});
       assert.equal(result.dppAmount,app==='EXEMPT'?'1000.00':'0.00');assert.equal(result.ppnAmount,'0.00');
       assert.equal(result.totalIncludingPpn,'1000.00');assert.equal(result.applicability,app);
     }
@@ -177,35 +178,35 @@ describe('PART 02A approved resolver integration (read-only)',()=>{
   it('refuses unapproved identities, missing or unapproved rules, wrong pins and unauthorized actors',async()=>{
     const f=await fixture(false), input=ruleInput(f,'BM_COMMISSION'), record=await rule(f,input);assert.ok(record.decision);
     const fake={id:id()}, unapproved=command({...f,bmApproval:fake as typeof f.issuerApproval},input,record.view,record.decision);
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,unapproved),errCode('HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED'));
+    await assert.rejects(calculateUnverifiedPpn(f.maker,unapproved),errCode('HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED'));
     const bmApproval=await f.approveIdentity(f.bmOwner,f.bm);await wait();const ready={...f,bmApproval};
     const cmd=command(ready,input,record.view,record.decision);
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,{...cmd,rule:{...cmd.rule,ruleId:id()}}),errCode('HANDYMAN_PPN_INTEGRITY_ERROR'));
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,{...cmd,supplier:{...cmd.supplier,profileDigest:'0'.repeat(64)}}),errCode('HANDYMAN_PPN_INTEGRITY_ERROR'));
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,{...cmd,taxpayerClassification:'P02A_TAX_E_N_E_N_TEST_CASE'}),errCode('HANDYMAN_PPN_MISSING_RULE'));
+    await assert.rejects(calculateUnverifiedPpn(f.maker,{...cmd,rule:{...cmd.rule,ruleId:id()}}),errCode('HANDYMAN_PPN_INTEGRITY_ERROR'));
+    await assert.rejects(calculateUnverifiedPpn(f.maker,{...cmd,supplier:{...cmd.supplier,profileDigest:'0'.repeat(64)}}),errCode('HANDYMAN_PPN_INTEGRITY_ERROR'));
+    await assert.rejects(calculateUnverifiedPpn(f.maker,{...cmd,taxpayerClassification:'P02A_TAX_E_N_E_N_TEST_CASE'}),errCode('HANDYMAN_PPN_MISSING_RULE'));
     const outsider=await scopedUser(f.buildingId,['handyman.commercial.manage']);
-    await assert.rejects(calculateApprovedHandymanPpn(outsider,cmd),errCode('PERMISSION_DENIED'));
+    await assert.rejects(calculateUnverifiedPpn(outsider,cmd),errCode('PERMISSION_DENIED'));
     const otherClient=id(),otherProperty=id(),otherBuilding=id();
     await q('INSERT INTO clients (id,code,name) VALUES ($1,$2,$3)',[otherClient,id(),'Other client']);
     await q('INSERT INTO properties (id,client_id,code,name) VALUES ($1,$2,$3,$4)',[otherProperty,otherClient,id(),'Other property']);
     await q('INSERT INTO buildings (id,property_id,code,name) VALUES ($1,$2,$3,$4)',[otherBuilding,otherProperty,id(),'Other building']);
     const otherReader=await scopedUser(otherBuilding,['handyman.finance.read']);
-    await assert.rejects(calculateApprovedHandymanPpn(otherReader,cmd),errCode('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(calculateUnverifiedPpn(otherReader,cmd),errCode('BUILDING_ACCESS_DENIED'));
     const pendingInput=ruleInput(f,'BM_COMMISSION',{taxpayerClassification:'P02A_TAX_E_P_E_P_PENDING_CASE',
       classificationDescription:'P02A_V1|APPLICABILITY=TAXABLE|SUPPLIER=ENTITY,PKP|RECIPIENT=ENTITY,PKP|CASE=PENDING_CASE'}),
       pending=await rule(f,pendingInput,false);
     const pendingCommand=command(ready,pendingInput,pending.view,record.decision);
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,pendingCommand),errCode('HANDYMAN_PPN_NOT_APPROVED'));
+    await assert.rejects(calculateUnverifiedPpn(f.maker,pendingCommand),errCode('HANDYMAN_PPN_NOT_APPROVED'));
   });
   it('fails closed at approval and half-open date boundaries, even with a future pinned rule',async()=>{
     const f=await fixture(), from=day(4),to=day(6),input=ruleInput(f,'BM_COMMISSION',{effectiveFrom:from,effectiveTo:to});
     const r=await rule(f,input);assert.ok(r.decision);const cmd=command(f,input,r.view,r.decision);
     const atDate=(d:string)=>`${d}T09:00:00+07:00`;
-    const first=await calculateApprovedHandymanPpn(f.maker,{...cmd,taxDate:from,taxPointAt:atDate(from)});
+    const first=await calculateUnverifiedPpn(f.maker,{...cmd,taxDate:from,taxPointAt:atDate(from)});
     assert.equal(first.dppAmount,'1000.00');
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,{...cmd,taxDate:to,taxPointAt:atDate(to)}),errCode('HANDYMAN_PPN_MISSING_RULE'));
+    await assert.rejects(calculateUnverifiedPpn(f.maker,{...cmd,taxDate:to,taxPointAt:atDate(to)}),errCode('HANDYMAN_PPN_MISSING_RULE'));
     const prior=iso(new Date(f.issuerApproval.approvedFrom!).getTime()-1);
-    await assert.rejects(calculateApprovedHandymanPpn(f.maker,{...cmd,taxDate:jakarta(new Date(prior).getTime()),taxPointAt:prior}),
+    await assert.rejects(calculateUnverifiedPpn(f.maker,{...cmd,taxDate:jakarta(new Date(prior).getTime()),taxPointAt:prior}),
       errCode('HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED'));
   });
   it('propagates identity tampering and ambiguous rule projections instead of choosing arbitrarily',async()=>{
@@ -214,7 +215,7 @@ describe('PART 02A approved resolver integration (read-only)',()=>{
     await q('ALTER TABLE handyman_tax_identity_profiles DISABLE TRIGGER hm_tax_profile_no_mutation');
     try{
       await q("UPDATE handyman_tax_identity_profiles SET evidence_reference='tampered' WHERE id=$1",[f.supplier.snapshot.id]);
-      await assert.rejects(calculateApprovedHandymanPpn(f.maker,cmd),errCode('HANDYMAN_TAX_IDENTITY_INTEGRITY_ERROR'));
+      await assert.rejects(calculateUnverifiedPpn(f.maker,cmd),errCode('HANDYMAN_TAX_IDENTITY_INTEGRITY_ERROR'));
       await q('UPDATE handyman_tax_identity_profiles SET evidence_reference=$2 WHERE id=$1',[f.supplier.snapshot.id,f.supplier.snapshot.evidenceReference]);
     }finally{await q('ALTER TABLE handyman_tax_identity_profiles ENABLE TRIGGER hm_tax_profile_no_mutation');}
     const next=await createHandymanTaxRule(f.maker,{...base,effectiveFrom:day(4),effectiveTo:day(8),expectedVersion:1});
@@ -222,14 +223,14 @@ describe('PART 02A approved resolver integration (read-only)',()=>{
     await q('ALTER TABLE handyman_tax_rule_windows DISABLE TRIGGER hm_tax_rule_window_guard');
     try{
       await q('UPDATE handyman_tax_rule_windows SET effective_from=$2 WHERE rule_id=$1',[next.snapshot.id,day(-1)]);
-      await assert.rejects(calculateApprovedHandymanPpn(f.maker,cmd),errCode('HANDYMAN_PPN_AMBIGUOUS_RULE'));
+      await assert.rejects(calculateUnverifiedPpn(f.maker,cmd),errCode('HANDYMAN_PPN_AMBIGUOUS_RULE'));
       await q('UPDATE handyman_tax_rule_windows SET effective_from=$2 WHERE rule_id=$1',[next.snapshot.id,day(4)]);
     }finally{
       await q('ALTER TABLE handyman_tax_rule_windows ENABLE TRIGGER hm_tax_rule_window_guard');
       await q(`ALTER TABLE handyman_tax_rule_windows ADD CONSTRAINT hm_tax_rule_window_no_overlap EXCLUDE USING gist
         (client_id WITH =,transaction_context WITH =,tax_code WITH =,taxpayer_classification WITH =,daterange(effective_from,effective_to,'[)') WITH &&)`);
     }
-    assert.equal((await calculateApprovedHandymanPpn(f.maker,cmd)).ppnAmount,'75.00');
+    assert.equal((await calculateUnverifiedPpn(f.maker,cmd)).ppnAmount,'75.00');
   });
   it('reads identity and rule windows from one repeatable-read snapshot while later closures take effect',async()=>{
     const f=await fixture(), input=ruleInput(f,'BM_COMMISSION',{effectiveTo:null}), r=await rule(f,input);assert.ok(r.decision);

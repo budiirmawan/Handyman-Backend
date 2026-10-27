@@ -132,7 +132,7 @@ function ms(value: unknown): number {
   if (!Number.isFinite(n) || new Date(n).toISOString() !== value) throw integrity();
   return n;
 }
-const hash = (snapshot: unknown) => createHash('sha256').update(stableJson(snapshot),'utf8').digest('hex');
+export const hash = (snapshot: unknown) => createHash('sha256').update(stableJson(snapshot),'utf8').digest('hex');
 function expectedOwnerId(value: HandymanTaxIdentityOwner): string {
   return value.kind === 'HANDYMAN_ISSUER' ? value.clientId : value.counterpartyId;
 }
@@ -282,14 +282,21 @@ function calculateAmounts(input: {sourceRupiah: bigint; applicability: PpnApplic
 }
 
 /** Pure core for already resolved trusted snapshots; it does not establish database authenticity. */
-export function calculatePpnFromResolved(input: NormalizedPpnInput, supplier: ApprovedHandymanTaxIdentity,
-  recipient: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): ApprovedPpnBreakdown {
+/** Validate policy and pins without imposing PPN's whole-rupiah monetary restriction on a case. */
+export function validatePpnFromResolved(input: NormalizedPpnInput, supplier: ApprovedHandymanTaxIdentity,
+  recipient: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): void {
   if (input.transactionContext === 'CUSTOMER_SERVICE_BILLING') throw customerUnavailable();
   const at = ms(input.taxPointAt), cutoff = Math.min(at,ms(authorityAsOf));
   validateIdentity(input.supplier,supplier,at,cutoff); validateIdentity(input.recipient,recipient,at,cutoff);
   if (identifierClash(supplier,recipient)) throw mismatch();
   const classDescription = classification(input,supplier,recipient);
   validateRule(input,resolved,cutoff,classDescription);
+  calculateAmounts({...input,sourceRupiah:0n},resolved.rule.snapshot);
+}
+
+export function calculatePpnFromResolved(input: NormalizedPpnInput, supplier: ApprovedHandymanTaxIdentity,
+  recipient: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): ApprovedPpnBreakdown {
+  validatePpnFromResolved(input,supplier,recipient,resolved,authorityAsOf);
   const p = resolved.rule.snapshot, {dpp,ppn}=calculateAmounts(input,p);
   const body = Object.freeze({ schema:'HANDYMAN_PPN_CALCULATION_V1' as const,clientId:input.clientId,
     transactionContext:input.transactionContext,taxDate:input.taxDate,taxPointAt:input.taxPointAt,currency:'IDR' as const,

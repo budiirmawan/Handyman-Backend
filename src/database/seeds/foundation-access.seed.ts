@@ -285,6 +285,7 @@ export const FOUNDATION_PERMISSIONS: readonly {
   { code: 'handyman.customer_tax.read', name: 'Access customer tax classification evidence references' },
   { code: 'handyman.tax_identity.approve', name: 'Approve or reject Handyman tax identities' },
   { code: 'handyman.tax_rule.approve', name: 'Approve or reject Handyman tax rules' },
+  { code: 'handyman.bm_tax_case.approve', name: 'Approve or reject BM commission tax cases' },
   {
     code: 'handyman.finance.manage',
     name: 'Execute Handyman finance commands (ledger, allocations, corrections, payment verification)',
@@ -854,6 +855,7 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   // Dedicated checker authority: never granted automatically, including to PLATFORM_ADMIN.
   'handyman.tax_identity.approve',
   'handyman.tax_rule.approve',
+  'handyman.bm_tax_case.approve',
   'handyman.customer_tax.read',
   'handyman.settlement.manage',
   // CR-HM-WORKER-COMPETENCY-01 PART 02 — verifying (or rejecting) a worker's

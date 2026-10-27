@@ -1,3 +1,4 @@
+import { migration0500HandymanBmCommissionTaxCases } from './0500_handyman_bm_commission_tax_cases';
 import { migration0499HandymanCustomerTaxClassifications } from './0499_handyman_customer_tax_classifications';
 import { migration0498HandymanRequestBuyerBindings } from './0498_handyman_request_buyer_bindings';
 import { migration0497HandymanTaxRuleGovernance } from './0497_handyman_tax_rule_governance';
@@ -1046,4 +1047,5 @@ export const migrations: readonly Migration[] = [
   migration0497HandymanTaxRuleGovernance,
   migration0498HandymanRequestBuyerBindings,
   migration0499HandymanCustomerTaxClassifications,
+  migration0500HandymanBmCommissionTaxCases,
 ];

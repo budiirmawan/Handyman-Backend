@@ -1,5 +1,8 @@
 # PART 02A-B — Request buyer / tax-party boundary
 
+> PART 02C-A subsequently replaces the unbound BM calculation boundary; see
+> `CR-HM-TAX-INDONESIA-02-PART-02C-A.md`. This customer contract is unchanged.
+
 ## Contract
 
 Migration 0498 adds request-scoped, append-only buyer assertions and

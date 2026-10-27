@@ -189,9 +189,9 @@ function reference(id: ApprovedHandymanTaxIdentity): PpnIdentityReference {
     approval:Object.freeze({ submission:Object.freeze({ ...id.approval.submission }), decision:Object.freeze({ ...id.approval.decision }) }) });
 }
 
-/** Pure math/checks for already resolved trusted snapshots: this function cannot prove database authenticity. */
-export function calculateBmWithholdingFromResolved(input: CalculateApprovedBmWithholdingInput, source: BmCommissionSource,
-  identity: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): ApprovedBmWithholdingBreakdown {
+/** Check the independent PPh policy and pinned provenance without authorizing or posting a payment. */
+export function validateBmWithholdingFromResolved(input: CalculateApprovedBmWithholdingInput, source: BmCommissionSource,
+  identity: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): void {
   const n = normalizePphInput(input), { checksumAlgorithm, checksum, ...body } = source;
   if (checksumAlgorithm !== 'SHA-256' || hash(body) !== checksum || checksum !== n.sourceChecksum ||
       source.schema !== 'HANDYMAN_BM_COMMISSION_SOURCE_V1' || source.entitlementId !== n.entitlementId ||
@@ -207,7 +207,14 @@ export function calculateBmWithholdingFromResolved(input: CalculateApprovedBmWit
   }
   const desc = expectedClassification(n,identity);
   validateRule(n,resolved,Math.min(epoch(n.taxPointAt),epoch(authorityAsOf)),desc);
-  const p = resolved.rule.snapshot, { basis, withholding, net } = amounts(n,p);
+  amounts({...n,commissionGross:'0.00'},resolved.rule.snapshot);
+}
+
+/** Pure math/checks for already resolved trusted snapshots: this function cannot prove database authenticity. */
+export function calculateBmWithholdingFromResolved(input: CalculateApprovedBmWithholdingInput, source: BmCommissionSource,
+  identity: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): ApprovedBmWithholdingBreakdown {
+  validateBmWithholdingFromResolved(input,source,identity,resolved,authorityAsOf);
+  const n = normalizePphInput(input), p = resolved.rule.snapshot, { basis, withholding, net } = amounts(n,p);
   const result = Object.freeze({ schema:'HANDYMAN_BM_PPH_WITHHOLDING_V1' as const, clientId:n.clientId,
     taxDate:n.taxDate,taxPointAt:n.taxPointAt,currency:'IDR' as const,commissionBasis:n.commissionBasis,commissionGross:n.commissionGross,
     treatment:n.treatment,taxpayerClassification:n.taxpayerClassification,taxableWithholdingBasis:decimal(basis),
