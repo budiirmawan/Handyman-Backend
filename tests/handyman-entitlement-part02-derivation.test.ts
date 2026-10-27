@@ -650,10 +650,12 @@ describe('CR-HM-BM-COMMISSION-01 PART 01C distinct BM earned binding', () => {
   });
 
   it('refuses a destructive 0494 downgrade after distinct facts exist', async () => {
+    assert.equal(await migrateDown(pool), '0497_handyman_tax_rule_governance');
     assert.equal(await migrateDown(pool), '0496_handyman_tax_identity_approval');
     assert.equal(await migrateDown(pool), '0495_handyman_tax_identity_profiles');
     await assert.rejects(migrateDown(pool), /Refusing to remove populated distinct BM entitlement history/);
     assert.equal((await q("SELECT count(*)::int AS n FROM schema_migrations WHERE id='0494_handyman_distinct_bm_entitlements'")).rows[0].n, 1);
-    assert.deepEqual(await migrateUp(pool), ['0495_handyman_tax_identity_profiles', '0496_handyman_tax_identity_approval']);
+    assert.deepEqual(await migrateUp(pool), ['0495_handyman_tax_identity_profiles', '0496_handyman_tax_identity_approval',
+      '0497_handyman_tax_rule_governance']);
   });
 });

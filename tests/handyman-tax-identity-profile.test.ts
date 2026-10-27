@@ -122,11 +122,11 @@ async function waitForBlock(waiterPid: number, blockerPid: number) {
 
 describe('CR-HM-TAX-INDONESIA-01 PART 01A identity and PKP assertions', () => {
   it('registers additive 0495, reuses existing issuer and BM, and preserves their prior facts', async () => {
-    assert.deepEqual(migrations.slice(-7).map(m => m.id), [
+    assert.deepEqual(migrations.slice(-8).map(m => m.id), [
       '0490_create_handyman_document_issuer_profiles', '0491_create_handyman_document_issuer_bank_accounts',
       '0492_create_handyman_document_issuer_settings', '0493_handyman_bm_beneficiary_building_coverage',
       '0494_handyman_distinct_bm_entitlements', '0495_handyman_tax_identity_profiles',
-      '0496_handyman_tax_identity_approval',
+      '0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance',
     ]);
     const f = await fixture(), bm = await party(f.clientId);
     const issuerBefore = (await q('SELECT to_jsonb(x) AS row FROM handyman_document_issuer_profiles x WHERE id=$1', [f.issuer.id])).rows[0];
@@ -425,9 +425,10 @@ describe('CR-HM-TAX-INDONESIA-01 PART 01A identity and PKP assertions', () => {
   });
 
   it('refuses destructive rollback once tax identity history exists', async () => {
+    assert.equal(await migrateDown(pool), '0497_handyman_tax_rule_governance');
     assert.equal(await migrateDown(pool), '0496_handyman_tax_identity_approval');
     await assert.rejects(migrateDown(pool), /Refusing to remove populated tax identity history/);
     assert.equal((await q("SELECT count(*)::int AS n FROM schema_migrations WHERE id='0495_handyman_tax_identity_profiles'")).rows[0].n, 1);
-    assert.deepEqual(await migrateUp(pool), ['0496_handyman_tax_identity_approval']);
+    assert.deepEqual(await migrateUp(pool), ['0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance']);
   });
 });
