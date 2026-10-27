@@ -2,6 +2,7 @@ import { Router, type Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { authenticationMiddleware } from '../auth/authentication.middleware';
 import { downloadQuotationDocument } from './handyman-quotation-document.service';
+import { recordLocalCareDownload } from './handyman-quotation-delivery.service';
 
 export function sendQuotationDocumentPdf(res: Response, document: Awaited<ReturnType<typeof downloadQuotationDocument>>) {
   res.setHeader('Content-Type', 'application/pdf');
@@ -22,7 +23,10 @@ export function createQuotationDocumentRouter(): Router {
           (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length))) {
         throw AppError.validation('Quotation document download accepts no context fields.');
       }
-      sendQuotationDocumentPdf(res, await downloadQuotationDocument(req.auth.userId, req.params.quotationVersionId as string));
+      const versionId = req.params.quotationVersionId as string;
+      const document = await downloadQuotationDocument(req.auth.userId, versionId);
+      await recordLocalCareDownload(req.auth.userId, versionId, document.pdfChecksum);
+      sendQuotationDocumentPdf(res, document);
     } catch (error) { next(error); }
   });
   return router;

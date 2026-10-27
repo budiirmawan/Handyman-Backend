@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import type { Pool } from 'pg';
 import { closePool, initDatabase, migrateDown, migrateUp } from '../src/database';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
+import { createEvidenceStorage, evidenceStorageKey } from '../src/modules/evidence/storage';
 import { createChannelAttribution } from '../src/modules/handyman-channel-attributions';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { handymanServiceRequestService, handymanServiceRequestTriageService, handymanServiceRequestDiagnosisService } from '../src/modules/handyman-requests';
@@ -34,19 +36,39 @@ import { startEmbeddedTestDatabase, type EmbeddedTestDatabase } from './helpers/
 import { initHandymanFixtures, realmFixture, locationChain } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
 
-const DIR = '/tmp/hm-quotation-document-0509', PORT = 55574;
+const DIR = '/tmp/hm-quotation-document-0509', STORAGE = '/tmp/hm-quotation-delivery-evidence-0510', PORT = 55574;
 const id = () => randomUUID(), sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
 const q = (sql: string, values: unknown[] = []) => pool.query(sql, values);
 const valid = () => new Date(Date.now() + 86400000).toISOString();
 const code = (expected: string) => (e: unknown) => { assert.equal((e as { code?: string }).code, expected); return true; };
 let db: EmbeddedTestDatabase, pool: Pool, admin: string, adminToken: string, discipline: string;
 let realm: Awaited<ReturnType<typeof realmFixture>>, chain: Awaited<ReturnType<typeof locationChain>>;
-let tenant: string, person: string, pic: string, service: string, uom: string, careUser: string, careLocalToken: string, limited: string;
+let tenant: string, person: string, pic: string, service: string, uom: string, careUser: string, careLocalToken: string, limited: string, limitedToken: string;
+let reviewer: string, reviewerToken: string, careReviewerActor: string, careReviewerToken: string;
 let requestId: string, quotationId: string, versionId: string, legacyVersion: string, legacyRequest: string;
-let careActor: string, careToken: string, firstBytes: Buffer, firstHash: string, secondVersion: string;
+let foreignRequest: string, foreignBuilding: string;
+let careActor: string, careToken: string, firstBytes: Buffer, firstHash: string, secondVersion: string, localSentId: string;
 const selection = () => ({ propertyId: realm.property.id, buildingId: realm.building.id, tenantCompanyId: tenant, spaceId: chain.space.id });
 const carePath = (request: string, version: string) => `/api/v1/handyman/care/requests/${request}/quotation-versions/${version}/document.pdf`;
 const localPath = (version: string) => `/api/v1/handyman/quotation-versions/${version}/document.pdf`;
+const localEvents = (request = requestId, quotation = quotationId, version = versionId, building = realm.building.id) =>
+  `/api/v1/handyman/care/buildings/${building}/requests/${request}/quotations/${quotation}/versions/${version}/delivery-events`;
+const careEvents = (request = requestId, quotation = quotationId, version = versionId) =>
+  `/api/v1/handyman/care/requests/${request}/quotations/${quotation}/versions/${version}/delivery-events`;
+const sentBody = (channel = 'WHATSAPP', extra: Record<string, unknown> = {}) => ({ type: 'SENT', pdfSha256: firstHash,
+  channel, recipientName: 'Customer PIC', recipientContact: channel === 'DIRECT' ? null : channel === 'WHATSAPP' ? '+628123456789' : 'customer@example.test',
+  recipientPicId: pic, idempotencyKey: `send-${id()}`, ...extra });
+const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+async function protectedEvidence(ownerRequest: string, bytes = Buffer.from('%PDF-independent-provider-receipt')) {
+  const evidenceId = id(), key = evidenceStorageKey(evidenceId);
+  await createEvidenceStorage().put(key, { buffer: bytes, mimeType: 'application/pdf' });
+  await q(`INSERT INTO evidence_submissions(id,client_id,execution_type,execution_id,evidence_type,file_reference,original_file_name,
+    mime_type,file_size,submitted_by_user_id,content_sha256,content_hashed_at,hash_algorithm)
+    VALUES($1,$2,'HANDYMAN_REQUEST',$3,'DOCUMENT',$4,'receipt.pdf','application/pdf',$5,$6,$7,NOW(),'SHA-256')`,
+  [evidenceId, realm.client.id, ownerRequest, key, bytes.length, careUser, sha(bytes)]);
+  return { evidenceId, key, bytes };
+}
 
 async function grant(userId: string, codes: string[]) {
   const role = await roleService.createRole({ code: `DOC_${id()}`, name: 'Quotation document test' });
@@ -114,9 +136,13 @@ async function pdfText(bytes: Buffer) {
 }
 
 before(async () => {
+  process.env.EVIDENCE_STORAGE_DIR = STORAGE;
+  await rm(STORAGE, { recursive: true, force: true });
   db = await startEmbeddedTestDatabase({ dir: DIR, port: PORT });
   pool = await initDatabase({ host: '127.0.0.1', port: PORT, name: 'asentra_test', user: 'postgres', password: '', ssl: false });
-  await migrateUp(pool); assert.equal(await migrateDown(pool), '0509_handyman_quotation_documents');
+  await migrateUp(pool);
+  assert.equal(await migrateDown(pool), '0510_handyman_quotation_delivery_events');
+  assert.equal(await migrateDown(pool), '0509_handyman_quotation_documents');
   const root = await createAdminUser(); admin = root.userId; adminToken = root.token;
   const d = await handymanDisciplineRepository.findDisciplineByCode(undefined, 'GENERAL_HANDYMAN'); assert.ok(d); discipline = d.id;
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline, query: q });
@@ -145,7 +171,8 @@ before(async () => {
   await line(versionId, 'LABOR', 1.2345, 100.25, 'Replace tap');
   await line(versionId, 'MATERIAL', 2, 10.10, 'Rubber seal');
   const care = await localUser(['handyman.care.building', 'tenant_company.manage'], true); careUser = care.id; careLocalToken = care.token;
-  limited = (await localUser(['tenant_company.manage'])).id;
+  const secondCare = await localUser(['handyman.care.building'], true); reviewer = secondCare.id; reviewerToken = secondCare.token;
+  const noCare = await localUser(['tenant_company.manage'], true); limited = noCare.id; limitedToken = noCare.token;
   const integrationCode = `QDOC_${id().slice(0,8).toUpperCase()}`, secret = 'quotation-document-workspace-test-secret';
   const integration = await handoffRuntimeRepository.createIntegration({ integrationCode, displayName: 'Quotation Care' });
   await handymanCareActorService.setIntegrationActorCapability({ integrationId: integration.id, capability: 'CUSTOMER_CARE' });
@@ -156,8 +183,24 @@ before(async () => {
     issuedAt: new Date(Date.now()-1000).toISOString(), expiresAt: new Date(Date.now()+240000).toISOString(),
     actor: { type: 'CUSTOMER_CARE', actorReference: 'care' } };
   careToken = (await admitCareWorkspace(assertion, signCareWorkspaceAssertion(assertion, secret))).workspaceToken;
+  careReviewerActor = (await handymanCareActorService.createCareActor({ integrationId: integration.id, actorReference: 'care-reviewer', displayName: 'Independent reviewer' })).id;
+  await grantCareActorProperty({ careActorId: careReviewerActor, propertyId: realm.property.id, clientId: realm.client.id }, admin);
+  const reviewerAssertion: CareWorkspaceAssertion = { ...assertion, assertionId: id(), actor: { type: 'CUSTOMER_CARE', actorReference: 'care-reviewer' } };
+  careReviewerToken = (await admitCareWorkspace(reviewerAssertion, signCareWorkspaceAssertion(reviewerAssertion, secret))).workspaceToken;
+  const foreign = await realmFixture('Foreign delivery'); foreignBuilding = foreign.building.id;
+  const foreignSpace = await locationChain(foreign);
+  const foreignTenant = await tenantCompanyService.createTenantCompany({ clientId: foreign.client.id, tenantCode: `T_${id().slice(0,8).toUpperCase()}`,
+    tenantName: 'Other Client Tenant' }, admin);
+  await tenantSpaceService.assignSpaceToTenant({ tenantCompanyId: foreignTenant.id, buildingId: foreignBuilding, spaceId: foreignSpace.space.id }, admin);
+  await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: foreignTenant.id, buildingId: foreignBuilding }, admin);
+  const foreignService = await serviceCatalogService.createServiceCatalogEntry({ clientId: foreign.client.id, code: `S_${id().slice(0,8).toUpperCase()}`,
+    name: 'Other repair', category: 'HANDYMAN' }, admin);
+  const attribution = await createChannelAttribution({ tenantCompanyId: foreignTenant.id, buildingId: foreignBuilding,
+    originChannel: 'BM_SUPER_APP', originReference: `bm-handoff:BM_SUPER_APP:${id()}`, createdByUserId: admin });
+  foreignRequest = (await handymanServiceRequestService.createHandymanServiceRequest({ channelAttributionId: attribution.id,
+    serviceCatalogId: foreignService.id }, admin)).id;
 });
-after(async () => { if (pool) await closePool(pool); if (db) await db.stop(); });
+after(async () => { if (pool) await closePool(pool); if (db) await db.stop(); await rm(STORAGE, { recursive: true, force: true }); });
 
 describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
   it('preserves legacy versions and fails closed on missing settings, issuer, verified bank, and unauthorized actors', async () => {
@@ -170,6 +213,11 @@ describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
       quantity: 1, uomId: uom, currency: 'IDR', finalQuotedUnitAmount: 9 }, careUser), code('PERMISSION_DENIED'));
     assert.equal((await api().get(localPath(versionId)).set('Authorization', `Bearer ${careLocalToken}`)).status, 404);
     assert.equal((await api().get(carePath(requestId, versionId)).query(selection()).set('Authorization', `Bearer ${careToken}`)).status, 404);
+    const draftBody = sentBody('WHATSAPP', { pdfSha256: '0'.repeat(64) });
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send(draftBody)).status, 404);
+    assert.equal((await api().post(careEvents()).set(auth(careToken)).send(draftBody)).status, 404);
+    const legacyQuotation = (await q('SELECT quotation_id FROM handyman_quotation_versions WHERE id=$1', [legacyVersion])).rows[0].quotation_id;
+    assert.equal((await api().post(localEvents(legacyRequest, legacyQuotation, legacyVersion)).set(auth(careLocalToken)).send(draftBody)).status, 404);
     await assert.rejects(q(`UPDATE handyman_quotation_versions SET status='ISSUED',valid_until=$2 WHERE id=$1`, [versionId, valid()]), /requires its official immutable document/);
     await assert.rejects(q(`INSERT INTO handyman_quotation_versions(id,quotation_id,version_number,status,valid_until,created_by_user_id)
       VALUES($1,$2,99,'ISSUED',$3,$4)`, [id(), quotationId, valid(), admin]), /must begin as DRAFT/);
@@ -213,7 +261,7 @@ describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
     firstBytes = row.pdf_bytes; firstHash = row.pdf_sha256;
     await assert.rejects(q('UPDATE handyman_quotation_documents SET pdf_bytes=$2 WHERE id=$1', [row.id, Buffer.from('%PDF-bad')]), /immutable/);
     await assert.rejects(q('DELETE FROM handyman_quotation_documents WHERE id=$1', [row.id]), /immutable/);
-    await assert.rejects(q('TRUNCATE handyman_quotation_documents'), /immutable/);
+    await assert.rejects(q('TRUNCATE handyman_quotation_documents, handyman_quotation_delivery_events'), /immutable/);
     await assert.rejects(q('UPDATE handyman_quotation_versions SET valid_until=$2 WHERE id=$1', [versionId, valid()]), /validity is pinned/);
     await assert.rejects(q("UPDATE handyman_quotation_versions SET status='DRAFT' WHERE id=$1", [versionId]), /cannot return to DRAFT/);
   });
@@ -236,6 +284,101 @@ describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
     assert.equal((await api().get(carePath(legacyRequest, versionId)).query(selection()).set('Authorization', `Bearer ${careToken}`)).status, 404);
     assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [versionId])).rows[0].status, before);
     assert.equal((await q('SELECT count(*)::int n FROM handyman_quotation_decisions WHERE quotation_version_id=$1', [versionId])).rows[0].n, 0);
+    const events = (await api().get(localEvents()).set(auth(careLocalToken))).body.data;
+    assert.ok(events.some((e: any) => e.type === 'DOWNLOADED' && e.recordedByUserId === careUser && e.pdfSha256 === firstHash));
+    assert.ok(events.some((e: any) => e.type === 'DOWNLOADED' && e.recordedByCareActorId === careActor));
+    assert.equal(events.filter((e: any) => e.type !== 'DOWNLOADED').length, 0);
+  });
+
+  it('records only Care-attested sends with exact artifact, recipient, channel and isolated scope', async () => {
+    const initial = await protectedEvidence(requestId);
+    const body = sentBody('WHATSAPP', { evidenceId: initial.evidenceId, occurredAt: new Date().toISOString() });
+    assert.equal((await api().post(localEvents()).send(body)).status, 401);
+    assert.equal((await api().post(localEvents()).set(auth(limitedToken)).send(body)).status, 403);
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send({ ...body, recordedByUserId: reviewer })).status, 400);
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send({ ...body, type: 'DOWNLOADED' })).status, 400);
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send({ ...body, pdfSha256: '0'.repeat(64) })).status, 409);
+    assert.equal((await api().post(localEvents(requestId, id(), versionId)).set(auth(careLocalToken)).send(body)).status, 404);
+    assert.equal((await api().post(localEvents(requestId, quotationId, id())).set(auth(careLocalToken)).send(body)).status, 404);
+    assert.equal((await api().post(localEvents(foreignRequest, quotationId, versionId, foreignBuilding)).set(auth(careLocalToken)).send(body)).status, 404);
+    assert.equal((await api().post(careEvents(foreignRequest)).set(auth(careToken)).send(body)).status, 404);
+    assert.equal((await api().get(careEvents(foreignRequest)).set(auth(careToken))).status, 404);
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send({ ...body, recipientPicId: id() })).status, 409);
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send({ ...body, recipientContact: null })).status, 400);
+    const sent = await api().post(localEvents()).set(auth(careLocalToken)).send(body);
+    assert.equal(sent.status, 201, JSON.stringify(sent.body));
+    const event = sent.body.data.event; localSentId = event.id;
+    assert.equal(event.type, 'SENT'); assert.equal(event.recordedByUserId, careUser); assert.equal(event.recordedByCareActorId, null);
+    assert.equal(event.quotationId, quotationId); assert.equal(event.quotationVersionId, versionId); assert.equal(event.pdfSha256, firstHash);
+    assert.equal(event.tenantCompanyId, tenant); assert.equal(event.recipientPicId, pic); assert.equal(event.recipientContact, '+628123456789');
+    assert.equal(event.evidenceId, initial.evidenceId); assert.equal(event.evidenceSha256, sha(initial.bytes));
+    assert.equal(event.reportedOccurredAt, body.occurredAt); assert.ok(event.recordedAt);
+    const replay = await api().post(localEvents()).set(auth(careLocalToken)).send(body);
+    assert.equal(replay.status, 200); assert.equal(replay.body.data.event.id, localSentId); assert.equal(replay.body.data.replayed, true);
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send({ ...body, recipientName: 'Different' })).status, 409);
+    for (const channel of ['EMAIL', 'DIRECT']) {
+      const sentOther = await api().post(localEvents()).set(auth(careLocalToken)).send(sentBody(channel));
+      assert.equal(sentOther.status, 201, JSON.stringify(sentOther.body)); assert.equal(sentOther.body.data.event.channel, channel);
+    }
+    const concurrent = sentBody('EMAIL');
+    const pair = await Promise.all([api().post(localEvents()).set(auth(careLocalToken)).send(concurrent),
+      api().post(localEvents()).set(auth(careLocalToken)).send(concurrent)]);
+    assert.deepEqual(pair.map(r => r.status).sort(), [200, 201]);
+    assert.equal(pair[0].body.data.event.id, pair[1].body.data.event.id);
+    assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [versionId])).rows[0].status, 'ISSUED');
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_quotation_decisions WHERE quotation_version_id=$1', [versionId])).rows[0].n, 0);
+  });
+
+  it('requires separate Care review of protected, intact external delivery proof, without creating consent', async () => {
+    const proof = await protectedEvidence(requestId);
+    const wrongRequest = await protectedEvidence(legacyRequest);
+    const confirm = { type: 'DELIVERED', pdfSha256: firstHash, sentEventId: localSentId, evidenceId: proof.evidenceId,
+      evidenceKind: 'PROVIDER_RECEIPT', reviewed: true, idempotencyKey: `confirm-${id()}` };
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send(confirm)).status, 409);
+    assert.equal((await api().post(careEvents()).set(auth(careToken)).send(confirm)).status, 409); // no cross-realm identity assumption
+    assert.equal((await api().post(localEvents()).set(auth(reviewerToken)).send({ ...confirm, reviewed: false })).status, 400);
+    assert.equal((await api().post(localEvents()).set(auth(reviewerToken)).send({ ...confirm, evidenceId: null })).status, 400);
+    assert.equal((await api().post(localEvents()).set(auth(reviewerToken)).send({ ...confirm, sentEventId: id() })).status, 404);
+    assert.equal((await api().post(localEvents()).set(auth(reviewerToken)).send({ ...confirm, evidenceId: wrongRequest.evidenceId })).status, 409);
+    await createEvidenceStorage().put(proof.key, { buffer: Buffer.from('tampered'), mimeType: 'application/pdf' });
+    assert.equal((await api().post(localEvents()).set(auth(reviewerToken)).send(confirm)).status, 409);
+    await createEvidenceStorage().put(proof.key, { buffer: proof.bytes, mimeType: 'application/pdf' });
+    const reviewed = await api().post(localEvents()).set(auth(reviewerToken)).send(confirm);
+    assert.equal(reviewed.status, 201, JSON.stringify(reviewed.body));
+    const event = reviewed.body.data.event;
+    assert.equal(event.type, 'DELIVERED'); assert.equal(event.sentEventId, localSentId); assert.equal(event.recordedByUserId, reviewer);
+    assert.equal(event.evidenceId, proof.evidenceId); assert.equal(event.evidenceSha256, sha(proof.bytes));
+    assert.equal(event.evidenceKind, 'PROVIDER_RECEIPT'); assert.equal(event.recipientPicId, pic); assert.equal(event.pdfSha256, firstHash);
+    assert.equal(JSON.stringify(event).includes('evidence/'), false);
+    assert.equal((await api().post(localEvents()).set(auth(reviewerToken)).send(confirm)).status, 200);
+    assert.equal((await api().post(localEvents()).set(auth(reviewerToken)).send({ ...confirm, idempotencyKey: `again-${id()}` })).status, 409);
+    assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [versionId])).rows[0].status, 'ISSUED');
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_quotation_decisions WHERE quotation_version_id=$1', [versionId])).rows[0].n, 0);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_commercial_consent_receipts WHERE target_id=$1', [versionId])).rows[0].n, 0);
+  });
+
+  it('supports workspace Care and a separate workspace reviewer; journal facts are append-only and bound in the database', async () => {
+    const body = sentBody('EMAIL');
+    const sent = await api().post(careEvents()).set(auth(careToken)).send(body);
+    assert.equal(sent.status, 201, JSON.stringify(sent.body));
+    assert.equal(sent.body.data.event.recordedByCareActorId, careActor); assert.equal(sent.body.data.event.recordedByUserId, null);
+    const proof = await protectedEvidence(requestId);
+    const confirm = { type: 'DELIVERED', pdfSha256: firstHash, sentEventId: sent.body.data.event.id, evidenceId: proof.evidenceId,
+      evidenceKind: 'TENANT_ACKNOWLEDGEMENT', reviewed: true, idempotencyKey: `workspace-review-${id()}` };
+    assert.equal((await api().post(careEvents()).set(auth(careToken)).send(confirm)).status, 409);
+    const reviewed = await api().post(careEvents()).set(auth(careReviewerToken)).send(confirm);
+    assert.equal(reviewed.status, 201, JSON.stringify(reviewed.body)); assert.equal(reviewed.body.data.event.recordedByCareActorId, careReviewerActor);
+    const history = await api().get(careEvents()).set(auth(careReviewerToken));
+    assert.equal(history.status, 200); assert.ok(history.body.data.some((event: any) => event.id === localSentId));
+    await assert.rejects(q(`UPDATE handyman_quotation_delivery_events SET channel='DIRECT' WHERE id=$1`, [localSentId]), /append-only/);
+    await assert.rejects(q('DELETE FROM handyman_quotation_delivery_events WHERE id=$1', [localSentId]), /append-only/);
+    await assert.rejects(q('TRUNCATE handyman_quotation_delivery_events'), /append-only/);
+    await assert.rejects(q(`INSERT INTO handyman_quotation_delivery_events
+      (id,client_id,building_id,request_id,tenant_company_id,quotation_id,quotation_version_id,document_id,pdf_sha256,event_type,
+       channel,recipient_name,recipient_contact,recipient_pic_id,recorded_by_user_id,idempotency_key,payload_sha256)
+      SELECT $1,client_id,building_id,request_id,tenant_company_id,quotation_id,quotation_version_id,document_id,repeat('0',64),'SENT',
+       channel,recipient_name,recipient_contact,recipient_pic_id,recorded_by_user_id,$2,repeat('a',64)
+      FROM handyman_quotation_delivery_events WHERE id=$3`, [id(), `forged-${id()}`, localSentId]), /exact official version/);
   });
 
   it('freezes old masters and bytes while issuing a unique revision and retains governed history after approval', async () => {
@@ -251,10 +394,14 @@ describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
     assert.equal(rows[1].source_snapshot.issuer.legalName, 'PT New Issuer'); assert.equal(rows[1].source_snapshot.bank.accountNumber, '9876543210');
     assert.match(rows[1].document_number, /^QTX-/); assert.deepEqual((await downloadQuotationDocument(admin, versionId)).bytes, firstBytes);
     assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [versionId])).rows[0].status, 'SUPERSEDED');
+    assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send(sentBody())).status, 409);
     const history = await api().get(carePath(requestId, versionId)).query(selection()).set('Authorization', `Bearer ${careToken}`).buffer(true);
     assert.equal(history.status, 200); assert.deepEqual(history.body, firstBytes);
     await decideHandymanQuotation(secondVersion, { decision: 'APPROVE', idempotencyKey: `approve-${id()}` }, person);
     assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [secondVersion])).rows[0].status, 'APPROVED');
+    const secondHash = rows[1].pdf_sha256;
+    assert.equal((await api().post(localEvents(requestId, quotationId, secondVersion)).set(auth(careLocalToken))
+      .send(sentBody('DIRECT', { pdfSha256: secondHash }))).status, 409);
     assert.equal((await api().get(carePath(requestId, secondVersion)).query(selection()).set('Authorization', `Bearer ${careToken}`)).status, 200);
     assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [legacyVersion])).rows[0].status, 'ISSUED');
   });
@@ -269,5 +416,7 @@ describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
     assert.equal((await api().get(carePath(inspectRequest, draft)).query(selection()).set('Authorization', `Bearer ${careToken}`)).status, 404);
     await revokeCareActorProperty({ careActorId: careActor, propertyId: realm.property.id, clientId: realm.client.id }, admin);
     assert.equal((await api().get(carePath(requestId, versionId)).query(selection()).set('Authorization', `Bearer ${careToken}`)).status, 404);
+    assert.equal((await api().get(careEvents()).set(auth(careToken))).status, 404);
+    assert.equal((await api().post(careEvents()).set(auth(careToken)).send(sentBody())).status, 404);
   });
 });

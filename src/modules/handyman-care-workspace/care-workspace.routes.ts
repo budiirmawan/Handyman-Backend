@@ -1,4 +1,5 @@
 import { downloadQuotationDocumentForCare } from '../handyman-quotations/handyman-quotation-document.service';
+import { recordWorkspaceCareDownload } from '../handyman-quotations/handyman-quotation-delivery.service';
 import { sendQuotationDocumentPdf } from '../handyman-quotations/handyman-quotation-document.routes';
 import { downloadTenantPaymentReceiptForCare } from '../handyman-tenant-receipts/handyman-tenant-receipt.service';
 import { sendPaymentReceiptPdf } from '../handyman-tenant-receipts/handyman-tenant-receipt.routes';
@@ -149,8 +150,10 @@ export function createCareWorkspaceRouter(): Router {
       if (req.body !== undefined && (!req.body || typeof req.body !== 'object' || Array.isArray(req.body) || Object.keys(req.body).length)) {
         throw AppError.validation('Quotation document download does not accept a body.');
       }
-      sendQuotationDocumentPdf(res, await downloadQuotationDocumentForCare(match[1], req.params.requestId,
-        req.params.quotationVersionId, req.query));
+      const document = await downloadQuotationDocumentForCare(match[1], req.params.requestId,
+        req.params.quotationVersionId, req.query);
+      await recordWorkspaceCareDownload(match[1], req.params.requestId as string, req.params.quotationVersionId as string, document.pdfChecksum);
+      sendQuotationDocumentPdf(res, document);
     } catch (error) { next(error); }
   });
   router.get([
