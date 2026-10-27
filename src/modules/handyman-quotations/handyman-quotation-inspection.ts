@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { AppError } from '../../shared/errors';
 import { handymanServiceRequestNotFoundError } from '../handyman-requests/handyman-request-triage.errors';
+import { hasReusableLinkedInspection } from './handyman-quotation-inspection-reuse';
 
 /**
  * Catalog preparation is not the only quotation entry point. Enforce the
@@ -39,11 +40,13 @@ async function assertInspectedSiteVisit(
     WHERE handyman_request_id=$1 AND client_id=$2 AND building_id=$3 AND inspection_result='INSPECTED'`,
     [requestId, request.client_id, request.building_id]);
   if (inspected.rowCount === 1) return;
+  // The reuse check also refuses an existing NOT_INSPECTABLE child record.
+  if (request.intake_source === 'CATALOG' && await hasReusableLinkedInspection(tx, requestId)) return;
   throw AppError.validation(message, [
     {
       field: 'inspection',
       message:
-        'Record an INSPECTED result for this request; booking or NOT_INSPECTABLE is insufficient.',
+        'An INSPECTED result for this request or a valid linked inspection covering the same scope is required; booking or NOT_INSPECTABLE is insufficient.',
     },
   ]);
 }

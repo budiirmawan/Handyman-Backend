@@ -29,6 +29,8 @@ import { updateHandymanDocumentIssuerProfile } from '../src/modules/handyman-doc
 import { uploadFieldEvidenceBinary, createPresignedFieldEvidenceIntent } from '../src/modules/handyman-field-evidence';
 import { createEvidenceStorage } from '../src/modules/evidence/storage';
 import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
+import { addHandymanServiceRequestItem, removeHandymanServiceRequestItem } from '../src/modules/handyman-parameterized-catalog';
+import { assertHandymanQuotationInspectionReady } from '../src/modules/handyman-quotations/handyman-quotation-inspection';
 import { handymanCareActorService, grantCareActorProperty, revokeCareActorProperty } from '../src/modules/handyman-care-actors';
 import { handoffRuntimeRepository, handoffIntegrationSecretEnvName } from '../src/modules/handyman-handoff';
 import { admitCareWorkspace, signCareWorkspaceAssertion, type CareWorkspaceAssertion } from '../src/modules/handyman-care-workspace/care-workspace.service';
@@ -46,6 +48,7 @@ let parent: string, child: string, feeRequest: string, feeScope: string, feeVers
 let evidence: Awaited<ReturnType<typeof uploadFieldEvidenceBinary>>['evidence'];
 let receipt: Awaited<ReturnType<typeof issueTenantPaymentReceipt>>, paymentId: string;
 let linkId: string, careActor: string, careToken: string;
+const previousMaxAge = process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS;
 const q = (sql: string, values: unknown[] = []) => pool.query(sql, values);
 const requestPath = (requestId: string) => `/api/v1/handyman/requests/${requestId}/inspection-work-link`;
 const code = (expected: string) => (e: unknown) => { assert.equal((e as { code?: string }).code, expected); return true; };
@@ -82,6 +85,7 @@ async function line(versionId: string, amount: number) {
 const validUntil = () => new Date(Date.now() + 86400000).toISOString();
 
 before(async () => {
+  delete process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS;
   process.env.EVIDENCE_STORAGE_DIR = DIR + '-evidence'; resetAppConfigCache();
   db = await startEmbeddedTestDatabase({ dir: DIR, port: PORT });
   pool = await initDatabase({ host: '127.0.0.1', port: PORT, name: 'asentra_test', user: 'postgres', password: '', ssl: false });
@@ -109,7 +113,10 @@ before(async () => {
 after(async () => {
   if (pool) await closePool(pool); if (db) await db.stop();
   await rm(DIR, { recursive: true, force: true }); await rm(DIR + '-evidence', { recursive: true, force: true });
-  delete process.env.EVIDENCE_STORAGE_DIR; resetAppConfigCache();
+  delete process.env.EVIDENCE_STORAGE_DIR;
+  if (previousMaxAge === undefined) delete process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS;
+  else process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS = previousMaxAge;
+  resetAppConfigCache();
 });
 
 describe('CR-HM-INSPECTION-WORK-LINK-01', () => {
@@ -251,18 +258,110 @@ describe('CR-HM-INSPECTION-WORK-LINK-01', () => {
     assert.equal(revoked.status, 404);
   });
 
-  it('preserves inspection-first, separate work approval, the fee receipt and no automatic credit', async () => {
+  it('reuses only a current, authorized inspection with matching service and intact report at every work quotation boundary', async () => {
     await handymanServiceRequestTriageService.recordHandymanRequestTriage({ handymanRequestId: child,
       triageDisposition: 'DIAGNOSIS', triageNote: 'Work request reviewed' }, admin);
     await diagnose(child);
     await q(`INSERT INTO handyman_service_commercial_profiles(id,client_id,service_catalog_id,pricing_mode,created_by_user_id)
       VALUES($1,$2,$3,'INSPECTION_FIRST',$4)`, [id(), realm.client.id, service, admin]);
-    await assert.rejects(createHandymanQuotation({ handymanRequestId: child }, admin), /completed inspection/i);
-    await q(`UPDATE handyman_service_commercial_profiles SET pricing_mode='FIXED' WHERE service_catalog_id=$1`, [service]);
+    const quote = () => createHandymanQuotation({ handymanRequestId: child }, admin);
+
+    // No invented expiry: absent, malformed and expired policy all keep the original guard.
+    await assert.rejects(quote(), /completed inspection/i);
+    const own = await request('INSPECTION');
+    await recordHandymanInspection({ handymanRequestId: own, inspectionResult: 'INSPECTED', inspectionNotes: 'Own inspection' }, admin);
+    await diagnose(own);
+    assert.ok((await createHandymanQuotation({ handymanRequestId: own }, admin)).quotation.id);
+    process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS = 'invalid';
+    await assert.rejects(quote(), /completed inspection/i);
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS = '1';
+    await assert.rejects(quote(), /completed inspection/i);
+    process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS = '3600';
+
+    const unlinked = await request('DIRECT');
+    await assert.rejects(createHandymanQuotation({ handymanRequestId: unlinked }, admin), /completed inspection/i);
+    const otherTenant = (await tenantCompanyService.createTenantCompany({ clientId: realm.client.id,
+      tenantCode: `T_${id().slice(0,8).toUpperCase()}`, tenantName: 'Other tenant' }, admin)).id;
+    await q('UPDATE handyman_service_requests SET tenant_company_id=$2 WHERE id=$1', [child, otherTenant]);
+    await assert.rejects(quote(), /completed inspection/i);
+    await q('UPDATE handyman_service_requests SET tenant_company_id=$2 WHERE id=$1', [child, tenant]);
+
+    const otherService = await serviceCatalogService.createServiceCatalogEntry({ clientId: realm.client.id,
+      code: `S_${id().slice(0,8).toUpperCase()}`, name: 'Different service', category: 'HANDYMAN' }, admin);
+    await q(`INSERT INTO handyman_service_commercial_profiles(id,client_id,service_catalog_id,pricing_mode,created_by_user_id)
+      VALUES($1,$2,$3,'INSPECTION_FIRST',$4)`, [id(), realm.client.id, otherService.id, admin]);
+    await q('UPDATE handyman_service_requests SET service_catalog_id=$2 WHERE id=$1', [child, otherService.id]);
+    await assert.rejects(quote(), /completed inspection/i);
+    await q('UPDATE handyman_service_requests SET service_catalog_id=$2 WHERE id=$1', [child, service]);
+    const otherVariant = id();
+    await q(`INSERT INTO handyman_service_variants(id,client_id,service_catalog_id,code,name,created_by_user_id)
+      VALUES($1,$2,$3,$4,'Different variant',$5)`, [otherVariant, realm.client.id, service, `V_${id().slice(0,8).toUpperCase()}`, admin]);
+    await q('UPDATE handyman_service_requests SET service_variant_id=$2 WHERE id=$1', [child, otherVariant]);
+    await assert.rejects(quote(), /completed inspection/i);
+    const attributeId = id();
+    await q(`INSERT INTO handyman_service_attributes(id,client_id,service_catalog_id,code,name,data_type,created_by_user_id)
+      VALUES($1,$2,$3,'CAPACITY','Capacity','TEXT',$4)`, [attributeId, realm.client.id, service, admin]);
+    await q(`INSERT INTO handyman_service_variant_attributes(id,client_id,service_variant_id,attribute_id,value_text,created_by_user_id)
+      VALUES($1,$2,$3,$4,'1PK',$5)`, [id(), realm.client.id, otherVariant, attributeId, admin]);
+    await q('UPDATE handyman_service_requests SET service_variant_id=$2 WHERE id=$1', [parent, otherVariant]);
+    await assert.rejects(quote(), /completed inspection/i); // same ID, but its mutable attributes were never snapshotted
+    await q('UPDATE handyman_service_requests SET service_variant_id=NULL WHERE id IN ($1,$2)', [parent, child]);
+    await q(`UPDATE handyman_service_requests SET description='Different work scope' WHERE id=$1`, [child]);
+    await assert.rejects(quote(), /completed inspection/i);
+    await q('UPDATE handyman_service_requests SET description=NULL WHERE id=$1', [child]);
+    // The parent has no immutable item snapshot; even apparently matching
+    // structured details cannot be silently inferred from mutable rows.
+    const workItem = await addHandymanServiceRequestItem(child, { serviceCatalogId: service, quantity: 1,
+      attributeValues: { CAPACITY: '1PK' } }, admin);
+    await assert.rejects(quote(), /completed inspection/i);
+    await removeHandymanServiceRequestItem(child, workItem.id, admin);
+    const late = await addHandymanServiceRequestItem(parent, { serviceCatalogId: service, quantity: 1 }, admin);
+    await assert.rejects(quote(), /completed inspection/i);
+    await removeHandymanServiceRequestItem(parent, late.id, admin);
+    await assert.rejects(quote(), /completed inspection/i);
+    // Isolate the remaining checks from the deliberately unsnapshotable fixture.
+    await q('DELETE FROM handyman_service_request_items WHERE id=$1', [late.id]);
+
+    const tx = await pool.connect();
+    try {
+      await tx.query('BEGIN');
+      await tx.query(`INSERT INTO handyman_request_inspections(id,client_id,handyman_request_id,channel_attribution_id,
+        building_id,inspection_result,inspection_notes,inspected_by_user_id)
+        SELECT $2,client_id,id,channel_attribution_id,building_id,'NOT_INSPECTABLE','Site inaccessible',$3
+        FROM handyman_service_requests WHERE id=$1`, [child, id(), admin]);
+      await assert.rejects(assertHandymanQuotationInspectionReady(tx, child), /completed inspection/i);
+    } finally { await tx.query('ROLLBACK'); tx.release(); }
+    const locked = await pool.connect();
+    try {
+      await locked.query('BEGIN');
+      await locked.query('SELECT id FROM handyman_service_requests WHERE id=$1 FOR UPDATE', [parent]);
+      await assert.rejects(quote(), code('CONFLICT'));
+    } finally { await locked.query('ROLLBACK'); locked.release(); }
+
+    const event = (await q(`SELECT id FROM operational_events WHERE event_type='HANDYMAN_INSPECTION_RECORDED'
+      AND metadata->>'inspectionId'=$1`, [inspectionId])).rows[0]; assert.ok(event);
+    await q(`UPDATE operational_events SET event_type='TEST_UNAUTHORIZED' WHERE id=$1`, [event.id]);
+    await assert.rejects(quote(), /completed inspection/i);
+    await q(`UPDATE operational_events SET event_type='HANDYMAN_INSPECTION_RECORDED' WHERE id=$1`, [event.id]);
+    const storage = createEvidenceStorage(), reportBytes = (await storage.get(evidence.storageKey)).buffer;
+    const corrupt = () => storage.put(evidence.storageKey, { buffer: Buffer.from('corrupted'), mimeType: 'application/pdf' });
+    const restore = () => storage.put(evidence.storageKey, { buffer: reportBytes, mimeType: 'application/pdf' });
+    await corrupt(); await assert.rejects(quote(), /completed inspection/i); await restore();
+
     await assert.rejects(createHandymanQuotation({ handymanRequestId: parent }, admin), code('CONFLICT'));
-    const draft = await createHandymanQuotation({ handymanRequestId: child }, admin); await line(draft.versions[0].id, 500);
+    const draft = await quote(); await line(draft.versions[0].id, 500);
+    await corrupt();
+    await assert.rejects(issueHandymanQuotationVersion(draft.versions[0].id, { validUntil: validUntil() }, admin), /completed inspection/i);
+    await restore();
+    delete process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS;
+    await assert.rejects(issueHandymanQuotationVersion(draft.versions[0].id, { validUntil: validUntil() }, admin), /completed inspection/i);
+    process.env.HANDYMAN_INSPECTION_REUSE_MAX_AGE_SECONDS = '3600';
     await issueHandymanQuotationVersion(draft.versions[0].id, { validUntil: validUntil() }, admin);
     assert.equal((await q('SELECT count(*)::int n FROM handyman_execution_scopes WHERE handyman_request_id=$1', [child])).rows[0].n, 0);
+    await corrupt();
+    await assert.rejects(decideHandymanQuotation(draft.versions[0].id, { decision: 'APPROVE', idempotencyKey: key() }, person), /completed inspection/i);
+    await restore();
     const rejected = await decideHandymanQuotation(draft.versions[0].id, { decision: 'REJECT', idempotencyKey: key() }, person);
     assert.equal(rejected.executionScope, null);
     const revised = await createHandymanQuotationRevision(draft.quotation.id, admin); await line(revised.id, 500);
@@ -270,6 +369,7 @@ describe('CR-HM-INSPECTION-WORK-LINK-01', () => {
     const approved = await decideHandymanQuotation(revised.id, { decision: 'APPROVE', idempotencyKey: key() }, person);
     assert.ok(approved.executionScope); assert.notEqual(approved.executionScope.id, feeScope);
     assert.equal(approved.executionScope.handymanRequestId, child);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_request_inspections WHERE handyman_request_id=$1', [child])).rows[0].n, 0);
     assert.equal((await q('SELECT count(*)::int n FROM handyman_inspection_fee_credits')).rows[0].n, 0);
     assert.equal((await q('SELECT count(*)::int n FROM handyman_customer_payments')).rows[0].n, 1);
     const original = await downloadTenantPaymentReceipt(admin, { executionScopeId: feeScope, paymentId });
