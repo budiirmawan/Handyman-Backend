@@ -10,11 +10,15 @@ import type {
   CaptureHandymanTaxIdentityInput, HandymanTaxIdentityOwner, HandymanTaxIdentitySnapshot,
   HandymanTaxIdentityView, IndividualResidency, PkpStatus, TaxIdentifierKind, TaxpayerKind,
 } from './handyman-tax-identity.types';
+import type {
+  ApprovedHandymanTaxIdentity, TaxIdentityApprovalCommand, TaxIdentityApprovalEvent, TaxIdentityDecisionCommand,
+} from './handyman-tax-identity-approval.types';
 
 type IdentityCode = 'HANDYMAN_TAX_IDENTITY_INVALID' | 'HANDYMAN_TAX_IDENTITY_NOT_FOUND' |
   'HANDYMAN_TAX_IDENTITY_UNVERIFIED' | 'HANDYMAN_TAX_IDENTITY_CONFLICT' |
   'HANDYMAN_TAX_IDENTITY_NOT_EFFECTIVE' | 'HANDYMAN_TAX_IDENTITY_UNKNOWN' |
-  'HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED';
+  'HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED' | 'HANDYMAN_TAX_IDENTITY_APPROVAL_FORBIDDEN' |
+  'HANDYMAN_TAX_IDENTITY_INTEGRITY_ERROR';
 function error(code: IdentityCode, message: string, statusCode: number): AppError {
   return new AppError({ code: ERROR_CODES[code], message, statusCode });
 }
@@ -23,6 +27,10 @@ const notFound = () => error('HANDYMAN_TAX_IDENTITY_NOT_FOUND', 'Tax identity or
 const unverified = () => error('HANDYMAN_TAX_IDENTITY_UNVERIFIED', 'The exact BM legal beneficiary must be verified before the identity starts.', 409);
 const conflict = () => error('HANDYMAN_TAX_IDENTITY_CONFLICT', 'Tax identity history, scope, version or effective window conflicts.', 409);
 const notEffective = () => error('HANDYMAN_TAX_IDENTITY_NOT_EFFECTIVE', 'No exact tax identity is effective at this instant.', 409);
+const integrity = () => error('HANDYMAN_TAX_IDENTITY_INTEGRITY_ERROR', 'Tax identity approval does not match its immutable payload.', 409);
+const approvalRequired = () => error('HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED', 'A matching Finance tax-identity approval is required.', 409);
+const selfApproval = () => error('HANDYMAN_TAX_IDENTITY_APPROVAL_FORBIDDEN', 'The maker or identity author cannot decide their own assertion.', 403);
+const unknown = () => error('HANDYMAN_TAX_IDENTITY_UNKNOWN', 'Unknown or incomplete taxpayer, residency, identifier, PKP or evidence cannot be approved.', 409);
 
 function dbError(err: unknown): never {
   if (err instanceof AppError) throw err;
@@ -135,6 +143,16 @@ async function access(actor: string, clientId: string, permission: 'handyman.fin
   if (!(await canAccessClient(actor, clientId))) throw buildingAccessDeniedError();
 }
 
+/** Internal callers must supply the authenticated actor; inactive users never decide. */
+async function approvalAccess(actor: string, clientId: string, mode: 'maker' | 'checker' | 'read'): Promise<void> {
+  const user = await getPool().query('SELECT status FROM users WHERE id=$1', [actor]);
+  if (user.rows[0]?.status !== 'ACTIVE')
+    throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'An active authenticated Finance actor is required.' });
+  await financialPermission(actor, mode === 'maker' ? 'handyman.finance.manage' : 'handyman.finance.read');
+  if (mode === 'checker') await financialPermission(actor, 'handyman.tax_identity.approve');
+  if (!(await canAccessClient(actor, clientId))) throw buildingAccessDeniedError();
+}
+
 /** Lock the pre-existing subject, not a newly invented taxpayer entity. */
 async function lockOwner(tx: PoolClient, target: HandymanTaxIdentityOwner): Promise<Record<string, any>> {
   if (target.kind === 'HANDYMAN_ISSUER') {
@@ -150,12 +168,14 @@ async function lockOwner(tx: PoolClient, target: HandymanTaxIdentityOwner): Prom
   return result.rows[0];
 }
 
-const SELECT_VIEW = `SELECT p.*, w.effective_to AS window_to, i.superseded_at AS issuer_to,
+const VIEW_COLUMNS = `p.*, w.effective_from AS window_from, w.effective_to AS window_to,
+  w.owner_kind AS window_owner_kind, w.owner_id AS window_owner_id, i.superseded_at AS issuer_to,
   c.id AS closure_id, c.effective_to AS closure_to, c.reason AS closure_reason,
-  c.created_by_user_id AS closure_created_by, c.created_at AS closure_created_at
-  FROM handyman_tax_identity_profiles p JOIN handyman_tax_identity_windows w ON w.profile_id=p.id
+  c.created_by_user_id AS closure_created_by, c.created_at AS closure_created_at`;
+const VIEW_FROM = `FROM handyman_tax_identity_profiles p JOIN handyman_tax_identity_windows w ON w.profile_id=p.id
   LEFT JOIN handyman_tax_identity_closures c ON c.profile_id=p.id
   LEFT JOIN handyman_document_issuer_profiles i ON i.id=p.issuer_profile_id`;
+const SELECT_VIEW = `SELECT ${VIEW_COLUMNS} ${VIEW_FROM}`;
 const iso = (value: Date | null): string | null => value ? value.toISOString() : null;
 function view(row: Record<string, any>): HandymanTaxIdentityView {
   // Only immutable profile fields participate in the digest. In particular,
@@ -283,6 +303,112 @@ export async function closeHandymanTaxIdentity(actorInput: string, input: {
   } catch (err) { return dbError(err); }
 }
 
+type NormalizedApproval = {
+  owner: HandymanTaxIdentityOwner; profileId: string; profileVersion: number; profileDigest: string;
+  evidenceSource: string; evidenceReference: string;
+};
+function normalizeApproval(input: TaxIdentityApprovalCommand, decision = false): NormalizedApproval {
+  exactKeys(input, ['owner', 'profileId', 'profileVersion', 'profileDigest', 'evidenceSource', 'evidenceReference',
+    ...(decision ? ['submissionId', 'decision'] : [])], 'input');
+  if (!Number.isSafeInteger(input.profileVersion) || input.profileVersion < 1 || input.profileVersion > 2_147_483_647)
+    throw invalid('profileVersion');
+  if (typeof input.profileDigest !== 'string' || !/^[0-9a-f]{64}$/.test(input.profileDigest)) throw invalid('profileDigest');
+  return { owner: owner(input.owner), profileId: uuid(input.profileId, 'profileId'), profileVersion: input.profileVersion,
+    profileDigest: input.profileDigest, evidenceSource: text(input.evidenceSource, 'evidenceSource', 200),
+    evidenceReference: text(input.evidenceReference, 'evidenceReference', 500) };
+}
+function eventDate(value: Date | string | null): string | null {
+  return value == null ? null : value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+function approvalEvent(row: Record<string, any>): TaxIdentityApprovalEvent {
+  return Object.freeze({ id: row.id, profileId: row.profile_id, clientId: row.client_id,
+    ownerKind: row.owner_kind, ownerId: row.owner_id, profileVersion: row.profile_version,
+    profileDigest: row.profile_digest, eventType: row.event_type, submissionId: row.submission_id,
+    actorUserId: row.actor_user_id, evidenceSource: row.evidence_source, evidenceReference: row.evidence_reference,
+    occurredAt: eventDate(row.occurred_at)!, reviewFrom: eventDate(row.review_from)!, reviewTo: eventDate(row.review_to),
+    approvedFrom: eventDate(row.approved_from), approvedTo: eventDate(row.approved_to) });
+}
+function assertComplete(identity: HandymanTaxIdentityView): void {
+  const s = identity.snapshot;
+  if (s.taxpayerKind === 'UNKNOWN' || s.pkpStatus === 'UNKNOWN' ||
+      (s.taxpayerKind === 'INDIVIDUAL' && (!s.individualResidency || s.individualResidency === 'UNKNOWN')) ||
+      !s.identifierKind || !s.identifierValue || !s.evidenceSource.trim() || !s.evidenceReference.trim()) throw unknown();
+}
+async function lockedApprovalProfile(tx: PoolClient, n: NormalizedApproval): Promise<{
+  row: Record<string, any>; identity: HandymanTaxIdentityView;
+}> {
+  await lockOwner(tx, n.owner);
+  const result = await tx.query(`${SELECT_VIEW}
+    WHERE p.id=$1 AND p.client_id=$2 AND p.owner_kind=$3 AND p.owner_id=$4 FOR UPDATE OF w`,
+  [n.profileId, n.owner.clientId, n.owner.kind, ownerId(n.owner)]);
+  if (!result.rowCount) throw notFound();
+  const row = result.rows[0], identity = view(row);
+  if (identity.snapshot.version !== n.profileVersion) throw conflict();
+  if (identity.digest !== n.profileDigest) throw integrity();
+  return { row, identity };
+}
+
+/** Submit one immutable, evidence-backed exact profile for an independent checker. */
+export async function submitHandymanTaxIdentityForApproval(actorInput: string, input: TaxIdentityApprovalCommand):
+Promise<TaxIdentityApprovalEvent> {
+  const actor = uuid(actorInput, 'actorUserId'), n = normalizeApproval(input);
+  await approvalAccess(actor, n.owner.clientId, 'maker');
+  try {
+    return await withTransaction(async tx => {
+      const { identity } = await lockedApprovalProfile(tx, n);
+      assertComplete(identity);
+      const result = await tx.query(`INSERT INTO handyman_tax_identity_approval_events
+        (id,profile_id,client_id,owner_kind,owner_id,profile_version,profile_digest,event_type,actor_user_id,
+         evidence_source,evidence_reference)
+        VALUES($1,$2,$3,$4,$5,$6,$7,'SUBMIT',$8,$9,$10) RETURNING *`,
+      [randomUUID(), n.profileId, n.owner.clientId, n.owner.kind, ownerId(n.owner), n.profileVersion,
+        n.profileDigest, actor, n.evidenceSource, n.evidenceReference]);
+      return approvalEvent(result.rows[0]);
+    });
+  } catch (err) { return dbError(err); }
+}
+
+/** One independent checker either approves or rejects the exact submission. */
+export async function decideHandymanTaxIdentityApproval(actorInput: string, input: TaxIdentityDecisionCommand):
+Promise<TaxIdentityApprovalEvent> {
+  const actor = uuid(actorInput, 'actorUserId'), n = normalizeApproval(input, true);
+  const submissionId = uuid(input.submissionId, 'submissionId');
+  if (input.decision !== 'APPROVE' && input.decision !== 'REJECT') throw invalid('decision');
+  await approvalAccess(actor, n.owner.clientId, 'checker');
+  try {
+    return await withTransaction(async tx => {
+      const { identity } = await lockedApprovalProfile(tx, n);
+      const submitted = await tx.query(`SELECT * FROM handyman_tax_identity_approval_events
+        WHERE id=$1 AND profile_id=$2 AND event_type='SUBMIT'`, [submissionId, n.profileId]);
+      if (!submitted.rowCount) throw notFound();
+      const s = submitted.rows[0];
+      if (s.profile_version !== n.profileVersion || s.profile_digest !== n.profileDigest ||
+          s.client_id !== n.owner.clientId || s.owner_kind !== n.owner.kind || s.owner_id !== ownerId(n.owner)) throw integrity();
+      if (s.actor_user_id === actor || identity.snapshot.createdByUserId === actor) throw selfApproval();
+      if (input.decision === 'APPROVE') assertComplete(identity);
+      const result = await tx.query(`INSERT INTO handyman_tax_identity_approval_events
+        (id,profile_id,client_id,owner_kind,owner_id,profile_version,profile_digest,event_type,submission_id,
+         actor_user_id,evidence_source,evidence_reference)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [randomUUID(), n.profileId, n.owner.clientId, n.owner.kind, ownerId(n.owner), n.profileVersion,
+        n.profileDigest, input.decision, submissionId, actor, n.evidenceSource, n.evidenceReference]);
+      return approvalEvent(result.rows[0]);
+    });
+  } catch (err) { return dbError(err); }
+}
+
+/** Finance-read audit access to submission and checker evidence, including rejected facts. */
+export async function listHandymanTaxIdentityApprovalHistory(actorInput: string, targetInput: HandymanTaxIdentityOwner,
+  profileIdInput: string): Promise<readonly TaxIdentityApprovalEvent[]> {
+  const actor = uuid(actorInput, 'actorUserId'), target = owner(targetInput), profileId = uuid(profileIdInput, 'profileId');
+  await approvalAccess(actor, target.clientId, 'read');
+  const result = await getPool().query(`SELECT e.* FROM handyman_tax_identity_approval_events e
+    JOIN handyman_tax_identity_profiles p ON p.id=e.profile_id
+    WHERE p.id=$1 AND p.client_id=$2 AND p.owner_kind=$3 AND p.owner_id=$4 ORDER BY e.occurred_at, e.id`,
+  [profileId, target.clientId, target.kind, ownerId(target)]);
+  return Object.freeze(result.rows.map(approvalEvent));
+}
+
 /** Read bounded immutable versions, including closed or cancelled assertions. */
 export async function listHandymanTaxIdentityHistory(actorInput: string, targetInput: HandymanTaxIdentityOwner,
   options: { beforeVersion?: number | null; limit?: number } = {}): Promise<Readonly<{
@@ -322,12 +448,67 @@ export async function resolveHandymanTaxIdentityAt(actorInput: string, targetInp
   return view(result.rows[0]);
 }
 
-/** The future tax-calculation seam explicitly fails until Finance approval exists. */
-export async function requireApprovedHandymanTaxIdentityAt(actor: string, target: HandymanTaxIdentityOwner,
-  at: string): Promise<never> {
-  const result = await resolveHandymanTaxIdentityAt(actor, target, at);
-  if (result.taxUse.reason !== 'APPROVAL_REQUIRED')
-    throw error('HANDYMAN_TAX_IDENTITY_UNKNOWN', 'Unknown taxpayer, residency or PKP classification cannot be used for tax.', 409);
-  throw error('HANDYMAN_TAX_IDENTITY_APPROVAL_REQUIRED',
-    'A dedicated Finance tax-identity approval contract is required before tax use.', 409);
+/**
+ * Resolve profile, window, submission and approval in ONE database snapshot.
+ * The original 0495 assertion/digest is unchanged; this separate authority
+ * never applies before the checker decision or outside the current window.
+ */
+export async function requireApprovedHandymanTaxIdentityAt(actorInput: string, targetInput: HandymanTaxIdentityOwner,
+  atInput: string): Promise<ApprovedHandymanTaxIdentity> {
+  const actor = uuid(actorInput, 'actorUserId'), target = owner(targetInput), at = instant(atInput, 'at');
+  await approvalAccess(actor, target.clientId, 'read');
+  const result = await getPool().query(`SELECT ${VIEW_COLUMNS}, row_to_json(a) AS approval_fact,
+    row_to_json(s) AS submission_fact,
+    CASE WHEN p.owner_kind='HANDYMAN_ISSUER' THEN
+      (i.id=p.issuer_profile_id AND i.client_id=p.client_id AND i.legal_name=p.legal_name AND i.effective_from<=p.effective_from)
+    ELSE (cp.id=p.owner_id AND cp.id=p.counterparty_id AND cp.client_id=p.client_id AND cp.legal_name=p.legal_name
+      AND v.id=p.verification_id AND v.counterparty_id=cp.id AND v.verified_at<=p.effective_from) END AS anchor_valid
+    ${VIEW_FROM}
+    LEFT JOIN handyman_bm_legal_counterparties cp ON cp.id=p.counterparty_id
+    LEFT JOIN handyman_bm_counterparty_verifications v ON v.id=p.verification_id AND v.counterparty_id=cp.id
+    LEFT JOIN handyman_tax_identity_approval_events a ON a.profile_id=p.id AND a.event_type='APPROVE'
+    LEFT JOIN handyman_tax_identity_approval_events s ON s.id=a.submission_id
+    WHERE p.client_id=$1 AND p.owner_kind=$2 AND p.owner_id=$3
+      AND w.effective_from <= $4 AND (w.effective_to IS NULL OR $4 < w.effective_to)
+      AND (p.owner_kind <> 'HANDYMAN_ISSUER' OR
+        (i.client_id=p.client_id AND i.effective_from <= $4 AND
+          ((i.status='ACTIVE' AND i.superseded_at IS NULL) OR
+           (i.status='SUPERSEDED' AND i.superseded_at IS NOT NULL AND $4 < i.superseded_at))))`,
+  [target.clientId, target.kind, ownerId(target), at]);
+  if (!result.rowCount) throw notEffective();
+  if (result.rowCount !== 1) throw conflict();
+  const row = result.rows[0], identity = view(row);
+  // The public snapshot has millisecond precision; never authorize the truncated
+  // millisecond containing a microsecond-precision issuer supersession.
+  if (identity.effectiveWindow.to && at.getTime() >= new Date(identity.effectiveWindow.to).getTime()) throw notEffective();
+  assertComplete(identity);
+  if (row.anchor_valid !== true) throw integrity();
+  if (!row.approval_fact) throw approvalRequired();
+  if (!row.submission_fact) throw integrity();
+  let submission: TaxIdentityApprovalEvent, decision: TaxIdentityApprovalEvent;
+  try { submission = approvalEvent(row.submission_fact); decision = approvalEvent(row.approval_fact); }
+  catch { throw integrity(); }
+  const expectedStart = new Date(Math.max(new Date(submission.reviewFrom).getTime(), new Date(decision.occurredAt).getTime())).toISOString();
+  const expectedWindowTo = row.closure_id ? eventDate(row.closure_to) : identity.snapshot.declaredEffectiveTo;
+  if (submission.eventType !== 'SUBMIT' || submission.submissionId !== null || decision.eventType !== 'APPROVE' ||
+      decision.submissionId !== submission.id || submission.profileId !== identity.snapshot.id ||
+      decision.profileId !== identity.snapshot.id || submission.clientId !== target.clientId || decision.clientId !== target.clientId ||
+      submission.ownerKind !== target.kind || decision.ownerKind !== target.kind ||
+      submission.ownerId !== ownerId(target) || decision.ownerId !== ownerId(target) ||
+      submission.profileVersion !== identity.snapshot.version || decision.profileVersion !== identity.snapshot.version ||
+      submission.profileDigest !== identity.digest || decision.profileDigest !== identity.digest ||
+      submission.actorUserId === decision.actorUserId || decision.actorUserId === identity.snapshot.createdByUserId ||
+      decision.occurredAt <= submission.occurredAt || row.window_owner_kind !== identity.snapshot.ownerKind ||
+      row.window_owner_id !== identity.snapshot.ownerId || eventDate(row.window_from) !== identity.snapshot.effectiveFrom ||
+      identity.effectiveWindow.identityWindowTo !== expectedWindowTo ||
+      submission.reviewFrom !== identity.snapshot.effectiveFrom || decision.reviewFrom !== submission.reviewFrom ||
+      decision.reviewTo !== submission.reviewTo || decision.approvedFrom !== expectedStart || decision.approvedTo !== submission.reviewTo ||
+      !submission.evidenceSource || !submission.evidenceReference || !decision.evidenceSource || !decision.evidenceReference ||
+      (submission.reviewTo !== null && (identity.effectiveWindow.identityWindowTo === null ||
+        identity.effectiveWindow.identityWindowTo > submission.reviewTo))) throw integrity();
+  if (!decision.approvedFrom || at.getTime() < new Date(decision.approvedFrom).getTime()) throw approvalRequired();
+  if (decision.approvedTo && at.getTime() >= new Date(decision.approvedTo).getTime()) throw notEffective();
+  return Object.freeze({ snapshot: identity.snapshot, digestAlgorithm: identity.digestAlgorithm, digest: identity.digest,
+    effectiveWindow: identity.effectiveWindow, approval: Object.freeze({ submission, decision }),
+    taxUse: Object.freeze({ allowed: true, reason: 'FINANCE_APPROVED' }) });
 }

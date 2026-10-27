@@ -1,3 +1,4 @@
+import { migration0496HandymanTaxIdentityApproval } from './0496_handyman_tax_identity_approval';
 import { migration0495HandymanTaxIdentityProfiles } from './0495_handyman_tax_identity_profiles';
 import { migration0494HandymanDistinctBmEntitlements } from './0494_handyman_distinct_bm_entitlements';
 import { migration0493HandymanBmBeneficiaryBuildingCoverage } from './0493_handyman_bm_beneficiary_building_coverage';
@@ -1038,4 +1039,5 @@ export const migrations: readonly Migration[] = [
   migration0493HandymanBmBeneficiaryBuildingCoverage,
   migration0494HandymanDistinctBmEntitlements,
   migration0495HandymanTaxIdentityProfiles,
+  migration0496HandymanTaxIdentityApproval,
 ];

@@ -1,5 +1,9 @@
 # CR-HM-TAX-INDONESIA-01 — PART 01A: tax identity and PKP profile
 
+> Historical PART 01A contract. PART 01B adds separate Finance approval facts;
+> see `CR-HM-TAX-INDONESIA-01-PART-01B.md`. The 0495 assertion itself and its
+> `UNAPPROVED` snapshot field remain immutable and are not rewritten.
+
 ## Scope and authority
 
 Migration 0495 adds **assertions**, not another issuer, BM party, tax engine, or
@@ -19,16 +23,14 @@ Client-scoped master data, not a Building coverage grant: the exact 0493/0494
 Building, agreement and beneficiary requirements remain separate and unchanged.
 No permission is created or granted to a role.
 
-**Blocker — dedicated Finance tax-identity approval is not defined.** The
-existing commercial authority, agreement tax-fact preparation, and 0493 BM
-legal-party verification are not tax-identity/PKP approval. Even Finance
-capture is only an unapproved assertion. The database permits only
-`approval_status = UNAPPROVED`; callers cannot submit or mutate an approval.
-`resolveHandymanTaxIdentityAt` returns `taxUse.allowed = false` with an explicit
-reason, and `requireApprovedHandymanTaxIdentityAt` always rejects, including
-for claimed `PKP` or `NON_PKP`. A future explicitly authorized Finance approval
-contract and migration are required before any tax use. No tax calculation,
-rate, fiscal document, Coretax call, distinct-BM earning or settlement is enabled.
+**PART 01A limitation, superseded by PART 01B:** commercial authority,
+agreement tax-fact preparation, and 0493 BM legal-party verification are not
+Finance tax approval. The 0495 assertion permanently remains
+`approval_status = UNAPPROVED`, and `resolveHandymanTaxIdentityAt` still returns
+`taxUse.allowed = false`. PART 01B adds independent, digest-pinned Finance
+maker-checker events and the separately gated `requireApprovedHandymanTaxIdentityAt`.
+Neither part enables tax calculation, fiscal documents, Coretax, tax-configured
+distinct-BM earnings, or distinct-BM settlement.
 
 ## Identifier contract
 
