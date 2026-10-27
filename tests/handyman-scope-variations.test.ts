@@ -25,7 +25,7 @@ import { buildingRepository } from '../src/modules/buildings/building.repository
 import { propertyRepository } from '../src/modules/properties/property.repository';
 import { clientRepository } from '../src/modules/clients/client.repository';
 import { userRepository } from '../src/modules/users/user.repository';
-import { permissionService } from '../src/modules/permissions';
+import { permissionRepository, permissionService } from '../src/modules/permissions';
 import { createEvidenceStorage } from '../src/modules/evidence/storage';
 import {
   HANDYMAN_BAST_CUSTOMER_CONSENT_METHOD, HANDYMAN_BAST_CUSTOMER_CONSENT_PROTOCOL,
@@ -46,6 +46,7 @@ const INSPECTOR_USER_A = '10000000-0000-4000-8000-000000000102';
 const OPS_MANAGER_USER_A = '10000000-0000-4000-8000-000000000103';
 const TENANT_USER_A = '10000000-0000-4000-8000-000000000104';
 const HELPER_USER_A = '10000000-0000-4000-8000-000000000105';
+const CARE_USER_A = '10000000-0000-4000-8000-000000000106';
 
 const ORG_A = '10000000-0000-4000-8000-000000000201';
 const VENDOR_A = '10000000-0000-4000-8000-000000000202';
@@ -101,6 +102,7 @@ const origFindBuilding = buildingRepository.findById;
 const origFindProperty = propertyRepository.findById;
 const origFindClient = clientRepository.findById;
 const origResolvePermissions = permissionService.resolvePermissionsForUser;
+const origListPermissionCodes = permissionRepository.listActivePermissionCodesForUser;
 
 
 /** Seeds a genuinely VERIFIED managed evidence upload (real bytes + SHA-256
@@ -307,7 +309,7 @@ before(async () => {
       version_number int NOT NULL, status text NOT NULL, currency text NOT NULL,
       subtotal_labor numeric(18,2) NOT NULL, subtotal_material numeric(18,2) NOT NULL,
       discount_amount numeric(18,2) NOT NULL, tax_amount numeric(18,2) NOT NULL,
-      total_amount numeric(18,2) NOT NULL, valid_until date, notes text,
+      total_amount numeric(18,2) NOT NULL, valid_until timestamptz, notes text,
       prepared_by_user_id uuid NOT NULL, issued_by_user_id uuid,
       issued_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -487,7 +489,8 @@ before(async () => {
       ('${INSPECTOR_USER_A}', 'ACTIVE', 'Indra Inspector A', 'inspector.a@example.com'),
       ('${OPS_MANAGER_A_ID()}', 'ACTIVE', 'Rina Ops Manager', 'ops.a@example.com'),
       ('${TENANT_USER_A}', 'ACTIVE', 'Siti Tenant PIC', 'tenant.a@example.com'),
-      ('${HELPER_USER_A}', 'ACTIVE', 'Hendra Helper A', 'helper.a@example.com');
+      ('${HELPER_USER_A}', 'ACTIVE', 'Hendra Helper A', 'helper.a@example.com'),
+      ('${CARE_USER_A}', 'ACTIVE', 'Care A', 'care.a@example.com');
 
     INSERT INTO tenant_pics VALUES (
       '${TENANT_PIC_A}', '${CLIENT_A}', '${TENANT_A}', '${TENANT_USER_A}',
@@ -499,7 +502,8 @@ before(async () => {
       ('${randomUUID()}', '${INSPECTOR_USER_A}', '${CLIENT_A}', '${PROPERTY_A}', '${BUILDING_A1}', 'ACTIVE'),
       ('${randomUUID()}', '${OPS_MANAGER_USER_A}', '${CLIENT_A}', '${PROPERTY_A}', '${BUILDING_A1}', 'ACTIVE'),
       ('${randomUUID()}', '${TENANT_USER_A}', '${CLIENT_A}', '${PROPERTY_A}', '${BUILDING_A1}', 'ACTIVE'),
-      ('${randomUUID()}', '${HELPER_USER_A}', '${CLIENT_A}', '${PROPERTY_A}', '${BUILDING_A1}', 'ACTIVE');
+      ('${randomUUID()}', '${HELPER_USER_A}', '${CLIENT_A}', '${PROPERTY_A}', '${BUILDING_A1}', 'ACTIVE'),
+      ('${randomUUID()}', '${CARE_USER_A}', '${CLIENT_A}', '${PROPERTY_A}', '${BUILDING_A1}', 'ACTIVE');
 
     INSERT INTO units_of_measure VALUES
       ('${UOM_UNIT}', 'UNIT', 'Unit', 'unit', 'ACTIVE'),
@@ -587,6 +591,8 @@ before(async () => {
       ('${QVER_WRONG_DELTA}', '${CLIENT_A}', '${QUO_A1}', 6, 'ISSUED', 'IDR',
        500000.00, 250000.00, 0.00, 82500.00, 832500.00,
        'Quotation version with unchanged 750000.00 line total', '${OPS_MANAGER_USER_A}', '${OPS_MANAGER_USER_A}', now());
+
+    UPDATE handyman_quotation_versions SET valid_until = now() + interval '3 days' WHERE status = 'ISSUED';
 
     INSERT INTO handyman_quotation_lines (
       id, client_id, quotation_version_id, line_number, line_type, source_item_id,
@@ -746,16 +752,18 @@ before(async () => {
         [id],
       )
     ).rows[0] ?? null;
-  permissionService.resolvePermissionsForUser = async (userId: string) => {
+  // This focused fixture mocks RBAC, while retaining the real customer-side
+  // exclusion and the variation service's exact-Building and PIC checks.
+  const codesFor = (userId: string): string[] => {
     if (userId === OPS_MANAGER_USER_A) {
-      return [
-        'tenant_company.manage',
-        'tenant_company.read',
-        'handyman.qc.manage',
-      ];
+      return ['tenant_company.manage', 'tenant_company.read', 'handyman.qc.manage', 'handyman.commercial.manage'];
     }
+    if (userId === CARE_USER_A) return ['tenant_company.manage', 'tenant_company.read', 'handyman.care.building'];
+    if (userId === TENANT_USER_A) return ['tenant_company.manage', 'handyman.commercial.manage'];
     return [];
   };
+  permissionService.resolvePermissionsForUser = async (userId: string) => codesFor(userId);
+  permissionRepository.listActivePermissionCodesForUser = async (userId: string) => codesFor(userId);
 
   const app = createApp();
   server = app.listen(0, '127.0.0.1');
@@ -776,6 +784,7 @@ after(async () => {
   propertyRepository.findById = origFindProperty;
   clientRepository.findById = origFindClient;
   permissionService.resolvePermissionsForUser = origResolvePermissions;
+  permissionRepository.listActivePermissionCodesForUser = origListPermissionCodes;
 
   if (server) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -836,6 +845,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         technicalFinding: 'Hidden moisture seepage found behind drywall',
         quantity: 2,
         uomId: UOM_UNIT,
+        quotedUnitAmount: 999999, // ignored: field findings cannot set commercial prices
         evidenceReference: await verifiedEvidenceRef('ev://finding/membrane-001'),
         notes: 'Inspector technical recommendation',
         idempotencyKey: 'idem-add-finding-1',
@@ -845,6 +855,9 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     const varId = s1.body.data.variation.id as string;
     assert.equal(s1.body.data.variation.status, 'FIELD_FINDING');
     assert.equal(s1.body.data.variation.originActorRole, 'INSPECTOR');
+    const fieldPrice = await getPool().query('SELECT quoted_unit_amount FROM handyman_scope_variations WHERE id = $1', [varId]);
+    assert.equal(fieldPrice.rows[0].quoted_unit_amount, null);
+    assert.equal('quotedUnitAmount' in s1.body.data.variation, false);
 
     // Inspector CANNOT promote to PROPOSAL (role guard)
     const inspPropose = await apiPost(
@@ -904,6 +917,26 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       readPending.body.data.reconciledAuthorizedScope.pendingVariationsCount,
       1,
     );
+    const originalMaterial = readPending.body.data.reconciledAuthorizedScope.reconciledOriginalLines
+      .find((line: { quotationLineId: string }) => line.quotationLineId === QLINE_MAT_A1);
+    assert.equal(originalMaterial.remainingAuthorizedQuantity, '10.000');
+    assert.equal((await getPool().query('SELECT status FROM handyman_work_sessions WHERE id = $1', [WSESS_A1])).rows[0].status, 'IN_PROGRESS');
+    const prematureExecution = await apiPost(
+      `/handyman/field/execution-scopes/${SCOPE_A1}/variations/${varId}/execution`,
+      LEAD_USER_A,
+      { evidenceReference: await verifiedEvidenceRef('ev://premature'), idempotencyKey: 'idem-premature', expectedVersion: 2 },
+    );
+    assert.equal(prematureExecution.status, 409);
+
+    // Care's generic tenant management is not Operations pricing authority;
+    // even a PIC who also holds that permission cannot review their own thread.
+    for (const actor of [CARE_USER_A, TENANT_USER_A]) {
+      const attempt = await apiPost(
+        `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/operations-review`, actor,
+        { idempotencyKey: `idem-forbidden-review-${actor}`, expectedVersion: 2 },
+      );
+      assert.equal(attempt.status, 403, JSON.stringify(attempt.body));
+    }
 
     // Stage 3: Operations/Manager reviews variation (OPERATIONS_REVIEW)
     const s3 = await apiPost(
@@ -919,6 +952,18 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s3.status, 200, JSON.stringify(s3.body));
     assert.equal(s3.body.data.variation.status, 'OPERATIONS_REVIEW');
     assert.equal(s3.body.data.variation.version, 3);
+    const carePrice = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`, CARE_USER_A,
+      { quotedUnitAmount: 175000, currency: 'IDR', revisedQuotationVersionId: QVER_A2_ADD,
+        idempotencyKey: 'idem-care-price', expectedVersion: 3 },
+    );
+    assert.equal(carePrice.status, 403);
+    const leadPrice = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`, LEAD_USER_A,
+      { quotedUnitAmount: 175000, currency: 'IDR', revisedQuotationVersionId: QVER_A2_ADD,
+        idempotencyKey: 'idem-lead-price', expectedVersion: 3 },
+    );
+    assert.equal(leadPrice.status, 403);
 
     // CHECK 1 Guard A: Omitting revisedQuotationVersionId fails closed (400 VALIDATION_ERROR)
     const omitQv = await apiPost(
@@ -1002,6 +1047,13 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
     assert.equal(s4.body.data.variation.quotedTotalDelta, '350000.00');
     assert.equal(s4.body.data.variation.revisedQuotationVersionId, QVER_A2_ADD);
     assert.equal(s4.body.data.variation.version, 4);
+    const changedReplay = await apiPost(
+      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`, OPS_MANAGER_USER_A,
+      { quotedUnitAmount: 1, currency: 'IDR', revisedQuotationVersionId: QVER_A2_ADD,
+        idempotencyKey: 'idem-add-rev-quo-1', expectedVersion: 3 },
+    );
+    assert.equal(changedReplay.status, 409);
+    assert.equal(changedReplay.body.error.code, 'HANDYMAN_VARIATION_IDEMPOTENCY_CONFLICT');
 
     // Guard: Operations/Manager CANNOT impersonate Tenant consent!
     const opsImpersonate = await apiPost(
@@ -1040,6 +1092,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         revisedQuotationVersionId: QVER_A1,
         evidenceReference: await verifiedEvidenceRef('ev://mismatched-qv'),
         idempotencyKey: 'idem-mismatched-qv',
+        expectedVersion: 4,
       },
     );
     assert.equal(mismatchedQvDecision.status, 409);
@@ -1048,30 +1101,60 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       'HANDYMAN_VARIATION_ILLEGAL_TRANSITION',
     );
 
+    const decisionPath = `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`;
+    const decisionEvidence = await verifiedEvidenceRef('ev://tenant-pinning-guards');
+    const decisionBody = { decision: 'APPROVE', revisedQuotationVersionId: QVER_A2_ADD,
+      evidenceReference: decisionEvidence, expectedVersion: 4, idempotencyKey: 'idem-decision-guard' };
+    assert.equal((await apiPost(decisionPath, CARE_USER_A, decisionBody)).status, 403);
+    assert.equal((await apiPost(decisionPath, TENANT_USER_A, { ...decisionBody, revisedQuotationVersionId: undefined })).status, 400);
+    assert.equal((await apiPost(decisionPath, TENANT_USER_A, { ...decisionBody, expectedVersion: undefined })).status, 400);
+    const staleDecision = await apiPost(decisionPath, TENANT_USER_A, { ...decisionBody, expectedVersion: 3 });
+    assert.equal(staleDecision.status, 409);
+    assert.equal(staleDecision.body.error.code, 'HANDYMAN_VARIATION_VERSION_CONFLICT');
+    await getPool().query(`UPDATE handyman_quotation_versions SET valid_until = now() - interval '1 second' WHERE id = $1`, [QVER_A2_ADD]);
+    assert.equal((await apiPost(decisionPath, TENANT_USER_A, decisionBody)).status, 409);
+    await getPool().query(`UPDATE handyman_quotation_versions SET valid_until = now() + interval '3 days', status = 'SUPERSEDED' WHERE id = $1`, [QVER_A2_ADD]);
+    assert.equal((await apiPost(decisionPath, TENANT_USER_A, decisionBody)).status, 409);
+    await getPool().query(`UPDATE handyman_quotation_versions SET status = 'ISSUED' WHERE id = $1`, [QVER_A2_ADD]);
+
     const bmBeforeAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
     // Stage 5: Authorized Tenant PIC user approves variation bound to QVER_A2_ADD (TENANT_DECISION)
-    const s5 = await apiPost(
-      `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/tenant-decision`,
-      TENANT_USER_A,
-      {
-        decision: 'APPROVE',
-        revisedQuotationVersionId: QVER_A2_ADD,
-        evidenceReference: await verifiedEvidenceRef('ev://tenant-consent/membrane-005'),
-        notes: 'Approved by Tenant PIC Siti',
-        idempotencyKey: 'idem-add-tenant-approve-1',
-        expectedVersion: 4,
-      },
-    );
+    const approvalBody = {
+      decision: 'APPROVE', revisedQuotationVersionId: QVER_A2_ADD,
+      evidenceReference: await verifiedEvidenceRef('ev://tenant-consent/membrane-005'),
+      notes: 'Approved by Tenant PIC Siti', idempotencyKey: 'idem-add-tenant-approve-1', expectedVersion: 4,
+    };
+    const s5 = await apiPost(decisionPath, TENANT_USER_A, approvalBody);
     assert.equal(s5.status, 200, JSON.stringify(s5.body));
     assert.equal(s5.body.data.variation.status, 'TENANT_DECISION');
     assert.equal(s5.body.data.variation.tenantDecisionOutcome, 'APPROVED');
     assert.equal(s5.body.data.variation.tenantDecidedByUserId, TENANT_USER_A);
+    const consent = s5.body.data.events.find((event: { eventType: string }) => event.eventType === 'TENANT_DECISION');
+    assert.equal(consent.metadata.consentSnapshot.version, 4);
+    assert.equal(consent.metadata.consentSnapshot.revisedQuotationVersionId, QVER_A2_ADD);
+    assert.equal(consent.metadata.consentSnapshot.quantity, '2.000');
+    assert.equal(consent.metadata.consentSnapshot.quotedUnitAmount, '175000.00');
+    assert.equal((await apiPost(decisionPath, TENANT_USER_A, approvalBody)).body.data.replayed, true);
+    const wrongReplay = await apiPost(decisionPath, TENANT_USER_A, { ...approvalBody, revisedQuotationVersionId: QVER_A3_REDUCE });
+    assert.equal(wrongReplay.status, 409);
+    assert.equal(wrongReplay.body.error.code, 'HANDYMAN_VARIATION_IDEMPOTENCY_CONFLICT');
     const bmApprovedAdd = await readBmWorkBinding(getPool(), SCOPE_A1);
     await assertBmWorkReassessment(t, bmBeforeAdd, bmApprovedAdd);
     const addCoverage = bmApprovedAdd.approvedVariations.find(v => v.id === varId)!;
     assert.equal(addCoverage.variationType, 'ADD');
     assert.equal(addCoverage.revisedQuotationVersionId, QVER_A2_ADD);
     assert.equal(addCoverage.authorized, false);
+
+    const authPath = `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/authorize-scope`;
+    const authGuard = { idempotencyKey: 'idem-auth-guard', expectedVersion: 5 };
+    assert.equal((await apiPost(authPath, CARE_USER_A, authGuard)).status, 403);
+    await getPool().query(`UPDATE handyman_scope_variations SET title = 'Changed after consent' WHERE id = $1`, [varId]);
+    assert.equal((await apiPost(authPath, OPS_MANAGER_USER_A, authGuard)).status, 409);
+    await getPool().query(`UPDATE handyman_scope_variations SET title = 'Additional waterproofing membrane' WHERE id = $1`, [varId]);
+    await getPool().query(`UPDATE handyman_quotation_versions SET status = 'SUPERSEDED' WHERE id = $1`, [QVER_A2_ADD]);
+    assert.equal((await apiPost(authPath, OPS_MANAGER_USER_A, authGuard)).status, 409);
+    // A timely PIC approval does not disappear merely because the offer later expires.
+    await getPool().query(`UPDATE handyman_quotation_versions SET status = 'ISSUED', valid_until = now() - interval '1 second' WHERE id = $1`, [QVER_A2_ADD]);
 
     // Stage 6: Operations/Manager authorizes scope (AUTHORIZED_SCOPE)
     const s6 = await apiPost(
@@ -1098,6 +1181,16 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         .variationId,
       varId,
     );
+
+    const executionPath = `/handyman/field/execution-scopes/${SCOPE_A1}/variations/${varId}/execution`;
+    const executionGuard = { evidenceReference: await verifiedEvidenceRef('ev://execution-guard'),
+      idempotencyKey: 'idem-execution-guard', expectedVersion: 6 };
+    await getPool().query(`UPDATE handyman_quotation_versions SET status = 'REJECTED' WHERE id = $1`, [QVER_A2_ADD]);
+    assert.equal((await apiPost(executionPath, LEAD_USER_A, executionGuard)).status, 409);
+    await getPool().query(`UPDATE handyman_quotation_versions SET status = 'ISSUED' WHERE id = $1`, [QVER_A2_ADD]);
+    await getPool().query(`UPDATE handyman_scope_variations SET quantity = 3 WHERE id = $1`, [varId]);
+    assert.equal((await apiPost(executionPath, LEAD_USER_A, executionGuard)).status, 409);
+    await getPool().query(`UPDATE handyman_scope_variations SET quantity = 2 WHERE id = $1`, [varId]);
 
     // Stage 7: Assigned PIC Pekerjaan records execution (EXECUTION)
     const s7 = await apiPost(
@@ -1419,6 +1512,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         revisedQuotationVersionId: QVER_A3_REDUCE,
         evidenceReference: await verifiedEvidenceRef('ev://tenant-approve-reduce'),
         idempotencyKey: 'idem-red-ten-1',
+        expectedVersion: 3,
       },
     );
     assert.equal(ten.status, 200);
@@ -1576,6 +1670,7 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
         evidenceReference: await verifiedEvidenceRef('ev://tenant-reject/repaint'),
         notes: 'Declined optional repaint',
         idempotencyKey: 'idem-rej-dec-1',
+        expectedVersion: 3,
       },
     );
     assert.equal(rejDec.status, 200);
@@ -1592,6 +1687,11 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       illegalAuth.body.error.code,
       'HANDYMAN_VARIATION_ILLEGAL_TRANSITION',
     );
+    const rejectedExecution = await apiPost(
+      `/handyman/field/execution-scopes/${SCOPE_A1}/variations/${rejVarId}/execution`, LEAD_USER_A,
+      { evidenceReference: await verifiedEvidenceRef('ev://reject-execution'), idempotencyKey: 'idem-reject-execution' },
+    );
+    assert.equal(rejectedExecution.status, 409);
 
     // Helper user is denied from field variation reads and proposals
     const helperRead = await apiGet(
@@ -1599,5 +1699,66 @@ describe('CR-HM-FIELD-AUTHORITY-01 P0-B — Pekerjaan Tambah / Kurang (ADD / RED
       HELPER_USER_A,
     );
     assert.equal(helperRead.status, 403);
+  });
+
+  it('4: never shares a revised quote between variations, even after rejection or under concurrent preparation', async () => {
+    // This suite has a deliberately narrow schema and mocked RBAC/issuance;
+    // it exercises variation commands, not the physical Work Session link.
+    const version = randomUUID();
+    await getPool().query(`INSERT INTO handyman_quotation_versions
+      (id, client_id, quotation_id, version_number, status, currency, subtotal_labor,
+       subtotal_material, discount_amount, tax_amount, total_amount, valid_until, notes,
+       prepared_by_user_id, issued_by_user_id, issued_at)
+      SELECT $1, client_id, quotation_id, 7, 'ISSUED', currency, subtotal_labor,
+       subtotal_material, discount_amount, tax_amount, total_amount, now() + interval '3 days', notes,
+       prepared_by_user_id, issued_by_user_id, now()
+      FROM handyman_quotation_versions WHERE id = $2`, [version, QVER_A2_ADD]);
+    await getPool().query(`INSERT INTO handyman_quotation_lines
+      (id, client_id, quotation_version_id, line_number, line_type, source_item_id, description,
+       quantity, uom_id, cost_basis_unit_amount, margin_percent, reference_unit_amount,
+       final_quoted_unit_amount, line_total, currency)
+      SELECT gen_random_uuid(), client_id, $1, line_number, line_type, source_item_id, description,
+       quantity, uom_id, cost_basis_unit_amount, margin_percent, reference_unit_amount,
+       final_quoted_unit_amount, line_total, currency
+      FROM handyman_quotation_lines WHERE quotation_version_id = $2`, [version, QVER_A2_ADD]);
+
+    const proposalPath = `/handyman/field/execution-scopes/${SCOPE_A1}/variations/proposals`;
+    const proposalIds: string[] = [];
+    for (const i of [1, 2]) {
+      const proposal = await apiPost(proposalPath, LEAD_USER_A, {
+        variationType: 'ADD', lineType: 'LABOR', title: 'Additional waterproofing membrane',
+        description: 'Apply membrane behind pantry wall panel', technicalFinding: 'Moisture behind wall',
+        quantity: 2, uomId: UOM_UNIT, evidenceReference: await verifiedEvidenceRef(`ev://concurrent-${i}`),
+        idempotencyKey: `idem-concurrent-proposal-${i}`,
+      });
+      assert.equal(proposal.status, 201, JSON.stringify(proposal.body));
+      const varId = proposal.body.data.variation.id as string;
+      proposalIds.push(varId);
+      const review = await apiPost(`/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/operations-review`,
+        OPS_MANAGER_USER_A, { idempotencyKey: `idem-concurrent-review-${i}`, expectedVersion: 1 });
+      assert.equal(review.status, 200, JSON.stringify(review.body));
+    }
+
+    const path = (varId: string) => `/handyman/execution-scopes/${SCOPE_A1}/variations/${varId}/revised-quotation`;
+    const rejectedReuse = await apiPost(path(proposalIds[0]), OPS_MANAGER_USER_A, {
+      quotedUnitAmount: 150000, currency: 'IDR', revisedQuotationVersionId: QVER_A4_REJECT,
+      idempotencyKey: 'idem-reuse-rejected-quote', expectedVersion: 2,
+    });
+    assert.equal(rejectedReuse.status, 409);
+    assert.match(rejectedReuse.body.error.message, /already bound/);
+
+    const results = await Promise.all(proposalIds.map((varId, i) => apiPost(path(varId), OPS_MANAGER_USER_A, {
+      quotedUnitAmount: 175000, currency: 'IDR', revisedQuotationVersionId: i ? version.toUpperCase() : version,
+      idempotencyKey: `idem-concurrent-quote-${i}`, expectedVersion: 2,
+    })));
+    assert.deepEqual(results.map(r => r.status).sort(), [200, 409]);
+    const bound = await getPool().query(
+      'SELECT id FROM handyman_scope_variations WHERE revised_quotation_version_id = $1', [version],
+    );
+    assert.equal(bound.rows.length, 1);
+    const original = await getPool().query(`SELECT approved_quotation_version_id, approved_total_amount::text
+      FROM handyman_execution_scopes WHERE id = $1`, [SCOPE_A1]);
+    assert.equal(original.rows[0].approved_quotation_version_id, QVER_A1);
+    assert.equal(original.rows[0].approved_total_amount, '832500.00');
   });
 });

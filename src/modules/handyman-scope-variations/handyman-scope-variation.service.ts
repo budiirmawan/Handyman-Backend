@@ -16,6 +16,8 @@ import { findEligibleHandymanWorker } from '../handyman-providers/handyman-worke
 import { assertVerifiedManagedEvidenceReference } from '../handyman-field-evidence/handyman-field-evidence.service';
 import { assertHandymanTenantDecisionActor }
   from '../handyman-tenant-decision-authority/handyman-tenant-decision-authority';
+import { assertHandymanQuotationPricingAuthority }
+  from '../handyman-quotations/handyman-quotation-access';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
 import {
   HANDYMAN_SCOPE_VARIATION_LINE_TYPES,
@@ -309,6 +311,25 @@ async function assertOperationsManagerForExecutionScope(
   }
 }
 
+// Reviewing, pricing and authorizing a variation are commercial decisions,
+// not Care relay actions. Reuse the quotation writer's explicit Operations
+// permission and customer-side exclusion in addition to the existing
+// exact-Building and originator-separation checks.
+async function assertVariationCommercialAuthority(
+  tx: PoolClient,
+  actorUserId: string,
+  ctx: ExecutionScopeContext,
+  originActorUserId: string,
+): Promise<void> {
+  await assertOperationsManagerForExecutionScope(actorUserId, ctx, originActorUserId);
+  await assertHandymanQuotationPricingAuthority({
+    actorUserId,
+    clientId: ctx.clientId,
+    handymanRequestId: ctx.handymanRequestId,
+    tenantCompanyId: ctx.tenantCompanyId,
+  }, tx);
+}
+
 async function assertAuthorizedTenantDecisionActor(
   actorUserId: string,
   ctx: ExecutionScopeContext,
@@ -468,6 +489,61 @@ function assertExpectedVersion(
   }
 }
 
+// The Tenant decides this exact immutable event snapshot, not a future edit of
+// the variation projection. A legacy decision without this pin fails closed at
+// authorization or execution rather than being silently upgraded to consent.
+function variationConsentSnapshot(v: HandymanScopeVariationRecord, version = v.version) {
+  return {
+    version,
+    revisedQuotationVersionId: v.revisedQuotationVersionId,
+    variationType: v.variationType,
+    lineType: v.lineType,
+    targetQuotationLineId: v.targetQuotationLineId,
+    title: v.title,
+    description: v.description,
+    technicalFinding: v.technicalFinding,
+    quantity: v.quantity,
+    uomId: v.uomId,
+    quotedUnitAmount: v.quotedUnitAmount,
+    quotedTotalDelta: v.quotedTotalDelta,
+    currency: v.currency,
+  };
+}
+
+function matchesVariationConsentSnapshot(
+  actual: unknown,
+  expected: ReturnType<typeof variationConsentSnapshot>,
+): boolean {
+  return !!actual && typeof actual === 'object' && !Array.isArray(actual) &&
+    Object.entries(expected).every(([key, value]) =>
+      (actual as Record<string, unknown>)[key] === value);
+}
+
+async function assertPinnedVariationApproval(
+  tx: PoolClient,
+  variation: HandymanScopeVariationRecord,
+  approvedVersion: number,
+): Promise<void> {
+  const events = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
+  const decision = events.find((event) => event.eventType === 'TENANT_DECISION');
+  if (
+    !decision || variation.tenantDecisionOutcome !== 'APPROVED' ||
+    decision.actorRole !== 'TENANT' ||
+    decision.actorUserId !== variation.tenantDecidedByUserId ||
+    decision.metadata.decisionOutcome !== 'APPROVED' ||
+    !matchesVariationConsentSnapshot(
+      decision.metadata.consentSnapshot,
+      variationConsentSnapshot(variation, approvedVersion),
+    )
+  ) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'Variation requires an exact version-pinned Tenant PIC approval; obtain a new decision on a newly issued variation.',
+    });
+  }
+}
+
 function toCents(amount: string): bigint {
   const trimmed = amount.trim();
   const isNegative = trimmed.startsWith('-');
@@ -487,6 +563,8 @@ function fromCents(cents: bigint): string {
   return `${isNegative ? '-' : ''}${whole}.${frac}`;
 }
 
+// This validates the version and total delta, not an item-level mapping:
+// ADD variations have no authoritative revised-quotation-line identity.
 async function assertValidRevisedQuotationVersionForVariation(
   tx: PoolClient,
   ctx: ExecutionScopeContext,
@@ -495,6 +573,7 @@ async function assertValidRevisedQuotationVersionForVariation(
     revisedQuotationVersionId: string;
     expectedCurrency: string;
     expectedVariationDelta: string;
+    requireCurrentOffer?: boolean;
   },
 ): Promise<{
   revisedVersionNumber: number;
@@ -511,15 +590,27 @@ async function assertValidRevisedQuotationVersionForVariation(
     });
   }
 
+  // The same quotation offer cannot be used to approve two variations,
+  // including when two preparations race. Only the variation service binds
+  // this pointer; serialize its check and write without changing the quote.
+  await tx.query(
+    `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+    [`handyman-variation-quotation:${params.revisedQuotationVersionId.toLowerCase()}`],
+  );
+
   const qvRes = await tx.query<{
     id: string;
     version_number: number;
     status: string;
+    currency: string;
+    current_offer: boolean;
     orig_version_number: number;
   }>(
     `SELECT qv.id,
             qv.version_number,
             qv.status,
+            qv.currency,
+            (qv.valid_until IS NOT NULL AND qv.valid_until > clock_timestamp()) AS current_offer,
             orig_qv.version_number AS orig_version_number
        FROM handyman_quotation_versions qv
        JOIN handyman_quotations q
@@ -558,6 +649,37 @@ async function assertValidRevisedQuotationVersionForVariation(
       code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
       message:
         'revisedQuotationVersionId must be in ISSUED or APPROVED status.',
+    });
+  }
+  if (qv.currency !== params.expectedCurrency) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'The revised quotation currency must match the variation currency.',
+    });
+  }
+  // Like quotation decisions, new consent cannot be recorded against an
+  // expired or undated issued offer. Once consent is recorded, passage of the
+  // offer deadline alone does not invalidate that existing decision.
+  if (params.requireCurrentOffer && qv.status === 'ISSUED' && !qv.current_offer) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'The revised quotation offer is expired or has no validity deadline.',
+    });
+  }
+
+  const duplicate = await tx.query<{ id: string }>(
+    `SELECT id FROM handyman_scope_variations
+      WHERE revised_quotation_version_id = $1 AND id <> $2
+      LIMIT 1`,
+    [params.revisedQuotationVersionId, params.variationId],
+  );
+  if (duplicate.rows.length > 0) {
+    throw new AppError({
+      statusCode: 409,
+      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+      message: 'This revised quotation version is already bound to another variation.',
     });
   }
 
@@ -1459,10 +1581,8 @@ export async function reviewScopeVariation(
       });
     }
 
-    await assertOperationsManagerForExecutionScope(
-      actorUserId,
-      ctx,
-      variation.originActorUserId,
+    await assertVariationCommercialAuthority(
+      tx, actorUserId, ctx, variation.originActorUserId,
     );
 
     const existingEv =
@@ -1618,7 +1738,7 @@ export async function prepareVariationRevisedQuotation(
   const revisedQuotationVersionId = assertUuid(
     input.revisedQuotationVersionId,
     'revisedQuotationVersionId',
-  );
+  ).toLowerCase();
 
   return withTransaction(async (tx) => {
     const variation =
@@ -1635,10 +1755,8 @@ export async function prepareVariationRevisedQuotation(
       });
     }
 
-    await assertOperationsManagerForExecutionScope(
-      actorUserId,
-      ctx,
-      variation.originActorUserId,
+    await assertVariationCommercialAuthority(
+      tx, actorUserId, ctx, variation.originActorUserId,
     );
 
     const existingEv =
@@ -1649,6 +1767,18 @@ export async function prepareVariationRevisedQuotation(
         idempotencyKey,
       );
     if (existingEv) {
+      if (
+        existingEv.actorUserId !== actorUserId ||
+        variation.revisedQuotationVersionId !== revisedQuotationVersionId ||
+        variation.quotedUnitAmount !== quotedUnitAmount ||
+        variation.currency !== currency
+      ) {
+        throw new AppError({
+          statusCode: 409,
+          code: ERROR_CODES.HANDYMAN_VARIATION_IDEMPOTENCY_CONFLICT,
+          message: 'idempotencyKey was already used with different quotation terms.',
+        });
+      }
       const events =
         await handymanScopeVariationRepository.listEventsByVariation(
           variation.id,
@@ -1682,6 +1812,7 @@ export async function prepareVariationRevisedQuotation(
         revisedQuotationVersionId,
         expectedCurrency: currency,
         expectedVariationDelta: quotedTotalDelta,
+        requireCurrentOffer: true,
       },
     );
 
@@ -1770,11 +1901,11 @@ export async function recordVariationTenantDecision(
   variationId: string,
   input: {
     decision: unknown;
-    revisedQuotationVersionId?: unknown;
+    revisedQuotationVersionId: unknown;
     evidenceReference: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
-    expectedVersion?: unknown;
+    expectedVersion: unknown;
   },
 ): Promise<{
   replayed: boolean;
@@ -1834,6 +1965,19 @@ export async function recordVariationTenantDecision(
 
     await assertAuthorizedTenantDecisionActor(actorUserId, ctx, tx);
 
+    // The PIC must identify both the variation state and the issued offer
+    // they actually reviewed; neither may be silently inferred from the head.
+    const callerQvId = assertUuid(
+      input.revisedQuotationVersionId, 'revisedQuotationVersionId',
+    ).toLowerCase();
+    const expectedVersion = Number(input.expectedVersion);
+    if (
+      (typeof input.expectedVersion !== 'number' && typeof input.expectedVersion !== 'string') ||
+      !Number.isInteger(expectedVersion) || expectedVersion < 1
+    ) {
+      throw AppError.validation('expectedVersion must be a positive integer.');
+    }
+
     const existingEv =
       await handymanScopeVariationRepository.findEventByIdempotencyKey(
         tx,
@@ -1842,12 +1986,19 @@ export async function recordVariationTenantDecision(
         idempotencyKey,
       );
     if (existingEv) {
-      if (variation.tenantDecisionOutcome !== decisionOutcome) {
+      const pinned = existingEv.metadata.consentSnapshot as { version?: unknown } | undefined;
+      if (
+        existingEv.actorUserId !== actorUserId ||
+        existingEv.metadata.decisionOutcome !== decisionOutcome ||
+        variation.revisedQuotationVersionId !== callerQvId ||
+        pinned?.version !== expectedVersion ||
+        existingEv.evidenceReference !== evidenceReference ||
+        existingEv.notes !== notes
+      ) {
         throw new AppError({
           statusCode: 409,
           code: ERROR_CODES.HANDYMAN_VARIATION_IDEMPOTENCY_CONFLICT,
-          message:
-            'idempotencyKey was already used with a different tenant decision outcome.',
+          message: 'idempotencyKey was already used with different tenant consent.',
         });
       }
       const events =
@@ -1858,7 +2009,7 @@ export async function recordVariationTenantDecision(
       return { replayed: true, variation, events };
     }
 
-    assertExpectedVersion(variation, input.expectedVersion);
+    assertExpectedVersion(variation, expectedVersion);
 
     if (variation.status !== 'REVISED_QUOTATION') {
       throw new AppError({
@@ -1882,22 +2033,13 @@ export async function recordVariationTenantDecision(
       });
     }
 
-    if (
-      input.revisedQuotationVersionId !== undefined &&
-      input.revisedQuotationVersionId !== null
-    ) {
-      const callerQvId = assertUuid(
-        input.revisedQuotationVersionId,
-        'revisedQuotationVersionId',
-      );
-      if (callerQvId !== variation.revisedQuotationVersionId) {
-        throw new AppError({
-          statusCode: 409,
-          code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-          message:
-            'Tenant decision revisedQuotationVersionId does not match the variation bound revisedQuotationVersionId.',
-        });
-      }
+    if (callerQvId !== variation.revisedQuotationVersionId) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message:
+          'Tenant decision revisedQuotationVersionId does not match the variation bound revisedQuotationVersionId.',
+      });
     }
 
     await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
@@ -1905,9 +2047,23 @@ export async function recordVariationTenantDecision(
       revisedQuotationVersionId: variation.revisedQuotationVersionId,
       expectedCurrency: variation.currency,
       expectedVariationDelta: variation.quotedTotalDelta,
+      requireCurrentOffer: true,
     });
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
+    // Evidence I/O can outlast an offer's deadline; recheck at the write.
+    const liveOffer = await tx.query<{ valid: boolean }>(
+      `SELECT status <> 'ISSUED' OR (valid_until IS NOT NULL AND valid_until > clock_timestamp()) AS valid
+         FROM handyman_quotation_versions WHERE id = $1`,
+      [variation.revisedQuotationVersionId],
+    );
+    if (!liveOffer.rows[0]?.valid) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message: 'The revised quotation offer expired before Tenant consent was recorded.',
+      });
+    }
 
     const updated =
       await handymanScopeVariationRepository.updateVariationState(tx, {
@@ -1936,6 +2092,7 @@ export async function recordVariationTenantDecision(
         decisionOutcome,
         variationType: variation.variationType,
         quantity: variation.quantity,
+        consentSnapshot: variationConsentSnapshot(variation),
       },
     });
 
@@ -2017,10 +2174,8 @@ export async function authorizeVariationScope(
       });
     }
 
-    await assertOperationsManagerForExecutionScope(
-      actorUserId,
-      ctx,
-      variation.originActorUserId,
+    await assertVariationCommercialAuthority(
+      tx, actorUserId, ctx, variation.originActorUserId,
     );
 
     const existingEv =
@@ -2073,6 +2228,8 @@ export async function authorizeVariationScope(
           'Cannot authorize scope variation without a distinct, valid revised quotation version.',
       });
     }
+
+    await assertPinnedVariationApproval(tx, variation, variation.version - 1);
 
     await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
       variationId: variation.id,
@@ -2166,8 +2323,9 @@ export async function authorizeVariationScope(
 }
 
 /**
- * 7. EXECUTION — Assigned PIC Pekerjaan (Crew Lead) executes an AUTHORIZED_SCOPE
- *    variation.
+ * 7. EXECUTION — Assigned PIC Pekerjaan (Crew Lead) records an AUTHORIZED_SCOPE
+ *    variation's execution. This event does not gate actual Work Sessions:
+ *    those carry only an execution scope/assignment, not a variation or line.
  */
 export async function recordVariationExecution(
   actorUserId: string,
@@ -2256,6 +2414,20 @@ export async function recordVariationExecution(
         message: `Variation cannot enter EXECUTION from status ${variation.status}. Requires AUTHORIZED_SCOPE.`,
       });
     }
+    if (!variation.revisedQuotationVersionId || !variation.currency || !variation.quotedTotalDelta) {
+      throw new AppError({
+        statusCode: 409,
+        code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message: 'Variation execution requires the approved revised quotation.',
+      });
+    }
+    await assertPinnedVariationApproval(tx, variation, variation.version - 2);
+    await assertValidRevisedQuotationVersionForVariation(tx, ctx, {
+      variationId: variation.id,
+      revisedQuotationVersionId: variation.revisedQuotationVersionId,
+      expectedCurrency: variation.currency,
+      expectedVariationDelta: variation.quotedTotalDelta,
+    });
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
 
