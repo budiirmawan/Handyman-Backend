@@ -29,6 +29,7 @@ import {
   openHandymanCustomerTransaction,
 } from '../handyman-customer-transactions';
 import { allocateHandymanCustomerPayment } from '../handyman-customer-payment-allocations';
+import { postReduceFinancialCorrection } from '../handyman-scope-variations/handyman-reduce-financial-correction.service';
 import {
   adjustHandymanCustomerLedger,
   refundHandymanCustomerPayment,
@@ -531,6 +532,24 @@ export async function postReverseCustomerPaymentHandler(
   } catch (error) {
     next(error);
   }
+}
+
+export async function postReduceFinancialCorrectionHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const body = requirePlainBody(req.body);
+    assertOnlyKeys(body, ['expectedVersion', 'idempotencyKey']);
+    const result = await postReduceFinancialCorrection(actor(req), {
+      executionScopeId: p(req.params.executionScopeId),
+      variationId: p(req.params.variationId),
+      expectedVersion: body.expectedVersion as number,
+      idempotencyKey: requireIdempotencyKey(body),
+    });
+    sendSuccess(res, result, result.replayed ? 200 : 201);
+  } catch (error) { next(error); }
 }
 
 export async function postAdjustCustomerLedgerHandler(

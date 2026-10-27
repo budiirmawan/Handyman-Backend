@@ -11,6 +11,7 @@ import {
   getInvoiceReconciliationSummaryHandler,
   getPricingContractHandler,
   postAdjustCustomerLedgerHandler,
+  postReduceFinancialCorrectionHandler,
   postAllocateCustomerPaymentHandler,
   postBmFeeBeneficiaryHandler,
   postBmFeeRuleHandler,
@@ -201,6 +202,12 @@ export function createHandymanFinanceCloseApiRouter(): Router {
     auth,
     finance,
     postReverseCustomerPaymentHandler,
+  );
+  router.post(
+    '/handyman/execution-scopes/:executionScopeId/variations/:variationId/financial-correction',
+    auth,
+    finance,
+    postReduceFinancialCorrectionHandler,
   );
   router.post(
     '/handyman/execution-scopes/:executionScopeId/ledger-adjustments',

@@ -222,6 +222,19 @@ async function recordCorrection(
       return { correction: replay, replayed: true };
     }
 
+    // Once a REDUCE is bound, an unqualified manual adjustment on that
+    // line or transaction could repeat the same deduction. Independently
+    // sourced integrations supply their executor and an atomic source binding;
+    // the deferred database guard verifies that binding before commit.
+    if (!executor && intent.correctionKind === 'ADJUSTMENT') {
+      const ambiguous = await tx.query(`SELECT 1 FROM handyman_reduce_financial_corrections
+        WHERE transaction_id=$1 AND ($2::uuid IS NULL OR charge_line_id=$2) LIMIT 1`,
+      [transaction.id, intent.sourceChargeLineId ?? null]);
+      if (ambiguous.rows.length) {
+        throw handymanLedgerCorrectionConflictError('adjustment-requires-explicit-reduce-provenance');
+      }
+    }
+
     await assertSourceInLedger(tx, transaction.id, intent);
     const record: NewHandymanLedgerCorrection = {
       clientId: transaction.clientId,

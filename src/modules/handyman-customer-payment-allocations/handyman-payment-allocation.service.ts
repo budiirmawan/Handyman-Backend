@@ -82,15 +82,16 @@ function ensureAmount(value: unknown): string {
  * No floating-point arithmetic is ever applied to an amount.
  */
 function toCents(value: string): bigint {
-  const [whole, fraction = ''] = value.split('.');
-  const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
-  return cents;
+  const negative = value.startsWith('-');
+  const [whole, fraction = ''] = (negative ? value.slice(1) : value).split('.');
+  const magnitude = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  return negative ? -magnitude : magnitude;
 }
 
 function fromCents(cents: bigint): string {
-  const whole = cents / 100n;
-  const fraction = cents % 100n;
-  return `${whole}.${fraction.toString().padStart(2, '0')}`;
+  const sign = cents < 0n ? '-' : '';
+  const magnitude = cents < 0n ? -cents : cents;
+  return `${sign}${magnitude / 100n}.${(magnitude % 100n).toString().padStart(2, '0')}`;
 }
 
 /**
@@ -217,6 +218,16 @@ export async function allocateHandymanCustomerPayment(
       );
     }
 
+    // A REDUCE binding is provenance for a canonical line adjustment, not
+    // another deduction. Existing un-reduced allocation behavior is unchanged.
+    const reduced = await tx.query<{ amount: string }>(`SELECT
+      (l.amount-COALESCE((SELECT sum(c.amount) FROM handyman_ledger_corrections c
+        WHERE c.correction_kind='ADJUSTMENT' AND c.source_charge_line_id=l.id),0))::numeric(18,2)::text AS amount
+      FROM handyman_charge_lines l WHERE l.id=$1 AND EXISTS
+        (SELECT 1 FROM handyman_reduce_financial_corrections b WHERE b.charge_line_id=l.id)`,
+    [chargeLineUuid]);
+    const allocationChargeAmount = reduced.rows[0]?.amount ?? String(chargeLine.amount);
+
     // Net applied basis (CR-HM-E2E-LIFECYCLE-01 repair): allocation
     // facts are immutable, but a PART 05 ALLOCATION REVERSAL negates
     // one exactly, and the correction law + PART 06 read both stop
@@ -263,7 +274,7 @@ export async function allocateHandymanCustomerPayment(
         allocation: replay,
         ...derive(
           String(payment.amount), paymentAllocated,
-          String(chargeLine.amount), chargeLineAllocated,
+          allocationChargeAmount, chargeLineAllocated,
         ),
         replayed: true,
       };
@@ -316,7 +327,7 @@ export async function allocateHandymanCustomerPayment(
       );
     }
     const chargeOutstandingBefore =
-      toCents(String(chargeLine.amount)) - toCents(chargeAllocatedBefore);
+      toCents(allocationChargeAmount) - toCents(chargeAllocatedBefore);
     if (requestedCents > chargeOutstandingBefore) {
       throw handymanPaymentAllocationConflictError(
         'exceeds-charge-line-outstanding-amount',
@@ -348,7 +359,7 @@ export async function allocateHandymanCustomerPayment(
           'exceeds-payment-unallocated-amount',
         );
       }
-      if (/allocation exceeds the charge line amount/.test(message)) {
+      if (/allocation exceeds the charge line amount|Allocation exceeds the corrected REDUCE charge line/.test(message)) {
         throw handymanPaymentAllocationConflictError(
           'exceeds-charge-line-outstanding-amount',
         );
@@ -360,7 +371,7 @@ export async function allocateHandymanCustomerPayment(
       allocation,
       ...derive(
         String(payment.amount), paymentAllocated,
-        String(chargeLine.amount), chargeLineAllocated,
+        allocationChargeAmount, chargeLineAllocated,
       ),
       replayed: false,
     };
@@ -404,7 +415,9 @@ export async function listHandymanPaymentAllocations(
  * DERIVED allocation summary (§6.6): computed from posted facts at
  * read time. Nothing here is stored, so it can never disagree with
  * the ledger — and a line with partial funding simply shows its
- * outstanding remainder, never a forged "paid" state.
+ * outstanding remainder, never a forged "paid" state. On a REDUCE ledger,
+ * line amounts include canonical adjustments and allocations include reversals;
+ * legacy summaries on other ledgers retain their existing semantics.
  */
 export async function summarizeHandymanPaymentAllocations(
   executionScopeId: string,
@@ -417,7 +430,12 @@ export async function summarizeHandymanPaymentAllocations(
     const transaction = await lockLedgerTransaction(tx, scopeUuid);
     const payments = await tx.query(
       `SELECT p.id, p.status, p.amount::text AS amount,
-              COALESCE(a.total, 0)::numeric(18, 2)::text AS allocated
+              (COALESCE(a.total, 0) - CASE WHEN EXISTS (
+                SELECT 1 FROM handyman_reduce_financial_corrections b WHERE b.transaction_id=p.transaction_id
+              ) THEN COALESCE((SELECT sum(c.amount) FROM handyman_ledger_corrections c
+                  JOIN handyman_payment_allocations pa ON pa.id=c.source_allocation_id
+                 WHERE c.correction_kind='REVERSAL' AND pa.payment_id=p.id),0) ELSE 0 END
+              )::numeric(18, 2)::text AS allocated
          FROM handyman_customer_payments p
          LEFT JOIN (
            SELECT payment_id, SUM(amount) AS total
@@ -428,8 +446,18 @@ export async function summarizeHandymanPaymentAllocations(
       [transaction.id],
     );
     const lines = await tx.query(
-      `SELECT l.id, l.line_kind, l.amount::text AS amount,
-              COALESCE(a.total, 0)::numeric(18, 2)::text AS allocated
+      `SELECT l.id, l.line_kind,
+              (l.amount - CASE WHEN EXISTS (
+                SELECT 1 FROM handyman_reduce_financial_corrections b WHERE b.transaction_id=l.transaction_id
+              ) THEN COALESCE((SELECT sum(c.amount) FROM handyman_ledger_corrections c
+                 WHERE c.correction_kind='ADJUSTMENT' AND c.source_charge_line_id=l.id),0) ELSE 0 END
+              )::numeric(18,2)::text AS amount,
+              (COALESCE(a.total, 0) - CASE WHEN EXISTS (
+                SELECT 1 FROM handyman_reduce_financial_corrections b WHERE b.transaction_id=l.transaction_id
+              ) THEN COALESCE((SELECT sum(c.amount) FROM handyman_ledger_corrections c
+                  JOIN handyman_payment_allocations pa ON pa.id=c.source_allocation_id
+                 WHERE c.correction_kind='REVERSAL' AND pa.charge_line_id=l.id),0) ELSE 0 END
+              )::numeric(18, 2)::text AS allocated
          FROM handyman_charge_lines l
          LEFT JOIN (
            SELECT charge_line_id, SUM(amount) AS total
