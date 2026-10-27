@@ -9,6 +9,7 @@ import { startEmbeddedTestDatabase } from './helpers/embedded-test-db';
 import { createAdminUser } from './helpers/access';
 import { api } from './helpers/http';
 import { initHandymanFixtures, realmFixture, locationChain, crewFixture } from './helpers/handyman-fixtures';
+import { releaseDispatchFixture } from './helpers/handyman-dispatch';
 import { handymanDisciplineRepository } from '../src/modules/handyman-disciplines';
 import { credentialService } from '../src/modules/auth';
 import { userService } from '../src/modules/users';
@@ -17,6 +18,15 @@ import { permissionRepository, permissionService } from '../src/modules/permissi
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { buildingService } from '../src/modules/buildings';
 import { workOrderService } from '../src/modules/work-orders';
+import { handymanDispatchService } from '../src/modules/handyman-dispatch';
+import { createHandymanArrivalChallenge } from '../src/modules/handyman-arrival-challenges';
+import { createHandymanArrivalLocationIdentifier } from '../src/modules/handyman-arrival-locations';
+import { evaluateHandymanArrivalVerification } from '../src/modules/handyman-arrival-results';
+import { saveHandymanBuildingGeospatialPolicy } from '../src/modules/handyman-geospatial-policies';
+import { addHandymanCrewMember, handymanWorkerContextService } from '../src/modules/handyman-providers';
+import { workforceService } from '../src/modules/workforce';
+import { assignBuildingToWorkforce } from '../src/modules/workforce-building-assignments';
+import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { inventoryItemService } from '../src/modules/inventory-items';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
 import { tenantCompanyService } from '../src/modules/tenant-companies';
@@ -59,6 +69,8 @@ let firstReduce: string, rejectedAdd: string;
 let rejectedVersion: string;
 let workOrder: string, foreignWorkOrder: string, materialItem: string;
 let approvedAdd: string, addLine: string, approvedVersionId: string;
+let crewId: string, leadUserId: string, leadWorkerId: string, helperToken: string;
+let chain: Awaited<ReturnType<typeof locationChain>>;
 
 function responseData(response: any, status = 200) {
   assert.equal(response.status, status, JSON.stringify(response.body));
@@ -87,8 +99,8 @@ async function estimate(versionId: string, lineId: string, quantity: number, ide
     quotationVersionId: versionId, quotationLineId: lineId, estimatedQty: quantity, idempotencyKey, ...binding,
   });
 }
-async function proposal(type: 'ADD' | 'REDUCE', quantity: number, target?: string) {
-  const body = { variationType: type, lineType: 'MATERIAL', quantity, uomId: uom,
+async function proposal(type: 'ADD' | 'REDUCE', quantity: number, target?: string, lineType: 'LABOR' | 'MATERIAL' = 'MATERIAL') {
+  const body = { variationType: type, lineType, quantity, uomId: uom,
     ...(target ? { targetQuotationLineId: target } : {}), title: `${type} pipe material`,
     description: 'Changed pipe material scope', technicalFinding: 'Verified site condition',
     evidenceReference: evidence, idempotencyKey: key(), quotedUnitAmount: 999999 };
@@ -109,15 +121,17 @@ async function addQuoteLine(version: string, type: 'LABOR' | 'MATERIAL', qty: nu
     uomId: uom, currency: 'IDR', finalQuotedUnitAmount: price, ...(sourceItemId ? { sourceItemId } : {}) }, admin);
 }
 // Real revisions contain original scope and separately identified additions.
-async function revision(a: number, b: number, add = false, oneOff = false) {
+async function revision(a: number, b: number, add = false, oneOff = false, extraLabor: Array<{ qty: number; price: number; name: string }> = []) {
   const v = await createHandymanQuotationRevision(quotationId, admin);
   const labor = await addQuoteLine(v.id, 'LABOR', 1, 100, 'Original labor');
   const lineA = await addQuoteLine(v.id, 'MATERIAL', a, 25, 'Original material A');
   await addQuoteLine(v.id, 'MATERIAL', b, 25, 'Original material B');
   const added = add ? await addQuoteLine(v.id, 'MATERIAL', 2, 30, 'Additional material', materialItem) : null;
   const oneOffLine = oneOff ? await addQuoteLine(v.id, 'MATERIAL', 0.3, 40, 'One-off seal') : null;
+  const laborLines = [];
+  for (const item of extraLabor) laborLines.push(await addQuoteLine(v.id, 'LABOR', item.qty, item.price, item.name));
   await issueHandymanQuotationVersion(v.id, { validUntil: validUntil() }, admin);
-  return { id: v.id, addedLine: added?.id, oneOffLine: oneOffLine?.id, lineA: lineA.id, labor: labor.id };
+  return { id: v.id, addedLine: added?.id, oneOffLine: oneOffLine?.id, lineA: lineA.id, labor: labor.id, laborLines: laborLines.map((line) => line.id) };
 }
 async function prepare(variationId: string, versionId: string, amount: number, lineId?: string) {
   responseData(await operation(variationId, 'revised-quotation', {
@@ -159,7 +173,7 @@ before(async () => {
   assert.ok(discipline);
   initHandymanFixtures({ adminUserId: admin, disciplineId: discipline.id, query: (sql, values) => pool.query(sql, values) });
   realm = await realmFixture('Variation execution');
-  const chain = await locationChain(realm);
+  chain = await locationChain(realm);
   await clientMonetaryContextService.setClientMonetaryContext({ clientId: realm.client.id,
     baseCurrencyCode: 'IDR', defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
   const tenant = await tenantCompanyService.createTenantCompany({ clientId: realm.client.id,
@@ -220,6 +234,21 @@ before(async () => {
     idempotencyKey: key() }, customer.id);
   assert.ok(originalDecision.executionScope); scope = originalDecision.executionScope.id;
   const crew = await crewFixture(realm);
+  crewId = crew.crew.id; leadUserId = crew.leadUser.id; leadWorkerId = crew.workerContext.id;
+  // A real helper attends check-in, but never authorizes or adds labor quantity.
+  const helperUser = await userService.createUser({ email: `${id()}@helper.test`, displayName: 'Crew helper' });
+  const helperProfile = await workforceService.createWorkforceProfile({ organizationId: realm.organization.id,
+    departmentId: realm.department.id, positionId: realm.position.id, employeeCode: `H_${id().slice(0, 8)}`,
+    fullName: 'Helper worker', workforceType: 'EXTERNAL', userId: helperUser.id });
+  await assignBuildingToWorkforce({ workforceProfileId: helperProfile.id, buildingId: realm.building.id });
+  await vendorWorkforceService.createVendorWorkforceBinding({ vendorId: crew.vendor.id, workforceProfileId: helperProfile.id,
+    vendorPersonnelCode: `VP_${id().slice(0, 8)}` });
+  const helperWorker = await handymanWorkerContextService.createHandymanWorkerContext({
+    handymanProviderContextId: crew.providerContext.id, workforceProfileId: helperProfile.id }, admin);
+  await addHandymanCrewMember({ handymanCrewId: crewId, handymanWorkerContextId: helperWorker.id }, admin);
+  await buildingAssignmentService.createAssignment(helperUser.id, { buildingId: realm.building.id });
+  await credentialService.createInitialCredential({ userId: helperUser.id, password: PASSWORD });
+  helperToken = responseData(await api().post('/api/v1/auth/login').send({ email: helperUser.email, password: PASSWORD })).sessionToken;
   await credentialService.createInitialCredential({ userId: crew.leadUser.id, password: PASSWORD });
   leadToken = responseData(await api().post('/api/v1/auth/login').send({ email: crew.leadUser.email, password: PASSWORD })).sessionToken;
   await assignHandymanExecutionScopeCrew({ executionScopeId: scope, providerContextId: crew.providerContext.id,
@@ -439,4 +468,146 @@ describe('approved variation and real material execution', () => {
     assert.ok(history.rows.some((e) => e.event_type === 'USE' && Number(e.quantity_delta) === 1));
     assert.ok(history.rows.some((e) => e.event_type === 'USE' && Number(e.quantity_delta) === 0.6));
   });
+
+  it('records only PIC-approved ADD labor against the real Lead session, exact service line and evidence', async () => {
+    const sessions = `/api/v1/handyman/execution-scopes/${scope}/work-sessions`;
+    const sessionAction = (action: string) => post(`${sessions}/${action}`, leadToken, { idempotencyKey: key() });
+    const uploadWorkEvidence = async () => {
+      const upload = await api().post(`/api/v1/handyman/field/execution-scopes/${scope}/evidence/upload`)
+        .set(auth(leadToken)).field('purpose', 'BEFORE_AFTER_WORK').field('idempotencyKey', key())
+        .attach('file', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+          { filename: 'completed-work.png', contentType: 'image/png' });
+      return responseData(upload, 201).evidence.attachmentReference as string;
+    };
+    await releaseDispatchFixture({ executionScopeId: scope, handymanCrewId: crewId,
+      actorUserId: admin, query: (sql, values) => pool.query(sql, values) });
+    await saveHandymanBuildingGeospatialPolicy({ buildingId: realm.building.id, referenceLatitude: -6.2,
+      referenceLongitude: 106.816666, geofenceRadiusMeters: 100, maxAccuracyMeters: 40, maxLocationAgeSeconds: 900 }, admin);
+    const location = await createHandymanArrivalLocationIdentifier({ buildingId: realm.building.id,
+      floorId: chain.floor.id, areaId: chain.area.id, roomId: chain.room.id, spaceId: chain.space.id }, admin);
+    const challenge = await createHandymanArrivalChallenge({ executionScopeId: scope }, leadUserId);
+    const arrival = await evaluateHandymanArrivalVerification({ executionScopeId: scope,
+      challengeToken: challenge.token, qrOpaqueCode: location.value,
+      deviceLocation: { latitude: -6.2, longitude: 106.816666, accuracyMeters: 10, capturedAt: new Date().toISOString() } }, leadUserId);
+    assert.equal(arrival.status, 'VERIFIED');
+    const beforeStartEvidence = await uploadWorkEvidence();
+    const firstSession = responseData(await sessionAction('check-in')).session.id as string;
+    responseData(await sessionAction('start-work'));
+    const workEvidence = await uploadWorkEvidence();
+    const presence = await pool.query('SELECT COUNT(*)::int AS n FROM handyman_work_session_helper_presence WHERE session_id=$1', [firstSession]);
+    assert.equal(presence.rows[0].n, 1);
+    const record = (session: string, body: Record<string, unknown>, token = leadToken) =>
+      post(`${sessions}/${session}/add-labor-executions`, token, { idempotencyKey: key(), ...body });
+
+    const rejected = await proposal('ADD', 1.5, undefined, 'LABOR'); await review(rejected);
+    const rejectedQuote = await revision(3, 6, true, true, [{ qty: 1.5, price: 80, name: 'Additional pipe service' }]);
+    const rejectedLine = rejectedQuote.laborLines[0];
+    const terms = { expectedVersion: 2, revisedQuotationVersionId: rejectedQuote.id, revisedQuotationLineId: rejectedLine,
+      workOrderId: workOrder, quotedUnitAmount: 80, currency: 'IDR' };
+    rejection(await operation(rejected, 'revised-quotation', terms, leadToken), 403, 'HANDYMAN_VARIATION_ROLE_FORBIDDEN');
+    rejection(await operation(rejected, 'revised-quotation', { ...terms, workOrderId: foreignWorkOrder }), 403, 'BUILDING_ACCESS_DENIED');
+    rejection(await operation(rejected, 'revised-quotation', { ...terms, revisedQuotationLineId: rejectedQuote.addedLine }),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(rejected, 'revised-quotation', { ...terms, revisedQuotationLineId: rejectedQuote.labor }),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    await prepare(rejected, rejectedQuote.id, 80, rejectedLine);
+    const rejectedBody = { variationId: rejected, approvedVariationVersion: 3, quotationLineId: rejectedLine,
+      workOrderId: workOrder, quantity: 0.7, evidenceReference: workEvidence };
+    rejection(await record(firstSession, rejectedBody), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    await decision(rejected, rejectedQuote.id, 'REJECTED', rejectedLine);
+    rejection(await record(firstSession, rejectedBody), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(rejected, 'authorize-scope', { expectedVersion: 4 }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+
+    const variation = await proposal('ADD', 1.5, undefined, 'LABOR'); await review(variation);
+    const offer = await revision(3, 6, true, true, [{ qty: 1.5, price: 80, name: 'Additional pipe service' }]);
+    const line = offer.laborLines[0];
+    await prepare(variation, offer.id, 80, line);
+    const consent = { expectedVersion: 3, revisedQuotationVersionId: offer.id, revisedQuotationLineId: line,
+      workOrderId: workOrder, decision: 'APPROVED', evidenceReference: evidence };
+    rejection(await operation(variation, 'tenant-decision', { ...consent, workOrderId: foreignWorkOrder }, picToken),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(variation, 'tenant-decision', { ...consent, revisedQuotationLineId: offer.labor }, picToken),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(variation, 'tenant-decision', consent, leadToken), 403, 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN');
+    await decision(variation, offer.id, 'APPROVED', line); await authorize(variation);
+    const field = responseData(await api().get(fieldVariations()).set(auth(leadToken))).variations.find((v: any) => v.id === variation);
+    assert.equal(field.revisedQuotationLineId, line);
+    assert.equal(field.workOrderId, workOrder);
+    assert.equal(field.approvedVariationVersion, 3);
+    assert.equal(field.quotedUnitAmount, undefined);
+    const body = { variationId: variation, approvedVariationVersion: 3, quotationLineId: line,
+      workOrderId: workOrder, quantity: 0.7, evidenceReference: workEvidence };
+    rejection(await record(firstSession, { ...body, approvedVariationVersion: 4 }), 409, 'HANDYMAN_VARIATION_VERSION_CONFLICT');
+    rejection(await record(firstSession, { ...body, quotationLineId: offer.labor }), 409, 'HANDYMAN_ADD_LABOR_BINDING_MISMATCH');
+    rejection(await record(firstSession, { ...body, workOrderId: foreignWorkOrder }), 409, 'HANDYMAN_ADD_LABOR_BINDING_MISMATCH');
+    rejection(await record(id(), body), 404, 'HANDYMAN_WORK_SESSION_NOT_FOUND');
+    rejection(await record(firstSession, body, helperToken), 403, 'HANDYMAN_WORK_SESSION_NOT_AUTHORIZED');
+    rejection(await record(firstSession, body, picToken), 403, 'HANDYMAN_WORK_SESSION_NOT_AUTHORIZED');
+    rejection(await record(firstSession, { ...body, quotedUnitAmount: 1 }), 400, 'VALIDATION_ERROR');
+    rejection(await record(firstSession, { ...body, helperCount: 50 }), 400, 'VALIDATION_ERROR');
+    rejection(await record(firstSession, { ...body, quantity: 0.0001 }), 400, 'VALIDATION_ERROR');
+    rejection(await record(firstSession, { ...body, quantity: 1.501 }), 400, 'HANDYMAN_ADD_LABOR_QUANTITY_EXCEEDED');
+    rejection(await record(firstSession, { ...body, evidenceReference: evidence }), 409, 'HANDYMAN_ADD_LABOR_EVIDENCE_INVALID');
+    rejection(await record(firstSession, { ...body, evidenceReference: beforeStartEvidence }), 409, 'HANDYMAN_ADD_LABOR_EVIDENCE_INVALID');
+    rejection(await record(firstSession, { ...body, evidenceReference: 'unverified' }), 400, 'HANDYMAN_EVIDENCE_REFERENCE_UNVERIFIED');
+    responseData(await sessionAction('pause'));
+    rejection(await record(firstSession, body), 409, 'HANDYMAN_WORK_SESSION_ILLEGAL_TRANSITION');
+    responseData(await sessionAction('resume'));
+    const keys = [key(), key()];
+    const raced = await Promise.all(keys.map((k) => record(firstSession, { ...body, idempotencyKey: k })));
+    assert.deepEqual(raced.map((r) => r.status).sort(), [200, 409]);
+    const winner = raced.findIndex((r) => r.status === 200);
+    const execution = responseData(raced[winner]).execution;
+    assert.equal(execution.variationId, variation);
+    assert.equal(execution.approvedVariationVersion, 3);
+    assert.equal(execution.quotationVersionId, offer.id);
+    assert.equal(execution.quotationLineId, line);
+    assert.equal(execution.workOrderId, workOrder);
+    assert.equal(execution.workSessionId, firstSession);
+    assert.equal(execution.leadUserId, leadUserId);
+    assert.equal(execution.leadWorkerId, leadWorkerId);
+    assert.equal(execution.approvedQty, 1.5);
+    assert.equal(execution.actualQty, 0.7);
+    assert.equal(execution.evidenceReference, workEvidence);
+    assert.equal(execution.price, undefined);
+    const replay = responseData(await record(firstSession, { ...body, idempotencyKey: keys[winner] }));
+    assert.equal(replay.replayed, true); assert.equal(replay.execution.id, execution.id);
+    rejection(await record(firstSession, { ...body, quantity: 0.8, idempotencyKey: keys[winner] }), 409, 'IDEMPOTENCY_CONFLICT');
+    rejection(await record(firstSession, body), 409, 'HANDYMAN_ADD_LABOR_DUPLICATE');
+    const listed = responseData(await api().get(`${sessions}/${firstSession}/add-labor-executions`).set(auth(leadToken))).executions;
+    assert.equal(listed.length, 1); assert.equal(listed[0].actualQty, 0.7);
+    await assert.rejects(pool.query('UPDATE handyman_add_labor_executions SET actual_qty=1 WHERE id=$1', [execution.id]), /append-only/);
+    await assert.rejects(pool.query('DELETE FROM handyman_add_labor_executions WHERE id=$1', [execution.id]), /append-only/);
+
+    // Historical approvals without an item-specific PIC pin remain history;
+    // they cannot be silently upgraded to a labor-execution authorization.
+    const legacy = await proposal('ADD', 0.5, undefined, 'LABOR'); await review(legacy);
+    const legacyQuote = await revision(3, 6, true, true, [
+      { qty: 1.5, price: 80, name: 'Additional pipe service' }, { qty: 0.5, price: 70, name: 'Legacy labor' },
+    ]);
+    await prepare(legacy, legacyQuote.id, 70); await decision(legacy, legacyQuote.id, 'APPROVED'); await authorize(legacy);
+    rejection(await record(firstSession, { ...body, variationId: legacy, quotationLineId: legacyQuote.laborLines[1] }),
+      409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    const oldVersion = await pool.query('SELECT status FROM handyman_quotation_versions WHERE id=$1', [offer.id]);
+    assert.equal(oldVersion.rows[0].status, 'SUPERSEDED');
+
+    responseData(await sessionAction('complete')); responseData(await sessionAction('check-out'));
+    const dispatch = await pool.query('SELECT appointment_id FROM handyman_dispatch_releases WHERE execution_scope_id=$1 ORDER BY created_at DESC LIMIT 1', [scope]);
+    await handymanDispatchService.releaseHandymanDispatch({ executionScopeId: scope, appointmentId: dispatch.rows[0].appointment_id }, admin);
+    const secondSession = responseData(await sessionAction('check-in')).session.id as string;
+    assert.notEqual(secondSession, firstSession);
+    responseData(await sessionAction('start-work'));
+    const secondEvidence = await uploadWorkEvidence();
+    rejection(await record(secondSession, { ...body, evidenceReference: workEvidence }), 409, 'HANDYMAN_ADD_LABOR_EVIDENCE_INVALID');
+    rejection(await record(secondSession, { ...body, quantity: 0.801, evidenceReference: secondEvidence }),
+      400, 'HANDYMAN_ADD_LABOR_QUANTITY_EXCEEDED');
+    const second = responseData(await record(secondSession, { ...body, quantity: 0.8, evidenceReference: secondEvidence })).execution;
+    assert.equal(second.actualQty, 0.8);
+    const sum = await pool.query(`SELECT SUM(actual_qty)::text AS actual, COUNT(*)::int AS records
+      FROM handyman_add_labor_executions WHERE variation_id=$1`, [variation]);
+    assert.equal(Number(sum.rows[0].actual), 1.5); assert.equal(sum.rows[0].records, 2);
+    const original = await pool.query('SELECT quantity FROM handyman_quotation_lines WHERE id=$1', [originalLabor]);
+    assert.equal(Number(original.rows[0].quantity), 1);
+  });
+
 });

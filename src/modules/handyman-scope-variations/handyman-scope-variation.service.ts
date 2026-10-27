@@ -20,7 +20,8 @@ import { assertHandymanQuotationPricingAuthority }
   from '../handyman-quotations/handyman-quotation-access';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
 import {
-  addMaterialBindingFromEvents, assertAddMaterialQuoteBinding,
+  addLaborBindingFromEvents, addMaterialBindingFromEvents,
+  assertAddLaborQuoteBinding, assertAddMaterialQuoteBinding,
   assertPinnedVariationApproval, variationConsentSnapshot,
 } from './handyman-scope-variation-material-authority';
 import {
@@ -802,7 +803,7 @@ function stripCommercialForField(
   v: HandymanScopeVariationRecord,
   events: HandymanScopeVariationEventRecord[],
 ): FieldScopeVariationProjection {
-  const binding = addMaterialBindingFromEvents(v, events);
+  const binding = addMaterialBindingFromEvents(v, events) ?? addLaborBindingFromEvents(v, events);
   const decision = events.find((event) => event.eventType === 'TENANT_DECISION');
   const approvedVersion = (decision?.metadata.consentSnapshot as { version?: unknown } | undefined)?.version;
   return {
@@ -1708,13 +1709,17 @@ export async function prepareVariationRevisedQuotation(
       tx, actorUserId, ctx, variation.originActorUserId,
     );
 
-    const isAddMaterial = variation.variationType === 'ADD' && variation.lineType === 'MATERIAL';
-    const binding = isAddMaterial ? {
+    const isAddItem = variation.variationType === 'ADD';
+    const hasBindingInput = input.revisedQuotationLineId != null || input.workOrderId != null;
+    // Existing unbound ADD labor offers remain historical/lifecycle-compatible,
+    // but cannot create item-level labor execution without fresh pinned consent.
+    const needsBinding = isAddItem && (variation.lineType === 'MATERIAL' || hasBindingInput);
+    const binding = needsBinding ? {
       revisedQuotationLineId: assertUuid(input.revisedQuotationLineId, 'revisedQuotationLineId').toLowerCase(),
       workOrderId: assertUuid(input.workOrderId, 'workOrderId').toLowerCase(),
     } : null;
-    if (!isAddMaterial && (input.revisedQuotationLineId != null || input.workOrderId != null)) {
-      throw AppError.validation('The material line and Work Order binding is only valid for an ADD material variation.');
+    if (!isAddItem && hasBindingInput) {
+      throw AppError.validation('The quotation line and Work Order binding is only valid for an ADD variation.');
     }
 
     const existingEv =
@@ -1777,7 +1782,8 @@ export async function prepareVariationRevisedQuotation(
     );
 
     if (binding) {
-      await assertAddMaterialQuoteBinding(tx, {
+      const validateBinding = variation.lineType === 'MATERIAL' ? assertAddMaterialQuoteBinding : assertAddLaborQuoteBinding;
+      await validateBinding(tx, {
         executionScopeId: ctx.executionScopeId, quotationVersionId: revisedQuotationVersionId,
         quotationLineId: binding.revisedQuotationLineId, workOrderId: binding.workOrderId,
         quantity: variation.quantity, uomId: variation.uomId, quotedUnitAmount, currency,
@@ -1936,16 +1942,16 @@ export async function recordVariationTenantDecision(
     await assertAuthorizedTenantDecisionActor(actorUserId, ctx, tx);
 
     const bindingEvents = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
-    const materialBinding = addMaterialBindingFromEvents(variation, bindingEvents);
-    if (variation.variationType === 'ADD' && variation.lineType === 'MATERIAL') {
-      if (!materialBinding) {
+    const itemBinding = addMaterialBindingFromEvents(variation, bindingEvents) ?? addLaborBindingFromEvents(variation, bindingEvents);
+    if (variation.variationType === 'ADD' && (variation.lineType === 'MATERIAL' || itemBinding)) {
+      if (!itemBinding) {
         throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-          message: 'ADD material requires a revised quotation-line and Work Order binding before Tenant consent.' });
+          message: 'ADD requires a revised quotation-line and Work Order binding before Tenant consent.' });
       }
-      if (assertUuid(input.revisedQuotationLineId, 'revisedQuotationLineId').toLowerCase() !== materialBinding.revisedQuotationLineId ||
-          assertUuid(input.workOrderId, 'workOrderId').toLowerCase() !== materialBinding.workOrderId) {
+      if (assertUuid(input.revisedQuotationLineId, 'revisedQuotationLineId').toLowerCase() !== itemBinding.revisedQuotationLineId ||
+          assertUuid(input.workOrderId, 'workOrderId').toLowerCase() !== itemBinding.workOrderId) {
         throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-          message: 'Tenant decision must identify the exact offered material line and Work Order.' });
+          message: 'Tenant decision must identify the exact offered line and Work Order.' });
       }
     }
 
@@ -2033,10 +2039,11 @@ export async function recordVariationTenantDecision(
       expectedVariationDelta: variation.quotedTotalDelta,
       requireCurrentOffer: true,
     });
-    if (materialBinding && variation.quotedUnitAmount !== null) {
-      await assertAddMaterialQuoteBinding(tx, {
+    if (itemBinding && variation.quotedUnitAmount !== null) {
+      const validateBinding = variation.lineType === 'MATERIAL' ? assertAddMaterialQuoteBinding : assertAddLaborQuoteBinding;
+      await validateBinding(tx, {
         executionScopeId: ctx.executionScopeId, quotationVersionId: variation.revisedQuotationVersionId,
-        quotationLineId: materialBinding.revisedQuotationLineId, workOrderId: materialBinding.workOrderId,
+        quotationLineId: itemBinding.revisedQuotationLineId, workOrderId: itemBinding.workOrderId,
         quantity: variation.quantity, uomId: variation.uomId,
         quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
       });
@@ -2084,7 +2091,7 @@ export async function recordVariationTenantDecision(
         decisionOutcome,
         variationType: variation.variationType,
         quantity: variation.quantity,
-        consentSnapshot: variationConsentSnapshot(variation, variation.version, materialBinding),
+        consentSnapshot: variationConsentSnapshot(variation, variation.version, itemBinding),
       },
     });
 
@@ -2242,6 +2249,21 @@ export async function authorizeVariationScope(
         quantity: variation.quantity, uomId: variation.uomId,
         quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
       });
+    }
+
+    // Legacy ADD labor approvals without an item binding retain their historical
+    // lifecycle, but are never executable through the new item-level contract.
+    if (variation.variationType === 'ADD' && variation.lineType === 'LABOR') {
+      const events = await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
+      const binding = addLaborBindingFromEvents(variation, events);
+      if (binding && variation.quotedUnitAmount !== null) {
+        await assertAddLaborQuoteBinding(tx, {
+          executionScopeId: ctx.executionScopeId, quotationVersionId: variation.revisedQuotationVersionId,
+          quotationLineId: binding.revisedQuotationLineId, workOrderId: binding.workOrderId,
+          quantity: variation.quantity, uomId: variation.uomId,
+          quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
+        });
+      }
     }
 
     if (variation.variationType === 'REDUCE') {

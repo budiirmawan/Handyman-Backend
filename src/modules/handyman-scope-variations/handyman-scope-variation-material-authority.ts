@@ -11,18 +11,27 @@ export type AddMaterialBinding = {
 
 // The Operations quotation event is append-only. Its exact line and Work Order
 // are included in the PIC consent snapshot; neither comes from the Crew Lead.
-export function addMaterialBindingFromEvents(
+function addBindingFromEvents(
   v: HandymanScopeVariationRecord,
   events: HandymanScopeVariationEventRecord[],
+  lineType: 'LABOR' | 'MATERIAL',
 ): AddMaterialBinding | null {
   const revision = events.find((e) => e.eventType === 'REVISED_QUOTATION' && e.actorRole === 'OPERATIONS_MANAGER');
   const line = revision?.metadata.revisedQuotationLineId;
   const workOrder = revision?.metadata.workOrderId;
-  if (v.variationType !== 'ADD' || v.lineType !== 'MATERIAL' ||
+  if (v.variationType !== 'ADD' || v.lineType !== lineType ||
       revision?.metadata.revisedQuotationVersionId !== v.revisedQuotationVersionId ||
       typeof line !== 'string' || !isValidUuid(line) ||
       typeof workOrder !== 'string' || !isValidUuid(workOrder)) return null;
   return { revisedQuotationLineId: line, workOrderId: workOrder };
+}
+
+export function addMaterialBindingFromEvents(v: HandymanScopeVariationRecord, events: HandymanScopeVariationEventRecord[]) {
+  return addBindingFromEvents(v, events, 'MATERIAL');
+}
+
+export function addLaborBindingFromEvents(v: HandymanScopeVariationRecord, events: HandymanScopeVariationEventRecord[]) {
+  return addBindingFromEvents(v, events, 'LABOR');
 }
 
 export function variationConsentSnapshot(
@@ -56,7 +65,8 @@ export async function assertPinnedVariationApproval(
 ): Promise<void> {
   const events = existingEvents ?? await handymanScopeVariationRepository.listEventsByVariation(variation.id, tx);
   const decision = events.find((event) => event.eventType === 'TENANT_DECISION');
-  const expected = variationConsentSnapshot(variation, approvedVersion, addMaterialBindingFromEvents(variation, events));
+  const expected = variationConsentSnapshot(variation, approvedVersion,
+    addMaterialBindingFromEvents(variation, events) ?? addLaborBindingFromEvents(variation, events));
   const snapshot = decision?.metadata.consentSnapshot;
   if (
     !decision || variation.tenantDecisionOutcome !== 'APPROVED' ||
@@ -73,7 +83,7 @@ export async function assertPinnedVariationApproval(
 /** The quote line itself is the immutable material identity (including its
  * description, UOM and optional inventory source); no inventory item or
  * original quotation line is invented for one-off material. */
-export async function assertAddMaterialQuoteBinding(
+async function assertAddQuoteBinding(
   tx: PoolClient,
   input: {
     executionScopeId: string;
@@ -85,6 +95,7 @@ export async function assertAddMaterialQuoteBinding(
     quotedUnitAmount: string;
     currency: string;
   },
+  lineType: 'LABOR' | 'MATERIAL',
 ): Promise<{ sourceItemId: string | null }> {
   const workOrder = await tx.query<{ client_id: string; building_id: string; status: string }>(
     'SELECT client_id, building_id, status FROM work_orders WHERE id=$1 FOR SHARE', [input.workOrderId]);
@@ -100,7 +111,7 @@ export async function assertAddMaterialQuoteBinding(
   }
   if (!['OPEN', 'ASSIGNED', 'IN_PROGRESS'].includes(workOrder.rows[0].status)) {
     throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-      message: 'Work Order is not open for material execution.' });
+      message: `Work Order is not open for ${lineType.toLowerCase()} execution.` });
   }
   const result = await tx.query<{ source_item_id: string | null }>(
     `SELECT l.source_item_id
@@ -108,16 +119,24 @@ export async function assertAddMaterialQuoteBinding(
        JOIN handyman_quotation_versions v ON v.quotation_id=s.quotation_id
        JOIN handyman_quotation_lines l ON l.quotation_version_id=v.id
       WHERE s.id=$1 AND v.id=$2 AND v.id<>s.approved_quotation_version_id
-        AND l.id=$3 AND l.line_type='MATERIAL' AND l.quantity=$4::numeric
+        AND l.id=$3 AND l.line_type=$8 AND l.quantity=$4::numeric
         AND l.uom_id=$5 AND l.final_quoted_unit_amount=$6::numeric AND l.currency=$7`,
     [input.executionScopeId, input.quotationVersionId, input.quotationLineId,
-      input.quantity, input.uomId, input.quotedUnitAmount, input.currency],
+      input.quantity, input.uomId, input.quotedUnitAmount, input.currency, lineType],
   );
   if (!result.rows[0]) {
     throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-      message: 'ADD material must bind the exact revised quotation MATERIAL line, quantity, UOM and approved terms.' });
+      message: `ADD ${lineType.toLowerCase()} must bind the exact revised quotation ${lineType} line, quantity, UOM and approved terms.` });
   }
   return { sourceItemId: result.rows[0].source_item_id };
+}
+
+type AddQuoteBindingInput = Parameters<typeof assertAddQuoteBinding>[1];
+export function assertAddMaterialQuoteBinding(tx: PoolClient, input: AddQuoteBindingInput) {
+  return assertAddQuoteBinding(tx, input, 'MATERIAL');
+}
+export function assertAddLaborQuoteBinding(tx: PoolClient, input: AddQuoteBindingInput) {
+  return assertAddQuoteBinding(tx, input, 'LABOR');
 }
 
 /** Called under the execution-scope lock. The selected version is the exact

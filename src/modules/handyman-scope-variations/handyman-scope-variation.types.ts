@@ -110,7 +110,7 @@ export interface FieldScopeVariationProjection {
   variationType: HandymanScopeVariationType;
   lineType: HandymanScopeVariationLineType;
   targetQuotationLineId: string | null;
-  /** Non-price identifiers for an explicitly offered ADD material line. */
+  /** Non-price identifiers for an explicitly offered ADD labor or material line. */
   revisedQuotationVersionId?: string | null;
   revisedQuotationLineId?: string;
   workOrderId?: string;
