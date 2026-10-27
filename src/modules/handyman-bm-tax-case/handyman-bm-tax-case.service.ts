@@ -100,7 +100,8 @@ async function lockLedger(tx:PoolClient,entitlementId:string):Promise<void> {
     WHERE f.id=$1 FOR UPDATE OF t`,[entitlementId]);
   if(!result.rowCount) throw missing();
 }
-async function lockSources(tx:PoolClient,s:BmTaxCaseSnapshot):Promise<void> {
+async function lockSources(tx:PoolClient,s:Pick<BmTaxCaseSnapshot,
+  'ppnBeneficiaryProfileId'|'ppnIssuerProfileId'|'pphBeneficiaryProfileId'|'ppnRuleId'|'pphRuleId'>):Promise<void> {
   // READ COMMITTED gets a fresh statement snapshot after each lock. Stable order avoids deadlocks between cases.
   await tx.query('SELECT profile_id FROM handyman_tax_identity_windows WHERE profile_id=ANY($1::uuid[]) ORDER BY profile_id FOR SHARE',
     [[s.ppnBeneficiaryProfileId,s.ppnIssuerProfileId,s.pphBeneficiaryProfileId]]);
@@ -276,7 +277,9 @@ function normalizeIntent(input:ProposeBmTaxCaseInput) {
     serviceClassification:code(input.serviceClassification,'serviceClassification'),transactionEvidenceReferenceId:uuid(input.transactionEvidenceReferenceId,'transactionEvidenceReferenceId'),
     ppn,pph,expectedVersion:input.expectedVersion===null?null:version(input.expectedVersion,'expectedVersion'),idempotencyKey:key(input.idempotencyKey)};
 }
-function snapshotFrom(input:ReturnType<typeof normalizeIntent>,source:BmCommissionSource,actor:string,id:string,v:number,previous:string|null,intentDigest:string):BmTaxCaseSnapshot {
+function snapshotFrom(input:ReturnType<typeof normalizeIntent>,source:Pick<BmCommissionSource,
+  'buildingId'|'executionScopeId'|'transactionId'|'commissionGross'|'beneficiary'|'coverage'|'agreement'>,
+  actor:string,id:string,v:number,previous:string|null,intentDigest:string):BmTaxCaseSnapshot {
   const ppn=input.ppn,pph=input.pph;
   if(ppn.supplier.owner.kind!=='BM_BENEFICIARY' || pph.beneficiary.owner.kind!=='BM_BENEFICIARY' ||
     ppn.supplier.owner.counterpartyId!==source.beneficiary.counterpartyId || pph.beneficiary.owner.counterpartyId!==source.beneficiary.counterpartyId) throw stale();
@@ -398,3 +401,11 @@ export async function requireApprovedHandymanBmTaxCase(actor:string,input:BmVeri
     const result=await requireApprovedBmTaxCaseInSnapshot(tx,actor,input);await tx.query('COMMIT');return {case:result.classification,decision:result.decision};
   }catch(err){await tx.query('ROLLBACK').catch(()=>undefined);throw err;}finally{tx.release();}
 }
+
+// Internal reuse by the separately approved correction bridge; none of these
+// helpers makes a caller-supplied correction into an approved tax case.
+export { access as accessBmTaxCase, lockLedger as lockBmTaxLedger, lockSources as lockBmTaxSources,
+  ruleAt as resolveBmTaxCaseRuleAt, normalizeIntent as normalizeBmTaxCaseIntent,
+  snapshotFrom as buildBmTaxCaseSnapshot, readNow as readBmTaxNow,
+  view as readBmTaxCaseRow, decision as readBmTaxCaseDecisionRow,
+  pin as normalizeBmTaxCasePin };

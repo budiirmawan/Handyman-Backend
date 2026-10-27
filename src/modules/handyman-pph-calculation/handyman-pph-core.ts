@@ -7,6 +7,11 @@ import type { PpnIdentityPin, PpnIdentityReference, PpnRulePin } from '../handym
 import type { ApprovedHandymanTaxIdentity } from '../handyman-tax-identity';
 import type { HandymanTaxRuleSnapshot, TaxRuleResolution } from '../handyman-tax-rules';
 import type { ApprovedBmWithholdingBreakdown, BmCommissionSource, CalculateApprovedBmWithholdingInput } from './handyman-pph.types';
+import type { BmCorrectedCommissionSource } from '../handyman-bm-correction-tax/handyman-bm-correction-tax.types';
+
+export type CorrectedBmWithholdingInput = Omit<CalculateApprovedBmWithholdingInput,'commissionBasis'> &
+  Readonly<{ commissionBasis: 'CORRECTED_BM_COMMISSION' }>;
+type PphInput = CalculateApprovedBmWithholdingInput | CorrectedBmWithholdingInput;
 
 type PphCode = 'HANDYMAN_PPH_INVALID' | 'HANDYMAN_PPH_SOURCE_NOT_FOUND' | 'HANDYMAN_PPH_SOURCE_STALE' |
   'HANDYMAN_PPH_CORRECTION_UNSUPPORTED' | 'HANDYMAN_PPH_MISSING_RULE' | 'HANDYMAN_PPH_AMBIGUOUS_RULE' |
@@ -75,20 +80,26 @@ function rulePin(value: PpnRulePin): PpnRulePin {
   return { ruleId: uuid(value.ruleId,'rule.ruleId'), ruleVersion: version(value.ruleVersion,'rule.ruleVersion'),
     ruleDigest: digest(value.ruleDigest,'rule.ruleDigest'), approvalDecisionId: uuid(value.approvalDecisionId,'rule.approvalDecisionId') };
 }
-export function normalizePphInput(input: CalculateApprovedBmWithholdingInput): CalculateApprovedBmWithholdingInput {
+function normalizePph(input: PphInput, basis: PphInput['commissionBasis']): PphInput {
   keys(input, ['clientId','entitlementId','sourceChecksum','currency','commissionBasis','commissionGross','taxDate','taxPointAt',
     'treatment','taxpayerClassification','beneficiary','rule'], 'input');
   const clientId = uuid(input.clientId,'clientId'), taxDate = date(input.taxDate,'taxDate'), taxPointAt = instant(input.taxPointAt,'taxPointAt');
   if (new Date(Date.parse(taxPointAt) + 7 * 3600000).toISOString().slice(0,10) !== taxDate) throw invalid('taxDate/taxPointAt');
-  if (input.currency !== 'IDR' || input.commissionBasis !== 'EARNED_BM_COMMISSION') throw unsupported('currency or commission basis');
+  if (input.currency !== 'IDR' || input.commissionBasis !== basis) throw unsupported('currency or commission basis');
   cents(input.commissionGross);
   if (!['WITHHOLD','EXEMPT','NON_WITHHOLD'].includes(input.treatment)) throw invalid('treatment');
   if (typeof input.taxpayerClassification !== 'string' || !/^[A-Z][A-Z0-9_]{1,63}$/.test(input.taxpayerClassification)) throw invalid('taxpayerClassification');
   const beneficiary = identityPin(input.beneficiary);
   if (beneficiary.owner.clientId !== clientId) throw mismatch();
   return { clientId, entitlementId: uuid(input.entitlementId,'entitlementId'), sourceChecksum: digest(input.sourceChecksum,'sourceChecksum'),
-    currency:'IDR', commissionBasis:'EARNED_BM_COMMISSION', commissionGross:input.commissionGross, taxDate, taxPointAt,
-    treatment:input.treatment, taxpayerClassification:input.taxpayerClassification, beneficiary, rule:rulePin(input.rule) };
+    currency:'IDR', commissionBasis:basis, commissionGross:input.commissionGross, taxDate, taxPointAt,
+    treatment:input.treatment, taxpayerClassification:input.taxpayerClassification, beneficiary, rule:rulePin(input.rule) } as PphInput;
+}
+export function normalizePphInput(input: CalculateApprovedBmWithholdingInput): CalculateApprovedBmWithholdingInput {
+  return normalizePph(input,'EARNED_BM_COMMISSION') as CalculateApprovedBmWithholdingInput;
+}
+export function normalizeCorrectedPphInput(input: CorrectedBmWithholdingInput): CorrectedBmWithholdingInput {
+  return normalizePph(input,'CORRECTED_BM_COMMISSION') as CorrectedBmWithholdingInput;
 }
 
 function epoch(value: string): number {
@@ -98,7 +109,7 @@ function epoch(value: string): number {
   return n;
 }
 type ApprovedRule = Extract<TaxRuleResolution, { status: 'APPROVED' }>;
-function expectedClassification(input: CalculateApprovedBmWithholdingInput, identity: ApprovedHandymanTaxIdentity): string {
+function expectedClassification(input: PphInput, identity: ApprovedHandymanTaxIdentity): string {
   const m = /^P02B_(TAX|EXEMPT|NON_WITHHOLD)_(E|IR|IN)_([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)$/.exec(input.taxpayerClassification);
   if (!m || m[3].length < 2 || m[3].length > 32 || m[3].split('_').some(x => ['ANY','ALL','DEFAULT','UNKNOWN','UNSPECIFIED','NONE'].includes(x)))
     throw unsupported('taxpayer classification vocabulary');
@@ -111,7 +122,7 @@ function expectedClassification(input: CalculateApprovedBmWithholdingInput, iden
   const description = kind === 'E' ? 'ENTITY' : kind === 'IR' ? 'INDIVIDUAL_RESIDENT' : 'INDIVIDUAL_NON_RESIDENT';
   return `P02B_V1|TREATMENT=${treatment}|BENEFICIARY=${description}|CASE=${m[3]}`;
 }
-function validateRule(input: CalculateApprovedBmWithholdingInput, resolved: ApprovedRule, cutoff: number, description: string): void {
+function validateRule(input: PphInput, resolved: ApprovedRule, cutoff: number, description: string): void {
   if (!resolved || resolved.status !== 'APPROVED' || !resolved.rule || !resolved.approval) throw pphIntegrity();
   const { rule, approval } = resolved, p = rule.snapshot, s = approval.submission, d = approval.decision, w = rule.effectiveWindow;
   if (!p || !s || !d || !w || p.schema !== 'HANDYMAN_TAX_RULE_V1' || p.id !== input.rule.ruleId || p.version !== input.rule.ruleVersion ||
@@ -149,7 +160,7 @@ function round(n: bigint, d: bigint, mode: string, scale: 0 | 2 | null): bigint 
   if (mode === 'HALF_EVEN') return (q + (r * 2n > divisor || (r * 2n === divisor && q % 2n === 1n) ? 1n : 0n)) * quantum;
   throw unsupported('rounding mode');
 }
-function amounts(input: CalculateApprovedBmWithholdingInput, p: HandymanTaxRuleSnapshot) {
+function amounts(input: PphInput, p: HandymanTaxRuleSnapshot) {
   const gross = cents(input.commissionGross), r = rate(p.ratePercent);
   if (!['HALF_UP','HALF_EVEN','DOWN','UP','NO_ROUNDING'].includes(p.roundingMode) ||
       (p.roundingMode === 'NO_ROUNDING' ? p.roundingScale !== null : p.roundingScale !== 0 && p.roundingScale !== 2))
@@ -227,4 +238,43 @@ export function calculateBmWithholdingFromResolved(input: CalculateApprovedBmWit
       approval:Object.freeze({ submission:Object.freeze({ ...resolved.approval.submission }),decision:Object.freeze({ ...resolved.approval.decision }) }) }),
     caseApplicability:'CALLER_ASSERTED_NOT_INDEPENDENTLY_VERIFIED' as const,authority:'READ_ONLY_PROJECTION' as const });
   return Object.freeze({ ...result,checksumAlgorithm:'SHA-256' as const,checksum:hash(result) });
+}
+
+/** The corrected source has its own schema/checksum; no original V1 source is fabricated. */
+export function validateBmCorrectedWithholdingFromResolved(input: CorrectedBmWithholdingInput, source: BmCorrectedCommissionSource,
+  identity: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): void {
+  const n=normalizeCorrectedPphInput(input),{checksumAlgorithm,checksum,...body}=source;
+  if(checksumAlgorithm!=='SHA-256' || hash(body)!==checksum || checksum!==n.sourceChecksum ||
+    source.schema!=='HANDYMAN_BM_CORRECTED_COMMISSION_SOURCE_V1' || source.entitlementId!==n.entitlementId ||
+    source.clientId!==n.clientId || source.currency!==n.currency || source.commissionBasis!==n.commissionBasis ||
+    source.commissionGross!==n.commissionGross || epoch(source.ledgerPostedAt)>epoch(n.taxPointAt)) throw pphIntegrity();
+  if(n.beneficiary.owner.kind!=='BM_BENEFICIARY' || n.beneficiary.owner.counterpartyId!==source.beneficiary.counterpartyId ||
+    identity.snapshot.verificationId!==source.beneficiary.verificationId) throw mismatch();
+  try { validateApprovedPpnIdentityPin(n.beneficiary,identity,n.taxPointAt,authorityAsOf); }
+  catch(err) {
+    if(err instanceof AppError && err.code===ERROR_CODES.HANDYMAN_PPN_NOT_APPROVED) throw notApproved();
+    if(err instanceof AppError && err.code===ERROR_CODES.HANDYMAN_PPN_IDENTITY_MISMATCH) throw mismatch();
+    throw pphIntegrity();
+  }
+  validateRule(n,resolved,Math.min(epoch(n.taxPointAt),epoch(authorityAsOf)),expectedClassification(n,identity));
+  amounts({...n,commissionGross:'0.00'},resolved.rule.snapshot);
+}
+
+/** Pure existing PPh policy/math for a resolved corrected source; the caller must establish case authority. */
+export function calculateBmCorrectedWithholdingFromResolved(input: CorrectedBmWithholdingInput, source: BmCorrectedCommissionSource,
+  identity: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string) {
+  validateBmCorrectedWithholdingFromResolved(input,source,identity,resolved,authorityAsOf);
+  const n=normalizeCorrectedPphInput(input),p=resolved.rule.snapshot,{basis,withholding,net}=amounts(n,p);
+  const body=Object.freeze({schema:'HANDYMAN_CORRECTED_BM_PPH_WITHHOLDING_V1' as const,clientId:n.clientId,
+    taxDate:n.taxDate,taxPointAt:n.taxPointAt,currency:'IDR' as const,commissionBasis:n.commissionBasis,commissionGross:n.commissionGross,
+    treatment:n.treatment,taxpayerClassification:n.taxpayerClassification,taxableWithholdingBasis:decimal(basis),
+    ratePercent:p.ratePercent,pphWithheld:decimal(withholding),projectedNetCommission:decimal(net),
+    rounding:Object.freeze({mode:p.roundingMode,scale:p.roundingScale as 0|2|null,stages:'BASIS_THEN_WITHHOLDING' as const}),
+    basisMethodCode:p.basisMethodCode,source,beneficiaryTaxIdentity:reference(identity),
+    rule:Object.freeze({id:p.id,version:p.version,digest:resolved.rule.digest,legalReference:p.legalReference,legalSource:p.legalSource,
+      classificationDescription:p.classificationDescription,basisDescription:p.basisDescription,evidenceSource:p.evidenceSource,
+      evidenceReference:p.evidenceReference,createdByUserId:p.createdByUserId,
+      approval:Object.freeze({submission:Object.freeze({...resolved.approval.submission}),decision:Object.freeze({...resolved.approval.decision})})}),
+    caseApplicability:'CALLER_ASSERTED_NOT_INDEPENDENTLY_VERIFIED' as const,authority:'READ_ONLY_PROJECTION' as const});
+  return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
 }

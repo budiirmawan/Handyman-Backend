@@ -463,6 +463,26 @@ export async function readHandymanBmCommissionCorrectionLineageInSnapshot(tx: Po
   const mode = (await tx.query(`SELECT current_setting('transaction_isolation') AS isolation,
     current_setting('transaction_read_only') AS read_only`)).rows[0];
   if (tx.getTransactionStatus() !== 'T' || mode.isolation !== 'repeatable read' || mode.read_only !== 'on') throw snapshotRequired();
+  return lineageAt(tx,n);
+}
+
+/** Internal write-side revalidation: serialize the ledger before reading its immutable facts. */
+export async function readHandymanBmCommissionCorrectionLineageInLockedTransaction(tx: PoolClient, actorInput: string,
+  input: {clientId: string; entitlementId: string}): Promise<BmCommissionCorrectionLineage> {
+  const n=normalize(actorInput,input);
+  const required=()=>new AppError({code:ERROR_CODES.HANDYMAN_BM_TAX_PROJECTION_SNAPSHOT_REQUIRED,statusCode:409,
+    message:'An active read-committed transaction with a locked ledger is required for correction approval.'});
+  if(tx.getTransactionStatus()!=='T') throw required();
+  const mode=(await tx.query(`SELECT current_setting('transaction_isolation') AS isolation,
+    current_setting('transaction_read_only') AS read_only`)).rows[0];
+  if(tx.getTransactionStatus()!=='T' || mode.isolation!=='read committed' || mode.read_only!=='off') throw required();
+  const locked=await tx.query(`SELECT t.id FROM handyman_customer_transactions t JOIN handyman_entitlement_facts f ON f.transaction_id=t.id
+    WHERE f.id=$1 AND f.client_id=$2 FOR UPDATE OF t`,[n.entitlementId,n.clientId]);
+  if(!locked.rowCount) throw pphIntegrity();
+  return lineageAt(tx,n);
+}
+
+async function lineageAt(tx:PoolClient,n:ReturnType<typeof normalize>):Promise<BmCommissionCorrectionLineage> {
   const original = await originalAt(tx,n.actor,n.clientId,n.entitlementId);
   const blockers: BmLineageBlocker[] = [];
   if (original.bindingStatus !== 'VERIFIED_HISTORICAL_BINDING')
