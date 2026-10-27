@@ -1,3 +1,4 @@
+import { migration0505HandymanBmSettlementPaymentEvidence } from './0505_handyman_bm_settlement_payment_evidence';
 import { migration0504HandymanBmBeneficiaryBankAccounts } from './0504_handyman_bm_beneficiary_bank_accounts';
 import { migration0503HandymanBmCommissionLedger } from './0503_handyman_bm_commission_ledger';
 import { migration0502HandymanBmCorrectionTaxApproval } from './0502_handyman_bm_correction_tax_approval';
@@ -1056,4 +1057,5 @@ export const migrations: readonly Migration[] = [
   migration0502HandymanBmCorrectionTaxApproval,
   migration0503HandymanBmCommissionLedger,
   migration0504HandymanBmBeneficiaryBankAccounts,
+  migration0505HandymanBmSettlementPaymentEvidence,
 ];

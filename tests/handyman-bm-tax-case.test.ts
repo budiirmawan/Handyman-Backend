@@ -37,12 +37,16 @@ import { hash } from '../src/modules/handyman-pph-calculation/handyman-pph-core'
 import { calculateHandymanBmCommissionTaxProjection } from '../src/modules/handyman-bm-tax-projection';
 import { calculateHandymanBmCommissionTaxProjectionInSnapshot } from '../src/modules/handyman-bm-tax-projection/handyman-bm-tax-projection.service';
 import { postHandymanBmCommissionLedger, readHandymanBmCommissionLedger } from '../src/modules/handyman-bm-commission-ledger';
+import { proposeHandymanBmBankAccount,proposeHandymanBmBankAccountState,decideHandymanBmBankAccount } from '../src/modules/handyman-bm-bank-account';
+import { prepareHandymanBmSettlement,approveHandymanBmSettlement,recordHandymanBmSettlementPayment,
+  readHandymanBmSettlementEvidence,verifyHandymanBmSettlementPayment,getHandymanBmSettlement } from '../src/modules/handyman-bm-settlement';
+import { createEvidenceStorage,evidenceStorageKey } from '../src/modules/evidence/storage';
 import { readHandymanBmCorrectedCommissionSource, proposeHandymanBmCorrectionTaxCase, decideHandymanBmCorrectionTaxCase,
   calculateHandymanBmCorrectedTaxProjection, type ProposeBmCorrectionTaxInput } from '../src/modules/handyman-bm-correction-tax';
 
-const DIR='/tmp/hm-bm-tax-02ca-pg',PORT=55541;
+const DIR='/tmp/hm-bm-tax-02ca-pg',EVIDENCE_DIR='/tmp/hm-bm-settlement-0505-evidence',PORT=55541;
 Object.assign(process.env,{NODE_ENV:'test',LOG_LEVEL:'error',DB_HOST:'127.0.0.1',DB_PORT:String(PORT),DB_USER:'postgres',
-  DB_PASSWORD:'postgres',DB_NAME:'asentra_test',DB_SSL:'false'});
+  DB_PASSWORD:'postgres',DB_NAME:'asentra_test',DB_SSL:'false',EVIDENCE_STORAGE_DIR:EVIDENCE_DIR});
 let pool:Pool,pg:EmbeddedPostgres,admin:string;
 const id=()=>randomUUID(),q=(sql:string,params:unknown[]=[])=>pool.query(sql,params);
 const code=(expected:string)=>(err:{code?:string})=>{assert.equal(err.code,expected);return true;};
@@ -51,7 +55,7 @@ const jakarta=(ms:number)=>new Date(ms+7*3600000).toISOString().slice(0,10);
 const day=(offset:number)=>{const x=new Date(Date.now()+7*3600000);return new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth(),x.getUTCDate()+offset)).toISOString().slice(0,10);};
 
 before(async()=>{
-  await rm(DIR,{recursive:true,force:true});await mkdir(DIR,{recursive:true});
+  await rm(DIR,{recursive:true,force:true});await rm(EVIDENCE_DIR,{recursive:true,force:true});await mkdir(DIR,{recursive:true});
   pg=new EmbeddedPostgres({databaseDir:DIR,port:PORT,user:'postgres',password:'',persistent:true,authMethod:'trust'});
   await pg.initialise();await pg.start();const system=pg.getPgClient('postgres','127.0.0.1');
   await system.connect();await system.query('CREATE DATABASE asentra_test');await system.end();
@@ -60,7 +64,7 @@ before(async()=>{
   const discipline=await handymanDisciplineRepository.findDisciplineByCode(undefined,'GENERAL_HANDYMAN');assert.ok(discipline);
   initHandymanFixtures({adminUserId:admin,disciplineId:discipline.id,query:q});
 });
-after(async()=>{try{if(pool)await closePool(pool);if(pg)await pg.stop();}finally{await rm(DIR,{recursive:true,force:true});}});
+after(async()=>{try{if(pool)await closePool(pool);if(pg)await pg.stop();}finally{await rm(DIR,{recursive:true,force:true});await rm(EVIDENCE_DIR,{recursive:true,force:true});}});
 
 async function scopedUser(buildingId:string,permissions:string[]){
   const user=await userService.createUser({email:`${id()}@bm-tax.test`,displayName:'Scoped Finance'});
@@ -165,7 +169,7 @@ async function counts(){
 
 describe('PART 02C-A independently verified BM commission tax case',()=>{
   it('registers an unassigned checker and verifies separate PPN/PPh pins with no financial writes',async()=>{
-    assert.equal(migrations.at(-1)!.id,'0504_handyman_bm_beneficiary_bank_accounts');
+    assert.equal(migrations.at(-1)!.id,'0505_handyman_bm_settlement_payment_evidence');
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_tax_case.approve'));
     const grants=async()=>(await q(`SELECT count(*)::int n FROM role_permission_assignments r JOIN permissions p ON p.id=r.permission_id
       WHERE p.code='handyman.bm_tax_case.approve' AND r.status='ACTIVE'`)).rows[0].n;
@@ -376,6 +380,7 @@ describe('PART 02C-A independently verified BM commission tax case',()=>{
     assert.equal(c.snapshot.intentDigest,hash({schema:'HANDYMAN_BM_TAX_CASE_INTENT_V1',actor:admin,...f.input}));
     const persisted=(await q('SELECT snapshot,digest FROM handyman_bm_tax_cases WHERE id=$1',[c.snapshot.id])).rows[0];
     try{
+      assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
       assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
       assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
       assert.equal(await migrateDown(pool),'0502_handyman_bm_correction_tax_approval');
@@ -744,6 +749,7 @@ describe('PART 02C-C independently reviewed NOT_APPLICABLE treatment',()=>{
         /BM tax case source, evidence, scope, version or independent tax rules are invalid/);
     }
     // A rollback must wait for concurrent case activity before checking whether V2 history exists.
+    assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
     assert.equal(await migrateDown(pool),'0502_handyman_bm_correction_tax_approval');
@@ -868,6 +874,7 @@ describe('PART 02D-B1 correction tax approval bridge',()=>{
     assert.deepEqual((await q('SELECT * FROM handyman_bm_tax_case_decisions WHERE id=$1',[old.d.id])).rows[0],oldDecision);
     await assert.rejects(q('UPDATE handyman_bm_correction_tax_cases SET digest=$2 WHERE id=$1',[c.snapshot.id,'0'.repeat(64)]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_correction_tax_decisions WHERE id=$1',[d.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
     await assert.rejects(migrateDown(pool),/Refusing to remove populated BM correction tax approval history/);
@@ -936,6 +943,7 @@ describe('BM-COMMISSION-02 PART 01 gross-to-net ledger',()=>{
     await assert.rejects(postHandymanBmCommissionLedger(wrong,request),code('BUILDING_ACCESS_DENIED'));
     await assert.rejects(q('UPDATE handyman_bm_commission_ledger SET net_payable=0 WHERE id=$1',[s.id]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_commission_ledger WHERE id=$1',[s.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
     assert.equal(await migrateDown(pool),'0504_handyman_bm_beneficiary_bank_accounts');
     try { await assert.rejects(migrateDown(pool),/Refusing to remove populated BM commission ledger history/); }
     finally { await migrateUp(pool); }
@@ -1012,5 +1020,152 @@ describe('BM-COMMISSION-02 PART 01 gross-to-net ledger',()=>{
       assert.ok('error' in outcome);assert.ok(['HANDYMAN_PPH_SOURCE_STALE','HANDYMAN_PPH_CORRECTION_UNSUPPORTED'].includes(outcome.error.code));
       assert.equal((await readHandymanBmCommissionLedger(admin,{clientId:cmd.clientId,entitlementId:cmd.entitlementId})).length,0);
     } finally {await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
+  });
+});
+
+/** Focused CR-HM-BM-SETTLEMENT-03 PART 02: real 0503 ledger + 0504 bank, protected evidence. */
+async function settlementFixture(options:Options={}){
+  const f=await fixture(options),approvedTax=await approveInput(f,occurredInput(f));
+  const entry=await postHandymanBmCommissionLedger(admin,{...approvedTax.cmd,idempotencyKey:id()});
+  const maker=await scopedUser(f.realm.building.id,['handyman.finance.read','handyman.finance.manage','handyman.settlement.manage',
+    'handyman.bm_bank_account.manage','handyman.bm_settlement.approve','handyman.bm_settlement.verify_payment']);
+  const checker=await scopedUser(f.realm.building.id,['handyman.finance.read','handyman.bm_bank_account.approve',
+    'handyman.bm_settlement.approve','handyman.bm_settlement.verify_payment']);
+  const bankNumber='12345678901234';
+  const proposed=await proposeHandymanBmBankAccount(maker,{clientId:f.realm.client.id,counterpartyId:f.bm.counterparty.id,
+    bankAccountId:null,expectedVersion:null,bankCode:'BCA',bankName:'Test Bank',accountNumber:bankNumber,accountHolderName:'PT BM',
+    currency:'IDR',verificationReference:`bank-ref/${id()}`,isDefault:true,evidenceReference:`maker-bank/${id()}`,idempotencyKey:id()});
+  await decideHandymanBmBankAccount(checker,{clientId:f.realm.client.id,counterpartyId:f.bm.counterparty.id,
+    proposalId:proposed.proposal.id,version:1,decision:'APPROVE',evidenceReference:`bank-check/${id()}`});
+  return {f,entry,approvedTax,maker,checker,bankNumber,bank:proposed.proposal};
+}
+function prepareInput(x:Awaited<ReturnType<typeof settlementFixture>>) {
+  return {clientId:x.f.realm.client.id,entitlementId:x.entry.snapshot.entitlementId,ledgerEntryIds:[x.entry.snapshot.id],
+    bankVersionId:x.bank.id,idempotencyKey:id(),evidenceReference:`prepare/${id()}`};
+}
+
+describe('BM-SETTLEMENT-03 PART 02 manual settlement and evidence',()=>{
+  it('registers unassigned permissions and supports an empty migration rollback',async()=>{
+    assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_settlement.approve'));
+    assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_settlement.verify_payment'));
+    const n=(await q(`SELECT count(*)::int AS n FROM role_permission_assignments a JOIN permissions p ON p.id=a.permission_id
+      WHERE a.status='ACTIVE' AND p.code IN ('handyman.bm_settlement.approve','handyman.bm_settlement.verify_payment')`)).rows[0].n;
+    assert.equal(n,0);assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');await migrateUp(pool);
+  });
+  it('requires independent approval and protected, explicitly reviewed actual-payment evidence',async()=>{
+    const x=await settlementFixture(),input=prepareInput(x),before=await counts();
+    const ledgerBefore=(await q('SELECT * FROM handyman_bm_commission_ledger WHERE id=$1',[x.entry.snapshot.id])).rows[0];
+    const proposals=await Promise.all(Array.from({length:12},()=>prepareHandymanBmSettlement(x.maker,input)));
+    assert.equal(proposals.filter(p=>!p.replayed).length,1);assert.equal(new Set(proposals.map(p=>p.settlement.snapshot.id)).size,1);
+    const p=proposals[0].settlement,scope={clientId:input.clientId,settlementId:p.snapshot.id};
+    assert.equal(p.status,'PREPARED');assert.equal(p.snapshot.netPayable,'10.25');
+    assert.equal(p.snapshot.agreementVersionId,x.f.versionId);assert.equal(p.snapshot.bankVersionId,x.bank.id);
+    assert.deepEqual(p.snapshot.ledgerEntries,[{id:x.entry.snapshot.id,digest:x.entry.digest}]);
+    assert.deepEqual(p.snapshot.assertions,{withholding:'NOT_ASSERTED',remittance:'NOT_ASSERTED'});
+    assert.equal(p.bank.accountNumberMasked,'****1234');assert.equal(p.bank.bankVerificationStatus,'NOT_VERIFIED_BY_SYSTEM');
+    assert.ok(!JSON.stringify(p).includes(x.bankNumber));
+    const bytes=Buffer.from('%PDF-1.4\nsynthetic test receipt\n%%EOF'),file={buffer:bytes,mimeType:'application/pdf'};
+    const reference=`bank-txn/${id()}`;
+    await assert.rejects(recordHandymanBmSettlementPayment(x.maker,{...scope,transferReference:reference,amount:'10.25',
+      transferredAt:iso(Date.now()),idempotencyKey:id(),file}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    const approval={...scope,settlementDigest:p.digest,evidenceReference:`approved/${id()}`};
+    await assert.rejects(approveHandymanBmSettlement(x.maker,approval),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    const sibling=await buildingService.createBuilding({propertyId:x.f.realm.property.id,code:`SIB_${id().slice(0,8)}`,name:'Other Building'});
+    const wrong=await scopedUser(sibling.id,['handyman.finance.read','handyman.bm_settlement.approve','handyman.bm_settlement.verify_payment']);
+    await assert.rejects(approveHandymanBmSettlement(wrong,approval),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(getHandymanBmSettlement(x.checker,{...scope,clientId:id()}),code('HANDYMAN_BM_SETTLEMENT_NOT_FOUND'));
+    const decisions=await Promise.all(Array.from({length:12},()=>approveHandymanBmSettlement(x.checker,approval)));
+    assert.equal(decisions.filter(d=>!d.replayed).length,1);assert.equal(decisions[0].settlement.status,'APPROVED');
+    await wait();const payment={...scope,transferReference:reference,amount:'10.25',transferredAt:iso(Date.now()),idempotencyKey:id(),file};
+    await assert.rejects(recordHandymanBmSettlementPayment(x.maker,{...payment,amount:'10.24'}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    await assert.rejects(recordHandymanBmSettlementPayment(x.maker,{...payment,file:{buffer:Buffer.from('not evidence'),mimeType:'application/pdf'}}),
+      code('HANDYMAN_BM_SETTLEMENT_INVALID'));
+    const recorded=await Promise.all(Array.from({length:12},()=>recordHandymanBmSettlementPayment(x.maker,payment)));
+    assert.equal(recorded.filter(r=>!r.replayed).length,1);assert.equal(recorded[0].settlement.status,'PAYMENT_RECORDED');
+    const result=recorded[0].settlement,verifyBase={...scope,evidenceReadId:id(),contentSha256:'a'.repeat(64),transferReference:reference,
+      amount:'10.25',transferredAt:payment.transferredAt,confirmedAccountNumber:x.bankNumber,attestedActualPayment:true as const,evidenceReference:`review/${id()}`};
+    await assert.rejects(verifyHandymanBmSettlementPayment(x.checker,verifyBase),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    await assert.rejects(readHandymanBmSettlementEvidence(x.maker,scope),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    const evidence=await readHandymanBmSettlementEvidence(x.checker,scope);assert.deepEqual(evidence.buffer,bytes);
+    const verified={...verifyBase,evidenceReadId:evidence.evidenceReadId,contentSha256:evidence.contentSha256};
+    await assert.rejects(verifyHandymanBmSettlementPayment(x.checker,{...verified,evidenceReadId:id()}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    await assert.rejects(verifyHandymanBmSettlementPayment(x.checker,{...verified,confirmedAccountNumber:'98765432101234'}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    await assert.rejects(verifyHandymanBmSettlementPayment(x.checker,{...verified,amount:'10.24'}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    const storage=createEvidenceStorage(),key=evidenceStorageKey(result.payment!.evidenceId);
+    await storage.put(key,{buffer:Buffer.from('%PDF-corrupt'),mimeType:'application/pdf'});
+    await assert.rejects(verifyHandymanBmSettlementPayment(x.checker,verified),code('HANDYMAN_BM_SETTLEMENT_EVIDENCE_UNAVAILABLE'));
+    await storage.remove(key);
+    await assert.rejects(verifyHandymanBmSettlementPayment(x.checker,verified),code('HANDYMAN_BM_SETTLEMENT_EVIDENCE_UNAVAILABLE'));
+    assert.equal((await getHandymanBmSettlement(x.checker,scope)).status,'PAYMENT_RECORDED');
+    await storage.put(key,{buffer:bytes,mimeType:'application/pdf'});
+    const complete=await Promise.all(Array.from({length:12},()=>verifyHandymanBmSettlementPayment(x.checker,verified)));
+    assert.equal(complete.filter(v=>!v.replayed).length,1);const settled=complete[0].settlement;
+    assert.equal(settled.status,'SETTLED');assert.equal(settled.verification?.method,'FINANCE_MANUAL_DOCUMENT_REVIEW');
+    assert.equal(settled.verification?.actorUserId,x.checker);assert.deepEqual(settled.snapshot.assertions,{withholding:'NOT_ASSERTED',remittance:'NOT_ASSERTED'});
+    assert.ok(!JSON.stringify(settled).includes(x.bankNumber));assert.ok(!JSON.stringify(settled).includes(key));
+    assert.deepEqual((await q('SELECT * FROM handyman_bm_commission_ledger WHERE id=$1',[x.entry.snapshot.id])).rows[0],ledgerBefore);
+    assert.deepEqual(await counts(),before);
+    await assert.rejects(q('UPDATE handyman_bm_settlements SET net_payable=1 WHERE id=$1',[scope.settlementId]),/immutable/);
+    await assert.rejects(q('DELETE FROM handyman_bm_settlement_verifications WHERE settlement_id=$1',[scope.settlementId]),/immutable/);
+    await assert.rejects(prepareHandymanBmSettlement(x.maker,{...input,idempotencyKey:id()}),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    await assert.rejects(migrateDown(pool),/Refusing to remove populated BM settlement payment history/);
+  });
+  it('pins every original and approved correction ledger entry and settles only their net total',async()=>{
+    const x=await settlementFixture(),{f}=x;await wait(25);
+    const ledger=await adjustHandymanCustomerLedger({executionScopeId:f.scope.id,chargeLineId:f.charge.chargeLine.id,
+      amount:'20.00',reason:'Recorded labor reduction',idempotencyKey:id()},admin);await wait(25);
+    await deriveHandymanFinancialEntitlements(f.scope.id,admin,id());
+    const fact=(await q('SELECT * FROM handyman_entitlement_corrections WHERE entitlement_id=$1',[f.earned.bmFee.id])).rows[0];assert.ok(fact);
+    const baseline=x.approvedTax.cmd.determination,source=await readHandymanBmCorrectedCommissionSource(admin,
+      {clientId:f.input.clientId,entitlementId:f.input.entitlementId,correctionFactId:fact.id,baseline});
+    const correctionInput:ProposeBmCorrectionTaxInput={...occurredInput(f),correctionFactId:fact.id,baseline,sourceChecksum:source.checksum,idempotencyKey:id()};
+    const state={f,old:x.approvedTax,ledger,fact,baseline,source,input:correctionInput};
+    const c=await proposeHandymanBmCorrectionTaxCase(admin,correctionInput),d=await decideHandymanBmCorrectionTaxCase(f.checker,correctionReview(state,c));
+    await wait(25);const corrected=await postHandymanBmCommissionLedger(admin,{...correctionCommand(state,c,d),idempotencyKey:id()});
+    const input={...prepareInput(x),ledgerEntryIds:[x.entry.snapshot.id,corrected.snapshot.id]};
+    await assert.rejects(prepareHandymanBmSettlement(x.maker,{...input,ledgerEntryIds:[corrected.snapshot.id]}),code('HANDYMAN_BM_SETTLEMENT_STALE'));
+    const prepared=(await prepareHandymanBmSettlement(x.maker,input)).settlement;
+    assert.equal(prepared.snapshot.netPayable,'8.40');assert.equal(prepared.snapshot.pphWithholdingProjection,'0.60');
+    assert.deepEqual(prepared.snapshot.ledgerEntries,[{id:x.entry.snapshot.id,digest:x.entry.digest},
+      {id:corrected.snapshot.id,digest:corrected.digest}]);
+    const approval=await approveHandymanBmSettlement(x.checker,{clientId:input.clientId,settlementId:prepared.snapshot.id,
+      settlementDigest:prepared.digest,evidenceReference:`review/${id()}`});assert.equal(approval.settlement.status,'APPROVED');
+  });
+  it('fences both directions against the pre-existing settlement inclusion ledger',async()=>{
+    async function legacyUnit(x:Awaited<ReturnType<typeof settlementFixture>>) {
+      const unit=id();await q(`INSERT INTO handyman_settlement_units(id,client_id,transaction_id,execution_scope_id,currency,idempotency_key,actor_user_id)
+        VALUES($1,$2,$3,$4,'IDR',$5,$6)`,[unit,x.f.realm.client.id,x.f.source.transactionId,x.f.scope.id,id(),admin]);return unit;
+    }
+    const x=await settlementFixture({distinct:false}),unit=await legacyUnit(x);
+    const settlement=(await prepareHandymanBmSettlement(x.maker,prepareInput(x))).settlement;
+    await assert.rejects(q(`INSERT INTO handyman_settlement_inclusions(id,unit_id,entitlement_id,amount,idempotency_key,actor_user_id)
+      VALUES($1,$2,$3,'10.00',$4,$5)`,[id(),unit,x.entry.snapshot.entitlementId,id(),admin]),/already bound/);
+    assert.equal((await getHandymanBmSettlement(x.checker,{clientId:x.f.realm.client.id,settlementId:settlement.snapshot.id})).status,'PREPARED');
+    const y=await settlementFixture({distinct:false}),oldUnit=await legacyUnit(y),inclusion=id();
+    await q(`INSERT INTO handyman_settlement_inclusions(id,unit_id,entitlement_id,amount,idempotency_key,actor_user_id)
+      VALUES($1,$2,$3,'10.00',$4,$5)`,[inclusion,oldUnit,y.entry.snapshot.entitlementId,id(),admin]);
+    const before=(await q('SELECT * FROM handyman_settlement_inclusions WHERE id=$1',[inclusion])).rows[0];
+    await assert.rejects(prepareHandymanBmSettlement(y.maker,prepareInput(y)),code('HANDYMAN_BM_SETTLEMENT_CONFLICT'));
+    assert.deepEqual((await q('SELECT * FROM handyman_settlement_inclusions WHERE id=$1',[inclusion])).rows[0],before);
+  });
+  it('blocks stale ledgers, substituted or suspended beneficiary accounts and unapproved transitions',async()=>{
+    const x=await settlementFixture(),other=await settlementFixture(),input=prepareInput(x);
+    await assert.rejects(prepareHandymanBmSettlement(x.maker,{...input,bankVersionId:other.bank.id}),code('HANDYMAN_BM_SETTLEMENT_STALE'));
+    await assert.rejects(prepareHandymanBmSettlement(x.maker,{...input,ledgerEntryIds:[other.entry.snapshot.id]}),code('HANDYMAN_BM_SETTLEMENT_STALE'));
+    const s=(await prepareHandymanBmSettlement(x.maker,input)).settlement;
+    const pending=await proposeHandymanBmBankAccountState(x.maker,{clientId:input.clientId,counterpartyId:x.f.bm.counterparty.id,
+      bankAccountId:x.bank.bankAccountId,expectedVersion:1,status:'SUSPENDED',isDefault:false,evidenceReference:`suspend/${id()}`,idempotencyKey:id()});
+    await decideHandymanBmBankAccount(x.checker,{clientId:input.clientId,counterpartyId:x.f.bm.counterparty.id,proposalId:pending.proposal.id,
+      version:pending.proposal.version,decision:'APPROVE',evidenceReference:`approve-suspension/${id()}`});
+    await assert.rejects(approveHandymanBmSettlement(x.checker,{clientId:input.clientId,settlementId:s.snapshot.id,settlementDigest:s.digest,
+      evidenceReference:`check/${id()}`}),code('HANDYMAN_BM_SETTLEMENT_STALE'));
+    assert.equal((await getHandymanBmSettlement(x.checker,{clientId:input.clientId,settlementId:s.snapshot.id})).status,'PREPARED');
+    const y=await settlementFixture(),yinput=prepareInput(y),ys=(await prepareHandymanBmSettlement(y.maker,yinput)).settlement;
+    await adjustHandymanCustomerLedger({executionScopeId:y.f.scope.id,chargeLineId:y.f.charge.chargeLine.id,amount:'20.00',
+      reason:'Later ledger correction',idempotencyKey:id()},admin);
+    await assert.rejects(approveHandymanBmSettlement(y.checker,{clientId:yinput.clientId,settlementId:ys.snapshot.id,settlementDigest:ys.digest,
+      evidenceReference:`check/${id()}`}),code('HANDYMAN_BM_SETTLEMENT_STALE'));
+    await assert.rejects(q(`INSERT INTO handyman_bm_settlement_verifications(id,settlement_id,payment_id,evidence_read_id,content_sha256,evidence_reference,method,actor_user_id)
+      VALUES($1,$2,$3,$4,$5,$6,'FINANCE_MANUAL_DOCUMENT_REVIEW',$7)`,[id(),ys.snapshot.id,id(),id(),'a'.repeat(64),`review/${id()}`,y.checker]),/stale|payment evidence/i);
   });
 });

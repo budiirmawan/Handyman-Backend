@@ -100,7 +100,9 @@ describe('CR-HM-BM-SETTLEMENT-03 PART 01 beneficiary bank account',()=>{
     assert.ok(!JSON.stringify(list).includes(original.accountNumber));assert.deepEqual(await counts(),before);
     await assert.rejects(q('UPDATE handyman_bm_bank_account_versions SET account_number=$2 WHERE id=$1',[pending.proposal.id,'998877665544']),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_bank_account_decisions WHERE proposal_id=$1',[pending.proposal.id]),/immutable/);
-    await assert.rejects(migrateDown(pool),/Refusing to remove populated BM bank account history/);
+    assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');
+    try { await assert.rejects(migrateDown(pool),/Refusing to remove populated BM bank account history/); }
+    finally { await migrateUp(pool); }
   });
 
   it('preserves prior approved versions through rejection, replacement, suspension and reactivation',async()=>{
