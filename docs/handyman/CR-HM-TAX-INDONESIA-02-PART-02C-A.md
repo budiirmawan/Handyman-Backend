@@ -1,5 +1,9 @@
 # PART 02C-A — Independently reviewed BM commission tax case
 
+PART 02C-C extends this original V1 contract with separately reviewed
+`NOT_APPLICABLE` treatments; see `CR-HM-TAX-INDONESIA-02-PART-02C-C.md`.
+The V1 behavior described below remains unchanged.
+
 ## Scope and authority
 
 Migration `0500_handyman_bm_commission_tax_cases` adds an immutable, versioned

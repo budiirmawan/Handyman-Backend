@@ -56,6 +56,12 @@ function instant(input: unknown, field: string): string {
   if (!Number.isFinite(result.getTime())) throw invalid(field);
   return result.toISOString();
 }
+/** Reuse the existing Jakarta date/instant rules for an explicitly reviewed non-applicable case. */
+export function normalizePpnTaxPoint(dateInput: unknown, instantInput: unknown): { taxDate: string; taxPointAt: string } {
+  const taxDate=date(dateInput,'taxDate'), taxPointAt=instant(instantInput,'taxPointAt');
+  if (new Date(Date.parse(taxPointAt)+7*3_600_000).toISOString().slice(0,10)!==taxDate) throw invalid('taxDate/taxPointAt');
+  return {taxDate,taxPointAt};
+}
 function owner(input: HandymanTaxIdentityOwner, field: string): HandymanTaxIdentityOwner {
   keys(input,['kind','clientId','counterpartyId'],field);
   const clientId = uuid(input.clientId,`${field}.clientId`);
@@ -365,3 +371,7 @@ export function calculateCustomerPpnFromResolved(input: NormalizedCustomerPpnInp
     transactionPartyBinding:'VERIFIED_BUYER_FINANCE_REVIEWED_TRANSACTION_ASSERTION' as const});
   return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
 }
+
+// Internal helpers retain the same validation and safe, identifier-free provenance for V2 cases.
+export { pin as normalizePpnIdentityPin, money as parsePpnWholeRupiah,
+  identifierClash as ppnIdentityIdentifierClash, identityReference as ppnIdentityReference };

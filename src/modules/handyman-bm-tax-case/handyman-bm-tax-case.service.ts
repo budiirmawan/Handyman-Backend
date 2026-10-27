@@ -9,14 +9,15 @@ import { permissionRepository } from '../permissions';
 import { readHandymanBmCommissionSourceInSnapshot } from '../handyman-pph-calculation/handyman-pph.service';
 import { validateBmWithholdingFromResolved, normalizePphInput } from '../handyman-pph-calculation/handyman-pph-core';
 import type { BmCommissionSource, CalculateApprovedBmWithholdingInput } from '../handyman-pph-calculation';
-import { validatePpnFromResolved, normalizePpnInput } from '../handyman-ppn-calculation/handyman-ppn-core';
+import { validatePpnFromResolved, normalizePpnInput, normalizePpnTaxPoint, normalizePpnIdentityPin,
+  validateApprovedPpnIdentityPin, ppnIdentityIdentifierClash } from '../handyman-ppn-calculation/handyman-ppn-core';
 import type { CalculateApprovedPpnInput, PpnIdentityPin, PpnRulePin } from '../handyman-ppn-calculation';
 import { requireApprovedIdentityAtInSnapshot } from '../handyman-tax-identity/handyman-tax-identity.service';
 import { resolveHandymanTaxRuleInSnapshot } from '../handyman-tax-rules/handyman-tax-rules.service';
 import type { ApprovedHandymanTaxIdentity } from '../handyman-tax-identity';
 import type { TaxRuleResolution } from '../handyman-tax-rules';
-import type { BmTaxCaseDecision, BmTaxCasePin, BmTaxCaseReference, BmTaxCaseSnapshot, BmTaxCaseView,
-  BmVerifiedCalculationInput, DecideBmTaxCaseInput, ProposeBmTaxCaseInput } from './handyman-bm-tax-case.types';
+import type { BmNonApplicabilityProvenance, BmTaxCaseDecision, BmTaxCasePin, BmTaxCaseReference, BmTaxCaseSnapshot,
+  BmTaxCaseSnapshotV1, BmTaxCaseView, BmVerifiedCalculationInput, DecideBmTaxCaseInput, ProposeBmTaxCaseInput } from './handyman-bm-tax-case.types';
 
 type Code = 'HANDYMAN_BM_TAX_CASE_INVALID'|'HANDYMAN_BM_TAX_CASE_MISSING'|'HANDYMAN_BM_TAX_CASE_CONFLICT'|
   'HANDYMAN_BM_TAX_CASE_STALE'|'HANDYMAN_BM_TAX_CASE_UNAPPROVED'|'HANDYMAN_BM_TAX_CASE_INTEGRITY_ERROR';
@@ -39,6 +40,15 @@ function uuid(value:unknown,field:string):string {
 function validEvidence(value:unknown):boolean {
   return typeof value==='string' && value===value.toLowerCase() && isValidUuid(value) &&
     !/^(?:0{32}|1{32}|f{32})$/.test(value.replaceAll('-',''));
+}
+function validLegalText(value:unknown):value is string {
+  return typeof value==='string' && [...value].length>=4 && [...value].length<=512 && value===value.trim() &&
+    /[A-Za-z]/.test(value) && !/[\u0000-\u001f\u007f]/.test(value) &&
+    !['unknown','none','unspecified','n/a','na','tbd','pending','default','null','not applicable'].includes(value.toLowerCase());
+}
+function legalText(value:unknown,field:string):string {
+  if(!validLegalText(value)) throw invalid(field);
+  return value;
 }
 function digest(value:unknown,field:string):string {
   if(typeof value!=='string' || !/^[0-9a-f]{64}$/.test(value)) throw invalid(field);
@@ -116,7 +126,26 @@ function bmIdentity(clientId:string,counterpartyId:string,profileId:string,profi
 function issuerIdentity(clientId:string,profileId:string,profileVersion:number,profileDigest:string,approvalDecisionId:string):PpnIdentityPin {
   return {owner:{kind:'HANDYMAN_ISSUER',clientId},profileId,profileVersion,profileDigest,approvalDecisionId};
 }
+function assertCaseTreatments(s:BmTaxCaseSnapshot):void {
+  const ppn=s.ppnApplicability,pph=s.pphTreatment;
+  if(s.schema==='HANDYMAN_BM_TAX_CASE_V1') {
+    if(!['TAXABLE','EXEMPT','NON_TAXABLE'].includes(ppn) || !['WITHHOLD','EXEMPT','NON_WITHHOLD'].includes(pph)) throw integrity();
+    return;
+  }
+  if(s.schema!=='HANDYMAN_BM_TAX_CASE_V2' || Object.keys(s).length!==60 ||
+    Object.values(s).some(v=>v!==null && typeof v==='object') || (ppn!=='NOT_APPLICABLE' && pph!=='NOT_APPLICABLE')) throw integrity();
+  if(ppn==='NOT_APPLICABLE') {
+    if(s.ppnTaxpayerClassification!==null || s.ppnRuleId!==null || s.ppnRuleVersion!==null || s.ppnRuleDigest!==null ||
+       s.ppnRuleDecisionId!==null || !validLegalText(s.ppnLegalReference) || !validLegalText(s.ppnLegalSource)) throw integrity();
+  } else if(!['TAXABLE','EXEMPT','NON_TAXABLE'].includes(ppn) || s.ppnLegalReference!==null || s.ppnLegalSource!==null) throw integrity();
+  if(pph==='NOT_APPLICABLE') {
+    if(s.pphTaxpayerClassification!==null || s.pphRuleId!==null || s.pphRuleVersion!==null || s.pphRuleDigest!==null ||
+       s.pphRuleDecisionId!==null || !validLegalText(s.pphLegalReference) || !validLegalText(s.pphLegalSource)) throw integrity();
+  } else if(!['WITHHOLD','EXEMPT','NON_WITHHOLD'].includes(pph) || s.pphLegalReference!==null || s.pphLegalSource!==null) throw integrity();
+}
 function storedPpn(s:BmTaxCaseSnapshot,amount:string):CalculateApprovedPpnInput {
+  if(s.ppnApplicability==='NOT_APPLICABLE' || !s.ppnTaxpayerClassification || !s.ppnRuleId || !s.ppnRuleVersion ||
+     !s.ppnRuleDigest || !s.ppnRuleDecisionId) throw integrity();
   return {clientId:s.clientId,transactionContext:'BM_COMMISSION',taxDate:s.ppnTaxDate,taxPointAt:s.ppnTaxPointAt,currency:'IDR',
     amountBasis:s.ppnAmountBasis,sourceAmount:amount,applicability:s.ppnApplicability,taxpayerClassification:s.ppnTaxpayerClassification,
     supplier:bmIdentity(s.clientId,s.counterpartyId,s.ppnBeneficiaryProfileId,s.ppnBeneficiaryVersion,s.ppnBeneficiaryDigest,s.ppnBeneficiaryDecisionId),
@@ -124,6 +153,8 @@ function storedPpn(s:BmTaxCaseSnapshot,amount:string):CalculateApprovedPpnInput 
     rule:{ruleId:s.ppnRuleId,ruleVersion:s.ppnRuleVersion,ruleDigest:s.ppnRuleDigest,approvalDecisionId:s.ppnRuleDecisionId}};
 }
 function storedPph(s:BmTaxCaseSnapshot):CalculateApprovedBmWithholdingInput {
+  if(s.pphTreatment==='NOT_APPLICABLE' || !s.pphTaxpayerClassification || !s.pphRuleId || !s.pphRuleVersion ||
+     !s.pphRuleDigest || !s.pphRuleDecisionId) throw integrity();
   return {clientId:s.clientId,entitlementId:s.entitlementId,sourceChecksum:s.sourceChecksum,currency:s.currency,commissionBasis:s.commissionBasis,
     commissionGross:s.commissionGross,taxDate:s.pphTaxDate,taxPointAt:s.pphTaxPointAt,treatment:s.pphTreatment,
     taxpayerClassification:s.pphTaxpayerClassification,
@@ -132,29 +163,56 @@ function storedPph(s:BmTaxCaseSnapshot):CalculateApprovedBmWithholdingInput {
 }
 export type ResolvedBmTaxCase = Readonly<{
   classification:BmTaxCaseView; decision:BmTaxCaseDecision; reference:BmTaxCaseReference; source:BmCommissionSource;
-  ppnInput:CalculateApprovedPpnInput; pphInput:CalculateApprovedBmWithholdingInput;
+  ppnInput:CalculateApprovedPpnInput|null; pphInput:CalculateApprovedBmWithholdingInput|null;
   ppnBeneficiary:ApprovedHandymanTaxIdentity; ppnIssuer:ApprovedHandymanTaxIdentity; pphBeneficiary:ApprovedHandymanTaxIdentity;
-  ppnRule:ApprovedRule; pphRule:ApprovedRule; readAt:string;
+  ppnRule:ApprovedRule|null; pphRule:ApprovedRule|null; readAt:string;
 }>;
 async function validateSources(tx:PoolClient,actor:string,s:BmTaxCaseSnapshot,readAt:string):Promise<Omit<ResolvedBmTaxCase,'classification'|'decision'|'reference'>> {
+  assertCaseTreatments(s);
   const source=await readHandymanBmCommissionSourceInSnapshot(tx,actor,s.clientId,s.entitlementId);
   if(source.checksum!==s.sourceChecksum || source.commissionGross!==s.commissionGross || source.buildingId!==s.buildingId ||
     source.transactionId!==s.transactionId || source.executionScopeId!==s.executionScopeId || source.beneficiary.counterpartyId!==s.counterpartyId ||
     source.beneficiary.verificationId!==s.verificationId || source.coverage.id!==s.coverageId || source.agreement.id!==s.agreementId ||
     source.agreement.versionId!==s.agreementVersionId || source.agreement.versionNumber!==s.agreementVersionNumber) throw stale();
-  if(Date.parse(s.ppnTaxPointAt)<Date.parse(source.ledgerPostedAt) || Date.parse(s.pphTaxPointAt)<Date.parse(source.ledgerPostedAt)) throw integrity();
-  const ppnInput=storedPpn(s,'0.00'),pphInput=storedPph(s);
-  const ppn=normalizePpnInput(ppnInput),pph=normalizePphInput(pphInput);
-  const ppnBeneficiary=await requireApprovedIdentityAtInSnapshot(tx,actor,ppn.supplier.owner,ppn.taxPointAt);
-  const ppnIssuer=await requireApprovedIdentityAtInSnapshot(tx,actor,ppn.recipient.owner,ppn.taxPointAt);
-  const pphBeneficiary=await requireApprovedIdentityAtInSnapshot(tx,actor,pph.beneficiary.owner,pph.taxPointAt);
+  const ppnPoint=normalizePpnTaxPoint(s.ppnTaxDate,s.ppnTaxPointAt),pphPoint=normalizePpnTaxPoint(s.pphTaxDate,s.pphTaxPointAt);
+  if(ppnPoint.taxPointAt!==s.ppnTaxPointAt || pphPoint.taxPointAt!==s.pphTaxPointAt ||
+    Date.parse(s.ppnTaxPointAt)<Date.parse(source.ledgerPostedAt) || Date.parse(s.pphTaxPointAt)<Date.parse(source.ledgerPostedAt)) throw integrity();
+  const ppnSupplier=bmIdentity(s.clientId,s.counterpartyId,s.ppnBeneficiaryProfileId,s.ppnBeneficiaryVersion,s.ppnBeneficiaryDigest,s.ppnBeneficiaryDecisionId);
+  const ppnRecipient=issuerIdentity(s.clientId,s.ppnIssuerProfileId,s.ppnIssuerVersion,s.ppnIssuerDigest,s.ppnIssuerDecisionId);
+  const pphPin=bmIdentity(s.clientId,s.counterpartyId,s.pphBeneficiaryProfileId,s.pphBeneficiaryVersion,s.pphBeneficiaryDigest,s.pphBeneficiaryDecisionId);
+  const ppnBeneficiary=await requireApprovedIdentityAtInSnapshot(tx,actor,ppnSupplier.owner,ppnPoint.taxPointAt);
+  const ppnIssuer=await requireApprovedIdentityAtInSnapshot(tx,actor,ppnRecipient.owner,ppnPoint.taxPointAt);
+  const pphBeneficiary=await requireApprovedIdentityAtInSnapshot(tx,actor,pphPin.owner,pphPoint.taxPointAt);
   if(ppnBeneficiary.snapshot.verificationId!==s.verificationId || pphBeneficiary.snapshot.verificationId!==s.verificationId) throw stale();
-  const ppnRule=await ruleAt(tx,actor,s.clientId,'PPN',ppn.taxDate,ppn.taxPointAt,ppn.taxpayerClassification,ppn.rule,readAt);
-  const pphRule=await ruleAt(tx,actor,s.clientId,'PPH_WITHHOLDING',pph.taxDate,pph.taxPointAt,pph.taxpayerClassification,pph.rule,readAt);
-  // Independently validate policy without rounding or calculating either amount.
-  validatePpnFromResolved(ppn,ppnBeneficiary,ppnIssuer,ppnRule,readAt);
-  validateBmWithholdingFromResolved(pph,source,pphBeneficiary,pphRule,readAt);
-  return {source,ppnInput:storedPpn(s,source.commissionGross),pphInput,ppnBeneficiary,ppnIssuer,pphBeneficiary,ppnRule,pphRule,readAt};
+  let ppnInput:CalculateApprovedPpnInput|null=null,pphInput:CalculateApprovedBmWithholdingInput|null=null;
+  let ppnRule:ApprovedRule|null=null,pphRule:ApprovedRule|null=null;
+  if(s.ppnApplicability==='NOT_APPLICABLE') {
+    validateApprovedPpnIdentityPin(ppnSupplier,ppnBeneficiary,ppnPoint.taxPointAt,readAt);
+    validateApprovedPpnIdentityPin(ppnRecipient,ppnIssuer,ppnPoint.taxPointAt,readAt);
+    if(ppnIdentityIdentifierClash(ppnBeneficiary,ppnIssuer)) throw integrity();
+  } else {
+    const ppn=normalizePpnInput(storedPpn(s,'0.00'));
+    ppnRule=await ruleAt(tx,actor,s.clientId,'PPN',ppn.taxDate,ppn.taxPointAt,ppn.taxpayerClassification,ppn.rule,readAt);
+    validatePpnFromResolved(ppn,ppnBeneficiary,ppnIssuer,ppnRule,readAt);
+    ppnInput=storedPpn(s,source.commissionGross);
+  }
+  if(s.pphTreatment==='NOT_APPLICABLE') validateApprovedPpnIdentityPin(pphPin,pphBeneficiary,pphPoint.taxPointAt,readAt);
+  else {
+    pphInput=storedPph(s);const pph=normalizePphInput(pphInput);
+    pphRule=await ruleAt(tx,actor,s.clientId,'PPH_WITHHOLDING',pph.taxDate,pph.taxPointAt,pph.taxpayerClassification,pph.rule,readAt);
+    validateBmWithholdingFromResolved(pph,source,pphBeneficiary,pphRule,readAt);
+  }
+  return {source,ppnInput,pphInput,ppnBeneficiary,ppnIssuer,pphBeneficiary,ppnRule,pphRule,readAt};
+}
+/** Only call after the current independently approved case has been re-resolved in the same snapshot. */
+export function nonApplicabilityProvenance(v:ResolvedBmTaxCase,family:'PPN'|'PPH_WITHHOLDING'):BmNonApplicabilityProvenance {
+  const s=v.classification.snapshot;
+  if(s.schema!=='HANDYMAN_BM_TAX_CASE_V2') throw integrity();
+  const isPpn=family==='PPN',reference=isPpn?s.ppnLegalReference:s.pphLegalReference,source=isPpn?s.ppnLegalSource:s.pphLegalSource;
+  if((isPpn?s.ppnApplicability:s.pphTreatment)!=='NOT_APPLICABLE' || !validLegalText(reference) || !validLegalText(source)) throw integrity();
+  return Object.freeze({legalReference:reference,legalSource:source,evidenceReferenceId:isPpn?s.ppnEvidenceReferenceId:s.pphEvidenceReferenceId,
+    reviewEvidenceReferenceId:isPpn?v.decision.ppnReviewEvidenceReferenceId:v.decision.pphReviewEvidenceReferenceId,
+    makerUserId:s.createdByUserId,checkerUserId:v.decision.actorUserId});
 }
 function view(row:Record<string,any>,replayed=false):BmTaxCaseView {
   const snapshot=row.snapshot as BmTaxCaseSnapshot;
@@ -163,6 +221,7 @@ function view(row:Record<string,any>,replayed=false):BmTaxCaseView {
      snapshot.previousCaseId!==row.previous_case_id || snapshot.createdByUserId!==row.created_by_user_id || snapshot.idempotencyKey!==row.idempotency_key ||
      !validEvidence(snapshot.transactionEvidenceReferenceId) || !validEvidence(snapshot.ppnEvidenceReferenceId) || !validEvidence(snapshot.pphEvidenceReferenceId))
     throw integrity();
+  assertCaseTreatments(snapshot);
   return Object.freeze({snapshot:Object.freeze(snapshot),digestAlgorithm:'SHA-256',digest:row.digest,createdAt:iso(row.created_at),replayed});
 }
 function decision(row:Record<string,any>,replayed=false):BmTaxCaseDecision {
@@ -176,45 +235,75 @@ function decision(row:Record<string,any>,replayed=false):BmTaxCaseDecision {
 function normalizeIntent(input:ProposeBmTaxCaseInput) {
   keys(input,['clientId','entitlementId','sourceChecksum','transactionClassification','serviceClassification','transactionEvidenceReferenceId',
     'ppn','pph','expectedVersion','idempotencyKey'],'input');
-  keys(input.ppn,['taxDate','taxPointAt','amountBasis','applicability','taxpayerClassification','supplier','recipient','rule','evidenceReferenceId'],'ppn');
-  keys(input.pph,['taxDate','taxPointAt','treatment','taxpayerClassification','beneficiary','rule','evidenceReferenceId'],'pph');
+  keys(input.ppn,['taxDate','taxPointAt','amountBasis','applicability','taxpayerClassification','supplier','recipient','rule',
+    'legalReference','legalSource','evidenceReferenceId'],'ppn');
+  keys(input.pph,['taxDate','taxPointAt','treatment','taxpayerClassification','beneficiary','rule','legalReference','legalSource','evidenceReferenceId'],'pph');
   const clientId=uuid(input.clientId,'clientId'),entitlementId=uuid(input.entitlementId,'entitlementId'),sourceChecksum=digest(input.sourceChecksum,'sourceChecksum');
-  const ppn=normalizePpnInput({clientId,transactionContext:'BM_COMMISSION',currency:'IDR',sourceAmount:'0.00',
-    taxDate:input.ppn.taxDate,taxPointAt:input.ppn.taxPointAt,amountBasis:input.ppn.amountBasis,applicability:input.ppn.applicability,
-    taxpayerClassification:input.ppn.taxpayerClassification,supplier:input.ppn.supplier,recipient:input.ppn.recipient,rule:input.ppn.rule});
-  const pph=normalizePphInput({clientId,entitlementId,sourceChecksum,currency:'IDR',commissionBasis:'EARNED_BM_COMMISSION',commissionGross:'0.00',
-    taxDate:input.pph.taxDate,taxPointAt:input.pph.taxPointAt,treatment:input.pph.treatment,taxpayerClassification:input.pph.taxpayerClassification,
-    beneficiary:input.pph.beneficiary,rule:input.pph.rule});
+  const ppn=(()=>{
+    if(input.ppn.applicability==='NOT_APPLICABLE') {
+      keys(input.ppn,['taxDate','taxPointAt','amountBasis','applicability','supplier','recipient','legalReference','legalSource','evidenceReferenceId'],'ppn');
+      const point=normalizePpnTaxPoint(input.ppn.taxDate,input.ppn.taxPointAt),supplier=normalizePpnIdentityPin(input.ppn.supplier,'supplier');
+      const recipient=normalizePpnIdentityPin(input.ppn.recipient,'recipient');
+      if(input.ppn.amountBasis!=='PPN_EXCLUSIVE' || supplier.owner.kind!=='BM_BENEFICIARY' || recipient.owner.kind!=='HANDYMAN_ISSUER' ||
+         supplier.owner.clientId!==clientId || recipient.owner.clientId!==clientId || supplier.profileId===recipient.profileId) throw invalid('ppn parties or amount basis');
+      return {...point,amountBasis:'PPN_EXCLUSIVE' as const,applicability:'NOT_APPLICABLE' as const,supplier,recipient,
+        legalReference:legalText(input.ppn.legalReference,'ppn legalReference'),legalSource:legalText(input.ppn.legalSource,'ppn legalSource'),
+        evidenceReferenceId:uuid(input.ppn.evidenceReferenceId,'ppn evidence')};
+    }
+    keys(input.ppn,['taxDate','taxPointAt','amountBasis','applicability','taxpayerClassification','supplier','recipient','rule','evidenceReferenceId'],'ppn');
+    const p=normalizePpnInput({clientId,transactionContext:'BM_COMMISSION',currency:'IDR',sourceAmount:'0.00',
+      taxDate:input.ppn.taxDate,taxPointAt:input.ppn.taxPointAt,amountBasis:input.ppn.amountBasis,applicability:input.ppn.applicability,
+      taxpayerClassification:input.ppn.taxpayerClassification,supplier:input.ppn.supplier,recipient:input.ppn.recipient,rule:input.ppn.rule});
+    return {taxDate:p.taxDate,taxPointAt:p.taxPointAt,amountBasis:p.amountBasis,applicability:p.applicability,
+      taxpayerClassification:p.taxpayerClassification,supplier:p.supplier,recipient:p.recipient,rule:p.rule,evidenceReferenceId:uuid(input.ppn.evidenceReferenceId,'ppn evidence')};
+  })();
+  const pph=(()=>{
+    if(input.pph.treatment==='NOT_APPLICABLE') {
+      keys(input.pph,['taxDate','taxPointAt','treatment','beneficiary','legalReference','legalSource','evidenceReferenceId'],'pph');
+      const point=normalizePpnTaxPoint(input.pph.taxDate,input.pph.taxPointAt),beneficiary=normalizePpnIdentityPin(input.pph.beneficiary,'beneficiary');
+      if(beneficiary.owner.kind!=='BM_BENEFICIARY' || beneficiary.owner.clientId!==clientId) throw invalid('pph beneficiary');
+      return {...point,treatment:'NOT_APPLICABLE' as const,beneficiary,legalReference:legalText(input.pph.legalReference,'pph legalReference'),
+        legalSource:legalText(input.pph.legalSource,'pph legalSource'),evidenceReferenceId:uuid(input.pph.evidenceReferenceId,'pph evidence')};
+    }
+    keys(input.pph,['taxDate','taxPointAt','treatment','taxpayerClassification','beneficiary','rule','evidenceReferenceId'],'pph');
+    const p=normalizePphInput({clientId,entitlementId,sourceChecksum,currency:'IDR',commissionBasis:'EARNED_BM_COMMISSION',commissionGross:'0.00',
+      taxDate:input.pph.taxDate,taxPointAt:input.pph.taxPointAt,treatment:input.pph.treatment,taxpayerClassification:input.pph.taxpayerClassification,
+      beneficiary:input.pph.beneficiary,rule:input.pph.rule});
+    return {taxDate:p.taxDate,taxPointAt:p.taxPointAt,treatment:p.treatment,taxpayerClassification:p.taxpayerClassification,
+      beneficiary:p.beneficiary,rule:p.rule,evidenceReferenceId:uuid(input.pph.evidenceReferenceId,'pph evidence')};
+  })();
   return {clientId,entitlementId,sourceChecksum,transactionClassification:code(input.transactionClassification,'transactionClassification'),
     serviceClassification:code(input.serviceClassification,'serviceClassification'),transactionEvidenceReferenceId:uuid(input.transactionEvidenceReferenceId,'transactionEvidenceReferenceId'),
-    ppn:{taxDate:ppn.taxDate,taxPointAt:ppn.taxPointAt,amountBasis:ppn.amountBasis,applicability:ppn.applicability,
-      taxpayerClassification:ppn.taxpayerClassification,supplier:ppn.supplier,recipient:ppn.recipient,rule:ppn.rule,evidenceReferenceId:uuid(input.ppn.evidenceReferenceId,'ppn evidence')},
-    pph:{taxDate:pph.taxDate,taxPointAt:pph.taxPointAt,treatment:pph.treatment,taxpayerClassification:pph.taxpayerClassification,
-      beneficiary:pph.beneficiary,rule:pph.rule,evidenceReferenceId:uuid(input.pph.evidenceReferenceId,'pph evidence')},
-    expectedVersion:input.expectedVersion===null?null:version(input.expectedVersion,'expectedVersion'),idempotencyKey:key(input.idempotencyKey)};
+    ppn,pph,expectedVersion:input.expectedVersion===null?null:version(input.expectedVersion,'expectedVersion'),idempotencyKey:key(input.idempotencyKey)};
 }
 function snapshotFrom(input:ReturnType<typeof normalizeIntent>,source:BmCommissionSource,actor:string,id:string,v:number,previous:string|null,intentDigest:string):BmTaxCaseSnapshot {
   const ppn=input.ppn,pph=input.pph;
   if(ppn.supplier.owner.kind!=='BM_BENEFICIARY' || pph.beneficiary.owner.kind!=='BM_BENEFICIARY' ||
     ppn.supplier.owner.counterpartyId!==source.beneficiary.counterpartyId || pph.beneficiary.owner.counterpartyId!==source.beneficiary.counterpartyId) throw stale();
-  return {schema:'HANDYMAN_BM_TAX_CASE_V1',id,version:v,previousCaseId:previous,clientId:input.clientId,buildingId:source.buildingId,
+  const pn='rule' in ppn?ppn.rule:null,ph='rule' in pph?pph.rule:null;
+  const common={id,version:v,previousCaseId:previous,clientId:input.clientId,buildingId:source.buildingId,
     entitlementId:input.entitlementId,executionScopeId:source.executionScopeId,transactionId:source.transactionId,sourceChecksum:input.sourceChecksum,
-    commissionGross:source.commissionGross,currency:'IDR',commissionBasis:'EARNED_BM_COMMISSION',counterpartyId:source.beneficiary.counterpartyId,
+    commissionGross:source.commissionGross,currency:'IDR' as const,commissionBasis:'EARNED_BM_COMMISSION' as const,counterpartyId:source.beneficiary.counterpartyId,
     verificationId:source.beneficiary.verificationId,coverageId:source.coverage.id,agreementId:source.agreement.id,agreementVersionId:source.agreement.versionId,
     agreementVersionNumber:source.agreement.versionNumber,transactionClassification:input.transactionClassification,serviceClassification:input.serviceClassification,
     transactionEvidenceReferenceId:input.transactionEvidenceReferenceId,
     ppnTaxDate:ppn.taxDate,ppnTaxPointAt:ppn.taxPointAt,ppnAmountBasis:ppn.amountBasis,ppnApplicability:ppn.applicability,
-    ppnTaxpayerClassification:ppn.taxpayerClassification,ppnEvidenceReferenceId:ppn.evidenceReferenceId,
-    ppnRuleId:ppn.rule.ruleId,ppnRuleVersion:ppn.rule.ruleVersion,ppnRuleDigest:ppn.rule.ruleDigest,ppnRuleDecisionId:ppn.rule.approvalDecisionId,
+    ppnTaxpayerClassification:'taxpayerClassification' in ppn?(ppn.taxpayerClassification??null):null,ppnEvidenceReferenceId:ppn.evidenceReferenceId,
+    ppnRuleId:pn?.ruleId??null,ppnRuleVersion:pn?.ruleVersion??null,ppnRuleDigest:pn?.ruleDigest??null,ppnRuleDecisionId:pn?.approvalDecisionId??null,
     ppnBeneficiaryProfileId:ppn.supplier.profileId,ppnBeneficiaryVersion:ppn.supplier.profileVersion,ppnBeneficiaryDigest:ppn.supplier.profileDigest,
     ppnBeneficiaryDecisionId:ppn.supplier.approvalDecisionId,ppnIssuerProfileId:ppn.recipient.profileId,ppnIssuerVersion:ppn.recipient.profileVersion,
     ppnIssuerDigest:ppn.recipient.profileDigest,ppnIssuerDecisionId:ppn.recipient.approvalDecisionId,
-    pphTaxDate:pph.taxDate,pphTaxPointAt:pph.taxPointAt,pphTreatment:pph.treatment,pphTaxpayerClassification:pph.taxpayerClassification,
-    pphEvidenceReferenceId:pph.evidenceReferenceId,pphRuleId:pph.rule.ruleId,pphRuleVersion:pph.rule.ruleVersion,
-    pphRuleDigest:pph.rule.ruleDigest,pphRuleDecisionId:pph.rule.approvalDecisionId,
+    pphTaxDate:pph.taxDate,pphTaxPointAt:pph.taxPointAt,pphTreatment:pph.treatment,
+    pphTaxpayerClassification:'taxpayerClassification' in pph?(pph.taxpayerClassification??null):null,pphEvidenceReferenceId:pph.evidenceReferenceId,
+    pphRuleId:ph?.ruleId??null,pphRuleVersion:ph?.ruleVersion??null,pphRuleDigest:ph?.ruleDigest??null,pphRuleDecisionId:ph?.approvalDecisionId??null,
     pphBeneficiaryProfileId:pph.beneficiary.profileId,pphBeneficiaryVersion:pph.beneficiary.profileVersion,
     pphBeneficiaryDigest:pph.beneficiary.profileDigest,pphBeneficiaryDecisionId:pph.beneficiary.approvalDecisionId,
     createdByUserId:actor,idempotencyKey:input.idempotencyKey,intentDigest};
+  if(ppn.applicability==='NOT_APPLICABLE' || pph.treatment==='NOT_APPLICABLE') return {...common,schema:'HANDYMAN_BM_TAX_CASE_V2',
+    ppnLegalReference:ppn.applicability==='NOT_APPLICABLE'?ppn.legalReference:null,ppnLegalSource:ppn.applicability==='NOT_APPLICABLE'?ppn.legalSource:null,
+    pphLegalReference:pph.treatment==='NOT_APPLICABLE'?pph.legalReference:null,pphLegalSource:pph.treatment==='NOT_APPLICABLE'?pph.legalSource:null};
+  // V1's normalized intent and snapshot fields remain exactly as before 0501.
+  return {...common,schema:'HANDYMAN_BM_TAX_CASE_V1'} as BmTaxCaseSnapshotV1;
 }
 async function readNow(tx:PoolClient):Promise<string> {
   return iso((await tx.query("SELECT date_trunc('milliseconds',clock_timestamp()) AS now")).rows[0].now);
@@ -222,7 +311,9 @@ async function readNow(tx:PoolClient):Promise<string> {
 
 /** A scoped Finance maker proposes both independently evidenced tax treatments; it is not authority. */
 export async function proposeHandymanBmTaxCase(actorInput:string,input:ProposeBmTaxCaseInput):Promise<BmTaxCaseView> {
-  const actor=uuid(actorInput,'actor'),n=normalizeIntent(input),intentDigest=hash({schema:'HANDYMAN_BM_TAX_CASE_INTENT_V1',actor,...n});
+  const actor=uuid(actorInput,'actor'),n=normalizeIntent(input);
+  const schema=n.ppn.applicability==='NOT_APPLICABLE' || n.pph.treatment==='NOT_APPLICABLE'?'HANDYMAN_BM_TAX_CASE_INTENT_V2':'HANDYMAN_BM_TAX_CASE_INTENT_V1';
+  const intentDigest=hash({schema,actor,...n});
   try{return await withTransaction(async tx=>{
     await tx.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     const buildingId=await access(tx,actor,n.clientId,n.entitlementId,'maker');await lockLedger(tx,n.entitlementId);

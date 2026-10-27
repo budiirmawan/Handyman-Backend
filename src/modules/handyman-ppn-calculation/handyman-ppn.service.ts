@@ -5,7 +5,8 @@ import { requireVerifiedBuyerBindingInSnapshot } from '../handyman-buyer-binding
 import { requireVerifiedCustomerTaxInSnapshot } from '../handyman-customer-tax/handyman-customer-tax.service';
 import { requireApprovedIdentityAtInSnapshot } from '../handyman-tax-identity/handyman-tax-identity.service';
 import type { BmVerifiedCalculationInput } from '../handyman-bm-tax-case';
-import { calculateCustomerPpnFromResolved, calculatePpnFromResolved, hash, normalizeCustomerPpnInput, normalizePpnInput, ppnError, validateApprovedPpnIdentityPin } from './handyman-ppn-core';
+import { calculateCustomerPpnFromResolved, calculatePpnFromResolved, hash, normalizeCustomerPpnInput, normalizePpnInput,
+  parsePpnWholeRupiah, ppnIdentityReference, ppnError, validateApprovedPpnIdentityPin } from './handyman-ppn-core';
 import type { ApprovedCustomerPpnBreakdown, CalculateCustomerPpnInput, VerifiedBmPpnBreakdown } from './handyman-ppn.types';
 
 /** Customer PPN retains its verified-buyer path; BM PPN requires an independently approved case. */
@@ -31,8 +32,23 @@ export async function calculateApprovedHandymanPpn(actorInput: string, input: Bm
 
 /** Internal only: caller must hold one repeatable-read, read-only transaction. */
 export async function calculateApprovedHandymanBmPpnInSnapshot(tx:PoolClient,actor:string,input:BmVerifiedCalculationInput):Promise<VerifiedBmPpnBreakdown> {
-  const {requireApprovedBmTaxCaseInSnapshot}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
-  const verified=await requireApprovedBmTaxCaseInSnapshot(tx,actor,input);
+  const {requireApprovedBmTaxCaseInSnapshot,nonApplicabilityProvenance}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
+  const verified=await requireApprovedBmTaxCaseInSnapshot(tx,actor,input),s=verified.classification.snapshot;
+  if(s.ppnApplicability==='NOT_APPLICABLE') {
+    if(verified.ppnInput!==null || verified.ppnRule!==null) throw ppnError('HANDYMAN_PPN_INTEGRITY_ERROR','Conflicting non-applicability provenance.');
+    // The whole-rupiah source restriction remains in force even when PPN does not apply.
+    parsePpnWholeRupiah(verified.source.commissionGross);
+    const body=Object.freeze({schema:'HANDYMAN_VERIFIED_BM_PPN_NOT_APPLICABLE_V1' as const,clientId:s.clientId,
+      transactionContext:'BM_COMMISSION' as const,taxDate:s.ppnTaxDate,taxPointAt:s.ppnTaxPointAt,currency:'IDR' as const,
+      amountBasis:'PPN_EXCLUSIVE' as const,applicability:'NOT_APPLICABLE' as const,taxpayerClassification:null,
+      sourceAmount:verified.source.commissionGross,dppAmount:null,ppnRatePercent:null,ppnAmount:'0.00' as const,
+      totalIncludingPpn:verified.source.commissionGross,rounding:null,basisMethodCode:null,rule:null,
+      supplier:ppnIdentityReference(verified.ppnBeneficiary),recipient:ppnIdentityReference(verified.ppnIssuer),
+      nonApplicability:nonApplicabilityProvenance(verified,'PPN'),transactionPartyBinding:'VERIFIED_BM_COMMISSION_FINANCE_APPROVED' as const,
+      source:verified.source,determination:verified.reference});
+    return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
+  }
+  if(!verified.ppnInput || !verified.ppnRule) throw ppnError('HANDYMAN_PPN_INTEGRITY_ERROR','A verified PPN rule is required.');
   // normalizePpnInput deliberately rejects fractional IDR commission, rather than rounding it silently.
   const pure=calculatePpnFromResolved(normalizePpnInput(verified.ppnInput),verified.ppnBeneficiary,verified.ppnIssuer,verified.ppnRule,verified.readAt);
   const {schema:_schema,transactionPartyBinding:_unverified,checksumAlgorithm:_algorithm,checksum:_checksum,...rest}=pure;

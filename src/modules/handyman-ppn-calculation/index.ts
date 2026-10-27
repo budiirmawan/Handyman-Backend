@@ -3,6 +3,8 @@ export type {
   ApprovedPpnBreakdown,
   ApprovedCustomerPpnBreakdown,
   VerifiedBmPpnBreakdown,
+  VerifiedBmRulePpnBreakdown,
+  VerifiedBmNonApplicablePpnBreakdown,
   CalculateApprovedPpnInput,
   CalculateCustomerPpnInput,
   PpnApplicability,

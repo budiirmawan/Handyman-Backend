@@ -76,10 +76,25 @@ export type ApprovedCustomerPpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' |
   transactionPartyBinding: 'VERIFIED_BUYER_FINANCE_REVIEWED_TRANSACTION_ASSERTION';
 }>;
 
-/** Read-only BM PPN over the exact source and independently approved Finance case. */
-export type VerifiedBmPpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' | 'transactionPartyBinding'> & Readonly<{
+/** Existing rule-based result and checksum remain unchanged. */
+export type VerifiedBmRulePpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' | 'transactionPartyBinding'> & Readonly<{
   schema: 'HANDYMAN_VERIFIED_BM_PPN_CALCULATION_V1';
   transactionPartyBinding: 'VERIFIED_BM_COMMISSION_FINANCE_APPROVED';
   source: import('../handyman-pph-calculation').BmCommissionSource;
   determination: import('../handyman-bm-tax-case').BmTaxCaseReference;
 }>;
+/** No rule, rate, tax basis or rounding is asserted for an independently reviewed non-applicability. */
+export type VerifiedBmNonApplicablePpnBreakdown = Readonly<{
+  schema: 'HANDYMAN_VERIFIED_BM_PPN_NOT_APPLICABLE_V1';
+  clientId: string; transactionContext: 'BM_COMMISSION'; taxDate: string; taxPointAt: string;
+  currency: 'IDR'; amountBasis: 'PPN_EXCLUSIVE'; applicability: 'NOT_APPLICABLE'; taxpayerClassification: null;
+  sourceAmount: string; dppAmount: null; ppnRatePercent: null; ppnAmount: '0.00'; totalIncludingPpn: string;
+  rounding: null; basisMethodCode: null; rule: null;
+  supplier: PpnIdentityReference; recipient: PpnIdentityReference;
+  nonApplicability: import('../handyman-bm-tax-case').BmNonApplicabilityProvenance;
+  transactionPartyBinding: 'VERIFIED_BM_COMMISSION_FINANCE_APPROVED';
+  source: import('../handyman-pph-calculation').BmCommissionSource;
+  determination: import('../handyman-bm-tax-case').BmTaxCaseReference;
+  checksumAlgorithm: 'SHA-256'; checksum: string;
+}>;
+export type VerifiedBmPpnBreakdown = VerifiedBmRulePpnBreakdown | VerifiedBmNonApplicablePpnBreakdown;

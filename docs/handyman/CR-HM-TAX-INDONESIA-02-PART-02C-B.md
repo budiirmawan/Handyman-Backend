@@ -44,17 +44,19 @@ and `netPayableProjection`. In canonical IDR decimal strings:
 netPayableProjection = commissionGross + ppnAmount - pphWithheld
 ```
 
-The existing PPN and PPh calculators alone determine their separate bases,
-rates, tax amounts and rounding. PPh uses its independently approved gross or
-ratio method; PPN is **not** automatically included in the PPh basis. The
-final addition/subtraction uses exact integer hundredths and adds no rounding
+For rule-based treatments, the existing PPN and PPh calculators determine
+their separate bases, rates, tax amounts and rounding. PPh uses its independently
+approved gross or ratio method; PPN is **not** automatically included in the
+PPh basis. The final addition/subtraction uses exact integer hundredths and adds no rounding
 policy. For example, synthetic gross `10.00`, PPN `1.00`, and PPh `0.75`
 produce `10.25`; these are test values, not statutory rates.
 
-0500 has no literal `NOT_APPLICABLE` status. Supported independently reviewed
-zero-tax treatments are PPN `EXEMPT` / `NON_TAXABLE` and PPh `EXEMPT` /
-`NON_WITHHOLD`; none is inferred from the other or from missing data. PPN
-`EXEMPT` may still have a nonzero DPP, whereas `NON_TAXABLE` has zero DPP.
+0500 originally had no literal `NOT_APPLICABLE` status. PART 02C-C adds an
+explicit independently reviewed V2 treatment without changing 0500 history;
+see `CR-HM-TAX-INDONESIA-02-PART-02C-C.md` for its distinct null-basis contract.
+The existing zero-tax treatments remain PPN `EXEMPT` / `NON_TAXABLE` and PPh
+`EXEMPT` / `NON_WITHHOLD`; none is inferred from another or from missing data.
+PPN `EXEMPT` may still have a nonzero DPP, whereas `NON_TAXABLE` has zero DPP.
 The supported PPh zero-withholding methods have zero withholding basis. A
 missing, unapproved, ambiguous or unsupported rule never silently becomes
 zero tax. PPN accepts only a whole-rupiah source ending in `.00`, even when

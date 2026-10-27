@@ -9,8 +9,9 @@ export type BmCommissionTaxProjection = Readonly<{
   input: BmVerifiedCalculationInput;
   inputChecksumAlgorithm: 'SHA-256'; inputChecksum: string;
   currency: 'IDR'; commissionGross: string;
-  ppnBasis: string; ppnAmount: string;
-  pphWithholdingBasis: string; pphWithheld: string;
+  /** A non-applicable tax has no asserted basis; null is not a zero-rated basis. */
+  ppnBasis: string | null; ppnAmount: string;
+  pphWithholdingBasis: string | null; pphWithheld: string;
   /** Exact decimal sum of gross plus PPN minus PPh, not a payment instruction. */
   netPayableProjection: string;
   /** Complete independently verified calculations, including source, case, identities and approved rules. */

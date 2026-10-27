@@ -56,9 +56,20 @@ export type ApprovedBmWithholdingBreakdown = Readonly<{
   checksumAlgorithm: 'SHA-256'; checksum: string;
 }>;
 
-/** Trusted boundary result: the Finance decision and source are covered by the result checksum. */
-export type VerifiedBmWithholdingBreakdown = Omit<ApprovedBmWithholdingBreakdown, 'schema' | 'caseApplicability'> & Readonly<{
+/** Existing rule-based result and checksum remain unchanged. */
+export type VerifiedBmRuleWithholdingBreakdown = Omit<ApprovedBmWithholdingBreakdown, 'schema' | 'caseApplicability'> & Readonly<{
   schema: 'HANDYMAN_VERIFIED_BM_PPH_WITHHOLDING_V1';
   caseApplicability: 'INDEPENDENTLY_FINANCE_APPROVED';
   determination: BmTaxCaseReference;
 }>;
+/** No rule, rate, tax basis or rounding is asserted for independently reviewed non-applicability. */
+export type VerifiedBmNonApplicableWithholdingBreakdown = Readonly<{
+  schema: 'HANDYMAN_VERIFIED_BM_PPH_NOT_APPLICABLE_V1'; clientId: string; taxDate: string; taxPointAt: string; currency: 'IDR';
+  commissionBasis: 'EARNED_BM_COMMISSION'; commissionGross: string; treatment: 'NOT_APPLICABLE'; taxpayerClassification: null;
+  taxableWithholdingBasis: null; ratePercent: null; pphWithheld: '0.00'; projectedNetCommission: string;
+  rounding: null; basisMethodCode: null; rule: null; source: BmCommissionSource; beneficiaryTaxIdentity: PpnIdentityReference;
+  nonApplicability: import('../handyman-bm-tax-case').BmNonApplicabilityProvenance;
+  caseApplicability: 'INDEPENDENTLY_FINANCE_APPROVED'; authority: 'READ_ONLY_PROJECTION'; determination: BmTaxCaseReference;
+  checksumAlgorithm: 'SHA-256'; checksum: string;
+}>;
+export type VerifiedBmWithholdingBreakdown = VerifiedBmRuleWithholdingBreakdown | VerifiedBmNonApplicableWithholdingBreakdown;

@@ -4,6 +4,7 @@ import { AppError, ERROR_CODES } from '../../shared/errors';
 import { assertBuildingScopedResourceAccess } from '../context-access';
 import { permissionRepository } from '../permissions';
 import { resolveHandymanBmBuildingCoverageInSnapshot } from '../handyman-bm-binding/handyman-bm-binding.service';
+import { ppnIdentityReference } from '../handyman-ppn-calculation/handyman-ppn-core';
 import { calculateBmWithholdingFromResolved, cents, decimal, hash, pphError, pphIntegrity, uuid } from './handyman-pph-core';
 import type { BmCommissionSource, VerifiedBmWithholdingBreakdown } from './handyman-pph.types';
 import type { BmVerifiedCalculationInput } from '../handyman-bm-tax-case';
@@ -170,8 +171,20 @@ export async function calculateApprovedHandymanBmWithholding(actorInput: string,
 
 /** Internal only: caller must hold one repeatable-read, read-only transaction. */
 export async function calculateApprovedHandymanBmWithholdingInSnapshot(tx:PoolClient,actor:string,input:BmVerifiedCalculationInput):Promise<VerifiedBmWithholdingBreakdown> {
-  const {requireApprovedBmTaxCaseInSnapshot}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
-  const verified=await requireApprovedBmTaxCaseInSnapshot(tx,actor,input);
+  const {requireApprovedBmTaxCaseInSnapshot,nonApplicabilityProvenance}=await import('../handyman-bm-tax-case/handyman-bm-tax-case.service');
+  const verified=await requireApprovedBmTaxCaseInSnapshot(tx,actor,input),s=verified.classification.snapshot;
+  if(s.pphTreatment==='NOT_APPLICABLE') {
+    if(verified.pphInput!==null || verified.pphRule!==null) throw pphIntegrity();
+    const body=Object.freeze({schema:'HANDYMAN_VERIFIED_BM_PPH_NOT_APPLICABLE_V1' as const,clientId:s.clientId,
+      taxDate:s.pphTaxDate,taxPointAt:s.pphTaxPointAt,currency:'IDR' as const,commissionBasis:'EARNED_BM_COMMISSION' as const,
+      commissionGross:verified.source.commissionGross,treatment:'NOT_APPLICABLE' as const,taxpayerClassification:null,
+      taxableWithholdingBasis:null,ratePercent:null,pphWithheld:'0.00' as const,projectedNetCommission:verified.source.commissionGross,
+      rounding:null,basisMethodCode:null,rule:null,source:verified.source,beneficiaryTaxIdentity:ppnIdentityReference(verified.pphBeneficiary),
+      nonApplicability:nonApplicabilityProvenance(verified,'PPH_WITHHOLDING'),caseApplicability:'INDEPENDENTLY_FINANCE_APPROVED' as const,
+      authority:'READ_ONLY_PROJECTION' as const,determination:verified.reference});
+    return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
+  }
+  if(!verified.pphInput || !verified.pphRule) throw pphIntegrity();
   const pure=calculateBmWithholdingFromResolved(verified.pphInput,verified.source,verified.pphBeneficiary,verified.pphRule,verified.readAt);
   const {schema:_schema,caseApplicability:_unverified,checksumAlgorithm:_algorithm,checksum:_checksum,...rest}=pure;
   const body=Object.freeze({...rest,schema:'HANDYMAN_VERIFIED_BM_PPH_WITHHOLDING_V1' as const,
