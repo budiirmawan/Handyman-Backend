@@ -10,6 +10,15 @@ export function handymanAssignmentScopeNotAuthorizedError(): AppError {
   });
 }
 
+/** An inspection-fee approval supports the fee ledger, not repair work. */
+export function handymanInspectionFeeWorkNotAuthorizedError(): AppError {
+  return new AppError({
+    code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED,
+    message: 'An inspection fee approval does not authorize a repair crew; approve the separate work quotation.',
+    statusCode: 409,
+  });
+}
+
 /** Provider context or crew is missing or not ACTIVE for assignment. */
 export function handymanAssignmentContextInactiveError(): AppError {
   return new AppError({

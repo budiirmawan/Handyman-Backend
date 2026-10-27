@@ -680,7 +680,7 @@ export async function assertVerifiedManagedEvidenceReference(
     clientId: string;
     buildingId: string;
     handymanRequestId: string;
-    executionScopeId: string;
+    executionScopeId: string | null;
   },
   reference: string | null | undefined,
   options?: {

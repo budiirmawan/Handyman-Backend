@@ -96,6 +96,17 @@ async function readOperationalProjection(
            WHERE x.handyman_request_id = s."requestId"
              AND x.client_id = s."clientId"
            LIMIT 1),
+        'inspectionWorkLink', (
+          SELECT jsonb_build_object('inspectionRequestId', l.inspection_request_id,
+            'workRequestId', l.work_request_id, 'inspectionId', l.inspection_id,
+            'inspectionEvidenceId', l.evidence_upload_id, 'feeRequestId', fs.handyman_request_id,
+            'feeExecutionScopeId', l.fee_execution_scope_id)
+          FROM handyman_inspection_work_links l
+          JOIN handyman_execution_scopes fs ON fs.id=l.fee_execution_scope_id
+          WHERE (l.inspection_request_id=s."requestId" OR l.work_request_id=s."requestId")
+            AND l.client_id=s."clientId" AND l.building_id=s."buildingId"
+            AND l.tenant_company_id=s."tenantCompanyId" AND l.space_id IS NOT DISTINCT FROM s."spaceId"
+          LIMIT 1),
         'financialTerms', jsonb_build_object(
           'unconfiguredTaxIsExempt', FALSE,
           'inspectionAgreement', (

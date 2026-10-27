@@ -1,5 +1,5 @@
 import { assertHandymanQuotationInspectionReady } from './handyman-quotation-inspection';
-import { AppError } from '../../shared/errors';
+import { AppError, ERROR_CODES } from '../../shared/errors';
 import { withTransaction } from '../../database';
 import { isValidUuid } from '../clients';
 import { assertBuildingScopedResourceAccess } from '../context-access';
@@ -189,6 +189,12 @@ export async function createHandymanQuotation(
       },
       tx,
     );
+
+    // A linked inspection remains the source only; its separate work request
+    // owns the work quotation and its independent customer decision.
+    const linked = await tx.query('SELECT 1 FROM handyman_inspection_work_links WHERE inspection_request_id=$1', [request.id]);
+    if (linked.rowCount) throw new AppError({ code: ERROR_CODES.CONFLICT, statusCode: 409,
+      message: 'Create the work quotation on the linked work request.' });
 
     // 3) CR-HM-03 sufficiency gate: an authoritative diagnosis/scope
     //    record must exist and be quotable (server-derived snapshot).

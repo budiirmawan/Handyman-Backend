@@ -42,6 +42,7 @@ import {
   handymanAssignmentContextInactiveError,
   handymanAssignmentContextMismatchError,
   handymanAssignmentIdempotencyConflictError,
+  handymanInspectionFeeWorkNotAuthorizedError,
   handymanAssignmentLeadInvalidError,
   handymanAssignmentNotFoundError,
   handymanAssignmentScopeNotAuthorizedError,
@@ -211,6 +212,10 @@ async function requireAssignableScope(
   if (scope.status !== 'AUTHORIZED') {
     throw handymanAssignmentScopeNotAuthorizedError();
   }
+  const fee = await tx.query(`SELECT 1 FROM handyman_execution_scopes s
+    JOIN handyman_inspection_fee_offers o ON o.quotation_version_id=s.approved_quotation_version_id
+    WHERE s.id=$1`, [scope.id]);
+  if (fee.rowCount) throw handymanInspectionFeeWorkNotAuthorizedError();
   return scope;
 }
 

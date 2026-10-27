@@ -247,7 +247,9 @@ describe('CR-HM-TENANT-RECEIPT-01', () => {
     await assert.rejects(q('UPDATE handyman_tenant_payment_receipts SET pdf_filename=$2 WHERE id=$1', [dpReceipt.id, 'changed.pdf']), /immutable/);
     await assert.rejects(q('DELETE FROM handyman_tenant_payment_receipts WHERE id=$1', [dpReceipt.id]), /immutable/);
     await assert.rejects(q('TRUNCATE handyman_tenant_payment_receipts'), /immutable/);
-    await assert.rejects(migrateDown(pool), /Refusing to remove issued tenant payment receipts/);
+    assert.equal(await migrateDown(pool), '0508_handyman_inspection_work_links');
+    try { await assert.rejects(migrateDown(pool), /Refusing to remove issued tenant payment receipts/); }
+    finally { await migrateUp(pool); }
     await closePool(pool); await db.pg.stop(); await db.pg.start();
     const config = await ensureTestDatabase(); assert.ok(config); pool = await initDatabase(config);
     const downloaded = await downloadTenantPaymentReceipt(care, ref(dpId));

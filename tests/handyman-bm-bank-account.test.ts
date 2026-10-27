@@ -100,6 +100,7 @@ describe('CR-HM-BM-SETTLEMENT-03 PART 01 beneficiary bank account',()=>{
     assert.ok(!JSON.stringify(list).includes(original.accountNumber));assert.deepEqual(await counts(),before);
     await assert.rejects(q('UPDATE handyman_bm_bank_account_versions SET account_number=$2 WHERE id=$1',[pending.proposal.id,'998877665544']),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_bank_account_decisions WHERE proposal_id=$1',[pending.proposal.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0508_handyman_inspection_work_links');
     assert.equal(await migrateDown(pool),'0507_handyman_tenant_payment_receipts');
     assert.equal(await migrateDown(pool),'0506_handyman_bm_document_issuance');
     assert.equal(await migrateDown(pool),'0505_handyman_bm_settlement_payment_evidence');

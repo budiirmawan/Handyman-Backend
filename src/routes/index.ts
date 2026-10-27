@@ -1,3 +1,4 @@
+import { createHandymanInspectionWorkLinkRouter } from '../modules/handyman-requests/handyman-inspection-work-link.routes';
 import { createHandymanTenantReceiptRouter } from '../modules/handyman-tenant-receipts/handyman-tenant-receipt.routes';
 import { createCommercialConsentBridgeRouter } from '../modules/handyman-commercial-consent/commercial-consent.routes';
 import { createHandymanFieldFeedRouter } from '../modules/handyman-field-feed/handyman-field-feed.routes';
@@ -909,6 +910,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanBmReportRouter()); // CR-HM-BM-REPORT-05 — Building-wide, non-issued monthly preview
   router.use(createHandymanBmDocumentsRouter()); // CR-HM-BM-DOCUMENT-06 — immutable issued BM PDFs
   router.use(createHandymanTenantReceiptRouter()); // Independently verified tenant payment receipts
+  router.use(createHandymanInspectionWorkLinkRouter());
   router.use(createHandymanDocumentIssuerProfileRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01A — Handyman document issuer company profile (handyman.commercial.manage + provider-Client scope)
   router.use(createHandymanDocumentBankAccountRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01B — issuer company receiving bank accounts (handyman.commercial.manage + provider-Client scope; verification act gates a payment destination)
   router.use(createHandymanDocumentSettingsRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01C — per-kind/per-language document wording, prefix namespace and signatory identity (handyman.commercial.manage + provider-Client scope)
