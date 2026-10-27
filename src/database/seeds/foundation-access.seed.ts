@@ -282,6 +282,7 @@ export const FOUNDATION_PERMISSIONS: readonly {
     name: 'Author Handyman commercial agreements, pricing and BM-fee terms',
   },
   { code: 'handyman.finance.read', name: 'Read Handyman financial transactions' },
+  { code: 'handyman.customer_tax.read', name: 'Access customer tax classification evidence references' },
   { code: 'handyman.tax_identity.approve', name: 'Approve or reject Handyman tax identities' },
   { code: 'handyman.tax_rule.approve', name: 'Approve or reject Handyman tax rules' },
   {
@@ -853,6 +854,7 @@ export const UNASSIGNED_BY_DEFAULT_PERMISSION_CODES: ReadonlySet<string> = new S
   // Dedicated checker authority: never granted automatically, including to PLATFORM_ADMIN.
   'handyman.tax_identity.approve',
   'handyman.tax_rule.approve',
+  'handyman.customer_tax.read',
   'handyman.settlement.manage',
   // CR-HM-WORKER-COMPETENCY-01 PART 02 — verifying (or rejecting) a worker's
   // individual certificate is an attestation about a person's competence and

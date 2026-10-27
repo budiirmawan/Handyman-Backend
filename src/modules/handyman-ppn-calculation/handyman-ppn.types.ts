@@ -1,4 +1,5 @@
 import type { BuyerBindingPin } from '../handyman-buyer-binding';
+import type { CustomerDocumentClass, CustomerIdentifierKind, CustomerTaxClassificationPin } from '../handyman-customer-tax';
 import type { HandymanTaxIdentityOwner, TaxIdentityApprovalEvent } from '../handyman-tax-identity';
 import type { HandymanTaxRoundingMode, HandymanTaxTransactionContext, TaxRuleApprovalEvent } from '../handyman-tax-rules';
 
@@ -34,10 +35,10 @@ export type CalculateApprovedPpnInput = Readonly<{
   recipient: PpnIdentityPin;
   rule: PpnRulePin;
 }>;
-/** Customer context can now name a verified request buyer without impersonating a BM.
- * Calculation remains blocked until a separately governed buyer tax identity exists. */
+/** An omitted classification retains the legacy fail-closed customer boundary. */
 export type CalculateCustomerPpnInput = Omit<CalculateApprovedPpnInput, 'transactionContext' | 'recipient'> & Readonly<{
   transactionContext: 'CUSTOMER_SERVICE_BILLING'; requestId: string; buyer: BuyerBindingPin;
+  classification?: CustomerTaxClassificationPin;
 }>;
 export type PpnIdentityReference = Readonly<{
   ownerKind: HandymanTaxIdentityOwner['kind']; ownerId: string; clientId: string;
@@ -62,4 +63,15 @@ export type ApprovedPpnBreakdown = Readonly<{
   /** No invoice, contract, tenant-company or Building beneficiary binding is asserted by this pure calculation. */
   transactionPartyBinding: 'CALLER_SUPPLIED_NOT_VERIFIED';
   checksumAlgorithm: 'SHA-256'; checksum: string;
+}>;
+
+/** Read-only result: Finance-reviewed source assertion, not invoice issuance or ledger proof. */
+export type ApprovedCustomerPpnBreakdown = Omit<ApprovedPpnBreakdown, 'schema' | 'transactionContext' | 'recipient' | 'transactionPartyBinding'> & Readonly<{
+  schema: 'HANDYMAN_CUSTOMER_PPN_CALCULATION_V1'; transactionContext: 'CUSTOMER_SERVICE_BILLING';
+  buyer: Readonly<{ tenantCompanyId: string; kind: 'INDIVIDUAL' | 'LEGAL_ENTITY'; binding: BuyerBindingPin }>;
+  customerClassification: Readonly<{
+    pin: CustomerTaxClassificationPin; documentClass: CustomerDocumentClass; identifierKind: CustomerIdentifierKind;
+    transactionEvidenceReferenceId: string; retailEvidenceReferenceId: string | null; verificationEvidenceReferenceId: string;
+  }>;
+  transactionPartyBinding: 'VERIFIED_BUYER_FINANCE_REVIEWED_TRANSACTION_ASSERTION';
 }>;

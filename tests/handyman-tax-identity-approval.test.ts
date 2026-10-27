@@ -136,7 +136,7 @@ async function rawNextBm(tx: PoolClient, target: Awaited<ReturnType<typeof bm>>,
 
 describe('CR-HM-TAX-INDONESIA-01 PART 01B Finance approval', () => {
   it('registers a dedicated checker capability but grants it to no role, even after seeding', async () => {
-    assert.deepEqual(migrations.slice(-3).map(m => m.id), ['0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings']);
+    assert.deepEqual(migrations.slice(-4).map(m => m.id), ['0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications']);
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.tax_identity.approve'));
     const checkGrants = async () => (await q(`SELECT count(*)::int AS n FROM role_permission_assignments rpa
       JOIN permissions p ON p.id=rpa.permission_id WHERE p.code='handyman.tax_identity.approve' AND rpa.status='ACTIVE'`)).rows[0].n;
@@ -149,6 +149,7 @@ describe('CR-HM-TAX-INDONESIA-01 PART 01B Finance approval', () => {
   });
 
   it('upgrades existing 0495 history without rewriting it and backfills the latest head', async () => {
+    assert.equal(await migrateDown(pool),'0499_handyman_customer_tax_classifications');
     assert.equal(await migrateDown(pool), '0498_handyman_request_buyer_bindings');
     assert.equal(await migrateDown(pool), '0497_handyman_tax_rule_governance');
     assert.equal(await migrateDown(pool), '0496_handyman_tax_identity_approval');
@@ -158,7 +159,7 @@ describe('CR-HM-TAX-INDONESIA-01 PART 01B Finance approval', () => {
       effectiveTo: boundary, reason: 'Existing pre-upgrade history' });
     const second = await capture(f.maker, party, { effectiveFrom: boundary, expectedVersion: 1 });
     const before = (await q('SELECT * FROM handyman_tax_identity_profiles WHERE owner_id=$1 ORDER BY version', [party.counterparty.id])).rows;
-    assert.deepEqual(await migrateUp(pool), ['0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings']);
+    assert.deepEqual(await migrateUp(pool), ['0496_handyman_tax_identity_approval', '0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications']);
     assert.deepEqual((await q('SELECT * FROM handyman_tax_identity_profiles WHERE owner_id=$1 ORDER BY version', [party.counterparty.id])).rows, before);
     const head = (await q('SELECT latest_profile_id, latest_version FROM handyman_tax_identity_heads WHERE owner_id=$1', [party.counterparty.id])).rows[0];
     assert.equal(head.latest_profile_id, second.snapshot.id); assert.equal(head.latest_version, 2);
@@ -495,11 +496,12 @@ describe('CR-HM-TAX-INDONESIA-01 PART 01B Finance approval', () => {
 
   it('refuses a destructive rollback of approval history', async () => {
     const before = (await q('SELECT * FROM handyman_tax_identity_approval_events ORDER BY id')).rows;
+    assert.equal(await migrateDown(pool),'0499_handyman_customer_tax_classifications');
     assert.equal(await migrateDown(pool), '0498_handyman_request_buyer_bindings');
     assert.equal(await migrateDown(pool), '0497_handyman_tax_rule_governance');
     await assert.rejects(migrateDown(pool), /Refusing to remove populated tax identity approval history/);
     assert.equal((await q("SELECT count(*)::int AS n FROM schema_migrations WHERE id='0496_handyman_tax_identity_approval'")).rows[0].n, 1);
-    assert.deepEqual(await migrateUp(pool), ['0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings']);
+    assert.deepEqual(await migrateUp(pool), ['0497_handyman_tax_rule_governance', '0498_handyman_request_buyer_bindings', '0499_handyman_customer_tax_classifications']);
     assert.deepEqual((await q('SELECT * FROM handyman_tax_identity_approval_events ORDER BY id')).rows, before);
   });
 });

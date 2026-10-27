@@ -1,17 +1,20 @@
 import { getPool } from '../../database';
 import { isValidUuid } from '../clients';
 import { requireVerifiedBuyerBindingInSnapshot } from '../handyman-buyer-binding/handyman-buyer-binding.service';
+import { requireVerifiedCustomerTaxInSnapshot } from '../handyman-customer-tax/handyman-customer-tax.service';
 import { requireApprovedIdentityAtInSnapshot } from '../handyman-tax-identity/handyman-tax-identity.service';
 import { resolveHandymanTaxRuleInSnapshot } from '../handyman-tax-rules/handyman-tax-rules.service';
-import { calculatePpnFromResolved, normalizeCustomerPpnInput, normalizePpnInput, ppnError, validateApprovedPpnIdentityPin } from './handyman-ppn-core';
-import type { ApprovedPpnBreakdown, CalculateApprovedPpnInput, CalculateCustomerPpnInput } from './handyman-ppn.types';
+import { calculateCustomerPpnFromResolved, calculatePpnFromResolved, normalizeCustomerPpnInput, normalizePpnInput, ppnError, validateApprovedPpnIdentityPin } from './handyman-ppn-core';
+import type { ApprovedPpnBreakdown, ApprovedCustomerPpnBreakdown, CalculateApprovedPpnInput, CalculateCustomerPpnInput } from './handyman-ppn.types';
 
 /**
  * Read-only trusted adapter: all three approvals are resolved in one database
  * snapshot and matched against caller-supplied immutable pins. The math is pure;
  * this method does not post, persist, issue or link a financial transaction.
  */
-export async function calculateApprovedHandymanPpn(actorInput: string, input: CalculateApprovedPpnInput | CalculateCustomerPpnInput): Promise<ApprovedPpnBreakdown> {
+export function calculateApprovedHandymanPpn(actorInput: string, input: CalculateApprovedPpnInput): Promise<ApprovedPpnBreakdown>;
+export function calculateApprovedHandymanPpn(actorInput: string, input: CalculateCustomerPpnInput): Promise<ApprovedCustomerPpnBreakdown>;
+export async function calculateApprovedHandymanPpn(actorInput: string, input: CalculateApprovedPpnInput | CalculateCustomerPpnInput): Promise<ApprovedPpnBreakdown | ApprovedCustomerPpnBreakdown> {
   if (typeof actorInput !== 'string' || !isValidUuid(actorInput))
     throw ppnError('HANDYMAN_PPN_INVALID','An authenticated actor is required.',400);
   const actor = actorInput.toLowerCase();
@@ -41,18 +44,22 @@ export async function calculateApprovedHandymanPpn(actorInput: string, input: Ca
   } finally { tx.release(); }
 }
 
-/** A request-bound buyer is not yet an approved recipient tax profile. */
-async function verifyCustomerBoundary(actor: string, input: CalculateCustomerPpnInput): Promise<never> {
+/** Customer calculation needs a verified buyer and a separately reviewed, rule-pinned classification. */
+async function verifyCustomerBoundary(actor: string, input: CalculateCustomerPpnInput): Promise<ApprovedCustomerPpnBreakdown> {
   const n=normalizeCustomerPpnInput(input),tx=await getPool().connect();
   try {
     await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const readAt=((await tx.query("SELECT date_trunc('milliseconds',clock_timestamp()) AS read_at")).rows[0].read_at as Date).toISOString();
-    await requireVerifiedBuyerBindingInSnapshot(tx,actor,{clientId:n.clientId,requestId:n.requestId,pin:n.buyer,at:n.taxPointAt});
+    const readAt=((await tx.query("SELECT date_trunc('milliseconds',transaction_timestamp()) AS read_at")).rows[0].read_at as Date).toISOString();
+    if (!n.classification) {
+      await requireVerifiedBuyerBindingInSnapshot(tx,actor,{clientId:n.clientId,requestId:n.requestId,pin:n.buyer,at:n.taxPointAt});
+      const supplier=await requireApprovedIdentityAtInSnapshot(tx,actor,n.supplier.owner,n.taxPointAt);
+      validateApprovedPpnIdentityPin(n.supplier,supplier,n.taxPointAt,readAt);
+      throw ppnError('HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE','A reviewed customer tax classification is required.');
+    }
+    const customer=await requireVerifiedCustomerTaxInSnapshot(tx,actor,{clientId:n.clientId,requestId:n.requestId,pin:n.classification});
     const supplier=await requireApprovedIdentityAtInSnapshot(tx,actor,n.supplier.owner,n.taxPointAt);
-    validateApprovedPpnIdentityPin(n.supplier,supplier,n.taxPointAt,readAt);
-    // 0495 does not approve customer tax status, PKP or residency. A buyer-binding
-    // attestation is not a substitute, so no rule or calculation is emitted.
-    throw ppnError('HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE','Buyer tax identity and applicable taxpayer status are not independently approved.');
+    const result=calculateCustomerPpnFromResolved(n,supplier,customer.buyer,customer,customer.rule,readAt);
+    await tx.query('COMMIT');return result;
   } catch (err) {
     await tx.query('ROLLBACK').catch(()=>undefined);throw err;
   } finally { tx.release(); }

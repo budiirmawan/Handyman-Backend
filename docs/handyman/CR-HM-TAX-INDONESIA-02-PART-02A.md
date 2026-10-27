@@ -15,23 +15,24 @@ is an explicit Indonesian calendar date and must match the supplied zoned
 tax-point instant in Asia/Jakarta. No rule is selected from PKP status alone.
 
 The output is a deterministic immutable breakdown and checksum, with source,
-DPP, rate, PPN, total, rule and both identity approvals/provenance. Its SHA-256
-checksum is over UTF-8 `stableJson` of the breakdown body excluding the
+DPP, rate, PPN, total and approved-rule provenance. Standalone BM output pins
+both identity approvals; customer output pins the buyer binding and reviewed
+classification instead. Its SHA-256 checksum is over UTF-8 `stableJson` of the breakdown body excluding the
 `checksumAlgorithm` and `checksum` fields. It is not an
 invoice, fiscal authorization, legal opinion, earned entitlement or settlement,
 and performs no writes. It does not alter legacy calculations or invoice
-monetary constraints. The supplied parties and case are **not** bound here to
-an actual invoice, tenant, Building, contract or charge; output explicitly says
-`CALLER_SUPPLIED_NOT_VERIFIED`. A downstream integration must independently
-verify those relationships, eligibility and legal facts before any financial use.
+monetary constraints. Standalone BM parties and case are **not** bound here to
+an actual invoice, tenant, Building, contract or charge; BM output explicitly
+says `CALLER_SUPPLIED_NOT_VERIFIED`. Customer output verifies its request-buyer
+binding and reviewed assertion but not an invoice, ledger charge or payment.
+Downstream use must independently verify the remaining relationships and facts.
 
-0495 currently supports only a provider issuer and a verified BM beneficiary,
-not a dedicated tenant/customer tax identity. `CUSTOMER_SERVICE_BILLING` is
-therefore **blocked** with `HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE`, even
-if a customer-context rule and BM identity have been approved: a BM is never
-substituted for a customer. PART 02A-B adds a separately verified request-buyer
-binding, but an approved buyer tax identity and taxpayer classification remain
-missing; see `CR-HM-TAX-INDONESIA-02-PART-02A-B.md`. For the standalone BM calculation,
+0495 supports only a provider issuer and a verified BM beneficiary, not a
+customer tax-identity owner; a BM is never substituted for a customer.
+PART 02A-B adds a verified request-buyer binding, and PART 02A-C adds a
+separately reviewed, rule-pinned customer document classification. A customer
+calculation lacking that classification remains blocked; see
+`CR-HM-TAX-INDONESIA-02-PART-02A-C.md`. For the standalone BM calculation,
 the BM is the supplier and issuer is the recipient; both require their own
 approved 0495 identity under the same Client. This does not bind them to an
 actual commission, Building or entitlement. Self supply and obvious

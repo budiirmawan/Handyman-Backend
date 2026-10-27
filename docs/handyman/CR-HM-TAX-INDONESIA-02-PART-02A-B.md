@@ -65,13 +65,14 @@ For `CUSTOMER_SERVICE_BILLING`, the calculator accepts a request ID and exact
 verified buyer-binding pin instead of a fabricated BM recipient. It resolves
 the buyer and the independently approved 0495/0496 provider issuer in the
 same read-only repeatable-read snapshot and enforces their separate scope and
-pins. A buyer binding does **not** establish the 0497 recipient's taxpayer
-classification, residency or PKP status. Because 0495 has no approved customer
-tax-identity owner, the calculation then fails closed with
-`HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE`; no PPN, exemption or tax invoice
-is inferred. Enabling customer calculations needs a separately governed buyer
-tax-identity contract and Finance-approved applicable rule. Existing standalone
-BM calculations remain unchanged and unbound to an actual entitlement.
+pins. A buyer binding does **not** establish the recipient's tax-document
+classification, residency or PKP status. Without a separate reviewed
+classification, the calculation fails closed with
+`HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE`. PART 02A-C adds a narrowly
+rule-pinned, independently reviewed customer classification; see
+`CR-HM-TAX-INDONESIA-02-PART-02A-C.md`. It does not infer buyer PKP or issue a
+tax invoice. Existing standalone BM calculations remain unchanged and
+unbound to an actual entitlement.
 
 There is no invoice issuance, posting, settlement, new rate or tax rule, or
 change to historic invoice, quotation, request or BM entitlement facts.

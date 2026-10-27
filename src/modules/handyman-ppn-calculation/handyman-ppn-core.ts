@@ -2,9 +2,12 @@ import { createHash } from 'node:crypto';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { stableJson } from '../../shared/stable-json';
 import { isValidUuid } from '../clients';
+import type { VerifiedBuyerBinding } from '../handyman-buyer-binding';
+import type { VerifiedCustomerTaxClassification } from '../handyman-customer-tax';
+import { customerTaxPolicy } from '../handyman-customer-tax/handyman-customer-tax.policy';
 import type { ApprovedHandymanTaxIdentity, HandymanTaxIdentityOwner } from '../handyman-tax-identity';
-import type { TaxRuleResolution } from '../handyman-tax-rules';
-import type { ApprovedPpnBreakdown, CalculateApprovedPpnInput, CalculateCustomerPpnInput, PpnApplicability, PpnIdentityPin, PpnIdentityReference } from './handyman-ppn.types';
+import type { HandymanTaxRuleSnapshot, TaxRuleResolution } from '../handyman-tax-rules';
+import type { ApprovedPpnBreakdown, ApprovedCustomerPpnBreakdown, CalculateApprovedPpnInput, CalculateCustomerPpnInput, PpnApplicability, PpnIdentityPin, PpnIdentityReference } from './handyman-ppn.types';
 
 type PpnCode = 'HANDYMAN_PPN_INVALID' | 'HANDYMAN_PPN_CUSTOMER_IDENTITY_UNAVAILABLE' | 'HANDYMAN_PPN_MISSING_RULE' | 'HANDYMAN_PPN_AMBIGUOUS_RULE' |
   'HANDYMAN_PPN_NOT_APPROVED' | 'HANDYMAN_PPN_INTEGRITY_ERROR' | 'HANDYMAN_PPN_UNSUPPORTED' | 'HANDYMAN_PPN_IDENTITY_MISMATCH';
@@ -102,10 +105,11 @@ export function normalizePpnInput(input: CalculateApprovedPpnInput): NormalizedP
   if (supplier.profileId === recipient.profileId) throw mismatch();
   return { ...input,clientId,taxDate,taxPointAt,supplier,recipient,rule,sourceRupiah:money(input.sourceAmount) };
 }
-/** Validate the prospective customer boundary without inventing a customer tax profile. */
-export function normalizeCustomerPpnInput(input: CalculateCustomerPpnInput): CalculateCustomerPpnInput {
+/** Validate the request-bound customer boundary without inferring buyer PKP status. */
+export type NormalizedCustomerPpnInput = CalculateCustomerPpnInput & { sourceRupiah: bigint };
+export function normalizeCustomerPpnInput(input: CalculateCustomerPpnInput): NormalizedCustomerPpnInput {
   keys(input,['clientId','transactionContext','taxDate','taxPointAt','currency','amountBasis','sourceAmount',
-    'applicability','taxpayerClassification','supplier','requestId','buyer','rule'],'input');
+    'applicability','taxpayerClassification','supplier','requestId','buyer','rule','classification'],'input');
   const clientId=uuid(input.clientId,'clientId'), requestId=uuid(input.requestId,'requestId');
   if(input.transactionContext!=='CUSTOMER_SERVICE_BILLING')throw invalid('transactionContext');
   const taxDate=date(input.taxDate,'taxDate'),taxPointAt=instant(input.taxPointAt,'taxPointAt');
@@ -114,13 +118,13 @@ export function normalizeCustomerPpnInput(input: CalculateCustomerPpnInput): Cal
   if(input.amountBasis!=='PPN_EXCLUSIVE')throw unsupported('amount basis');
   if(!['TAXABLE','EXEMPT','NON_TAXABLE'].includes(input.applicability))throw invalid('applicability');
   if(typeof input.taxpayerClassification!=='string' || !/^[A-Z][A-Z0-9_]{1,63}$/.test(input.taxpayerClassification))throw invalid('taxpayerClassification');
-  money(input.sourceAmount);
+  const sourceRupiah=money(input.sourceAmount);
   const supplier=pin(input.supplier,'supplier');
   if(supplier.owner.kind!=='HANDYMAN_ISSUER' || supplier.owner.clientId!==clientId)throw mismatch();
   keys(input.rule,['ruleId','ruleVersion','ruleDigest','approvalDecisionId'],'rule');
   const rule={ruleId:uuid(input.rule.ruleId,'rule.ruleId'),ruleVersion:version(input.rule.ruleVersion,'rule.ruleVersion'),
     ruleDigest:digest(input.rule.ruleDigest,'rule.ruleDigest'),approvalDecisionId:uuid(input.rule.approvalDecisionId,'rule.approvalDecisionId')};
-  return {...input,clientId,requestId,taxDate,taxPointAt,supplier,rule};
+  return {...input,clientId,requestId,taxDate,taxPointAt,supplier,rule,sourceRupiah};
 }
 function ms(value: unknown): number {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value)) throw integrity();
@@ -197,7 +201,8 @@ function classification(input: NormalizedPpnInput, supplier: ApprovedHandymanTax
   return `P02A_V1|APPLICABILITY=${app}|SUPPLIER=${description(sk)},${sp}|RECIPIENT=${description(rk)},${rp}|CASE=${m[6]}`;
 }
 type ApprovedRule = Extract<TaxRuleResolution, { status:'APPROVED' }>;
-function validateRule(input: NormalizedPpnInput, resolved: ApprovedRule, cutoff: number, classDescription: string): void {
+type RuleInput = Pick<CalculateApprovedPpnInput,'rule'|'clientId'|'transactionContext'|'taxpayerClassification'|'taxDate'>;
+function validateRule(input: RuleInput, resolved: ApprovedRule, cutoff: number, classDescription: string): void {
   if (!resolved || resolved.status !== 'APPROVED' || !resolved.rule || !resolved.approval) throw integrity();
   const rule = resolved.rule, p = rule.snapshot, s = resolved.approval.submission, d = resolved.approval.decision, w = rule.effectiveWindow;
   if (!p || !s || !d || !w || p.schema !== 'HANDYMAN_TAX_RULE_V1' || p.id !== input.rule.ruleId || p.version !== input.rule.ruleVersion ||
@@ -245,16 +250,8 @@ function identityReference(id: ApprovedHandymanTaxIdentity): PpnIdentityReferenc
     approval:Object.freeze({ submission:Object.freeze({ ...id.approval.submission }),decision:Object.freeze({ ...id.approval.decision }) }) });
 }
 
-/** Pure core for already resolved trusted snapshots; it does not establish database authenticity. */
-export function calculatePpnFromResolved(input: NormalizedPpnInput, supplier: ApprovedHandymanTaxIdentity,
-  recipient: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): ApprovedPpnBreakdown {
-  if (input.transactionContext === 'CUSTOMER_SERVICE_BILLING') throw customerUnavailable();
-  const at = ms(input.taxPointAt), cutoff = Math.min(at,ms(authorityAsOf));
-  validateIdentity(input.supplier,supplier,at,cutoff); validateIdentity(input.recipient,recipient,at,cutoff);
-  if (identifierClash(supplier,recipient)) throw mismatch();
-  const classDescription = classification(input,supplier,recipient);
-  validateRule(input,resolved,cutoff,classDescription);
-  const p = resolved.rule.snapshot, r = rate(p.ratePercent);
+function calculateAmounts(input: {sourceRupiah: bigint; applicability: PpnApplicability}, p: HandymanTaxRuleSnapshot): {dpp:bigint; ppn:bigint} {
+  const r = rate(p.ratePercent);
   if (!['HALF_UP','HALF_EVEN','DOWN','UP','NO_ROUNDING'].includes(p.roundingMode)) throw unsupported('rounding mode');
   if ((p.roundingMode === 'NO_ROUNDING' && p.roundingScale !== null) ||
       (p.roundingMode !== 'NO_ROUNDING' && p.roundingScale !== 0)) throw unsupported('IDR rounding scale');
@@ -281,6 +278,19 @@ export function calculatePpnFromResolved(input: NormalizedPpnInput, supplier: Ap
       dpp = 0n; ppn = 0n;
     } else throw unsupported('DPP method');
   }
+  return {dpp,ppn};
+}
+
+/** Pure core for already resolved trusted snapshots; it does not establish database authenticity. */
+export function calculatePpnFromResolved(input: NormalizedPpnInput, supplier: ApprovedHandymanTaxIdentity,
+  recipient: ApprovedHandymanTaxIdentity, resolved: ApprovedRule, authorityAsOf: string): ApprovedPpnBreakdown {
+  if (input.transactionContext === 'CUSTOMER_SERVICE_BILLING') throw customerUnavailable();
+  const at = ms(input.taxPointAt), cutoff = Math.min(at,ms(authorityAsOf));
+  validateIdentity(input.supplier,supplier,at,cutoff); validateIdentity(input.recipient,recipient,at,cutoff);
+  if (identifierClash(supplier,recipient)) throw mismatch();
+  const classDescription = classification(input,supplier,recipient);
+  validateRule(input,resolved,cutoff,classDescription);
+  const p = resolved.rule.snapshot, {dpp,ppn}=calculateAmounts(input,p);
   const body = Object.freeze({ schema:'HANDYMAN_PPN_CALCULATION_V1' as const,clientId:input.clientId,
     transactionContext:input.transactionContext,taxDate:input.taxDate,taxPointAt:input.taxPointAt,currency:'IDR' as const,
     amountBasis:'PPN_EXCLUSIVE' as const,applicability:input.applicability,taxpayerClassification:input.taxpayerClassification,
@@ -293,4 +303,58 @@ export function calculatePpnFromResolved(input: NormalizedPpnInput, supplier: Ap
       approval:Object.freeze({ submission:Object.freeze({ ...resolved.approval.submission }),decision:Object.freeze({ ...resolved.approval.decision }) }) }),
     supplier:identityReference(supplier),recipient:identityReference(recipient),transactionPartyBinding:'CALLER_SUPPLIED_NOT_VERIFIED' as const });
   return Object.freeze({ ...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body) });
+}
+
+/** Internal pure calculation after one trusted snapshot has re-proved buyer, classification and rule. */
+export function calculateCustomerPpnFromResolved(input: NormalizedCustomerPpnInput, supplier: ApprovedHandymanTaxIdentity,
+  buyer: VerifiedBuyerBinding, customer: VerifiedCustomerTaxClassification, resolved: ApprovedRule,
+  authorityAsOf: string): ApprovedCustomerPpnBreakdown {
+  if (!input.classification) throw customerUnavailable();
+  const at=ms(input.taxPointAt),cutoff=Math.min(at,ms(authorityAsOf));
+  validateIdentity(input.supplier,supplier,at,cutoff);
+  const s=customer.classification.snapshot,d=customer.decision,pin=input.classification,b=buyer.binding.snapshot,bd=buyer.decision;
+  const policy=customerTaxPolicy(input.taxpayerClassification);
+  if (customer.classification.digestAlgorithm!=='SHA-256' || hash(s)!==customer.classification.digest ||
+      s.id!==pin.classificationId.toLowerCase() || s.version!==pin.version || customer.classification.digest!==pin.digest ||
+      d.id!==pin.decisionId.toLowerCase() || d.decisionDigest!==pin.decisionDigest || d.classificationId!==s.id ||
+      d.classificationDigest!==customer.classification.digest || d.version!==s.version || d.decision!=='VERIFY' ||
+      d.actorUserId===s.createdByUserId || ms(d.occurredAt)>cutoff ||
+      s.clientId!==input.clientId || s.requestId!==input.requestId || s.taxDate!==input.taxDate || s.taxPointAt!==input.taxPointAt ||
+      s.currency!==input.currency || s.amountBasis!==input.amountBasis || s.sourceAmount!==input.sourceAmount ||
+      s.taxpayerClassification!==input.taxpayerClassification || s.applicability!==input.applicability ||
+      s.ruleId!==input.rule.ruleId || s.ruleVersion!==input.rule.ruleVersion || s.ruleDigest!==input.rule.ruleDigest ||
+      s.ruleDecisionId!==input.rule.approvalDecisionId || s.distinctFromSupplier!==true ||
+      s.buyerBindingId!==input.buyer.bindingId.toLowerCase() || s.buyerBindingVersion!==input.buyer.bindingVersion ||
+      s.buyerBindingDigest!==input.buyer.bindingDigest || s.buyerDecisionId!==input.buyer.decisionId.toLowerCase() ||
+      s.buyerDecisionDigest!==input.buyer.decisionDigest || b.id!==s.buyerBindingId || buyer.binding.digest!==s.buyerBindingDigest ||
+      bd.id!==s.buyerDecisionId || bd.decisionDigest!==s.buyerDecisionDigest || bd.decision!=='VERIFY' ||
+      b.buyerTenantCompanyId!==s.buyerTenantCompanyId || b.buyerKind!==s.buyerKind || b.buildingId!==s.buildingId ||
+      s.buyerKind!==policy.buyerKind || s.documentClass!==policy.documentClass || s.identifierKind!==policy.identifierKind ||
+      kind(supplier)!==policy.supplierKind || supplier.snapshot.pkpStatus!==policy.supplierPkp) throw integrity();
+  const {decisionDigest:decisionHash,...decisionBody}=d;
+  if (hash(decisionBody)!==decisionHash || hash(b)!==buyer.binding.digest ||
+      (s.identifierKind==='NONE' ? s.identifierReferenceId!==null : !s.identifierReferenceId) ||
+      (s.documentClass==='FINAL_CONSUMER' && (s.retailSellerEligible!==true || s.retailDirect!==true || s.retailFinalConsumption!==true ||
+        s.retailForResale!==false || !s.retailEvidenceReferenceId))) throw integrity();
+  validateRule(input,resolved,cutoff,policy.description);
+  const p=resolved.rule.snapshot,{dpp,ppn}=calculateAmounts(input,p);
+  const buyerPin=Object.freeze({bindingId:s.buyerBindingId,bindingVersion:s.buyerBindingVersion,bindingDigest:s.buyerBindingDigest,
+    decisionId:s.buyerDecisionId,decisionDigest:s.buyerDecisionDigest});
+  const classPin=Object.freeze({classificationId:s.id,version:s.version,digest:customer.classification.digest,decisionId:d.id,decisionDigest:d.decisionDigest});
+  const body=Object.freeze({schema:'HANDYMAN_CUSTOMER_PPN_CALCULATION_V1' as const,clientId:input.clientId,
+    transactionContext:'CUSTOMER_SERVICE_BILLING' as const,taxDate:input.taxDate,taxPointAt:input.taxPointAt,currency:'IDR' as const,
+    amountBasis:'PPN_EXCLUSIVE' as const,applicability:input.applicability,taxpayerClassification:input.taxpayerClassification,
+    sourceAmount:decimal(input.sourceRupiah),dppAmount:decimal(dpp),ppnRatePercent:p.ratePercent,ppnAmount:decimal(ppn),
+    totalIncludingPpn:decimal(input.sourceRupiah+ppn),rounding:Object.freeze({mode:p.roundingMode,
+      scale:p.roundingScale as 0|null,stages:'DPP_THEN_PPN' as const}),basisMethodCode:p.basisMethodCode,
+    rule:Object.freeze({id:p.id,version:p.version,digest:resolved.rule.digest,legalReference:p.legalReference,legalSource:p.legalSource,
+      classificationDescription:p.classificationDescription,basisDescription:p.basisDescription,evidenceSource:p.evidenceSource,
+      evidenceReference:p.evidenceReference,createdByUserId:p.createdByUserId,
+      approval:Object.freeze({submission:Object.freeze({...resolved.approval.submission}),decision:Object.freeze({...resolved.approval.decision})})}),
+    supplier:identityReference(supplier),buyer:Object.freeze({tenantCompanyId:s.buyerTenantCompanyId,kind:s.buyerKind,binding:buyerPin}),
+    customerClassification:Object.freeze({pin:classPin,documentClass:s.documentClass,identifierKind:s.identifierKind,
+      transactionEvidenceReferenceId:s.transactionEvidenceReferenceId,retailEvidenceReferenceId:s.retailEvidenceReferenceId,
+      verificationEvidenceReferenceId:d.evidenceReferenceId}),
+    transactionPartyBinding:'VERIFIED_BUYER_FINANCE_REVIEWED_TRANSACTION_ASSERTION' as const});
+  return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
 }
