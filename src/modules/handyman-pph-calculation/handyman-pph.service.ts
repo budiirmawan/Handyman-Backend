@@ -6,7 +6,7 @@ import { permissionRepository } from '../permissions';
 import { resolveHandymanBmBuildingCoverageInSnapshot } from '../handyman-bm-binding/handyman-bm-binding.service';
 import { ppnIdentityReference } from '../handyman-ppn-calculation/handyman-ppn-core';
 import { calculateBmWithholdingFromResolved, cents, decimal, hash, pphError, pphIntegrity, uuid } from './handyman-pph-core';
-import type { BmCommissionSource, VerifiedBmWithholdingBreakdown } from './handyman-pph.types';
+import type { BmCommissionSource, BmOriginalCommissionAnchor, VerifiedBmWithholdingBreakdown } from './handyman-pph.types';
 import type { BmVerifiedCalculationInput } from '../handyman-bm-tax-case';
 
 const iso = (d: Date): string => d.toISOString();
@@ -56,8 +56,8 @@ async function ledgerBasis(tx: PoolClient, transactionId: string, currency: stri
     chargedNet:decimal(labor+material-laborAdjust-materialAdjust-transactionAdjust), adjustedTransactionScope:decimal(transactionAdjust) };
 }
 
-/** Snapshot establishes the exact original entitlement, verified Building and commercial authority. */
-export async function readHandymanBmCommissionSourceInSnapshot(tx: PoolClient, actor: string, clientId: string, entitlementId: string): Promise<BmCommissionSource> {
+/** Re-resolve the immutable EARNED fact and its historical party anchors, without claiming that the current ledger is unchanged. */
+export async function readHandymanBmOriginalCommissionAnchorInSnapshot(tx: PoolClient, actor: string, clientId: string, entitlementId: string): Promise<BmOriginalCommissionAnchor> {
   await financeRead(tx,actor);
   const rows = await tx.query(`SELECT f.*, s.client_id AS scope_client_id, s.building_id AS scope_building_id,
       t.client_id AS transaction_client_id, t.execution_scope_id AS transaction_scope_id,
@@ -79,10 +79,6 @@ export async function readHandymanBmCommissionSourceInSnapshot(tx: PoolClient, a
       f.scope_client_id !== clientId || f.transaction_client_id !== clientId ||
       f.transaction_scope_id !== f.execution_scope_id || f.transaction_currency !== f.currency ||
       iso(f.transaction_created_at) !== iso(f.ledger_posted_at)) throw pphIntegrity();
-  if ((await tx.query('SELECT 1 FROM handyman_entitlement_corrections WHERE entitlement_id=$1 LIMIT 1',[entitlementId])).rowCount) throw corrected();
-  const ledger = await ledgerBasis(tx,f.transaction_id,f.currency);
-  if (ledger.laborNet !== f.labor_net || ledger.materialNet !== f.material_net || ledger.chargedNet !== f.charged_net ||
-      ledger.adjustedTransactionScope !== f.adjusted_transaction_scope) throw stale();
   const gross = cents(f.amount), labor = cents(f.labor_net), charged = cents(f.charged_net);
   if (gross > labor || gross > charged || f.actual_term_rate !== f.bm_term_rate_percent) throw pphIntegrity();
   const basis = f.fiscal_basis ?? f.labor_net;
@@ -124,7 +120,7 @@ export async function readHandymanBmCommissionSourceInSnapshot(tx: PoolClient, a
   const agreement={ id:cov.agreementId,versionId:cov.agreementVersionId,versionNumber:cov.agreementVersionNumber,
     effectiveFrom:iso(f.agreement_effective_from),effectiveToAtEarning:maybeIso(f.agreement_effective_to),ruleId:cov.ruleId,termId:cov.termId };
   const agreementChecksum=hash({ schema:'HANDYMAN_BM_COMMERCIAL_ANCHOR_V1',clientId,...agreement,ratePercent:f.actual_term_rate });
-  const body = Object.freeze({ schema:'HANDYMAN_BM_COMMISSION_SOURCE_V1' as const, clientId,buildingId:cov.buildingId,
+  const body = Object.freeze({ schema:'HANDYMAN_BM_EARNED_COMMISSION_ANCHOR_V1' as const, clientId,buildingId:cov.buildingId,
     executionScopeId:f.execution_scope_id,transactionId:f.transaction_id,entitlementId:f.id,
     ledgerContractVersion:'CR-HM-13-PART-06' as const,ledgerPostedAt:iso(f.ledger_posted_at),derivedAt:iso(f.derived_at),
     derivedByUserId:f.derived_by_user_id as string,currency:'IDR' as const,commissionBasis:'EARNED_BM_COMMISSION' as const,commissionGross:f.amount as string,
@@ -132,7 +128,7 @@ export async function readHandymanBmCommissionSourceInSnapshot(tx: PoolClient, a
     adjustedTransactionScope:f.adjusted_transaction_scope as string,commercialBasis:basis as string,
     commercialBasisSource:f.fiscal_basis === null ? 'LEDGER_LABOR_NET' as const : 'EXISTING_FISCAL_BASIS' as const,
     commercialFiscalBasis:f.fiscal_basis === null ? null : Object.freeze({ tenantProfileId:f.fiscal_tenant_profile_id as string,bmProfileId:f.fiscal_bm_profile_id as string }),
-    commercialRatePercent:f.actual_term_rate as string,ledgerBasisDigest:ledger.ledgerBasisDigest,
+    commercialRatePercent:f.actual_term_rate as string,
     agreement:Object.freeze({ ...agreement,anchorChecksum:agreementChecksum }),
     beneficiary:Object.freeze({ kind:cov.beneficiaryKind,counterpartyId:cov.counterpartyId,counterpartyChecksum,
       verificationId:cov.verificationId,verificationChecksum,verifiedAt:iso(cov.verifiedAt),
@@ -140,6 +136,28 @@ export async function readHandymanBmCommissionSourceInSnapshot(tx: PoolClient, a
     coverage:Object.freeze({ id:cov.id,effectiveFrom:iso(cov.effectiveFrom),declaredEffectiveTo:maybeIso(cov.originalEffectiveTo),
       effectiveToAtEarning:distinct ? maybeIso(f.bm_coverage_effective_to) : null,immutableChecksum:coverageChecksum }) });
   return Object.freeze({ ...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body) });
+}
+
+/** Tax reads must additionally prove the current ledger is still the original, uncorrected source. */
+export async function readHandymanBmCommissionSourceInSnapshot(tx: PoolClient, actor: string, clientId: string, entitlementId: string): Promise<BmCommissionSource> {
+  const original = await readHandymanBmOriginalCommissionAnchorInSnapshot(tx,actor,clientId,entitlementId);
+  if ((await tx.query('SELECT 1 FROM handyman_entitlement_corrections WHERE entitlement_id=$1 LIMIT 1',[entitlementId])).rowCount) throw corrected();
+  const ledger = await ledgerBasis(tx,original.transactionId,original.currency);
+  if (ledger.laborNet !== original.laborNet || ledger.materialNet !== original.materialNet || ledger.chargedNet !== original.chargedNet ||
+      ledger.adjustedTransactionScope !== original.adjustedTransactionScope) throw stale();
+  // No immutable earning-time set of ledger IDs was recorded. A refund/reversal,
+  // adjustment or final variation cannot safely be declared part of the old
+  // basis just because timestamps or net totals happen to match. Do not turn
+  // the original case into a corrected calculation by inference.
+  const uncertain = await tx.query(`SELECT 1 WHERE
+    EXISTS (SELECT 1 FROM handyman_ledger_corrections WHERE transaction_id=$1)
+    OR EXISTS (SELECT 1 FROM handyman_scope_variations
+      WHERE execution_scope_id=$2 AND status='FINAL_CHARGE_ELIGIBILITY')`,
+    [original.transactionId,original.executionScopeId]);
+  if (uncertain.rowCount) throw corrected();
+  const {schema: _schema, checksumAlgorithm: _algorithm, checksum: _checksum, ...anchors} = original;
+  const body = Object.freeze({schema:'HANDYMAN_BM_COMMISSION_SOURCE_V1' as const,...anchors,ledgerBasisDigest:ledger.ledgerBasisDigest});
+  return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
 }
 
 /** Read and pin an existing, uncorrected EARNED BM commission; this never creates one. */

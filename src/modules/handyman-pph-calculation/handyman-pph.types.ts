@@ -24,6 +24,13 @@ export type BmCommissionSource = Readonly<{
   checksumAlgorithm: 'SHA-256'; checksum: string;
 }>;
 
+/** Historical fact/party anchor only. It is not a current tax-calculation source. */
+export type BmOriginalCommissionAnchor = Omit<BmCommissionSource,
+  'schema' | 'ledgerBasisDigest' | 'checksumAlgorithm' | 'checksum'> & Readonly<{
+  schema: 'HANDYMAN_BM_EARNED_COMMISSION_ANCHOR_V1';
+  checksumAlgorithm: 'SHA-256'; checksum: string;
+}>;
+
 export type CalculateApprovedBmWithholdingInput = Readonly<{
   clientId: string; entitlementId: string; sourceChecksum: string;
   currency: 'IDR'; commissionBasis: 'EARNED_BM_COMMISSION'; commissionGross: string;

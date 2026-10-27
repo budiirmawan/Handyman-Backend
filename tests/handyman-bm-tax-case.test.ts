@@ -19,7 +19,10 @@ import { handymanDisciplineRepository } from '../src/modules/handyman-discipline
 import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
 import { prepareHandymanCommercialAgreement, activateHandymanCommercialAgreementVersion } from '../src/modules/handyman-commercial-agreements';
 import { openHandymanCustomerTransaction, composeHandymanChargeLine } from '../src/modules/handyman-customer-transactions';
-import { adjustHandymanCustomerLedger } from '../src/modules/handyman-customer-ledger-corrections';
+import { adjustHandymanCustomerLedger, refundHandymanCustomerPayment } from '../src/modules/handyman-customer-ledger-corrections';
+import { recordHandymanCustomerPayment, confirmHandymanCustomerPayment } from '../src/modules/handyman-customer-payments';
+import { allocateHandymanCustomerPayment } from '../src/modules/handyman-customer-payment-allocations';
+import { readHandymanBmCommissionCorrectionLineage } from '../src/modules/handyman-bm-correction-lineage';
 import { deriveHandymanFinancialEntitlements } from '../src/modules/handyman-financial-entitlements';
 import { updateHandymanDocumentIssuerProfile } from '../src/modules/handyman-documents/handyman-document-issuer.service';
 import { captureHandymanTaxIdentity, closeHandymanTaxIdentity, decideHandymanTaxIdentityApproval, submitHandymanTaxIdentityForApproval,
@@ -745,5 +748,38 @@ describe('PART 02C-C independently reviewed NOT_APPLICABLE treatment',()=>{
       assert.ok('error' in outcome);assert.match(String(outcome.error),/Refusing to remove populated BM non-applicability case history/);
     }finally{await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
     assert.equal((await calculateHandymanBmCommissionTaxProjection(admin,cmd)).netPayableProjection,'10.00');
+  });
+});
+
+describe('PART 02D-A correction lineage tax boundary',()=>{
+  it('keeps an approved historical case unchanged and blocks fresh corrected tax after a concurrent refund',async()=>{
+    const f=await fixture(),{c,d,cmd}=await approved(f);
+    const p=await recordHandymanCustomerPayment({executionScopeId:f.scope.id,amount:'100.00',channel:'BANK_TRANSFER',
+      providerName:'Bank',providerReference:id(),externalReference:id(),idempotencyKey:id()},admin);
+    await confirmHandymanCustomerPayment({executionScopeId:f.scope.id,paymentId:p.payment.id,idempotencyKey:id()},admin);
+    await allocateHandymanCustomerPayment({executionScopeId:f.scope.id,paymentId:p.payment.id,
+      chargeLineId:f.charge.chargeLine.id,amount:'60.00',idempotencyKey:id()},admin);
+    const caseBefore=(await q('SELECT * FROM handyman_bm_tax_cases WHERE id=$1',[c.snapshot.id])).rows[0];
+    const decisionBefore=(await q('SELECT * FROM handyman_bm_tax_case_decisions WHERE id=$1',[d.id])).rows[0];
+    const earnedBefore=(await q('SELECT * FROM handyman_entitlement_facts WHERE id=$1',[f.earned.bmFee.id])).rows[0];
+    const tx=await pool.connect();let refundId='';
+    try{
+      await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const before=await calculateHandymanBmCommissionTaxProjectionInSnapshot(tx,admin,cmd);
+      const refund=await refundHandymanCustomerPayment({executionScopeId:f.scope.id,paymentId:p.payment.id,
+        amount:'20.00',reason:'Customer refund with unproven fee basis',idempotencyKey:id()},admin);refundId=refund.correction.id;
+      const same=await calculateHandymanBmCommissionTaxProjectionInSnapshot(tx,admin,cmd);
+      assert.deepEqual(same,before,'the old snapshot is not silently mixed with the newly committed refund');
+      await tx.query('COMMIT');
+    }finally{if(tx.getTransactionStatus()==='T')await tx.query('ROLLBACK');tx.release();}
+    await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,cmd),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+    await assert.rejects(calculateApprovedHandymanPpn(admin,cmd),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+    await assert.rejects(calculateApprovedHandymanBmWithholding(admin,cmd),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
+    const lineage=await readHandymanBmCommissionCorrectionLineage(admin,{clientId:f.input.clientId,entitlementId:f.input.entitlementId});
+    assert.equal(lineage.ledgerCorrections.find(x=>x.id===refundId)!.entitlementCorrection,null);
+    assert.equal(lineage.correctedCommission,null);assert.equal(lineage.correctedTaxCalculation,'UNSUPPORTED');
+    assert.deepEqual((await q('SELECT * FROM handyman_bm_tax_cases WHERE id=$1',[c.snapshot.id])).rows[0],caseBefore);
+    assert.deepEqual((await q('SELECT * FROM handyman_bm_tax_case_decisions WHERE id=$1',[d.id])).rows[0],decisionBefore);
+    assert.deepEqual((await q('SELECT * FROM handyman_entitlement_facts WHERE id=$1',[f.earned.bmFee.id])).rows[0],earnedBefore);
   });
 });
