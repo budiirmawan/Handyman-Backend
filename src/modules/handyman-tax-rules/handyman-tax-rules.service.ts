@@ -6,6 +6,7 @@ import { stableJson } from '../../shared/stable-json';
 import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError, canAccessClient } from '../context-access';
 import { financialPermission } from '../handyman-customer-transactions/handyman-financial-integration-access';
+import { permissionRepository } from '../permissions';
 import type {
   CreateHandymanTaxRule, HandymanTaxRuleScope, HandymanTaxRuleSnapshot, HandymanTaxRuleView,
   TaxRuleApprovalEvent, TaxRuleDecisionCommand, TaxRuleResolution, TaxRuleResolveInput, TaxRuleReviewCommand,
@@ -91,13 +92,20 @@ function normalizeCreate(input: CreateHandymanTaxRule) {
 }
 
 /** Actor IDs must come from trusted authenticated server callers, never the request body. */
-async function access(actor: string, clientId: string, mode: 'maker' | 'checker' | 'read'): Promise<void> {
-  const result = await getPool().query('SELECT status FROM users WHERE id=$1', [actor]);
+async function access(actor: string, clientId: string, mode: 'maker' | 'checker' | 'read', tx?: PoolClient): Promise<void> {
+  const result = await (tx ?? getPool()).query('SELECT status FROM users WHERE id=$1', [actor]);
   if (result.rows[0]?.status !== 'ACTIVE')
     throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'An active authenticated Finance actor is required.' });
-  await financialPermission(actor, mode === 'maker' ? 'handyman.finance.manage' : 'handyman.finance.read');
-  if (mode === 'checker') await financialPermission(actor, 'handyman.tax_rule.approve');
-  if (!(await canAccessClient(actor, clientId))) throw buildingAccessDeniedError();
+  const required = mode === 'maker' ? 'handyman.finance.manage' : 'handyman.finance.read';
+  if (tx) {
+    const permissions = await permissionRepository.listActivePermissionCodesForUser(actor, tx);
+    if (!permissions.includes(required) || (mode === 'checker' && !permissions.includes('handyman.tax_rule.approve')))
+      throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'Explicit Finance authority is required.' });
+  } else {
+    await financialPermission(actor, required);
+    if (mode === 'checker') await financialPermission(actor, 'handyman.tax_rule.approve');
+  }
+  if (!(await canAccessClient(actor, clientId, tx))) throw buildingAccessDeniedError();
 }
 async function lockClient(tx: PoolClient, clientId: string): Promise<void> {
   if (!(await tx.query('SELECT id FROM clients WHERE id=$1 FOR UPDATE', [clientId])).rowCount) throw notFound();
@@ -244,11 +252,21 @@ export async function listHandymanTaxRuleApprovalHistory(actorInput: string, cli
 
 /** Explicit case and tax family are mandatory; no identity, PKP or zero-rate fallback is consulted. */
 export async function resolveHandymanTaxRule(actorInput: string, input: TaxRuleResolveInput): Promise<TaxRuleResolution> {
+  return resolveRule(actorInput, input);
+}
+
+/** Trusted internal callers can share a single repeatable-read snapshot across approvals. */
+export async function resolveHandymanTaxRuleInSnapshot(tx: PoolClient, actorInput: string,
+  input: TaxRuleResolveInput): Promise<TaxRuleResolution> {
+  return resolveRule(actorInput, input, tx);
+}
+
+async function resolveRule(actorInput: string, input: TaxRuleResolveInput, tx?: PoolClient): Promise<TaxRuleResolution> {
   exactKeys(input, [...scopeFields,'taxDate','knownAt']);
   const actor = uuid(actorInput,'actorUserId'), s = scope(input), taxDate = calendarDate(input.taxDate,'taxDate');
   const asOf = input.knownAt === undefined ? null : knownInstant(input.knownAt);
-  await access(actor,s.clientId,'read');
-  const result = await getPool().query(`SELECT ${VIEW_FIELDS}, row_to_json(a) AS approval_fact,
+  await access(actor,s.clientId,'read',tx);
+  const result = await (tx ?? getPool()).query(`SELECT ${VIEW_FIELDS}, row_to_json(a) AS approval_fact,
     row_to_json(sub) AS submission_fact, clock_timestamp() AS read_at ${VIEW_FROM}
     LEFT JOIN handyman_tax_rule_approval_events a ON a.rule_id=r.id AND a.event_type='APPROVE'
     LEFT JOIN handyman_tax_rule_approval_events sub ON sub.id=a.submission_id

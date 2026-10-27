@@ -6,6 +6,7 @@ import { stableJson } from '../../shared/stable-json';
 import { isValidUuid } from '../clients';
 import { buildingAccessDeniedError, canAccessClient } from '../context-access';
 import { financialPermission } from '../handyman-customer-transactions/handyman-financial-integration-access';
+import { permissionRepository } from '../permissions';
 import type {
   CaptureHandymanTaxIdentityInput, HandymanTaxIdentityOwner, HandymanTaxIdentitySnapshot,
   HandymanTaxIdentityView, IndividualResidency, PkpStatus, TaxIdentifierKind, TaxpayerKind,
@@ -144,13 +145,20 @@ async function access(actor: string, clientId: string, permission: 'handyman.fin
 }
 
 /** Internal callers must supply the authenticated actor; inactive users never decide. */
-async function approvalAccess(actor: string, clientId: string, mode: 'maker' | 'checker' | 'read'): Promise<void> {
-  const user = await getPool().query('SELECT status FROM users WHERE id=$1', [actor]);
+async function approvalAccess(actor: string, clientId: string, mode: 'maker' | 'checker' | 'read', tx?: PoolClient): Promise<void> {
+  const user = await (tx ?? getPool()).query('SELECT status FROM users WHERE id=$1', [actor]);
   if (user.rows[0]?.status !== 'ACTIVE')
     throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'An active authenticated Finance actor is required.' });
-  await financialPermission(actor, mode === 'maker' ? 'handyman.finance.manage' : 'handyman.finance.read');
-  if (mode === 'checker') await financialPermission(actor, 'handyman.tax_identity.approve');
-  if (!(await canAccessClient(actor, clientId))) throw buildingAccessDeniedError();
+  const required = mode === 'maker' ? 'handyman.finance.manage' : 'handyman.finance.read';
+  if (tx) {
+    const permissions = await permissionRepository.listActivePermissionCodesForUser(actor, tx);
+    if (!permissions.includes(required) || (mode === 'checker' && !permissions.includes('handyman.tax_identity.approve')))
+      throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'Explicit Finance authority is required.' });
+  } else {
+    await financialPermission(actor, required);
+    if (mode === 'checker') await financialPermission(actor, 'handyman.tax_identity.approve');
+  }
+  if (!(await canAccessClient(actor, clientId, tx))) throw buildingAccessDeniedError();
 }
 
 /** Lock the pre-existing subject, not a newly invented taxpayer entity. */
@@ -455,9 +463,20 @@ export async function resolveHandymanTaxIdentityAt(actorInput: string, targetInp
  */
 export async function requireApprovedHandymanTaxIdentityAt(actorInput: string, targetInput: HandymanTaxIdentityOwner,
   atInput: string): Promise<ApprovedHandymanTaxIdentity> {
+  return requireApprovedIdentityAt(actorInput, targetInput, atInput);
+}
+
+/** Trusted internal callers can share a single repeatable-read snapshot across approvals. */
+export async function requireApprovedIdentityAtInSnapshot(tx: PoolClient, actorInput: string,
+  targetInput: HandymanTaxIdentityOwner, atInput: string): Promise<ApprovedHandymanTaxIdentity> {
+  return requireApprovedIdentityAt(actorInput, targetInput, atInput, tx);
+}
+
+async function requireApprovedIdentityAt(actorInput: string, targetInput: HandymanTaxIdentityOwner,
+  atInput: string, tx?: PoolClient): Promise<ApprovedHandymanTaxIdentity> {
   const actor = uuid(actorInput, 'actorUserId'), target = owner(targetInput), at = instant(atInput, 'at');
-  await approvalAccess(actor, target.clientId, 'read');
-  const result = await getPool().query(`SELECT ${VIEW_COLUMNS}, row_to_json(a) AS approval_fact,
+  await approvalAccess(actor, target.clientId, 'read', tx);
+  const result = await (tx ?? getPool()).query(`SELECT ${VIEW_COLUMNS}, row_to_json(a) AS approval_fact,
     row_to_json(s) AS submission_fact,
     CASE WHEN p.owner_kind='HANDYMAN_ISSUER' THEN
       (i.id=p.issuer_profile_id AND i.client_id=p.client_id AND i.legal_name=p.legal_name AND i.effective_from<=p.effective_from)
