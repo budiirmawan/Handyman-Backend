@@ -8,6 +8,8 @@
  * an immutable line and inventory is never mutated from here).
  */
 
+import type { HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
+
 export const HANDYMAN_QUOTATION_LINE_TYPES = ['LABOR', 'MATERIAL'] as const;
 export type HandymanQuotationLineType =
   (typeof HANDYMAN_QUOTATION_LINE_TYPES)[number];
@@ -75,7 +77,7 @@ export type HandymanQuotationLineRecord = {
 export type HandymanQuotationLineServiceView = Omit<
   HandymanQuotationLineRecord,
   'createdAt' | 'updatedAt'
-> & { createdAt: string; updatedAt: string };
+> & { createdAt: string; updatedAt: string; taxPriceBasis?: HandymanTaxPriceBasis | null };
 
 /**
  * Caller input: the commercial facts ONLY (type, description, quantity,
@@ -91,6 +93,8 @@ export type AddHandymanQuotationLineInput = {
   uomId: string;
   currency: HandymanQuotationCurrency;
   finalQuotedUnitAmount: number;
+  /** Optional at draft creation, mandatory for every line before ISSUE. */
+  taxPriceBasis?: HandymanTaxPriceBasis;
   sourceItemId?: string;
   /**
    * Only `MANUAL_ONE_TIME` may be declared by a caller, and only to label one

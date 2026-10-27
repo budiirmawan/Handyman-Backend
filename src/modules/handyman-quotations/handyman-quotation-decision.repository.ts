@@ -22,6 +22,9 @@ type Row = {
   decided_by_user_id: string | null;
   decided_by_care_actor_id: string | null;
   commercial_consent_id: string | null;
+  offer_document_id: string | null;
+  offer_source_sha256: string | null;
+  offer_pdf_sha256: string | null;
   idempotency_key: string;
   request_fingerprint: string;
   decided_at: Date;
@@ -32,6 +35,7 @@ type Row = {
 const DECISION_SELECT = `
   SELECT id, client_id, quotation_id, quotation_version_id, decision,
          tenant_company_id, tenant_pic_id, decided_by_user_id, decided_by_care_actor_id, commercial_consent_id,
+         offer_document_id, offer_source_sha256, offer_pdf_sha256,
          idempotency_key, request_fingerprint, decided_at,
          created_at, updated_at
     FROM handyman_quotation_decisions`;
@@ -47,6 +51,8 @@ function map(row: Row): HandymanQuotationDecisionRecord {
     tenantPicId: row.tenant_pic_id,
     decidedByUserId: row.decided_by_user_id,
     ...(row.decided_by_care_actor_id ? { decidedByCareActorId: row.decided_by_care_actor_id, commercialConsentId: row.commercial_consent_id } : {}),
+    ...(row.offer_document_id ? { offerDocumentId: row.offer_document_id, offerSourceSha256: row.offer_source_sha256,
+      offerPdfSha256: row.offer_pdf_sha256 } : {}),
     idempotencyKey: row.idempotency_key,
     requestFingerprint: row.request_fingerprint,
     decidedAt: row.decided_at,
@@ -63,12 +69,12 @@ async function insertDecision(
     `INSERT INTO handyman_quotation_decisions (
        id, client_id, quotation_id, quotation_version_id, decision,
        tenant_company_id, tenant_pic_id, decided_by_user_id, decided_by_care_actor_id, commercial_consent_id,
-       idempotency_key, request_fingerprint
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       idempotency_key, request_fingerprint, offer_document_id, offer_source_sha256, offer_pdf_sha256
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING id, client_id, quotation_id, quotation_version_id,
                decision, tenant_company_id, tenant_pic_id,
                decided_by_user_id, decided_by_care_actor_id, commercial_consent_id, idempotency_key, request_fingerprint,
-               decided_at, created_at, updated_at`,
+               offer_document_id, offer_source_sha256, offer_pdf_sha256, decided_at, created_at, updated_at`,
     [
       randomUUID(),
       input.clientId,
@@ -82,6 +88,9 @@ async function insertDecision(
       input.commercialConsentId ?? null,
       input.idempotencyKey,
       input.requestFingerprint,
+      input.offerDocumentId ?? null,
+      input.offerSourceSha256 ?? null,
+      input.offerPdfSha256 ?? null,
     ],
   );
   return map(result.rows[0]);

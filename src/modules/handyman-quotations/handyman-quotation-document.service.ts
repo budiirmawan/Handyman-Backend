@@ -17,10 +17,13 @@ import { resolveHandymanDocumentSettingsSnapshot } from '../handyman-documents/h
 import { renderHandymanDocumentPdf } from '../handyman-documents/handyman-document-pdf';
 import type { HandymanDocumentLocale, HandymanDocumentTermsBlock } from '../handyman-documents/handyman-document-pdf.types';
 import { assertHandymanQuotationPricingAuthority } from './handyman-quotation-access';
+import { assertHandymanTenantDecisionActor } from '../handyman-tenant-decision-authority/handyman-tenant-decision-authority';
+import { HANDYMAN_TAX_PRICE_BASES, QUOTATION_PRICE_BASIS_PROTOCOL, taxPriceBasisLabel,
+  type HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
 import type { HandymanQuotationRecord, HandymanQuotationVersionRecord } from './handyman-quotation.types';
 
 type Line = { id: string; lineType: string; description: string; quantity: string; uomId: string;
-  unit: string; unitAmount: string; total: string; currency: string };
+  unit: string; unitAmount: string; total: string; currency: string; taxPriceBasis?: HandymanTaxPriceBasis };
 type Customer = { requestId: string; tenantCompanyId: string; tenantName: string; legalName: string | null;
   tenantPicName: string | null; buildingId: string; buildingName: string; spaceId: string | null;
   spaceName: string | null; serviceName: string | null; requestDescription: string | null };
@@ -28,6 +31,8 @@ type RequestItem = { id: string; serviceName: string; variantName: string | null
   unit: string | null; description: string | null; attributes: unknown; inheritedAttributes: unknown; accessCondition: string | null };
 export type QuotationDocumentSource = {
   schema: 'HANDYMAN_QUOTATION_DOCUMENT_V1'; status: 'ISSUED'; clientId: string;
+  /** Absent on historical documents; never inferred or backfilled. */
+  priceBasisProtocol?: typeof QUOTATION_PRICE_BASIS_PROTOCOL;
   issuance: { id: string; number: string; issuedAt: string; actorUserId: string };
   quotation: { id: string; versionId: string; versionNumber: number; validUntil: string; currency: string;
     dpRequired: boolean; dpPercentage: string | null; dpAmount: string | null; dpTermsNotes: string | null };
@@ -84,8 +89,10 @@ export async function createIssuedQuotationDocument(
       FROM handyman_quotation_versions WHERE id=$1 AND quotation_id=$2 AND status='ISSUED'`, [issued.id, quotation.id])).rows[0];
   if (!version?.valid_until) throw conflict('Issued quotation source version is unavailable.');
   const lines = (await tx.query<Line>(`SELECT l.id,l.line_type AS "lineType",l.description,l.quantity::text AS quantity,
-      l.uom_id AS "uomId",u.symbol AS unit,l.final_quoted_unit_amount::text AS "unitAmount",l.line_total::text AS total,l.currency
+      l.uom_id AS "uomId",u.symbol AS unit,l.final_quoted_unit_amount::text AS "unitAmount",l.line_total::text AS total,l.currency,
+      b.tax_price_basis AS "taxPriceBasis"
     FROM handyman_quotation_lines l JOIN units_of_measure u ON u.id=l.uom_id AND u.client_id=$2
+    JOIN handyman_quotation_line_price_bases b ON b.quotation_line_id=l.id AND b.quotation_version_id=l.quotation_version_id
     WHERE l.quotation_version_id=$1 ORDER BY l.created_at,l.id`, [issued.id, quotation.clientId])).rows;
   const sums = (await tx.query<{ count: string; currencies: string; currency: string | null; labor: string; material: string; total: string }>(`
     SELECT count(*)::text AS count,count(DISTINCT currency)::text AS currencies,min(currency) AS currency,
@@ -132,6 +139,7 @@ export async function createIssuedQuotationDocument(
   const documentNumber = `${settings.documentPrefix}-${allocation.number.padStart(10, '0')}`;
   if (version.valid_until.getTime() <= allocation.issued_at.getTime()) throw conflict('Quotation validity ended before document issuance.');
   const source: QuotationDocumentSource = { schema: 'HANDYMAN_QUOTATION_DOCUMENT_V1', status: 'ISSUED', clientId: quotation.clientId,
+    priceBasisProtocol: QUOTATION_PRICE_BASIS_PROTOCOL,
     issuance: { id: randomUUID(), number: documentNumber, issuedAt: allocation.issued_at.toISOString(), actorUserId },
     quotation: { id: quotation.id, versionId: issued.id, versionNumber: issued.versionNumber,
       validUntil: version.valid_until.toISOString(), currency: sums.currency, dpRequired: version.dp_required,
@@ -191,6 +199,7 @@ async function renderQuotation(s: QuotationDocumentSource, sourceHash: string) {
     addText(rows, 'Quantity', `${line.quantity} ${line.unit}`);
     addText(rows, 'Unit price', `${line.currency} ${line.unitAmount}`);
     addText(rows, 'Line total', `${line.currency} ${line.total}`);
+    addText(rows, 'Tax price basis', taxPriceBasisLabel(line.taxPriceBasis));
     rows.forEach(description => lineItems.push({ description }));
   });
   const scope: string[] = [];
@@ -211,11 +220,14 @@ async function renderQuotation(s: QuotationDocumentSource, sourceHash: string) {
     addText(scope, 'Inherited attributes', item.inheritedAttributes); addText(scope, 'Access condition', item.accessCondition);
   });
   const summary: string[] = [];
+  addText(summary, 'Offer document ID', s.issuance.id);
   addText(summary, 'Issued at UTC', s.issuance.issuedAt);
   addText(summary, 'Valid until UTC', s.quotation.validUntil);
   addText(summary, 'Labor subtotal', `${s.quotation.currency} ${s.totals.labor}`);
   addText(summary, 'Material subtotal', `${s.quotation.currency} ${s.totals.material}`);
-  addText(summary, 'Total', `${s.quotation.currency} ${s.totals.total}`);
+  addText(summary, 'Quoted line total', `${s.quotation.currency} ${s.totals.total}`);
+  addText(summary, 'Tax note', 'Totals exclude any applicable PPN on lines marked EXCLUSIVE. Applicability is determined separately.');
+  addText(summary, 'Basis precedence', 'Per-line price basis controls over general tax terms / basis per item berlaku atas ketentuan pajak umum.');
   addText(summary, 'Down payment required', s.quotation.dpRequired ? 'YES' : 'NO');
   addText(summary, 'Down payment percentage', s.quotation.dpPercentage);
   addText(summary, 'Down payment amount', s.quotation.dpAmount === null ? null : `${s.quotation.currency} ${s.quotation.dpAmount}`);
@@ -255,12 +267,27 @@ export function verifyStoredQuotationDocument(row: QuotationDocumentStored): voi
         s.customer.requestId !== row.request_id || s.quotation.id !== row.quotation_id || s.quotation.versionId !== row.quotation_version_id ||
         s.issuance.id !== row.id || s.issuance.number !== row.document_number || s.issuance.actorUserId !== row.issued_by_user_id ||
         s.issuance.issuedAt !== row.issued_at.toISOString() || s.issuer.profileId !== row.issuer_profile_id ||
-        s.bank.versionRowId !== row.bank_version_id || s.settings.settingsId !== row.settings_id || !s.lines.length) throw integrity();
+        s.bank.versionRowId !== row.bank_version_id || s.settings.settingsId !== row.settings_id || !s.lines.length ||
+        (s.priceBasisProtocol !== undefined && (s.priceBasisProtocol !== QUOTATION_PRICE_BASIS_PROTOCOL ||
+          s.lines.some(line => !(HANDYMAN_TAX_PRICE_BASES as readonly string[]).includes(line.taxPriceBasis ?? '')) ||
+          new Set(s.lines.map(line => line.id)).size !== s.lines.length))) throw integrity();
   } catch { throw integrity(); }
 }
+export type QuotationDecisionOffer = { id: string; sourceSha256: string; pdfSha256: string };
+
+/** Legacy documents deliberately return no binding; they are never upgraded. */
+export async function findQuotationDecisionOffer(tx: Pick<PoolClient, 'query'>, versionId: string): Promise<QuotationDecisionOffer | null> {
+  const row = (await tx.query<QuotationDocumentStored>(
+    'SELECT * FROM handyman_quotation_documents WHERE quotation_version_id=$1', [versionId])).rows[0];
+  if (!row) return null;
+  verifyStoredQuotationDocument(row);
+  return row.source_snapshot.priceBasisProtocol === QUOTATION_PRICE_BASIS_PROTOCOL
+    ? { id: row.id, sourceSha256: row.source_sha256, pdfSha256: row.pdf_sha256 } : null;
+}
+
 function asDownload(row: QuotationDocumentStored) {
   verifyStoredQuotationDocument(row);
-  return { filename: row.pdf_filename, fileSize: row.pdf_size, pdfChecksum: row.pdf_sha256,
+  return { id: row.id, filename: row.pdf_filename, fileSize: row.pdf_size, pdfChecksum: row.pdf_sha256,
     sourceChecksum: row.source_sha256, bytes: row.pdf_bytes };
 }
 
@@ -268,22 +295,27 @@ function asDownload(row: QuotationDocumentStored) {
 export async function downloadQuotationDocument(actorInput: string, versionInput: string) {
   const actor = uuid(actorInput, 'actorUserId'), versionId = uuid(versionInput, 'quotationVersionId');
   return withTransaction(async tx => {
-    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const context = (await tx.query<{ client_id: string; request_id: string; building_id: string; user_status: string }>(`
-      SELECT q.client_id,q.handyman_request_id AS request_id,r.building_id,u.status AS user_status
+    await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    const context = (await tx.query<{ client_id: string; request_id: string; building_id: string; tenant_company_id: string; user_status: string; is_pic: boolean }>(`
+      SELECT q.client_id,q.handyman_request_id AS request_id,r.building_id,r.tenant_company_id,u.status AS user_status,
+        EXISTS (SELECT 1 FROM tenant_pics tp WHERE tp.id=r.tenant_pic_id AND tp.user_id=u.id) AS is_pic
       FROM handyman_quotation_versions v JOIN handyman_quotations q ON q.id=v.quotation_id
       JOIN handyman_service_requests r ON r.id=q.handyman_request_id AND r.client_id=q.client_id
       JOIN users u ON u.id=$2 WHERE v.id=$1 AND v.status<>'DRAFT'`, [versionId, actor])).rows[0];
     if (!context) throw notFound();
     const permissions = await permissionRepository.listActivePermissionCodesForUser(actor, tx);
     if (context.user_status !== 'ACTIVE') throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'Active user required.' });
-    if (permissions.includes('handyman.commercial.manage')) {
+    if (context.is_pic && permissions.includes('tenant_company.manage')) {
+      await assertBuildingScopedResourceAccess(actor, { clientId: context.client_id, buildingId: context.building_id }, tx);
+      await assertHandymanTenantDecisionActor(tx, { actorUserId: actor, handymanRequestId: context.request_id,
+        clientId: context.client_id, tenantCompanyId: context.tenant_company_id, buildingId: context.building_id });
+    } else if (permissions.includes('handyman.commercial.manage')) {
       await assertBuildingScopedResourceAccess(actor, { clientId: context.client_id, buildingId: context.building_id }, tx);
       await assertHandymanQuotationPricingAuthority({ clientId: context.client_id, handymanRequestId: context.request_id, actorUserId: actor }, tx);
     } else if (permissions.includes('handyman.care.building')) {
       const buildings = await resolveBuildingsForUser(actor, tx);
       if (!buildings.some(b => b.client?.id === context.client_id && b.building.id === context.building_id)) throw notFound();
-    } else throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'Quotation document requires Operations or Building Care authority.' });
+    } else throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'Quotation document requires the request Tenant PIC, Operations or Building Care authority.' });
     const row = (await tx.query<QuotationDocumentStored>(`SELECT * FROM handyman_quotation_documents
       WHERE quotation_version_id=$1 AND client_id=$2 AND request_id=$3`, [versionId, context.client_id, context.request_id])).rows[0];
     if (!row) throw notFound();

@@ -6,13 +6,18 @@ import type { HandymanBastRecord } from '../handyman-bast/handyman-bast.types';
 import type { HandymanExecutionScopeRecord } from '../handyman-quotations/handyman-execution-scope.types';
 import { commercialConsentHash, COMMERCIAL_CONSENT_PURPOSE } from './commercial-consent.assertion';
 import type { CommercialRequest, CommercialTarget } from './commercial-consent.service';
+import type { QuotationDecisionOffer } from '../handyman-quotations/handyman-quotation-document.service';
 
 /** Exact ISSUED version identity; quotation engine already makes issued
  * commercial lines immutable. This is NOT a replacement pricing/PDF engine. */
-export function quotationCommercialTarget(versionId: string, request: CommercialRequest): CommercialTarget {
-  return { type: 'QUOTATION_VERSION', id: versionId,
-    digest: commercialConsentHash([COMMERCIAL_CONSENT_PURPOSE, 'QUOTATION_VERSION', versionId,
-      request.id, request.clientId, request.tenantCompanyId, request.tenantPicId, request.buildingId, request.spaceId]) };
+export function quotationCommercialTarget(versionId: string, request: CommercialRequest,
+  offer: QuotationDecisionOffer | null = null): CommercialTarget {
+  const identity: unknown[] = [COMMERCIAL_CONSENT_PURPOSE, 'QUOTATION_VERSION', versionId,
+    request.id, request.clientId, request.tenantCompanyId, request.tenantPicId, request.buildingId, request.spaceId];
+  // Historical verified assertions retain their original digest. New offers
+  // bind the independently verified customer assertion to the exact PDF.
+  if (offer) identity.push('ISSUED_PRICE_BASIS_OFFER_V1', offer.id, offer.sourceSha256, offer.pdfSha256);
+  return { type: 'QUOTATION_VERSION', id: versionId, digest: commercialConsentHash(identity) };
 }
 /** Actor/decision-independent digest of the exact authoritative issued BAST
  * manifest. Its QC/quotation/issue-event identities are immutable. */

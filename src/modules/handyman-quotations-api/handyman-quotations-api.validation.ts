@@ -5,6 +5,7 @@ import {
   HANDYMAN_QUOTATION_DECISIONS,
   HANDYMAN_QUOTATION_LINE_ORIGIN_KINDS,
   HANDYMAN_QUOTATION_LINE_TYPES,
+  parseTaxPriceBasis,
   type AddHandymanQuotationLineInput,
   type DecideHandymanQuotationInput,
 } from '../handyman-quotations';
@@ -244,9 +245,18 @@ export function parseQuotationLineBody(
     uomId,
     currency: currency as AddHandymanQuotationLineInput['currency'],
     finalQuotedUnitAmount,
+    ...(src.taxPriceBasis !== undefined ? { taxPriceBasis: parseTaxPriceBasis(src.taxPriceBasis) } : {}),
     ...(sourceItemId ? { sourceItemId } : {}),
     ...(originKind ? { originKind } : {}),
   };
+}
+
+export function parseQuotationPriceBasisBody(body: unknown) {
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      Object.keys(body).some(key => key !== 'taxPriceBasis')) {
+    throw AppError.validation('Only taxPriceBasis is accepted.');
+  }
+  return parseTaxPriceBasis((body as Record<string, unknown>).taxPriceBasis);
 }
 
 export function parseQuotationIssueBody(body: unknown): {
@@ -282,6 +292,8 @@ export function parseQuotationIssueBody(body: unknown): {
 
 export function parseQuotationDecisionBody(body: unknown): {
   decision: DecideHandymanQuotationInput['decision'];
+  offerDocumentId?: string;
+  offerPdfSha256?: string;
 } {
   const src = (body ?? {}) as Record<string, unknown>;
   const decision = typeof src.decision === 'string' ? src.decision : '';
@@ -292,5 +304,10 @@ export function parseQuotationDecisionBody(body: unknown): {
       { field: 'decision', message: 'decision must be APPROVE or REJECT.' },
     ]);
   }
-  return { decision: decision as DecideHandymanQuotationInput['decision'] };
+  const hasOffer = src.offerDocumentId !== undefined || src.offerPdfSha256 !== undefined;
+  if (hasOffer && (typeof src.offerPdfSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(src.offerPdfSha256))) {
+    throw AppError.validation('offerPdfSha256 must be the exact lowercase SHA-256 of the issued offer.');
+  }
+  return { decision: decision as DecideHandymanQuotationInput['decision'],
+    ...(hasOffer ? { offerDocumentId: uuid(src.offerDocumentId, 'offerDocumentId'), offerPdfSha256: src.offerPdfSha256 as string } : {}) };
 }

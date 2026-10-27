@@ -37,6 +37,9 @@ export {
   getHandymanQuotationVersionTotals,
 } from './handyman-quotation-line.service';
 export { handymanQuotationLineRepository } from './handyman-quotation-line.repository';
+export { setHandymanQuotationLineTaxPriceBasis, HANDYMAN_TAX_PRICE_BASES, parseTaxPriceBasis }
+  from './handyman-quotation-price-basis';
+export type { HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
 export {
   handymanQuotationVersionNotFoundError,
   handymanQuotationVersionNotDraftError,

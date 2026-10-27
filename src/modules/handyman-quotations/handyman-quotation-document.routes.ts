@@ -8,6 +8,7 @@ export function sendQuotationDocumentPdf(res: Response, document: Awaited<Return
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${document.filename}"`);
   res.setHeader('Content-Length', String(document.fileSize));
+  res.setHeader('X-Document-Id', document.id);
   res.setHeader('X-Document-Source-SHA256', document.sourceChecksum);
   res.setHeader('X-Content-SHA256', document.pdfChecksum);
   res.send(document.bytes);

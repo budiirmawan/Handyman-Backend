@@ -1,4 +1,5 @@
 import { toHandymanBastCommandPayload } from '../handyman-bast-api/handyman-bast-api.controller';
+import { findQuotationDecisionOffer } from '../handyman-quotations/handyman-quotation-document.service';
 import { Router } from 'express';
 import { withTransaction } from '../../database';
 import { sendSuccess } from '../../shared/api-response';
@@ -66,7 +67,9 @@ export function createCommercialConsentBridgeRouter(): Router {
           if (!version || !quotation || quotation.handymanRequestId !== request.id || quotation.clientId !== request.clientId) throw careCreateContextNotFound();
           await authorizeCareCommercialRequest(tx, principal, request);
           if (version.status !== 'ISSUED' || !version.validUntil || version.validUntil.getTime() <= Date.now()) throw invalid();
-          return { target: quotationCommercialTarget(version.id, request), customer: requestContext(request), validUntil: version.validUntil.toISOString() };
+          const offer = await findQuotationDecisionOffer(tx, version.id);
+          return { target: quotationCommercialTarget(version.id, request, offer), offer,
+            customer: requestContext(request), validUntil: version.validUntil.toISOString() };
         }
         const parent = await handymanBastRepository.findBastById(tx, targetId);
         if (!parent) throw careCreateContextNotFound();

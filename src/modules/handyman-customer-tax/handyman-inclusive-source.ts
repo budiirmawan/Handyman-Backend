@@ -5,6 +5,12 @@ import { createHash } from 'node:crypto';
 import { handymanScopeVariationRepository } from '../handyman-scope-variations/handyman-scope-variation.repository';
 import { addLaborBindingFromEvents, addMaterialBindingFromEvents, assertPinnedVariationApproval } from '../handyman-scope-variations/handyman-scope-variation-material-authority';
 import { validateHandymanTaxFacts } from '../handyman-pricing-contract/handyman-indonesia-tax';
+import { verifyStoredQuotationDocument, type QuotationDocumentStored } from '../handyman-quotations/handyman-quotation-document.service';
+import { QUOTATION_PRICE_BASIS_PROTOCOL, VARIATION_PRICE_BASIS_PROTOCOL } from '../handyman-quotations/handyman-quotation-price-basis';
+import { quotationDecisionFingerprint, careQuotationDecisionFingerprint } from '../handyman-quotations/handyman-quotation-decision-fingerprint';
+import { quotationCommercialTarget } from '../handyman-commercial-consent/commercial-consent.targets';
+import { parseCommercialConsentAssertion } from '../handyman-commercial-consent/commercial-consent.assertion';
+import { verifyStoredVariationOffer, type VariationOfferStored } from '../handyman-scope-variations/handyman-variation-offer-document.service';
 
 const digest = (v: unknown) => createHash('sha256').update(stableJson(v)).digest('hex');
 const conflict = (message: string): never => { throw new AppError({ code: 'HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT', statusCode: 409, message }); };
@@ -23,17 +29,19 @@ export type InclusiveCommercialSource = Readonly<{
   clientId: string; buildingId: string; requestId: string; executionScopeId: string; tenantCompanyId: string;
   transactionId: string; quotationId: string; quotationVersionId: string; quotationDecisionId: string;
   quotationDecisionFingerprint: string; currency: 'IDR';
+  quotationOffer: Readonly<{ id: string; sourceSha256: string; pdfSha256: string }>;
   profiles: ReadonlyArray<Readonly<{ id: string; quotationVersionId: string; digest: string; providerStatus: 'PKP'|'NON_PKP' }>>;
   lines: ReadonlyArray<Readonly<{
     chargeLineId: string; quotationLineId: string; quotationVersionId: string; chargeBasisId: string;
     lineKind: 'LABOR'|'MATERIAL'; quantity: string; unitAmount: string; quotedAmount: string; chargeAmount: string;
-    compositionKind: string; grossAmount: string; addVariationId: string | null;
+    compositionKind: string; grossAmount: string; addVariationId: string | null; taxPriceBasis: 'GROSS_INCLUSIVE';
     reductions: ReadonlyArray<Readonly<{ bindingId: string; variationId: string; approvedVersion: number;
       decisionEventId: string; authorizationEventId: string; revisedQuotationVersionId: string;
-      correctionId: string | null; amount: string }>>;
+      correctionId: string | null; amount: string; offerDocumentId: string; offerSourceSha256: string; offerPdfSha256: string }>>;
   }>>;
   additions: ReadonlyArray<Readonly<{ variationId: string; approvedVersion: number; revisedQuotationVersionId: string;
-    quotationLineId: string; revisionEventId: string; decisionEventId: string; authorizationEventId: string }>>;
+    quotationLineId: string; revisionEventId: string; decisionEventId: string; authorizationEventId: string;
+    offerDocumentId: string; offerSourceSha256: string; offerPdfSha256: string }>>;
   grossAmount: string;
 }>;
 
@@ -48,7 +56,8 @@ export async function readInclusiveCommercialSource(tx: PoolClient, clientId: st
   executionScopeId: string, taxDate: string): Promise<InclusiveCommercialSource> {
   const scope = (await tx.query(`SELECT s.id,s.client_id,s.building_id,s.handyman_request_id,s.tenant_company_id,
       s.quotation_id,s.approved_quotation_version_id,s.quotation_decision_id,t.id AS transaction_id,t.currency,
-      d.request_fingerprint
+      d.tenant_pic_id,s.space_id,d.request_fingerprint,d.offer_document_id,d.offer_source_sha256,d.offer_pdf_sha256,
+      d.decided_by_user_id,d.decided_by_care_actor_id,d.commercial_consent_id
     FROM handyman_execution_scopes s
     JOIN handyman_service_requests r ON r.id=s.handyman_request_id AND r.client_id=s.client_id
       AND r.building_id=s.building_id AND r.tenant_company_id=s.tenant_company_id
@@ -60,9 +69,46 @@ export async function readInclusiveCommercialSource(tx: PoolClient, clientId: st
     WHERE s.id=$1 AND s.client_id=$2 AND s.handyman_request_id=$3`, [executionScopeId, clientId, requestId])).rows[0];
   if (!scope || scope.currency !== 'IDR') return conflict('The exact approved quotation and IDR customer transaction are required.');
 
-  const original = (await tx.query<{ id: string }>('SELECT id FROM handyman_quotation_lines WHERE quotation_version_id=$1 ORDER BY id',
-    [scope.approved_quotation_version_id])).rows;
+  const originalDoc = (await tx.query<QuotationDocumentStored>(`SELECT * FROM handyman_quotation_documents
+    WHERE quotation_version_id=$1 AND quotation_id=$2 AND client_id=$3 AND request_id=$4`,
+  [scope.approved_quotation_version_id, scope.quotation_id, clientId, requestId])).rows[0];
+  if (!originalDoc || originalDoc.source_snapshot.priceBasisProtocol !== QUOTATION_PRICE_BASIS_PROTOCOL ||
+      scope.offer_document_id !== originalDoc.id || scope.offer_source_sha256 !== originalDoc.source_sha256 ||
+      scope.offer_pdf_sha256 !== originalDoc.pdf_sha256) {
+    return conflict('The approved quotation has an ambiguous historical price basis or missing exact offer consent; an authorized correction or supplemental agreement is required.');
+  }
+  verifyStoredQuotationDocument(originalDoc);
+  const quotationOffer = { id: originalDoc.id, sourceSha256: originalDoc.source_sha256, pdfSha256: originalDoc.pdf_sha256 };
+  const personalFingerprint = quotationDecisionFingerprint(scope.approved_quotation_version_id, 'APPROVE', quotationOffer);
+  if (scope.decided_by_care_actor_id) {
+    const receipt = (await tx.query(`SELECT * FROM handyman_commercial_consent_receipts WHERE id=$1 AND care_actor_id=$2`,
+      [scope.commercial_consent_id, scope.decided_by_care_actor_id])).rows[0];
+    const target = quotationCommercialTarget(scope.approved_quotation_version_id, { id: requestId, clientId,
+      tenantCompanyId: scope.tenant_company_id, tenantPicId: scope.tenant_pic_id, buildingId: scope.building_id, spaceId: scope.space_id }, quotationOffer);
+    const assertion = receipt && parseCommercialConsentAssertion(receipt.assertion);
+    if (!receipt || !assertion || receipt.client_id !== clientId || receipt.handyman_request_id !== requestId ||
+        receipt.target_type !== target.type || receipt.target_id !== target.id || receipt.target_digest !== target.digest ||
+        receipt.decision !== 'ACCEPT' || assertion.targetType !== target.type || assertion.targetDigest !== target.digest ||
+        assertion.targetId !== target.id || assertion.decision !== 'ACCEPT' || assertion.careActorId !== scope.decided_by_care_actor_id ||
+        assertion.clientId !== clientId || assertion.handymanRequestId !== requestId || assertion.tenantCompanyId !== scope.tenant_company_id ||
+        assertion.tenantPicId !== scope.tenant_pic_id || assertion.buildingId !== scope.building_id || assertion.spaceId !== scope.space_id ||
+        assertion.communicationId !== receipt.communication_id || assertion.jti !== receipt.assertion_id ||
+        digest(receipt.assertion) !== receipt.assertion_hash ||
+        scope.request_fingerprint !== careQuotationDecisionFingerprint(personalFingerprint, scope.decided_by_care_actor_id, receipt.id)) {
+      return conflict('Verified customer consent does not bind the exact issued quotation offer.');
+    }
+  } else if (!scope.decided_by_user_id || scope.commercial_consent_id || scope.request_fingerprint !== personalFingerprint) {
+    return conflict('Personal Tenant PIC consent does not bind the exact issued quotation offer.');
+  }
+  const original = (await tx.query<{ id: string; tax_price_basis: string | null }>(`SELECT l.id,b.tax_price_basis
+    FROM handyman_quotation_lines l LEFT JOIN handyman_quotation_line_price_bases b
+      ON b.quotation_line_id=l.id AND b.quotation_version_id=l.quotation_version_id
+    WHERE l.quotation_version_id=$1 ORDER BY l.id`, [scope.approved_quotation_version_id])).rows;
   if (!original.length) return conflict('The approved quotation contains no billable source lines.');
+  if (originalDoc.source_snapshot.lines.length !== original.length || original.some(line => line.tax_price_basis !== 'GROSS_INCLUSIVE' ||
+      !originalDoc.source_snapshot.lines.some(offered => offered.id === line.id && offered.taxPriceBasis === line.tax_price_basis))) {
+    return conflict('Inclusive calculation requires an explicitly agreed gross-inclusive basis on every original line; exclusive, mixed or ambiguous terms are unsupported.');
+  }
   const expected = new Set(original.map(x => x.id));
   const versions = new Set<string>([scope.approved_quotation_version_id]);
   const variations = await handymanScopeVariationRepository.listByExecutionScope(executionScopeId, tx);
@@ -86,6 +132,37 @@ export async function readInclusiveCommercialSource(tx: PoolClient, clientId: st
         typeof approvedVersion !== 'number' || !Number.isSafeInteger(approvedVersion) || approvedVersion < 1 || approvedVersion >= v.version)
       return conflict('The exact variation decision and Operations authorization are required.');
     await assertPinnedVariationApproval(tx, v, approvedVersion, events);
+    const ref = revisions[0].metadata.offerDocument as { id?: unknown; version?: unknown; sourceSha256?: unknown; pdfSha256?: unknown } | undefined;
+    const pin = decisions[0].metadata.consentSnapshot as Record<string, unknown>;
+    if (!ref || typeof ref.id !== 'string' || ref.version !== approvedVersion || typeof ref.sourceSha256 !== 'string' ||
+        typeof ref.pdfSha256 !== 'string' || pin.offerDocumentId !== ref.id || pin.offerDocumentVersion !== ref.version ||
+        pin.offerPdfSha256 !== ref.pdfSha256) {
+      return conflict('The variation lacks exact price-basis-disclosing customer offer consent; an authorized supplemental agreement is required.');
+    }
+    const offerDoc = (await tx.query<VariationOfferStored>(`SELECT * FROM handyman_variation_offer_documents
+      WHERE id=$1 AND variation_id=$2 AND execution_scope_id=$3 AND client_id=$4 AND request_id=$5`,
+    [ref.id, v.id, executionScopeId, clientId, requestId])).rows[0];
+    if (!offerDoc || offerDoc.variation_version !== approvedVersion || offerDoc.source_sha256 !== ref.sourceSha256 ||
+        offerDoc.pdf_sha256 !== ref.pdfSha256 || offerDoc.source_snapshot.priceBasisProtocol !== VARIATION_PRICE_BASIS_PROTOCOL) {
+      return conflict('The approved variation is not bound to the exact price-basis-disclosing PDF.');
+    }
+    verifyStoredVariationOffer(offerDoc);
+    const revisedDoc = (await tx.query<QuotationDocumentStored>(`SELECT * FROM handyman_quotation_documents
+      WHERE id=$1 AND quotation_version_id=$2 AND quotation_id=$3 AND client_id=$4 AND request_id=$5`,
+    [offerDoc.revised_quotation_document_id, v.revisedQuotationVersionId, scope.quotation_id, clientId, requestId])).rows[0];
+    if (!revisedDoc) return conflict('The exact revised quotation source is unavailable.');
+    verifyStoredQuotationDocument(revisedDoc);
+    const source = offerDoc.source_snapshot;
+    if (offerDoc.original_quotation_document_id !== originalDoc.id || source.originalReference.sourceSha256 !== originalDoc.source_sha256 ||
+        source.originalReference.pdfSha256 !== originalDoc.pdf_sha256 || stableJson(source.original) !== stableJson(originalDoc.source_snapshot) ||
+        source.revisedReference.sourceSha256 !== revisedDoc.source_sha256 || source.revisedReference.pdfSha256 !== revisedDoc.pdf_sha256 ||
+        stableJson(source.revised) !== stableJson(revisedDoc.source_snapshot) ||
+        revisedDoc.source_snapshot.priceBasisProtocol !== QUOTATION_PRICE_BASIS_PROTOCOL ||
+        revisedDoc.source_snapshot.lines.some(line => line.taxPriceBasis !== 'GROSS_INCLUSIVE') ||
+        source.variation.taxPriceBasis !== 'GROSS_INCLUSIVE') {
+      return conflict('Variation offer has mismatched, exclusive, mixed or ambiguous customer-agreed price basis.');
+    }
+    const offerPins = { offerDocumentId: offerDoc.id, offerSourceSha256: offerDoc.source_sha256, offerPdfSha256: offerDoc.pdf_sha256 };
     const revision = (await tx.query(`SELECT 1 FROM handyman_quotation_versions x JOIN handyman_quotation_versions o
       ON o.id=$2 AND o.quotation_id=x.quotation_id WHERE x.id=$1 AND x.quotation_id=$3
       AND x.version_number>o.version_number AND x.status IN ('ISSUED','APPROVED','SUPERSEDED')`,
@@ -98,6 +175,10 @@ export async function readInclusiveCommercialSource(tx: PoolClient, clientId: st
         return conflict('An approved ADD is not yet final-charge eligible.');
       const binding = addMaterialBindingFromEvents(v, events) ?? addLaborBindingFromEvents(v, events);
       if (!binding || expected.has(binding.revisedQuotationLineId)) return conflict('The ADD must pin one distinct approved revised line.');
+      if (source.variation.priceBasisLineId !== binding.revisedQuotationLineId ||
+          !source.revised.lines.some(line => line.id === binding.revisedQuotationLineId && line.taxPriceBasis === 'GROSS_INCLUSIVE')) {
+        return conflict('ADD price basis does not match its exact consented revised quotation line.');
+      }
       const exact = (await tx.query(`SELECT 1 FROM handyman_scope_variations x JOIN handyman_quotation_lines q
         ON q.id=$2 AND q.quotation_version_id=x.revised_quotation_version_id AND q.line_type=x.line_type
         AND q.quantity=x.quantity AND q.uom_id=x.uom_id AND q.final_quoted_unit_amount=x.quoted_unit_amount
@@ -107,8 +188,12 @@ export async function readInclusiveCommercialSource(tx: PoolClient, clientId: st
       expected.add(binding.revisedQuotationLineId);
       additions.push({ variationId:v.id, approvedVersion, revisedQuotationVersionId:v.revisedQuotationVersionId,
         quotationLineId:binding.revisedQuotationLineId, revisionEventId:revisions[0].id, decisionEventId:decisions[0].id,
-        authorizationEventId:authorizations[0].id });
+        authorizationEventId:authorizations[0].id, ...offerPins });
     } else {
+      if (source.variation.priceBasisLineId !== v.targetQuotationLineId ||
+          !source.original.lines.some(line => line.id === v.targetQuotationLineId && line.taxPriceBasis === 'GROSS_INCLUSIVE')) {
+        return conflict('REDUCE price basis does not match the exact originally agreed line.');
+      }
       const row = (await tx.query(`SELECT b.id,b.charge_line_id,b.correction_id,b.approved_variation_version,
           b.decision_event_id,b.authorization_event_id,b.revised_quotation_version_id,(-b.signed_amount)::numeric(18,2)::text AS amount,
           (b.client_id=$2 AND b.building_id=$3 AND b.execution_scope_id=$4 AND b.transaction_id=$5
@@ -129,7 +214,7 @@ export async function readInclusiveCommercialSource(tx: PoolClient, clientId: st
         return conflict('Every approved REDUCE must have its exact current signed ledger binding.');
       const entry = {bindingId:row.id, variationId:v.id, approvedVersion, decisionEventId:row.decision_event_id,
         authorizationEventId:row.authorization_event_id, revisedQuotationVersionId:row.revised_quotation_version_id,
-        correctionId:row.correction_id as string|null, amount:row.amount as string};
+        correctionId:row.correction_id as string|null, amount:row.amount as string, ...offerPins};
       whole(entry.amount);
       if (entry.correctionId) correctionIds.add(entry.correctionId);
       const list = reductionByCharge.get(row.charge_line_id) ?? []; list.push(entry); reductionByCharge.set(row.charge_line_id, list);
@@ -175,12 +260,12 @@ export async function readInclusiveCommercialSource(tx: PoolClient, clientId: st
     lines.push({chargeLineId:c.id, quotationLineId:c.quotation_line_id, quotationVersionId:c.quotation_version_id,
       chargeBasisId:c.basis_id, lineKind:c.line_kind, quantity:c.quantity, unitAmount:c.unit_amount,
       quotedAmount:c.quoted_amount, chargeAmount:c.amount, compositionKind:c.composition_kind,
-      grossAmount:amount(net), addVariationId:addition?.variationId ?? null, reductions});
+      grossAmount:amount(net), addVariationId:addition?.variationId ?? null, taxPriceBasis:'GROSS_INCLUSIVE', reductions});
   }
   if ([...reductionByCharge.keys()].some(id => !charges.some(c => c.id===id)))
     return conflict('A REDUCE references a missing commercial charge.');
   return {schema:'HANDYMAN_INCLUSIVE_COMMERCIAL_SOURCE_V1',clientId,buildingId:scope.building_id,requestId,
     executionScopeId,tenantCompanyId:scope.tenant_company_id,transactionId:scope.transaction_id,quotationId:scope.quotation_id,
     quotationVersionId:scope.approved_quotation_version_id,quotationDecisionId:scope.quotation_decision_id,
-    quotationDecisionFingerprint:scope.request_fingerprint,currency:'IDR',profiles,lines,additions,grossAmount:amount(total)};
+    quotationDecisionFingerprint:scope.request_fingerprint,quotationOffer,currency:'IDR',profiles,lines,additions,grossAmount:amount(total)};
 }

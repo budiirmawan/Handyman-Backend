@@ -12,6 +12,8 @@ import { parseCareHandymanPaymentProofSelection } from '../handyman-care-workspa
 import { WORKSPACE_OCCUPANCY_CTES } from '../handyman-care-workspace/care-workspace-occupancies.repository';
 import { renderHandymanDocumentPdf } from '../handyman-documents/handyman-document-pdf';
 import { assertHandymanQuotationPricingAuthority } from '../handyman-quotations/handyman-quotation-access';
+import { HANDYMAN_TAX_PRICE_BASES, QUOTATION_PRICE_BASIS_PROTOCOL, VARIATION_PRICE_BASIS_PROTOCOL,
+  taxPriceBasisLabel, type HandymanTaxPriceBasis } from '../handyman-quotations/handyman-quotation-price-basis';
 import {
   addText, blocks, exactText, verifyStoredQuotationDocument,
   type QuotationDocumentSource, type QuotationDocumentStored,
@@ -24,10 +26,12 @@ type PriorVariation = { id: string; variationType: string; lineType: string; tit
   description: string; quantity: string; unit: string; quotedUnitAmount: string; quotedTotalDelta: string; currency: string };
 type Source = {
   schema: 'HANDYMAN_VARIATION_OFFER_V1'; status: 'ISSUED'; clientId: string; requestId: string; executionScopeId: string;
+  priceBasisProtocol?: typeof VARIATION_PRICE_BASIS_PROTOCOL;
   issuance: { id: string; number: string; issuedAt: string; actorUserId: string };
   originalReference: Reference; original: QuotationDocumentSource;
   revisedReference: Reference; revised: QuotationDocumentSource;
-  variation: ReturnType<typeof variationConsentSnapshot> & { id: string; unit: string };
+  variation: ReturnType<typeof variationConsentSnapshot> & { id: string; unit: string;
+    priceBasisLineId?: string; taxPriceBasis?: HandymanTaxPriceBasis };
   previousAuthorizedVariations: PriorVariation[];
   reconciliation: { mode: 'STANDALONE' | 'CUMULATIVE'; originalQuotedTotal: string; revisedQuotedTotal: string };
 };
@@ -99,16 +103,31 @@ export async function createIssuedVariationOfferDocument(
   }
   verifyStoredQuotationDocument(original);
   verifyStoredQuotationDocument(revised);
-  // UOM display is taken from the frozen commercial document, never today's
-  // mutable unit master. A reduction refers to the original approved line.
-  const unitLine = variation.variationType === 'REDUCE'
-    ? original.source_snapshot.lines.find(line => line.id === variation.targetQuotationLineId)
-    : binding ? revised.source_snapshot.lines.find(line => line.id === binding.revisedQuotationLineId)
-      : revised.source_snapshot.lines.find(line => line.uomId === variation.uomId && line.lineType === variation.lineType);
-  if (!unitLine || unitLine.uomId !== variation.uomId || !unitLine.unit) {
-    throw conflict('The variation unit is unavailable in the immutable quotation source.');
+  if (revised.source_snapshot.priceBasisProtocol !== QUOTATION_PRICE_BASIS_PROTOCOL) {
+    throw conflict('The revised offer must disclose a price basis for every line.');
   }
-  const unit = unitLine.unit;
+  if (variation.variationType === 'REDUCE' && original.source_snapshot.priceBasisProtocol !== QUOTATION_PRICE_BASIS_PROTOCOL) {
+    throw conflict('The original offer did not disclose this line basis; an authorized supplemental agreement is required.');
+  }
+  // An unbound legacy-style ADD labor offer can still be issued only when one
+  // exact revised line resolves the disclosed basis. No Work Order is invented.
+  let priceBasisLineId = variation.variationType === 'REDUCE' ? variation.targetQuotationLineId : binding?.revisedQuotationLineId;
+  if (variation.variationType === 'ADD' && !priceBasisLineId) {
+    const matches = await tx.query<{ id: string }>(`SELECT id FROM handyman_quotation_lines
+      WHERE quotation_version_id=$1 AND line_type=$2 AND uom_id=$3 AND quantity=$4::numeric
+        AND final_quoted_unit_amount=$5::numeric AND currency=$6 AND line_total=$7::numeric`,
+    [variation.revisedQuotationVersionId, variation.lineType, variation.uomId, variation.quantity,
+      variation.quotedUnitAmount, variation.currency, variation.quotedTotalDelta]);
+    if (matches.rows.length !== 1) throw conflict('The ADD price basis requires one exact revised quotation line.');
+    priceBasisLineId = matches.rows[0].id;
+  }
+  // A REDUCE refers to the original approved line, not an assumed revised one.
+  const unitLine = (variation.variationType === 'REDUCE' ? original : revised).source_snapshot.lines
+    .find(line => line.id === priceBasisLineId);
+  if (!unitLine || unitLine.uomId !== variation.uomId || !unitLine.unit || !unitLine.taxPriceBasis) {
+    throw conflict('The affected line has no disclosed commercial price basis; an authorized supplemental agreement is required.');
+  }
+  const unit = unitLine.unit, taxPriceBasis = unitLine.taxPriceBasis;
   // Show previously authorized work even for a standalone re-quote, but make
   // clear whether those adjustments are included in this quotation's total.
   const previous = await priorAuthorizedVariations(tx, variation);
@@ -119,11 +138,13 @@ export async function createIssuedVariationOfferDocument(
   // substituting today's settings; VO makes the document number distinct.
   const number = `${revised.source_snapshot.settings.documentPrefix}-VO-${allocation.number.padStart(10, '0')}`;
   const source: Source = { schema: 'HANDYMAN_VARIATION_OFFER_V1', status: 'ISSUED', clientId: variation.clientId,
+    priceBasisProtocol: VARIATION_PRICE_BASIS_PROTOCOL,
     requestId: variation.handymanRequestId, executionScopeId: variation.executionScopeId,
     issuance: { id: randomUUID(), number, issuedAt: allocation.issued_at.toISOString(), actorUserId },
     originalReference: reference(original), original: original.source_snapshot,
     revisedReference: reference(revised), revised: revised.source_snapshot,
-    variation: { id: variation.id, ...variationConsentSnapshot(variation, variation.version, binding), unit },
+    variation: { id: variation.id, ...variationConsentSnapshot(variation, variation.version, binding), unit,
+      priceBasisLineId: unitLine.id, taxPriceBasis },
     previousAuthorizedVariations: previous, reconciliation };
   const canonical = stableJson(source), sourceHash = sha(canonical);
   const pdf = await renderOffer(source, sourceHash);
@@ -157,6 +178,8 @@ async function renderOffer(s: Source, sourceHash: string) {
   item('Quantity', `${v.quantity} ${v.unit}`);
   item('Unit price', `${v.currency} ${v.quotedUnitAmount}`);
   item('Current price difference', `${v.currency} ${v.quotedTotalDelta}`);
+  item('Current change tax price basis', taxPriceBasisLabel(v.taxPriceBasis));
+  item('Price basis quotation line ID', v.priceBasisLineId);
   item('Original quotation line ID', v.targetQuotationLineId);
   item('Revised quotation line ID', v.revisedQuotationLineId);
   item('Work Order ID', v.workOrderId);
@@ -174,6 +197,8 @@ async function renderOffer(s: Source, sourceHash: string) {
       item('Item', line.description); item('Quantity', `${line.quantity} ${line.unit}`);
       item('Unit price', `${line.currency} ${line.unitAmount}`);
       item('Line total', `${line.currency} ${line.total}`);
+      item('Tax price basis', taxPriceBasisLabel(
+        quote.priceBasisProtocol === QUOTATION_PRICE_BASIS_PROTOCOL ? line.taxPriceBasis : undefined));
     });
   }
   quotationLines('Original approved scope', s.original);
@@ -213,7 +238,9 @@ async function renderOffer(s: Source, sourceHash: string) {
   addText(summary, 'Current variation difference', `${v.currency} ${v.quotedTotalDelta}`);
   addText(summary, 'Revised labor subtotal', `${v.currency} ${s.revised.totals.labor}`);
   addText(summary, 'Revised material subtotal', `${v.currency} ${s.revised.totals.material}`);
-  addText(summary, 'Revised total', `${v.currency} ${s.reconciliation.revisedQuotedTotal}`);
+  addText(summary, 'Revised quoted line total', `${v.currency} ${s.reconciliation.revisedQuotedTotal}`);
+  addText(summary, 'Tax note', 'Totals exclude any applicable PPN on lines marked EXCLUSIVE. Applicability is determined separately.');
+  addText(summary, 'Basis precedence', 'Per-line price basis controls over general tax terms / basis per item berlaku atas ketentuan pajak umum.');
   addText(summary, 'Down payment required', s.revised.quotation.dpRequired ? 'YES' : 'NO');
   addText(summary, 'Down payment percentage', s.revised.quotation.dpPercentage);
   addText(summary, 'Down payment amount', s.revised.quotation.dpAmount === null ? null : `${v.currency} ${s.revised.quotation.dpAmount}`);
@@ -258,7 +285,9 @@ function verifyStored(row: Stored): void {
         s.originalReference.id !== row.original_quotation_document_id || s.revisedReference.id !== row.revised_quotation_document_id ||
         s.revised.quotation.versionId !== row.revised_quotation_version_id ||
         s.issuance.id !== row.id || s.issuance.number !== row.document_number || s.issuance.actorUserId !== row.issued_by_user_id ||
-        s.issuance.issuedAt !== row.issued_at.toISOString()) throw integrity();
+        s.issuance.issuedAt !== row.issued_at.toISOString() ||
+        (s.priceBasisProtocol !== undefined && (s.priceBasisProtocol !== VARIATION_PRICE_BASIS_PROTOCOL ||
+          !s.variation.priceBasisLineId || !(HANDYMAN_TAX_PRICE_BASES as readonly string[]).includes(s.variation.taxPriceBasis ?? '')))) throw integrity();
   } catch { throw integrity(); }
 }
 export { verifyStored as verifyStoredVariationOffer };

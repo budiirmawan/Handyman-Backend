@@ -1,5 +1,6 @@
 import { AppError } from '../../shared/errors';
-import { withTransaction } from '../../database';
+import { getPool, withTransaction } from '../../database';
+import { parseTaxPriceBasis, writeDraftLinePriceBasis, type HandymanTaxPriceBasis } from './handyman-quotation-price-basis';
 import { isValidUuid } from '../clients';
 import { recordOperationalEvent } from '../operational-events';
 import { priceCatalogLookupService } from '../price-catalog-entries';
@@ -135,6 +136,7 @@ function validateInput(
       'originKind must be CATALOG or MANUAL_ONE_TIME when declared.',
     );
   }
+  if (input.taxPriceBasis !== undefined) parseTaxPriceBasis(input.taxPriceBasis);
   return { description };
 }
 
@@ -301,6 +303,9 @@ export async function addHandymanQuotationLine(
       originKind,
       createdByUserId: actorUserId,
     });
+    if (input.taxPriceBasis !== undefined) {
+      await writeDraftLinePriceBasis(tx, version.id, line.id, parseTaxPriceBasis(input.taxPriceBasis), actorUserId);
+    }
     await recordOperationalEvent(
       {
         clientId: quotation.clientId,
@@ -320,7 +325,7 @@ export async function addHandymanQuotationLine(
       },
       tx,
     );
-    return toServiceLineView(line);
+    return { ...toServiceLineView(line), taxPriceBasis: input.taxPriceBasis ?? null };
   });
 }
 
@@ -358,7 +363,10 @@ export async function listHandymanQuotationVersionLines(
     undefined,
     version.id,
   );
-  return lines.map(toServiceLineView);
+  const bases = await getPool().query<{ quotation_line_id: string; tax_price_basis: HandymanTaxPriceBasis }>(
+    'SELECT quotation_line_id,tax_price_basis FROM handyman_quotation_line_price_bases WHERE quotation_version_id=$1', [version.id]);
+  const byLine = new Map(bases.rows.map(row => [row.quotation_line_id, row.tax_price_basis]));
+  return lines.map(line => ({ ...toServiceLineView(line), taxPriceBasis: byLine.get(line.id) ?? null }));
 }
 
 /** Bounded derived totals (F4/F5: derived, never persisted). */

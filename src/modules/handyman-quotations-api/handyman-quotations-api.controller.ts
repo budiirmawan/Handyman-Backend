@@ -14,6 +14,7 @@ import {
   getHandymanQuotationVersionTotals,
   issueHandymanQuotationVersion,
   listHandymanQuotationVersionLines,
+  setHandymanQuotationLineTaxPriceBasis,
   supersedeHandymanQuotationVersion,
 } from '../handyman-quotations';
 import type {
@@ -31,6 +32,7 @@ import {
   parseQuotationRevisionBody,
   parseQuotationIssueBody,
   parseQuotationLineBody,
+  parseQuotationPriceBasisBody,
 } from './handyman-quotations-api.validation';
 
 /**
@@ -70,6 +72,7 @@ type CustomerHandymanQuotationLinePayload = Pick<
   | 'finalQuotedUnitAmount'
   | 'lineTotal'
   | 'currency'
+  | 'taxPriceBasis'
   | 'createdAt'
   | 'updatedAt'
 >;
@@ -87,6 +90,7 @@ function toCustomerQuotationLinePayload(
     finalQuotedUnitAmount: line.finalQuotedUnitAmount,
     lineTotal: line.lineTotal,
     currency: line.currency,
+    taxPriceBasis: line.taxPriceBasis ?? null,
     createdAt: line.createdAt,
     updatedAt: line.updatedAt,
   };
@@ -342,6 +346,17 @@ export async function postHandymanQuotationLineHandler(
   } catch (error) {
     next(error);
   }
+}
+
+export async function putHandymanQuotationLineTaxPriceBasisHandler(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  try {
+    sendSuccess(res, await setHandymanQuotationLineTaxPriceBasis(
+      parseQuotationApiUuidParam(p(req.params.quotationVersionId), 'quotationVersionId'),
+      parseQuotationApiUuidParam(p(req.params.quotationLineId), 'quotationLineId'),
+      parseQuotationPriceBasisBody(req.body), actor(req)));
+  } catch (error) { next(error); }
 }
 
 export async function getHandymanQuotationLinesHandler(

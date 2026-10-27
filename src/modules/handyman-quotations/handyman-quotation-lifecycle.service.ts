@@ -239,6 +239,12 @@ export async function issueHandymanQuotationVersion(
       version.id,
     );
     if (lines.length < 1) throw handymanQuotationNoLinesError();
+    const basisCount = await tx.query<{ n: string }>(`SELECT count(*)::text AS n
+      FROM handyman_quotation_line_price_bases WHERE quotation_version_id=$1`, [version.id]);
+    if (Number(basisCount.rows[0]?.n) !== lines.length) {
+      throw new AppError({ code: 'HANDYMAN_QUOTATION_PRICE_BASIS_REQUIRED', statusCode: 409,
+        message: 'Explicit commercial tax price basis is required for every quotation line before issue.' });
+    }
     if (!(validUntilMs > Date.now())) {
       throw handymanQuotationValidityInvalidError();
     }

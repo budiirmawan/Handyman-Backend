@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import { randomUUID as id } from 'node:crypto';
+import { createHash, randomUUID as id } from 'node:crypto';
+import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import { rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import type { Pool, PoolClient } from 'pg';
 import { closePool, initDatabase, migrateUp } from '../src/database';
+import { stableJson } from '../src/shared/stable-json';
+import { quotationDecisionFingerprint } from '../src/modules/handyman-quotations/handyman-quotation-decision-fingerprint';
 import { resetAppConfigCache } from '../src/config';
 import { startEmbeddedTestDatabase } from './helpers/embedded-test-db';
 import { createAdminUser } from './helpers/access';
@@ -43,7 +46,13 @@ import { serviceCatalogService } from '../src/modules/service-catalog';
 import { handymanServiceRequestService, handymanServiceRequestTriageService,
   handymanServiceRequestDiagnosisService } from '../src/modules/handyman-requests';
 import { addHandymanQuotationLine, createHandymanQuotation, createHandymanQuotationRevision,
-  decideHandymanQuotation, issueHandymanQuotationVersion } from '../src/modules/handyman-quotations';
+  decideHandymanQuotation, issueHandymanQuotationVersion, setHandymanQuotationLineTaxPriceBasis } from '../src/modules/handyman-quotations';
+import { COMMERCIAL_CONSENT_PURPOSE, COMMERCIAL_CONSENT_METHOD, commercialConsentSecretEnvName,
+  signCommercialConsentAssertion, type CommercialConsentAssertion } from '../src/modules/handyman-commercial-consent/commercial-consent.assertion';
+import { quotationCommercialTarget } from '../src/modules/handyman-commercial-consent/commercial-consent.targets';
+import { grantCareActorProperty, handymanCareActorService } from '../src/modules/handyman-care-actors';
+import { handoffRuntimeRepository, handoffIntegrationSecretEnvName } from '../src/modules/handyman-handoff';
+import { admitCareWorkspace, signCareWorkspaceAssertion, type CareWorkspaceAssertion } from '../src/modules/handyman-care-workspace/care-workspace.service';
 import { assignHandymanExecutionScopeCrew } from '../src/modules/handyman-scope-assignments';
 import { updateHandymanDocumentIssuerProfile, updateHandymanDocumentSettings,
   createHandymanDocumentBankAccount, activateHandymanDocumentBankAccount } from '../src/modules/handyman-documents';
@@ -117,7 +126,23 @@ async function login(user: { id: string; email: string }) {
 }
 async function line(version: string, type: 'LABOR'|'MATERIAL', quantity: number, price: number, description: string) {
   return addHandymanQuotationLine(version, { lineType: type, quantity, uomId: uom,
-    currency: 'IDR', finalQuotedUnitAmount: price, description }, admin);
+    currency: 'IDR', finalQuotedUnitAmount: price, description, taxPriceBasis: 'GROSS_INCLUSIVE' }, admin);
+}
+async function quotationOffer(version: string) {
+  const row = (await q('SELECT id,pdf_sha256 FROM handyman_quotation_documents WHERE quotation_version_id=$1', [version])).rows[0];
+  assert.ok(row); return { offerDocumentId: row.id as string, offerPdfSha256: row.pdf_sha256 as string };
+}
+async function pdfText(bytes: Buffer) {
+  const doc = await PDFDocument.load(bytes), out: string[] = [];
+  for (const page of doc.getPages()) {
+    const contents = page.node.Contents();
+    const streams = contents instanceof PDFArray ? Array.from({ length: contents.size() }, (_, i) => contents.lookup(i)) : contents ? [contents] : [];
+    for (const stream of streams) if (stream instanceof PDFRawStream) {
+      const text = Buffer.from(decodePDFRawStream(stream).decode()).toString('latin1');
+      for (const match of text.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)) out.push(Buffer.from(match[1]!, 'hex').toString('latin1'));
+    }
+  }
+  return out.join('\n');
 }
 async function revision(a: number, b: number, add: boolean, free: boolean) {
   const v = await createHandymanQuotationRevision(quotationId, admin, { dpRequired: false });
@@ -224,7 +249,8 @@ before(async () => {
   originalFree = (await line(originalVersion, 'LABOR', 1, 0, 'No-charge item')).id;
   await prepareHandymanTaxProfile({quotationVersionId:originalVersion}, taxFacts(), admin);
   await issueHandymanQuotationVersion(originalVersion, { validUntil: validUntil() }, admin);
-  const decision = await decideHandymanQuotation(originalVersion, { decision: 'APPROVE', tenantPicId: pic.id, idempotencyKey: key() }, customer.id);
+  const decision = await decideHandymanQuotation(originalVersion,
+    { decision: 'APPROVE', ...await quotationOffer(originalVersion), idempotencyKey: key() }, customer.id);
   assert.ok(decision.executionScope); scope = decision.executionScope.id;
   crew = await crewFixture(realm); leadToken = await login(crew.leadUser);
   await assignHandymanExecutionScopeCrew({ executionScopeId: scope, providerContextId: crew.providerContext.id,
@@ -343,6 +369,161 @@ async function financialCounts() {
 }
 
 describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
+  it('01C-A requires explicit per-line disclosure and exact personal offer consent; mixed basis fails closed', async () => {
+    const attr = await createChannelAttribution({ tenantCompanyId: tenantId, buildingId: realm.building.id,
+      tenantPicId: picId, spaceId: chain.space.id, originChannel: 'BM_SUPER_APP',
+      originReference: `bm-handoff:BM_SUPER_APP:${id()}`, createdByUserId: customerId });
+    const request = await handymanServiceRequestService.createHandymanServiceRequest({ channelAttributionId: attr.id,
+      serviceCatalogId: serviceId, description: 'Mixed customer terms' }, admin);
+    await handymanServiceRequestTriageService.recordHandymanRequestTriage({ handymanRequestId: request.id,
+      triageDisposition: 'DIAGNOSIS', triageNote: 'Reviewed' }, admin);
+    await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis({ handymanRequestId: request.id,
+      disciplineId, diagnosis: 'Repair' }, admin);
+    const quote = await createHandymanQuotation({ handymanRequestId: request.id }, admin);
+    const version = quote.versions[0].id;
+    const firstLine = await line(version, 'LABOR', 1, 100, 'Inclusive labor');
+    const secondLine = await addHandymanQuotationLine(version, { lineType: 'MATERIAL', quantity: 1, uomId: uom,
+      currency: 'IDR', finalQuotedUnitAmount: 50, description: 'Exclusive material' }, admin);
+    await prepareHandymanTaxProfile({ quotationVersionId: version }, taxFacts(), admin);
+    await assert.rejects(issueHandymanQuotationVersion(version, { validUntil: validUntil() }, admin),
+      (error: any) => error.code === 'HANDYMAN_QUOTATION_PRICE_BASIS_REQUIRED');
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_quotation_documents WHERE quotation_version_id=$1', [version])).rows[0].n, 0);
+    await assert.rejects(setHandymanQuotationLineTaxPriceBasis(version, secondLine.id, 'TAXABLE', admin));
+    await assert.rejects(setHandymanQuotationLineTaxPriceBasis(version, secondLine.id, 'TAX_EXCLUSIVE', customerId),
+      (error: any) => error.code === 'PERMISSION_DENIED');
+    const setPath = `/api/v1/handyman/quotation-versions/${version}/lines/${secondLine.id}/tax-price-basis`;
+    data(await api().put(setPath).set(auth(adminToken)).send({ taxPriceBasis: 'TAX_EXCLUSIVE' }));
+    await issueHandymanQuotationVersion(version, { validUntil: validUntil() }, admin);
+    const doc = (await q('SELECT * FROM handyman_quotation_documents WHERE quotation_version_id=$1', [version])).rows[0];
+    assert.equal(doc.source_snapshot.priceBasisProtocol, 'HANDYMAN_QUOTATION_LINE_PRICE_BASIS_V1');
+    assert.deepEqual(doc.source_snapshot.lines.map((l: any) => [l.id, l.taxPriceBasis, l.total]),
+      [[firstLine.id, 'GROSS_INCLUSIVE', '100.00'], [secondLine.id, 'TAX_EXCLUSIVE', '50.00']]);
+    const text = await pdfText(doc.pdf_bytes);
+    assert.match(text, /INCLUSIVE - includes applicable PPN/);
+    assert.match(text, /EXCLUSIVE - excludes applicable PPN/);
+    const download = await api().get(`/api/v1/handyman/quotation-versions/${version}/document.pdf`).set(auth(picToken)).buffer(true);
+    assert.equal(download.status, 200); assert.equal(download.headers['x-document-id'], doc.id);
+    assert.equal(download.headers['x-content-sha256'], doc.pdf_sha256);
+    assert.equal(createHash('sha256').update(download.body).digest('hex'), doc.pdf_sha256);
+    const decisionUrl = `/api/v1/handyman/quotation-versions/${version}/decision`;
+    const k = key();
+    const sendDecision = (body: unknown) => api().post(decisionUrl).set(auth(picToken)).set('Idempotency-Key', k).send(body);
+    assert.equal((await sendDecision({ decision: 'APPROVE' })).status, 400);
+    assert.equal((await sendDecision({ decision: 'APPROVE', offerDocumentId: id(), offerPdfSha256: doc.pdf_sha256 })).status, 409);
+    assert.equal((await sendDecision({ decision: 'APPROVE', offerDocumentId: doc.id, offerPdfSha256: '0'.repeat(64) })).status, 409);
+    const body = { decision: 'APPROVE', offerDocumentId: doc.id, offerPdfSha256: doc.pdf_sha256 };
+    const accepted = data(await sendDecision(body), 201);
+    assert.equal(accepted.offerDocumentId, doc.id); assert.equal(accepted.offerSourceSha256, doc.source_sha256);
+    assert.equal(accepted.offerPdfSha256, doc.pdf_sha256);
+    assert.equal(data(await sendDecision(body), 201).id, accepted.id);
+    await assert.rejects(setHandymanQuotationLineTaxPriceBasis(version, secondLine.id, 'GROSS_INCLUSIVE', admin));
+    await assert.rejects(q('UPDATE handyman_quotation_line_price_bases SET tax_price_basis=$2 WHERE quotation_line_id=$1',
+      [secondLine.id, 'GROSS_INCLUSIVE']));
+    await openHandymanCustomerTransaction({ executionScopeId: accepted.executionScope.id, idempotencyKey: key() }, admin);
+    const tx = await pool.connect();
+    try {
+      await assert.rejects(readInclusiveCommercialSource(tx, realm.client.id, request.id, accepted.executionScope.id, jakarta(taxPoint)),
+        (error: any) => error.code === 'HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT' && /exclusive, mixed/i.test(error.message));
+    } finally { tx.release(); }
+  });
+
+  it('01C-A never upgrades an unpinned historical decision from a Finance profile', async () => {
+    const current = (await q('SELECT * FROM handyman_quotation_documents WHERE quotation_version_id=$1', [originalVersion])).rows[0];
+    const historical = structuredClone(current.source_snapshot);
+    delete historical.priceBasisProtocol;
+    historical.lines.forEach((item: any) => { delete item.taxPriceBasis; });
+    const canonical = stableJson(historical), sourceHash = createHash('sha256').update(canonical).digest('hex');
+    const oldFingerprint = createHash('sha256').update(JSON.stringify([originalVersion, 'APPROVE'])).digest('hex');
+    assert.equal(quotationDecisionFingerprint(originalVersion, 'APPROVE', null), oldFingerprint);
+    // Simulate pre-migration persisted rows inside a rollback-only test transaction.
+    // The application never changes or backfills an actual historical offer.
+    const tx = await pool.connect();
+    try {
+      await tx.query('BEGIN');
+      await tx.query('ALTER TABLE handyman_quotation_documents DISABLE TRIGGER hm_quotation_document_no_write');
+      await tx.query('ALTER TABLE handyman_quotation_decisions DISABLE TRIGGER handyman_quotation_decision_no_write');
+      await tx.query(`UPDATE handyman_quotation_documents SET source_snapshot=$2::text::jsonb,source_canonical=$2::text,source_sha256=$3
+        WHERE id=$1`, [current.id, canonical, sourceHash]);
+      await tx.query(`UPDATE handyman_quotation_decisions SET offer_document_id=NULL,offer_source_sha256=NULL,
+        offer_pdf_sha256=NULL,request_fingerprint=$2 WHERE quotation_version_id=$1`, [originalVersion, oldFingerprint]);
+      await assert.rejects(readInclusiveCommercialSource(tx, realm.client.id, requestId, scope, jakarta(taxPoint)),
+        (error: any) => error.code === 'HANDYMAN_FINANCIAL_RECONCILIATION_CONFLICT' && /ambiguous historical/.test(error.message));
+    } finally { await tx.query('ROLLBACK'); tx.release(); }
+    const unchanged = (await q('SELECT * FROM handyman_quotation_documents WHERE id=$1', [current.id])).rows[0];
+    assert.equal(unchanged.source_sha256, current.source_sha256); assert.equal(unchanged.pdf_sha256, current.pdf_sha256);
+  });
+
+  it('01C-A binds independently verified Care consent to the exact issued quotation PDF', async () => {
+    const attr = await createChannelAttribution({ tenantCompanyId: tenantId, buildingId: realm.building.id,
+      tenantPicId: picId, spaceId: chain.space.id, originChannel: 'BM_SUPER_APP',
+      originReference: `bm-handoff:BM_SUPER_APP:${id()}`, createdByUserId: customerId });
+    const request = await handymanServiceRequestService.createHandymanServiceRequest({ channelAttributionId: attr.id,
+      serviceCatalogId: serviceId, description: 'Independently verified Care consent' }, admin);
+    await handymanServiceRequestTriageService.recordHandymanRequestTriage({ handymanRequestId: request.id,
+      triageDisposition: 'DIAGNOSIS', triageNote: 'Reviewed' }, admin);
+    await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis({ handymanRequestId: request.id,
+      disciplineId, diagnosis: 'Repair' }, admin);
+    const quote = await createHandymanQuotation({ handymanRequestId: request.id }, admin);
+    const version = quote.versions[0].id, priced = await line(version, 'LABOR', 1, 100, 'Care-verified labor');
+    await prepareHandymanTaxProfile({ quotationVersionId: version }, taxFacts(), admin);
+    await issueHandymanQuotationVersion(version, { validUntil: validUntil() }, admin);
+    const doc = (await q('SELECT * FROM handyman_quotation_documents WHERE quotation_version_id=$1', [version])).rows[0];
+    const integrationCode = `BASIS_${id().slice(0, 8).toUpperCase()}`;
+    const handoffSecret = 'test-care-workspace-secret-quotation-basis-01';
+    const verifierSecret = 'test-independent-customer-consent-secret-01';
+    try {
+      const integration = await handoffRuntimeRepository.createIntegration({ integrationCode, displayName: 'Test Care' });
+      await handymanCareActorService.setIntegrationActorCapability({ integrationId: integration.id, capability: 'CUSTOMER_CARE' });
+      const actor = await handymanCareActorService.createCareActor({ integrationId: integration.id, actorReference: 'care', displayName: 'Care' });
+      process.env[handoffIntegrationSecretEnvName(integrationCode)] = handoffSecret;
+      process.env[commercialConsentSecretEnvName(integrationCode)] = verifierSecret;
+      await q('UPDATE handyman_handoff_integrations SET commercial_consent_contract_ref=$2 WHERE id=$1',
+        [integration.id, 'TEST ONLY independent customer verification']);
+      await grantCareActorProperty({ careActorId: actor.id, propertyId: realm.property.id, clientId: realm.client.id }, admin);
+      const now = Date.now();
+      const workspace: CareWorkspaceAssertion = { purpose: 'HANDYMAN_CARE_WORKSPACE', integrationCode, assertionId: id(),
+        issuedAt: new Date(now - 1000).toISOString(), expiresAt: new Date(now + 240000).toISOString(),
+        actor: { type: 'CUSTOMER_CARE', actorReference: 'care' } };
+      const token = (await admitCareWorkspace(workspace, signCareWorkspaceAssertion(workspace, handoffSecret))).workspaceToken;
+      const baseUrl = `/api/v1/handyman/care/requests/${request.id}`;
+      const contact = data(await api().post(`${baseUrl}/communications`).set(auth(token)).send({
+        purpose: 'QUOTATION_RESPONSE_RECEIVED', reportedContactName: 'Customer', channel: 'MESSAGING',
+        channelReference: 'test message', statement: 'Reported approval', reportedStatement: 'CONFIRM', idempotencyKey: key() }), 201);
+      const targetData = data(await api().get(`${baseUrl}/commercial-targets/QUOTATION_VERSION/${version}`).set(auth(token)));
+      assert.deepEqual(targetData.offer, { id: doc.id, sourceSha256: doc.source_sha256, pdfSha256: doc.pdf_sha256 });
+      const oldTarget = quotationCommercialTarget(version, { id: request.id, clientId: realm.client.id, tenantCompanyId: tenantId,
+        tenantPicId: picId, buildingId: realm.building.id, spaceId: chain.space.id });
+      assert.notEqual(targetData.target.digest, oldTarget.digest);
+      const assertion: CommercialConsentAssertion = { iss: integrationCode, aud: 'handyman-backend',
+        purpose: COMMERCIAL_CONSENT_PURPOSE, method: COMMERCIAL_CONSENT_METHOD, jti: id(),
+        iat: new Date(now - 1000).toISOString(), exp: new Date(now + 180000).toISOString(), careActorId: actor.id,
+        clientId: realm.client.id, handymanRequestId: request.id, tenantCompanyId: tenantId, tenantPicId: picId,
+        buildingId: realm.building.id, spaceId: chain.space.id, communicationId: contact.id,
+        customerReference: 'TEST independent customer', verificationReference: `TEST receipt ${id()}`,
+        targetType: 'QUOTATION_VERSION', targetId: version, targetDigest: targetData.target.digest, decision: 'ACCEPT', rejectReason: null };
+      const endpoint = `${baseUrl}/quotation-versions/${version}/decision`, decisionKey = key();
+      const send = (a: CommercialConsentAssertion) => api().post(endpoint).set(auth(token))
+        .set('x-handyman-commercial-consent-signature', signCommercialConsentAssertion(a, verifierSecret))
+        .send({ decision: 'ACCEPT', idempotencyKey: decisionKey, consentAssertion: a });
+      assert.equal((await send({ ...assertion, targetDigest: oldTarget.digest })).status, 403);
+      const accepted = data(await send(assertion));
+      assert.equal(accepted.offerDocumentId, doc.id); assert.equal(accepted.offerPdfSha256, doc.pdf_sha256);
+      assert.equal(accepted.decidedByUserId, null); assert.equal(accepted.decidedByCareActorId, actor.id);
+      assert.equal(data(await send(assertion)).id, accepted.id);
+      await openHandymanCustomerTransaction({ executionScopeId: accepted.executionScope.id, idempotencyKey: key() }, admin);
+      await composeHandymanChargeLine({ executionScopeId: accepted.executionScope.id, quotationLineId: priced.id, idempotencyKey: key() }, admin);
+      const tx = await pool.connect();
+      try {
+        const source = await readInclusiveCommercialSource(tx, realm.client.id, request.id, accepted.executionScope.id, jakarta(taxPoint));
+        assert.equal(source.quotationOffer.pdfSha256, doc.pdf_sha256);
+        assert.equal(source.lines[0].taxPriceBasis, 'GROSS_INCLUSIVE'); assert.equal(source.grossAmount, '100.00');
+      } finally { tx.release(); }
+    } finally {
+      delete process.env[handoffIntegrationSecretEnvName(integrationCode)];
+      delete process.env[commercialConsentSecretEnvName(integrationCode)];
+    }
+  });
+
   it('uses separately verified line policies and preserves the approved gross without financial writes',async()=>{
     currentClassification=await proposeCustomerTaxClassification(maker,proposal('550.00',null));
     await assert.rejects(verify(currentClassification,maker),(e:any)=>e.code==='PERMISSION_DENIED');
@@ -417,7 +598,7 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       basisDescription:fullDesc,ratePercent:'10.000000',roundingMode:'NO_ROUNDING',roundingScale:null}));
   });
 
-  it('projects an eligible ADD and reconciled REDUCE with independently reviewed per-line PPN', async () => {
+  it('01C-A projects an eligible ADD and REDUCE only with exact price-basis offers and reviewed per-line PPN', async () => {
     // A separate request keeps this case independent of the preceding stateful
     // cases, including when the whole focused file is run in the future.
     const attribution = await createChannelAttribution({ tenantCompanyId: tenantId, buildingId: realm.building.id,
@@ -439,7 +620,7 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     await prepareHandymanTaxProfile({ quotationVersionId: originalVersion }, taxFacts(), admin);
     await issueHandymanQuotationVersion(originalVersion, { validUntil: validUntil() }, admin);
     const decision = await decideHandymanQuotation(originalVersion,
-      { decision: 'APPROVE', tenantPicId: picId, idempotencyKey: key() }, customerId);
+      { decision: 'APPROVE', ...await quotationOffer(originalVersion), idempotencyKey: key() }, customerId);
     assert.ok(decision.executionScope); scope = decision.executionScope.id;
     const originalPrices = (await q(`SELECT id, quantity::text, final_quoted_unit_amount::text, line_total::text
       FROM handyman_quotation_lines WHERE quotation_version_id=$1 ORDER BY id`, [originalVersion])).rows;
@@ -491,6 +672,11 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     // The signed REDUCE is posted against the original charge while its own
     // reviewed offer is current, before the ADD replaces that offer.
     const reduce = await makeAuthorized('REDUCE', 'MATERIAL', 4, originalA, 25, 6, 8, false);
+    const reduceDoc = (await q('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1', [reduce])).rows[0];
+    assert.equal(reduceDoc.source_snapshot.priceBasisProtocol, 'HANDYMAN_VARIATION_LINE_PRICE_BASIS_V1');
+    assert.equal(reduceDoc.source_snapshot.variation.priceBasisLineId, originalA);
+    assert.equal(reduceDoc.source_snapshot.variation.taxPriceBasis, 'GROSS_INCLUSIVE');
+    assert.match(await pdfText(reduceDoc.pdf_bytes), /INCLUSIVE - includes applicable PPN/);
     const posted = data(await post(path(reduce), adminToken, { expectedVersion: 5, idempotencyKey: key() }), 201);
     assert.equal(posted.binding.signedAmount, '-100.00');
     data(await post(`${field()}/${reduce}/execution`, leadToken,
@@ -509,6 +695,17 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
       revisedQuotationVersionId: revised.id, revisedQuotationLineId: addLine, workOrderId: workOrder,
       quotedUnitAmount: 110, currency: 'IDR', idempotencyKey: key() }));
     const document = offered.events.find((event: any) => event.eventType === 'REVISED_QUOTATION').metadata.offerDocument;
+    const addDoc = (await q('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1', [add])).rows[0];
+    assert.equal(addDoc.source_snapshot.variation.priceBasisLineId, addLine);
+    assert.equal(addDoc.source_snapshot.variation.taxPriceBasis, 'GROSS_INCLUSIVE');
+    assert.match(await pdfText(addDoc.pdf_bytes), /INCLUSIVE - includes applicable PPN/);
+    const addDecision = { expectedVersion: 3, revisedQuotationVersionId: revised.id, revisedQuotationLineId: addLine,
+      workOrderId: workOrder, decision: 'APPROVED', evidenceReference: evidence, offerDocumentId: document.id,
+      offerDocumentVersion: document.version, offerPdfSha256: document.pdfSha256, idempotencyKey: key() };
+    denied(await post(`${variations()}/${add}/tenant-decision`, picToken,
+      { ...addDecision, offerDocumentVersion: document.version + 1 }), 409);
+    denied(await post(`${variations()}/${add}/tenant-decision`, picToken,
+      { ...addDecision, offerPdfSha256: '0'.repeat(64) }), 409);
     data(await post(`${variations()}/${add}/tenant-decision`, picToken, { expectedVersion: 3,
       revisedQuotationVersionId: revised.id, revisedQuotationLineId: addLine, workOrderId: workOrder,
       decision: 'APPROVED', evidenceReference: evidence, offerDocumentId: document.id,
@@ -574,6 +771,9 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     const result = await calculate(classification, verified);
     assert.deepEqual(await financialCounts(), counts);
     assert.equal(result.invoiceIssued, false); assert.equal(result.totalIncludingPpn, '560.00');
+    assert.equal(result.commercialSource.quotationOffer.id, decision.offerDocumentId);
+    assert.equal(result.commercialSource.quotationOffer.pdfSha256, decision.offerPdfSha256);
+    assert.ok(result.commercialSource.lines.every(x => x.taxPriceBasis === 'GROSS_INCLUSIVE'));
     assert.equal(result.considerationBeforePpn, '541.00'); assert.equal(result.dppAmount, '391.00');
     assert.equal(result.ppnAmount, '19.00');
     const amounts = (chargeLineId: string) => {
@@ -588,9 +788,12 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     const added = result.commercialSource.additions.find(x => x.variationId === add); assert.ok(added);
     assert.equal(added.approvedVersion, 3); assert.equal(added.quotationLineId, addLine);
     assert.equal(added.revisedQuotationVersionId, revised.id);
+    assert.equal(added.offerDocumentId, addDoc.id); assert.equal(added.offerPdfSha256, addDoc.pdf_sha256);
     const reduced = result.commercialSource.lines.find(x => x.chargeLineId === chargeA); assert.ok(reduced);
     assert.equal(reduced.chargeAmount, '250.00'); assert.equal(reduced.grossAmount, '150.00');
     assert.equal(reduced.reductions.length, 1); assert.equal(reduced.reductions[0].correctionId, posted.binding.correctionId);
+    assert.equal(reduced.reductions[0].offerDocumentId, reduceDoc.id);
+    assert.equal(reduced.reductions[0].offerPdfSha256, reduceDoc.pdf_sha256);
     assert.equal(result.commercialSource.profiles.length, 3);
     assert.deepEqual((await q(`SELECT id, quantity::text, final_quoted_unit_amount::text, line_total::text
       FROM handyman_quotation_lines WHERE quotation_version_id=$1 ORDER BY id`, [originalVersion])).rows, originalPrices);
@@ -650,11 +853,11 @@ describe('Inclusive Handyman invoice tax — focused PostgreSQL',()=>{
     const partialQuote = await createHandymanQuotation({ handymanRequestId: partialRequest.id }, admin);
     const partialVersion = partialQuote.versions[0].id;
     const partialLine = (await addHandymanQuotationLine(partialVersion, { lineType: 'MATERIAL', quantity: 10, uomId: partialUom,
-      currency: 'IDR', finalQuotedUnitAmount: 25, description: 'Material' }, admin)).id;
+      currency: 'IDR', finalQuotedUnitAmount: 25, description: 'Material', taxPriceBasis: 'GROSS_INCLUSIVE' }, admin)).id;
     await prepareHandymanTaxProfile({ quotationVersionId: partialVersion }, taxFacts(), admin);
     await issueHandymanQuotationVersion(partialVersion, { validUntil: validUntil() }, admin);
     const partialDecision = await decideHandymanQuotation(partialVersion,
-      { decision: 'APPROVE', tenantPicId: pic.id, idempotencyKey: key() }, customer.id);
+      { decision: 'APPROVE', ...await quotationOffer(partialVersion), idempotencyKey: key() }, customer.id);
     assert.ok(partialDecision.executionScope); const partialScope = partialDecision.executionScope.id;
     const partialCrew = await crewFixture(partialRealm);
     await assignHandymanExecutionScopeCrew({ executionScopeId: partialScope, providerContextId: partialCrew.providerContext.id,
