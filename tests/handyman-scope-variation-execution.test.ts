@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { randomUUID as id } from 'node:crypto';
+import { createHash, randomUUID as id } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
+import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import type { Pool } from 'pg';
-import { closePool, initDatabase, migrateUp } from '../src/database';
+import { closePool, initDatabase, migrateDown, migrateUp } from '../src/database';
 import { resetAppConfigCache } from '../src/config';
 import { startEmbeddedTestDatabase } from './helpers/embedded-test-db';
 import { createAdminUser } from './helpers/access';
@@ -29,6 +30,10 @@ import { assignBuildingToWorkforce } from '../src/modules/workforce-building-ass
 import { vendorWorkforceService } from '../src/modules/vendor-workforce';
 import { inventoryItemService } from '../src/modules/inventory-items';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
+import { grantCareActorProperty, revokeCareActorProperty, handymanCareActorService } from '../src/modules/handyman-care-actors';
+import { handoffRuntimeRepository, handoffIntegrationSecretEnvName } from '../src/modules/handyman-handoff';
+import { admitCareWorkspace, signCareWorkspaceAssertion, type CareWorkspaceAssertion } from '../src/modules/handyman-care-workspace/care-workspace.service';
+import { stableJson } from '../src/shared/stable-json';
 import { tenantCompanyService } from '../src/modules/tenant-companies';
 import { tenantPicService } from '../src/modules/tenant-pics';
 import { tenantSpaceService } from '../src/modules/tenant-spaces';
@@ -71,6 +76,13 @@ let workOrder: string, foreignWorkOrder: string, materialItem: string;
 let approvedAdd: string, addLine: string, approvedVersionId: string;
 let crewId: string, leadUserId: string, leadWorkerId: string, helperToken: string;
 let chain: Awaited<ReturnType<typeof locationChain>>;
+let requestId: string, tenantId: string, careLocalToken: string, careToken: string, careActor: string, integrationCode: string;
+let firstOfferBytes: Buffer, firstOfferHash: string;
+const offerPins = new Map<string, { offerDocumentId: string; offerDocumentVersion: number; offerPdfSha256: string }>();
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const careSelection = () => ({ propertyId: realm.property.id, tenantCompanyId: tenantId, buildingId: realm.building.id, spaceId: chain.space.id });
+const carePath = (variationId: string) => `/api/v1/handyman/care/requests/${requestId}/variations/${variationId}/offer.pdf`;
+const localPath = (variationId: string) => `${opsVariations()}/${variationId}/offer.pdf`;
 
 function responseData(response: any, status = 200) {
   assert.equal(response.status, status, JSON.stringify(response.body));
@@ -121,8 +133,9 @@ async function addQuoteLine(version: string, type: 'LABOR' | 'MATERIAL', qty: nu
     uomId: uom, currency: 'IDR', finalQuotedUnitAmount: price, ...(sourceItemId ? { sourceItemId } : {}) }, admin);
 }
 // Real revisions contain original scope and separately identified additions.
-async function revision(a: number, b: number, add = false, oneOff = false, extraLabor: Array<{ qty: number; price: number; name: string }> = []) {
-  const v = await createHandymanQuotationRevision(quotationId, admin);
+async function revision(a: number, b: number, add = false, oneOff = false, extraLabor: Array<{ qty: number; price: number; name: string }> = [], withDp = false) {
+  const v = await createHandymanQuotationRevision(quotationId, admin, withDp
+    ? { dpRequired: true, dpPercentage: 20, dpTermsNotes: 'Deposit after Tenant approval' } : { dpRequired: false });
   const labor = await addQuoteLine(v.id, 'LABOR', 1, 100, 'Original labor');
   const lineA = await addQuoteLine(v.id, 'MATERIAL', a, 25, 'Original material A');
   await addQuoteLine(v.id, 'MATERIAL', b, 25, 'Original material B');
@@ -133,20 +146,37 @@ async function revision(a: number, b: number, add = false, oneOff = false, extra
   await issueHandymanQuotationVersion(v.id, { validUntil: validUntil() }, admin);
   return { id: v.id, addedLine: added?.id, oneOffLine: oneOffLine?.id, lineA: lineA.id, labor: labor.id, laborLines: laborLines.map((line) => line.id) };
 }
-async function prepare(variationId: string, versionId: string, amount: number, lineId?: string) {
-  responseData(await operation(variationId, 'revised-quotation', {
-    expectedVersion: 2, revisedQuotationVersionId: versionId, quotedUnitAmount: amount, currency: 'IDR',
+async function prepare(variationId: string, versionId: string, amount: number, lineId?: string, idempotencyKey = key()) {
+  const result = responseData(await operation(variationId, 'revised-quotation', {
+    expectedVersion: 2, revisedQuotationVersionId: versionId, quotedUnitAmount: amount, currency: 'IDR', idempotencyKey,
     ...(lineId ? { revisedQuotationLineId: lineId, workOrderId: workOrder } : {}),
   }));
+  const issued = result.events.find((event: any) => event.eventType === 'REVISED_QUOTATION').metadata.offerDocument;
+  assert.ok(issued.id && issued.pdfSha256); assert.equal(issued.version, 3);
+  offerPins.set(variationId, { offerDocumentId: issued.id, offerDocumentVersion: issued.version, offerPdfSha256: issued.pdfSha256 });
+  return result;
 }
 async function decision(variationId: string, versionId: string, outcome: 'APPROVED' | 'REJECTED', lineId?: string) {
+  const pin = offerPins.get(variationId); assert.ok(pin);
   responseData(await operation(variationId, 'tenant-decision', {
-    expectedVersion: 3, revisedQuotationVersionId: versionId, decision: outcome, evidenceReference: evidence,
+    expectedVersion: 3, revisedQuotationVersionId: versionId, decision: outcome, evidenceReference: evidence, ...pin,
     ...(lineId ? { revisedQuotationLineId: lineId, workOrderId: workOrder } : {}),
   }, picToken));
 }
 async function authorize(variationId: string) {
   responseData(await operation(variationId, 'authorize-scope', { expectedVersion: 4 }));
+}
+async function pdfText(bytes: Buffer) {
+  const doc = await PDFDocument.load(bytes), out: string[] = [];
+  for (const page of doc.getPages()) {
+    const contents = page.node.Contents();
+    const streams = contents instanceof PDFArray ? Array.from({ length: contents.size() }, (_, i) => contents.lookup(i)) : contents ? [contents] : [];
+    for (const stream of streams) if (stream instanceof PDFRawStream) {
+      const data = Buffer.from(decodePDFRawStream(stream).decode()).toString('latin1');
+      for (const match of data.matchAll(/<([0-9A-Fa-f]+)>\s*Tj/g)) out.push(Buffer.from(match[1]!, 'hex').toString('latin1'));
+    }
+  }
+  return out.join('\n').replace(/\s+/g, ' ');
 }
 // Queue both authenticated commands behind a held scope lock. This makes the
 // authorization-versus-ISSUE race deterministic rather than timing-dependent.
@@ -178,6 +208,7 @@ before(async () => {
     baseCurrencyCode: 'IDR', defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
   const tenant = await tenantCompanyService.createTenantCompany({ clientId: realm.client.id,
     tenantCode: `T_${id().slice(0, 8).toUpperCase()}`, tenantName: 'Customer', legalName: 'PT Customer' }, admin);
+  tenantId = tenant.id;
   const customer = await userService.createUser({ email: `${id()}@variation.test`, displayName: 'Tenant PIC' });
   const picRole = await roleService.createRole({ code: `PIC_${id()}`, name: 'Tenant PIC' });
   const permission = await permissionRepository.findByCode('tenant_company.manage'); assert.ok(permission);
@@ -189,6 +220,25 @@ before(async () => {
   const pic = await tenantPicService.createTenantPic({ tenantCompanyId: tenant.id, picName: 'Customer PIC', userId: customer.id }, admin);
   await tenantSpaceService.assignSpaceToTenant({ tenantCompanyId: tenant.id, buildingId: realm.building.id, spaceId: chain.space.id }, admin);
   await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: tenant.id, buildingId: realm.building.id }, admin);
+  const careUser = await userService.createUser({ email: `${id()}@care.test`, displayName: 'Building Care' });
+  const careRole = await roleService.createRole({ code: `CARE_${id()}`, name: 'Building Care' });
+  const carePermission = await permissionRepository.findByCode('handyman.care.building'); assert.ok(carePermission);
+  await permissionService.assignPermissionToRole(careRole.id, carePermission.id);
+  await roleService.assignRoleToUser(careUser.id, careRole.id);
+  await buildingAssignmentService.createAssignment(careUser.id, { buildingId: realm.building.id });
+  await credentialService.createInitialCredential({ userId: careUser.id, password: PASSWORD });
+  careLocalToken = responseData(await api().post('/api/v1/auth/login').send({ email: careUser.email, password: PASSWORD })).sessionToken;
+  integrationCode = `VO_${id().slice(0, 8).toUpperCase()}`;
+  const secret = 'variation-offer-workspace-test-secret';
+  const integration = await handoffRuntimeRepository.createIntegration({ integrationCode, displayName: 'Variation Care' });
+  await handymanCareActorService.setIntegrationActorCapability({ integrationId: integration.id, capability: 'CUSTOMER_CARE' });
+  careActor = (await handymanCareActorService.createCareActor({ integrationId: integration.id, actorReference: 'care', displayName: 'Care' })).id;
+  process.env[handoffIntegrationSecretEnvName(integrationCode)] = secret;
+  await grantCareActorProperty({ careActorId: careActor, propertyId: realm.property.id, clientId: realm.client.id }, admin);
+  const assertion: CareWorkspaceAssertion = { purpose: 'HANDYMAN_CARE_WORKSPACE', integrationCode, assertionId: id(),
+    issuedAt: new Date(Date.now() - 1000).toISOString(), expiresAt: new Date(Date.now() + 240000).toISOString(),
+    actor: { type: 'CUSTOMER_CARE', actorReference: 'care' } };
+  careToken = (await admitCareWorkspace(assertion, signCareWorkspaceAssertion(assertion, secret))).workspaceToken;
   const service = await serviceCatalogService.createServiceCatalogEntry({ clientId: realm.client.id,
     code: `S_${id().slice(0, 8).toUpperCase()}`, name: 'Pipe repair', category: 'HANDYMAN' }, admin);
   uom = id();
@@ -208,6 +258,7 @@ before(async () => {
     createdByUserId: customer.id });
   const request = await handymanServiceRequestService.createHandymanServiceRequest({ channelAttributionId: attr.id,
     serviceCatalogId: service.id, description: 'Repair pipes' }, admin);
+  requestId = request.id;
   await handymanServiceRequestTriageService.recordHandymanRequestTriage({ handymanRequestId: request.id,
     triageDisposition: 'DIAGNOSIS', triageNote: 'Reviewed' }, admin);
   await handymanServiceRequestDiagnosisService.recordHandymanDiagnosis({ handymanRequestId: request.id,
@@ -217,7 +268,7 @@ before(async () => {
     city: 'Jakarta', province: 'Jakarta', postalCode: '10110', email: 'issuer@example.test', phone: '+62 21 5000 1111',
     whatsapp: '+62 811 2000 3000', website: null, taxId: null, businessRegistrationId: null, logoReference: null }, admin);
   await updateHandymanDocumentSettings({ clientId: realm.client.id, documentKind: 'QUOTATION', language: 'id',
-    expectedVersion: null, documentPrefix: 'QTN', termsLines: ['Work after approval'], paymentNote: null,
+    expectedVersion: null, documentPrefix: 'QTN', termsLines: ['Work after approval'], paymentNote: 'Transfer within seven days',
     warrantyNote: null, contactNote: null, footerNote: null, signatoryName: 'Manager', signatoryTitle: 'Operations' }, admin);
   const bank = await createHandymanDocumentBankAccount({ clientId: realm.client.id, bankCode: 'BANK', bankName: 'Test Bank',
     accountNumber: '1234567890', accountHolderName: 'PT Issuer', currency: 'IDR' }, admin);
@@ -264,10 +315,32 @@ after(async () => {
   await closePool();
   if (db) await db.stop();
   await rm(STORAGE, { recursive: true, force: true });
+  if (integrationCode) delete process.env[handoffIntegrationSecretEnvName(integrationCode)];
   resetAppConfigCache();
 });
 
 describe('approved variation and real material execution', () => {
+  it('fails closed when a historical issued quotation has no official source artifact', async () => {
+    const variation = await proposal('ADD', 1, undefined, 'LABOR'); await review(variation);
+    const old = await createHandymanQuotationRevision(quotationId, admin, { dpRequired: false });
+    await addQuoteLine(old.id, 'LABOR', 1, 100, 'Original labor');
+    await addQuoteLine(old.id, 'MATERIAL', 10, 25, 'Original material A');
+    await addQuoteLine(old.id, 'MATERIAL', 8, 25, 'Original material B');
+    await addQuoteLine(old.id, 'LABOR', 1, 25, 'Legacy addition');
+    // Simulate a version issued before migration 0509; no artifact is invented.
+    await pool.query('ALTER TABLE handyman_quotation_versions DISABLE TRIGGER hm_quotation_issue_requires_document');
+    try {
+      await pool.query(`UPDATE handyman_quotation_versions SET status='ISSUED',valid_until=$2 WHERE id=$1`, [old.id, validUntil()]);
+    } finally {
+      await pool.query('ALTER TABLE handyman_quotation_versions ENABLE TRIGGER hm_quotation_issue_requires_document');
+    }
+    rejection(await operation(variation, 'revised-quotation', { expectedVersion: 2, revisedQuotationVersionId: old.id,
+      quotedUnitAmount: 25, currency: 'IDR' }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION', 'historical missing documents');
+    const state = (await pool.query('SELECT status,revised_quotation_version_id FROM handyman_scope_variations WHERE id=$1', [variation])).rows[0];
+    assert.equal(state.status, 'OPERATIONS_REVIEW'); assert.equal(state.revised_quotation_version_id, null);
+    assert.equal((await pool.query('SELECT count(*)::int n FROM handyman_variation_offer_documents WHERE variation_id=$1', [variation])).rows[0].n, 0);
+  });
+
   it('serializes authorized REDUCE against issue/use, permits remaining work and preserves history and returns', async () => {
     const estimateKey = key();
     const created = responseData(await estimate(originalVersion, originalA, 10, estimateKey));
@@ -286,15 +359,83 @@ describe('approved variation and real material execution', () => {
     rejection(await operation(firstReduce, 'operations-review', { expectedVersion: 1 }, leadToken), 403, 'HANDYMAN_VARIATION_ROLE_FORBIDDEN');
     rejection(await operation(firstReduce, 'operations-review', { expectedVersion: 2 }), 409, 'HANDYMAN_VARIATION_VERSION_CONFLICT');
     await review(firstReduce);
-    const v2 = await revision(6, 8);
+    const v2 = await revision(6, 8, false, false, [], true);
     rejection(await operation(firstReduce, 'revised-quotation', { expectedVersion: 2,
       revisedQuotationVersionId: v2.id, quotedUnitAmount: 25, currency: 'USD' }),
     409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
-    await prepare(firstReduce, v2.id, 25);
+    // PostgreSQL rejects even a direct state change without an artifact in the
+    // same transaction; the failed attempt leaves the reviewed state intact.
+    await assert.rejects(pool.query(`UPDATE handyman_scope_variations SET status='REVISED_QUOTATION',
+      revised_quotation_version_id=$2, quoted_unit_amount=25, quoted_total_delta=-100, currency='IDR',version=version+1 WHERE id=$1`,
+    [firstReduce, v2.id]), /requires its official immutable PDF/);
+    assert.equal((await pool.query('SELECT status FROM handyman_scope_variations WHERE id=$1', [firstReduce])).rows[0].status, 'OPERATIONS_REVIEW');
+    const issueKey = key();
+    const prepared = await prepare(firstReduce, v2.id, 25, undefined, issueKey);
+    const pin = offerPins.get(firstReduce)!;
+    const replayed = await prepare(firstReduce, v2.id, 25, undefined, issueKey);
+    assert.equal(replayed.replayed, true);
+    assert.equal(replayed.events.find((e: any) => e.eventType === 'REVISED_QUOTATION').metadata.offerDocument.id, pin.offerDocumentId);
+    assert.equal(prepared.variation.tenantDecisionOutcome, null);
+    const doc = (await pool.query('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1', [firstReduce])).rows[0];
+    const originalDoc = (await pool.query('SELECT * FROM handyman_quotation_documents WHERE quotation_version_id=$1', [originalVersion])).rows[0];
+    const revisedDoc = (await pool.query('SELECT * FROM handyman_quotation_documents WHERE quotation_version_id=$1', [v2.id])).rows[0];
+    assert.match(doc.document_number, /^QTN-VO-\d+$/);
+    assert.equal(doc.variation_version, 3); assert.equal(doc.revised_quotation_version_id, v2.id);
+    assert.equal(doc.original_quotation_document_id, originalDoc.id); assert.equal(doc.revised_quotation_document_id, revisedDoc.id);
+    assert.deepEqual(doc.source_snapshot.original, originalDoc.source_snapshot);
+    assert.deepEqual(doc.source_snapshot.revised, revisedDoc.source_snapshot);
+    assert.equal(doc.source_snapshot.variation.targetQuotationLineId, originalA);
+    assert.equal(doc.source_snapshot.variation.quotedTotalDelta, '-100.00');
+    assert.equal(doc.source_snapshot.revised.quotation.dpRequired, true);
+    assert.equal(Number(doc.source_snapshot.revised.quotation.dpAmount), 90);
+    assert.equal(stableJson(doc.source_snapshot), doc.source_canonical);
+    assert.equal(sha(doc.source_canonical), doc.source_sha256); assert.equal(sha(doc.pdf_bytes), doc.pdf_sha256);
+    firstOfferBytes = doc.pdf_bytes; firstOfferHash = doc.pdf_sha256;
+    const text = await pdfText(firstOfferBytes);
+    for (const fact of ['Scope Variation Offer', 'NOT APPROVED', 'ISSUED - OFFER ONLY', 'REDUCE MATERIAL',
+      '4.000 pc', '-100.00', '450.00', 'Original material A', 'Original labor', 'Deposit after Tenant approval',
+      'Transfer within seven days', originalDoc.document_number, revisedDoc.document_number]) {
+      assert.ok(text.includes(fact), `PDF must contain ${fact}: ${text}`);
+    }
+    await assert.rejects(pool.query('UPDATE handyman_variation_offer_documents SET pdf_bytes=$2 WHERE id=$1',
+      [doc.id, Buffer.from('%PDF-tampered')]), /immutable/);
+    await assert.rejects(pool.query('DELETE FROM handyman_variation_offer_documents WHERE id=$1', [doc.id]), /immutable/);
+    await assert.rejects(pool.query('UPDATE handyman_scope_variations SET quoted_unit_amount=26 WHERE id=$1', [firstReduce]), /immutable/);
+    await assert.rejects(pool.query(`INSERT INTO handyman_scope_variation_events
+      (id,client_id,variation_id,execution_scope_id,event_type,from_status,to_status,actor_user_id,actor_role,evidence_reference,idempotency_key,metadata)
+      VALUES($1,$2,$3,$4,'TENANT_DECISION','REVISED_QUOTATION','TENANT_DECISION',$5,'TENANT',$6,$7,'{}')`,
+    [id(), realm.client.id, firstReduce, scope, admin, evidence, key()]), /exact issued variation PDF and version/);
+    const local = await api().get(localPath(firstReduce)).set(auth(careLocalToken)).buffer(true);
+    assert.equal(local.status, 200, JSON.stringify(local.body)); assert.deepEqual(local.body, firstOfferBytes);
+    assert.equal(local.headers['x-content-sha256'], firstOfferHash); assert.equal(local.headers['x-variation-offer-id'], doc.id);
+    assert.equal(local.headers['x-variation-offer-version'], '3'); assert.equal(local.headers['cache-control'], 'private, no-store');
+    assert.equal((await api().get(localPath(firstReduce)).set(auth(adminToken))).status, 200);
+    assert.equal((await api().get(localPath(firstReduce)).set(auth(picToken))).status, 403);
+    assert.equal((await api().get(localPath(firstReduce)).set(auth(leadToken))).status, 403);
+    const care = await api().get(carePath(firstReduce)).query(careSelection()).set(auth(careToken)).buffer(true);
+    assert.equal(care.status, 200, JSON.stringify(care.body)); assert.deepEqual(care.body, firstOfferBytes);
+    for (const query of [{ ...careSelection(), tenantCompanyId: id() }, { ...careSelection(), spaceId: id() },
+      { ...careSelection(), propertyId: id() }]) {
+      assert.equal((await api().get(carePath(firstReduce)).query(query).set(auth(careToken))).status, 404);
+    }
+    const projection = await api().get(`/api/v1/handyman/care/requests/${requestId}/projection`).query(careSelection()).set(auth(careToken));
+    assert.equal(projection.status, 200, JSON.stringify(projection.body));
+    const projected = projection.body.data.variationOffers.find((offer: any) => offer.variationId === firstReduce);
+    assert.equal(projected.offerStatus, 'ISSUED'); assert.equal(projected.tenantDecision, null);
+    assert.equal(projected.pdfSha256, firstOfferHash); assert.equal(projected.downloadPath, carePath(firstReduce));
     rejection(await operation(firstReduce, 'authorize-scope', { expectedVersion: 3 }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
-    rejection(await operation(firstReduce, 'tenant-decision', { expectedVersion: 3, revisedQuotationVersionId: v2.id,
-      decision: 'APPROVED', evidenceReference: evidence }), 403, 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN');
+    const consent = { expectedVersion: 3, revisedQuotationVersionId: v2.id, decision: 'APPROVED', evidenceReference: evidence };
+    rejection(await operation(firstReduce, 'tenant-decision', consent), 403, 'HANDYMAN_TENANT_DECISION_ACTOR_FORBIDDEN');
+    rejection(await operation(firstReduce, 'tenant-decision', consent, picToken), 400, 'VALIDATION_ERROR');
+    rejection(await operation(firstReduce, 'tenant-decision', { ...consent, ...pin, offerDocumentId: id() }, picToken), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(firstReduce, 'tenant-decision', { ...consent, ...pin, offerDocumentVersion: 4 }, picToken), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
+    rejection(await operation(firstReduce, 'tenant-decision', { ...consent, ...pin, offerPdfSha256: '0'.repeat(64) }, picToken), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
     await decision(firstReduce, v2.id, 'APPROVED');
+    const decisionEvent = (await pool.query(`SELECT metadata FROM handyman_scope_variation_events
+      WHERE variation_id=$1 AND event_type='TENANT_DECISION'`, [firstReduce])).rows[0];
+    assert.equal(decisionEvent.metadata.consentSnapshot.offerDocumentId, doc.id);
+    assert.equal(decisionEvent.metadata.consentSnapshot.offerDocumentVersion, 3);
+    assert.equal(decisionEvent.metadata.consentSnapshot.offerPdfSha256, firstOfferHash);
     responseData(await material(materialA, 'issue', 1)); // consent alone is not scope authorization
     const gate = await pool.connect();
     await gate.query('BEGIN');
@@ -328,6 +469,12 @@ describe('approved variation and real material execution', () => {
     const reduceAgain = await proposal('REDUCE', 3, originalA);
     await review(reduceAgain);
     const v3 = await revision(3, 8); await prepare(reduceAgain, v3.id, 25);
+    const laterDoc = (await pool.query('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1', [reduceAgain])).rows[0];
+    assert.notEqual(laterDoc.id, pin.offerDocumentId); assert.notEqual(laterDoc.document_number, doc.document_number);
+    assert.equal(laterDoc.source_snapshot.reconciliation.mode, 'CUMULATIVE');
+    assert.ok(laterDoc.source_snapshot.previousAuthorizedVariations.some((v: any) => v.id === firstReduce));
+    const historic = await api().get(localPath(firstReduce)).set(auth(careLocalToken)).buffer(true);
+    assert.deepEqual(historic.body, firstOfferBytes); assert.equal(historic.headers['x-content-sha256'], firstOfferHash);
     await decision(reduceAgain, v3.id, 'APPROVED'); await authorize(reduceAgain);
     rejection(await material(materialA, 'use', 0.001), 400, 'HANDYMAN_MATERIAL_EXECUTION_QUANTITY_EXCEEDED', 'exceeds-remaining-scope-after-reduction');
     const replay = responseData(await material(materialA, 'use', 4, useKey));
@@ -365,6 +512,11 @@ describe('approved variation and real material execution', () => {
     rejection(await operation(rejectedAdd, 'revised-quotation', { ...terms, revisedQuotationLineId: refusedOffer.lineA }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
     rejection(await operation(rejectedAdd, 'revised-quotation', { ...terms, revisedQuotationLineId: refusedOffer.labor }), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
     await prepare(rejectedAdd, refusedOffer.id, 30, refusedOffer.addedLine);
+    const offeredMaterial = (await pool.query('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1', [rejectedAdd])).rows[0];
+    const materialText = await pdfText(offeredMaterial.pdf_bytes);
+    for (const fact of ['ADD MATERIAL', '2.000 pc', '60.00', 'Additional material']) assert.ok(materialText.includes(fact), fact);
+    assert.equal(offeredMaterial.source_snapshot.variation.revisedQuotationLineId, refusedOffer.addedLine);
+    assert.equal(offeredMaterial.source_snapshot.variation.workOrderId, workOrder);
     const refusedBinding = { variationId: rejectedAdd, approvedVariationVersion: 3, workOrderId: workOrder };
     rejection(await estimate(refusedOffer.id, refusedOffer.addedLine!, 1, key(), refusedBinding), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
     rejection(await operation(rejectedAdd, 'tenant-decision', { expectedVersion: 3, revisedQuotationVersionId: refusedOffer.id,
@@ -511,6 +663,9 @@ describe('approved variation and real material execution', () => {
     rejection(await operation(rejected, 'revised-quotation', { ...terms, revisedQuotationLineId: rejectedQuote.labor }),
       409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
     await prepare(rejected, rejectedQuote.id, 80, rejectedLine);
+    const offeredLabor = (await pool.query('SELECT * FROM handyman_variation_offer_documents WHERE variation_id=$1', [rejected])).rows[0];
+    const laborText = await pdfText(offeredLabor.pdf_bytes);
+    for (const fact of ['ADD LABOR', '1.500 pc', '120.00', 'Additional pipe service']) assert.ok(laborText.includes(fact), fact);
     const rejectedBody = { variationId: rejected, approvedVariationVersion: 3, quotationLineId: rejectedLine,
       workOrderId: workOrder, quantity: 0.7, evidenceReference: workEvidence };
     rejection(await record(firstSession, rejectedBody), 409, 'HANDYMAN_VARIATION_ILLEGAL_TRANSITION');
@@ -608,6 +763,19 @@ describe('approved variation and real material execution', () => {
     assert.equal(Number(sum.rows[0].actual), 1.5); assert.equal(sum.rows[0].records, 2);
     const original = await pool.query('SELECT quantity FROM handyman_quotation_lines WHERE id=$1', [originalLabor]);
     assert.equal(Number(original.rows[0].quantity), 1);
+  });
+
+  it('keeps historic bytes after settings changes and immediately revokes Care workspace access', async () => {
+    await updateHandymanDocumentSettings({ clientId: realm.client.id, documentKind: 'QUOTATION', language: 'id',
+      expectedVersion: 1, documentPrefix: 'QTN', termsLines: ['Updated current terms'], paymentNote: 'New payment terms',
+      warrantyNote: null, contactNote: null, footerNote: null, signatoryName: 'Manager', signatoryTitle: 'Operations' }, admin);
+    const historic = await api().get(carePath(firstReduce)).query(careSelection()).set(auth(careToken)).buffer(true);
+    assert.equal(historic.status, 200); assert.deepEqual(historic.body, firstOfferBytes);
+    const text = await pdfText(historic.body);
+    assert.ok(text.includes('Transfer within seven days')); assert.ok(!text.includes('New payment terms'));
+    await revokeCareActorProperty({ careActorId: careActor, propertyId: realm.property.id, clientId: realm.client.id }, admin);
+    assert.equal((await api().get(carePath(firstReduce)).query(careSelection()).set(auth(careToken))).status, 404);
+    await assert.rejects(migrateDown(pool), /Refusing to remove issued variation offer documents/);
   });
 
 });

@@ -191,6 +191,20 @@ async function readOperationalProjection(
            WHERE q.handyman_request_id = s."requestId"
              AND q.client_id = s."clientId"
            LIMIT 1),
+        'variationOffers', COALESCE((
+          SELECT jsonb_agg(x.item ORDER BY x.issued_at DESC, x.id DESC) FROM (
+            SELECT d.id,d.issued_at,jsonb_build_object(
+              'variationId', v.id, 'variationStatus', v.status, 'tenantDecision', v.tenant_decision_outcome,
+              'offerStatus', 'ISSUED', 'documentId', d.id, 'documentVersion', d.variation_version,
+              'number', d.document_number, 'issuedAt', d.issued_at, 'pdfSha256', d.pdf_sha256,
+              'revisedQuotationVersionId', d.revised_quotation_version_id,
+              'downloadPath', '/api/v1/handyman/care/requests/' || s."requestId"::text ||
+                '/variations/' || v.id::text || '/offer.pdf') AS item
+            FROM handyman_variation_offer_documents d
+            JOIN handyman_scope_variations v ON v.id=d.variation_id AND v.execution_scope_id=d.execution_scope_id
+            WHERE d.client_id=s."clientId" AND d.request_id=s."requestId" AND d.execution_scope_id=s."executionScopeId"
+            ORDER BY d.issued_at DESC,d.id DESC LIMIT 50
+          ) x), '[]'::jsonb),
         'scheduling', jsonb_build_object(
           'readiness', COALESCE((
             SELECT jsonb_agg(jsonb_build_object(

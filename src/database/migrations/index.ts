@@ -1,3 +1,4 @@
+import { migration0513HandymanVariationOfferDocuments } from './0513_handyman_variation_offer_documents';
 import { migration0512HandymanAddLaborExecution } from './0512_handyman_add_labor_execution';
 import { migration0511HandymanAddMaterialExecutionBinding } from './0511_handyman_add_material_execution_binding';
 import { migration0510HandymanQuotationDeliveryEvents } from './0510_handyman_quotation_delivery_events';
@@ -1072,4 +1073,5 @@ export const migrations: readonly Migration[] = [
   migration0510HandymanQuotationDeliveryEvents,
   migration0511HandymanAddMaterialExecutionBinding,
   migration0512HandymanAddLaborExecution,
+  migration0513HandymanVariationOfferDocuments,
 ];

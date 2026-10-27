@@ -26,7 +26,7 @@ type Customer = { requestId: string; tenantCompanyId: string; tenantName: string
   spaceName: string | null; serviceName: string | null; requestDescription: string | null };
 type RequestItem = { id: string; serviceName: string; variantName: string | null; quantity: string;
   unit: string | null; description: string | null; attributes: unknown; inheritedAttributes: unknown; accessCondition: string | null };
-type Source = {
+export type QuotationDocumentSource = {
   schema: 'HANDYMAN_QUOTATION_DOCUMENT_V1'; status: 'ISSUED'; clientId: string;
   issuance: { id: string; number: string; issuedAt: string; actorUserId: string };
   quotation: { id: string; versionId: string; versionNumber: number; validUntil: string; currency: string;
@@ -37,9 +37,9 @@ type Source = {
   bank: Awaited<ReturnType<typeof resolveHandymanDocumentBankAccountSnapshot>>;
   settings: Awaited<ReturnType<typeof resolveHandymanDocumentSettingsSnapshot>>;
 };
-type Stored = { id: string; client_id: string; request_id: string; quotation_id: string; quotation_version_id: string;
+export type QuotationDocumentStored = { id: string; client_id: string; request_id: string; quotation_id: string; quotation_version_id: string;
   document_number: string; issuer_profile_id: string; bank_version_id: string; settings_id: string;
-  issued_by_user_id: string; issued_at: Date; source_snapshot: Source; source_canonical: string; source_sha256: string;
+  issued_by_user_id: string; issued_at: Date; source_snapshot: QuotationDocumentSource; source_canonical: string; source_sha256: string;
   pdf_filename: string; pdf_bytes: Buffer; pdf_size: number; pdf_sha256: string };
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -131,7 +131,7 @@ export async function createIssuedQuotationDocument(
     `SELECT nextval('handyman_quotation_document_number_seq')::text AS number, clock_timestamp() AS issued_at`)).rows[0]!;
   const documentNumber = `${settings.documentPrefix}-${allocation.number.padStart(10, '0')}`;
   if (version.valid_until.getTime() <= allocation.issued_at.getTime()) throw conflict('Quotation validity ended before document issuance.');
-  const source: Source = { schema: 'HANDYMAN_QUOTATION_DOCUMENT_V1', status: 'ISSUED', clientId: quotation.clientId,
+  const source: QuotationDocumentSource = { schema: 'HANDYMAN_QUOTATION_DOCUMENT_V1', status: 'ISSUED', clientId: quotation.clientId,
     issuance: { id: randomUUID(), number: documentNumber, issuedAt: allocation.issued_at.toISOString(), actorUserId },
     quotation: { id: quotation.id, versionId: issued.id, versionNumber: issued.versionNumber,
       validUntil: version.valid_until.toISOString(), currency: sums.currency, dpRequired: version.dp_required,
@@ -142,7 +142,7 @@ export async function createIssuedQuotationDocument(
   if (pdf.bytes.length !== pdf.fileSize || pdf.fileSize < 1 || pdf.fileSize > MAX_PDF_BYTES ||
       pdf.bytes.subarray(0, 5).toString() !== '%PDF-' || sha(pdf.bytes) !== pdf.checksum) throw integrity();
   if (version.valid_until.getTime() <= Date.now()) throw conflict('Quotation validity ended before document persistence.');
-  const stored = (await tx.query<Stored>(`INSERT INTO handyman_quotation_documents
+  const stored = (await tx.query<QuotationDocumentStored>(`INSERT INTO handyman_quotation_documents
     (id,client_id,request_id,quotation_id,quotation_version_id,document_number,issuer_profile_id,bank_version_id,settings_id,
      issued_by_user_id,issued_at,source_snapshot,source_canonical,source_sha256,pdf_filename,pdf_bytes,pdf_size,pdf_sha256)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::text::jsonb,$12::text,$13,$14,$15,$16,$17) RETURNING *`,
@@ -150,12 +150,12 @@ export async function createIssuedQuotationDocument(
     issuer.profileId, bank.versionRowId, settings.settingsId, actorUserId, source.issuance.issuedAt,
     canonical, sourceHash, pdf.filename, pdf.bytes, pdf.fileSize, pdf.checksum])).rows[0];
   if (!stored) throw integrity();
-  verifyStored(stored);
+  verifyStoredQuotationDocument(stored);
 }
 
 /** WinAnsi PDF fonts cannot encode every input; losslessly escape unsupported
  * code points instead of silently dropping a customer's scope or payment data. */
-function exactText(value: string): string {
+export function exactText(value: string): string {
   const chars = Array.from(value);
   return chars.map((ch, i) => {
     if (ch === '\\') return '\\\\';
@@ -169,18 +169,18 @@ function pieces(value: string, width = 55): string[] {
   return (text.match(new RegExp(`[\\s\\S]{1,${width}}`, 'g')) ?? [''])
     .map(chunk => chunk.replace(/^ /, '\\u{20}').replace(/ $/, '\\u{20}'));
 }
-function addText(target: string[], label: string, value: unknown): void {
+export function addText(target: string[], label: string, value: unknown): void {
   if (value === null || value === undefined) return;
   const text = typeof value === 'string' ? value : stableJson(value);
   const chunks = pieces(`${label}: ${text}`);
   chunks.forEach((chunk, index) => target.push(index === 0 ? chunk : `[continued] ${chunk}`));
 }
-function blocks(heading: string, lines: string[]): HandymanDocumentTermsBlock[] {
+export function blocks(heading: string, lines: string[]): HandymanDocumentTermsBlock[] {
   const out: HandymanDocumentTermsBlock[] = [];
   for (let i = 0; i < lines.length; i += 60) out.push({ heading: i ? `${heading} (continued)` : heading, lines: lines.slice(i, i + 60) });
   return out;
 }
-async function renderQuotation(s: Source, sourceHash: string) {
+async function renderQuotation(s: QuotationDocumentSource, sourceHash: string) {
   // The shared layout rounds IDR/JPY and limits numeric quantities to three
   // decimals. Print DB numeric strings as text instead, so the issued prices,
   // totals and quantities are never silently rounded by presentation.
@@ -245,7 +245,7 @@ async function renderQuotation(s: Source, sourceHash: string) {
   }, { filename: `quotation-${s.issuance.number.toLowerCase()}.pdf` });
 }
 
-function verifyStored(row: Stored): void {
+export function verifyStoredQuotationDocument(row: QuotationDocumentStored): void {
   try {
     const s = row.source_snapshot;
     if (!Buffer.isBuffer(row.pdf_bytes) || row.pdf_bytes.length !== row.pdf_size || row.pdf_size < 1 || row.pdf_size > MAX_PDF_BYTES ||
@@ -258,8 +258,8 @@ function verifyStored(row: Stored): void {
         s.bank.versionRowId !== row.bank_version_id || s.settings.settingsId !== row.settings_id || !s.lines.length) throw integrity();
   } catch { throw integrity(); }
 }
-function asDownload(row: Stored) {
-  verifyStored(row);
+function asDownload(row: QuotationDocumentStored) {
+  verifyStoredQuotationDocument(row);
   return { filename: row.pdf_filename, fileSize: row.pdf_size, pdfChecksum: row.pdf_sha256,
     sourceChecksum: row.source_sha256, bytes: row.pdf_bytes };
 }
@@ -284,7 +284,7 @@ export async function downloadQuotationDocument(actorInput: string, versionInput
       const buildings = await resolveBuildingsForUser(actor, tx);
       if (!buildings.some(b => b.client?.id === context.client_id && b.building.id === context.building_id)) throw notFound();
     } else throw new AppError({ code: ERROR_CODES.PERMISSION_DENIED, statusCode: 403, message: 'Quotation document requires Operations or Building Care authority.' });
-    const row = (await tx.query<Stored>(`SELECT * FROM handyman_quotation_documents
+    const row = (await tx.query<QuotationDocumentStored>(`SELECT * FROM handyman_quotation_documents
       WHERE quotation_version_id=$1 AND client_id=$2 AND request_id=$3`, [versionId, context.client_id, context.request_id])).rows[0];
     if (!row) throw notFound();
     return asDownload(row);
@@ -297,7 +297,7 @@ export async function downloadQuotationDocumentForCare(token: string, requestInp
   const principal = await resolveCareWorkspacePrincipal(token);
   const selection = parseCareHandymanPaymentProofSelection(query);
   const requestId = uuid(requestInput, 'requestId'), versionId = uuid(versionInput, 'quotationVersionId');
-  const result = await getPool().query<Stored & { authenticated: boolean }>(`${WORKSPACE_OCCUPANCY_CTES}
+  const result = await getPool().query<QuotationDocumentStored & { authenticated: boolean }>(`${WORKSPACE_OCCUPANCY_CTES}
     SELECT EXISTS(SELECT 1 FROM authority) AS authenticated,d.* FROM (SELECT 1) singleton
     LEFT JOIN LATERAL (
       SELECT doc.* FROM handyman_service_requests r

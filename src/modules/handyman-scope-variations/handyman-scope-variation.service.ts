@@ -19,6 +19,8 @@ import { assertHandymanTenantDecisionActor }
 import { assertHandymanQuotationPricingAuthority }
   from '../handyman-quotations/handyman-quotation-access';
 import { handymanScopeVariationRepository } from './handyman-scope-variation.repository';
+import { createIssuedVariationOfferDocument, requireVariationOfferForDecision }
+  from './handyman-variation-offer-document.service';
 import {
   addLaborBindingFromEvents, addMaterialBindingFromEvents,
   assertAddLaborQuoteBinding, assertAddMaterialQuoteBinding,
@@ -530,6 +532,7 @@ async function assertValidRevisedQuotationVersionForVariation(
   originalVersionNumber: number;
   originalQuotedTotal: string;
   revisedQuotedTotal: string;
+  mode: 'STANDALONE' | 'CUMULATIVE';
 }> {
   if (params.revisedQuotationVersionId === ctx.approvedQuotationVersionId) {
     throw new AppError({
@@ -603,11 +606,11 @@ async function assertValidRevisedQuotationVersionForVariation(
   // Like quotation decisions, new consent cannot be recorded against an
   // expired or undated issued offer. Once consent is recorded, passage of the
   // offer deadline alone does not invalidate that existing decision.
-  if (params.requireCurrentOffer && qv.status === 'ISSUED' && !qv.current_offer) {
+  if (params.requireCurrentOffer && (qv.status !== 'ISSUED' || !qv.current_offer)) {
     throw new AppError({
       statusCode: 409,
       code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-      message: 'The revised quotation offer is expired or has no validity deadline.',
+      message: 'A current, unapproved ISSUED revised quotation offer is required.',
     });
   }
 
@@ -714,6 +717,7 @@ async function assertValidRevisedQuotationVersionForVariation(
     originalVersionNumber: Number(qv.orig_version_number),
     originalQuotedTotal: fromCents(origTotalCents),
     revisedQuotedTotal: fromCents(revTotalCents),
+    mode: matchesCumulative && priorVarsRes.rows.length > 0 ? 'CUMULATIVE' : 'STANDALONE',
   };
 }
 
@@ -1691,6 +1695,8 @@ export async function prepareVariationRevisedQuotation(
   ).toLowerCase();
 
   return withTransaction(async (tx) => {
+    // Serialize cumulative scope, the issued offer and its snapshot together.
+    await lockHandymanQcScope(tx, ctx.executionScopeId);
     const variation =
       await handymanScopeVariationRepository.findByIdForUpdate(
         tx,
@@ -1811,6 +1817,10 @@ export async function prepareVariationRevisedQuotation(
         revisedQuotationVersionId,
       });
 
+    const offer = await createIssuedVariationOfferDocument(tx, updated, actorUserId, binding, {
+      mode: qvValidation.mode, originalQuotedTotal: qvValidation.originalQuotedTotal,
+      revisedQuotedTotal: qvValidation.revisedQuotedTotal,
+    });
     await handymanScopeVariationRepository.insertEvent(tx, {
       id: randomUUID(),
       clientId: ctx.clientId,
@@ -1833,6 +1843,8 @@ export async function prepareVariationRevisedQuotation(
         revisedVersionNumber: qvValidation.revisedVersionNumber,
         originalQuotedTotal: qvValidation.originalQuotedTotal,
         revisedQuotedTotal: qvValidation.revisedQuotedTotal,
+        offerDocument: { id: offer.offerDocumentId, version: offer.offerDocumentVersion,
+          number: offer.number, pdfSha256: offer.offerPdfSha256, sourceSha256: offer.sourceSha256 },
       },
     });
 
@@ -1878,6 +1890,9 @@ export async function recordVariationTenantDecision(
     revisedQuotationVersionId: unknown;
     revisedQuotationLineId?: unknown;
     workOrderId?: unknown;
+    offerDocumentId?: unknown;
+    offerDocumentVersion?: unknown;
+    offerPdfSha256?: unknown;
     evidenceReference: unknown;
     notes?: unknown;
     idempotencyKey: unknown;
@@ -1976,8 +1991,12 @@ export async function recordVariationTenantDecision(
         idempotencyKey,
       );
     if (existingEv) {
-      const pinned = existingEv.metadata.consentSnapshot as { version?: unknown } | undefined;
+      const pinned = existingEv.metadata.consentSnapshot as { version?: unknown; offerDocumentId?: unknown;
+        offerDocumentVersion?: unknown; offerPdfSha256?: unknown } | undefined;
       if (
+        (pinned?.offerDocumentId !== undefined &&
+          (input.offerDocumentId !== pinned.offerDocumentId || Number(input.offerDocumentVersion) !== pinned.offerDocumentVersion ||
+            input.offerPdfSha256 !== pinned.offerPdfSha256)) ||
         existingEv.actorUserId !== actorUserId ||
         existingEv.metadata.decisionOutcome !== decisionOutcome ||
         variation.revisedQuotationVersionId !== callerQvId ||
@@ -2048,11 +2067,12 @@ export async function recordVariationTenantDecision(
         quotedUnitAmount: variation.quotedUnitAmount, currency: variation.currency,
       });
     }
+    const offer = await requireVariationOfferForDecision(tx, variation, bindingEvents, itemBinding, input);
 
     await assertVerifiedManagedEvidenceReference(tx, ctx, evidenceReference);
     // Evidence I/O can outlast an offer's deadline; recheck at the write.
     const liveOffer = await tx.query<{ valid: boolean }>(
-      `SELECT status <> 'ISSUED' OR (valid_until IS NOT NULL AND valid_until > clock_timestamp()) AS valid
+      `SELECT status = 'ISSUED' AND valid_until IS NOT NULL AND valid_until > clock_timestamp() AS valid
          FROM handyman_quotation_versions WHERE id = $1`,
       [variation.revisedQuotationVersionId],
     );
@@ -2091,7 +2111,7 @@ export async function recordVariationTenantDecision(
         decisionOutcome,
         variationType: variation.variationType,
         quantity: variation.quantity,
-        consentSnapshot: variationConsentSnapshot(variation, variation.version, itemBinding),
+        consentSnapshot: { ...variationConsentSnapshot(variation, variation.version, itemBinding), ...offer },
       },
     });
 

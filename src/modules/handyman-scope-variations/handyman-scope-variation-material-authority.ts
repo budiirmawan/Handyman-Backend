@@ -78,6 +78,26 @@ export async function assertPinnedVariationApproval(
     throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
       message: 'Variation requires an exact version-pinned Tenant PIC approval; obtain a new decision on a newly issued variation.' });
   }
+  // New document-backed decisions additionally pin the exact offered bytes.
+  // Historical decisions without an offer remain historical, not backfilled.
+  const revision = events.find(e => e.eventType === 'REVISED_QUOTATION' && e.actorRole === 'OPERATIONS_MANAGER');
+  const ref = revision?.metadata.offerDocument as { id?: unknown; version?: unknown; pdfSha256?: unknown; sourceSha256?: unknown } | undefined;
+  if (ref !== undefined) {
+    const pin = snapshot as Record<string, unknown>;
+    const doc = await tx.query<{ ok: boolean }>(`SELECT EXISTS (SELECT 1 FROM handyman_variation_offer_documents d
+      WHERE d.variation_id=$1 AND d.execution_scope_id=$2 AND d.id=$3 AND d.variation_version=$4
+        AND d.pdf_sha256=$5 AND d.source_sha256=$6 AND d.revised_quotation_version_id=$7
+        AND d.pdf_sha256=encode(sha256(d.pdf_bytes),'hex')
+        AND d.source_sha256=encode(sha256(convert_to(d.source_canonical,'UTF8')),'hex')
+        AND d.source_canonical::jsonb=d.source_snapshot) AS ok`,
+    [variation.id, variation.executionScopeId, ref?.id, ref?.version, ref?.pdfSha256, ref?.sourceSha256,
+      variation.revisedQuotationVersionId]);
+    if (!doc.rows[0]?.ok || pin.offerDocumentId !== ref?.id || pin.offerDocumentVersion !== ref?.version ||
+        pin.offerPdfSha256 !== ref?.pdfSha256) {
+      throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
+        message: 'The Tenant PIC approval does not match the exact immutable variation offer.' });
+    }
+  }
 }
 
 /** The quote line itself is the immutable material identity (including its
