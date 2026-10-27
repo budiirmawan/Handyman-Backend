@@ -51,6 +51,7 @@ import { createHandymanArrivalConfigurationRouter }
   from '../modules/handyman-arrival-configuration';
 import { createHandymanDocumentIssuerProfileRouter } from '../modules/handyman-documents';
 import { createHandymanBmStatementRouter } from '../modules/handyman-bm-statement/handyman-bm-statement.routes';
+import { createHandymanBmReportRouter } from '../modules/handyman-bm-report/handyman-bm-report.routes';
 import { createHandymanDocumentBankAccountRouter } from '../modules/handyman-documents';
 import { createHandymanDocumentSettingsRouter } from '../modules/handyman-documents';
 import { createHandymanWorkSessionsApiRouter }
@@ -903,6 +904,7 @@ export function createApiRouter(): Router {
   router.use(createHandymanDispatchApiRouter()); // CR-HM-OPS-DISPATCH-02 P0-C/P0-D — dispatch readiness/release + identity projection
   router.use(createHandymanArrivalConfigurationRouter()); // CR-HM-FIELD-OPERATIONS-01 PART 04 — approved G-2 QR registry + G-3 Building geofence configuration (building_configuration.* + BE-02G)
   router.use(createHandymanBmStatementRouter()); // CR-HM-BM-COMMISSION-04 PART 01 — scoped, non-issued statement preview
+  router.use(createHandymanBmReportRouter()); // CR-HM-BM-REPORT-05 — Building-wide, non-issued monthly preview
   router.use(createHandymanDocumentIssuerProfileRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01A — Handyman document issuer company profile (handyman.commercial.manage + provider-Client scope)
   router.use(createHandymanDocumentBankAccountRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01B — issuer company receiving bank accounts (handyman.commercial.manage + provider-Client scope; verification act gates a payment destination)
   router.use(createHandymanDocumentSettingsRouter()); // CR-HM-DOCUMENT-PROFILE-01 PART 01C — per-kind/per-language document wording, prefix namespace and signatory identity (handyman.commercial.manage + provider-Client scope)
