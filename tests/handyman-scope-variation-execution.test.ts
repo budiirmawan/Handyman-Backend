@@ -34,6 +34,7 @@ import { grantCareActorProperty, revokeCareActorProperty, handymanCareActorServi
 import { handoffRuntimeRepository, handoffIntegrationSecretEnvName } from '../src/modules/handyman-handoff';
 import { admitCareWorkspace, signCareWorkspaceAssertion, type CareWorkspaceAssertion } from '../src/modules/handyman-care-workspace/care-workspace.service';
 import { stableJson } from '../src/shared/stable-json';
+import { createEvidenceStorage, evidenceStorageKey } from '../src/modules/evidence/storage';
 import { tenantCompanyService } from '../src/modules/tenant-companies';
 import { tenantPicService } from '../src/modules/tenant-pics';
 import { tenantSpaceService } from '../src/modules/tenant-spaces';
