@@ -145,7 +145,12 @@ export async function recordAddLaborExecution(input: RecordAddLaborInput, actorU
         message: 'Work evidence must match this scope and variation and be verified after work started.' });
     }
     const duplicates = await tx.query(`SELECT 1 FROM handyman_add_labor_executions
-      WHERE (variation_id=$1 AND work_session_id=$2) OR evidence_id=$3 LIMIT 1`, [variationId, sessionId, evidence.id]);
+      WHERE (variation_id=$1 AND work_session_id=$2) OR evidence_id=$3
+      UNION ALL SELECT 1 FROM handyman_completion_declarations d
+      LEFT JOIN handyman_completion_revocations r ON r.declaration_id=d.id
+      WHERE d.execution_scope_id=$4 AND r.id IS NULL
+        AND (d.evidence_id=$3 OR (d.variation_id=$1 AND d.actual_qty=0)) LIMIT 1`,
+    [variationId, sessionId, evidence.id, scopeId]);
     if (duplicates.rows[0]) {
       throw new AppError({ statusCode: 409, code: ERROR_CODES.HANDYMAN_ADD_LABOR_DUPLICATE,
         message: 'This variation already has a declaration for the session or this work evidence has been used.' });

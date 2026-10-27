@@ -102,6 +102,8 @@ function toApprovedSignOffPayload(
 
 function toBastEventPayload(event: HandymanBastEventRecord) {
   const metadata = event.metadata ?? {};
+  const completion = metadata.completion && typeof metadata.completion === 'object'
+    ? metadata.completion as Record<string, unknown> : null;
   return {
     id: event.id,
     bastId: event.bastId,
@@ -117,6 +119,12 @@ function toBastEventPayload(event: HandymanBastEventRecord) {
     // customer-care GET read-after-write without publishing arbitrary JSON.
     voidReason:
       typeof metadata.voidReason === 'string' ? metadata.voidReason : null,
+    completion: completion && typeof completion.verificationId === 'string'
+      && typeof completion.manifestId === 'string' && typeof completion.manifestVersion === 'number'
+      && typeof completion.manifestSha256 === 'string' ? {
+        verificationId: completion.verificationId, manifestId: completion.manifestId,
+        manifestVersion: completion.manifestVersion, manifestSha256: completion.manifestSha256,
+      } : null,
   };
 }
 

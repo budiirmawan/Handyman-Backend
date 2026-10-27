@@ -147,6 +147,7 @@ async function updateBastStatus(
   id: string,
   status: HandymanBastStatus,
   expectedFromStatus: HandymanBastStatus,
+  completionVerificationId?: string,
 ): Promise<HandymanBastRecord> {
   const issuedAtSql = status === 'ISSUED'
     ? 'issued_at = COALESCE(issued_at, NOW())'
@@ -174,12 +175,13 @@ async function updateBastStatus(
             ${acceptedAtSql},
             ${rejectedAtSql},
             ${voidedAtSql},
+            completion_verification_id = COALESCE($4, completion_verification_id),
             updated_at = NOW()
       WHERE id = $1 AND status = $3
       RETURNING id, client_id, execution_scope_id, qc_run_id, status,
                 issued_at, accepted_at, rejected_at, voided_at,
                 created_at, updated_at`,
-    [id, status, expectedFromStatus],
+    [id, status, expectedFromStatus, completionVerificationId ?? null],
   );
   if (!result.rows[0]) {
     // Lost the concurrency race: another writer already transitioned this

@@ -1,3 +1,4 @@
+import { requireVerifiedCompletionForIssue } from '../handyman-completion-manifest/handyman-completion-manifest.service';
 import { resolveCareWorkspacePrincipal } from '../handyman-care-workspace/care-workspace.service';
 import { handymanExecutionScopeRepository } from '../handyman-quotations/handyman-execution-scope.repository';
 import { assertCareConsentWriteFresh, verifyCareCommercialConsent, type CareDecisionChannel } from '../handyman-commercial-consent/commercial-consent.service';
@@ -279,15 +280,18 @@ async function applyPart01Transition(
     }
     await loadAuthorizedScope(client, bast.executionScopeId);
     const next = nextHandymanBastStatus(bast.status, action);
+    let completion: Awaited<ReturnType<typeof requireVerifiedCompletionForIssue>> | undefined;
     if (action === 'ISSUE') {
       if (!bast.qcRunId) throw handymanBastQcNotReadyError();
       await requireCurrentQcPassForBast(client, scope, bast.qcRunId);
+      completion = await requireVerifiedCompletionForIssue(client, scope, bast.qcRunId);
     }
     const updated = await handymanBastRepository.updateBastStatus(
       client,
       bast.id,
       next,
       bast.status,
+      completion?.verificationId,
     );
     const event = await handymanBastRepository.insertEvent(client, {
       clientId: bast.clientId,
@@ -296,7 +300,7 @@ async function applyPart01Transition(
       eventType: action,
       idempotencyKey,
       actorUserId: actor,
-      metadata: voidReasonMetadata,
+      metadata: completion ? { ...voidReasonMetadata, completion } : voidReasonMetadata,
     });
     return { bast: updated, event, replayed: false };
   });
