@@ -1,4 +1,5 @@
 import { withTransaction } from '../../database';
+import type { PoolClient } from 'pg';
 import { isValidUuid } from '../clients';
 import {
   assertBuildingScopedResourceAccess,
@@ -11,8 +12,10 @@ import {
   handymanQuotationLineRepository,
   handymanQuotationRepository,
 } from '../handyman-quotations';
-import { resolveHandymanAssignmentLead }
-  from '../handyman-scope-assignments';
+import {
+  handymanScopeAssignmentRepository,
+  resolveHandymanAssignmentLead,
+} from '../handyman-scope-assignments';
 import {
   handymanMaterialExecutionEstimateInvalidError,
   handymanMaterialExecutionIllegalTransitionError,
@@ -103,6 +106,48 @@ async function authorityPreamble(
   return { scope, resolution };
 }
 
+// Variation authorization and assignment changes lock this scope first. Hold
+// that same lock through each new material action so a concurrent REDUCE cannot
+// race a quantity check, and re-resolve the real current Lead under the lock.
+async function lockMaterialAuthority(tx: PoolClient, scopeId: string, actorId: string) {
+  const scope = await handymanScopeAssignmentRepository.lockScopeById(tx, scopeId);
+  if (!scope) throw handymanExecutionScopeNotFoundError();
+  const lead = await resolveHandymanAssignmentLead(scopeId, actorId, tx);
+  if (!lead || lead.leadUserId !== actorId) throw handymanMaterialExecutionNotAuthorizedError();
+}
+
+// A REDUCE targets an immutable original quotation line. Bind it to the real
+// material execution line through that identity; do not rewrite approvedQty or
+// historical use. Only new estimates, acquisitions and use are limited.
+async function assertRemainingOriginalMaterialQuantity(
+  tx: PoolClient,
+  scopeId: string,
+  quotationLineId: string,
+  proposedQuantity: number,
+): Promise<void> {
+  const result = await tx.query<{ allowed: boolean }>(
+    `SELECT ROUND($3::numeric, 3) <= GREATEST(ql.quantity - COALESCE((
+       SELECT SUM(v.quantity)
+         FROM handyman_scope_variations v
+        WHERE v.execution_scope_id = s.id
+          AND v.variation_type = 'REDUCE' AND v.line_type = 'MATERIAL'
+          AND v.target_quotation_line_id = ql.id
+          AND v.tenant_decision_outcome = 'APPROVED'
+          AND v.status IN ('AUTHORIZED_SCOPE', 'EXECUTION', 'QC', 'FINAL_CHARGE_ELIGIBILITY')
+     ), 0), 0) AS allowed
+       FROM handyman_execution_scopes s
+       JOIN handyman_quotation_lines ql ON ql.quotation_version_id = s.approved_quotation_version_id
+      WHERE s.id = $1 AND ql.id = $2 AND ql.line_type = 'MATERIAL'`,
+    [scopeId, quotationLineId, proposedQuantity],
+  );
+  if (!result.rows[0]) {
+    throw handymanMaterialExecutionLinkInvalidError('line-not-on-original-approved-snapshot');
+  }
+  if (!result.rows[0].allowed) {
+    throw handymanMaterialExecutionQuantityExceededError('exceeds-remaining-scope-after-reduction');
+  }
+}
+
 /**
  * ESTIMATE (governance D1/D3/D4/D7): AUTHORIZED scope + CURRENT
  * authoritative Crew Lead + valid quotation MATERIAL-line link →
@@ -163,6 +208,7 @@ export async function estimateHandymanMaterialExecutionLine(
   const sourceItemId = input.sourceItemId ?? quoteLine.sourceItemId;
 
   return withTransaction(async (tx) => {
+    await lockMaterialAuthority(tx, scopeUuid, actorUuid);
     // Serialize link attempts against the SAME quotation line inside
     // the scope Lead serialization window.
     await tx.query(
@@ -184,6 +230,7 @@ export async function estimateHandymanMaterialExecutionLine(
       }
       throw handymanMaterialExecutionLinkConflictError();
     }
+    await assertRemainingOriginalMaterialQuantity(tx, scopeUuid, quoteLineUuid, estimatedQty);
 
     const line = await handymanMaterialExecutionRepository
       .createMaterialExecutionLine(tx, {
@@ -330,6 +377,7 @@ async function acquireHandymanMaterialLine(
   await authorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
+    await lockMaterialAuthority(tx, scopeUuid, actorUuid);
     const current = await handymanMaterialExecutionRepository
       .findMaterialExecutionLineByIdForUpdate(tx, lineUuid);
     if (!current || current.executionScopeId !== scopeUuid) {
@@ -367,6 +415,10 @@ async function acquireHandymanMaterialLine(
       throw handymanMaterialExecutionQuantityExceededError(
         'exceeds-approved-snapshot-quantity');
     }
+    await assertRemainingOriginalMaterialQuantity(
+      tx, scopeUuid, current.quotationLineId,
+      nextIssued + nextPurchased - current.returnedQty,
+    );
     const headed = await handymanMaterialExecutionRepository
       .updateMaterialExecutionLineHead(tx, lineUuid, {
         status: mode,
@@ -448,6 +500,7 @@ async function adjustUsageHandymanMaterialLine(
   await authorityPreamble(scopeUuid, actorUuid);
 
   return withTransaction(async (tx) => {
+    await lockMaterialAuthority(tx, scopeUuid, actorUuid);
     const current = await handymanMaterialExecutionRepository
       .findMaterialExecutionLineByIdForUpdate(tx, lineUuid);
     if (!current || current.executionScopeId !== scopeUuid) {
@@ -487,6 +540,11 @@ async function adjustUsageHandymanMaterialLine(
           - nextUsed) {
       throw handymanMaterialExecutionQuantityExceededError(
         'return-exceeds-used-quantity');
+    }
+    if (kind === 'USE') {
+      await assertRemainingOriginalMaterialQuantity(
+        tx, scopeUuid, current.quotationLineId, nextUsed,
+      );
     }
     const headed = await handymanMaterialExecutionRepository
       .updateMaterialExecutionLineHead(tx, lineUuid, {

@@ -602,14 +602,12 @@ async function assertValidRevisedQuotationVersionForVariation(
     id: string;
     version_number: number;
     status: string;
-    currency: string;
     current_offer: boolean;
     orig_version_number: number;
   }>(
     `SELECT qv.id,
             qv.version_number,
             qv.status,
-            qv.currency,
             (qv.valid_until IS NOT NULL AND qv.valid_until > clock_timestamp()) AS current_offer,
             orig_qv.version_number AS orig_version_number
        FROM handyman_quotation_versions qv
@@ -651,13 +649,7 @@ async function assertValidRevisedQuotationVersionForVariation(
         'revisedQuotationVersionId must be in ISSUED or APPROVED status.',
     });
   }
-  if (qv.currency !== params.expectedCurrency) {
-    throw new AppError({
-      statusCode: 409,
-      code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
-      message: 'The revised quotation currency must match the variation currency.',
-    });
-  }
+  // Currency belongs to the immutable quotation lines, not the version row.
   // Like quotation decisions, new consent cannot be recorded against an
   // expired or undated issued offer. Once consent is recorded, passage of the
   // offer deadline alone does not invalidate that existing decision.
@@ -712,13 +704,13 @@ async function assertValidRevisedQuotationVersionForVariation(
         'revisedQuotationVersionId has no quotation lines; a valid revised scope/charge representation is required.',
     });
   }
-  for (const row of revLinesRes.rows) {
+  for (const row of [...origLinesRes.rows, ...revLinesRes.rows]) {
     if (row.currency !== params.expectedCurrency) {
       throw new AppError({
         statusCode: 409,
         code: ERROR_CODES.HANDYMAN_VARIATION_ILLEGAL_TRANSITION,
         message:
-          'revisedQuotationVersionId line currency does not match the variation currency.',
+          'Original and revised quotation line currencies must match the variation currency.',
       });
     }
   }
