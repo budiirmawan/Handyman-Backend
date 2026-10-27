@@ -5,6 +5,8 @@ import { assertBuildingScopedResourceAccess } from '../context-access';
 import { recordOperationalEvent } from '../operational-events';
 import { handymanExecutionScopeNotFoundError } from '../handyman-quotations';
 import { handymanScopeAssignmentRepository } from '../handyman-scope-assignments';
+import { hasApprovedScopeQuotation } from '../handyman-scope-assignments/handyman-scope-quotation-authority';
+import { hasRequiredDispatchPayment } from './handyman-dispatch-payment';
 import { handymanPermitReadinessRepository } from '../handyman-scheduling/handyman-permit-readiness.repository';
 import { handymanUnitAccessReadinessRepository } from '../handyman-scheduling/handyman-unit-access.repository';
 import {
@@ -143,12 +145,15 @@ export async function assertDispatchExecutionClearance(
   }, tx);
   const assignment = await handymanScopeAssignmentRepository.findActiveAssignmentByScope(tx, scope.id);
   const release = await handymanDispatchRepository.lockActiveByScope(tx, scope.id);
-  if (scope.status !== 'AUTHORIZED' || !assignment || assignment.id !== assignmentId ||
+  if (scope.status !== 'AUTHORIZED' || !(await hasApprovedScopeQuotation(tx, scope.id)) ||
+      !assignment || assignment.id !== assignmentId ||
       !release || release.assignmentId !== assignment.id || !release.appointmentId) {
-    throw handymanDispatchNotReadyError(['Current AUTHORIZED scope, assignment and dispatch release are required.']);
+    throw handymanDispatchNotReadyError(['Current approved quotation, AUTHORIZED scope, assignment and dispatch release are required.']);
   }
   const clearance = await readExecutionClearance(tx, scope, assignment, release.appointmentId, true);
+  const requiredPaymentSatisfied = await hasRequiredDispatchPayment(tx, scope);
   const failures = [];
+  if (!requiredPaymentSatisfied) failures.push('Required quotation DP is not confirmed net of refunds and reversals.');
   if (!clearance.appointmentId) failures.push('Released execution visit is not current/confirmed for this crew and Building.');
   if (!clearance.permitClearance) failures.push('No active, scope-matching permit covers the execution visit; absence is not an exemption.');
   if (!clearance.unitAccessClearance) failures.push('No active, scope-matching unit access covers the execution visit; absence is not an exemption.');
@@ -185,8 +190,8 @@ export async function evaluateDispatchReadiness(
     buildingId: scope.buildingId,
   }, executor);
 
-  // 1. Authorized scope
-  const authorizedScope = scope.status === 'AUTHORIZED';
+  // 1. Authorized scope, tied to this exact approved quotation decision.
+  const authorizedScope = scope.status === 'AUTHORIZED' && await hasApprovedScopeQuotation(db, scope.id);
 
   // 2. Active assignment
   const assignment =
@@ -311,6 +316,7 @@ export async function evaluateDispatchReadiness(
     [scopeId, scope.clientId],
   );
   const materialReady = materialRes.rows.length === 0;
+  const requiredPaymentSatisfied = authorizedScope && await hasRequiredDispatchPayment(db, scope);
 
   const checks: HandymanDispatchReadinessCheck = {
     authorizedScope,
@@ -322,10 +328,12 @@ export async function evaluateDispatchReadiness(
     permitClearance,
     unitAccessClearance,
     materialReady,
+    requiredPaymentSatisfied,
     assignmentCurrent,
   };
   const failures: string[] = [];
-  if (!authorizedScope) failures.push('Execution scope is not AUTHORIZED.');
+  if (!authorizedScope) failures.push('Execution scope has no matching approved quotation decision.');
+  if (!requiredPaymentSatisfied) failures.push('Required quotation DP is not confirmed net of refunds and reversals.');
   if (!assignmentCurrent) failures.push('No ACTIVE crew assignment.');
   if (!confirmedAppointment) failures.push('No CONFIRMED execution appointment.');
   if (!eligibleProvider) failures.push('Provider context is not ACTIVE.');

@@ -4,7 +4,17 @@ import { rm } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import type { Pool } from 'pg';
-import { closePool, initDatabase, migrateDown, migrateUp } from '../src/database';
+import { closePool, initDatabase, migrateDown, migrateUp, withTransaction } from '../src/database';
+import { evaluateDispatchReadiness, releaseHandymanDispatch, assertDispatchExecutionClearance } from '../src/modules/handyman-dispatch/handyman-dispatch.service';
+import { handymanBmClearanceVerifier } from '../src/modules/handyman-dispatch/handyman-bm-clearance';
+import { openHandymanCustomerTransaction, composeHandymanChargeLine } from '../src/modules/handyman-customer-transactions';
+import { recordHandymanCustomerPayment, confirmHandymanCustomerPayment } from '../src/modules/handyman-customer-payments';
+import { allocateHandymanCustomerPayment } from '../src/modules/handyman-customer-payment-allocations';
+import { refundHandymanCustomerPayment, reverseHandymanCustomerPayment } from '../src/modules/handyman-customer-ledger-corrections';
+import { createHandymanPermitReadiness } from '../src/modules/handyman-scheduling/handyman-permit-readiness.service';
+import { createHandymanUnitAccessReadiness } from '../src/modules/handyman-scheduling/handyman-unit-access.service';
+import { COMMERCIAL_CONSENT_PURPOSE, COMMERCIAL_CONSENT_METHOD, commercialConsentSecretEnvName,
+  signCommercialConsentAssertion, type CommercialConsentAssertion } from '../src/modules/handyman-commercial-consent/commercial-consent.assertion';
 import { buildingAssignmentService } from '../src/modules/building-assignments';
 import { clientMonetaryContextService } from '../src/modules/client-monetary-contexts';
 import { createEvidenceStorage, evidenceStorageKey } from '../src/modules/evidence/storage';
@@ -33,7 +43,7 @@ import { credentialService } from '../src/modules/auth';
 import { stableJson } from '../src/shared/stable-json';
 import { createAdminUser } from './helpers/access';
 import { startEmbeddedTestDatabase, type EmbeddedTestDatabase } from './helpers/embedded-test-db';
-import { initHandymanFixtures, realmFixture, locationChain } from './helpers/handyman-fixtures';
+import { initHandymanFixtures, realmFixture, locationChain, crewFixture } from './helpers/handyman-fixtures';
 import { api } from './helpers/http';
 
 const DIR = '/tmp/hm-quotation-document-0509', STORAGE = '/tmp/hm-quotation-delivery-evidence-0510', PORT = 55574;
@@ -43,7 +53,8 @@ const valid = () => new Date(Date.now() + 86400000).toISOString();
 const code = (expected: string) => (e: unknown) => { assert.equal((e as { code?: string }).code, expected); return true; };
 let db: EmbeddedTestDatabase, pool: Pool, admin: string, adminToken: string, discipline: string;
 let realm: Awaited<ReturnType<typeof realmFixture>>, chain: Awaited<ReturnType<typeof locationChain>>;
-let tenant: string, person: string, pic: string, service: string, uom: string, careUser: string, careLocalToken: string, limited: string, limitedToken: string;
+let tenant: string, person: string, personToken: string, pic: string, service: string, uom: string, careUser: string, careLocalToken: string, limited: string, limitedToken: string;
+let integrationCode: string, integrationId: string;
 let reviewer: string, reviewerToken: string, careReviewerActor: string, careReviewerToken: string;
 let requestId: string, quotationId: string, versionId: string, legacyVersion: string, legacyRequest: string;
 let foreignRequest: string, foreignBuilding: string;
@@ -151,7 +162,7 @@ before(async () => {
     defaultTransactionCurrencyCode: 'IDR', allowedCurrencyCodes: ['IDR'] }, admin);
   tenant = (await tenantCompanyService.createTenantCompany({ clientId: realm.client.id,
     tenantCode: `T_${id().slice(0,8).toUpperCase()}`, tenantName: 'Customer Company', legalName: 'PT Customer' }, admin)).id;
-  const customer = await localUser(['tenant_company.manage', 'handyman.commercial.manage']); person = customer.id;
+  const customer = await localUser(['tenant_company.manage', 'handyman.commercial.manage'], true); person = customer.id; personToken = customer.token;
   pic = (await tenantPicService.createTenantPic({ tenantCompanyId: tenant, picName: 'Customer PIC', userId: person }, admin)).id;
   await tenantSpaceService.assignSpaceToTenant({ tenantCompanyId: tenant, buildingId: realm.building.id, spaceId: chain.space.id }, admin);
   await tenantBuildingContextService.createTenantBuildingContext({ tenantCompanyId: tenant, buildingId: realm.building.id }, admin);
@@ -173,8 +184,10 @@ before(async () => {
   const care = await localUser(['handyman.care.building', 'tenant_company.manage'], true); careUser = care.id; careLocalToken = care.token;
   const secondCare = await localUser(['handyman.care.building'], true); reviewer = secondCare.id; reviewerToken = secondCare.token;
   const noCare = await localUser(['tenant_company.manage'], true); limited = noCare.id; limitedToken = noCare.token;
-  const integrationCode = `QDOC_${id().slice(0,8).toUpperCase()}`, secret = 'quotation-document-workspace-test-secret';
+  integrationCode = `QDOC_${id().slice(0,8).toUpperCase()}`;
+  const secret = 'quotation-document-workspace-test-secret';
   const integration = await handoffRuntimeRepository.createIntegration({ integrationCode, displayName: 'Quotation Care' });
+  integrationId = integration.id;
   await handymanCareActorService.setIntegrationActorCapability({ integrationId: integration.id, capability: 'CUSTOMER_CARE' });
   careActor = (await handymanCareActorService.createCareActor({ integrationId: integration.id, actorReference: 'care', displayName: 'Care' })).id;
   process.env[handoffIntegrationSecretEnvName(integrationCode)] = secret;
@@ -200,7 +213,13 @@ before(async () => {
   foreignRequest = (await handymanServiceRequestService.createHandymanServiceRequest({ channelAttributionId: attribution.id,
     serviceCatalogId: foreignService.id }, admin)).id;
 });
-after(async () => { if (pool) await closePool(pool); if (db) await db.stop(); await rm(STORAGE, { recursive: true, force: true }); });
+after(async () => {
+  if (integrationCode) {
+    delete process.env[handoffIntegrationSecretEnvName(integrationCode)];
+    delete process.env[commercialConsentSecretEnvName(integrationCode)];
+  }
+  if (pool) await closePool(pool); if (db) await db.stop(); await rm(STORAGE, { recursive: true, force: true });
+});
 
 describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
   it('preserves legacy versions and fails closed on missing settings, issuer, verified bank, and unauthorized actors', async () => {
@@ -397,13 +416,251 @@ describe('CR-HM-QUOTATION-DOCUMENT-01', () => {
     assert.equal((await api().post(localEvents()).set(auth(careLocalToken)).send(sentBody())).status, 409);
     const history = await api().get(carePath(requestId, versionId)).query(selection()).set('Authorization', `Bearer ${careToken}`).buffer(true);
     assert.equal(history.status, 200); assert.deepEqual(history.body, firstBytes);
-    await decideHandymanQuotation(secondVersion, { decision: 'APPROVE', idempotencyKey: `approve-${id()}` }, person);
+    const decisionPath = `/api/v1/handyman/quotation-versions/${secondVersion}/decision`;
+    assert.equal((await api().post(decisionPath).set('Idempotency-Key', id()).send({ decision: 'APPROVE' })).status, 401);
+    assert.equal((await api().post(decisionPath).set(auth(careLocalToken)).set('Idempotency-Key', id())
+      .send({ decision: 'APPROVE', actorUserId: person })).status, 403);
+    const approved = await api().post(decisionPath).set(auth(personToken)).set('Idempotency-Key', id()).send({ decision: 'APPROVE' });
+    assert.equal(approved.status, 201, JSON.stringify(approved.body));
+    assert.equal(approved.body.data.decidedByUserId, person);
+    assert.equal(approved.body.data.quotationVersionId, secondVersion);
+    assert.equal(approved.body.data.executionScope.approvedQuotationVersionId, secondVersion);
     assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [secondVersion])).rows[0].status, 'APPROVED');
     const secondHash = rows[1].pdf_sha256;
     assert.equal((await api().post(localEvents(requestId, quotationId, secondVersion)).set(auth(careLocalToken))
       .send(sentBody('DIRECT', { pdfSha256: secondHash }))).status, 409);
     assert.equal((await api().get(carePath(requestId, secondVersion)).query(selection()).set('Authorization', `Bearer ${careToken}`)).status, 200);
     assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [legacyVersion])).rows[0].status, 'ISSUED');
+  });
+
+  it('assigns only the exact approved decision lineage, including malformed historical scopes', async () => {
+    const crew = await crewFixture(realm);
+    const assign = (scope: string) => api().post(`/api/v1/handyman/execution-scopes/${scope}/assignment`)
+      .set(auth(adminToken)).send({ providerContextId: crew.providerContext.id, crewId: crew.crew.id });
+    const good = (await q('SELECT * FROM handyman_execution_scopes WHERE approved_quotation_version_id=$1', [secondVersion])).rows[0];
+    assert.ok(good); assert.equal(good.handyman_request_id, requestId);
+    const doc = (await q('SELECT * FROM handyman_quotation_documents WHERE quotation_version_id=$1', [secondVersion])).rows[0];
+    assert.equal(doc.source_snapshot.quotation.versionId, secondVersion); assert.equal(doc.pdf_sha256, sha(doc.pdf_bytes));
+    assert.equal((await assign(versionId)).status, 404, 'a quotation version is not an execution scope');
+    await assert.rejects(decideHandymanQuotation(versionId, { decision: 'APPROVE', idempotencyKey: id() }, person),
+      code('HANDYMAN_QUOTATION_INVALID_TRANSITION'));
+
+    // Model the gap in historical/imported scope records: the individual FKs
+    // exist but do not bind the decision to the version or its request.
+    async function inconsistentScope(req: string, quote: string, version: string, decision: string) {
+      const scope = id();
+      const inserted = await q(`INSERT INTO handyman_execution_scopes
+        (id,client_id,handyman_request_id,channel_attribution_id,quotation_id,approved_quotation_version_id,
+         quotation_decision_id,tenant_company_id,tenant_pic_id,building_id,floor_id,area_id,room_id,space_id,status,created_by_user_id)
+        SELECT $1,r.client_id,r.id,r.channel_attribution_id,$3,$4,$5,r.tenant_company_id,r.tenant_pic_id,r.building_id,
+          $6,$7,$8,r.space_id,'AUTHORIZED',$9 FROM handyman_service_requests r WHERE r.id=$2 RETURNING id`,
+      [scope, req, quote, version, decision, chain.floor.id, chain.area.id, chain.room.id, person]);
+      assert.equal(inserted.rowCount, 1); return scope;
+    }
+    const superseded = await inconsistentScope(requestId, quotationId, versionId, good.quotation_decision_id);
+    const refused = await assign(superseded);
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.equal(refused.body.error.code, 'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED');
+
+    const rejectedRequest = await request();
+    const rejectedQuote = await createHandymanQuotation({ handymanRequestId: rejectedRequest }, admin);
+    const rejectedVersion = rejectedQuote.versions[0].id;
+    await line(rejectedVersion, 'LABOR', 1, 100, 'Rejected repair');
+    await issueHandymanQuotationVersion(rejectedVersion, { validUntil: valid() }, admin);
+    const rejection = await api().post(`/api/v1/handyman/quotation-versions/${rejectedVersion}/decision`)
+      .set(auth(personToken)).set('Idempotency-Key', id()).send({ decision: 'REJECT' });
+    assert.equal(rejection.status, 201, JSON.stringify(rejection.body));
+    assert.equal(rejection.body.data.decision, 'REJECT'); assert.equal(rejection.body.data.executionScope, null);
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_execution_scopes WHERE handyman_request_id=$1', [rejectedRequest])).rows[0].n, 0);
+    const rejected = await inconsistentScope(rejectedRequest, rejectedQuote.quotation.id, rejectedVersion, rejection.body.data.id);
+    assert.equal((await assign(rejected)).body.error.code, 'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED');
+
+    const pendingRequest = await request();
+    const pendingQuote = await createHandymanQuotation({ handymanRequestId: pendingRequest }, admin);
+    const pendingVersion = pendingQuote.versions[0].id;
+    await line(pendingVersion, 'LABOR', 1, 100, 'Unapproved repair');
+    await issueHandymanQuotationVersion(pendingVersion, { validUntil: valid() }, admin);
+    const pending = await inconsistentScope(pendingRequest, pendingQuote.quotation.id, pendingVersion, good.quotation_decision_id);
+    assert.equal((await assign(pending)).body.error.code, 'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED');
+    // Even a forged APPROVED projection must not borrow another request's decision.
+    await q("UPDATE handyman_quotation_versions SET status='APPROVED' WHERE id=$1", [pendingVersion]);
+    assert.equal((await assign(pending)).body.error.code, 'HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED');
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_execution_scope_assignments WHERE execution_scope_id=ANY($1::uuid[])',
+      [[superseded, rejected, pending]])).rows[0].n, 0);
+
+    const assigned = await assign(good.id);
+    assert.equal(assigned.status, 201, JSON.stringify(assigned.body));
+    const readiness = await evaluateDispatchReadiness(good.id, admin);
+    assert.equal(readiness.checks.authorizedScope, true);
+    assert.equal(readiness.checks.requiredPaymentSatisfied, true, 'the approved revision explicitly requires no DP');
+    assert.equal(readiness.assignmentReadiness, 'PLANNED');
+    assert.equal(readiness.checks.permitClearance, false);
+    await assert.rejects(releaseHandymanDispatch({ executionScopeId: good.id }, admin), code('HANDYMAN_DISPATCH_NOT_READY'));
+  });
+
+  it('keeps Care reports pending unless a separately enrolled verifier signs this exact issued version', async () => {
+    const req = await request(); const quote = await createHandymanQuotation({ handymanRequestId: req }, admin);
+    const version = quote.versions[0].id; await line(version, 'LABOR', 1, 100, 'Verified Care repair');
+    await issueHandymanQuotationVersion(version, { validUntil: valid() }, admin);
+    const doc = (await q('SELECT pdf_sha256,pdf_bytes FROM handyman_quotation_documents WHERE quotation_version_id=$1', [version])).rows[0];
+    assert.equal(doc.pdf_sha256, sha(doc.pdf_bytes));
+    const base = `/api/v1/handyman/care/requests/${req}`;
+    const contact = await api().post(`${base}/communications`).set(auth(careToken)).send({
+      purpose: 'QUOTATION_RESPONSE_RECEIVED', reportedContactName: 'Reported customer', channel: 'MESSAGING',
+      channelReference: 'test message', statement: 'Care reports approval', reportedStatement: 'CONFIRM', idempotencyKey: id(),
+    });
+    assert.equal(contact.status, 201, JSON.stringify(contact.body));
+    assert.equal(contact.body.data.verification_state, 'PENDING_VERIFICATION');
+    const targetResponse = await api().get(`${base}/commercial-targets/QUOTATION_VERSION/${version}`).set(auth(careToken));
+    assert.equal(targetResponse.status, 200, JSON.stringify(targetResponse.body));
+    const target = targetResponse.body.data.target;
+    const now = Date.now();
+    const assertion: CommercialConsentAssertion = { iss: integrationCode, aud: 'handyman-backend',
+      purpose: COMMERCIAL_CONSENT_PURPOSE, method: COMMERCIAL_CONSENT_METHOD, jti: id(),
+      iat: new Date(now - 1000).toISOString(), exp: new Date(now + 180000).toISOString(), careActorId: careActor,
+      clientId: realm.client.id, handymanRequestId: req, tenantCompanyId: tenant, tenantPicId: pic,
+      buildingId: realm.building.id, spaceId: chain.space.id, communicationId: contact.body.data.id,
+      customerReference: 'TEST independent customer', verificationReference: `TEST receipt ${id()}`,
+      targetType: 'QUOTATION_VERSION', targetId: version, targetDigest: target.digest, decision: 'ACCEPT', rejectReason: null };
+    const secret = 'TEST-only-independent-customer-consent-key';
+    const body = { decision: 'ACCEPT', idempotencyKey: id(), consentAssertion: assertion };
+    const decisionPath = `${base}/quotation-versions/${version}/decision`;
+    const send = (payload: unknown, signature?: string) => {
+      const r = api().post(decisionPath).set(auth(careToken));
+      if (signature) r.set('x-handyman-commercial-consent-signature', signature);
+      return r.send(payload);
+    };
+    const blocked = await send(body, signCommercialConsentAssertion(assertion, secret));
+    assert.equal(blocked.status, 503, JSON.stringify(blocked.body));
+    assert.equal(blocked.body.error.code, 'HANDYMAN_COMMERCIAL_CONSENT_INTEGRATION_BLOCKED');
+    assert.equal((await q('SELECT status FROM handyman_quotation_versions WHERE id=$1', [version])).rows[0].status, 'ISSUED');
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_execution_scopes WHERE handyman_request_id=$1', [req])).rows[0].n, 0);
+    // Test-only external verifier enrollment; not a production producer.
+    await q('UPDATE handyman_handoff_integrations SET commercial_consent_contract_ref=$2 WHERE id=$1',
+      [integrationId, 'TEST ONLY: independent customer verification']);
+    process.env[commercialConsentSecretEnvName(integrationCode)] = secret;
+    assert.equal((await send({ decision: 'ACCEPT', idempotencyKey: id() })).status, 403);
+    assert.equal((await send(body, signCommercialConsentAssertion(assertion, 'wrong-test-key'))).status, 403);
+    const altered = { ...assertion, targetId: id() };
+    assert.equal((await send({ ...body, consentAssertion: altered }, signCommercialConsentAssertion(altered, secret))).status, 403);
+    assert.equal((await q('SELECT verification_state FROM handyman_care_communications WHERE id=$1', [contact.body.data.id])).rows[0].verification_state, 'PENDING_VERIFICATION');
+    assert.equal((await q('SELECT count(*)::int n FROM handyman_quotation_decisions WHERE quotation_version_id=$1', [version])).rows[0].n, 0);
+    const accepted = await send(body, signCommercialConsentAssertion(assertion, secret));
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+    assert.equal(accepted.body.data.decidedByUserId, null);
+    assert.equal(accepted.body.data.decidedByCareActorId, careActor);
+    assert.equal(accepted.body.data.executionScope.approvedQuotationVersionId, version);
+    assert.ok(accepted.body.data.commercialConsentId);
+    const crew = await crewFixture(realm);
+    const assigned = await api().post(`/api/v1/handyman/execution-scopes/${accepted.body.data.executionScope.id}/assignment`)
+      .set(auth(adminToken)).send({ providerContextId: crew.providerContext.id, crewId: crew.crew.id });
+    assert.equal(assigned.status, 201, JSON.stringify(assigned.body));
+    assert.equal((await evaluateDispatchReadiness(accepted.body.data.executionScope.id, admin)).assignmentReadiness, 'PLANNED');
+  });
+
+  it('allows planning but enforces confirmed net DP and permit/access at release and again at execution', async (t) => {
+    const req = await request(); const quote = await createHandymanQuotation({ handymanRequestId: req }, admin);
+    const version = quote.versions[0].id; const quoteLine = await line(version, 'LABOR', 1, 100, 'Repair requiring DP');
+    await issueHandymanQuotationVersion(version, { validUntil: valid(), dpRequired: true, dpPercentage: 30 }, admin);
+    const decision = await decideHandymanQuotation(version, { decision: 'APPROVE', idempotencyKey: id() }, person);
+    const scope = decision.executionScope!; const crew = await crewFixture(realm);
+    const assigned = await api().post(`/api/v1/handyman/execution-scopes/${scope.id}/assignment`)
+      .set(auth(adminToken)).send({ providerContextId: crew.providerContext.id, crewId: crew.crew.id });
+    assert.equal(assigned.status, 201, JSON.stringify(assigned.body));
+    const assignmentId = assigned.body.data.id;
+    let report = await evaluateDispatchReadiness(scope.id, admin);
+    assert.equal(report.assignmentReadiness, 'PLANNED');
+    assert.equal(report.checks.requiredPaymentSatisfied, false);
+    assert.equal(report.checks.permitClearance, false);
+    await assert.rejects(releaseHandymanDispatch({ executionScopeId: scope.id }, admin), code('HANDYMAN_DISPATCH_NOT_READY'));
+
+    await openHandymanCustomerTransaction({ executionScopeId: scope.id, idempotencyKey: id() }, admin);
+    const record = (amount: string, stage = 'DP') => recordHandymanCustomerPayment({ executionScopeId: scope.id,
+      amount, channel: 'BANK_TRANSFER', obligationStage: stage, idempotencyKey: id(), externalReference: id() }, admin);
+    const confirm = (paymentId: string) => confirmHandymanCustomerPayment({ executionScopeId: scope.id, paymentId, idempotencyKey: id() }, admin);
+    const other = await record('100.00', 'TERMIN'); await confirm(other.payment.id);
+    const first = await record('20.00');
+    assert.equal((await evaluateDispatchReadiness(scope.id, admin)).checks.requiredPaymentSatisfied, false, 'PENDING and other stages are not DP');
+    await confirm(first.payment.id);
+    assert.equal((await evaluateDispatchReadiness(scope.id, admin)).checks.requiredPaymentSatisfied, false, 'partial DP is insufficient');
+    const second = await record('10.00'); await confirm(second.payment.id);
+    assert.equal((await evaluateDispatchReadiness(scope.id, admin)).checks.requiredPaymentSatisfied, true);
+
+    // Test fixture for an already-confirmed visit, as in the existing dispatch
+    // suite. No caller-provided booking is accepted by the release endpoint.
+    const start = new Date(Date.now() - 60000), end = new Date(Date.now() + 4 * 3600000), appointmentId = id();
+    await q('ALTER TABLE handyman_visit_appointments DISABLE TRIGGER ALL');
+    try {
+      await q(`INSERT INTO handyman_visit_appointments
+        (id,client_id,handyman_request_id,execution_scope_id,tenant_company_id,building_id,kind,resource_type,resource_id,
+         start_at,end_at,timezone,state,confirmed_by_user_id,confirmed_at,created_by_user_id,tenant_choice_evidence_ref,version)
+        SELECT $1,s.client_id,s.handyman_request_id,s.id,s.tenant_company_id,s.building_id,'EXECUTION','CREW',$2,
+          $3,$4,COALESCE(b.timezone,'UTC'),'CONFIRMED',$5,NOW(),$5,'test-existing-choice',1
+          FROM handyman_execution_scopes s JOIN buildings b ON b.id=s.building_id WHERE s.id=$6`,
+      [appointmentId, crew.crew.id, start, end, admin, scope.id]);
+    } finally { await q('ALTER TABLE handyman_visit_appointments ENABLE TRIGGER ALL'); }
+    await q(`INSERT INTO handyman_visit_capacity_reservations(id,appointment_id,client_id,resource_type,resource_id,start_at,end_at,active)
+      VALUES($1,$2,$3,'CREW',$4,$5,$6,TRUE)`, [id(), appointmentId, realm.client.id, crew.crew.id, start, end]);
+    report = await evaluateDispatchReadiness(scope.id, admin);
+    assert.equal(report.checks.confirmedAppointment, true); assert.equal(report.checks.permitClearance, false);
+    assert.equal(report.checks.requiredPaymentSatisfied, true);
+    await assert.rejects(releaseHandymanDispatch({ executionScopeId: scope.id }, admin), code('HANDYMAN_DISPATCH_NOT_READY'));
+    await createHandymanPermitReadiness({ handymanRequestId: req, permitType: 'UNIT', validFrom: start.toISOString(),
+      validUntil: end.toISOString(), authorizationNote: 'Existing local permit' }, admin);
+    await createHandymanUnitAccessReadiness({ handymanRequestId: req, accessWindowStart: start.toISOString(),
+      accessWindowEnd: end.toISOString(), authorizationNote: 'Existing tenant access' }, admin);
+    report = await evaluateDispatchReadiness(scope.id, admin);
+    assert.equal(report.ready, true, JSON.stringify(report));
+    assert.equal(report.bmClearance.state, 'NOT_INTEGRATED'); // manual coordination is not BM API verification
+    const bm = t.mock.method(handymanBmClearanceVerifier, 'verify', async () => ({ decision: 'UNAVAILABLE' }));
+    try {
+      assert.equal((await evaluateDispatchReadiness(scope.id, admin)).bmClearance.state, 'UNAVAILABLE');
+      await assert.rejects(releaseHandymanDispatch({ executionScopeId: scope.id }, admin), code('HANDYMAN_DISPATCH_NOT_READY'));
+    } finally { bm.mock.restore(); }
+    await reverseHandymanCustomerPayment({ executionScopeId: scope.id, paymentId: second.payment.id,
+      reason: 'Payment reversed before dispatch', idempotencyKey: id() }, admin);
+    report = await evaluateDispatchReadiness(scope.id, admin);
+    assert.equal(report.checks.permitClearance, true); assert.equal(report.checks.unitAccessClearance, true);
+    assert.equal(report.checks.requiredPaymentSatisfied, false);
+    await assert.rejects(releaseHandymanDispatch({ executionScopeId: scope.id }, admin), code('HANDYMAN_DISPATCH_NOT_READY'));
+    const replacement = await record('10.00'); await confirm(replacement.payment.id);
+    assert.equal((await evaluateDispatchReadiness(scope.id, admin)).ready, true);
+    assert.equal((await releaseHandymanDispatch({ executionScopeId: scope.id }, admin)).status, 'RELEASED');
+    await withTransaction(tx => assertDispatchExecutionClearance(tx, scope.id, crew.leadUser.id, assignmentId));
+    await reverseHandymanCustomerPayment({ executionScopeId: scope.id, paymentId: replacement.payment.id,
+      reason: 'Payment reversed after dispatch', idempotencyKey: id() }, admin);
+    assert.equal((await evaluateDispatchReadiness(scope.id, admin)).checks.requiredPaymentSatisfied, false);
+    await assert.rejects(withTransaction(tx => assertDispatchExecutionClearance(tx, scope.id, crew.leadUser.id, assignmentId)), code('HANDYMAN_DISPATCH_NOT_READY'));
+    const refundable = await record('10.00'); await confirm(refundable.payment.id);
+    const charge = await composeHandymanChargeLine({ executionScopeId: scope.id, quotationLineId: quoteLine.id, idempotencyKey: id() }, admin);
+    await allocateHandymanCustomerPayment({ executionScopeId: scope.id, paymentId: refundable.payment.id,
+      chargeLineId: charge.chargeLine.id, amount: '10.00', idempotencyKey: id() }, admin);
+    await refundHandymanCustomerPayment({ executionScopeId: scope.id, paymentId: refundable.payment.id,
+      amount: '1.00', reason: 'Partial refund', idempotencyKey: id() }, admin);
+    assert.equal((await evaluateDispatchReadiness(scope.id, admin)).checks.requiredPaymentSatisfied, false);
+    await assert.rejects(withTransaction(tx => assertDispatchExecutionClearance(tx, scope.id, crew.leadUser.id, assignmentId)), code('HANDYMAN_DISPATCH_NOT_READY'));
+    const topUp = await record('1.00'); await confirm(topUp.payment.id);
+    await withTransaction(tx => assertDispatchExecutionClearance(tx, scope.id, crew.leadUser.id, assignmentId));
+
+    // A correction that holds the ledger lock wins before a concurrent start;
+    // the start must re-read its committed reversal instead of stale DP.
+    const correcting = await pool.connect();
+    let pending: Promise<unknown> | undefined;
+    try {
+      await correcting.query('BEGIN');
+      await correcting.query('SELECT id FROM handyman_customer_transactions WHERE execution_scope_id=$1 FOR UPDATE', [scope.id]);
+      let finished = false;
+      pending = withTransaction(tx => assertDispatchExecutionClearance(tx, scope.id, crew.leadUser.id, assignmentId))
+        .then(() => { finished = true; return null; }, error => { finished = true; return error; });
+      await new Promise(resolve => setTimeout(resolve, 75));
+      assert.equal(finished, false, 'execution must wait for the payment/correction transaction lock');
+      await correcting.query(`INSERT INTO handyman_ledger_corrections
+        (id,client_id,transaction_id,correction_kind,source_kind,source_payment_id,currency,amount,reason,corrected_by_user_id,idempotency_key)
+        SELECT $1,client_id,transaction_id,'REVERSAL','PAYMENT',id,currency,amount,'Concurrent reversal',$2,$3
+          FROM handyman_customer_payments WHERE id=$4`, [id(), admin, id(), topUp.payment.id]);
+      await correcting.query('COMMIT');
+      assert.equal(((await pending) as { code?: string })?.code, 'HANDYMAN_DISPATCH_NOT_READY');
+    } finally { await correcting.query('ROLLBACK'); correcting.release(); if (pending) await pending; }
   });
 
   it('keeps inspection-first and draft access guards and revokes Care access immediately', async () => {

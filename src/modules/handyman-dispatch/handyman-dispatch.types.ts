@@ -48,6 +48,8 @@ export type HandymanDispatchReadinessCheck = {
   permitClearance: boolean;
   unitAccessClearance: boolean;
   materialReady: boolean;
+  /** True when no DP is required, or confirmed DP covers the approved terms. */
+  requiredPaymentSatisfied: boolean;
   assignmentCurrent: boolean;
 };
 

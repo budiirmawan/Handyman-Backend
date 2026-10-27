@@ -51,6 +51,7 @@ import {
 import {
   handymanScopeAssignmentRepository,
 } from './handyman-scope-assignment.repository';
+import { hasApprovedScopeQuotation } from './handyman-scope-quotation-authority';
 import type {
   AssignHandymanExecutionScopeCrewInput,
   HandymanAssignmentLeadResolution,
@@ -209,13 +210,12 @@ async function requireAssignableScope(
     executionScopeId,
   );
   if (!scope) throw handymanExecutionScopeNotFoundError();
-  if (scope.status !== 'AUTHORIZED') {
-    throw handymanAssignmentScopeNotAuthorizedError();
-  }
+  if (scope.status !== 'AUTHORIZED') throw handymanAssignmentScopeNotAuthorizedError();
   const fee = await tx.query(`SELECT 1 FROM handyman_execution_scopes s
     JOIN handyman_inspection_fee_offers o ON o.quotation_version_id=s.approved_quotation_version_id
     WHERE s.id=$1`, [scope.id]);
   if (fee.rowCount) throw handymanInspectionFeeWorkNotAuthorizedError();
+  if (!(await hasApprovedScopeQuotation(tx, scope.id))) throw handymanAssignmentScopeNotAuthorizedError();
   return scope;
 }
 

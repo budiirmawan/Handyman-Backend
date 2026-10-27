@@ -5,7 +5,7 @@ export function handymanAssignmentScopeNotAuthorizedError(): AppError {
   return new AppError({
     code: ERROR_CODES.HANDYMAN_EXECUTION_SCOPE_ASSIGNMENT_NOT_AUTHORIZED,
     message:
-      'Execution scope must exist with status AUTHORIZED before crew assignment.',
+      'Execution scope must be AUTHORIZED by its matching approved quotation before crew assignment.',
     statusCode: 409,
   });
 }
