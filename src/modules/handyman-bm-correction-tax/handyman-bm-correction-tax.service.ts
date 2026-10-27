@@ -7,7 +7,7 @@ import { isValidUuid } from '../clients';
 import { readHandymanBmCommissionCorrectionLineageInSnapshot, readHandymanBmCommissionCorrectionLineageInLockedTransaction }
   from '../handyman-bm-correction-lineage/handyman-bm-correction-lineage.service';
 import {
-  accessBmTaxCase, lockBmTaxLedger, lockBmTaxSources, resolveBmTaxCaseRuleAt, normalizeBmTaxCaseIntent,
+  accessBmTaxCase, lockBmTaxLedger, lockBmTaxSources, lockBmTaxPostingScopeAndLedger, resolveBmTaxCaseRuleAt, normalizeBmTaxCaseIntent,
   buildBmTaxCaseSnapshot, readBmTaxNow, readBmTaxCaseRow, readBmTaxCaseDecisionRow, normalizeBmTaxCasePin,
 } from '../handyman-bm-tax-case/handyman-bm-tax-case.service';
 import type { BmTaxCasePin, ProposeBmTaxCaseInput } from '../handyman-bm-tax-case';
@@ -278,11 +278,29 @@ export async function decideHandymanBmCorrectionTaxCase(actorInput:string,input:
 
 /** Only the current correction-specific checker decision can authorize a read-only projection. */
 export async function calculateHandymanBmCorrectedTaxProjection(actorInput:string,input:BmCorrectionTaxProjectionInput) {
-  keys(input,['clientId','entitlementId','correctionFactId','determination'],'input');
-  const actor=uuid(actorInput,'actor'),clientId=uuid(input.clientId,'clientId'),entitlementId=uuid(input.entitlementId,'entitlementId');
-  const correctionFactId=uuid(input.correctionFactId,'correctionFactId'),pin=normalizeBmTaxCasePin(input.determination),tx=await getPool().connect();
+  const tx=await getPool().connect();
   try {
     await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const result=await calculateCorrectedComponents(tx,actorInput,input,false);
+    await tx.query('COMMIT');return result;
+  } catch(error) {await tx.query('ROLLBACK').catch(()=>undefined);throw error;} finally {tx.release();}
+}
+
+/** Internal posting path; all original and correction sources remain fenced through commit. */
+export async function calculateHandymanBmCorrectedTaxProjectionInLockedTransaction(tx:PoolClient,actorInput:string,input:BmCorrectionTaxProjectionInput) {
+  if(tx.getTransactionStatus()!=='T') throw integrity();
+  const mode=(await tx.query(`SELECT current_setting('transaction_isolation') AS isolation,
+    current_setting('transaction_read_only') AS read_only`)).rows[0];
+  if(tx.getTransactionStatus()!=='T' || mode.isolation!=='read committed' || mode.read_only!=='off') throw integrity();
+  keys(input,['clientId','entitlementId','correctionFactId','determination'],'input');
+  await lockBmTaxPostingScopeAndLedger(tx,uuid(input.clientId,'clientId'),uuid(input.entitlementId,'entitlementId'));
+  return calculateCorrectedComponents(tx,actorInput,input,true);
+}
+
+async function calculateCorrectedComponents(tx:PoolClient,actorInput:string,input:BmCorrectionTaxProjectionInput,locked:boolean) {
+  keys(input,['clientId','entitlementId','correctionFactId','determination'],'input');
+  const actor=uuid(actorInput,'actor'),clientId=uuid(input.clientId,'clientId'),entitlementId=uuid(input.entitlementId,'entitlementId');
+  const correctionFactId=uuid(input.correctionFactId,'correctionFactId'),pin=normalizeBmTaxCasePin(input.determination);
     const buildingId=await accessBmTaxCase(tx,actor,clientId,entitlementId,'read');
     const row=(await tx.query('SELECT * FROM handyman_bm_correction_tax_cases WHERE correction_id=$1 ORDER BY version DESC LIMIT 1',[correctionFactId])).rows[0];
     if(!row || row.id!==pin.caseId || row.version!==pin.version || row.client_id!==clientId || row.entitlement_id!==entitlementId || row.building_id!==buildingId)
@@ -290,13 +308,14 @@ export async function calculateHandymanBmCorrectedTaxProjection(actorInput:strin
     const dr=(await tx.query('SELECT * FROM handyman_bm_correction_tax_decisions WHERE case_id=$1',[pin.caseId])).rows[0];
     if(!dr) throw unapproved();
     const c=view(row),review=decision(dr),s=c.snapshot;
+    if(locked) await lockBmTaxSources(tx,s);
     if(c.digest!==pin.digest || review.id!==pin.decisionId || review.decisionDigest!==pin.decisionDigest || review.caseId!==s.id ||
       review.caseDigest!==c.digest || review.correctionFactId!==correctionFactId || review.clientId!==clientId ||
       review.entitlementId!==entitlementId || review.buildingId!==buildingId || review.version!==s.version ||
       review.actorUserId===s.createdByUserId || Date.parse(review.occurredAt)<=Date.parse(c.createdAt)) throw integrity();
     const readAt=await readBmTaxNow(tx);
     if(review.decision!=='APPROVE' || Date.parse(review.occurredAt)>Date.parse(readAt)) throw unapproved();
-    const source=await sourceInSnapshot(tx,actor,{clientId,entitlementId,correctionFactId,baseline:baselineOf(s)});
+    const source=await sourceInSnapshot(tx,actor,{clientId,entitlementId,correctionFactId,baseline:baselineOf(s)},locked);
     const n=assertSnapshot(s,source),resolved=await taxPolicy(tx,actor,n,source,readAt);
     const determination=Object.freeze({caseId:s.id,version:s.version,digest:c.digest,decisionId:review.id,decisionDigest:review.decisionDigest,
       makerUserId:s.createdByUserId,checkerUserId:review.actorUserId,occurredAt:review.occurredAt});
@@ -346,7 +365,5 @@ export async function calculateHandymanBmCorrectedTaxProjection(actorInput:strin
       signedRecordedCommissionImpact:source.signedAmount,commissionGross:source.commissionGross,
       ppnBasis:ppn.dppAmount,ppnAmount:ppn.ppnAmount,pphWithholdingBasis:pph.taxableWithholdingBasis,pphWithheld:pph.pphWithheld,
       netCommissionProjection:decimal(cents(source.commissionGross)+cents(ppn.ppnAmount)-cents(pph.pphWithheld)),ppn,pph});
-    const result=Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
-    await tx.query('COMMIT');return result;
-  } catch(error) {await tx.query('ROLLBACK').catch(()=>undefined);throw error;} finally {tx.release();}
+    return Object.freeze({...body,checksumAlgorithm:'SHA-256' as const,checksum:hash(body)});
 }

@@ -100,14 +100,26 @@ async function lockLedger(tx:PoolClient,entitlementId:string):Promise<void> {
     WHERE f.id=$1 FOR UPDATE OF t`,[entitlementId]);
   if(!result.rowCount) throw missing();
 }
+/** Posting also fences FINAL_CHARGE_ELIGIBILITY transitions, which lock the scope first. */
+async function lockPostingScopeAndLedger(tx:PoolClient,clientId:string,entitlementId:string):Promise<void> {
+  const scope=await tx.query(`SELECT s.id FROM handyman_execution_scopes s
+    JOIN handyman_entitlement_facts f ON f.execution_scope_id=s.id AND f.client_id=s.client_id
+    WHERE f.id=$1 AND f.client_id=$2 FOR UPDATE OF s`,[entitlementId,clientId]);
+  if(!scope.rowCount) throw missing();
+  await lockLedger(tx,entitlementId);
+}
 async function lockSources(tx:PoolClient,s:Pick<BmTaxCaseSnapshot,
-  'ppnBeneficiaryProfileId'|'ppnIssuerProfileId'|'pphBeneficiaryProfileId'|'ppnRuleId'|'pphRuleId'>):Promise<void> {
+  'ppnBeneficiaryProfileId'|'ppnIssuerProfileId'|'pphBeneficiaryProfileId'|'ppnRuleId'|'pphRuleId'|'coverageId'|'agreementVersionId'>):Promise<void> {
   // READ COMMITTED gets a fresh statement snapshot after each lock. Stable order avoids deadlocks between cases.
   await tx.query('SELECT profile_id FROM handyman_tax_identity_windows WHERE profile_id=ANY($1::uuid[]) ORDER BY profile_id FOR SHARE',
     [[s.ppnBeneficiaryProfileId,s.ppnIssuerProfileId,s.pphBeneficiaryProfileId]]);
   await tx.query(`SELECT i.id FROM handyman_document_issuer_profiles i JOIN handyman_tax_identity_profiles p ON p.issuer_profile_id=i.id
     WHERE p.id=$1 FOR SHARE OF i`,[s.ppnIssuerProfileId]);
   await tx.query('SELECT rule_id FROM handyman_tax_rule_windows WHERE rule_id=ANY($1::uuid[]) ORDER BY rule_id FOR SHARE',[[s.ppnRuleId,s.pphRuleId]]);
+  // A coverage or agreement closure must not race the final source revalidation.
+  await tx.query(`SELECT c.id FROM handyman_bm_building_coverages c
+    JOIN handyman_commercial_agreement_versions v ON v.id=c.agreement_version_id
+    WHERE c.id=$1 AND v.id=$2 FOR SHARE OF c,v`,[s.coverageId,s.agreementVersionId]);
 }
 type ApprovedRule=Extract<TaxRuleResolution,{status:'APPROVED'}>;
 async function ruleAt(tx:PoolClient,actor:string,clientId:string,family:'PPN'|'PPH_WITHHOLDING',taxDate:string,taxPointAt:string,
@@ -405,6 +417,7 @@ export async function requireApprovedHandymanBmTaxCase(actor:string,input:BmVeri
 // Internal reuse by the separately approved correction bridge; none of these
 // helpers makes a caller-supplied correction into an approved tax case.
 export { access as accessBmTaxCase, lockLedger as lockBmTaxLedger, lockSources as lockBmTaxSources,
+  lockPostingScopeAndLedger as lockBmTaxPostingScopeAndLedger,
   ruleAt as resolveBmTaxCaseRuleAt, normalizeIntent as normalizeBmTaxCaseIntent,
   snapshotFrom as buildBmTaxCaseSnapshot, readNow as readBmTaxNow,
   view as readBmTaxCaseRow, decision as readBmTaxCaseDecisionRow,

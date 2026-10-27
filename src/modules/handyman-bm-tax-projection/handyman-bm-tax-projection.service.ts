@@ -2,7 +2,8 @@ import type { PoolClient } from 'pg';
 import { getPool } from '../../database';
 import { AppError, ERROR_CODES } from '../../shared/errors';
 import { stableJson } from '../../shared/stable-json';
-import { normalizeBmVerifiedCalculationInput } from '../handyman-bm-tax-case/handyman-bm-tax-case.service';
+import { normalizeBmVerifiedCalculationInput, lockBmTaxPostingScopeAndLedger, lockBmTaxSources }
+  from '../handyman-bm-tax-case/handyman-bm-tax-case.service';
 import type { BmVerifiedCalculationInput } from '../handyman-bm-tax-case';
 import { cents, decimal, hash } from '../handyman-pph-calculation/handyman-pph-core';
 import { calculateApprovedHandymanBmWithholdingInSnapshot } from '../handyman-pph-calculation/handyman-pph.service';
@@ -23,8 +24,26 @@ export async function calculateHandymanBmCommissionTaxProjectionInSnapshot(tx:Po
   const mode=(await tx.query(`SELECT current_setting('transaction_isolation') AS isolation,
     current_setting('transaction_read_only') AS read_only`)).rows[0];
   if(tx.getTransactionStatus()!=='T' || mode.isolation!=='repeatable read' || mode.read_only!=='on') throw snapshotRequired();
+  return calculateComponents(tx,actor,n);
+}
 
-  // Each calculator re-resolves the approved 0500 case and both tax sources; the same transaction fixes their view.
+/** Internal posting path: source writers and approval windows are fenced until commit. */
+export async function calculateHandymanBmCommissionTaxProjectionInLockedTransaction(tx:PoolClient,actor:string,
+  input:BmVerifiedCalculationInput):Promise<BmCommissionTaxProjection> {
+  const n=normalizeBmVerifiedCalculationInput(input);
+  if(tx.getTransactionStatus()!=='T') throw integrity();
+  const mode=(await tx.query(`SELECT current_setting('transaction_isolation') AS isolation,
+    current_setting('transaction_read_only') AS read_only`)).rows[0];
+  if(tx.getTransactionStatus()!=='T' || mode.isolation!=='read committed' || mode.read_only!=='off') throw integrity();
+  await lockBmTaxPostingScopeAndLedger(tx,n.clientId,n.entitlementId);
+  const row=(await tx.query('SELECT snapshot FROM handyman_bm_tax_cases WHERE id=$1 AND entitlement_id=$2',
+    [n.determination.caseId,n.entitlementId])).rows[0];
+  if(row) await lockBmTaxSources(tx,row.snapshot);
+  return calculateComponents(tx,actor,n);
+}
+
+async function calculateComponents(tx:PoolClient,actor:string,n:BmVerifiedCalculationInput):Promise<BmCommissionTaxProjection> {
+  // Each existing calculator re-resolves the approved case and both tax sources.
   const ppn=await calculateApprovedHandymanBmPpnInSnapshot(tx,actor,n);
   const pph=await calculateApprovedHandymanBmWithholdingInSnapshot(tx,actor,n);
   const pin=n.determination,source=ppn.source,determination=ppn.determination;

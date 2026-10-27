@@ -36,6 +36,7 @@ import { requireApprovedBmTaxCaseInSnapshot } from '../src/modules/handyman-bm-t
 import { hash } from '../src/modules/handyman-pph-calculation/handyman-pph-core';
 import { calculateHandymanBmCommissionTaxProjection } from '../src/modules/handyman-bm-tax-projection';
 import { calculateHandymanBmCommissionTaxProjectionInSnapshot } from '../src/modules/handyman-bm-tax-projection/handyman-bm-tax-projection.service';
+import { postHandymanBmCommissionLedger, readHandymanBmCommissionLedger } from '../src/modules/handyman-bm-commission-ledger';
 import { readHandymanBmCorrectedCommissionSource, proposeHandymanBmCorrectionTaxCase, decideHandymanBmCorrectionTaxCase,
   calculateHandymanBmCorrectedTaxProjection, type ProposeBmCorrectionTaxInput } from '../src/modules/handyman-bm-correction-tax';
 
@@ -164,7 +165,7 @@ async function counts(){
 
 describe('PART 02C-A independently verified BM commission tax case',()=>{
   it('registers an unassigned checker and verifies separate PPN/PPh pins with no financial writes',async()=>{
-    assert.equal(migrations.at(-1)!.id,'0502_handyman_bm_correction_tax_approval');
+    assert.equal(migrations.at(-1)!.id,'0503_handyman_bm_commission_ledger');
     assert.ok(UNASSIGNED_BY_DEFAULT_PERMISSION_CODES.has('handyman.bm_tax_case.approve'));
     const grants=async()=>(await q(`SELECT count(*)::int n FROM role_permission_assignments r JOIN permissions p ON p.id=r.permission_id
       WHERE p.code='handyman.bm_tax_case.approve' AND r.status='ACTIVE'`)).rows[0].n;
@@ -375,6 +376,7 @@ describe('PART 02C-A independently verified BM commission tax case',()=>{
     assert.equal(c.snapshot.intentDigest,hash({schema:'HANDYMAN_BM_TAX_CASE_INTENT_V1',actor:admin,...f.input}));
     const persisted=(await q('SELECT snapshot,digest FROM handyman_bm_tax_cases WHERE id=$1',[c.snapshot.id])).rows[0];
     try{
+      assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
       assert.equal(await migrateDown(pool),'0502_handyman_bm_correction_tax_approval');
       assert.equal(await migrateDown(pool),'0501_handyman_bm_tax_non_applicability');
       assert.deepEqual(await calculateHandymanBmCommissionTaxProjection(admin,cmd),before);
@@ -741,6 +743,7 @@ describe('PART 02C-C independently reviewed NOT_APPLICABLE treatment',()=>{
         /BM tax case source, evidence, scope, version or independent tax rules are invalid/);
     }
     // A rollback must wait for concurrent case activity before checking whether V2 history exists.
+    assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
     assert.equal(await migrateDown(pool),'0502_handyman_bm_correction_tax_approval');
     const tx=await pool.connect();
     try{
@@ -863,7 +866,9 @@ describe('PART 02D-B1 correction tax approval bridge',()=>{
     assert.deepEqual((await q('SELECT * FROM handyman_bm_tax_case_decisions WHERE id=$1',[old.d.id])).rows[0],oldDecision);
     await assert.rejects(q('UPDATE handyman_bm_correction_tax_cases SET digest=$2 WHERE id=$1',[c.snapshot.id,'0'.repeat(64)]),/immutable/);
     await assert.rejects(q('DELETE FROM handyman_bm_correction_tax_decisions WHERE id=$1',[d.id]),/immutable/);
+    assert.equal(await migrateDown(pool),'0503_handyman_bm_commission_ledger');
     await assert.rejects(migrateDown(pool),/Refusing to remove populated BM correction tax approval history/);
+    await migrateUp(pool);
     await assert.rejects(calculateHandymanBmCommissionTaxProjection(admin,old.cmd),code('HANDYMAN_PPH_CORRECTION_UNSUPPORTED'));
     await adjustHandymanCustomerLedger({executionScopeId:f.scope.id,chargeLineId:f.charge.chargeLine.id,amount:'10.00',
       reason:'Another unlinked correction',idempotencyKey:id()},admin);
@@ -896,5 +901,111 @@ describe('PART 02D-B1 correction tax approval bridge',()=>{
     assert.ok(fact);await assert.rejects(readHandymanBmCorrectedCommissionSource(admin,{clientId:f.input.clientId,
       entitlementId:f.input.entitlementId,correctionFactId:fact.id,baseline}),/approved 0500 original-source witness/);
     assert.ok(lc.correction.id);
+  });
+});
+
+/** Approved points are in the past and after the fixture's independent rule/identity approvals. */
+function occurredInput(f:Awaited<ReturnType<typeof fixture>>,input:ProposeBmTaxCaseInput=f.input):ProposeBmTaxCaseInput {
+  const point=Date.now()-3;
+  return {...input,ppn:{...input.ppn,taxDate:jakarta(point),taxPointAt:iso(point)},
+    pph:{...input.pph,taxDate:jakarta(point),taxPointAt:iso(point)}};
+}
+
+describe('BM-COMMISSION-02 PART 01 gross-to-net ledger',()=>{
+  it('posts exact verified amounts once under concurrent retries, preserves history, scope and non-payment boundaries',async()=>{
+    const f=await fixture(),{cmd}=await approveInput(f,occurredInput(f)),before=await counts(),key=id(),request={...cmd,idempotencyKey:key};
+    const posted=await Promise.all(Array.from({length:12},()=>postHandymanBmCommissionLedger(admin,request)));
+    assert.equal(new Set(posted.map(x=>x.snapshot.id)).size,1);assert.equal(posted.filter(x=>!x.replayed).length,1);
+    const record=posted[0],s=record.snapshot;
+    assert.equal(s.entryType,'ORIGINAL');assert.equal(s.counterpartyId,f.bm.counterparty.id);assert.equal(s.buildingId,f.realm.building.id);
+    assert.deepEqual(s.amounts,{gross:'10.00',ppn:'1.00',pph:'0.75',net:'10.25'});assert.deepEqual(s.delta,s.amounts);
+    assert.deepEqual(s.assertions,{withholding:'NOT_ASSERTED',remittance:'NOT_ASSERTED',payment:'NOT_ASSERTED'});
+    assert.equal(s.sourceChecksum,f.source.checksum);assert.equal(s.approval.decisionId,cmd.determination.decisionId);
+    assert.equal(record.digest,hash(s));assert.deepEqual(await counts(),before);
+    const history=await readHandymanBmCommissionLedger(admin,{clientId:cmd.clientId,entitlementId:cmd.entitlementId});
+    assert.equal(history.length,1);assert.equal(history[0].digest,record.digest);
+    await assert.rejects(postHandymanBmCommissionLedger(admin,{...request,idempotencyKey:id()}),code('HANDYMAN_BM_COMMISSION_LEDGER_CONFLICT'));
+    await assert.rejects(postHandymanBmCommissionLedger(admin,{...request,determination:{...cmd.determination,version:2}}),
+      code('HANDYMAN_BM_COMMISSION_LEDGER_CONFLICT'));
+    const sibling=await buildingService.createBuilding({propertyId:f.realm.property.id,code:`BL_${id().slice(0,8)}`,name:'Other Building'});
+    const wrong=await scopedUser(sibling.id,['handyman.finance.read','handyman.finance.manage']);
+    await assert.rejects(readHandymanBmCommissionLedger(wrong,{clientId:cmd.clientId,entitlementId:cmd.entitlementId}),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(postHandymanBmCommissionLedger(wrong,request),code('BUILDING_ACCESS_DENIED'));
+    await assert.rejects(q('UPDATE handyman_bm_commission_ledger SET net_payable=0 WHERE id=$1',[s.id]),/immutable/);
+    await assert.rejects(q('DELETE FROM handyman_bm_commission_ledger WHERE id=$1',[s.id]),/immutable/);
+    await assert.rejects(migrateDown(pool),/Refusing to remove populated BM commission ledger history/);
+  });
+
+  it('blocks future forecasts, unapproved, stale and unlinked sources without creating an entry',async()=>{
+    const f=await fixture(),future=await approved(f),key=id();
+    await assert.rejects(postHandymanBmCommissionLedger(admin,{...future.cmd,idempotencyKey:key}),code('HANDYMAN_BM_COMMISSION_LEDGER_FORECAST'));
+    await proposeHandymanBmTaxCase(admin,{...f.input,expectedVersion:1,idempotencyKey:id()});
+    await assert.rejects(postHandymanBmCommissionLedger(admin,{...future.cmd,idempotencyKey:id()}),code('HANDYMAN_BM_TAX_CASE_STALE'));
+    const g=await fixture(),input=occurredInput(g),pending=await proposeHandymanBmTaxCase(admin,input);
+    const fake={clientId:input.clientId,entitlementId:input.entitlementId,determination:{caseId:pending.snapshot.id,
+      version:pending.snapshot.version,digest:pending.digest,decisionId:id(),decisionDigest:'a'.repeat(64)},idempotencyKey:id()};
+    await assert.rejects(postHandymanBmCommissionLedger(admin,fake),code('HANDYMAN_BM_TAX_CASE_UNAPPROVED'));
+    const d=await decideHandymanBmTaxCase(g.checker,review(g,pending));await wait();
+    const good=command(g,pending,d);
+    await assert.rejects(postHandymanBmCommissionLedger(admin,{...good,idempotencyKey:id(),determination:{...good.determination,digest:'0'.repeat(64)}}),
+      code('HANDYMAN_BM_TAX_CASE_INTEGRITY_ERROR'));
+    await adjustHandymanCustomerLedger({executionScopeId:g.scope.id,chargeLineId:g.charge.chargeLine.id,amount:'20.00',
+      reason:'Unlinked labor correction',idempotencyKey:id()},admin);
+    await assert.rejects(postHandymanBmCommissionLedger(admin,{...good,idempotencyKey:id()}),
+      (e:{code?:string})=>['HANDYMAN_PPH_SOURCE_STALE','HANDYMAN_PPH_CORRECTION_UNSUPPORTED'].includes(e.code??''));
+    assert.equal((await readHandymanBmCommissionLedger(admin,{clientId:good.clientId,entitlementId:good.entitlementId})).length,0);
+  });
+
+  it('uses separately approved non-applicability without inventing a tax rate',async()=>{
+    const f=await fixture(),{cmd}=await approveInput(f,occurredInput(f,nonApplicableInput(f,true,true)));
+    const r=await postHandymanBmCommissionLedger(admin,{...cmd,idempotencyKey:id()});
+    assert.deepEqual(r.snapshot.amounts,{gross:'10.00',ppn:'0.00',pph:'0.00',net:'10.00'});
+    const p=r.snapshot.projection as {ppn:{rule:unknown;nonApplicability:unknown};pph:{rule:unknown;nonApplicability:unknown}};
+    assert.equal(p.ppn.rule,null);assert.equal(p.pph.rule,null);assert.ok(p.ppn.nonApplicability);assert.ok(p.pph.nonApplicability);
+  });
+
+  it('requires the pre-correction ledger witness and posts only a signed corrected delta with its own approval',async()=>{
+    const missing=await correctionFixture();
+    await assert.rejects(postHandymanBmCommissionLedger(admin,{...missing.old.cmd,correctionFactId:missing.fact.id,idempotencyKey:id()}),
+      code('HANDYMAN_BM_COMMISSION_LEDGER_WITNESS_REQUIRED'));
+
+    const f=await fixture(),old=await approveInput(f,occurredInput(f)),original=await postHandymanBmCommissionLedger(admin,{...old.cmd,idempotencyKey:id()});
+    await wait(25);const ledger=await adjustHandymanCustomerLedger({executionScopeId:f.scope.id,chargeLineId:f.charge.chargeLine.id,
+      amount:'20.00',reason:'Recorded labor reduction',idempotencyKey:id()},admin);await wait(25);
+    await deriveHandymanFinancialEntitlements(f.scope.id,admin,id());
+    const fact=(await q('SELECT * FROM handyman_entitlement_corrections WHERE entitlement_id=$1',[f.earned.bmFee.id])).rows[0];assert.ok(fact);
+    const baseline=old.cmd.determination,source=await readHandymanBmCorrectedCommissionSource(admin,
+      {clientId:f.input.clientId,entitlementId:f.input.entitlementId,correctionFactId:fact.id,baseline});
+    const correctionInput:ProposeBmCorrectionTaxInput={...occurredInput(f),correctionFactId:fact.id,baseline,sourceChecksum:source.checksum,idempotencyKey:id()};
+    const x={f,old,ledger,fact,baseline,source,input:correctionInput};
+    const c=await proposeHandymanBmCorrectionTaxCase(admin,correctionInput);
+    const d=await decideHandymanBmCorrectionTaxCase(f.checker,correctionReview(x,c));await wait(25);
+    const cmd=correctionCommand(x,c,d),key=id(),entries=await Promise.all(Array.from({length:12},()=>
+      postHandymanBmCommissionLedger(admin,{...cmd,idempotencyKey:key})));
+    assert.equal(new Set(entries.map(x=>x.snapshot.id)).size,1);assert.equal(entries.filter(x=>!x.replayed).length,1);
+    const corrected=entries[0].snapshot;assert.equal(corrected.entryType,'CORRECTION_ADJUSTMENT');assert.equal(corrected.previousEntryId,original.snapshot.id);
+    assert.equal(corrected.correctionFactId,fact.id);assert.equal(corrected.approval.decisionId,d.id);assert.equal(corrected.sourceChecksum,source.checksum);
+    assert.deepEqual(corrected.amounts,{gross:'8.00',ppn:'1.00',pph:'0.60',net:'8.40'});
+    assert.deepEqual(corrected.delta,{gross:'-2.00',ppn:'0.00',pph:'-0.15',net:'-1.85'});
+    const sums=(await q(`SELECT SUM(gross_delta)::text gross,SUM(ppn_delta)::text ppn,SUM(pph_delta)::text pph,SUM(net_delta)::text net
+      FROM handyman_bm_commission_ledger WHERE entitlement_id=$1`,[f.earned.bmFee.id])).rows[0];
+    assert.deepEqual(sums,corrected.amounts);assert.equal((await readHandymanBmCommissionLedger(admin,{clientId:cmd.clientId,entitlementId:cmd.entitlementId})).length,2);
+  });
+
+  it('waits for a concurrent direct source correction, then revalidates instead of posting stale amounts',async()=>{
+    const f=await fixture(),{cmd}=await approveInput(f,occurredInput(f)),tx=await pool.connect();
+    try {
+      await tx.query('BEGIN');await tx.query('SELECT id FROM handyman_customer_transactions WHERE id=$1 FOR UPDATE',[f.source.transactionId]);
+      let finished=false;
+      const task=postHandymanBmCommissionLedger(admin,{...cmd,idempotencyKey:id()}).then(
+        value=>{finished=true;return {value};},error=>{finished=true;return {error};});
+      await wait(80);assert.equal(finished,false,'posting must wait for the source ledger row');
+      await tx.query(`INSERT INTO handyman_ledger_corrections(id,client_id,transaction_id,correction_kind,source_kind,source_charge_line_id,
+        currency,amount,reason,corrected_by_user_id,idempotency_key) VALUES($1,$2,$3,'ADJUSTMENT','CHARGE_LINE',$4,'IDR','20.00',$5,$6,$7)`,
+        [id(),f.input.clientId,f.source.transactionId,f.charge.chargeLine.id,'Concurrent direct correction',admin,id()]);
+      await tx.query('COMMIT');const outcome=await task;
+      assert.ok('error' in outcome);assert.ok(['HANDYMAN_PPH_SOURCE_STALE','HANDYMAN_PPH_CORRECTION_UNSUPPORTED'].includes(outcome.error.code));
+      assert.equal((await readHandymanBmCommissionLedger(admin,{clientId:cmd.clientId,entitlementId:cmd.entitlementId})).length,0);
+    } finally {await tx.query('ROLLBACK').catch(()=>undefined);tx.release();}
   });
 });
